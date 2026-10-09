@@ -1,23 +1,23 @@
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-task-history-permissions';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-task-history-permissions';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-task-history-permissions';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-task-history-permissions';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-task-history-permissions';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-task-history-permissions';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-task-history-permissions';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-task-history-permissions';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-task-history-permissions';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-task-history-permissions';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-task-history-permissions';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-task-history-permissions';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-task-history-permissions';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-computer-ssh-key';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-computer-ssh-key';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-computer-ssh-key';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-computer-ssh-key';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-computer-ssh-key';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-computer-ssh-key';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-computer-ssh-key';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -26,20 +26,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/permissions.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-task-history-permissions';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/branding.js?v=20261009-shell-v2-computer-ssh-key';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/presentation.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -50,9 +50,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-task-history-permissions';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-task-history-permissions';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-computer-ssh-key';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-computer-ssh-key';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -60,27 +60,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/workspace-session.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-task-history-permissions';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-task-history-permissions';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-task-history-permissions';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-task-history-permissions';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-task-history-permissions';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-computer-ssh-key';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-computer-ssh-key';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-computer-ssh-key';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -88,14 +88,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-task-history-permissions';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-task-history-permissions';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-task-history-permissions';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-computer-ssh-key';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-computer-ssh-key';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-computer-ssh-key';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-task-history-permissions';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-task-history-permissions';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-computer-ssh-key';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -113,7 +113,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-task-history-permissions';
+const APP_BUILD = '20261009-shell-v2-computer-ssh-key';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13437,6 +13437,47 @@ async function workjetComputerControl(request = {}) {
       throw new Error('Workjet connection change was not confirmed.');
     }
     return { action, endpointRef, computerId: endpoint.computer_id, enabled: endpoint.enabled };
+  }
+
+  if (action === 'computer.ssh_key.ensure') {
+    assertWorkjetComputerPayloadKeys(request, new Set(['action', 'commandId', 'computerId']));
+    const commandId = boundedWorkjetComputerText(request.commandId, 'commandId', 128);
+    const computerId = boundedWorkjetComputerText(request.computerId, 'computerId', 160);
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.workjet.computer.ssh_key.ensure',
+      record_id: computerId,
+      payload: { computer_id: computerId },
+      client_context: {
+        source: 'workjet-computer-control',
+        actor: actorContext(state.session),
+      },
+    }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
+    const result = completedWorkjetComputerResult(receipt, commandId);
+    assertWorkjetComputerPayloadKeys(result, new Set([
+      'ok', 'contract', 'computer_id', 'private_key', 'public_key', 'public_key_sha256',
+    ]));
+    if (result.contract !== 'ctox.workjet.computer-ssh-key.v1' || result.computer_id !== computerId) {
+      throw new Error('Workjet computer SSH key was not confirmed.');
+    }
+    const reference = result.private_key;
+    if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
+      throw new Error('Workjet computer SSH key reference was not confirmed.');
+    }
+    assertWorkjetComputerPayloadKeys(reference, new Set(['scope', 'name']));
+    const scope = boundedWorkjetComputerText(reference.scope, 'credential scope', 128);
+    const name = boundedWorkjetComputerText(reference.name, 'credential name', 128);
+    const publicKey = boundedWorkjetComputerText(result.public_key, 'public key', 1024);
+    const publicKeySha256 = boundedWorkjetComputerText(result.public_key_sha256, 'public key fingerprint', 80);
+    if (scope !== 'computer-access' || !/^workjet-ssh-[a-f0-9]{64}$/.test(name)
+      || !/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?$/.test(publicKey)
+      || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(publicKeySha256)) {
+      throw new Error('Workjet computer SSH key was not confirmed.');
+    }
+    return { action, contract: result.contract, computerId,
+      privateKey: { scope, name }, publicKey, publicKeySha256 };
   }
 
   if (action === 'computer.unassign') {
