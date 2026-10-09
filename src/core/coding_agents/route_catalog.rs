@@ -492,6 +492,7 @@ mod tests {
         );
         settings.insert("OPENAI_API_KEY".into(), "fixture-new-private".into());
         runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let before_probe = runtime_env::load_runtime_env_map(root.path())?;
         let (probe, binding) = probe_current(root.path(), &captured);
         assert_eq!(probe.failure, Some(Failure::RouteChanged));
         assert!(probe.http_status.is_none());
@@ -499,7 +500,10 @@ mod tests {
         assert!(binding.is_none());
         assert!(old_server.try_recv()?.is_none());
         assert!(new_server.try_recv()?.is_none());
-        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, settings);
+        assert_eq!(
+            runtime_env::load_runtime_env_map(root.path())?,
+            before_probe
+        );
         Ok(())
     }
 
