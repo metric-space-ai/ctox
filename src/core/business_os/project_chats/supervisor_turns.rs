@@ -241,8 +241,15 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
     ensure!(
         submitted.module == "ctox"
             && submitted.command_type == "ctox.workjet.project.supervisor.turn.submit"
-            && submitted.client_context.pointer("/actor/id").and_then(Value::as_str) == Some(owner)
-            && submitted.record_id.as_deref().is_none_or(|id| id == binding.project_id)
+            && submitted
+                .client_context
+                .pointer("/actor/id")
+                .and_then(Value::as_str)
+                == Some(owner)
+            && submitted
+                .record_id
+                .as_deref()
+                .is_none_or(|id| id == binding.project_id)
             && request.project_id == binding.project_id
             && request.thread_id == binding.thread_id
             && request.turn_kind == TurnKind::Conversation
@@ -277,8 +284,10 @@ pub(in crate::business_os) fn control(
         "ctox.workjet.project.supervisor.turn.capabilities" => {
             let request: CapabilitiesPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
-            Ok(json!({"ok":true, "contract":CAPABILITIES_CONTRACT, "binding":binding,
-                "turn_kinds":["work","conversation"], "default_turn_kind":"work"}))
+            Ok(
+                json!({"ok":true, "contract":CAPABILITIES_CONTRACT, "binding":binding,
+                "turn_kinds":["work","conversation"], "default_turn_kind":"work"}),
+            )
         }
         "ctox.workjet.project.supervisor.turn.submit" => {
             let request: SubmitPayload = serde_json::from_value(command.payload.clone())?;

@@ -2205,7 +2205,10 @@ pub(super) fn create_supervisor_ai_request(
     turn_kind: &str,
     submit_command_id: &str,
 ) -> anyhow::Result<Value> {
-    anyhow::ensure!(matches!(turn_kind, "conversation" | "work"), "invalid Supervisor turn kind");
+    anyhow::ensure!(
+        matches!(turn_kind, "conversation" | "work"),
+        "invalid Supervisor turn kind"
+    );
     create_ai_request_with_supervisor_turn(
         root,
         session,

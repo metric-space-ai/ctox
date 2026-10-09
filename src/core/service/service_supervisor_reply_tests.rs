@@ -21,8 +21,14 @@ fn fixture_for_kind(turn_kind: Option<&str>) -> Result<(tempfile::TempDir, Queue
                     "goal":"Erkläre mir den nächsten Schritt.", "turn_kind":kind},
                 "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
         )?;
-        anyhow::ensure!(accepted["status"] == "completed", "reply submit was not admitted");
-        accepted["result"]["turn"]["command_id"].as_str().context("reply command")?.to_owned()
+        anyhow::ensure!(
+            accepted["status"] == "completed",
+            "reply submit was not admitted"
+        );
+        accepted["result"]["turn"]["command_id"]
+            .as_str()
+            .context("reply command")?
+            .to_owned()
     } else {
         command_id
     };
@@ -32,7 +38,8 @@ fn fixture_for_kind(turn_kind: Option<&str>) -> Result<(tempfile::TempDir, Queue
     // through the queue API and acquire the real lease before starting execution.
     if task.route_status == "leased" {
         anyhow::ensure!(
-            channels::ack_leased_messages(temp.path(), &[task.message_key.clone()], "pending")? == 1,
+            channels::ack_leased_messages(temp.path(), &[task.message_key.clone()], "pending")?
+                == 1,
             "native Supervisor fixture lease was not released"
         );
     }
@@ -233,12 +240,18 @@ fn supervisor_work_and_legacy_turns_retain_work_completion_review() -> Result<()
         let root = temp.path();
         // Like PR42: no mode, writeback or required-artifact metadata. Only the
         // explicit kind, not metadata absence or reply words, grants the policy.
-        for reply in ["Der PR-Head ist nicht zugänglich; die Prüfung ist offen.", "Die Prüfung ist erledigt."] {
+        for reply in [
+            "Der PR-Head ist nicht zugänglich; die Prüfung ist offen.",
+            "Die Prüfung ist erledigt.",
+        ] {
             persist_typed_business_command_result(root, &job, reply)?;
             assert!(!supervisor_conversation_reply_ready(root, &job)?);
         }
         let context = channels::inspect_business_command(root, &command_id)?.unwrap();
-        assert_eq!(context["command"]["payload"]["supervisor_turn"]["kind"], "work");
+        assert_eq!(
+            context["command"]["payload"]["supervisor_turn"]["kind"],
+            "work"
+        );
     }
     Ok(())
 }
@@ -251,7 +264,8 @@ fn supervisor_conversation_requires_the_original_owner_submit_kind() -> Result<(
     assert!(supervisor_conversation_reply_ready(root, &job)?);
     let context = channels::inspect_business_command(root, &command_id)?.unwrap();
     let submitted = context["command"]["payload"]["supervisor_turn"]["submit_command_id"]
-        .as_str().context("original Owner submit")?;
+        .as_str()
+        .context("original Owner submit")?;
     // A copied marker cannot upgrade a different admitted work request.
     let policy = crate::business_os::store::open_store(root)?;
     assert_eq!(policy.execute(
@@ -266,7 +280,14 @@ fn supervisor_conversation_requires_the_original_owner_submit_kind() -> Result<(
 fn supervisor_submit_rejects_unknown_or_null_kind() -> Result<()> {
     let (temp, _, command_id) = fixture_for_kind(None)?;
     let original = channels::inspect_business_command(temp.path(), &command_id)?.unwrap();
-    for (index, kind) in [Value::Null, json!("completed"), json!({"kind":"conversation"})].into_iter().enumerate() {
+    for (index, kind) in [
+        Value::Null,
+        json!("completed"),
+        json!({"kind":"conversation"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let admitted = crate::business_os::command_plane::accept_rxdb_business_command(
             temp.path(),
             json!({"id":format!("invalid-kind-{index}"), "module":"ctox",
@@ -297,11 +318,20 @@ fn generic_threads_request_cannot_copy_supervisor_conversation_provenance() -> R
             "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
     )?;
     assert_eq!(accepted["status"], "completed");
-    let id = accepted["result"]["ai_command"]["command_id"].as_str()
-        .or_else(|| accepted["result"]["ai_command"]["id"].as_str()).context("generic AI command")?;
+    let id = accepted["result"]["ai_command"]["command_id"]
+        .as_str()
+        .or_else(|| accepted["result"]["ai_command"]["id"].as_str())
+        .context("generic AI command")?;
     let generic = channels::inspect_business_command(root, id)?.unwrap();
-    assert!(generic["command"]["payload"].get("supervisor_turn").is_none());
-    assert!(!crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(root, &generic["command"])?);
+    assert!(generic["command"]["payload"]
+        .get("supervisor_turn")
+        .is_none());
+    assert!(
+        !crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(
+            root,
+            &generic["command"]
+        )?
+    );
     Ok(())
 }
 
@@ -311,7 +341,11 @@ fn supervisor_turn_kind_capability_is_owner_scoped_and_does_not_submit_work() ->
     let root = temp.path();
     let original = channels::inspect_business_command(root, &command_id)?.unwrap();
     let core = Connection::open(crate::paths::core_db(root))?;
-    let before: i64 = core.query_row("SELECT COUNT(*) FROM business_command_task_links", [], |row| row.get(0))?;
+    let before: i64 = core.query_row(
+        "SELECT COUNT(*) FROM business_command_task_links",
+        [],
+        |row| row.get(0),
+    )?;
     for actor in ["owner", "foreign"] {
         let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
             root,
@@ -323,15 +357,25 @@ fn supervisor_turn_kind_capability_is_owner_scoped_and_does_not_submit_work() ->
         if actor == "owner" {
             let accepted = accepted?;
             assert_eq!(accepted["status"], "completed");
-            assert_eq!(accepted["result"]["contract"], "ctox.workjet.supervisor_turn_capabilities.v1");
+            assert_eq!(
+                accepted["result"]["contract"],
+                "ctox.workjet.supervisor_turn_capabilities.v1"
+            );
             assert_eq!(accepted["result"]["binding"]["project_id"], "project");
-            assert_eq!(accepted["result"]["turn_kinds"], json!(["work","conversation"]));
+            assert_eq!(
+                accepted["result"]["turn_kinds"],
+                json!(["work", "conversation"])
+            );
             assert_eq!(accepted["result"]["default_turn_kind"], "work");
         } else if let Ok(accepted) = accepted {
             assert_ne!(accepted["status"], "completed");
         }
     }
-    let after: i64 = core.query_row("SELECT COUNT(*) FROM business_command_task_links", [], |row| row.get(0))?;
+    let after: i64 = core.query_row(
+        "SELECT COUNT(*) FROM business_command_task_links",
+        [],
+        |row| row.get(0),
+    )?;
     assert_eq!(before, after);
     Ok(())
 }
