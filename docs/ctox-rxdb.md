@@ -1,5 +1,56 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Unavailable app and task collections
+
+A typed app data-read denial opens the existing permission surface inside the
+same window, with an action to inspect app rights. It is not a failed mount or
+an automatic retry; unexpected mount errors keep their recovery diagnostics.
+Crew observes ordinary collections through invalidation-only subscriptions,
+then executes its bounded reads. A native collection-specific read denial
+retires that task source and its exact local/readiness listeners for the current
+mount. Authorized command rows can still render, but the unavailable source is
+marked as restricted instead of empty, idle or syncing. Denials never trigger a
+sort fallback, read retry, local data fallback, permission grant or write. A new
+mount under new authority starts fresh; unrelated errors remain visible.
+Global context resolves known target-card module metadata before its owning
+window and the desktop route. Unknown DOM IDs never become a module identity.
+A hidden app route preserves its visibility denial and shows a visible reason;
+it neither creates a window nor changes native access.
+
+### Selected task history and role changes
+
+The Crew native history observer uses the existing live `sync.mayReadCollection`
+predicate before leasing `ctox_runs` and `ctox_harness_events`, after acquisition,
+and before accepting a native hint or replacement bridge. A role retirement
+releases its exact lease and subscriptions and exposes unavailable history in the
+Crew UI. A typed `COLLECTION_READ_FORBIDDEN` race follows the same retirement;
+uncoded denials and unexpected failures still reach the error handler. No local
+fallback, projection write or permission grant follows a denial. A new authorized
+observation can acquire fresh leases; a retired one never retries on its own.
+
+### Native Jour fixe narration retries
+
+The native narration reservation is unique per meeting, deck revision and
+slide. A `failed` or `failed_prerequisite` reservation without an audio receipt
+can be retried with either the same operation ID or a new one after readiness
+is restored. A new ID reuses the existing slot atomically and retains its
+three-attempt budget. Current Supervisor, lease, owner, deck and file-policy
+checks still run before synthesis and before audio publication.
+Running, uncertain and completed reservations cannot start another synthesis;
+conflicts identify the existing operation ID and status. Replaying the committed
+operation returns its retained receipt and projects the same stored WAV bytes.
+A failed attempt is not a narrated slide: only committed audio can make the
+meeting ready.
+
+Local HTTP MCP dispatches tools on ordinary OS threads. Narration drives the
+configured speech adapter on a current-thread Tokio runtime only when no
+runtime is present; managed gateway workers retain their existing runtime.
+Executor setup failure is `execution_unavailable`, never a speech-configuration
+failure. Preparation retrospectives use the retained meeting state and actual
+stored audio references; worker claims and speculative provider learnings do
+not replace that evidence.
+
+
 
 ### Native federation consumer authority
 

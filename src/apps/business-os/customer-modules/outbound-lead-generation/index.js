@@ -32,6 +32,9 @@ import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs'
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
+import {
+  CUSTOM_GROUP_LABEL, customFieldKey, fieldGroupsFor, isCustomFieldKey, normalizeCustomFields, normalizeFieldLabels,
+} from './field-catalog.mjs';
 
 // Owner-Rechercheanweisung (Schritt 1-3) und Belegregel 5: Felder, die zwei
 // unabhaengige Quellen brauchen, waren nur EINER Quelle zugeordnet (wz_code nur
@@ -302,8 +305,52 @@ const REVIEW_FIELD_LABELS = Object.freeze(Object.fromEntries(
   RESEARCH_FIELD_GROUPS.flatMap((group) => group.fields.map(([key, label]) => [key, label])),
 ));
 
+// Die Feldliste, wie der Nutzer sie im Reiter „Pflichtfelder“ pflegt:
+// umbenannt, abgeschaltet, eigene Felder (Owner 09.10.2026).
+function fieldCatalogFrom(record) {
+  return {
+    labels: normalizeFieldLabels(record?.field_labels),
+    disabled: new Set((Array.isArray(record?.disabled_field_keys) ? record.disabled_field_keys : [])
+      .map(String).filter((key) => RESEARCH_FIELD_SET.has(key))),
+    custom: normalizeCustomFields(record?.custom_fields),
+  };
+}
+function fieldCatalog() {
+  const record = state.researchPolicyRecord || null;
+  if (state.fieldCatalogCache?.record !== record) state.fieldCatalogCache = { record, catalog: fieldCatalogFrom(record) };
+  return state.fieldCatalogCache.catalog;
+}
+function fieldCatalogDraft() {
+  return state.fieldCatalogDraft || fieldCatalog();
+}
+function reviewFieldGroups(catalog = fieldCatalog()) {
+  return fieldGroupsFor(RESEARCH_FIELD_GROUPS, catalog);
+}
+function isResearchFieldKey(key) {
+  return RESEARCH_FIELD_SET.has(key) || isCustomFieldKey(key);
+}
+
 function researchFieldLabel(key) {
-  return REVIEW_FIELD_LABELS[String(key || '').trim()] || String(key || '').trim();
+  const k = String(key || '').trim();
+  const catalog = fieldCatalog();
+  return catalog.labels[k]
+    || catalog.custom.find((field) => field.key === k)?.label
+    || REVIEW_FIELD_LABELS[k]
+    || k;
+}
+
+// Nutzer schreiben den Rechercheablauf mit den Namen, die sie in der App sehen
+// ("Besucheradresse"), nicht mit Datenbankschluesseln (Owner 09.10.2026). Der
+// Agent bekommt die Zuordnung mit; "E-Mail" gibt es fuer Firma und Person,
+// deshalb steht der Bereich davor.
+const REVIEW_FIELD_GROUP_LABELS = Object.freeze(Object.fromEntries(
+  RESEARCH_FIELD_GROUPS.flatMap((group) => group.fields.map(([key]) => [key, group.label])),
+));
+function researchFieldLabelMap(keys) {
+  return Object.fromEntries(keys.map((key) => [
+    key,
+    `${REVIEW_FIELD_GROUP_LABELS[key] || (isCustomFieldKey(key) ? CUSTOM_GROUP_LABEL : 'Feld')}: ${researchFieldLabel(key)}`,
+  ]));
 }
 
 // Owner 23.09.2026: Nicht jedes Feld muss fuer die Sellify-Uebergabe
@@ -324,7 +371,10 @@ function optionalResearchFields() {
     return new Set(lokal.keys);
   }
   const gespeichert = record?.optional_field_keys;
-  return new Set(Array.isArray(gespeichert) ? gespeichert : DEFAULT_OPTIONAL_FIELDS);
+  const optional = new Set(Array.isArray(gespeichert) ? gespeichert : DEFAULT_OPTIONAL_FIELDS);
+  // Abgeschaltete Felder werden nicht recherchiert und blockieren nichts.
+  for (const key of fieldCatalog().disabled) optional.add(key);
+  return optional;
 }
 function optionalFieldsDraft() {
   return state.optionalFieldsDraft instanceof Set ? state.optionalFieldsDraft : optionalResearchFields();
@@ -353,7 +403,7 @@ function leerFreigebbar(key) {
 }
 
 function researchAnsweredNotFound(lead, key) {
-  const status = lead?.field_status?.[key];
+  const status = isCustomFieldKey(key) ? lead?.payload?.custom_field_status?.[key] : lead?.field_status?.[key];
   return ['no_match', 'unsupported'].includes(String(status?.status || '').trim())
     && Boolean(String(status?.reason || '').trim());
 }
@@ -488,17 +538,28 @@ const REPLICATED_COLLECTIONS = Object.freeze([
 ]);
 const DEFAULT_RESEARCH_POLICY = [
   "0. Zuerst prüfen, ob Unternehmen und Ansprechpartner bereits in Sellify vorhanden sind. Der Sellify-Bestand ist der Ausgangswert jedes Feldes und zugleich eine Quelle. Er wird nur geändert, wenn eine externe Quelle etwas anderes belegt.",
-  "1. Identität und Registerdaten zuerst klären: Firmierung (firma_name) einschließlich früherer Namen und Umfirmierungen (firma_fruehere_namen), Rechtsform, Aktivitätsstatus (firma_aktivitaetsstatus) sowie Geschäftsführung (firma_geschaeftsfuehrung) und Prokura (firma_prokura) aus dem Register. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
-  "2. Danach Website, Anschrift und Kommunikation ergänzen: Domain (firma_domain) zuerst, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift (firma_anschrift), Besucheranschrift (firma_besucheranschrift) und Postanschrift (firma_postanschrift) getrennt führen, Postfach (firma_postfach), PLZ (firma_plz), Ort (firma_ort), Land (firma_land), Firmen-E-Mail (firma_email), Telefon (firma_telefon) und Fax (firma_fax, am besten über Google). Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
-  "3. Danach die Kennzahlen prüfen: Branche bzw. WZ-Code (wz_code), Umsatz (umsatz), Mitarbeiterzahl (mitarbeiter) und die Geschäftstätigkeit (firma_geschaeftstaetigkeit). WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (firma_homepage_fact_sheet).",
-  "4. Zuletzt die Ansprechpartner recherchieren: Anrede/Geschlecht (person_geschlecht), Titel (person_titel), Vorname (person_vorname), Nachname (person_nachname), Funktion (person_funktion), Position (person_position), E-Mail (person_email), Telefon (person_telefon), LinkedIn-Profil (person_linkedin) und XING-Profil (person_xing). E-Mail-Adressen aus dem Unternehmensmuster ableiten und über MailTester und Experte validieren (person_email_validation). Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
-  "4a. Die E-Mail-Pruefung (person_email_validation) uebernimmt CTOX selbst: nach jedem Rueckschreiben prueft der Daemon jede gelieferte Kontaktadresse ueber experte.de und haengt das Ergebnis dem Kontakt an. Liefere deshalb jede gefundene persoenliche Adresse als person_email mit Beleg und person_key. Versuche die Pruefung NICHT ueber `ctox web read` und setze person_email_validation NICHT auf no_match, nur weil du sie nicht selbst ausfuehren kannst.",
-  "5. Belegregel (Owner 23.09.2026): Für jedes Feld genügt EINE passende belegte Quelle mit URL und wörtlichem Zitat, das den konkreten Wert tatsächlich nennt. Weitere unabhängige Quellen stärken den Wert und werden angezeigt, sind aber keine Pflicht. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
-  "5a. Selbstauskünfte wie firma_domain, firma_email, firma_telefon, firma_fax, firma_postfach, firma_besucheranschrift, firma_postanschrift, firma_homepage_fact_sheet sowie alle person_-Felder belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als no_match verwerfen mit der Begründung, er stehe nur auf der eigenen Website. Eine persönliche E-Mail-Adresse, die genau so auf der offiziellen Unternehmensseite steht, ist belegt; eine SMTP-Prüfung ist dafür nicht nötig.",
-  "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]} — so verpackte Belege gehen beim Speichern verloren. Das gilt auch für result.person_records und result.evidence.",
+  "1. Identität und Registerdaten zuerst klären: Firmenname einschließlich früherer Namen und Umfirmierungen, Rechtsform, Aktivitätsstatus sowie Geschäftsführung und Prokura aus dem Register. Nur amtierende Geschäftsführer und Prokuristen übernehmen; Ausgeschiedene („nicht mehr Geschäftsführer“, „ausgeschieden“, „Prokura erloschen“) nie eintragen. Deutschland: Handelsregister, Northdata, Bundesanzeiger, CompanyHouse. Österreich: Firmenbuch/JustizOnline, FirmenABC, Northdata. Schweiz: Zefix/Handelsregister, SHAB, Moneyhouse, Northdata.",
+  "2. Danach Website, Anschrift und Kommunikation: zuerst die Domain, weil Impressum und Unternehmensseite ohne sie nicht auffindbar sind. Dann Anschrift, PLZ, Ort, Länderkennzeichen, Firmen-E-Mail und Firmen-Telefon. Priorität der Adresssuche in allen drei Ländern: 1. Impressum der offiziellen Website, 2. FirmenABC (Österreich) bzw. Zefix (Schweiz) bzw. D&B Hoovers (Deutschland, Schweiz), 3. Northdata als letzte Quelle.",
+  "2a. Besucheradresse und Postadresse: Nennt keine Quelle eine abweichende Besucher- oder Postadresse, sind beide gleich der Anschrift. Dann beide mit dem Wert und dem Beleg der Anschrift eintragen und als Begründung „keine abweichende Angabe gefunden“ vermerken. Nur eine ausdrücklich abweichende Angabe (z. B. „Besucheranschrift:“, „Postanschrift:“, „Lieferadresse“) wird getrennt geführt.",
+  "2b. Optionale Felder wie Fax, Postfach und frühere Namen nur eintragen, wenn sie bei der Suche nach den anderen Feldern auftauchen. Für sie keine eigene Suche; ihr Fehlen blockiert nichts.",
+  "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
+  "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Prokura, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
+  "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
+  "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
+  "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
+  "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, Prokura, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
+  "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
   "5b. Werte in der Schreibweise der Quelle übernehmen, mit Umlauten und ß. Keine Umschrift: Nürnberg, nicht Nuernberg; Lechstraße, nicht Lechstrasse. Schweizer Adressen behalten ihr ss.",
-  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts — weder den Wert noch sein Fehlen.",
+  "5c. Belege als reine JSON-Liste senden: \"sources\": [ { … }, { … } ]. Kein Trägerobjekt wie {\"item\": [ … ]}. Das gilt auch für result.person_records und result.evidence.",
+  "6. Bei Zugriffshürden Web-Stack-Unlocking verwenden; bei Anmeldung den CTOX-Browser öffnen und erst nach sichtbarer Bestätigung des Nutzers mit derselben persistenten Sitzung fortsetzen. Eine Quelle, die blockiert oder vorübergehend nicht erreichbar ist, belegt nichts, weder den Wert noch sein Fehlen.",
   "7. Unklare oder widersprüchliche Daten als prüfbedürftig markieren und nicht automatisch an Sellify übergeben. Bei Widerspruch zwischen zwei Quellen das Feld leer lassen und beide Werte mit ihrer Quelle festhalten.",
+  "8. Abschlussbericht: Nach dem letzten Rückschreiben den gespeicherten Lead-Datensatz neu lesen (get_record) und den Bericht ausschließlich daraus erstellen. Zahlen (belegt, nicht gefunden, offen), Personen, Kontakte, E-Mail-Prüfungen, LinkedIn-/XING-Profile und Quellen nur so nennen, wie sie im gespeicherten Datensatz stehen. Was nicht gespeichert werden konnte, ausdrücklich als nicht gespeichert benennen.",
+  "",
+  "Tipps aus den bisherigen Läufen:",
+  "- Zuerst die registrierten Adapter der Quellen ausführen (ctox_web_scrape execute), erst ohne Adapter den Browser. Liefert ein Adapter nichts oder ist er veraltet, das Skript reparieren und testen, dann ausführen.",
+  "- Jede Quelle je Feldgruppe genau einmal fragen. Keine Wiederholung bei blocked, authorization_required oder temporary_unreachable; die nächste Quelle nehmen. „Nicht gefunden“ erst, wenn alle für das Feld genannten Quellen gefragt sind, mit diesen Versuchen als attempts.",
+  "- Registerfelder (Regel 5) erst zurückschreiben, wenn die zweite Quelle gefragt wurde.",
+  "- Zwischenstände früh sichern: nach den Registerdaten einmal zurückschreiben, am Ende höchstens zwei weitere Rückschreibungen.",
 ].join('\n');
 const CURRENT_USER_COPY = Object.freeze({
   de: {
@@ -1529,7 +1590,9 @@ function normalizeResearchFieldKeys(value) {
 }
 
 function activeResearchFields() {
-  return state.researchFieldKeys.length ? [...state.researchFieldKeys] : [...RESEARCH_FIELDS];
+  const disabled = fieldCatalog().disabled;
+  return (state.researchFieldKeys.length ? [...state.researchFieldKeys] : [...RESEARCH_FIELDS])
+    .filter((key) => !disabled.has(key));
 }
 
 function researchPolicyRecord(
@@ -1768,7 +1831,17 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
     state.lastLeadReloadChanged = Boolean(leadChanges.changedIds.size || leadChanges.removedIds.size);
     state.leadListRows = leads.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
     const revisions = new Map(leads.map(lead => [lead.id, lead._rev]));
+    const vorherigeAuswahl = state.leads.find(lead => lead.id === state.selectedLeadId) || null;
     state.leads = sameBinding ? state.leads.filter(lead => revisions.get(lead.id) === lead._rev) : [];
+    // Eine neue Revision des gewaehlten Leads leerte bisher das Detail ("wird
+    // geladen"), bis die volle Fassung nachkam: die Rechercheangaben
+    // verschwanden und erschienen einen Augenblick spaeter wieder (thesen
+    // 09.10.2026). Bis dahin bleibt die bisherige Fassung sichtbar. Sie dient
+    // nur der Anzeige; Abgleich und Aktionen lesen state.leads.
+    if (sameBinding && vorherigeAuswahl && revisions.has(vorherigeAuswahl.id)
+      && !state.leads.some(lead => lead.id === vorherigeAuswahl.id)) {
+      state.detailAnzeigeVorher = vorherigeAuswahl;
+    }
     if (state.lastLeadReloadChanged) invalidateChangedRecipientEligibility(state.leads);
   }
   if (!fresh.has('leads') && !fresh.has('imports')) return;
@@ -2285,44 +2358,142 @@ function renderSourcePanel() {
     </div>`);
 }
 
-function requiredResearchFieldCount(optional = optionalFieldsDraft()) {
-  return RESEARCH_FIELD_GROUPS.flatMap(group => group.fields).filter(([key]) => !optional.has(key)).length;
+function requiredResearchFieldCount(optional = optionalFieldsDraft(), catalog = fieldCatalogDraft()) {
+  return reviewFieldGroups(catalog).flatMap(group => group.fields).filter(([key]) => !optional.has(key)).length;
+}
+
+function editableFieldCatalogDraft() {
+  if (!state.fieldCatalogDraft) {
+    const saved = fieldCatalog();
+    state.fieldCatalogDraft = { labels: { ...saved.labels }, disabled: new Set(saved.disabled), custom: saved.custom.map((field) => ({ ...field })) };
+  }
+  return state.fieldCatalogDraft;
+}
+function fieldCatalogSignature(catalog) {
+  return JSON.stringify([catalog.labels, [...catalog.disabled].sort(), catalog.custom]);
 }
 
 function renderOptionalFieldSettings() {
   const draft = optionalFieldsDraft();
   const gespeichert = optionalResearchFields();
-  const geaendert = draft.size !== gespeichert.size || [...draft].some((key) => !gespeichert.has(key));
+  const katalog = fieldCatalogDraft();
+  const geaendert = draft.size !== gespeichert.size || [...draft].some((key) => !gespeichert.has(key))
+    || fieldCatalogSignature(katalog) !== fieldCatalogSignature(fieldCatalog());
+  // Abgeschaltete Felder bleiben sichtbar, damit man sie wieder einschalten kann.
+  const gruppen = fieldGroupsFor(RESEARCH_FIELD_GROUPS, { labels: katalog.labels, custom: katalog.custom });
+  const zeile = (key, label) => {
+    const aus = katalog.disabled.has(key);
+    const eigen = isCustomFieldKey(key);
+    const beschreibung = eigen ? katalog.custom.find((field) => field.key === key)?.description || '' : '';
+    return `<div class="leadgen-optional-field${aus ? ' is-off' : ''}">
+      <label><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${!draft.has(key) && !aus ? ' checked' : ''}${aus ? ' disabled' : ''}> <span title="${escapeHtml(beschreibung)}">${escapeHtml(label)}</span></label>
+      <span class="leadgen-field-tools">
+        <button type="button" class="ctox-button ctox-button--sm" data-action="rename-field" data-field="${escapeHtml(key)}" title="Umbenennen" aria-label="${escapeHtml(label)} umbenennen">✎</button>
+        ${eigen
+          ? `<button type="button" class="ctox-button ctox-button--sm" data-action="delete-custom-field" data-field="${escapeHtml(key)}">Löschen</button>`
+          : `<button type="button" class="ctox-button ctox-button--sm" data-action="toggle-field-off" data-field="${escapeHtml(key)}" title="${aus ? 'Wieder recherchieren' : 'Nicht mehr recherchieren'}">${aus ? 'Einschalten' : 'Aus'}</button>`}
+      </span>
+    </div>`;
+  };
   return `<section class="leadgen-optional-fields" aria-label="Pflichtfelder">
-    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht: diese Felder müssen für die Freigabe geprüft sein. Nicht angehakte Felder sind optional; sie werden weiterhin recherchiert und belegte Werte an Sellify übertragen.</span></label>
-    ${RESEARCH_FIELD_GROUPS.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
-      ${group.fields.map(([key, label]) => `<label class="leadgen-optional-field"><input type="checkbox" data-action="toggle-optional-field" data-field="${escapeHtml(key)}"${!draft.has(key) ? ' checked' : ''}> <span>${escapeHtml(label)}</span></label>`).join('')}
+    <label class="leadgen-policy-label">Pflichtfelder<span class="leadgen-policy-hint"> — angehakt = Pflicht für die Freigabe, ohne Haken optional (wird recherchiert, blockiert nicht). ✎ benennt um; der Name gilt in der App und im Rechercheablauf. „Aus“ = wird nicht recherchiert. Eigene Felder unten anlegen.</span></label>
+    ${gruppen.map((group) => `<fieldset class="leadgen-optional-group"><legend>${escapeHtml(group.label)}</legend>
+      ${group.fields.map(([key, label]) => zeile(key, label)).join('')}
     </fieldset>`).join('')}
+    <div class="leadgen-field-add" role="group" aria-label="Feld hinzufügen">
+      <input type="text" data-field-add="label" maxlength="80" placeholder="Neues Feld, z. B. Zertifikate">
+      <select data-field-add="area" aria-label="Bereich"><option value="company">Unternehmen</option><option value="contact">Ansprechpartner</option></select>
+      <input type="text" data-field-add="description" maxlength="400" placeholder="Was genau gesucht wird (für die Recherche)">
+      <label><input type="checkbox" data-field-add="required"> Pflicht</label>
+      <button type="button" class="ctox-button ctox-button--sm" data-action="add-custom-field">Feld hinzufügen</button>
+    </div>
     <div class="leadgen-optional-actions">
-      <span class="leadgen-muted">${requiredResearchFieldCount(draft)} Pflichtfelder${geaendert ? ' · nicht gespeichert' : ''}</span>
+      <span class="leadgen-muted">${requiredResearchFieldCount(draft, katalog)} Pflichtfelder${geaendert ? ' · nicht gespeichert' : ''}</span>
       <button class="ctox-button ctox-button--sm${geaendert ? ' is-primary' : ''}" data-action="save-optional-fields"${geaendert ? '' : ' disabled'}>Pflichtfelder speichern</button>
     </div>
   </section>`;
 }
 
+async function renameResearchField(key) {
+  const katalog = editableFieldCatalogDraft();
+  const eigen = katalog.custom.find((field) => field.key === key);
+  const bisher = katalog.labels[key] || eigen?.label || REVIEW_FIELD_LABELS[key] || key;
+  const name = String(await showBusinessPrompt('Neuer Name für das Feld', {
+    title: 'Feld umbenennen', defaultValue: bisher, confirmLabel: 'Übernehmen', cancelLabel: 'Abbrechen',
+  }) || '').trim().slice(0, 80);
+  if (!name || name === bisher) return;
+  if (eigen) eigen.label = name;
+  else if (name === REVIEW_FIELD_LABELS[key]) delete katalog.labels[key];
+  else katalog.labels[key] = name;
+  renderSourcePanel();
+}
+
+function addCustomResearchField(trigger) {
+  const form = trigger.closest('.leadgen-field-add');
+  const wert = (name) => form?.querySelector(`[data-field-add="${name}"]`);
+  const label = String(wert('label')?.value || '').trim().slice(0, 80);
+  if (!label) { showBusinessAlert('Bitte einen Namen für das neue Feld eingeben.'); return; }
+  const katalog = editableFieldCatalogDraft();
+  const vorhanden = [...RESEARCH_FIELDS, ...katalog.custom.map((field) => field.key)];
+  const key = customFieldKey(label, vorhanden);
+  katalog.custom.push({
+    key,
+    label,
+    area: wert('area')?.value === 'contact' ? 'contact' : 'company',
+    description: String(wert('description')?.value || '').trim().slice(0, 400),
+  });
+  const optional = new Set(optionalFieldsDraft());
+  if (wert('required')?.checked) optional.delete(key); else optional.add(key);
+  state.optionalFieldsDraft = optional;
+  renderSourcePanel();
+}
+
+async function deleteCustomResearchField(key) {
+  const katalog = editableFieldCatalogDraft();
+  const feld = katalog.custom.find((field) => field.key === key);
+  if (!feld) return;
+  const ok = await showBusinessConfirm(`Das Feld „${feld.label}“ löschen? Bereits recherchierte Werte bleiben an den Leads gespeichert, werden aber nicht mehr angezeigt.`, {
+    title: 'Feld löschen', confirmLabel: 'Löschen', kind: 'confirm',
+  });
+  if (!ok) return;
+  katalog.custom = katalog.custom.filter((field) => field.key !== key);
+  delete katalog.labels[key];
+  const optional = new Set(optionalFieldsDraft());
+  optional.delete(key);
+  state.optionalFieldsDraft = optional;
+  renderSourcePanel();
+}
+
 async function saveOptionalFields() {
   const draft = optionalFieldsDraft();
-  const keys = [...draft].sort();
+  const katalog = fieldCatalogDraft();
+  const eigeneSchluessel = new Set(katalog.custom.map((field) => field.key));
+  const keys = [...draft].filter((key) => !isCustomFieldKey(key) || eigeneSchluessel.has(key)).sort();
   const doc = await mitKanalHeilung(() => state.collections.researchPolicies.findOne(RESEARCH_POLICY_ID).exec(), 'save-optional-read');
   if (!doc) {
     showBusinessAlert('Der Rechercheablauf ist noch nicht geladen. Bitte kurz warten und erneut speichern.');
     return;
   }
-  // Nur dieses Feld aendern: kein neuer Prompt, keine Version, kein
-  // Adapter-Abgleich - die Adapter lesen die Pflichtfeld-Auswahl nicht.
+  // Nur die Feldliste aendern: kein neuer Prompt, keine Version, kein
+  // Adapter-Abgleich - die Adapter lesen die Feldliste nicht.
   const jetzt = Date.now();
-  await mitKanalHeilung(() => doc.incrementalPatch({ optional_field_keys: keys, updated_at_ms: jetzt }), 'save-optional-write');
+  const felder = { optional_field_keys: keys };
+  // Die Feldliste nur schreiben, wenn sie geaendert wurde.
+  if (fieldCatalogSignature(katalog) !== fieldCatalogSignature(fieldCatalog())) {
+    Object.assign(felder, {
+      field_labels: normalizeFieldLabels(katalog.labels),
+      disabled_field_keys: [...katalog.disabled].sort(),
+      custom_fields: normalizeCustomFields(katalog.custom),
+    });
+  }
+  await mitKanalHeilung(() => doc.incrementalPatch({ ...felder, updated_at_ms: jetzt }), 'save-optional-write');
   state.optionalFieldsSaved = { keys, at: jetzt };
-  state.researchPolicyRecord = { ...(state.researchPolicyRecord || {}), optional_field_keys: keys, updated_at_ms: jetzt };
+  state.researchPolicyRecord = { ...(state.researchPolicyRecord || {}), ...felder, updated_at_ms: jetzt };
   state.optionalFieldsDraft = null;
+  state.fieldCatalogDraft = null;
   renderSourcePanel();
   render();
-  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys))} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
+  showBusinessAlert(`${requiredResearchFieldCount(new Set(keys), fieldCatalog())} Pflichtfelder gespeichert. Nicht angehakte Felder bleiben optional.`);
 }
 
 // Ein Feld ohne gefundene Information fuer DIESEN Lead freigeben: es bleibt
@@ -3389,7 +3560,9 @@ function renderDetail() {
   const tabsHost = pane.querySelector('[data-detail-tabs]');
   const body = pane.querySelector('[data-detail-body]');
   if (!title || !body) return;
-  const lead = selectedLead();
+  const aktuelleFassung = selectedLead();
+  if (aktuelleFassung || state.detailAnzeigeVorher?.id !== state.selectedLeadId) state.detailAnzeigeVorher = null;
+  const lead = aktuelleFassung || state.detailAnzeigeVorher;
   if (!lead) {
     // Waehrend eines Sync-Ticks ist die Lead-Liste kurz leer. Solange eine
     // Auswahl existiert und die Spalte Inhalt zeigt, bleibt sie stehen.
@@ -3836,6 +4009,16 @@ async function handleClick(event) {
     return;
   }
   if (action === 'save-optional-fields') await saveOptionalFields();
+  if (action === 'rename-field') { await renameResearchField(String(trigger.dataset.field || '')); return; }
+  if (action === 'add-custom-field') { addCustomResearchField(trigger); return; }
+  if (action === 'delete-custom-field') { await deleteCustomResearchField(String(trigger.dataset.field || '')); return; }
+  if (action === 'toggle-field-off') {
+    const key = String(trigger.dataset.field || '');
+    const katalog = editableFieldCatalogDraft();
+    if (katalog.disabled.has(key)) katalog.disabled.delete(key); else katalog.disabled.add(key);
+    renderSourcePanel();
+    return;
+  }
   if (action === 'release-empty-field') await setEmptyFieldRelease(String(trigger.dataset.field || ''), true);
   if (action === 'unrelease-empty-field') await setEmptyFieldRelease(String(trigger.dataset.field || ''), false);
   if (action === 'make-field-optional') {
@@ -10180,6 +10363,15 @@ async function researchLead(id, options = {}) {
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
+        field_labels: researchFieldLabelMap([...(nurFelder || activeResearchFields()), ...fieldCatalog().custom.map((field) => field.key)]),
+        custom_fields: fieldCatalog().custom,
+        custom_fields_note: fieldCatalog().custom.length
+          ? 'Die eigenen Felder (custom_fields) zusätzlich recherchieren, mit derselben Belegregel. Zurückschreiben '
+            + 'nur in result.custom_fields.<key> = {"value": …, "sources": [{"url": …, "quote": …, "source_id": …}], '
+            + '"reason": …}; nie in field_status oder result.fields. Nicht gefunden: value null und reason.'
+          : '',
+        field_labels_note: 'Der Rechercheablauf nennt Felder mit ihrem Namen aus der App. field_labels ordnet jedem '
+          + 'Feldschlüssel diesen Namen zu ("Bereich: Name"). Zurückgeschrieben wird immer unter dem Feldschlüssel.',
         ...(fortsetzung ? { continuation: fortsetzung } : {}),
         include_private: enabledPrivateResearchSources(),
         person_priorities: [...PERSON_RESEARCH_PRIORITIES],
@@ -12898,6 +13090,9 @@ function feldImEditor(fieldKey) {
 }
 
 function researchFieldValue(lead, fieldKey) {
+  if (isCustomFieldKey(fieldKey)) {
+    return String(lead?.data?.[fieldKey] || lead?.payload?.custom_field_status?.[fieldKey]?.value || '').trim();
+  }
   const aliases = RESEARCH_FIELD_VALUE_KEYS[fieldKey] || [fieldKey];
   if (fieldKey.startsWith('person_')) {
     return String(firstValue(lead?.contacts?.[0], aliases) || '').trim();
@@ -13056,7 +13251,7 @@ function operatorAttestedField(lead, key) {
     && (!istPerson || !entry?.person_key || String(entry.person_key) === personKey));
 }
 function researchFieldReview(lead) {
-  const groups = RESEARCH_FIELD_GROUPS.map((group) => ({
+  const groups = reviewFieldGroups().map((group) => ({
     id: group.id,
     label: group.label,
     fields: group.fields.map(([key, label]) => {
@@ -13094,7 +13289,7 @@ function researchFieldReview(lead) {
     field.notFound = !field.filled && (researchAnsweredNotFound(lead, field.key) || field.releasedEmpty);
   }
   const fields = groups.flatMap((group) => group.fields);
-  const researchFields = fields.filter((field) => RESEARCH_FIELD_SET.has(field.key));
+  const researchFields = fields.filter((field) => isResearchFieldKey(field.key));
   const researchedKeys = new Set((Array.isArray(lead?.payload?.researched_field_keys)
     ? lead.payload.researched_field_keys : []).map((key) => String(key || '')));
   const loadedEvidenceCount = (Array.isArray(lead?.evidence) ? lead.evidence.length : 0)
@@ -13189,6 +13384,13 @@ function validationBlockerDetails(lead) {
       && !(recherchierbar && researchAnsweredNotFound(lead, key))) {
       blockers.push(`${label} fehlt`);
       feldZuBlocker.set(`${label} fehlt`, key);
+    }
+  }
+  for (const field of fieldCatalog().custom) {
+    if (optional.has(field.key) || leerFreigegeben(lead, field.key)) continue;
+    if (!researchFieldValue(lead, field.key) && !researchAnsweredNotFound(lead, field.key)) {
+      blockers.push(`${field.label} fehlt`);
+      feldZuBlocker.set(`${field.label} fehlt`, field.key);
     }
   }
   const activity = normalizeProtectionText(researchFieldValue(lead, 'firma_aktivitaetsstatus'));

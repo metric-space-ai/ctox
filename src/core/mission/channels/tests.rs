@@ -4641,6 +4641,58 @@ fn take_messages_ages_threads_while_using_latest_message_within_thread() {
 }
 
 #[test]
+fn take_messages_serves_communication_before_older_queue_work() {
+    let db_path = unique_test_db_path("ctox-channel-communication-first");
+    let mut conn = open_channel_db(&db_path).expect("failed to open db");
+    for (message_key, channel, thread_key, external_created_at) in [
+        ("queue-old", "queue", "queue:system", "2026-04-22T08:00:00Z"),
+        ("mail-new", "email", "thread-mail", "2026-04-24T11:00:00Z"),
+        ("tui-new", "tui", "tui:local", "2026-04-24T12:00:00Z"),
+    ] {
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key,
+                channel,
+                account_key: "account",
+                thread_key,
+                remote_id: message_key,
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Sender",
+                sender_address: "customer@example.com",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Priority",
+                preview: message_key,
+                body_text: message_key,
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at,
+                observed_at: external_created_at,
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+    }
+    ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+
+    let order = take_messages(&mut conn, None, 3, "ctox-service")
+        .expect("take messages should succeed")
+        .into_iter()
+        .map(|message| message.message_key)
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["tui-new", "mail-new", "queue-old"]);
+
+    let _ = fs::remove_file(&db_path);
+}
+
+#[test]
 fn take_messages_does_not_retake_same_owner_lease() {
     let db_path = unique_test_db_path("ctox-channel-no-same-owner-retake");
     let mut conn = open_channel_db(&db_path).expect("failed to open db");

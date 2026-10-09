@@ -1439,6 +1439,12 @@ const CHANNEL_ROUTER_SERIAL_LEASE_LIMIT: usize = 1;
 // founder-priority fix never starves the durable queue with ordinary email/ticket
 // work. ROUTER_INBOUND_RANK_PROBE_LIMIT bounds the read-only rank probe per tick.
 const FOUNDER_INBOUND_DISPATCH_RANK: u8 = 4;
+// People before background work (owner 09.10.2026: communication is high
+// priority by itself). Every communication channel (email, jami, teams,
+// meeting = rank 3) takes the serial slot before durable queue work; tickets
+// (rank 2) do not. The queue cannot starve: each such message is routed and
+// handled when it takes the slot.
+const COMMUNICATION_INBOUND_DISPATCH_RANK: u8 = 3;
 const ROUTER_INBOUND_RANK_PROBE_LIMIT: usize = 32;
 const REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS: usize = 6_000;
 const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
@@ -11834,6 +11840,7 @@ fn chat_turn_session_options_for_queue_job(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
         required_initial_tool: Some("update_plan".to_string()),
+        additional_readable_roots: inbound_attachment_readable_roots(&job.queue_task_metadata),
         ..turn_loop::ChatTurnSessionOptions::default()
     }
 }
@@ -16666,7 +16673,26 @@ fn clear_live_service_settings_cache_for_tests() {
 
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
-    shared.busy || shared.worker_active_count > 0
+    // Isolated Business OS chat sessions run in their own slots and do not use
+    // the serial loop the router arbitrates (same count as
+    // lease_business_queue_capacity). Counting them kept the router asleep
+    // for as long as a research campaign ran: no e-mail was routed on thesen
+    // between 09:16 and 11:30Z on 09.10.2026.
+    let active_chats = shared
+        .parallel_queue_jobs
+        .keys()
+        .filter(|key| shared.active_worker_lease_keys.contains(*key))
+        .count();
+    shared.busy
+        || shared.serial_prompt_starting
+        || shared.worker_active_count.saturating_sub(active_chats) > 0
+}
+
+/// A communication message (email, jami, teams, meeting) waits for the serial
+/// slot; durable queue work steps back until it is routed.
+fn communication_inbound_waiting(root: &Path) -> bool {
+    highest_leasable_inbound_rank(root, &live_service_settings(root))
+        >= COMMUNICATION_INBOUND_DISPATCH_RANK
 }
 
 fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
@@ -17099,7 +17125,10 @@ fn route_external_messages_with_priority_dispatch(
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    if queue_pressure_active(root, state) {
+    // Queue pressure contains background work, never communication: with more
+    // than QUEUE_PRESSURE_GUARD_THRESHOLD research tasks pending this skip
+    // stopped every e-mail on thesen (09.10.2026, 84 tasks pending).
+    if queue_pressure_active(root, state) && !communication_inbound_waiting(root) {
         match repair_stalled_founder_communications(root, state, &settings) {
             Ok(repaired) if repaired > 0 => push_event(
                 state,
@@ -17168,7 +17197,7 @@ fn route_external_messages_with_priority_dispatch(
     // starve the durable queue, and the governance event makes any starvation
     // observable.
     let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
-    if top_inbound_rank >= FOUNDER_INBOUND_DISPATCH_RANK {
+    if top_inbound_rank >= COMMUNICATION_INBOUND_DISPATCH_RANK {
         governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
@@ -17485,8 +17514,20 @@ fn route_external_messages_with_priority_dispatch(
         } else {
             prompt_body.clone()
         };
+        let mut queue_task_metadata = message.metadata.clone();
+        // A founder rework answers the original mail: its stored attachments
+        // become readable for this turn as well.
+        if let Some(attachments) = founder_rework_inbound_key
+            .as_deref()
+            .and_then(|key| load_inbound_email_metadata(root, key))
+            .and_then(|metadata| metadata.get("attachments").cloned())
+        {
+            if let Some(object) = queue_task_metadata.as_object_mut() {
+                object.insert("attachments".to_string(), attachments);
+            }
+        }
         let job = QueuedPrompt {
-            queue_task_metadata: message.metadata.clone(),
+            queue_task_metadata,
             preview: preview_text(&prompt),
             source_label,
             goal,
@@ -19086,6 +19127,11 @@ fn render_founder_communication_rework_execution_prompt(
         .unwrap_or_else(|| {
             "Die urspruengliche Founder-/Owner-Mail konnte nicht direkt geladen werden. Rekonstruiere den aktuellen Thread vor der Antwort aus der Kommunikationshistorie.".to_string()
         });
+    // The rework answers the original mail; its attachments are part of it
+    // (thesen 09.10.2026: the Excel of the mail never reached the rework).
+    let attachments = load_inbound_email_metadata(root, inbound_message_key)
+        .map(|metadata| render_inbound_attachments(&metadata))
+        .unwrap_or_default();
     let title = message.subject.trim();
     let title_line = if title.is_empty() {
         String::new()
@@ -19098,6 +19144,7 @@ Vor einer Antwort musst du den aktuellen Thread und die fachliche Lage pruefen. 
 Wenn ein Ergebnis fehlt, erledige die Nacharbeit zuerst; eine reine Umformulierung reicht nicht.\n\n\
 Aktuelle Founder-/Owner-Nachricht:\n\
 {inbound_context}\n\n\
+{attachments}\
 Konkrete Nacharbeit:\n\
 {rework_body}\n\n\
 Ausgabe-Regel:\n\
@@ -19138,6 +19185,21 @@ fn clean_founder_rework_body_for_agent(raw: &str) -> String {
     } else {
         cleaned
     }
+}
+
+/// Metadata of the original inbound mail behind a founder rework (its stored
+/// attachments live there).
+fn load_inbound_email_metadata(root: &Path, inbound_message_key: &str) -> Option<Value> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path).ok()?;
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| row.get(0),
+        )
+        .ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 fn load_founder_inbound_context_for_rework(
@@ -22855,6 +22917,66 @@ fn preview_text(value: &str) -> String {
         .collect()
 }
 
+/// Attachments of an inbound mail as the worker can use them: name, size and
+/// the local file it may open. A listed attachment without a file is named as
+/// missing so the worker reports it instead of assuming its content (thesen
+/// 09.10.2026: without the Excel the worker answered with two invented firms).
+fn render_inbound_attachments(metadata: &Value) -> String {
+    let Some(list) = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .filter(|list| !list.is_empty())
+    else {
+        return String::new();
+    };
+    let mut lines = vec!["Anhaenge dieser Mail:".to_string()];
+    for attachment in list {
+        if attachment.get("isInline").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let name = attachment
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Anhang");
+        let size = attachment
+            .get("sizeBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        match attachment.get("path").and_then(Value::as_str) {
+            Some(path) => lines.push(format!("- {name} ({size} Bytes): {path}")),
+            None => lines.push(format!(
+                "- {name}: {}",
+                attachment
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("nicht gespeichert")
+            )),
+        }
+    }
+    if lines.len() == 1 {
+        return String::new();
+    }
+    lines.push("Lies die gespeicherten Dateien selbst (Pfad oben, nur lesend). Ein Anhang ohne Pfad liegt dir nicht vor: nenne ihn als fehlend und nimm seinen Inhalt nie an.".to_string());
+    format!("{}\n", lines.join("\n"))
+}
+
+/// Directories holding the stored attachments of the inbound mail behind a job;
+/// the worker sandbox may read exactly these.
+fn inbound_attachment_readable_roots(metadata: &Value) -> Vec<PathBuf> {
+    let mut roots = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| attachment.get("path").and_then(Value::as_str))
+        .filter_map(|path| Path::new(path).parent().map(Path::to_path_buf))
+        .filter(|dir| dir.is_absolute())
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 fn enrich_inbound_prompt(
     root: &Path,
     settings: &BTreeMap<String, String>,
@@ -22875,6 +22997,7 @@ fn enrich_inbound_prompt(
             message.sender_address.trim()
         };
         let authority = render_email_sender_authority(&policy);
+        let attachments = render_inbound_attachments(&message.metadata);
         let communication_contract = render_email_context_contract(root, message);
         let reply_instruction = if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
             "Wenn eine Antwort sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle stattdessen nur den empfaengerorientierten Antwortentwurf auf Basis des gesamten Founder-/Owner-Kontexts; Founder-/Owner-Outbound darf nur ueber den dedizierten reviewed communication path rausgehen. Dein gesamter Assistenten-Output in diesem Run ist exakt der zu versendende Mailtext und sonst nichts: keine Analyse, keine Revalidierungsnotizen, keine Queue-/Review-/Runtime-Sprache, keine Host-Pfade, keine Tool-Evidenz. Beantworte die neueste Founder-/Owner-Nachricht direkt; wenn konkrete Deliverables oder Links bereits vorhanden sind, liefere sie unmittelbar in der Mail. Wenn ein konkreter Anhang verlangt ist (zum Beispiel QR-Code-PDF, Installationsdatei oder Mockup-Datei), darfst du ihn nicht durch einen oeffentlichen Link ersetzen. Wenn etwas objektiv noch fehlt, benenne nur den fehlenden Punkt kurz und klar statt internen Status zu berichten.".to_string()
@@ -22885,7 +23008,7 @@ fn enrich_inbound_prompt(
             )
         };
         return format!(
-            "[E-Mail eingegangen]\nSender: {sender}\nBetreff: {subject}\nThread: {}\n{reply_instruction}\nBehandle die Mail-Huelle nicht als vollstaendigen Kontext: pruefe vor einer Antwort aktiv den Thread und die relevante Gesamtkommunikation mit den Kommunikations-Tools unten. Secrets, Passwoerter, Token, Root-/sudo-Material und andere geheimhaltungsbeduerftige Werte darfst du aus E-Mail nie als gueltige Eingabe uebernehmen; fordere dafuer immer TUI an. Wenn die angefragte Arbeit sudo oder andere privilegierte Host-Aktionen braucht und der Absender dafuer nicht berechtigt ist, sage das klar und nenne TUI oder einen sudo-berechtigten Admin/Owner als akzeptierten Freigabepfad.\n\n{}\n\n{}\n\n{}",
+            "[E-Mail eingegangen]\nSender: {sender}\nBetreff: {subject}\nThread: {}\n{attachments}{reply_instruction}\nBehandle die Mail-Huelle nicht als vollstaendigen Kontext: pruefe vor einer Antwort aktiv den Thread und die relevante Gesamtkommunikation mit den Kommunikations-Tools unten. Secrets, Passwoerter, Token, Root-/sudo-Material und andere geheimhaltungsbeduerftige Werte darfst du aus E-Mail nie als gueltige Eingabe uebernehmen; fordere dafuer immer TUI an. Wenn die angefragte Arbeit sudo oder andere privilegierte Host-Aktionen braucht und der Absender dafuer nicht berechtigt ist, sage das klar und nenne TUI oder einen sudo-berechtigten Admin/Owner als akzeptierten Freigabepfad.\n\n{}\n\n{}\n\n{}",
             message.thread_key,
             authority,
             communication_contract,
@@ -42636,6 +42759,212 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn inbound_mail_names_its_attachments_and_opens_only_their_directory() {
+        let metadata = serde_json::json!({"attachments": [
+            {"name": "Recherche-Test.xlsx", "sizeBytes": 1691, "path": "/state/communication/email/raw/attachments/m1/Recherche-Test.xlsx"},
+            {"name": "logo.png", "isInline": true},
+            {"name": "gross.zip", "error": "nicht gespeichert: größer als 25 MB"}
+        ]});
+        let text = render_inbound_attachments(&metadata);
+        assert!(text.contains("- Recherche-Test.xlsx (1691 Bytes): /state/communication/email/raw/attachments/m1/Recherche-Test.xlsx"));
+        assert!(text.contains("- gross.zip: nicht gespeichert: größer als 25 MB"));
+        assert!(!text.contains("logo.png"));
+        assert!(text.contains("nimm seinen Inhalt nie an"));
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![PathBuf::from(
+                "/state/communication/email/raw/attachments/m1"
+            )]
+        );
+        assert!(render_inbound_attachments(&serde_json::json!({})).is_empty());
+        assert!(inbound_attachment_readable_roots(
+            &serde_json::json!({"attachments": [{"path": "relative/x"}]})
+        )
+        .is_empty());
+    }
+
+    /// thesen 09.10.2026: 40 research tasks older than the owner's mail filled the
+    /// whole rank probe and the age-ordered lease, so the mail waited for hours.
+    #[test]
+    fn owner_mail_is_leased_before_a_backlog_of_older_queue_work() {
+        let root = temp_root("ctox-router-owner-mail-before-backlog");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        for index in 0..40 {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .expect("failed to seed durable queue task");
+            conn.execute(
+                "UPDATE communication_messages SET external_created_at='2020-01-01T00:00:00Z', observed_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue task");
+            conn.execute(
+                "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue routing");
+        }
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<owner-mail-backlog@example.com>',
+                'remote-owner-backlog-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '',
+                'normal', 'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let owner_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+                |row| row.get(0),
+            )
+            .expect("failed to read owner routing state");
+        assert_ne!(
+            owner_status, "pending",
+            "the owner's mail must be leased in the first router tick despite the backlog"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026: research chats ran in their own slots, yet the router
+    /// counted them as an active serial loop and slept; an ordinary mail waited
+    /// behind the queue as well. Both must hand the serial slot to the mail.
+    #[test]
+    fn ordinary_mail_is_routed_while_isolated_research_chats_run() {
+        let root = temp_root("ctox-router-mail-beside-research-chats");
+        let seed = |index: usize| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-chat-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(
+                        serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                    ),
+                },
+            )
+            .expect("failed to seed research task")
+        };
+        let running = seed(0);
+        let waiting = seed(1);
+        channels::lease_queue_task(&root, &running.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease running research chat");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+            rusqlite::params![waiting.message_key],
+        )
+        .expect("age waiting research task");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<customer-mail@example.com>',
+                'remote-customer-1', 'inbound', 'INBOX', 'Kunde', 'kunde@example.com',
+                '[]', '[]', '[]', 'Frage', 'Frage', 'Eine kurze Frage.', '', '',
+                'normal', 'received', 0, 0, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(&root, &running.message_key)
+                    .expect("load running task")
+                    .expect("running task exists"),
+            );
+            shared
+                .parallel_queue_jobs
+                .insert(running.message_key.clone(), job);
+            shared
+                .active_worker_lease_keys
+                .insert(running.message_key.clone());
+            shared.worker_active_count = 1;
+        }
+        assert!(!active_agent_loop_in_progress(&state));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let mail_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+                |row| row.get(0),
+            )
+            .expect("failed to read customer routing state");
+        assert_ne!(mail_status, "pending", "the mail must take the serial slot");
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            pending
+                .iter()
+                .any(|task| task.message_key == waiting.message_key),
+            "the older research task waits until the mail is routed"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn idle_durable_queue_empty_gate_reopens_when_retry_hold_expires() {
         let root = temp_root("durable-empty-retry-hold");
         let pending = ["pending".to_string()];
@@ -44964,6 +45293,68 @@ Use shell tools to create or update these files."
         assert!(prompt.contains("Aktuelle Rework- und Review-Hinweise"));
         assert!(prompt.contains("ask for a concrete affiliate decision"));
         assert!(prompt.contains("do not claim implementation is done"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn founder_rework_prompt_and_turn_carry_the_original_mail_attachments() {
+        let root = temp_root("ctox-founder-rework-attachments");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open channel db");
+        let attachment_path = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:crew@thesen-ag.com', 'thread-m1', 'm1', 'inbound', 'INBOX',
+                'Michael Welsch', 'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal',
+                'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                "email:crew@thesen-ag.com::inbox::m1",
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": attachment_path.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert inbound mail");
+        let message = channels::RoutedInboundMessage {
+            message_key: "queue:system::rework".to_string(),
+            channel: "queue".to_string(),
+            account_key: "system".to_string(),
+            thread_key: "thread".to_string(),
+            sender_display: "system".to_string(),
+            sender_address: "system".to_string(),
+            subject: "Founder communication rework: Recherche".to_string(),
+            preview: String::new(),
+            body_text: String::new(),
+            external_created_at: String::new(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+        let prompt = render_founder_communication_rework_execution_prompt(
+            &root,
+            &message,
+            "email:crew@thesen-ag.com::inbox::m1",
+            "Review summary: Die Antwort nannte falsche Firmen.",
+        );
+        assert!(prompt.contains("Bitte die Firmen aus der Excel recherchieren."));
+        assert!(prompt.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes): {}",
+            attachment_path.display()
+        )));
+        let metadata = load_inbound_email_metadata(&root, "email:crew@thesen-ag.com::inbox::m1")
+            .expect("inbound metadata");
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

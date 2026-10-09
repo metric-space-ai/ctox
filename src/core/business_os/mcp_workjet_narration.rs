@@ -26,6 +26,26 @@ struct Request {
     action: String,
     request: wire::NarrateRequest,
 }
+struct NarrationAttempt {
+    operation_id: String,
+    owner_user_id: String,
+    intent_hash: String,
+    state: String,
+    attempts: u64,
+    receipt_json: Option<String>,
+    projections_json: Option<String>,
+}
+fn narration_attempt(row: &rusqlite::Row<'_>) -> rusqlite::Result<NarrationAttempt> {
+    Ok(NarrationAttempt {
+        operation_id: row.get(0)?,
+        owner_user_id: row.get(1)?,
+        intent_hash: row.get(2)?,
+        state: row.get(3)?,
+        attempts: row.get(4)?,
+        receipt_json: row.get(5)?,
+        projections_json: row.get(6)?,
+    })
+}
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -148,20 +168,28 @@ pub(super) fn execute(
     args: &Value,
     trusted: &Value,
 ) -> anyhow::Result<Value> {
-    // MCP gateway dispatches tools on spawn_blocking within this existing
-    // runtime. No nested runtime, separate daemon, browser credential or fallback.
+    // Managed MCP uses spawn_blocking in its runtime; local HTTP MCP uses bare
+    // std threads. Drive the same configured adapter in either context, creating
+    // a runtime only when this thread has none. Never nest a runtime or mistake
+    // a missing executor for missing speech configuration.
     execute_with(root, context, args, trusted, |request| {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| SpeechError::ConfigurationUnavailable)?;
         let gateway = SpeechGateway::from_root(root)?;
-        handle.block_on(async {
+        let synthesis = async {
             tokio::time::timeout(
                 std::time::Duration::from_secs(90),
                 gateway.synthesize_verified_async(request),
             )
             .await
             .map_err(|_| SpeechError::TimedOut)?
-        })
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle.block_on(synthesis),
+            Err(_) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| SpeechError::ExecutionUnavailable)?
+                .block_on(synthesis),
+        }
     })
 }
 fn execute_with<F>(
@@ -201,24 +229,50 @@ where
         let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (meeting, text) = current(&core_tx, &tx, context, trusted, &r)?;
         tx.execute_batch(SCHEMA)?;
-        let old:Option<(String,String,String,u64,Option<String>,Option<String>)>=tx.query_row("SELECT owner_user_id,intent_hash,state,attempts,receipt_json,projections_json FROM workjet_jour_fixe_native_narration WHERE operation_id=?1",[&r.operation_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
-        if let Some((owner, prior, state, attempts, receipt, projections)) = old {
+        // The slide slot, not a caller's fresh operation ID, owns the retry
+        // budget. An operation ID already used elsewhere still wins this lookup
+        // so its intent cannot be rebound to another slide.
+        let old = tx.query_row(
+            "SELECT operation_id,owner_user_id,intent_hash,state,attempts,receipt_json,projections_json
+             FROM workjet_jour_fixe_native_narration
+             WHERE operation_id=?1 OR (meeting_id=?2 AND deck_revision=?3 AND slide_id=?4)
+             ORDER BY CASE WHEN operation_id=?1 THEN 0 ELSE 1 END LIMIT 1",
+            params![r.operation_id, meeting.id, r.deck_revision, r.slide_id],
+            narration_attempt,
+        ).optional()?;
+        if let Some(old) = old {
+            let replay = old.operation_id == r.operation_id;
             anyhow::ensure!(
-                owner == meeting.owner_user_id && prior == intent,
+                old.owner_user_id == meeting.owner_user_id
+                    && (!replay || old.intent_hash == intent),
                 "narration operation intent conflicts"
             );
-            if let Some(raw) = receipt {
-                let result = serde_json::from_str(&raw)?;
+            if let (true, Some(raw)) = (replay, old.receipt_json.as_ref()) {
+                let result = serde_json::from_str(raw)?;
                 let refs = serde_json::from_str(
-                    &projections.context("committed native audio projection receipt missing")?,
+                    &old.projections_json
+                        .context("committed native audio projection receipt missing")?,
                 )?;
                 tx.commit()?;
                 core_tx.commit()?;
                 project_custody(root, &refs)?;
                 return Ok(result);
             }
-            anyhow::ensure!(state=="failed_prerequisite" && attempts<3,"narration is already running or its producer result is uncertain; no automatic resynthesis");
-            tx.execute("UPDATE workjet_jour_fixe_native_narration SET state='reserved',attempts=attempts+1,error_class=NULL WHERE operation_id=?1",[&r.operation_id])?;
+            anyhow::ensure!(
+                matches!(old.state.as_str(), "failed" | "failed_prerequisite")
+                    && old.receipt_json.is_none()
+                    && old.attempts < 3,
+                "narration uniqueness conflict: existing operation_id '{}', status '{}', attempts {}; only a failed attempt below the retry limit can be retried; running, uncertain or completed audio cannot be resynthesized",
+                old.operation_id, old.state, old.attempts
+            );
+            // Reuse the unique slot atomically under the existing writer fence.
+            // Keep its attempt count even when the Supervisor changes the ID.
+            tx.execute(
+                "UPDATE workjet_jour_fixe_native_narration
+                 SET operation_id=?2,intent_hash=?3,state='reserved',attempts=attempts+1,error_class=NULL
+                 WHERE operation_id=?1",
+                params![old.operation_id, r.operation_id, intent],
+            )?;
         } else {
             tx.execute("INSERT INTO workjet_jour_fixe_native_narration (operation_id,owner_user_id,meeting_id,deck_revision,slide_id,intent_hash,state,attempts) VALUES(?1,?2,?3,?4,?5,?6,'reserved',1)",params![r.operation_id,meeting.owner_user_id,meeting.id,r.deck_revision,r.slide_id,intent])?;
         }
@@ -257,7 +311,15 @@ where
                     | SpeechError::InvalidRequest
                     | SpeechError::UnsupportedBackend
             );
-            store::open_store(root)?.execute("UPDATE workjet_jour_fixe_native_narration SET state=?2,error_class=?3 WHERE operation_id=?1 AND state='reserved'",params![r.operation_id,if known {"failed_prerequisite"} else {"uncertain"},serde_json::to_string(&error)?])?;
+            let state = if known {
+                "failed_prerequisite"
+            } else if error == SpeechError::ExecutionUnavailable {
+                // Runtime creation failed before the provider could be called.
+                "failed"
+            } else {
+                "uncertain"
+            };
+            store::open_store(root)?.execute("UPDATE workjet_jour_fixe_native_narration SET state=?2,error_class=?3 WHERE operation_id=?1 AND state='reserved'",params![r.operation_id,state,serde_json::to_string(&error)?])?;
             anyhow::bail!("native narration readiness failure: {error}; no audio was published");
         }
     };

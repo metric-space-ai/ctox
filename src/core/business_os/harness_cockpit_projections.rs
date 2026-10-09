@@ -6,7 +6,7 @@ mod schedule;
 mod tests;
 use super::{queue_pause_state, queue_retention};
 use crate::business_os::store::{self, BusinessProjectionWriter as NativeProjectionWriter};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -1230,6 +1230,58 @@ fn finalized_runs_sql(crew: bool) -> String {
     )
 }
 
+/// Preparation outcomes are facts about the retained meeting, not model prose.
+/// In particular a failed narration attempt is never proof of playable audio.
+fn preparation_reply_from_persisted_meeting(
+    policy: &Connection,
+    task: Option<&str>,
+    reply: &str,
+) -> Result<String> {
+    let Some(task) = task else {
+        return Ok(reply.to_owned());
+    };
+    if !has_table(policy, "workjet_jour_fixe_meetings")? {
+        return Ok(reply.to_owned());
+    }
+    let has_binding: bool = policy.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('workjet_jour_fixe_meetings') WHERE name='preparation_task_id')",
+        [], |row| row.get(0),
+    )?;
+    if !has_binding {
+        return Ok(reply.to_owned());
+    }
+    let raw: Option<String> = policy
+        .query_row(
+            "SELECT metadata_json FROM workjet_jour_fixe_meetings WHERE preparation_task_id=?1",
+            [task],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(reply.to_owned());
+    };
+    let meeting: crate::business_os::workjet_jour_fixe_contract::Meeting =
+        serde_json::from_str(&raw)?;
+    let narrated = meeting
+        .slides
+        .iter()
+        .filter(|slide| slide.audio.is_some())
+        .count();
+    let state = serde_json::to_value(meeting.state)?;
+    let retrospective = format!(
+        "Jour fixe: {narrated}/{} Folien mit gespeicherter Audio-Referenz; Meeting-Status {}.",
+        meeting.slides.len(),
+        state.as_str().context("meeting state")?,
+    );
+    // No provider/configuration conclusion is inferred from a worker's text.
+    // Unverified learnings must not poison the next preparation's memory.
+    Ok(format!(
+        "{}\n```ctox-crew\n{}\n```",
+        crate::crew::public_reply_text(reply),
+        json!({"crew_retrospective":{"retrospective":retrospective,"learnings":[]}}),
+    ))
+}
+
 fn project_runs(
     root: &Path,
     conn: &Connection,
@@ -1307,6 +1359,11 @@ fn project_runs(
                     [&id],
                     |r| r.get(0),
                 )?;
+                    let reply = preparation_reply_from_persisted_meeting(
+                        writer.inner.source_connection(),
+                        task.as_deref(),
+                        &reply,
+                    )?;
                     let owner_feedback: Option<String> = if has_table(
                         conn,
                         "business_command_aggregates",

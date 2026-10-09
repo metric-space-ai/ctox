@@ -550,3 +550,148 @@ fn ssh_algorithm_constraint_is_strict_persisted_and_invalidates_old_jobs() -> Re
     );
     Ok(())
 }
+
+#[test]
+fn native_ssh_key_setup_returns_only_public_material_and_reuses_the_stored_key() -> Result<()> {
+    let root = tempdir()?;
+    assign(
+        root.path(),
+        storage_config("ssh", "/volume1/artifacts"),
+        true,
+    )?;
+    let payload = json!({"computer_id": "computer-1"});
+    let first = dispatch(
+        root.path(),
+        "ctox.workjet.computer.ssh_key.ensure",
+        payload.clone(),
+    )?;
+    let repeated = dispatch(root.path(), "ctox.workjet.computer.ssh_key.ensure", payload)?;
+    assert_eq!(first, repeated);
+    assert_eq!(first["contract"], "ctox.workjet.computer-ssh-key.v1");
+    assert_eq!(first["computer_id"], "computer-1");
+    assert!(first["public_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("ssh-ed25519 "));
+    assert!(first["public_key_sha256"]
+        .as_str()
+        .unwrap()
+        .starts_with("SHA256:"));
+    let serialized = serde_json::to_string(&first)?;
+    assert!(!serialized.contains("PRIVATE KEY"));
+    assert_eq!(
+        crate::secrets::list_secret_records(root.path(), Some("computer-access"))?.len(),
+        1
+    );
+    let reference: SecretReference = serde_json::from_value(first["private_key"].clone())?;
+    crate::secrets::with_current_secret_value(
+        root.path(),
+        &reference.scope,
+        &reference.name,
+        |bytes| {
+            let key = PrivateKey::from_openssh(bytes)?;
+            assert_eq!(
+                key.public_key().to_openssh()?,
+                first["public_key"].as_str().unwrap()
+            );
+            assert_eq!(
+                key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+                first["public_key_sha256"]
+            );
+            Ok(())
+        },
+    )?;
+    let mut connection = ssh();
+    connection["private_key"] = first["private_key"].clone();
+    upsert(root.path(), connection)?;
+    assert!(!resolve_computer_endpoint(root.path(), &request())?
+        .fingerprint
+        .is_empty());
+    Ok(())
+}
+
+#[test]
+fn native_ssh_key_setup_denies_unassigned_foreign_and_non_owner_computers() -> Result<()> {
+    let root = tempdir()?;
+    let payload = json!({"computer_id": "computer-1"});
+    let kind = "ctox.workjet.computer.ssh_key.ensure";
+    assert!(dispatch(root.path(), kind, payload.clone()).is_err());
+    assert!(!crate::secrets::secret_store_path(root.path()).exists());
+    assign(
+        root.path(),
+        storage_config("ssh", "/volume1/artifacts"),
+        true,
+    )?;
+    for role in ["user", "founder", "team", ""] {
+        assert!(handle_workjet_computer_store_command(
+            root.path(),
+            &command(kind, payload.clone()),
+            "owner-1",
+            None,
+            role
+        )
+        .is_err());
+    }
+    assert!(handle_workjet_computer_store_command(
+        root.path(),
+        &command(kind, payload.clone()),
+        "owner-2",
+        None,
+        "admin"
+    )
+    .is_err());
+    assert!(dispatch(
+        root.path(),
+        kind,
+        json!({"computer_id":"computer-1", "owner_user_id":"owner-2"})
+    )
+    .is_err());
+    assert!(dispatch(
+        root.path(),
+        kind,
+        json!({"computer_id":"computer-1", "private_key":"not-accepted"})
+    )
+    .is_err());
+    assert!(!crate::secrets::secret_store_path(root.path()).exists());
+    dispatch(
+        root.path(),
+        "ctox.workjet.computer.unassign",
+        payload.clone(),
+    )?;
+    assert!(dispatch(root.path(), kind, payload).is_err());
+    assert!(!crate::secrets::secret_store_path(root.path()).exists());
+    Ok(())
+}
+
+#[test]
+fn native_ssh_key_setup_does_not_adopt_or_overwrite_an_unissued_existing_record() -> Result<()> {
+    let root = tempdir()?;
+    assign(
+        root.path(),
+        storage_config("ssh", "/volume1/artifacts"),
+        true,
+    )?;
+    let name = format!(
+        "workjet-ssh-{:x}",
+        Sha256::digest(serde_json::to_vec(&("owner-1", "computer-1"))?)
+    );
+    crate::secrets::write_secret_record(
+        root.path(),
+        "computer-access",
+        &name,
+        "existing-unissued-value",
+        None,
+        json!({}),
+    )?;
+    assert!(dispatch(
+        root.path(),
+        "ctox.workjet.computer.ssh_key.ensure",
+        json!({"computer_id":"computer-1"})
+    )
+    .is_err());
+    assert_eq!(
+        crate::secrets::read_secret_value(root.path(), "computer-access", &name)?,
+        "existing-unissued-value"
+    );
+    Ok(())
+}

@@ -113,6 +113,7 @@ function hydrationHarness(state, getSelected, load) {
   const noop = () => {};
   const scope = {
     refreshConfirmedHarnessStatus: noop, loadLocalCommands: async () => [], loadLocalQueueTasks: async () => [],
+    loadTaskSource: Function(body('isTaskSourceReadDenied')+'\n'+body('loadTaskSource')+'\nreturn loadTaskSource;')(),
     loadLocalBugReports: async () => [], loadLocalWebStackOverview: async () => ({ok:true}),
     loadHarnessFlowSnapshot: async () => ({ok:true}), emptyHarnessFlow: () => ({}),
     loadLocalCrewMembers: async () => [], loadLocalChannelAccounts: async () => [], armExpressionRefresh: noop,
@@ -153,4 +154,74 @@ test('a newer native hint survives an in-flight hydrate and clears only after it
   finish({key:'a',events:[],runs:[]}); await reading;
   assert.equal(state.taskHistoryRevision,newer);
   await hydrate(state); assert.deepEqual(revisions,['first','second']); assert.equal(state.taskHistoryRevision,null);
+});
+
+
+test('live role preflight skips denied collections and reports their unavailable state without leases', async () => {
+  const calls = [], unavailable = [], errors = [];
+  const sync = { mayReadCollection: () => false, leaseCollection: name => { calls.push(name); assert.fail('denied lease'); } };
+  const stop = subscribeTaskHistoryChanges({ sync, getSelection: () => ({taskId:'a'}),
+    onChange: () => assert.fail('denied hint'), onError: e => errors.push(e), onUnavailable: x => unavailable.push(x) });
+  await settle();
+  assert.deepEqual(calls, []); assert.deepEqual(errors, []);
+  assert.deepEqual(unavailable.map(x => x.collection), ['ctox_runs', 'ctox_harness_events']);
+  assert(unavailable.every(x => x.error.code === 'COLLECTION_READ_FORBIDDEN'));
+  stop(); stop();
+});
+
+test('a role change during lease acquisition releases late leases without subscribing or fallback', async () => {
+  const f=setup(), pending=[], unavailable=[], errors=[]; let readable=true;
+  const sync={mayReadCollection:()=>readable, leaseCollection:name=>new Promise(yes=>pending.push(()=>yes(f.registry.acquire(name,'race',async()=>{}))))};
+  const stop=subscribeTaskHistoryChanges({sync,getSelection:()=>({taskId:'a'}),onChange:()=>assert.fail('retired hint'),
+    onError:e=>errors.push(e),onUnavailable:x=>unavailable.push(x)});
+  await settle(); assert.equal(pending.length,2); readable=false; pending.forEach(resolve=>resolve()); await settle();
+  assert.equal(unavailable.length,2); assert.deepEqual(errors,[]);
+  for(const [name,state] of f.states){assert.equal(f.registry.leaseCount(name),0);assert.equal(state.listeners.size,0);}
+  stop(); await settle();
+});
+
+test('coded native role denial retires the observation but uncoded denial remains an error', async () => {
+  const unavailable=[], errors=[], calls=[];
+  const denied=new Error('policy denied');denied.code='COLLECTION_READ_FORBIDDEN';
+  const unexpected=new Error('COLLECTION_READ_FORBIDDEN text alone is not the typed contract');
+  const sync={mayReadCollection:()=>true,async leaseCollection(name){calls.push(name);throw name==='ctox_runs'?denied:unexpected;}};
+  const stop=subscribeTaskHistoryChanges({sync,getSelection:()=>({taskId:'a'}),onChange:()=>assert.fail('denied hint'),
+    onUnavailable:x=>unavailable.push(x),onError:e=>errors.push(e)});
+  await settle();assert.deepEqual(calls,['ctox_runs','ctox_harness_events']);
+  assert.equal(unavailable.length,1);assert.equal(unavailable[0].error,denied);assert.deepEqual(errors,[unexpected]);stop();
+});
+
+test('revoked histories cannot publish a hint and release both old and replacement subscriptions', async () => {
+  const f=setup(), unavailable=[], errors=[], changes=[];let readable=true;
+  f.sync.mayReadCollection=()=>readable;
+  const options={sync:f.sync,getSelection:()=>({taskId:'a'}),onChange:x=>changes.push(x),
+    onUnavailable:x=>unavailable.push(x),onError:e=>errors.push(e)};
+  const stop=subscribeTaskHistoryChanges(options);await settle();readable=false;
+  for(const state of f.states.values()){state.emit(null);state.emit(null);}await settle();
+  assert.equal(changes.length,0);assert.equal(unavailable.length,2);assert.deepEqual(errors,[]);
+  for(const [name,state] of f.states){assert.equal(state.listeners.size,0);assert.equal(f.registry.leaseCount(name),0);}
+  const replacement=nativeState('ctox_runs');f.registry.set('ctox_runs',Promise.resolve({state:replacement}));await settle();
+  assert.equal(replacement.listeners.size,0);replacement.emit(null);assert.equal(changes.length,0);stop();
+  readable=true;const fresh=subscribeTaskHistoryChanges(options);await settle();replacement.emit(null);
+  assert.equal(changes.length,1,'a newly authorized observation can acquire a fresh lease');fresh();await settle();
+});
+
+test('unexpected lease errors stay visible and releases are still bounded after a callback failure', async () => {
+  const f=setup(), errors=[];const unexpected=new Error('selection unavailable');
+  const stop=subscribeTaskHistoryChanges({sync:f.sync,getSelection:()=>{throw unexpected;},onChange:()=>assert.fail('unexpected hint'),onError:e=>errors.push(e)});
+  await settle();f.states.get('ctox_runs').emit(null);await settle();
+  assert.deepEqual(errors,[unexpected]);assert.equal(f.registry.leaseCount('ctox_runs'),0);
+  assert.equal(f.states.get('ctox_runs').listeners.size,0);stop();await settle();assert.equal(f.registry.leaseCount('ctox_harness_events'),0);
+});
+
+test('actual cockpit exposes denied history access without warnings or claiming its data is readable', async () => {
+  const calls=[], state={ctx:{sync:{mayReadCollection:()=>false,leaseCollection:()=>assert.fail('denied native lease')}},lang:'de',disposed:false};
+  const wire=Function('ctoxCollection','getSelectedTask','nativeTaskId','taskLiveKey','refreshConfirmedHarnessStatus','renderFromLocalCache','subscribeTaskHistoryChanges','showDataError','window','LOCAL_RENDER_DEBOUNCE_MS',body('wireLocalRealtime')+'\nreturn wireLocalRealtime;')(
+    ()=>null,()=>({id:'a'}),t=>t.id,t=>t.id,()=>{},async()=>calls.push('render'),subscribeTaskHistoryChanges,()=>assert.fail('role denial is not an unexpected data error'),{setTimeout,clearTimeout},1);
+  const stop=wire(state);await settle();await new Promise(yes=>setTimeout(yes,10));
+  assert.deepEqual([...state.taskHistoryUnavailable],['ctox_runs','ctox_harness_events']);assert.deepEqual(calls,['render']);
+  const notice=Function('labels','escapeAttr','escapeHtml',body('taskHistoryPermissionNotice')+'\nreturn taskHistoryPermissionNotice;')(
+    {de:{timeline:'Verlauf',notPermittedForRole:'für deine Rolle nicht freigegeben'}},x=>x,x=>x);
+  assert.match(notice(state),/data-task-history-unavailable role="status"/);assert.match(notice(state),/COLLECTION_READ_FORBIDDEN: ctox_runs, ctox_harness_events/);
+  assert.match(notice(state),/Verlauf: für deine Rolle nicht freigegeben/);assert.equal(notice({...state,taskHistoryUnavailable:new Set()}),'');stop();await settle();
 });

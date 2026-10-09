@@ -342,6 +342,9 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
         lead["person_field_status"][person_key]["person_email_validation"] =
             native_email_field_status(verdict, Some(person_key));
     }
+    for (person_key, verdict) in &matched {
+        promote_pattern_email(lead, person_key.as_deref(), verdict);
+    }
     if !lead.get("evidence").is_some_and(Value::is_array) {
         lead["evidence"] = Value::Array(Vec::new());
     }
@@ -377,6 +380,76 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
         lead["field_status"]["person_email_validation"] = native_email_field_status(best, None);
     }
     changed
+}
+
+/// A personal address is often not published; the worker builds it from the
+/// pattern of other addresses at the same company and leaves it open, because
+/// no quote names it (owner 09.10.2026: "aus dem Schema rekonstruieren und
+/// dann mit dem E-Mail-Tester testen"). Once experte.de confirms exactly that
+/// address as deliverable, its verdict is the quote that names it, and the
+/// address counts as verified for that person. An undeliverable verdict, an
+/// address the worker did not claim for this person, or an already verified
+/// value stays as it is.
+fn promote_pattern_email(lead: &mut Value, person_key: Option<&str>, verdict: &EmailVerdict) {
+    if !verdict.valid {
+        return;
+    }
+    let promote = |status: &mut Value| {
+        let claimed = status
+            .get("value")
+            .and_then(Value::as_str)
+            .and_then(normalize_email);
+        if claimed.as_deref() != Some(verdict.email.as_str())
+            || status.get("status").and_then(Value::as_str) == Some("verified")
+        {
+            return;
+        }
+        let source = json!({
+            "source_id": VALIDATION_SOURCE_ID,
+            "url": verdict.source_url,
+            "quote": verdict.note,
+        });
+        let mut sources = status
+            .get("sources")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        sources.push(source);
+        status["status"] = Value::String("verified".to_string());
+        status["sources"] = Value::Array(sources);
+        status["reason"] = Value::String(format!(
+            "Aus dem Adressmuster gebildet; {VALIDATION_SOURCE_ID} bestaetigt die Zustellbarkeit ({})",
+            verdict.note
+        ));
+        status["validated_email"] = Value::String(verdict.email.clone());
+        status["run_id"] = Value::String(verdict.run_id.clone());
+    };
+    if let Some(person_key) = person_key {
+        if let Some(status) = lead
+            .get_mut("person_field_status")
+            .and_then(|people| people.get_mut(person_key))
+            .and_then(|fields| fields.get_mut("person_email"))
+        {
+            promote(status);
+        }
+    }
+    if let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) {
+        for contact in contacts.iter_mut() {
+            let owner = contact
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim);
+            if owner != person_key || contact_email(contact).as_deref() != Some(&verdict.email) {
+                continue;
+            }
+            if let Some(status) = contact
+                .get_mut("field_status")
+                .and_then(|fields| fields.get_mut("person_email"))
+            {
+                promote(status);
+            }
+        }
+    }
 }
 
 fn native_email_field_status(verdict: &EmailVerdict, person_key: Option<&str>) -> Value {
@@ -1162,6 +1235,62 @@ mod tests {
         // Applying the same verdict again adds no second evidence entry.
         apply_email_verdicts(&mut lead, &[verdict("r.weidling@weicon.de", true)]);
         assert_eq!(lead["evidence"].as_array().expect("evidence").len(), 1);
+    }
+
+    #[test]
+    fn a_deliverable_pattern_address_becomes_the_persons_verified_email() {
+        let open = json!({"status": "action_required", "value": "r.weidling@weicon.de",
+            "sources": [{"source_id": "weicon.de", "url": "https://www.weicon.de/impressum",
+                "quote": "info@weicon.de, s.beilmann@weicon.de"}],
+            "reason": "aus dem Muster v.nachname@weicon.de gebildet"});
+        let mut lead = json!({
+            "contacts": [
+                {"person_key": "p-ralph", "person_email": "r.weidling@weicon.de",
+                 "field_status": {"person_email": open.clone()}},
+                {"person_key": "p-anna", "person_email": "a.muster@weicon.de",
+                 "field_status": {"person_email": open.clone()}}
+            ],
+            "person_field_status": {"p-ralph": {"person_email": open.clone()},
+                                    "p-anna": {"person_email": open.clone()}},
+            "evidence": []
+        });
+        apply_email_verdicts(
+            &mut lead,
+            &[
+                verdict("r.weidling@weicon.de", true),
+                verdict("a.muster@weicon.de", false),
+            ],
+        );
+        let ralph = &lead["person_field_status"]["p-ralph"]["person_email"];
+        assert_eq!(ralph["status"], "verified");
+        assert_eq!(ralph["value"], "r.weidling@weicon.de");
+        let sources = ralph["sources"].as_array().expect("sources");
+        assert_eq!(
+            sources.len(),
+            2,
+            "the pattern source stays, the verdict joins it"
+        );
+        assert_eq!(sources[1]["source_id"], "experte.de");
+        assert_eq!(lead["contacts"][0]["field_status"]["person_email"], *ralph);
+        // Undeliverable: the address stays open.
+        assert_eq!(
+            lead["person_field_status"]["p-anna"]["person_email"]["status"],
+            "action_required"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["status"],
+            "action_required"
+        );
+        // A verdict for another address never verifies this person's claim.
+        let mut other = json!({
+            "contacts": [{"person_key": "p1", "person_email": "x@weicon.de"}],
+            "person_field_status": {"p1": {"person_email": {"status": "action_required", "value": "y@weicon.de"}}}
+        });
+        apply_email_verdicts(&mut other, &[verdict("x@weicon.de", true)]);
+        assert_eq!(
+            other["person_field_status"]["p1"]["person_email"]["status"],
+            "action_required"
+        );
     }
 
     #[test]

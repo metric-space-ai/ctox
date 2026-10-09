@@ -2324,6 +2324,12 @@ pub fn peek_leasable_inbound_messages(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
@@ -6056,6 +6062,12 @@ fn take_messages_with_projection(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
@@ -6148,6 +6160,12 @@ fn take_messages_with_projection(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')

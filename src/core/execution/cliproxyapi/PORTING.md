@@ -5,6 +5,17 @@
 - Upstream: `a88197f845c979132c8978ea223c6af05cc81536`
 - Track A, accepted v7.2.116 standalone Rust-port release: **COMPLETE**
 - Current v8.0.16 update and promotion: **INCOMPLETE**
+- Latest observed upstream release: [v8.0.22](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.22),
+  immutable commit `67465884ca179a8f9098328d03a361b50003fdd7` (2026-10-08).
+  Its Claude overage reset correction `80809679914f376605e2ae6aa2c5d68f140f98d3`
+  is adapted into the actual Messages, count-tokens and streaming HTTP response
+  paths. Billing-only resets do not become subscription retry delays; rejected
+  applicable shared windows retain their latest bounded reset. Generic
+  Retry-After/Ms and the existing conductor/account scopes remain unchanged;
+  upstream random grace is not introduced by this slice. Eight parser guards
+  and a real loopback transport regression cover the integration. Both feature
+  matrices execute those applicable guards. This does not promote the accepted pin or
+  establish full v8.0.22 parity, deployed providers or installed acceptance.
 - The direct Claude Responses route now creates native caller context below
   the actual account selection on every unary/stream failover attempt. Original
   payload and case-insensitive session/agent/client headers remain request-local.
