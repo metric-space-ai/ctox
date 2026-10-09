@@ -225,20 +225,16 @@ fn forward_event(
 }
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
-    // These terminal events drive surface shutdown/completion state. Dropping
-    // them under backpressure can leave exec/TUI waiting forever even though
-    // the underlying turn has already ended.
+    // Reply selection needs its witnessed start and final message as well as
+    // terminal state. Keep one classifier for runtime and facade so a slow
+    // consumer cannot lose the evidence required to validate the reply.
     match event {
         InProcessServerEvent::ServerNotification(notification) => {
             ctox_app_server::in_process::server_notification_requires_delivery(notification)
         }
-        InProcessServerEvent::LegacyNotification(notification) => matches!(
-            notification
-                .method
-                .strip_prefix("codex/event/")
-                .unwrap_or(&notification.method),
-            "task_complete" | "turn_aborted" | "shutdown_complete"
-        ),
+        InProcessServerEvent::LegacyNotification(notification) => {
+            ctox_app_server::in_process::legacy_notification_requires_delivery(notification)
+        }
         _ => false,
     }
 }
@@ -1784,6 +1780,49 @@ mod tests {
             },
         ));
         assert!(!event_requires_delivery(&private));
+    }
+
+    #[test]
+    fn assistant_text_delivery_keeps_legacy_reply_witnesses_in_order() {
+        let (tx, mut rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        // Parameters remain opaque to this buffer. The adapter still owns
+        // typed decoding and exact thread/turn validation.
+        let expected = [
+            ("task_started", serde_json::json!({"witness": "turn-start"})),
+            ("agent_message", serde_json::json!({"answer": "Vollständig 🦊 **geändert**"})),
+            ("agent_message", serde_json::json!({"metadata": "ctox-crew metadata:"})),
+            ("task_complete", serde_json::json!({"witness": "turn-complete"})),
+        ];
+        for (method, params) in &expected {
+            let event = InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: format!("codex/event/{method}"),
+                params: Some(params.clone()),
+            });
+            assert!(event_requires_delivery(&event));
+            assert!(matches!(
+                forward_event(&tx, &mut pending, event, true, 16),
+                ForwardOutcome::Forwarded
+            ));
+        }
+        assert_eq!(pending.len(), expected.len() - 1);
+        for (index, (method, params)) in expected.iter().enumerate() {
+            if index > 0 {
+                tx.try_send(pending.pop_front().unwrap()).unwrap();
+            }
+            let InProcessServerEvent::LegacyNotification(event) = rx.try_recv().unwrap() else {
+                panic!("lost native reply witness")
+            };
+            assert_eq!(event.method, format!("codex/event/{method}"));
+            assert_eq!(event.params.as_ref(), Some(params));
+        }
+        assert!(pending.is_empty());
+        assert!(!event_requires_delivery(&InProcessServerEvent::LegacyNotification(
+            JSONRPCNotification {
+                method: "codex/event/agent_message_delta".into(),
+                params: None,
+            }
+        )));
     }
 
     #[test]

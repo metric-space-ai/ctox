@@ -208,7 +208,9 @@ unfinished work.
 ## 2026-10 Public assistant streaming under event pressure
 
 Both in-process runtime and facade use the same required-delivery classifier
-for AgentMessage deltas and their AgentMessage item start/completion. Previously
+for AgentMessage deltas, their AgentMessage item start/completion, and turn start.
+The shared legacy classifier also preserves the actual task/turn-start witness
+and AgentMessage final used by native reply selection. Previously
 these notifications were droppable under bounded backpressure, producing
 contiguous but incomplete public text. The existing nonblocking required-event
 buffer retains order and its runaway/session-failure bound; interrupt/control
