@@ -189,4 +189,5 @@ pub use session_handoff_gate::NativeSessionHandoffGate;
 pub(crate) use external_sql_sync::start_background_sync;
 pub(crate) use person_research_command::recover_once as recover_person_research_commands_once;
 pub use store_workjet_sessions::{run_workjet_session_transfer_recovery, RecoveryOutcome};
-pub(crate) use workjet_transfer_git::execute_cli as execute_workjet_transfer_git_cli;
+mod workjet_transfer_workspace;
+pub(crate) use workjet_transfer_workspace::execute_cli as execute_workjet_transfer_git_cli;
