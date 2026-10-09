@@ -520,6 +520,9 @@ fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> 
         conn.execute("UPDATE business_command_aggregates SET execution_phase='terminal',terminal_status='completed' WHERE command_id=?1",[id])?;
     }
     let policy = store::open_store(root.path())?;
+    // Calculation follows intake; its upper bound must include the newly
+    // admitted commands rather than the earlier identity-issuance timestamp.
+    let now = store::now_ms() as i64;
     for (i, (recipe, expected)) in [
         ("project_tasks_total", 3),
         ("project_tasks_completed", 2),
