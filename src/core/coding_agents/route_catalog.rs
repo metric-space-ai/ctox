@@ -322,6 +322,41 @@ mod tests {
     }
 
     #[test]
+    fn inherited_account_metadata_reads_only_the_native_store_and_keeps_configuration(
+    ) -> anyhow::Result<()> {
+        use std::collections::BTreeMap;
+        let root = tempfile::tempdir()?;
+        let settings = BTreeMap::from([
+            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                "https://llm.ctox.dev".to_owned(),
+            ),
+            (
+                "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                "fixture-private-proxy".to_owned(),
+            ),
+            (
+                "MINIMAX_API_KEY".to_owned(),
+                "fixture-unrelated-private".to_owned(),
+            ),
+        ]);
+        runtime_env::save_runtime_env_map(root.path(), &settings)?;
+        let before = runtime_env::load_runtime_env_map(root.path())?;
+        let NativeInheritedAccountMetadata { provider } = account_metadata(root.path())?.unwrap();
+        assert_eq!(provider, "ctox_proxy");
+        assert_eq!(runtime_env::load_runtime_env_map(root.path())?, before);
+        assert!(
+            !root.path().join("coding-agents").exists(),
+            "metadata must not prepare or start Pi"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn inherited_account_metadata_requires_an_unchanged_private_snapshot() {
         let original = route("https://llm.ctox.dev/v1");
         let metadata = native_metadata_from_current(
