@@ -236,8 +236,10 @@ mod tests {
             (vec!["--model", "MiniMax-M3"], None),
             (vec!["--token", "fixture-secret"], None),
         ] {
-            let args = std::iter::once("route").chain(suffix)
-                .map(str::to_owned).collect::<Vec<_>>();
+            let args = std::iter::once("route")
+                .chain(suffix)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             assert_eq!(coding_route_cli_options(&args), expected);
         }
         assert_eq!(coding_route_cli_options(&["turn".to_owned()]), None);

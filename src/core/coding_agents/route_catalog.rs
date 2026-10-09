@@ -6,7 +6,12 @@ use super::{resolve_inherited_coding_route, InheritedCodingRoute};
 use crate::execution::models::runtime_env;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, io::Read, path::Path, time::{Duration, Instant}};
+use std::{
+    collections::BTreeSet,
+    io::Read,
+    path::Path,
+    time::{Duration, Instant},
+};
 use zeroize::Zeroizing;
 
 const MAX_BODY: u64 = 65_536;
@@ -70,7 +75,8 @@ fn models_endpoint(route: &InheritedCodingRoute) -> Result<url::Url, Failure> {
     let mut endpoint = url::Url::parse(&route.base_url).map_err(|_| Failure::InvalidEndpoint)?;
     let loopback = endpoint.host_str().is_some_and(|host| {
         host == "localhost"
-            || host.trim_matches(['[', ']'])
+            || host
+                .trim_matches(['[', ']'])
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     });
@@ -125,7 +131,8 @@ fn fetch(route: &InheritedCodingRoute, credential: &str, deadline: Duration) -> 
         .timeout_connect(deadline)
         .timeout(deadline)
         .build();
-    let response = agent.get(endpoint.as_str())
+    let response = agent
+        .get(endpoint.as_str())
         .set("Accept", "application/json")
         .set("User-Agent", "CTOX-Native-Model-Catalog")
         .set("Authorization", &format!("Bearer {credential}"))
@@ -141,7 +148,8 @@ fn fetch(route: &InheritedCodingRoute, credential: &str, deadline: Duration) -> 
         }
     };
     let status = response.status();
-    let retry = response.header("Retry-After")
+    let retry = response
+        .header("Retry-After")
         .and_then(|header| header.parse::<u64>().ok())
         .filter(|seconds| *seconds <= 604_800);
     let mut probe = Probe {
@@ -160,7 +168,10 @@ fn fetch(route: &InheritedCodingRoute, credential: &str, deadline: Duration) -> 
         });
     } else {
         let mut bytes = Vec::new();
-        let read = response.into_reader().take(MAX_BODY + 1).read_to_end(&mut bytes);
+        let read = response
+            .into_reader()
+            .take(MAX_BODY + 1)
+            .read_to_end(&mut bytes);
         if read.is_err() {
             probe.failure = Some(Failure::TransportFailed);
         } else if bytes.len() as u64 > MAX_BODY {
@@ -177,7 +188,8 @@ fn fetch(route: &InheritedCodingRoute, credential: &str, deadline: Duration) -> 
 }
 
 fn read_credential(root: &Path, route: &InheritedCodingRoute) -> Option<Zeroizing<String>> {
-    runtime_env::load_runtime_env_map(root).ok()?
+    runtime_env::load_runtime_env_map(root)
+        .ok()?
         .remove(route.credential_key)
         .filter(|credential| !credential.trim().is_empty())
         .map(Zeroizing::new)
@@ -206,16 +218,24 @@ pub(super) fn inspect(root: &Path) -> anyhow::Result<Value> {
     let probe = if let Some(credential) = read_credential(root, &route) {
         let mut probe = fetch(&route, &credential, DEADLINE);
         let current_route = resolve_inherited_coding_route(root).ok();
-        let current_credential = current_route.as_ref().and_then(|route| read_credential(root, route));
+        let current_credential = current_route
+            .as_ref()
+            .and_then(|route| read_credential(root, route));
         retain_current_result(
-            &mut probe, &route, &credential, current_route.as_ref(),
+            &mut probe,
+            &route,
+            &credential,
+            current_route.as_ref(),
             current_credential.as_ref().map(|secret| secret.as_str()),
         );
         probe
     } else {
         Probe::failed(Failure::CredentialUnavailable)
     };
-    let selected_model_listed = probe.models.as_ref().map(|models| models.contains(&route.model_id));
+    let selected_model_listed = probe
+        .models
+        .as_ref()
+        .map(|models| models.contains(&route.model_id));
     let ok = probe.failure.is_none();
     // Serialize only the selected public fields; no provider body, paths,
     // credential selector, credentials or request headers escape this owner.
@@ -251,7 +271,10 @@ mod tests {
     #[test]
     fn live_models_decode_only_complete_bounded_ids() {
         let body = br#"{"data":[{"id":"MiniMax-M3","private":"ignored"},{"id":"MiniMax-M3"}]}"#;
-        assert_eq!(decode_models(body, "fixture-secret").unwrap(), ["MiniMax-M3"]);
+        assert_eq!(
+            decode_models(body, "fixture-secret").unwrap(),
+            ["MiniMax-M3"]
+        );
         assert!(decode_models(br#"{"data":[],"has_more":true}"#, "").is_err());
         assert!(decode_models(br#"{"data":[{"id":" MiniMax-M3"}]}"#, "").is_err());
         assert!(decode_models(br#"{"data":[{"id":"\u0000"}]}"#, "").is_err());
@@ -265,13 +288,22 @@ mod tests {
         let server = Server::http("127.0.0.1:0").unwrap();
         let address = format!("http://{}/v1", server.server_addr());
         let worker = std::thread::spawn(move || {
-            let request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
             assert_eq!(request.method().as_str(), "GET");
             assert_eq!(request.url(), "/v1/models");
-            assert!(request.headers().iter().any(|header|
-                header.field.equiv("Authorization") && header.value.as_str() == "Bearer fixture-secret"
-            ));
-            request.respond(Response::from_string(r#"{"data":[{"id":"MiniMax-M3","secret":"fixture-secret"}]}"#)).unwrap();
+            assert!(request
+                .headers()
+                .iter()
+                .any(|header| header.field.equiv("Authorization")
+                    && header.value.as_str() == "Bearer fixture-secret"));
+            request
+                .respond(Response::from_string(
+                    r#"{"data":[{"id":"MiniMax-M3","secret":"fixture-secret"}]}"#,
+                ))
+                .unwrap();
         });
         let probe = fetch(&route(&address), "fixture-secret", Duration::from_secs(2));
         worker.join().unwrap();
@@ -285,12 +317,21 @@ mod tests {
             let server = Server::http("127.0.0.1:0").unwrap();
             let address = format!("http://{}/v1", server.server_addr());
             let worker = std::thread::spawn(move || {
-                let request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
-                request.respond(Response::from_string("fixture-secret upstream-private")
-                    .with_status_code(StatusCode(status))
-                    .with_header(Header::from_bytes("Retry-After", "120").unwrap())
-                    .with_header(Header::from_bytes("Location", "https://example.invalid/private").unwrap())
-                ).unwrap();
+                let request = server
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap();
+                request
+                    .respond(
+                        Response::from_string("fixture-secret upstream-private")
+                            .with_status_code(StatusCode(status))
+                            .with_header(Header::from_bytes("Retry-After", "120").unwrap())
+                            .with_header(
+                                Header::from_bytes("Location", "https://example.invalid/private")
+                                    .unwrap(),
+                            ),
+                    )
+                    .unwrap();
             });
             let probe = fetch(&route(&address), "fixture-secret", Duration::from_secs(2));
             worker.join().unwrap();
@@ -310,7 +351,10 @@ mod tests {
             let server = Server::http("127.0.0.1:0").unwrap();
             let address = format!("http://{}/v1", server.server_addr());
             let worker = std::thread::spawn(move || {
-                let request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+                let request = server
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap();
                 let _ = request.respond(Response::from_string(body));
             });
             let probe = fetch(&route(&address), "fixture-secret", Duration::from_secs(2));
@@ -325,11 +369,18 @@ mod tests {
         let server = Server::http("127.0.0.1:0").unwrap();
         let address = format!("http://{}/v1", server.server_addr());
         let worker = std::thread::spawn(move || {
-            let request = server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
             std::thread::sleep(Duration::from_millis(800));
             let _ = request.respond(Response::empty(200));
         });
-        let probe = fetch(&route(&address), "fixture-secret", Duration::from_millis(200));
+        let probe = fetch(
+            &route(&address),
+            "fixture-secret",
+            Duration::from_millis(200),
+        );
         worker.join().unwrap();
         assert_eq!(probe.http_status, None);
         assert_eq!(probe.failure, Some(Failure::TransportFailed));
@@ -337,10 +388,20 @@ mod tests {
 
     #[test]
     fn live_models_refuses_unsafe_endpoint_and_unsupported_discovery() {
-        for base in ["http://example.com/v1", "https://example.com/v1?key=secret", "https://user:secret@example.com/v1", "https://example.com/v1#secret"] {
+        for base in [
+            "http://example.com/v1",
+            "https://example.com/v1?key=secret",
+            "https://user:secret@example.com/v1",
+            "https://example.com/v1#secret",
+        ] {
             assert_eq!(models_endpoint(&route(base)), Err(Failure::InvalidEndpoint));
         }
-        assert_eq!(models_endpoint(&route("https://llm.ctox.dev/v1")).unwrap().as_str(), "https://llm.ctox.dev/v1/models");
+        assert_eq!(
+            models_endpoint(&route("https://llm.ctox.dev/v1"))
+                .unwrap()
+                .as_str(),
+            "https://llm.ctox.dev/v1/models"
+        );
         assert!(models_endpoint(&route("http://[::1]:12345/v1")).is_ok());
         let mut azure = route("https://example.com/v1");
         azure.provider = "azure_foundry".to_owned();
@@ -352,10 +413,17 @@ mod tests {
         let original = route("https://llm.ctox.dev/v1");
         let mut changed = route("https://llm.ctox.dev/v1");
         changed.model_id = "MiniMax-M3.1-Flash-Preview".to_owned();
-        for (current, secret) in [(Some(&changed), Some("same")), (Some(&original), Some("rotated")), (None, None)] {
+        for (current, secret) in [
+            (Some(&changed), Some("same")),
+            (Some(&original), Some("rotated")),
+            (None, None),
+        ] {
             let mut probe = Probe {
-                http_status: Some(200), retry_after_seconds: None, elapsed_ms: 10,
-                models: Some(vec!["MiniMax-M3".to_owned()]), failure: None,
+                http_status: Some(200),
+                retry_after_seconds: None,
+                elapsed_ms: 10,
+                models: Some(vec!["MiniMax-M3".to_owned()]),
+                failure: None,
             };
             retain_current_result(&mut probe, &original, "same", current, secret);
             assert_eq!(probe.failure, Some(Failure::RouteChanged));

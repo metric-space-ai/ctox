@@ -5406,14 +5406,18 @@ mod tests {
                 vec!["route", "--probe"],
                 vec!["route", "--root", "/explicit-root", "--probe"],
             ] {
-                let route = std::iter::once(command).chain(suffix)
-                    .map(str::to_owned).collect::<Vec<_>>();
+                let route = std::iter::once(command)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
                 assert!(super::skips_cli_startup_db(&route));
                 assert!(super::skips_cli_turn_ledger(&route));
             }
             let duplicate_probe = vec![
-                command.to_owned(), "route".to_owned(),
-                "--probe".to_owned(), "--probe".to_owned(),
+                command.to_owned(),
+                "route".to_owned(),
+                "--probe".to_owned(),
+                "--probe".to_owned(),
             ];
             assert!(!super::skips_cli_startup_db(&duplicate_probe));
             let turn = vec![command.to_owned(), "turn".to_owned()];
