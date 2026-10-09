@@ -156,10 +156,16 @@ pub fn server_notification_requires_delivery(notification: &ServerNotification) 
         | ServerNotification::ContextCompacted(_)
         | ServerNotification::AgentMessageDelta(_) => true,
         ServerNotification::ItemStarted(item) => {
-            matches!(&item.item, ctox_app_server_protocol::ThreadItem::AgentMessage { .. })
+            matches!(
+                &item.item,
+                ctox_app_server_protocol::ThreadItem::AgentMessage { .. }
+            )
         }
         ServerNotification::ItemCompleted(item) => {
-            matches!(&item.item, ctox_app_server_protocol::ThreadItem::AgentMessage { .. })
+            matches!(
+                &item.item,
+                ctox_app_server_protocol::ThreadItem::AgentMessage { .. }
+            )
         }
         _ => false,
     }
@@ -1095,48 +1101,78 @@ mod tests {
         let mut gone = false;
         let answer = "Gerne – Rätselraten 🦊 **geänderten** Deine Freigabe";
         let mut notifications = vec![ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: "thread".into(), turn_id: "turn".into(),
-            item: ThreadItem::AgentMessage { id: "item".into(), text: String::new(), phase: None },
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage {
+                id: "item".into(),
+                text: String::new(),
+                phase: None,
+            },
         })];
         for ch in answer.chars() {
-            notifications.push(ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
-                thread_id: "thread".into(), turn_id: "turn".into(),
-                item_id: "item".into(), delta: ch.to_string(),
-            }));
+            notifications.push(ServerNotification::AgentMessageDelta(
+                AgentMessageDeltaNotification {
+                    thread_id: "thread".into(),
+                    turn_id: "turn".into(),
+                    item_id: "item".into(),
+                    delta: ch.to_string(),
+                },
+            ));
         }
-        notifications.push(ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: "thread".into(), turn_id: "turn".into(),
-            item: ThreadItem::AgentMessage { id: "item".into(), text: answer.into(), phase: None },
-        }));
+        notifications.push(ServerNotification::ItemCompleted(
+            ItemCompletedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: ThreadItem::AgentMessage {
+                    id: "item".into(),
+                    text: answer.into(),
+                    phase: None,
+                },
+            },
+        ));
         let count = notifications.len();
         for notification in notifications {
             let required = server_notification_requires_delivery(&notification);
             assert!(required);
-            assert!(!enqueue_in_process_event(&tx, &mut pending, &mut gone,
-                InProcessServerEvent::ServerNotification(notification), required, 1024, "test"));
+            assert!(!enqueue_in_process_event(
+                &tx,
+                &mut pending,
+                &mut gone,
+                InProcessServerEvent::ServerNotification(notification),
+                required,
+                1024,
+                "test"
+            ));
         }
         // The producer returned synchronously despite a full consumer queue.
         assert_eq!(pending.len(), count - 1);
-        assert!(matches!(rx.try_recv().unwrap(),
-            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))
+        ));
         let mut streamed = String::new();
         while let Some(event) = pending.pop_front() {
             tx.try_send(event).unwrap();
             match rx.try_recv().unwrap() {
-                InProcessServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(n)) =>
-                    streamed.push_str(&n.delta),
-                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) =>
-                    assert_eq!(streamed, answer),
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::AgentMessageDelta(n),
+                ) => streamed.push_str(&n.delta),
+                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) => {
+                    assert_eq!(streamed, answer)
+                }
                 _ => panic!("unexpected assistant stream event"),
             }
         }
         assert_eq!(streamed, answer);
-        let private = ServerNotification::ItemStarted(
-            ItemStartedNotification {
-                thread_id: "thread".into(), turn_id: "turn".into(),
-                item: ThreadItem::Reasoning { id: "private".into(),
-                    summary: vec!["private".into()], content: vec![] },
-            });
+        let private = ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            item: ThreadItem::Reasoning {
+                id: "private".into(),
+                summary: vec!["private".into()],
+                content: vec![],
+            },
+        });
         assert!(!server_notification_requires_delivery(&private));
         assert!(!gone);
     }

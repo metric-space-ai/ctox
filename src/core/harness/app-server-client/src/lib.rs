@@ -1713,49 +1713,76 @@ mod tests {
         let mut pending = VecDeque::new();
         let answer = "Gerne – Rätselraten 🦊 **geänderten** Deine Freigabe";
         let mut notifications = vec![ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: "thread".into(), turn_id: "turn".into(),
-            item: ThreadItem::AgentMessage { id: "item".into(), text: String::new(), phase: None },
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage {
+                id: "item".into(),
+                text: String::new(),
+                phase: None,
+            },
         })];
         for ch in answer.chars() {
-            notifications.push(ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
-                thread_id: "thread".into(), turn_id: "turn".into(),
-                item_id: "item".into(), delta: ch.to_string(),
-            }));
+            notifications.push(ServerNotification::AgentMessageDelta(
+                AgentMessageDeltaNotification {
+                    thread_id: "thread".into(),
+                    turn_id: "turn".into(),
+                    item_id: "item".into(),
+                    delta: ch.to_string(),
+                },
+            ));
         }
-        notifications.push(ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: "thread".into(), turn_id: "turn".into(),
-            item: ThreadItem::AgentMessage { id: "item".into(), text: answer.into(), phase: None },
-        }));
+        notifications.push(ServerNotification::ItemCompleted(
+            ItemCompletedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: ThreadItem::AgentMessage {
+                    id: "item".into(),
+                    text: answer.into(),
+                    phase: None,
+                },
+            },
+        ));
         let count = notifications.len();
         for notification in notifications {
             let event = InProcessServerEvent::ServerNotification(notification);
             let required = event_requires_delivery(&event);
             assert!(required);
-            assert!(matches!(forward_event(&tx, &mut pending, event, required, 1024),
-                ForwardOutcome::Forwarded));
+            assert!(matches!(
+                forward_event(&tx, &mut pending, event, required, 1024),
+                ForwardOutcome::Forwarded
+            ));
         }
         // The producer returned synchronously despite a full consumer queue.
         assert_eq!(pending.len(), count - 1);
-        assert!(matches!(rx.try_recv().unwrap(),
-            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))
+        ));
         let mut streamed = String::new();
         while let Some(event) = pending.pop_front() {
             tx.try_send(event).unwrap();
             match rx.try_recv().unwrap() {
-                InProcessServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(n)) =>
-                    streamed.push_str(&n.delta),
-                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) =>
-                    assert_eq!(streamed, answer),
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::AgentMessageDelta(n),
+                ) => streamed.push_str(&n.delta),
+                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) => {
+                    assert_eq!(streamed, answer)
+                }
                 _ => panic!("unexpected assistant stream event"),
             }
         }
         assert_eq!(streamed, answer);
         let private = InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(
             ItemStartedNotification {
-                thread_id: "thread".into(), turn_id: "turn".into(),
-                item: ThreadItem::Reasoning { id: "private".into(),
-                    summary: vec!["private".into()], content: vec![] },
-            }));
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: ThreadItem::Reasoning {
+                    id: "private".into(),
+                    summary: vec!["private".into()],
+                    content: vec![],
+                },
+            },
+        ));
         assert!(!event_requires_delivery(&private));
     }
 

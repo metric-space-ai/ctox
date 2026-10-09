@@ -24,8 +24,14 @@ struct PublicFilter {
 }
 impl Default for PublicFilter {
     fn default() -> Self {
-        Self { pending: String::new(), hidden: false, hidden_tail: false, line_start: true,
-            ordinary_fence: false, backticks: 0 }
+        Self {
+            pending: String::new(),
+            hidden: false,
+            hidden_tail: false,
+            line_start: true,
+            ordinary_fence: false,
+            backticks: 0,
+        }
     }
 }
 impl PublicFilter {
@@ -34,7 +40,9 @@ impl PublicFilter {
         const PLAIN_OPEN: &str = "ctox-crew metadata:";
         let mut public = String::new();
         let mut count = 0;
-        if self.hidden_tail { return (public, false); }
+        if self.hidden_tail {
+            return (public, false);
+        }
         for ch in text.chars() {
             self.pending.push(ch);
             loop {
@@ -42,8 +50,11 @@ impl PublicFilter {
                 if self.pending.starts_with(marker) {
                     self.pending.drain(..marker.len());
                     self.hidden = !self.hidden;
-                } else if !self.hidden && !self.ordinary_fence && self.line_start
-                    && self.pending.starts_with(PLAIN_OPEN) {
+                } else if !self.hidden
+                    && !self.ordinary_fence
+                    && self.line_start
+                    && self.pending.starts_with(PLAIN_OPEN)
+                {
                     // Some providers emit the reserved metadata tail without a
                     // fence. Its header and JSON are private, including when
                     // the header is split across notifications.
@@ -51,7 +62,9 @@ impl PublicFilter {
                     self.hidden_tail = true;
                     return (public, false);
                 } else if marker.starts_with(&self.pending)
-                    || (!self.hidden && !self.ordinary_fence && self.line_start
+                    || (!self.hidden
+                        && !self.ordinary_fence
+                        && self.line_start
                         && PLAIN_OPEN.starts_with(&self.pending))
                 {
                     break;
@@ -59,13 +72,19 @@ impl PublicFilter {
                     let first = self.pending.chars().next().expect("nonempty pending");
                     self.pending.drain(..first.len_utf8());
                     if !self.hidden {
-                        if count == limit { return (public, true); }
+                        if count == limit {
+                            return (public, true);
+                        }
                         public.push(first);
                         count += 1;
                         if first == '`' {
                             self.backticks += 1;
-                            if self.backticks == 3 { self.ordinary_fence = !self.ordinary_fence; }
-                        } else { self.backticks = 0; }
+                            if self.backticks == 3 {
+                                self.ordinary_fence = !self.ordinary_fence;
+                            }
+                        } else {
+                            self.backticks = 0;
+                        }
                         self.line_start = first == '\n'
                             || (self.line_start && matches!(first, ' ' | '\t' | '\r'));
                     }
@@ -76,7 +95,11 @@ impl PublicFilter {
     }
     fn finish(&mut self) -> String {
         let tail = std::mem::take(&mut self.pending);
-        if self.hidden || self.hidden_tail { String::new() } else { tail }
+        if self.hidden || self.hidden_tail {
+            String::new()
+        } else {
+            tail
+        }
     }
 }
 struct Item {
@@ -399,8 +422,16 @@ mod tests {
         for split in 0..=chars.len() {
             let mut capture = PublicTextCapture::default();
             observe(&mut capture, &started(Some(MessagePhase::FinalAnswer)), 0);
-            let mut all = observe(&mut capture, &delta(&chars[..split].iter().collect::<String>()), 1);
-            all.extend(observe(&mut capture, &delta(&chars[split..].iter().collect::<String>()), 102));
+            let mut all = observe(
+                &mut capture,
+                &delta(&chars[..split].iter().collect::<String>()),
+                1,
+            );
+            all.extend(observe(
+                &mut capture,
+                &delta(&chars[split..].iter().collect::<String>()),
+                102,
+            ));
             all.extend(observe(&mut capture, &completed(&raw), 103));
             assert_eq!(text(&all), answer, "split {split}");
             assert!(all.last().unwrap().completed);
@@ -410,7 +441,11 @@ mod tests {
         observe(&mut capture, &started(None), 0);
         let mut all = Vec::new();
         for (index, ch) in raw.chars().enumerate() {
-            all.extend(observe(&mut capture, &delta(&ch.to_string()), index as u64 * 101));
+            all.extend(observe(
+                &mut capture,
+                &delta(&ch.to_string()),
+                index as u64 * 101,
+            ));
         }
         all.extend(observe(&mut capture, &completed(&raw), 10_000));
         assert_eq!(text(&all), answer);

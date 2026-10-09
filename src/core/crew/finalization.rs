@@ -48,7 +48,9 @@ pub(crate) fn public_reply_text(reply: &str) -> String {
             plain_tail = Some(offset);
             break;
         }
-        if line.matches("```").count() % 2 == 1 { fenced = !fenced; }
+        if line.matches("```").count() % 2 == 1 {
+            fenced = !fenced;
+        }
         offset += line.len();
     }
     let reply = &reply[..plain_tail.unwrap_or(reply.len())];
@@ -220,10 +222,16 @@ mod tests {
         let plain = format!("Fertig.\n\nctox-crew metadata:\n```json\n{metadata}\n```");
         assert!(parse_retrospective(&plain).is_some());
         assert_eq!(public_reply_text(&plain), "Fertig.");
-        assert_eq!(public_reply_text("Antwort\nctox-crew metadata:\n{broken secret}"), "Antwort");
+        assert_eq!(
+            public_reply_text("Antwort\nctox-crew metadata:\n{broken secret}"),
+            "Antwort"
+        );
         let literal = "```text\nctox-crew metadata:\nordinary code\n```";
         assert_eq!(public_reply_text(literal), literal);
-        assert_eq!(public_reply_text("Quote ctox-crew metadata: literally."), "Quote ctox-crew metadata: literally.");
+        assert_eq!(
+            public_reply_text("Quote ctox-crew metadata: literally."),
+            "Quote ctox-crew metadata: literally."
+        );
         let code = "Beispiel:\n```json\n{\"user_data\":1}\n```";
         assert_eq!(public_reply_text(code), code);
         assert_eq!(

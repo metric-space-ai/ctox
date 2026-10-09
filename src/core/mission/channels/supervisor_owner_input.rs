@@ -223,7 +223,8 @@ pub(crate) fn continue_pending(root: &Path, task_id: &str, attempt_id: &str) -> 
     let continued: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM supervisor_owner_input_snapshots
          WHERE task_id=?1 AND attempt_id=?2 AND continued_at IS NOT NULL)",
-        params![task_id, attempt_id], |row| row.get(0),
+        params![task_id, attempt_id],
+        |row| row.get(0),
     )?;
     if continued {
         // Recovery may observe a newer lease after this same task was already
@@ -274,7 +275,10 @@ pub(crate) fn continue_pending(root: &Path, task_id: &str, attempt_id: &str) -> 
            AND EXISTS(SELECT 1 FROM worker_attempt_finalizations WHERE attempt_id=?2)",
         params![task_id, attempt_id, now_iso_string()],
     )?;
-    ensure!(changed == 1, "supervisor input continuation has no durable worker attempt");
+    ensure!(
+        changed == 1,
+        "supervisor input continuation has no durable worker attempt"
+    );
     let tasks = load_queue_projection_tasks(&tx, &[task_id.to_owned()])?;
     refresh_queue_projection_tasks(root, &tx, &tasks)?;
     tx.commit()?;
@@ -287,29 +291,38 @@ pub(crate) fn mark_finished_slice(root: &Path, attempt_id: &str, tasks: &[String
     ensure!(!tasks.is_empty(), "Owner-input slice has no tasks");
     let mut conn = open_channel_db(&resolve_db_path(root, None))?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let applied: Option<Option<String>> = tx.query_row(
-        "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id=?1",
-        [attempt_id], |row| row.get(0),
-    ).optional()?;
+    let applied: Option<Option<String>> = tx
+        .query_row(
+            "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id=?1",
+            [attempt_id],
+            |row| row.get(0),
+        )
+        .optional()?;
     let applied = applied.context("Owner-input slice has no durable worker attempt")?;
-    if applied.is_some() { tx.commit()?; return Ok(true); }
+    if applied.is_some() {
+        tx.commit()?;
+        return Ok(true);
+    }
     for task in tasks {
         let continued: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM supervisor_owner_input_snapshots
              WHERE task_id=?1 AND attempt_id=?2 AND continued_at IS NOT NULL)",
-            params![task, attempt_id], |row| row.get(0),
+            params![task, attempt_id],
+            |row| row.get(0),
         )?;
         if !continued && current_queue_route_status(&tx, task)? != "handled" {
             tx.commit()?;
             return Ok(false);
         }
     }
-    ensure!(tx.execute(
-        "UPDATE worker_attempt_finalizations SET queue_effects_applied_at=?2,updated_at=?2
+    ensure!(
+        tx.execute(
+            "UPDATE worker_attempt_finalizations SET queue_effects_applied_at=?2,updated_at=?2
          WHERE attempt_id=?1 AND queue_effects_applied_at IS NULL",
-        params![attempt_id, now_iso_string()],
-    )? == 1, "Owner-input slice queue effects were not recorded");
+            params![attempt_id, now_iso_string()],
+        )? == 1,
+        "Owner-input slice queue effects were not recorded"
+    );
     tx.commit()?;
     Ok(true)
 }
-

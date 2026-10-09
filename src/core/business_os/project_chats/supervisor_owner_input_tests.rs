@@ -78,29 +78,73 @@ fn failed(value: anyhow::Result<Value>) -> bool {
 #[test]
 fn supervisor_owner_input_batch_waits_for_every_task_effect() -> anyhow::Result<()> {
     let (root, first) = fixture()?;
-    let second = super::supervisor_turns::control(root.path(), "second-submit", "owner", "submit",
-        json!({"project_id":"project","thread_id":THREAD,"goal":"Review a second bounded task"}))?
-        ["result"]["turn"].clone();
+    let second = super::supervisor_turns::control(
+        root.path(),
+        "second-submit",
+        "owner",
+        "submit",
+        json!({"project_id":"project","thread_id":THREAD,"goal":"Review a second bounded task"}),
+    )?["result"]["turn"]
+        .clone();
     begin(root.path(), &first, "batch-worker", "batch-attempt")?;
     channels::lease_queue_task(root.path(), task(&second), "batch-worker")?;
-    assert!(channels::transition_business_command_for_task(root.path(), task(&second),
-        "running", None, None, None, "bounded task fixture started")?);
+    assert!(channels::transition_business_command_for_task(
+        root.path(),
+        task(&second),
+        "running",
+        None,
+        None,
+        None,
+        "bounded task fixture started"
+    )?);
     for turn in [&first, &second] {
         supervisor_owner_input::capture(root.path(), task(turn), "batch-attempt", "batch-worker")?;
     }
-    input(root.path(), &first, "first-late", "owner", "Use the actual first source.")?;
-    input(root.path(), &second, "second-late", "owner", "Use the actual second source.")?;
+    input(
+        root.path(),
+        &first,
+        "first-late",
+        "owner",
+        "Use the actual first source.",
+    )?;
+    input(
+        root.path(),
+        &second,
+        "second-late",
+        "owner",
+        "Use the actual second source.",
+    )?;
     let tasks = [task(&first).to_owned(), task(&second).to_owned()];
-    assert!(supervisor_owner_input::continue_pending(root.path(), task(&first), "batch-attempt")?);
-    assert!(!supervisor_owner_input::mark_finished_slice(root.path(), "batch-attempt", &tasks)?);
+    assert!(supervisor_owner_input::continue_pending(
+        root.path(),
+        task(&first),
+        "batch-attempt"
+    )?);
+    assert!(!supervisor_owner_input::mark_finished_slice(
+        root.path(),
+        "batch-attempt",
+        &tasks
+    )?);
     let db = Connection::open(crate::paths::core_db(root.path()))?;
     let marker: Option<String> = db.query_row(
         "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id='batch-attempt'",
         [], |row| row.get(0))?;
     assert!(marker.is_none());
-    assert!(supervisor_owner_input::continue_pending(root.path(), task(&second), "batch-attempt")?);
-    assert!(supervisor_owner_input::mark_finished_slice(root.path(), "batch-attempt", &tasks)?);
-    assert!(supervisor_owner_input::mark_finished_slice(root.path(), "batch-attempt", &tasks)?);
+    assert!(supervisor_owner_input::continue_pending(
+        root.path(),
+        task(&second),
+        "batch-attempt"
+    )?);
+    assert!(supervisor_owner_input::mark_finished_slice(
+        root.path(),
+        "batch-attempt",
+        &tasks
+    )?);
+    assert!(supervisor_owner_input::mark_finished_slice(
+        root.path(),
+        "batch-attempt",
+        &tasks
+    )?);
     Ok(())
 }
 
@@ -186,9 +230,8 @@ fn supervisor_owner_input_preserves_live_lease_and_late_input_requires_same_task
         "owner",
         "The source is now available; preserve the review.",
     )?;
-    let recovered_snapshot = supervisor_owner_input::capture(
-        root.path(), task(&turn), "attempt-1", "native-worker-1",
-    )?;
+    let recovered_snapshot =
+        supervisor_owner_input::capture(root.path(), task(&turn), "attempt-1", "native-worker-1")?;
     assert_eq!(recovered_snapshot.len(), 1);
     let after = channels::load_queue_task(root.path(), task(&turn))?.unwrap();
     assert_eq!(after.lease_worker_id, before.lease_worker_id);
@@ -223,15 +266,29 @@ fn supervisor_owner_input_preserves_live_lease_and_late_input_requires_same_task
         "retry_wait"
     );
     assert!(supervisor_owner_input::mark_finished_slice(
-        root.path(), "attempt-1", &[task(&turn).to_owned()])?);
+        root.path(),
+        "attempt-1",
+        &[task(&turn).to_owned()]
+    )?);
     let engine = crate::lcm::LcmEngine::open(
-        &crate::paths::core_db(root.path()), crate::lcm::LcmConfig::default())?;
+        &crate::paths::core_db(root.path()),
+        crate::lcm::LcmConfig::default(),
+    )?;
     engine.record_worker_attempt_artifact_check("attempt-1", true, "bounded slice fixture")?;
-    engine.terminalize_worker_attempt("attempt-1",
-        crate::lcm::WorkerAttemptTerminalStatus::Succeeded, false, true, None)?;
+    engine.terminalize_worker_attempt(
+        "attempt-1",
+        crate::lcm::WorkerAttemptTerminalStatus::Succeeded,
+        false,
+        true,
+        None,
+    )?;
     begin(root.path(), &turn, "native-worker-2", "attempt-2")?;
     let new_lease = channels::load_queue_task(root.path(), task(&turn))?.unwrap();
-    assert!(supervisor_owner_input::continue_pending(root.path(), task(&turn), "attempt-1")?);
+    assert!(supervisor_owner_input::continue_pending(
+        root.path(),
+        task(&turn),
+        "attempt-1"
+    )?);
     let after_recovery = channels::load_queue_task(root.path(), task(&turn))?.unwrap();
     assert_eq!(after_recovery.lease_worker_id, new_lease.lease_worker_id);
     assert_eq!(after_recovery.lease_expires_at, new_lease.lease_expires_at);
@@ -393,15 +450,35 @@ fn supervisor_owner_input_rejects_foreign_routes_forged_approval_and_oversize_bo
 fn supervisor_owner_input_does_not_clear_provider_capacity_hold() -> anyhow::Result<()> {
     let (root, turn) = fixture()?;
     begin(root.path(), &turn, "capacity-worker", "capacity-attempt")?;
-    channels::persist_business_command_worker_result(root.path(), task(&turn), "Provider capacity is unavailable")?;
-    channels::record_business_command_review(root.path(), task(&turn), "held", "pending",
-        &json!({"retryable_hold":true,"reason":"provider capacity"}))?;
-    channels::hold_leased_messages_for_attempt(root.path(), "capacity-attempt",
-        &[task(&turn).to_owned()], &crate::review::HoldReason::Technical {
+    channels::persist_business_command_worker_result(
+        root.path(),
+        task(&turn),
+        "Provider capacity is unavailable",
+    )?;
+    channels::record_business_command_review(
+        root.path(),
+        task(&turn),
+        "held",
+        "pending",
+        &json!({"retryable_hold":true,"reason":"provider capacity"}),
+    )?;
+    channels::hold_leased_messages_for_attempt(
+        root.path(),
+        "capacity-attempt",
+        &[task(&turn).to_owned()],
+        &crate::review::HoldReason::Technical {
             policy_id: channels::PROVIDER_CAPACITY_HOLD_POLICY.to_owned(),
-        }, "Provider capacity is unavailable")?;
+        },
+        "Provider capacity is unavailable",
+    )?;
     let before = channels::load_queue_task(root.path(), task(&turn))?.unwrap();
-    input(root.path(), &turn, "capacity-input", "owner", "Preserve my new facts until capacity returns.")?;
+    input(
+        root.path(),
+        &turn,
+        "capacity-input",
+        "owner",
+        "Preserve my new facts until capacity returns.",
+    )?;
     let after = channels::load_queue_task(root.path(), task(&turn))?.unwrap();
     assert_eq!(after.retry_not_before, before.retry_not_before);
     assert_eq!(after.hold_reason, before.hold_reason);
@@ -422,17 +499,34 @@ fn concurrent_supervisor_owner_inputs_keep_both_intents_in_admission_order() -> 
         let barrier = barrier.clone();
         workers.push(std::thread::spawn(move || {
             barrier.wait();
-            supervisor_owner_input::admit(&path, &task_id, &command,
-                &format!("concurrent-input-{index}"), "owner", &format!("Source fact {index}"))
+            supervisor_owner_input::admit(
+                &path,
+                &task_id,
+                &command,
+                &format!("concurrent-input-{index}"),
+                "owner",
+                &format!("Source fact {index}"),
+            )
         }));
     }
     let mut sequences = Vec::new();
-    for worker in workers { sequences.push(worker.join().unwrap()?.sequence); }
+    for worker in workers {
+        sequences.push(worker.join().unwrap()?.sequence);
+    }
     sequences.sort();
-    assert_eq!(sequences, vec![1,2]);
-    begin(root.path(), &turn, "concurrent-reader", "concurrent-attempt")?;
-    let captured = supervisor_owner_input::capture(root.path(), task(&turn),
-        "concurrent-attempt", "concurrent-reader")?;
+    assert_eq!(sequences, vec![1, 2]);
+    begin(
+        root.path(),
+        &turn,
+        "concurrent-reader",
+        "concurrent-attempt",
+    )?;
+    let captured = supervisor_owner_input::capture(
+        root.path(),
+        task(&turn),
+        "concurrent-attempt",
+        "concurrent-reader",
+    )?;
     assert_eq!(captured.len(), 2);
     assert_ne!(captured[0].body, captured[1].body);
     assert_eq!(captured[0].sequence, 1);
@@ -443,18 +537,43 @@ fn concurrent_supervisor_owner_inputs_keep_both_intents_in_admission_order() -> 
 #[test]
 fn supervisor_input_capability_is_scoped_opt_in_without_creating_work() -> anyhow::Result<()> {
     let root = super::supervisor_turns::fixture()?;
-    let legacy = super::supervisor_turns::control(root.path(), "legacy-cap", "owner", "capabilities",
-        json!({"project_id":"project","thread_id":THREAD}))?;
+    let legacy = super::supervisor_turns::control(
+        root.path(),
+        "legacy-cap",
+        "owner",
+        "capabilities",
+        json!({"project_id":"project","thread_id":THREAD}),
+    )?;
     assert!(legacy["result"].get("input_contract").is_none());
-    let enabled = super::supervisor_turns::control(root.path(), "input-cap", "owner", "capabilities",
-        json!({"project_id":"project","thread_id":THREAD,"include_input":true}))?;
+    let enabled = super::supervisor_turns::control(
+        root.path(),
+        "input-cap",
+        "owner",
+        "capabilities",
+        json!({"project_id":"project","thread_id":THREAD,"include_input":true}),
+    )?;
     assert_eq!(enabled["status"], "completed");
-    assert_eq!(enabled["result"]["input_contract"], "ctox.workjet.supervisor_input.v1");
+    assert_eq!(
+        enabled["result"]["input_contract"],
+        "ctox.workjet.supervisor_input.v1"
+    );
     assert_eq!(enabled["result"]["input_delivery"], "next_slice");
     assert_eq!(enabled["result"]["max_input_chars"], 4096);
-    assert!(failed(super::supervisor_turns::control(root.path(), "foreign-cap", "foreign", "capabilities",
-        json!({"project_id":"project","thread_id":THREAD,"include_input":true}))));
+    assert!(failed(super::supervisor_turns::control(
+        root.path(),
+        "foreign-cap",
+        "foreign",
+        "capabilities",
+        json!({"project_id":"project","thread_id":THREAD,"include_input":true})
+    )));
     let conn = Connection::open(crate::paths::core_db(root.path()))?;
-    assert_eq!(conn.query_row("SELECT COUNT(*) FROM business_command_task_links", [], |row| row.get::<_, i64>(0))?, 0);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM business_command_task_links",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        0
+    );
     Ok(())
 }

@@ -291,14 +291,28 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
         let root = fixture_for_owner(OWNER)?;
         let now = chrono::Utc::now().timestamp_millis();
         store::issue_business_os_capability_token_for_managed_user_with_email(
-            root.path(), OWNER, Some(ALIAS), "Owner", "chef", now,
+            root.path(),
+            OWNER,
+            Some(ALIAS),
+            "Owner",
+            "chef",
+            now,
         )?;
         store::issue_business_os_capability_token_for_managed_user(
-            root.path(), ALIAS, "Owner", "admin", now,
+            root.path(),
+            ALIAS,
+            "Owner",
+            "admin",
+            now,
         )?;
-        let submitted = control(root.path(), "alias-conversation", ALIAS, "submit",
+        let submitted = control(
+            root.path(),
+            "alias-conversation",
+            ALIAS,
+            "submit",
             json!({"project_id":"project","thread_id":THREAD,
-                "goal":"Erkläre den nächsten Schritt.","turn_kind":"conversation"}))?;
+                "goal":"Erkläre den nächsten Schritt.","turn_kind":"conversation"}),
+        )?;
         assert_eq!(submitted["status"], "completed");
         let turn = &submitted["result"]["turn"];
         let command_id = turn["command_id"].as_str().context("native command")?;
@@ -310,26 +324,49 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
         assert_eq!(delegated.client_context["actor"]["id"], OWNER);
         channels::lease_queue_task(root.path(), task_id, "actual-test-worker")?;
         assert!(channels::transition_business_command_for_task(
-            root.path(), task_id, "running", None, None, None, "actual test worker starts")?);
+            root.path(),
+            task_id,
+            "running",
+            None,
+            None,
+            None,
+            "actual test worker starts"
+        )?);
         channels::persist_business_command_worker_result(
-            root.path(), task_id, "Hier ist der nächste Schritt.")?;
+            root.path(),
+            task_id,
+            "Hier ist der nächste Schritt.",
+        )?;
         let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
         assert!(super::supervisor_turns::reply_completion_allowed(
-            root.path(), &canonical["command"])?);
+            root.path(),
+            &canonical["command"]
+        )?);
         if let Some(revoked) = revoked {
-            conn.execute("UPDATE business_users SET active=0 WHERE user_id=?1", [revoked])?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                [revoked],
+            )?;
             assert!(super::supervisor_turns::reply_completion_allowed(
-                root.path(), &canonical["command"]).is_err());
+                root.path(),
+                &canonical["command"]
+            )
+            .is_err());
         } else {
             // Simulate a changed private provenance actor, not a new trusted
             // alias. Display names and profile fields cannot supply authority.
-            conn.execute("UPDATE business_commands SET client_context_json=json_set(
+            conn.execute(
+                "UPDATE business_commands SET client_context_json=json_set(
                 client_context_json,'$.actor.id','foreign@example.test',
-                '$.actor.email',?1) WHERE command_id='alias-conversation'", [ALIAS])?;
+                '$.actor.email',?1) WHERE command_id='alias-conversation'",
+                [ALIAS],
+            )?;
             assert!(super::supervisor_turns::reply_completion_allowed(
-                root.path(), &canonical["command"]).is_err());
+                root.path(),
+                &canonical["command"]
+            )
+            .is_err());
         }
     }
     Ok(())
 }
-
