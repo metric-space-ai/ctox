@@ -33,7 +33,8 @@ and once a slide has a canvas, the canvas becomes that slide's source of truth.
    decisions, open questions, comments and final transcript of the previous
    meeting. Every slide cites at least one source in `sourceRefs`.
 5. Draft the document and check it without storing:
-   `business_os.presentation_read` `validate_document` `{document}`. Fix every
+   `business_os.presentation_read` `validate_document`
+   `{project_id, meeting_id, document}`. Fix every
    `error` using its `repairHint`; warnings (layout budgets) are advice.
 6. Store it: `business_os.presentation_update` `create_presentation`
    `{operation_id, project_id, meeting_id, document}`. A meeting has exactly one
@@ -49,7 +50,10 @@ and once a slide has a canvas, the canvas becomes that slide's source of truth.
    jour-fix skill describes (read the new meeting revision before each slide).
 
 Recover an uncertain write by repeating the same `operation_id` with the
-identical request. A different request needs a new `operation_id`. A revision
+identical request. A different request needs a new `operation_id`; ids are
+scoped to the meeting's presentation. Only the project's latest meeting accepts
+writes, before or during the meeting; earlier presentations stay as they were
+shown, because later decks compare against them. A revision
 conflict means: read again (`read_presentation`), then decide.
 
 ## Deck for a Regeltermin

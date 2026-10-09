@@ -31,10 +31,12 @@ fn script(root: &Path) -> anyhow::Result<PathBuf> {
         }
     }
     std::fs::create_dir_all(&dir)?;
+    static STAGING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let staging = dir.join(format!(
-        ".validator-{}.{}.tmp",
+        ".validator-{}.{}.{}.tmp",
         &digest[..16],
-        std::process::id()
+        std::process::id(),
+        STAGING.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::write(&staging, BUNDLE)?;
     std::fs::rename(&staging, &path)?;
@@ -42,14 +44,30 @@ fn script(root: &Path) -> anyhow::Result<PathBuf> {
 }
 
 fn node_major(candidate: &Path) -> Option<u32> {
-    let output = Command::new(candidate)
+    let mut child = Command::new(candidate)
         .arg("--version")
         .env_clear()
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
-    let text = String::from_utf8(output.stdout).ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < Duration::from_secs(5) => {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
     text.trim()
         .trim_start_matches('v')
         .split('.')
@@ -59,35 +77,73 @@ fn node_major(candidate: &Path) -> Option<u32> {
 }
 
 /// First Node.js 20+ from PATH, then the usual system locations. Older Node
-/// versions cannot run the bundled engine and are skipped, not used.
+/// versions cannot run the bundled engine and are skipped. Only a successful
+/// lookup is remembered, so installing Node later needs no daemon restart.
 pub(in crate::business_os) fn node() -> anyhow::Result<PathBuf> {
-    static RESOLVED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            let name = if cfg!(windows) { "node.exe" } else { "node" };
-            let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
-                .map(|paths| {
-                    std::env::split_paths(&paths)
-                        .map(|dir| dir.join(name))
-                        .collect()
-                })
-                .unwrap_or_default();
-            candidates.extend(
-                [
-                    "/opt/homebrew/bin/node",
-                    "/usr/local/bin/node",
-                    "/usr/bin/node",
-                ]
-                .iter()
-                .map(PathBuf::from),
-            );
-            candidates
-                .into_iter()
-                .filter(|candidate| candidate.is_file())
-                .find(|candidate| node_major(candidate).is_some_and(|major| major >= 20))
+    static RESOLVED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(found) = RESOLVED.get() {
+        return Ok(found.clone());
+    }
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(name))
+                .collect()
         })
-        .clone()
-        .context("presentation validation needs Node.js 20 or newer on the CTOX host")
+        .unwrap_or_default();
+    candidates.extend(
+        [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+        ]
+        .iter()
+        .map(PathBuf::from),
+    );
+    let found = candidates
+        .into_iter()
+        .filter(|candidate| candidate.is_file())
+        .find(|candidate| node_major(candidate).is_some_and(|major| major >= 20))
+        .context("presentation validation needs Node.js 20 or newer on the CTOX host")?;
+    Ok(RESOLVED.get_or_init(|| found).clone())
+}
+
+/// At most two validator processes run at once; further callers wait their turn.
+struct Slot;
+static SLOTS: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+static SLOT_FREED: std::sync::Condvar = std::sync::Condvar::new();
+const MAX_CONCURRENT: usize = 2;
+
+impl Slot {
+    fn acquire() -> anyhow::Result<Self> {
+        let deadline = Instant::now() + TIMEOUT;
+        let mut busy = SLOTS
+            .lock()
+            .map_err(|_| anyhow::anyhow!("validator slots poisoned"))?;
+        while *busy >= MAX_CONCURRENT {
+            let left = deadline.saturating_duration_since(Instant::now());
+            anyhow::ensure!(
+                !left.is_zero(),
+                "presentation validator is busy; retry shortly"
+            );
+            busy = SLOT_FREED
+                .wait_timeout(busy, left)
+                .map_err(|_| anyhow::anyhow!("validator slots poisoned"))?
+                .0;
+        }
+        *busy += 1;
+        Ok(Slot)
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Ok(mut busy) = SLOTS.lock() {
+            *busy = busy.saturating_sub(1);
+        }
+        SLOT_FREED.notify_one();
+    }
 }
 
 /// Sends one request to the validator and returns its JSON answer. `ok:false`
@@ -99,7 +155,9 @@ pub(in crate::business_os) fn run(root: &Path, request: &Value) -> anyhow::Resul
         "presentation validator request exceeds {MAX_REQUEST_BYTES} bytes"
     );
     let script = script(root)?;
-    let mut child = Command::new(node()?)
+    let node = node()?;
+    let _slot = Slot::acquire()?;
+    let mut child = Command::new(node)
         .arg(&script)
         .env_clear()
         .stdin(Stdio::piped())

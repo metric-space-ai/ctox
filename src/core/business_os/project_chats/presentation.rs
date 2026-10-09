@@ -34,8 +34,9 @@ CREATE TABLE IF NOT EXISTS workjet_presentation_revisions (
  document_json TEXT NOT NULL, source TEXT NOT NULL, actor TEXT NOT NULL, operation_id TEXT NOT NULL,
  created_at_ms INTEGER NOT NULL, PRIMARY KEY(presentation_id, revision));
 CREATE TABLE IF NOT EXISTS workjet_presentation_operations (
- operation_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, presentation_id TEXT NOT NULL,
- intent_hash TEXT NOT NULL, receipt_json TEXT NOT NULL, projections_json TEXT NOT NULL);";
+ presentation_id TEXT NOT NULL, operation_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+ intent_hash TEXT NOT NULL, receipt_json TEXT NOT NULL, projections_json TEXT NOT NULL,
+ PRIMARY KEY(presentation_id, operation_id));";
 
 pub(in crate::business_os) fn is_command(kind: &str) -> bool {
     matches!(kind, READ | CANVAS_SAVE | EDITS_APPLY)
@@ -43,6 +44,69 @@ pub(in crate::business_os) fn is_command(kind: &str) -> bool {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), canonical(&map[key]));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Intent identity of a request, independent of JSON key order.
+pub(in crate::business_os) fn intent_hash(value: &Value) -> anyhow::Result<String> {
+    Ok(sha256_hex(&serde_json::to_vec(&canonical(value))?))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::business_os) enum Writer {
+    Owner,
+    Supervisor,
+}
+
+/// A presentation is written only for the project's latest meeting, and only
+/// while that meeting is being prepared, held or (Owner) reviewed. Earlier
+/// meetings keep what they showed; later decks compare against it.
+pub(in crate::business_os) fn ensure_writable(
+    conn: &Connection,
+    meeting: &meeting_wire::Meeting,
+    writer: Writer,
+) -> anyhow::Result<()> {
+    use meeting_wire::MeetingState as State;
+    let open = match writer {
+        Writer::Supervisor => matches!(
+            meeting.state,
+            State::Planned | State::Preparing | State::Ready | State::Live
+        ),
+        Writer::Owner => matches!(
+            meeting.state,
+            State::Preparing | State::Ready | State::Live | State::Review
+        ),
+    };
+    ensure!(
+        open,
+        "the presentation of a {:?} meeting cannot be changed",
+        meeting.state
+    );
+    let newer: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workjet_jour_fixe_meetings WHERE project_id=?1 AND owner_user_id=?2 AND meeting_id<>?3 AND scheduled_at_ms>?4)",
+        params![meeting.project_id, meeting.owner_user_id, meeting.id, meeting.scheduled_at_ms],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        !newer,
+        "a later meeting exists; earlier presentations stay as they were shown"
+    );
+    Ok(())
 }
 
 fn table_exists(conn: &Connection) -> anyhow::Result<bool> {
@@ -434,6 +498,7 @@ pub(in crate::business_os) fn receipt(
 /// A stored operation with the same intent is replayed; a different intent conflicts.
 pub(in crate::business_os) fn replay(
     conn: &Connection,
+    presentation_id: &str,
     operation_id: &str,
     owner: &str,
     intent: &str,
@@ -443,8 +508,8 @@ pub(in crate::business_os) fn replay(
     }
     let prior: Option<(String, String, String, String)> = conn
         .query_row(
-            "SELECT owner_user_id,intent_hash,receipt_json,projections_json FROM workjet_presentation_operations WHERE operation_id=?1",
-            [operation_id],
+            "SELECT owner_user_id,intent_hash,receipt_json,projections_json FROM workjet_presentation_operations WHERE presentation_id=?1 AND operation_id=?2",
+            params![presentation_id, operation_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()?;
@@ -453,7 +518,7 @@ pub(in crate::business_os) fn replay(
     };
     ensure!(
         stored_owner == owner && stored_intent == intent,
-        "presentation operation intent conflicts"
+        "this operation_id was already used for a different request on this presentation; use a new operation_id"
     );
     Ok(Some((
         serde_json::from_str(&receipt)?,
@@ -471,8 +536,8 @@ pub(in crate::business_os) fn record_operation(
     projections: &[DomainRecordRef],
 ) -> anyhow::Result<()> {
     tx.execute(
-        "INSERT INTO workjet_presentation_operations(operation_id,owner_user_id,presentation_id,intent_hash,receipt_json,projections_json) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![operation_id, owner, presentation_id, intent, serde_json::to_string(receipt)?, serde_json::to_string(projections)?],
+        "INSERT INTO workjet_presentation_operations(presentation_id,operation_id,owner_user_id,intent_hash,receipt_json,projections_json) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![presentation_id, operation_id, owner, intent, serde_json::to_string(receipt)?, serde_json::to_string(projections)?],
     )?;
     Ok(())
 }
@@ -592,9 +657,7 @@ pub(in crate::business_os) fn handle(
 ) -> anyhow::Result<Value> {
     let (edit, payload) = parse_owner_edit(command)?;
     let (operation, presentation_id, expected) = edit.identity();
-    let intent = sha256_hex(&serde_json::to_vec(
-        &json!({"kind":command.command_type,"payload":payload}),
-    )?);
+    let intent = intent_hash(&json!({"kind":command.command_type,"payload":payload}))?;
     let (meeting, manifest, document) = {
         let conn = open_store(root)?;
         let manifest = load_by_id(&conn, presentation_id)?
@@ -610,7 +673,13 @@ pub(in crate::business_os) fn handle(
                 && manifest.owner_user_id == meeting.owner_user_id,
             "presentation ownership binding conflicts"
         );
-        if let Some((result, _)) = replay(&conn, operation, &meeting.owner_user_id, &intent)? {
+        if let Some((result, _)) = replay(
+            &conn,
+            presentation_id,
+            operation,
+            &meeting.owner_user_id,
+            &intent,
+        )? {
             return Ok(result);
         }
         ensure!(
@@ -620,13 +689,10 @@ pub(in crate::business_os) fn handle(
         let document = current_document(&conn, &manifest)?;
         (meeting, manifest, document)
     };
-    ensure!(
-        !matches!(
-            meeting.state,
-            meeting_wire::MeetingState::Cancelled | meeting_wire::MeetingState::Failed
-        ),
-        "a cancelled or failed meeting keeps its presentation unchanged"
-    );
+    {
+        let conn = open_store(root)?;
+        ensure_writable(&conn, &meeting, Writer::Owner)?;
+    }
     let answer = super::presentation_validator::run(
         root,
         &edit.validator_request(serde_json::from_str(&document)?)?,
@@ -647,8 +713,13 @@ pub(in crate::business_os) fn handle(
             command.record_id.as_deref(),
             &current.meeting_id,
         )?;
-        if let Some((result, projections)) = replay(tx, operation, &meeting.owner_user_id, &intent)?
-        {
+        if let Some((result, projections)) = replay(
+            tx,
+            presentation_id,
+            operation,
+            &meeting.owner_user_id,
+            &intent,
+        )? {
             return Ok(AppliedDomainEffect {
                 result,
                 projections,
@@ -658,6 +729,7 @@ pub(in crate::business_os) fn handle(
             current.revision == expected && current.document_sha256 == manifest.document_sha256,
             "presentation revision changed; read the current presentation"
         );
+        ensure_writable(tx, &meeting, Writer::Owner)?;
         let (next_manifest, projections) = commit_revision(
             root,
             tx,

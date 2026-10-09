@@ -8,7 +8,6 @@ use super::super::workjet_presentation_contract as wire;
 use super::*;
 use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 pub(super) const READ_TOOL: &str = "business_os.presentation_read";
 pub(super) const WRITE_TOOL: &str = "business_os.presentation_update";
@@ -71,7 +70,8 @@ pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
         action_schema("read_presentation", Value::Object(scope()), &["project_id","meeting_id"]),
         action_schema("read_slide", with(scope(), json!({"slide_id":{"type":"string","minLength":1,"maxLength":120}})), &["project_id","meeting_id","slide_id"]),
         action_schema("read_document", Value::Object(scope()), &["project_id","meeting_id"]),
-        action_schema("validate_document", json!({"document":{"type":"object"}}), &["document"]),
+        action_schema("read_history", with(scope(), json!({"limit":{"type":"integer","minimum":1,"maximum":6}})), &["project_id","meeting_id"]),
+        action_schema("validate_document", with(scope(), json!({"document":{"type":"object"}})), &["project_id","meeting_id","document"]),
     ]});
     read_tool(READ_TOOL,
         "Call read_guide first: it returns the authoring guide for Jour fixe presentations. Read the presentation (learnordie SlideDocument, schema learnordie.slide.v1) of this registered Supervisor's current Jour fixe meeting: read_presentation returns the manifest and a compact outline, read_slide one full slide including its canvas, read_document the whole document when it is small. read_history lists this project's earlier meetings, newest first (index 1 = last, 2 = penultimate), with the scene data their presentations actually showed; it is the only source for comparisons with earlier meetings. validate_document checks a draft without storing it and returns issues with repair hints.",
@@ -232,20 +232,22 @@ fn read(
     if action == "read_guide" {
         return Ok(json!({"contract":wire::CONTRACT_SCHEMA,"guide":GUIDE}));
     }
+    let (mut core, mut policy) = connections(root, false)?;
+    let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let scope = resolve(&core_tx, &policy_tx, context, trusted, arguments, false)?;
     if action == "validate_document" {
+        drop(policy_tx);
+        drop(core_tx);
         let document = arguments["request"]["document"].clone();
         anyhow::ensure!(document.is_object(), "request.document must be an object");
-        // Dry run only; still bound to an existing supervisor session above.
+        // Dry run against the current, leased meeting scope; nothing is stored.
         let answer = store_presentation::validate_report(root, document)?;
         return bounded(
             json!({"contract":wire::CONTRACT_SCHEMA,"validation":answer}),
             "validation report",
         );
     }
-    let (mut core, mut policy) = connections(root, false)?;
-    let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
-    let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
-    let scope = resolve(&core_tx, &policy_tx, context, trusted, arguments, false)?;
     if action == "read_history" {
         let limit = arguments["request"]["limit"]
             .as_u64()
@@ -356,7 +358,7 @@ fn write(
     arguments: &Value,
 ) -> anyhow::Result<Value> {
     let operation = arg(arguments, "operation_id")?.to_owned();
-    let intent = format!("{:x}", Sha256::digest(serde_json::to_vec(arguments)?));
+    let intent = store_presentation::intent_hash(arguments)?;
     // The slide engine runs outside any writer lock, against the revision the
     // caller named; that revision is re-checked inside the write transaction.
     let (next, expected) = {
@@ -364,8 +366,14 @@ fn write(
         let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let scope = resolve(&core_tx, &policy_tx, context, trusted, arguments, false)?;
+        let presentation_key = scope
+            .presentation
+            .as_ref()
+            .map(|manifest| manifest.presentation_id.clone())
+            .unwrap_or_else(|| store_presentation::presentation_id_for(&scope.meeting.id));
         if let Some((result, refs)) = store_presentation::replay(
             &policy_tx,
+            &presentation_key,
             &operation,
             &scope.meeting.owner_user_id,
             &intent,
@@ -375,14 +383,11 @@ fn write(
             publish(root, &refs)?;
             return Ok(result);
         }
-        anyhow::ensure!(
-            !matches!(
-                scope.meeting.state,
-                super::super::workjet_jour_fixe_contract::MeetingState::Cancelled
-                    | super::super::workjet_jour_fixe_contract::MeetingState::Failed
-            ),
-            "a cancelled or failed meeting keeps its presentation unchanged"
-        );
+        store_presentation::ensure_writable(
+            &policy_tx,
+            &scope.meeting,
+            store_presentation::Writer::Supervisor,
+        )?;
         let request = &arguments["request"];
         match action {
             "create_presentation" => {
@@ -449,8 +454,14 @@ fn write(
     let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let scope = resolve(&core_tx, &policy_tx, context, trusted, arguments, true)?;
+    let presentation_key = scope
+        .presentation
+        .as_ref()
+        .map(|manifest| manifest.presentation_id.clone())
+        .unwrap_or_else(|| store_presentation::presentation_id_for(&scope.meeting.id));
     if let Some((result, refs)) = store_presentation::replay(
         &policy_tx,
+        &presentation_key,
         &operation,
         &scope.meeting.owner_user_id,
         &intent,
@@ -460,6 +471,11 @@ fn write(
         publish(root, &refs)?;
         return Ok(result);
     }
+    store_presentation::ensure_writable(
+        &policy_tx,
+        &scope.meeting,
+        store_presentation::Writer::Supervisor,
+    )?;
     match (&expected, &scope.presentation) {
         (None, None) => {}
         (Some((revision, sha)), Some(current)) => anyhow::ensure!(

@@ -14519,6 +14519,9 @@ function date4(params) {
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
 config(en_default());
 
+// src/zod-config.ts
+external_exports.config({ jitless: true });
+
 // src/scenes/business-data.ts
 var businessSceneIdValues = ["business.kpi-bars", "business.trend"];
 var BUSINESS_SCENE_DATA_MAX_BYTES = 16 * 1024;
@@ -14621,12 +14624,14 @@ var canvasElementSchema = external_exports.object({
 function isSafeCanvasImage(dataURL, mimeType) {
   if (dataURL.length > 4 * 1024 * 1024) return false;
   const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataURL);
-  if (!match || mimeType && match[1] !== mimeType || match[2].length % 4 !== 0) return false;
+  const kind = match?.[1];
+  const payload = match?.[2];
+  if (!kind || !payload || mimeType && kind !== mimeType || payload.length % 4 !== 0) return false;
   try {
-    const bytes = atob(match[2].slice(0, 32));
-    if (match[1] === "image/png") return bytes.startsWith("PNG\r\n\n");
-    if (match[1] === "image/jpeg") return bytes.startsWith("ÿØÿ");
-    if (match[1] === "image/gif") return bytes.startsWith("GIF87a") || bytes.startsWith("GIF89a");
+    const bytes = atob(payload.slice(0, 32));
+    if (kind === "image/png") return bytes.startsWith("PNG\r\n\n");
+    if (kind === "image/jpeg") return bytes.startsWith("ÿØÿ");
+    if (kind === "image/gif") return bytes.startsWith("GIF87a") || bytes.startsWith("GIF89a");
     return bytes.startsWith("RIFF") && bytes.slice(8, 12) === "WEBP";
   } catch {
     return false;
@@ -15934,9 +15939,9 @@ function blockElements(block, x, y, width, files, assets) {
       result.push({ ...base(id2("axis"), "line", x, baseline, width, 0, block.id), points: [[0, 0], [width, 0]], lastCommittedPoint: null, startBinding: null, endBinding: null, startArrowhead: null, endArrowhead: null });
       if (block.chartType === "line") result.push({ ...base(id2("curve"), "line", x, y, width, 315, block.id), strokeColor: ACCENT, points, lastCommittedPoint: null, startBinding: null, endBinding: null, startArrowhead: null, endArrowhead: null });
       numbers.forEach((value, i) => {
-        const valueY = y + points[i][1];
+        const valueY = y + (points[i]?.[1] ?? 0);
         if (block.chartType === "bar") result.push({ ...base(id2(`bar${i}`), "rectangle", x + cellWidth * (i + 0.2), Math.min(valueY, baseline), cellWidth * 0.6, Math.abs(valueY - baseline), block.id), backgroundColor: "#c9e6df", fillStyle: "hachure" });
-        else result.push({ ...base(id2(`point${i}`), "ellipse", x + points[i][0] - 5, valueY - 5, 10, 10, block.id), backgroundColor: ACCENT, fillStyle: "solid" });
+        else result.push({ ...base(id2(`point${i}`), "ellipse", x + (points[i]?.[0] ?? 0) - 5, valueY - 5, 10, 10, block.id), backgroundColor: ACCENT, fillStyle: "solid" });
         result.push(textElement(id2(`label${i}`), `${labels[i]}
 ${value}`, x + cellWidth * i + 4, y + 335, cellWidth - 8, 22, block.id));
       });
@@ -15973,8 +15978,9 @@ function canvasSceneForSlide(slide, assets = []) {
   if (slide.canvas) return canvasSceneSchema.parse(slide.canvas);
   const files = {};
   const heading = slide.blocks.find((block) => block.type === "heading" && block.text === slide.title);
-  const elements = [textElement(`${slide.id}:title`, slide.title, 88, 80, 1424, 54, heading?.id)];
-  const bodyTop = Math.max(230, elements[0].y + elements[0].height + 70);
+  const titleElement = textElement(`${slide.id}:title`, slide.title, 88, 80, 1424, 54, heading?.id);
+  const elements = [titleElement];
+  const bodyTop = Math.max(230, titleElement.y + titleElement.height + 70);
   elements.push({ ...base(`${slide.id}:underline`, "line", 90, bodyTop - 50, 300, 0), strokeColor: ACCENT, points: [[0, 0], [300, 0]], lastCommittedPoint: null, startBinding: null, endBinding: null, startArrowhead: null, endArrowhead: null });
   const content = slide.blocks.filter((block) => block !== heading);
   const visual = /figure_(right|left)/.test(slide.layout) ? content.find((block) => block.type === "figure" || block.type === "scene3d") : void 0;
@@ -15999,6 +16005,13 @@ function canvasSceneForSlide(slide, assets = []) {
   }
   return canvasSceneSchema.parse({ version: CANVAS_VERSION, width: CANVAS_WIDTH, height: CANVAS_HEIGHT, backgroundColor: PAPER, elements: [...elements, ...body], files });
 }
+function codePointSlice(text2, max) {
+  if (text2.length <= max) return text2;
+  let end = max;
+  const code = text2.charCodeAt(end - 1);
+  if (code >= 55296 && code <= 56319) end -= 1;
+  return text2.slice(0, end);
+}
 function updateSlideCanvas(document, slideId, scene) {
   const canvas = canvasSceneSchema.parse(scene);
   if (!document.slides.some((slide) => slide.id === slideId)) throw new Error(`Slide ${slideId} does not exist.`);
@@ -16007,12 +16020,12 @@ function updateSlideCanvas(document, slideId, scene) {
     const next = { ...slide, canvas };
     const titleElement = canvas.elements.find((item) => item.id === `${slide.id}:title` && item.type === "text" && !item.isDeleted);
     const title = (titleElement?.originalText ?? titleElement?.text)?.trim();
-    if (title) next.title = title.slice(0, 140);
+    if (title) next.title = codePointSlice(title, 140);
     next.blocks = slide.blocks.map((block) => {
       if (block.type !== "heading" && block.type !== "paragraph") return block;
       const text2 = canvasTextForBlock(next, block.id)?.trim();
       if (!text2) return block;
-      return { ...block, text: text2.slice(0, block.type === "heading" ? 140 : 1200) };
+      return { ...block, text: codePointSlice(text2, block.type === "heading" ? 140 : 1200) };
     });
     return next;
   }) });

@@ -86,7 +86,7 @@ fn guide_and_dry_run_validation_reach_the_supervisor() -> anyhow::Result<()> {
         root.path(),
         &trusted,
         READ_TOOL,
-        json!({"action":"validate_document","request":{"document":deck()}}),
+        json!({"action":"validate_document","request":scope(json!({"document":deck()}))}),
     )?;
     assert_eq!(valid["validation"]["ok"], true, "{valid}");
     let mut broken = deck();
@@ -95,7 +95,7 @@ fn guide_and_dry_run_validation_reach_the_supervisor() -> anyhow::Result<()> {
         root.path(),
         &trusted,
         READ_TOOL,
-        json!({"action":"validate_document","request":{"document":broken}}),
+        json!({"action":"validate_document","request":scope(json!({"document":broken}))}),
     )?;
     assert_eq!(invalid["validation"]["ok"], false, "{invalid}");
     Ok(())
@@ -240,5 +240,29 @@ fn history_returns_what_earlier_meetings_showed() -> anyhow::Result<()> {
             .any(|scene| scene["scene_id"] == "business.kpi-bars"
                 && scene["data"]["items"].is_array())
     );
+    Ok(())
+}
+
+#[test]
+fn earlier_meetings_keep_the_presentation_they_showed() -> anyhow::Result<()> {
+    if !node_available() {
+        eprintln!("SKIP: node not available");
+        return Ok(());
+    }
+    let (root, trusted) = fixture()?;
+    store::open_store(root.path())?.execute(
+        "INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-2','project','owner',1792054800000,?1,NULL)",
+        [meeting("meeting-2", 1_792_054_800_000, "planned")?.to_string()],
+    )?;
+    let refused = call(
+        root.path(),
+        &trusted,
+        WRITE_TOOL,
+        json!({"action":"create_presentation","request":scope(json!({"operation_id":"late-1","document":deck()}))}),
+    );
+    let message = refused
+        .expect_err("an earlier meeting accepted a new presentation")
+        .to_string();
+    assert!(message.contains("later meeting"), "{message}");
     Ok(())
 }
