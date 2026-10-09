@@ -4341,7 +4341,7 @@ function ensureCtoxSmokeBinary() {
   const freshProfileScaleSeed = smokeMode === 'business-os-fresh-profile-ui'
     ? seedBusinessOsFreshProfileScaleNativeSetup()
     : null;
-  if (smokeMode === 'business-os-roles-permissions-ui') {
+  if (smokeMode === 'business-os-roles-permissions-ui' || smokeMode === 'business-os-agent-scope-ui') {
     await seedBusinessOsRolesPermissionsNativeUsers();
   }
   let threadsRightClickCapabilities = null;
@@ -7679,6 +7679,20 @@ function ensureCtoxSmokeBinary() {
         requester: issueBusinessOsSmokeCapability('threads-requester'),
         reviewer: issueBusinessOsSmokeCapability('threads-reviewer'),
       };
+    }
+    if (smokeMode === 'business-os-agent-scope-ui') {
+      // local-dev is deliberately a placeholder, not a durable chat owner.
+      // Use a real isolated native user and its production-issued capability.
+      const capability = issueBusinessOsSmokeCapability('owner_ui');
+      const origin = new URL(smokeUrl).origin;
+      await page.route((url) => url.origin === origin, (route) => route.continue({
+        headers: { ...route.request().headers(), authorization: `Bearer ${capability.token}` },
+      }));
+      await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
+      await page.waitForFunction(() => {
+        const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+        return state?.session?.authenticated === true && state.session.user?.id === 'owner_ui';
+      }, null, { timeout: smokeHookWaitTimeoutMs });
     }
     const pageEvaluateStartedAt = Date.now();
     const officeRestartKind = smokeMode === 'office-document-midflight-restart-browser-to-rust'
