@@ -130,7 +130,7 @@ impl Controller {
             XaiLoginProgress::Cancelled => "cancelled",
             XaiLoginProgress::Failed => "failed",
         };
-        if phase == "pending" && chrono::Utc::now().timestamp_millis() >= retained.expires_at {
+        if phase != "accepted" && chrono::Utc::now().timestamp_millis() >= retained.expires_at {
             self.login.cancel(&retained.device.login_id)?;
             phase = "expired";
         }
