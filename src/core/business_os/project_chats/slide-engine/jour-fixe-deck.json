@@ -19,12 +19,6 @@
       "intent": "title",
       "blocks": [
         {
-          "id": "titel-heading",
-          "type": "heading",
-          "text": "Jour fixe Workjet · KW 41",
-          "level": 1
-        },
-        {
           "id": "titel-untertitel",
           "type": "paragraph",
           "text": "Regeltermin am 8. Oktober 2026 · Stand seit dem 24. September"
@@ -51,12 +45,6 @@
       "layout": "technical_figure_right",
       "intent": "summary",
       "blocks": [
-        {
-          "id": "kennzahlen-heading",
-          "type": "heading",
-          "text": "Kennzahlen seit dem letzten Regeltermin",
-          "level": 1
-        },
         {
           "id": "kennzahlen-text",
           "type": "paragraph",
@@ -118,12 +106,6 @@
       "intent": "explanation",
       "blocks": [
         {
-          "id": "exitwert-heading",
-          "type": "heading",
-          "text": "Exitwert E5 je Regeltermin",
-          "level": 1
-        },
-        {
           "id": "exitwert-szene",
           "type": "scene3d",
           "sceneId": "business.trend",
@@ -182,12 +164,6 @@
       "intent": "summary",
       "blocks": [
         {
-          "id": "offene-punkte-heading",
-          "type": "heading",
-          "text": "Offene Punkte",
-          "level": 1
-        },
-        {
           "id": "offene-punkte-liste",
           "type": "bulletList",
           "items": [
@@ -235,12 +211,6 @@
       "layout": "technical_two_column",
       "intent": "comparison",
       "blocks": [
-        {
-          "id": "entscheidung-heading",
-          "type": "heading",
-          "text": "Entscheidung: Preisstufe Team",
-          "level": 1
-        },
         {
           "id": "entscheidung-text",
           "type": "paragraph",

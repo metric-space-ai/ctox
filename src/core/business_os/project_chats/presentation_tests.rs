@@ -111,6 +111,38 @@ fn canvas_scene(text: &str) -> String {
 }
 
 #[test]
+fn owner_canvas_saves_are_not_held_to_the_supervisor_content_rules() -> anyhow::Result<()> {
+    if !node_available() {
+        eprintln!("SKIP: node not available");
+        return Ok(());
+    }
+    let (root, meeting) = fixture()?;
+    agent_revision(root.path(), &meeting)?;
+    let read = send(
+        root.path(),
+        "read-1",
+        "read",
+        "owner",
+        json!({"project_id":"project","meeting_id":"meeting-1"}),
+    )?;
+    let presentation = read["result"]["presentation"]["presentation_id"].clone();
+    let slide = read["result"]["presentation"]["slide_ids"][1].clone();
+    // The Owner may write what he likes on his own slide, even text the
+    // Supervisor's content rules would reject.
+    let saved = send(
+        root.path(),
+        "save-1",
+        "canvas.save",
+        "owner",
+        json!({"operation_id":"canvas-op","presentation_id":presentation,"expected_revision":1,
+            "slide_id":slide,"scene_json":canvas_scene("Diese Folie bleibt bewusst leer.")}),
+    )?;
+    assert_eq!(saved["status"], "completed", "{saved}");
+    assert_eq!(saved["result"]["mutation"]["revision"], 2);
+    Ok(())
+}
+
+#[test]
 fn owner_reads_manifest_and_saves_a_canvas_revision_with_replay() -> anyhow::Result<()> {
     if !node_available() {
         eprintln!("SKIP: node not available");

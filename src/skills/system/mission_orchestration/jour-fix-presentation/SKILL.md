@@ -34,8 +34,10 @@ and once a slide has a canvas, the canvas becomes that slide's source of truth.
    meeting. Every slide cites at least one source in `sourceRefs`.
 5. Draft the document and check it without storing:
    `business_os.presentation_read` `validate_document`
-   `{project_id, meeting_id, document}`. Fix every
-   `error` using its `repairHint`; warnings (layout budgets) are advice.
+   `{project_id, meeting_id, document}`. It checks the schema and the content
+   rules below and returns every issue. Fix every `error` using its
+   `repairHint`; warnings (layout budgets, a repeated sentence) are advice. A
+   deck with content errors is not stored and not published.
 6. Store it: `business_os.presentation_update` `create_presentation`
    `{operation_id, project_id, meeting_id, document}`. A meeting has exactly one
    presentation; later changes use `replace_document`, `apply_edits` or
@@ -59,7 +61,7 @@ conflict means: read again (`read_presentation`), then decide.
 ## Deck for a Regeltermin
 
 Language: the project's language (German unless the project says otherwise).
-Six to nine slides. Suggested order, adapt to the evidence:
+Three to nine slides. Suggested order, adapt to the evidence:
 
 | # | Slide | Layout | `intent` | Content |
 |---|---|---|---|---|
@@ -73,7 +75,9 @@ Six to nine slides. Suggested order, adapt to the evidence:
 | 8 | Nächste Schritte | `technical_one_column` | `summary` | `numberedList` of next acceptance criteria |
 
 A slide whose evidence is entirely missing is left out; say on slide 2 what
-is missing. Never keep an empty slide.
+is missing. Never keep an empty slide. When almost nothing is measured yet (a
+first Regeltermin), the deck has three slides: the title with the question,
+goal and status naming every gap once, and the decisions for today.
 
 Every slide's `title` is drawn as its handwritten headline: at most 60
 characters, and do not repeat it as a `heading` block. Use `heading` blocks
@@ -84,6 +88,27 @@ units and German formatting in text (`1.980`, `4,8 Mio €`, `−5`, dates
 `12.10.2026`); `data` fields hold plain JSON numbers (`1980`, `4.8`). Say
 "keine Daten" plainly when a source is missing. In the PR table, "effect" is
 one short line you can support from the evidence, otherwise `keine Daten`.
+
+## Write about the project, never about the slides
+
+The Owner reads every sentence. Each one states a project fact, a change or a
+decision. These rules are checked (`content.*` issues) on everything the
+Supervisor stores:
+
+- Never write about the slide, the deck, the layout or the display: no "diese
+  Folie", "bleibt leer", "erscheint hier", "links steht". State the fact.
+- Never make the data plumbing the message: no "laut Katalog", "aus der
+  Konfiguration", "keine frühere Präsentation". Say what is missing for the
+  project ("Gemergte PRs: Quelle noch nicht angebunden").
+- No internal ids, field names, recipe names or system states in slides or
+  notes: no `missing_source`, `project_tasks_total`, "KPI-Prompts", "Rezepte",
+  "gebundene Werte", "Native-Quellen". Use the Owner's words.
+- Name every gap once, on slide 2. A slide or table that would only say
+  "keine Daten" is left out.
+- A heading never repeats the slide title; a callout title never restates it.
+- "Nächste Schritte" does not restate "Entscheidungen": decisions say what the
+  Owner approves today, next steps say what changes afterwards. Each fact
+  appears once in the deck.
 
 ## Document shape
 
@@ -198,7 +223,8 @@ aloud. Write them as two to five spoken sentences in the deck language, at most
 about 900 characters per slide, no markdown, no lists, no URLs. Write as you
 would speak: spell out units and signs (Euro, Millisekunden, Pull Request
 Nummer 14). Say what changed
-and what the Owner should decide. Notes of kind `source` hold citations; they
+and what the Owner should decide. Notes talk about the project, never about the
+slide layout ("links steht …") or your own choices ("ich zeige keine Werte"). Notes of kind `source` hold citations; they
 are not read aloud.
 
 ## Editing an existing presentation
