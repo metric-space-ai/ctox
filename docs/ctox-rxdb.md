@@ -24,6 +24,12 @@ Command/queue peer probes request a direct bridge and share the existing
 startup deadline across acquisition and peer readiness. Readiness rejection,
 timeout, missing state and a closed or absent native peer remain failures.
 
+The right-click fixture respects the native admin-only `business_users` policy:
+its ordinary requester sees only its own option, while the independently
+authenticated admin reviewer must see the real reviewer/requester directory
+options after its native snapshot completes. Known reviewer IDs can be submitted
+for approval without granting the requester administrative collection access.
+
 ### Unavailable app and task collections
 
 A typed app data-read denial opens the existing permission surface inside the
