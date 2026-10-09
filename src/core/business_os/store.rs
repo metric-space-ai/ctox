@@ -13085,6 +13085,28 @@ impl RxdbProjectionWriterCache {
         Ok(false)
     }
 
+    fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut(collection) {
+            let result = writer.upsert_source_projection_batch(records);
+            if result.is_err() {
+                self.writers.remove(collection);
+            }
+            result?;
+        }
+        Ok(())
+    }
+
     fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -13194,6 +13216,29 @@ impl BusinessProjectionWriter {
             .rxdb_writers
             .stored_payload(collection, record_id)?
             .is_some_and(|mirrored| same_projection_payload(&mirrored, payload)))
+    }
+
+    /// Commit at most 32 prepared records per source/mirror transaction.
+    /// Source delivery remains durable before independently retryable RxDB
+    /// delivery; no reservation spans both stores or a complete replay.
+    pub(crate) fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        for chunk in records.chunks(32) {
+            let tx = crate::persistence::SqliteWriteTransaction::begin(
+                &self.conn,
+                "projection.source_batch",
+            )?;
+            for (id, updated, payload) in chunk {
+                upsert_business_record(&tx, collection, id, *updated, payload.clone())?;
+            }
+            tx.commit()?;
+            self.rxdb_writers
+                .upsert_source_projection_batch(collection, chunk)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn upsert_source_projection(
@@ -13452,6 +13497,41 @@ impl RxdbCollectionWriter {
             return Ok(None);
         };
         Ok(serde_json::from_str::<Value>(&raw).ok())
+    }
+
+    fn upsert_source_projection_batch(
+        &mut self,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(records.len() <= 32, "projection batch exceeds 32 records");
+        if records.is_empty() {
+            return Ok(());
+        }
+        let mut replication_lwt = self.last_replication_lwt;
+        let tx =
+            crate::persistence::SqliteWriteTransaction::begin(&self.conn, "projection.rxdb_batch")?;
+        for (id, updated, payload) in records {
+            let now = now_ms().min(i64::MAX as u128) as i64;
+            replication_lwt = now.max(replication_lwt.saturating_add(1));
+            upsert_rxdb_collection_record_with_writer(
+                &tx,
+                &self.table,
+                &self.columns,
+                id,
+                *updated,
+                replication_lwt,
+                payload.clone(),
+                self.demand_file_storage,
+                false,
+                true,
+            )?;
+        }
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
+        // One wake observes the complete committed batch; a failed batch
+        // rolls back without publishing any of its rows.
+        self.notify_committed_change();
+        Ok(())
     }
 
     fn upsert_source_projection(

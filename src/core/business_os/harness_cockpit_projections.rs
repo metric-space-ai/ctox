@@ -137,6 +137,48 @@ impl BusinessProjectionWriter {
         }
         Ok(())
     }
+    fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: Vec<(String, i64, Value)>,
+    ) -> Result<()> {
+        for chunk in records.chunks(32) {
+            let mut changed = Vec::new();
+            let mut pending = Vec::new();
+            for (id, source_ms, payload) in chunk {
+                let key = (collection.to_string(), id.clone());
+                let mut comparable = payload.clone();
+                comparable
+                    .as_object_mut()
+                    .map(|object| object.remove("updated_at_ms"));
+                if self.payloads.get(&key) == Some(&comparable) {
+                    continue;
+                }
+                if !self.payloads.contains_key(&key)
+                    && self
+                        .inner
+                        .stored_projection_matches(collection, id, &comparable)?
+                {
+                    self.payloads.insert(key, comparable);
+                    continue;
+                }
+                let observed = Utc::now().timestamp_millis().max(*source_ms);
+                let mut payload = payload.clone();
+                payload["updated_at_ms"] = json!(observed);
+                changed.push((id.clone(), observed, payload));
+                pending.push((key, comparable));
+            }
+            self.inner
+                .upsert_source_projection_batch(collection, &changed)?;
+            // Cache only the chunk whose mirror committed. A later failure
+            // preserves successful chunks and keeps failed delivery retryable.
+            if self.inner.delivered_to_rxdb(collection) {
+                self.payloads.extend(pending);
+            }
+        }
+        Ok(())
+    }
+
     fn tombstone_source_projection(&mut self, collection: &str, id: &str, now: i64) -> Result<()> {
         self.inner
             .tombstone_source_projection(collection, id, now)?;
@@ -1069,6 +1111,7 @@ fn project_events_since(
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut projected = Vec::with_capacity(events.len());
             for (id, kind, title, attempt, metadata, created_at) in events {
                 let metadata: Value = serde_json::from_str(&metadata)?;
                 let Some(created_at_ms) =
@@ -1096,9 +1139,8 @@ fn project_events_since(
                 };
                 let step_position = event_step_position(conn, &task, &created_at, &metadata)?;
                 // Tool payloads and raw reasoning stay in the authoritative ledger.
-                writer.upsert_source_projection(
-                    "ctox_harness_events", &id,
-                    created_at_ms,
+                projected.push((
+                    id.clone(), created_at_ms,
                     json!({
                         "id":id,"task_id":task,"command_id":metadata.get("command_id"),"attempt":attempt,
                         "kind":event_kind(&kind),"title":title,"tool_type":metadata.pointer("/tool/type"),
@@ -1109,9 +1151,10 @@ fn project_events_since(
                         "runtime_seconds":metadata.pointer("/runtime/seconds"),"step_position":step_position,
                         "created_at_ms":created_at_ms,"updated_at_ms":created_at_ms
                     }),
-                )?;
-                delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
+                ));
             }
+            writer.upsert_source_projection_batch("ctox_harness_events", projected)?;
+            delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
             // Enforce the per-task cap immediately with the task/time index.
             // The expensive cross-task age/window sweep stays on maintenance.
             delivered &= retain_task_events(writer, &task)?;

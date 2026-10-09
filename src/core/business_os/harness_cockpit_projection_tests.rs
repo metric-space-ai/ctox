@@ -1113,6 +1113,95 @@ fn runs_join_real_turn_ids_and_refresh_late_costs_without_double_counting() -> R
 }
 
 #[test]
+fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch(
+        "CREATE TRIGGER fixture_batch_failure
+        BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
+        WHEN new.id='batch-event-040'
+        BEGIN SELECT RAISE(ABORT,'injected batch mirror failure'); END;",
+    )?;
+    let records = (0..65).map(|n| {
+        let id = format!("batch-event-{n:03}");
+        (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1}))
+    }).collect::<Vec<_>>();
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(writer
+        .upsert_source_projection_batch("ctox_harness_events", records.clone())
+        .is_err());
+    assert_eq!(writer.payloads.len(), 32);
+    let count_source = || -> Result<i64> {
+        Ok(writer.inner.source_connection().query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_harness_events'",
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    assert_eq!(count_source()?, 64, "only two source chunks committed");
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        32,
+        "the failed second mirror chunk rolled back completely"
+    );
+    let first = || -> Result<(String, f64)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-event-000'",
+            [], |r|Ok((r.get(0)?,r.get(1)?)))?)
+    };
+    let before = first()?;
+    rxdb.execute_batch("DROP TRIGGER fixture_batch_failure")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", records)?;
+    assert_eq!(writer.payloads.len(), 65);
+    assert_eq!(
+        first()?,
+        before,
+        "successful chunks are not rewritten during retry"
+    );
+    assert_eq!(rxdb.query_row(
+        "SELECT COUNT(*),COUNT(DISTINCT lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
+        [], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))
+    )?, (65,65));
+    Ok(())
+}
+
+#[test]
+fn projection_batches_recover_late_collection_and_dedupe_after_restart() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch("DROP TABLE ctox_business_os__ctox_harness_events__v0")?;
+    let payload = json!({"id":"batch-late","kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1});
+    let rows = vec![("batch-late".to_string(), 1, payload)];
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert!(
+        writer.payloads.is_empty(),
+        "missing mirror is not acknowledged"
+    );
+    rxdb.execute_batch("CREATE TABLE ctox_business_os__ctox_harness_events__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL)")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert_eq!(writer.payloads.len(), 1);
+    let row = || -> Result<(String, f64, String)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime,data FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-late'",
+            [], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?)
+    };
+    let before = row()?;
+    drop(writer);
+    let mut restarted = BusinessProjectionWriter::open(root.path())?;
+    restarted.upsert_source_projection_batch("ctox_harness_events", rows)?;
+    assert_eq!(
+        row()?,
+        before,
+        "replay after restart preserves the committed envelope"
+    );
+    assert_eq!(restarted.payloads.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn projection_delivery_recovers_when_rxdb_collection_appears_after_writer_open() -> Result<()> {
     let (root, _) = setup()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
