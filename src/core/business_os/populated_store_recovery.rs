@@ -22,6 +22,7 @@ use super::rxdb_peer::{
     acquire_native_peer_process_lock, expected_rxdb_collection_version,
     migrate_additive_native_rxdb_collection_versions, repair_stale_rxdb_collection_schema_versions,
     rxdb_collection_version_table_name, sqlite_quote_identifier, sqlite_table_exists,
+    NativePeerProcessLock,
 };
 use super::sqlite_file_digest::{sqlite_file_sha256, sqlite_path_sha256};
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
@@ -765,7 +766,7 @@ const CUTOVER_PHASE_IN_PROGRESS: &str = "in_progress";
 const CUTOVER_PHASE_ACCEPTED: &str = "accepted";
 
 struct NativeRxdbWriterGuard {
-    _peer_lock: File,
+    _peer_lock: NativePeerProcessLock,
     exclusive: Option<Connection>,
 }
 
@@ -812,7 +813,7 @@ fn acquire_exclusive_native_rxdb_writer(root: &Path) -> anyhow::Result<NativeRxd
     })
 }
 
-fn acquire_native_rxdb_peer_lock(root: &Path) -> anyhow::Result<File> {
+fn acquire_native_rxdb_peer_lock(root: &Path) -> anyhow::Result<NativePeerProcessLock> {
     acquire_native_peer_process_lock(root)?.ok_or_else(|| {
         anyhow!(
             "refusing native RxDB writer: an active native peer holds {}",

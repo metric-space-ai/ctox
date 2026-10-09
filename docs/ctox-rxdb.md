@@ -1,5 +1,21 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native peer lock and private subscription ordering
+
+The native peer and offline recovery writers retain a `NativePeerProcessLock`.
+Its destructor explicitly unlocks before closing the file: a concurrent child
+spawn may temporarily inherit the same open file description, so close alone
+cannot establish that the retired owner released its flock. Status probes that
+successfully acquire the lock use the same explicit release. Recovery retains
+its peer guard even after releasing the SQLite transaction.
+
+Private BusinessData pumps subscribe to the exact connection before the remote
+request and release events only after the complete local ACK. An event received
+while that release races the receive joins the same FIFO as the pre-ACK snapshot;
+it cannot overtake SnapshotStart or earlier pages. Exact peer, session and
+accepted subscription checks, bounded pre-ACK buffering and current publication
+authority remain required.
+
 
 ### Native federation consumer authority
 
