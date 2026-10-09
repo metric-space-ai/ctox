@@ -22,7 +22,10 @@ Each selected entry applies the submit/watch admission checks on the held snapsh
 Owner, registered project/Supervisor binding, admitted envelope, canonical
 intent and durable queue link. The reader uses a deferred read-only Core
 snapshot and never initializes the database or enters its writer fence.
+Core audit actor metadata is redacted. Owner identity is verified against each
+private admitted command envelope rather than that audit JSON field.
 A partial native index keeps this read scoped to Supervisor chat tasks.
+
 A removed or conflicting binding is rejected, including on final revalidation.
 Admitted payload/client-context and canonical intent reads are capped at 64 KiB;
 oversized legacy envelopes report an explicit bounded-reader error.

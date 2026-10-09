@@ -4084,7 +4084,6 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             ON business_command_aggregates(record_id,
                 json_extract(intent_json,'$.payload.thread_id'),
                 json_extract(intent_json,'$.payload.thread_key'),
-                json_extract(intent_json,'$.client_context.actor.id'),
                 created_at_ms DESC, command_id DESC)
             WHERE module='ctox' AND command_type='business_os.chat.task';
         CREATE INDEX IF NOT EXISTS idx_business_command_aggregates_state

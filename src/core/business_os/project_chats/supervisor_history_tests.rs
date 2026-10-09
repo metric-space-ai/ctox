@@ -65,6 +65,13 @@ fn supervisor_history_paginates_real_native_turns_after_another_send_and_reader_
         )
     };
     assert_eq!(count()?, 3);
+    let audit_owner: Option<String> = conn.query_row(
+        "SELECT json_extract(intent_json,'$.client_context.actor.id')
+         FROM business_command_aggregates WHERE command_id=?1",
+        [first["command_id"].as_str().unwrap()],
+        |r| r.get(0),
+    )?;
+    assert_ne!(audit_owner.as_deref(), Some("owner"));
     let page = read(root.path(), "owner", json!({"limit":2}))?;
     assert_eq!(page["contract"], "ctox.workjet.supervisor_history.v1");
     assert_eq!(page["history_page"]["turns"].as_array().unwrap().len(), 2);
@@ -162,6 +169,22 @@ fn supervisor_history_denies_foreign_owner_forged_cursor_and_excess_request_fiel
         turn["command_id"]
     );
     held.rollback()?;
+    let admitted = super::super::open_store(root.path())?;
+    let original_context: String = admitted.query_row(
+        "SELECT client_context_json FROM business_commands WHERE command_id=?1",
+        [turn["command_id"].as_str().unwrap()],
+        |r| r.get(0),
+    )?;
+    admitted.execute(
+        "UPDATE business_commands SET client_context_json=
+             json_set(client_context_json,'$.actor.id','other') WHERE command_id=?1",
+        [turn["command_id"].as_str().unwrap()],
+    )?;
+    assert!(read(root.path(), "owner", json!({})).is_err());
+    admitted.execute(
+        "UPDATE business_commands SET client_context_json=?1 WHERE command_id=?2",
+        rusqlite::params![original_context, turn["command_id"].as_str().unwrap()],
+    )?;
     conn.execute(
         "UPDATE business_command_aggregates SET intent_json=
             json_set(intent_json,'$.payload.thread_key','foreign-thread')

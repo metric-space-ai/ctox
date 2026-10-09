@@ -117,24 +117,24 @@ pub(super) fn history(root: &Path, owner: &str, payload: Value) -> anyhow::Resul
     )?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let tx = conn.transaction()?;
+    // The Core audit ledger redacts actor identity. Select the bound native
+    // scope here, then verify Owner identity against each admitted envelope.
     let scope = "module='ctox' AND command_type='business_os.chat.task'
         AND record_id=?1
         AND json_extract(intent_json,'$.payload.thread_id')=?2
         AND json_extract(intent_json,'$.payload.thread_key')=?3
-        AND json_extract(intent_json,'$.payload.risk_class')='internal'
-        AND json_extract(intent_json,'$.client_context.actor.id')=?4";
+        AND json_extract(intent_json,'$.payload.risk_class')='internal'";
     if let Some(cursor) = &page.cursor {
         let anchor: Option<i64> = tx
             .query_row(
                 &format!(
                     "SELECT created_at_ms FROM business_command_aggregates
-                WHERE {scope} AND command_id=?5"
+                WHERE {scope} AND command_id=?4"
                 ),
                 params![
                     binding.project_id,
                     binding.thread_id,
                     binding.thread_key,
-                    owner,
                     cursor.before_command_id
                 ],
                 |r| r.get(0),
@@ -154,15 +154,14 @@ pub(super) fn history(root: &Path, owner: &str, payload: Value) -> anyhow::Resul
                 substr(json_extract(intent_json,'$.payload.user_message'),1,4096),
                 length(json_extract(intent_json,'$.payload.user_message'))>4096
              FROM business_command_aggregates WHERE {scope}
-                AND (?5 IS NULL OR created_at_ms<?5 OR (created_at_ms=?5 AND command_id<?6))
-             ORDER BY created_at_ms DESC,command_id DESC LIMIT ?7"
+                AND (?4 IS NULL OR created_at_ms<?4 OR (created_at_ms=?4 AND command_id<?5))
+             ORDER BY created_at_ms DESC,command_id DESC LIMIT ?6"
         ))?;
         let rows = statement.query_map(
             params![
                 binding.project_id,
                 binding.thread_id,
                 binding.thread_key,
-                owner,
                 before_ms,
                 before_id,
                 limit + 1
