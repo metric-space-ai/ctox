@@ -64,6 +64,7 @@ fn http_configured_mistral_retry(managed: bool) -> anyhow::Result<()> {
         synthesis: SpeechBackend::Mistral,
         transcription: SpeechBackend::Mistral,
         voice_id: None,
+        rate: Default::default(),
     };
     config.save(root.path())?;
     // The first HTTP call fails for a genuine prerequisite. No provider is called.

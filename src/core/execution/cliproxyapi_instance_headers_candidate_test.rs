@@ -109,6 +109,7 @@ fn candidate_instance_header_router(root: &Path) -> InstanceResponsesRouter {
             .unwrap(),
     );
     InstanceResponsesRouter {
+        xai_root: None,
         default_provider: "antigravity".to_owned(),
         portable: Some(Arc::new(
             OpenAiResponsesProviderRouter::new(

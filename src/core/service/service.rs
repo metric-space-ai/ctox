@@ -7,6 +7,9 @@ mod auth_assist_recovery_tests;
 mod cv_print_recovery;
 #[path = "service_runtime_support.rs"]
 mod runtime_support;
+#[cfg(test)]
+#[path = "service_supervisor_reply_tests.rs"]
+mod supervisor_reply_tests;
 use chrono::DateTime;
 use chrono::Utc;
 use cv_print_recovery::*;
@@ -1151,7 +1154,9 @@ fn accepted_queue_plan_failure(
 ) -> Result<Option<lcm::IncompleteTaskExecutionPlan>> {
     if !matches!(
         disposition,
-        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::None
+        CompletionReviewDisposition::Approved { .. }
+            | CompletionReviewDisposition::ReplyValidated
+            | CompletionReviewDisposition::None
     ) || !queue_supports_plan_failure(root, job)?
     {
         return Ok(None);
@@ -1307,6 +1312,9 @@ const PLATFORM_EXPERTISE_PASSES: [ExpertisePassSpec; 3] = [
 #[derive(Debug, Clone)]
 enum CompletionReviewDisposition {
     None,
+    /// A native, owner-bound Supervisor reply; this completes the dialogue
+    /// turn only, never a worker, coding task, or artifact deliverable.
+    ReplyValidated,
     Approved {
         review_audit_key: String,
     },
@@ -1453,6 +1461,7 @@ const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
         CompletionReviewDisposition::None => "none",
+        CompletionReviewDisposition::ReplyValidated => "reply_validated",
         CompletionReviewDisposition::Approved { .. } => "approved",
         CompletionReviewDisposition::Hold { .. } => "hold",
         CompletionReviewDisposition::NoSend { .. } => "no-send",
@@ -7587,6 +7596,7 @@ fn start_prompt_worker(
                             matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::Approved { .. }
+                                    | CompletionReviewDisposition::ReplyValidated
                             ) || (matches!(&review_disposition, CompletionReviewDisposition::None)
                                 && is_business_os_chat_queue_job(&root, &job));
                         let terminal_no_send = matches!(
@@ -7900,6 +7910,7 @@ fn start_prompt_worker(
                         let review_can_complete = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::Approved { .. }
+                                | CompletionReviewDisposition::ReplyValidated
                         );
                         if !expected_artifact_refs.is_empty() && outcome_witness_error.is_none() {
                             if let Some(proof_id) = reviewed_terminal_proof_ids.first() {
@@ -8045,6 +8056,7 @@ fn start_prompt_worker(
                         let completion_review_accepted = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::Approved { .. }
+                                | CompletionReviewDisposition::ReplyValidated
                                 | CompletionReviewDisposition::None
                                 | CompletionReviewDisposition::NoSend { .. }
                         );
@@ -8266,6 +8278,7 @@ fn start_prompt_worker(
                             let approved_completion_hold = matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::Approved { .. }
+                                    | CompletionReviewDisposition::ReplyValidated
                             )
                             .then(|| {
                                 let reason = if outcome_witness_error.is_some() {
@@ -8503,7 +8516,8 @@ fn start_prompt_worker(
                                         );
                                     }
                                 }
-                                CompletionReviewDisposition::None => {
+                                CompletionReviewDisposition::None
+                                | CompletionReviewDisposition::ReplyValidated => {
                                     push_event_locked(
                                         &mut shared,
                                         format!(
@@ -9657,6 +9671,27 @@ fn run_completion_review(
         }
         None => {}
     }
+    // A Supervisor dialogue is not a claim that its project's work is done.
+    // Its restricted native tools persist worker tasks and approvals separately;
+    // those tasks retain their own completion review and artifact guards.
+    match supervisor_conversation_reply_ready(root, job) {
+        Ok(true) => {
+            push_event(state, format!(
+                "Native Supervisor reply validated for {} under workjet.supervisor.conversation-reply.v1; no external work-completion review",
+                job.source_label
+            ));
+            return CompletionReviewDisposition::ReplyValidated;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "workjet.supervisor.conversation-reply.v1".to_string(),
+                },
+                summary: format!("Native Supervisor reply could not be validated: {error}"),
+            };
+        }
+    }
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = crate::paths::core_db(&root);
     let review_skill_path = root
@@ -10546,6 +10581,30 @@ fn completion_review_is_reviewer_limited_internal_work(
     )
 }
 
+fn supervisor_conversation_reply_ready(root: &Path, job: &QueuedPrompt) -> Result<bool> {
+    if job.source_label != "queue"
+        || job.leased_message_keys.len() != 1
+        || !job.leased_ticket_event_keys.is_empty()
+        || job.ticket_self_work_id.is_some()
+        || job.outbound_email.is_some()
+        || job.outbound_anchor.is_some()
+        || job.suggested_skill.is_some()
+        || is_systematic_research_job(job)
+        || !expected_outcome_artifacts_for_job(job).is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(context) =
+        channels::inspect_business_command_for_task(root, &job.leased_message_keys[0])?
+    else {
+        return Ok(false);
+    };
+    crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(
+        root,
+        &context["command"],
+    )
+}
+
 fn completion_review_should_skip_feedback_turn(root: &Path, job: &QueuedPrompt) -> bool {
     let _ = root;
     job.source_label == QUEUE_GUARD_SOURCE_LABEL
@@ -10813,6 +10872,7 @@ fn record_typed_business_command_review(
     let retryable_hold = completion_review_disposition_is_retryable_hold(disposition);
     let (review_status, validation_status) = match disposition {
         CompletionReviewDisposition::Approved { .. }
+        | CompletionReviewDisposition::ReplyValidated
         | CompletionReviewDisposition::NoSend { .. } => ("passed", "passed"),
         CompletionReviewDisposition::FeedbackRetry { .. }
         | CompletionReviewDisposition::RequeueInternalWork { .. } => ("failed", "pending"),
@@ -10826,6 +10886,8 @@ fn record_typed_business_command_review(
     };
     let evidence = serde_json::json!({
         "disposition": completion_review_disposition_label(disposition),
+        "policy_id": matches!(disposition, CompletionReviewDisposition::ReplyValidated)
+            .then_some("workjet.supervisor.conversation-reply.v1"),
         "app_validation": app_validation,
         "turn_id": turn_id,
         "thread_key": thread_key,
@@ -33418,6 +33480,18 @@ Business OS command:
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
+    fn supervisor_conversation_reply_keeps_unfinished_plan_guard() -> anyhow::Result<()> {
+        let (root, job, _) = incomplete_plan_queue_fixture("supervisor-reply-open-plan")?;
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            &CompletionReviewDisposition::ReplyValidated,
+        )?
+        .is_some());
+        Ok(())
     }
 
     #[test]

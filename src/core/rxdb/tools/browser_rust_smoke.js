@@ -1031,6 +1031,8 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
 
   const moduleRoot = path.join(installedModulesRoot, id);
   fs.mkdirSync(moduleRoot, { recursive: true });
+  // Runtime assets are served only for a complete, authorizable manifest.
+  fs.writeFileSync(path.join(moduleRoot, 'module.json'), `${JSON.stringify(module, null, 2)}\n`);
   fs.writeFileSync(path.join(moduleRoot, 'index.html'), '<section data-agent-scope-fixture>Phase 12 Agent Scope fixture</section>\n');
   fs.writeFileSync(path.join(moduleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
@@ -1059,6 +1061,14 @@ function prepareBusinessOsAgentScopeModuleFixture(fixture) {
 
   const hiddenModuleRoot = path.join(installedModulesRoot, hiddenId);
   fs.mkdirSync(hiddenModuleRoot, { recursive: true });
+  fs.writeFileSync(path.join(hiddenModuleRoot, 'module.json'), `${JSON.stringify({
+    ...module,
+    id: hiddenId,
+    title: 'Phase 12 Hidden Agent Scope App',
+    version: '0.2.0',
+    entry: `installed-modules/${hiddenId}/index.js`,
+    lifecycle: { runtime_installed: true, visibility_state: 'private', audience: 'private' },
+  }, null, 2)}\n`);
   fs.writeFileSync(path.join(hiddenModuleRoot, 'index.html'), '<section data-agent-scope-hidden-fixture>Phase 12 hidden Agent Scope fixture</section>\n');
   fs.writeFileSync(path.join(hiddenModuleRoot, 'index.css'), ':host { display: block; }\n');
   fs.writeFileSync(path.join(hiddenModuleRoot, 'schema.js'), 'export const collections = {};\n');
@@ -1093,6 +1103,20 @@ function prepareBusinessOsFreshProfileModuleAssets() {
   for (const moduleId of moduleIds) {
     const moduleRoot = path.join(installedModulesRoot, moduleId);
     fs.mkdirSync(moduleRoot, { recursive: true });
+    const scaleIndex = moduleId.startsWith('phase14-scale-app-')
+      ? Number(moduleId.slice(-2)) - 1 : -1;
+    const version = scaleIndex >= 0 ? `1.${Math.floor(scaleIndex / 8)}.${scaleIndex % 8}`
+      : moduleId.includes('private') ? '0.5.0'
+        : moduleId.includes('restricted') ? '1.2.0' : '1.0.0';
+    const title = scaleIndex >= 0 ? `Phase 14 Scale App ${scaleIndex + 1}`
+      : moduleId.includes('private') ? 'Phase 14 Fresh Private App'
+        : moduleId.includes('restricted') ? 'Phase 14 Fresh Restricted App' : 'Phase 14 Fresh Team App';
+    fs.writeFileSync(path.join(moduleRoot, 'module.json'), JSON.stringify({
+      id: moduleId, title, version, source: 'installed', install_scope: 'installed',
+      entry: `installed-modules/${moduleId}/index.js`, collections: ['business_commands'],
+    }, null, 2));
+    fs.writeFileSync(path.join(moduleRoot, 'index.js'),
+      'export async function mount({ container }) { container.textContent = "Fresh profile fixture"; return () => { container.replaceChildren(); }; }\n');
     fs.writeFileSync(path.join(moduleRoot, 'schema.js'), 'export const collections = {};\n');
     fs.writeFileSync(path.join(moduleRoot, 'icon.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="${moduleId}">
   <rect width="24" height="24" rx="5" fill="#23665f"/>
@@ -2769,8 +2793,9 @@ function quoteSqlIdentifier(identifier) {
 }
 
 // waitForHealthy reports ok as soon as the SHELL is healthy. The strict
-// contract requires COMPLETE initial sync for the requested collection set, so
-// poll until the required tail finishes (bounded) before asserting. Demand-only
+// contract also requires COMPLETE initial sync and bounded transport queues.
+// Poll that entire contract within the original deadline; callers still assert
+// the final status so an unresolved violation remains a failure. Demand-only
 // chunk/blob collections must only be requested by callers that have explicitly
 // leased them first.
 async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null, allowRestart = true } = {}) {
@@ -2781,16 +2806,17 @@ async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredC
       timeoutMs: options.timeoutMs,
       allowRestart: options.allowRestart === true,
       ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-    }), { timeoutMs, requiredCollections, allowRestart });
-    const initialSync = status?.sync?.initialSync || {};
-    const missing = Array.isArray(initialSync.missingInitialReplication)
-      ? initialSync.missingInitialReplication
-      : [];
-    const incomplete = Array.isArray(initialSync.entries)
-      && initialSync.entries.some((entry) => entry?.state !== 'complete');
-    if (status?.ok && missing.length === 0 && !incomplete) return status;
-    if (Date.now() > deadline) return status;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    }), { timeoutMs: Math.max(1, deadline - Date.now()), requiredCollections, allowRestart });
+    try {
+      assertHealthyAdvancedStatusContract(status);
+      return status;
+    } catch {
+      // Startup may still be draining ACKs after initial sync completes.
+      // Preserve the final invalid status for the caller's strict assertion.
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return status;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, remainingMs)));
   }
 }
 
@@ -4331,7 +4357,7 @@ function ensureCtoxSmokeBinary() {
   const freshProfileScaleSeed = smokeMode === 'business-os-fresh-profile-ui'
     ? seedBusinessOsFreshProfileScaleNativeSetup()
     : null;
-  if (smokeMode === 'business-os-roles-permissions-ui') {
+  if (smokeMode === 'business-os-roles-permissions-ui' || smokeMode === 'business-os-agent-scope-ui') {
     await seedBusinessOsRolesPermissionsNativeUsers();
   }
   let threadsRightClickCapabilities = null;
@@ -6015,11 +6041,14 @@ function ensureCtoxSmokeBinary() {
             await seedFreshProfileModuleCatalog();
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
             return waitFor(() => {
-              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
-              const disabled = card?.querySelector('[data-disabled-reason]');
-              const lifecycle = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
+              const storeRoot = document.querySelector('[data-app-store-root]');
+              const card = storeRoot?.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const detail = storeRoot?.querySelector('[data-detail-drawer]');
+              if (card && (detail?.hidden || detail?.querySelector('[data-detail-title]')?.textContent !== teamModule.title)) card.click();
+              const disabled = detail?.querySelector('[data-disabled-reason]');
+              const lifecycle = detail?.querySelector('[data-detail-version]');
               return {
-                ok: Boolean(card && disabled && lifecycle),
+                ok: Boolean(card && detail && !detail.hidden && disabled && lifecycle?.textContent?.trim() === 'v1.0.0'),
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
@@ -6062,19 +6091,31 @@ function ensureCtoxSmokeBinary() {
             };
           };
           try {
+            await seedFreshProfileModuleCatalog();
             const renderTimings = [installModules(builderSession)];
             const builderTabs = await waitFor(() => {
               const tabs = tabEvidence();
               return {
-                ok: tabs.privateTab
-                  && tabs.teamTab
-                  && tabs.restrictedTab
-                  && tabs.privateState === 'private'
-                  && tabs.teamState === 'team'
-                  && tabs.restrictedState === 'restricted',
+                ok: tabs.privateTab && tabs.teamTab && tabs.restrictedTab,
                 ...tabs,
               };
             }, 8000, 'fresh-profile lifecycle tabs');
+            const builderLifecycle = [];
+            for (const mod of [privateModule, teamModule, restrictedModule]) {
+              smoke.openAppLifecycleDrawer(mod);
+              const evidence = await waitFor(() => {
+                const panel = document.querySelector('.module-lifecycle-drawer');
+                const summary = panel?.querySelector('.module-lifecycle-summary');
+                return {
+                  ok: Boolean(panel && panel.textContent.includes(mod.id) && summary),
+                  state: summary?.getAttribute('data-state') || '',
+                  label: summary?.querySelector('strong')?.textContent?.trim() || '',
+                  text: panel?.textContent || '',
+                };
+              }, 5000, `fresh-profile lifecycle details ${mod.id}`);
+              builderLifecycle.push(evidence);
+              document.querySelector('[data-close-lifecycle]')?.click();
+            }
             const startMenu = await openStartMenu();
             const startMenuText = startMenu.text || document.querySelector('.shell-start-menu-panel')?.innerText || '';
             const privateLifecycle = appLifecycleBadge(privateModule, { session: builderSession, governance });
@@ -6101,15 +6142,18 @@ function ensureCtoxSmokeBinary() {
             await seedFreshProfileModuleCatalog();
             document.querySelector('[data-app-store-root] [data-scope="installed"]')?.click();
             const appStore = await waitFor(() => {
-              const card = document.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
-              const disabled = card?.querySelector('[data-disabled-reason]');
-              const lifecycle = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
+              const storeRoot = document.querySelector('[data-app-store-root]');
+              const card = storeRoot?.querySelector(`[data-app-id="${css(teamModule.id)}"]`);
+              const detail = storeRoot?.querySelector('[data-detail-drawer]');
+              if (card && (detail?.hidden || detail?.querySelector('[data-detail-title]')?.textContent !== teamModule.title)) card.click();
+              const disabled = detail?.querySelector('[data-disabled-reason]');
+              const lifecycle = detail?.querySelector('[data-detail-version]');
               const cards = [...document.querySelectorAll('[data-app-id]')];
               const scaleCardCount = scaleModuleIds
                 .filter((id) => document.querySelector(`[data-app-id="${css(id)}"]`))
                 .length;
               return {
-                ok: Boolean(card && disabled && lifecycle),
+                ok: Boolean(card && detail && !detail.hidden && disabled && lifecycle?.textContent?.trim() === 'v1.0.0'),
                 cardText: card?.innerText || '',
                 disabledReason: disabled?.getAttribute('data-disabled-reason') || '',
                 lifecycleText: lifecycle?.textContent?.trim() || '',
@@ -6142,19 +6186,23 @@ function ensureCtoxSmokeBinary() {
             if (scopedTaskbarPinsKey) localStorage.removeItem(scopedTaskbarPinsKey);
             localStorage.removeItem('ctox.businessOs.taskbarPins');
 
-            const lifecycleLabelsVisible = builderTabs.privateText === 'Privat'
-              && builderTabs.teamText === 'Team'
-              && builderTabs.restrictedText === 'Eingeschränkt'
-              && privateLifecycle.text === 'Privat'
+            const lifecycleLabelsVisible = builderLifecycle[0].state === 'private'
+              && builderLifecycle[0].label === 'Privat'
+              && builderLifecycle[1].state === 'team'
+              && builderLifecycle[1].label === 'Team'
+              && builderLifecycle[2].state === 'restricted'
+              && builderLifecycle[2].label === 'Eingeschränkt'
+              && privateLifecycle.text === 'App privat'
               && teamLifecycle.text === 'Team'
               && restrictedLifecycle.text === 'Eingeschränkt';
             const versionBadgesVisible = privateLifecycle.version === 'v0.5.0'
               && teamLifecycle.version === 'v1.0.0'
               && restrictedLifecycle.version === 'v1.2.0'
-              && /v0\.5\.0\s+Privat/.test(startMenuText)
-              && /v1\.0\.0\s+Team/.test(startMenuText)
-              && /v1\.2\.0\s+Eingeschränkt/.test(startMenuText)
-              && /v1\.0\.0\s*·\s*Team/.test(appStore.lifecycleText);
+              && builderLifecycle[0].text.includes('v0.5.0')
+              && builderLifecycle[1].text.includes('v1.0.0')
+              && builderLifecycle[2].text.includes('v1.2.0')
+              && [privateModule, teamModule, restrictedModule].every((mod) => startMenuText.includes(mod.title))
+              && appStore.lifecycleText === 'v1.0.0';
             const disabledReasonsVisible = /Nur Owner|Admins|App-Freigaberecht/.test(appStore.disabledReason)
               || /Nur Owner|Admins|App-Freigaberecht/.test(appStore.cardText);
             const desktopViewportVerified = window.innerWidth >= 1200
@@ -6260,12 +6308,12 @@ function ensureCtoxSmokeBinary() {
               const root = document.querySelector('[data-app-store-root]') || document.body;
               const targetCard = document.querySelector('[data-app-id="phase14-fresh-team-app"]');
               targetCard?.scrollIntoView?.({ block: 'center', inline: 'nearest' });
-              const visibleLifecycle = [...document.querySelectorAll('.module-tab-lifecycle, .app-card-version-row .ctox-badge[data-state]')]
+              const visibleLifecycle = [...root.querySelectorAll('[data-detail-drawer]:not([hidden]) [data-detail-version]')]
                 .filter((el) => {
                   const rect = el.getBoundingClientRect();
                   return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth;
                 });
-              const disabled = targetCard?.querySelector('[data-disabled-reason]');
+              const disabled = root.querySelector('[data-detail-drawer]:not([hidden]) [data-disabled-reason]');
               const disabledReason = disabled?.getAttribute('data-disabled-reason') || '';
               return {
                 ok: window.innerWidth <= 430
@@ -7670,6 +7718,20 @@ function ensureCtoxSmokeBinary() {
         reviewer: issueBusinessOsSmokeCapability('threads-reviewer'),
       };
     }
+    if (smokeMode === 'business-os-agent-scope-ui') {
+      // local-dev is deliberately a placeholder, not a durable chat owner.
+      // Use a real isolated native user and its production-issued capability.
+      const capability = issueBusinessOsSmokeCapability('owner_ui');
+      const origin = new URL(smokeUrl).origin;
+      await page.route((url) => url.origin === origin, (route) => route.continue({
+        headers: { ...route.request().headers(), authorization: `Bearer ${capability.token}` },
+      }));
+      await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
+      await page.waitForFunction(() => {
+        const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP;
+        return state?.session?.authenticated === true && state.session.user?.id === 'owner_ui';
+      }, null, { timeout: smokeHookWaitTimeoutMs });
+    }
     const pageEvaluateStartedAt = Date.now();
     const officeRestartKind = smokeMode === 'office-document-midflight-restart-browser-to-rust'
       ? 'document'
@@ -8035,18 +8097,47 @@ function ensureCtoxSmokeBinary() {
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
-          const commandBridge = await appState.sync.startCollection('business_commands');
-          const queueBridge = await appState.sync.startCollection('ctox_queue_tasks');
+          const commandCollectionsDeadline = Date.now() + nativePeerOpenTimeoutMs;
+          const remaining = () => Math.max(0, commandCollectionsDeadline - Date.now());
+          const acquireDirectBridge = async (collection) => {
+            const bridge = await appState.sync.startCollection(collection, { forceDirect: true });
+            console.log(`smoke_command_bridge_acquisition=${JSON.stringify({ collection, mode: bridge?.mode || 'unknown', hasState: !!bridge?.state, hasReady: !!bridge?.ready })}`);
+            if (bridge?.state) return bridge;
+            if (!bridge?.ready) {
+              throw new Error(`No replication state or ready promise for ${collection} (mode=${bridge?.mode || 'missing'})`);
+            }
+            let timer;
+            try {
+              // A bounded pending handle keeps state=null after its real bridge
+              // opens. Resolve ready before retaining the state for the probe.
+              const readyBridge = await Promise.race([
+                bridge.ready,
+                new Promise((_, reject) => {
+                  timer = setTimeout(() => reject(new Error(
+                    `Timed out waiting for replication bridge readiness on ${collection}`,
+                  )), remaining());
+                }),
+              ]);
+              if (!readyBridge?.state) {
+                throw new Error(`Ready replication bridge has no state for ${collection}`);
+              }
+              return readyBridge;
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+          const commandBridge = await acquireDirectBridge('business_commands');
+          const queueBridge = await acquireDirectBridge('ctox_queue_tasks');
           commandBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app business_commands replication error', error));
           queueBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_queue_tasks replication error', error));
           appCommandReplicationState = commandBridge?.state || null;
           appQueueReplicationState = queueBridge?.state || null;
-          await bounded(appCommandReplicationState?.awaitInitialReplication?.(), 15000);
-          await bounded(appQueueReplicationState?.awaitInitialReplication?.(), 15000);
-          await bounded(appCommandReplicationState?.awaitInSync?.(), 15000);
-          await bounded(appQueueReplicationState?.awaitInSync?.(), 15000);
-          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs);
-          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', nativePeerOpenTimeoutMs);
+          await bounded(appCommandReplicationState?.awaitInitialReplication?.(), Math.min(15000, remaining()));
+          await bounded(appQueueReplicationState?.awaitInitialReplication?.(), Math.min(15000, remaining()));
+          await bounded(appCommandReplicationState?.awaitInSync?.(), Math.min(15000, remaining()));
+          await bounded(appQueueReplicationState?.awaitInSync?.(), Math.min(15000, remaining()));
+          await waitForNativePeerOpen(appCommandReplicationState, 'business_commands', remaining());
+          await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', remaining());
           setupPhaseTimings.commandCollectionsReadyMs = Date.now() - commandCollectionsStartedAt;
         }
         if (needsCodingAgentCollections) {
@@ -10158,10 +10249,16 @@ function ensureCtoxSmokeBinary() {
           },
         };
         const allPermissions = Object.values(BusinessOsPermissions);
+        // Keep the principal admitted by the native transport. This fixture
+        // varies the UI role, not the owner of a durable business chat.
+        const nativeActorId = String(state.session?.user?.id || '').trim();
+        if (!state.session?.authenticated || !nativeActorId) {
+          throw new Error('agent scope fixture needs an authenticated native actor');
+        }
         const actorSession = {
           authenticated: true,
           user: {
-            id: 'agent_scope_team',
+            id: nativeActorId,
             display_name: 'Agent Scope Team',
             role: 'user',
           },
@@ -10325,9 +10422,7 @@ function ensureCtoxSmokeBinary() {
           // installed fixture mounted. Re-apply the scoped fixture metadata so
           // the shell resolves data-module-root to the same module contract.
           applyAgentScopeState();
-          const target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)
-            || document.querySelector('[data-module-content]')
-            || document.querySelector('[data-module-root]');
+          const target = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`);
           if (!target) throw new Error('agent scope fixture DOM target is missing');
           target.scrollIntoView?.({ block: 'center', inline: 'center' });
           const rect = target.getBoundingClientRect();
@@ -10497,10 +10592,13 @@ function ensureCtoxSmokeBinary() {
         };
         const openAgentGrantBoundarySettings = async () => {
           applyAgentScopeState();
+          // The read-grant above exercises the facade only. Restore the native
+          // policy snapshot before testing the Settings policy projection.
+          state.governance = originalState.governance;
           state.session = {
             authenticated: true,
             user: {
-              id: 'agent_scope_owner',
+              id: nativeActorId,
               display_name: 'Agent Scope Owner',
               role: 'chef',
               is_admin: true,
@@ -10515,15 +10613,23 @@ function ensureCtoxSmokeBinary() {
           return waitFor(() => {
             const panel = document.querySelector('[data-agent-grant-boundary]');
             const text = panel?.textContent || '';
+            // Settings reloads the native policy. The local facade grant above
+            // is a permission-helper fixture, never a native policy mutation.
+            const nativeGrants = (originalState.governance?.permission_model?.explicit_grants || [])
+              .filter((grant) => grant && grant.active !== false);
+            const rows = panel?.querySelectorAll('tbody tr') || [];
             return {
               ok: Boolean(
-	                panel
-	                  && /Agent- und App-Zugriff/.test(text)
-	                  && /agent_scope_team/.test(text)
-	                  && /Daten lesen/.test(text)
-                  && /Datenbereich Business Commands/.test(text)
+                panel
+                  && /Agent- und App-Zugriff/.test(text)
                   && /Owner\/Admin-Policy/.test(text)
+                  && rows.length === nativeGrants.length
+                  && nativeGrants.every((grant) => text.includes(grant.subject_id))
+                  && (nativeGrants.length > 0 || /Keine Sonderfreigaben/.test(text))
+                  && !panel.querySelector('input, select, textarea, button')
               ),
+              expectedNativeGrantCount: nativeGrants.length,
+              visibleGrantCount: rows.length,
               text: text.trim().slice(0, 1000),
             };
           }, 15000, 'agent scope Settings grant boundary');
@@ -10533,12 +10639,21 @@ function ensureCtoxSmokeBinary() {
           await seedAgentScopeModuleCatalog({ force: true });
           applyAgentScopeState();
           await state.openModule(targetModule.id, { force: true, asModule: true });
-          await waitFor(() => ({
-            ok: state.activeModule?.id === targetModule.id
-              && Boolean(document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`)),
-            activeModule: state.activeModule?.id || '',
-            fixture: globalThis.__ctoxAgentScopeFixture || null,
-          }), 30000, 'agent scope target module open');
+          await waitFor(() => {
+            const marker = document.querySelector(`[data-agent-scope-fixture="${css(targetModule.id)}"]`);
+            const window = state.windowManager?.listWindows?.()
+              .find((entry) => entry.ownerId === `desktop-app:${targetModule.id}`);
+            const owner = marker?.closest('.shell-window')?.getAttribute('data-owner-id') || '';
+            return {
+              // Apps mount in their own shell window; desktop stays active.
+              ok: Boolean(window && marker?.getClientRects().length
+                && owner === `desktop-app:${targetModule.id}`),
+              activeModule: state.activeModule?.id || '',
+              windowId: window?.id || '',
+              owner,
+              fixture: globalThis.__ctoxAgentScopeFixture || null,
+            };
+          }, 30000, 'agent scope target module open');
           await waitFor(() => ({
             ok: Boolean(document.querySelector('[data-ctox-chat-root]')),
             hasChatRoot: Boolean(document.querySelector('[data-ctox-chat-root]')),
@@ -10547,6 +10662,10 @@ function ensureCtoxSmokeBinary() {
           const menu = await openGlobalContextMenu();
           const submitted = await submitGlobalContextMenu();
           const detail = submitted.detail || {};
+          const auditCommandType = detail.command_type || detail.type || '';
+          if (auditCommandType !== 'business_os.context.ask') {
+            throw new Error(`agent scope ask emitted a different command type: ${auditCommandType}`);
+          }
           const visibleScope = detail.client_context?.visible_scope || null;
           const clientContextMatchesUi = Boolean(
             visibleScope
@@ -10568,7 +10687,7 @@ function ensureCtoxSmokeBinary() {
               && appStoreDetail.client_context?.app_id === targetModule.id
               && appStoreDetail.client_context?.actor?.id === actorSession.user.id
               && appStoreDetail.payload?.mode === 'ask'
-              && appStoreDetail.command_type === 'business_os.context.ask'
+              && (appStoreDetail.command_type || appStoreDetail.type) === 'business_os.context.ask'
               && scopeRowsMatchVisibleScope(appStoreMenu.rows, appStoreVisibleScope)
           );
           const businessChatScope = await waitForBusinessChatScope(appStoreDetail);
@@ -10630,7 +10749,7 @@ function ensureCtoxSmokeBinary() {
             id: commandId,
             wait_timeout_ms: 45000,
             module: targetModule.id,
-            type: detail.command_type || 'business_os.chat.task',
+            type: auditCommandType,
             record_id: detail.record_id || targetModule.id,
             inbound_channel: 'business_os.agent_scope_smoke',
             payload: {
@@ -10643,21 +10762,38 @@ function ensureCtoxSmokeBinary() {
               source: 'business-os-agent-scope-smoke',
               audit_probe: true,
             },
+          }).catch(async (error) => {
+            const native = await state.commandBus.getStatus(commandId).catch(() => null);
+            throw new Error(`agent scope native audit command failed: ${JSON.stringify({
+              code: error?.code || '',
+              message: error?.message || '',
+              status: native?.status || '',
+              replicationPhase: native?.replication_phase || '',
+              executionPhase: native?.execution_phase || '',
+              errorCode: native?.error_code || '',
+              errorMessage: native?.error_message || native?.error || native?.result?.error || native?.result?.reason || '',
+              outcome: {
+                ok: native?.result?.outcome?.ok,
+                exitCode: native?.result?.outcome?.exit_code,
+                error: native?.result?.outcome?.error,
+              },
+            })}`);
           });
           const commandCollection = state.db?.raw?.business_commands || state.db?.collection?.('business_commands');
           const persistedCommand = await waitFor(async () => {
-            const docs = docsToJson(await commandCollection.find().exec());
-            const doc = docs.find((item) => item.id === commandId || item.command_id === commandId);
+            const record = await commandCollection.findOne(commandId).exec();
+            const doc = record?.toJSON?.() || record;
             return {
-              ok: Boolean(doc),
+              ok: Boolean(doc && doc.replication_phase === 'native_observed'),
               command: doc || null,
-              count: docs.length,
             };
           }, 15000, 'agent scope persisted command');
           const persistedContext = persistedCommand.command?.client_context || {};
           const persistedVisibleScope = persistedContext.visible_scope || persistedContext.scope || null;
           const auditVisible = Boolean(
             persistedCommand.command
+              && persistedCommand.command.command_type === auditCommandType
+              && persistedContext.actor?.id === nativeActorId
               && persistedVisibleScope?.app?.module_id === targetModule.id
               && (dispatchResult?.task_id || dispatchResult?.command_id || commandId)
           );
@@ -10668,7 +10804,9 @@ function ensureCtoxSmokeBinary() {
           await state.openModule(hiddenModule.id, { force: true, asModule: true });
           await delay(150);
           const statusText = document.body?.innerText || '';
-          const appHiddenDenied = !hiddenTab && state.activeModule?.id !== hiddenModule.id;
+          const appHiddenDenied = !hiddenTab && state.activeModule?.id !== hiddenModule.id
+            && !state.windowManager?.listWindows?.()
+              .some((entry) => entry.ownerId === `desktop-app:${hiddenModule.id}`);
           const deniedReasonVisible = /nicht sichtbar|not visible|Privat|private/i.test(statusText);
 
           const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
@@ -10771,9 +10909,19 @@ function ensureCtoxSmokeBinary() {
         ];
         const renderStartedAt = performance.now();
         await state.openModule('threads', { force: true, asModule: true });
-        await Promise.all(requiredCollections.map((name) => state.sync?.startCollection?.(name).catch(() => null)));
+        await Promise.all(requiredCollections.map((name) => state.sync.startCollection(name)));
+        let historyViewSelected = false;
         const rendered = await waitFor(() => {
           const root = document.querySelector('[data-threads-root]');
+          const historyView = root?.querySelector('.threads-left select[data-pg-name="view"]');
+          if (historyView && !historyViewSelected) {
+            // These are historical records, with no pending work in Handeln.
+            // Exercise the normal wide-history selector instead of the inbox.
+            root.querySelector('.threads-left [data-pg-tray-toggle]')?.click();
+            historyView.value = 'all';
+            historyView.dispatchEvent(new Event('change', { bubbles: true }));
+            historyViewSelected = true;
+          }
           const visibleThreadRows = root?.querySelectorAll?.('[data-thread-id]')?.length || 0;
           return {
             ok: Boolean(root && visibleThreadRows > 0 && visibleThreadRows <= 200),
@@ -12665,6 +12813,7 @@ function ensureCtoxSmokeBinary() {
             restrictedTabVisible: Boolean(restrictedTab),
             previewBadgeState: previewBadge?.getAttribute('data-state') || '',
             previewBadgeText: previewBadge?.textContent?.trim() || '',
+            previewBadgeLabel: previewBadge?.getAttribute('aria-label') || previewBadge?.getAttribute('title') || '',
             restrictedBadgeState: restrictedBadge?.getAttribute('data-state') || '',
             restrictedBadgeText: restrictedBadge?.textContent?.trim() || '',
             activeModule: state.activeModule?.id || '',
@@ -12722,7 +12871,7 @@ function ensureCtoxSmokeBinary() {
               && tabs.previewTabVisible
               && !tabs.restrictedTabVisible
               && tabs.previewBadgeState === 'preview'
-              && tabs.previewBadgeText === 'Vorschau',
+              && /\bVorschau\b/i.test(tabs.previewBadgeLabel),
           );
 
           installAudienceModules(outsideSession);
@@ -13140,7 +13289,7 @@ function ensureCtoxSmokeBinary() {
             ok: Boolean(card
               && releaseButton
               && !releaseButton.disabled
-              && /Privat/.test(lifecycleBadge?.textContent || card?.innerText || '')),
+              && /\bprivat\b/i.test(lifecycleBadge?.textContent || card?.innerText || '')),
             hasCard: Boolean(card),
             hasReleaseButton: Boolean(releaseButton),
             releaseDisabled: releaseButton?.disabled ?? null,

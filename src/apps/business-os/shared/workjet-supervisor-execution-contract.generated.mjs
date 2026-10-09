@@ -186,6 +186,88 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "optional": true
       }
     }
+  },
+  "TurnHistoryCursor": {
+    "fields": {
+      "before_created_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "before_command_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      }
+    }
+  },
+  "TurnHistoryRequest": {
+    "fields": {
+      "cursor": {
+        "type": "TurnHistoryCursor",
+        "optional": true
+      },
+      "limit": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 20,
+        "optional": true
+      }
+    }
+  },
+  "TurnHistoryEntry": {
+    "fields": {
+      "command_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "task_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "created_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "user_text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "user_text_truncated": {
+        "type": "bool"
+      }
+    }
+  },
+  "TurnHistoryPage": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "thread_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 36
+      },
+      "thread_key": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "turns": {
+        "type": "Vec<TurnHistoryEntry>",
+        "max_items": 20
+      },
+      "next_cursor": {
+        "type": "TurnHistoryCursor",
+        "optional": true
+      },
+      "has_more": {
+        "type": "bool"
+      }
+    }
   }
 });
 export const SUPERVISOR_EXECUTION_COMMANDS = deepFreeze({
@@ -195,6 +277,14 @@ export const SUPERVISOR_EXECUTION_COMMANDS = deepFreeze({
     "response_field": "execution_page",
     "response_type": "ExecutionPage",
     "response_contract_field": "execution_contract",
+    "authorization": "current_native_project_owner"
+  },
+  "ctox.workjet.project.supervisor.turn.history": {
+    "request_field": "history_page",
+    "request_type": "TurnHistoryRequest",
+    "response_field": "history_page",
+    "response_type": "TurnHistoryPage",
+    "response_contract_field": "history_contract",
     "authorization": "current_native_project_owner"
   }
 });

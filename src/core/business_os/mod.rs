@@ -82,6 +82,7 @@ mod rxdb_peer_intake_reader;
 mod rxdb_peer_intake_state;
 mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;
+mod rxdb_peer_speech_settings;
 mod rxdb_peer_tombstones;
 mod rxdb_peer_transfer_accounts;
 mod rxdb_peer_transfer_grants;

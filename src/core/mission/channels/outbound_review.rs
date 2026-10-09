@@ -4080,6 +4080,12 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_workjet_supervisor_turn_history
+            ON business_command_aggregates(record_id,
+                json_extract(intent_json,'$.payload.thread_id'),
+                json_extract(intent_json,'$.payload.thread_key'),
+                created_at_ms DESC, command_id DESC)
+            WHERE module='ctox' AND command_type='business_os.chat.task';
         CREATE INDEX IF NOT EXISTS idx_business_command_aggregates_state
             ON business_command_aggregates(execution_phase, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_business_command_open_type_id

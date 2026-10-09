@@ -91,10 +91,13 @@ async function runThreadsRightClickPeers({
       if (type === 'warning') browserDiagnostics.warnings += 1;
       if (type === 'error') browserDiagnostics.errors += 1;
       console.log('[browser:' + actor + ':' + type + '] ' + message.text());
+      if (type === 'error') {
+        console.error('threads_console_error_location=' + JSON.stringify({ actor, ...message.location() }));
+      }
     });
     page.on('pageerror', (error) => {
       browserDiagnostics.errors += 1;
-      console.error('[browser:' + actor + ':error] ' + error.message);
+      console.error('[browser:' + actor + ':pageerror] ' + (error.stack || error.message));
     });
     page.on('requestfailed', (request) => {
       browserDiagnostics.requestFailures += 1;
@@ -412,7 +415,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       };
     }, 5000, 'threads right-click global context menu');
   };
-  const waitForReviewerOption = async () => waitFor(() => {
+  const waitForRequesterOption = async () => waitFor(() => {
     const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
     const options = menu
       ? [...menu.querySelectorAll('[data-ctox-context-user-options] option')].map((option) => ({
@@ -421,10 +424,12 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       }))
       : [];
     return {
-      ok: options.some((option) => option.value === reviewerId && /Threads Reviewer/.test(option.label)),
+      // Native policy deliberately keeps business_users admin-only. The
+      // requester may use a known reviewer ID, but must not enumerate users.
+      ok: options.length === 1 && options[0].value === requesterSession.user.id,
       options,
     };
-  }, 5000, 'threads right-click reviewer option');
+  }, 5000, 'threads requester directory restriction');
   const submitContextMode = async ({ mode, message, userId, contextRecordId = targetRecordId }) => {
     await openTargetModule();
     const contextTarget = document.querySelector('[data-threads-rightclick-fixture]');
@@ -433,16 +438,15 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       ? 'Threads Right-Click App Smoke Record'
       : 'Threads Right-Click Smoke Record';
     await openGlobalContextMenu();
-    const reviewerOption = await waitForReviewerOption().catch((error) => ({
-      ok: false,
-      error: String(error?.message || error),
-    }));
+    const reviewerOption = await waitForRequesterOption();
     reviewerPickerEvidence.push({
       mode,
-      visible: reviewerOption.ok === true,
+      restrictedToSelf: reviewerOption.ok === true,
+      options: reviewerOption.options,
       optionCount: Array.isArray(reviewerOption.options) ? reviewerOption.options.length : 0,
       error: reviewerOption.error || '',
     });
+    console.log('threads_reviewer_picker=' + JSON.stringify(reviewerPickerEvidence.at(-1)));
     const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
     const form = menu?.querySelector('form');
     const input = menu?.querySelector(`input[name="contextMode"][value="${css(mode)}"]`);
@@ -647,7 +651,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     throw new Error('threads right-click command status unhealthy; see threads-requester-command-status.json');
   }
   await globalThis.__ctoxReportThreadsPhase('reviewer-approval');
-  const { projections, rendered, approvalDecision, status, authenticatedReviewer } =
+  const { projections, rendered, approvalDecision, status, authenticatedReviewer, reviewerPicker } =
     await globalThis.__ctoxReviewThreadsApproval({
       targetModule, targetRecordId, appTargetRecordId, threadsCollections,
       dataPrompt, appPrompt, reviewerId,
@@ -713,8 +717,10 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     tenantScope: 'local-workspace',
     actorRole: requesterSession.user.role,
     reviewerRole: authenticatedReviewer.role,
-    reviewerPickerVisible: reviewerPickerEvidence.some((item) => item.visible),
-    reviewerPickerEvidence,
+    reviewerPickerVisible: reviewerPicker.ok === true
+      && reviewerPickerEvidence.length === 3
+      && reviewerPickerEvidence.every((item) => item.restrictedToSelf === true),
+    reviewerPickerEvidence: { requester: reviewerPickerEvidence, reviewer: reviewerPicker },
     scaleCommands: Number(scale.commands || 0),
     scaleThreads: Number(scale.threads || 0),
     scaleMessages: Number(scale.messages || 0),
@@ -969,7 +975,34 @@ async function runReviewerInBrowser({
   }
 
 
-  return { projections, rendered, approvalDecision, status, authenticatedReviewer: state.session.user };
+  // The directory picker belongs to the authorized admin profile, after its
+  // real business_users initial snapshot has completed above. Never grant the
+  // requester administrative collection access just to populate a fixture.
+  const pickerTarget = document.querySelector('[data-threads-root]');
+  if (!pickerTarget) throw new Error('reviewer thread surface missing for directory picker');
+  const pickerRect = pickerTarget.getBoundingClientRect();
+  pickerTarget.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, button: 2,
+    clientX: Math.max(24, Math.round(pickerRect.left + 12)),
+    clientY: Math.max(24, Math.round(pickerRect.top + 12)),
+  }));
+  const reviewerPicker = await waitFor(() => {
+    const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
+    const options = menu
+      ? [...menu.querySelectorAll('[data-ctox-context-user-options] option')].map((option) => ({
+        value: option.getAttribute('value') || '',
+        label: option.getAttribute('label') || '',
+      }))
+      : [];
+    return {
+      ok: options.some((option) => option.value === reviewerId && /Threads Reviewer/.test(option.label))
+        && options.some((option) => option.value === 'threads-requester' && /Threads Requester/.test(option.label)),
+      actorId: state.session.user.id, role: state.session.user.role, options,
+    };
+  }, 5000, 'authorized reviewer directory picker');
+  console.log('threads_reviewer_picker=' + JSON.stringify(reviewerPicker));
+
+  return { projections, rendered, approvalDecision, status, reviewerPicker, authenticatedReviewer: state.session.user };
 }
 
 module.exports = { runThreadsRightClickPeers, runRequesterInBrowser, runReviewerInBrowser, openContextTargetInBrowser };

@@ -22,6 +22,7 @@
     "business_module_source_files",
     "business_module_commits",
     "business_module_source_blob_chunks",
+    "workjet_provider_registry",
     "workjet_projects",
     "workjet_project_chats",
     "workjet_project_workers",

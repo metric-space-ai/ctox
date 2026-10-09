@@ -299,6 +299,10 @@ pub(crate) struct NativeModelCatalogObservation {
     pub failure: Option<String>,
     #[serde(skip)]
     pub private_binding: Option<String>,
+    // Holder-local adoption hint, only after current live discovery confirms
+    // the configured model. Do not serialize an unvalidated runtime choice.
+    #[serde(skip)]
+    pub inherited_selected_model: Option<String>,
 }
 
 fn probe_current(root: &Path, route: &InheritedCodingRoute) -> (Probe, Option<String>) {
@@ -343,6 +347,13 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
     let failure = serde_json::to_value(probe.failure)?
         .as_str()
         .map(str::to_owned);
+    let inherited_selected_model = (probe.failure.is_none()
+        && probe.http_status == Some(200)
+        && probe
+            .models
+            .as_ref()
+            .is_some_and(|models| models.contains(&route.model_id)))
+    .then(|| route.model_id.clone());
     Ok(NativeModelCatalogObservation {
         provider: route.provider,
         checked_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -352,6 +363,7 @@ pub(super) fn observe(root: &Path) -> anyhow::Result<NativeModelCatalogObservati
         retry_after_seconds: probe.retry_after_seconds,
         failure,
         private_binding: binding,
+        inherited_selected_model,
     })
 }
 
@@ -452,7 +464,12 @@ mod tests {
         );
         assert_eq!(observation.http_status, Some(200));
         assert!(observation.failure.is_none());
+        assert_eq!(
+            observation.inherited_selected_model.as_deref(),
+            Some("MiniMax-M3")
+        );
         let public = serde_json::to_string(&observation)?;
+        assert!(!public.contains("inherited_selected_model"));
         for private in ["fixture-private-proxy", "OPENAI_API_KEY", address.as_str()] {
             assert!(!public.contains(private));
         }

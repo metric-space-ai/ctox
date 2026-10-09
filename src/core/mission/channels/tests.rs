@@ -4171,6 +4171,91 @@ fn founder_inbound_cannot_be_handled_without_reviewed_send() {
 }
 
 #[test]
+fn take_messages_revalidates_candidates_after_unlocked_ranking() {
+    let db_path = unique_test_db_path("ctox-channel-batch-lease-revalidation");
+    let mut conn = open_channel_db(&db_path).expect("open fixture");
+    conn.execute_batch("PRAGMA journal_mode=WAL").unwrap();
+    for key in ["owned", "retry", "scheduled", "moved", "current"] {
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: key,
+                channel: "email",
+                account_key: "email:fixture@example.com",
+                thread_key: key,
+                remote_id: key,
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Fixture",
+                sender_address: "fixture@example.com",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Lease fixture",
+                preview: "Before candidate scan",
+                body_text: "Before candidate scan",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-01-01T00:00:00Z",
+                observed_at: "2026-01-01T00:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .unwrap();
+    }
+    ensure_routing_rows_for_inbound(&conn).unwrap();
+    let path = db_path.clone();
+    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_ran = ran.clone();
+    AFTER_BATCH_LEASE_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            other.busy_timeout(std::time::Duration::ZERO).unwrap();
+            // Acquiring and committing the competing writer proves ranking
+            // released both its statement and read snapshot before leasing.
+            let tx = rusqlite::Transaction::new_unchecked(
+                &other, rusqlite::TransactionBehavior::Immediate,
+            ).unwrap();
+            tx.execute("UPDATE communication_routing_state SET route_status='leased',lease_owner='other' WHERE message_key='owned'", []).unwrap();
+            tx.execute("UPDATE communication_routing_state SET retry_not_before='2099-01-01T00:00:00Z' WHERE message_key='retry'", []).unwrap();
+            tx.execute(r#"UPDATE communication_messages SET metadata_json='{"not_before":"2099-01-01T00:00:00Z"}' WHERE message_key='scheduled'"#, []).unwrap();
+            tx.execute("UPDATE communication_messages SET thread_key='another-thread' WHERE message_key='moved'", []).unwrap();
+            tx.execute("UPDATE communication_messages SET body_text='Current payload' WHERE message_key='current'", []).unwrap();
+            tx.commit().unwrap();
+            callback_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    });
+    let taken = take_messages(&mut conn, Some("email"), 10, "batch-owner").unwrap();
+    assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(conn.is_autocommit());
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].message_key, "current");
+    assert_eq!(taken[0].body_text, "Current payload");
+    assert_eq!(taken[0].routing.lease_owner.as_deref(), Some("batch-owner"));
+    for key in ["retry", "scheduled", "moved"] {
+        let state: (String, Option<String>, i64) = conn.query_row(
+            "SELECT route_status,lease_owner,attempt FROM communication_routing_state WHERE message_key=?1",
+            [key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(state, ("pending".into(), None, 0));
+    }
+    let owner: String = conn
+        .query_row(
+            "SELECT lease_owner FROM communication_routing_state WHERE message_key='owned'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, "other");
+    drop(conn);
+    let _ = fs::remove_file(&db_path);
+}
+
+#[test]
 fn take_messages_allows_pending_rows_with_stale_lease_owner() {
     let db_path = unique_test_db_path("ctox-channel-take-pending-stale-owner");
     let mut conn = open_channel_db(&db_path).expect("failed to open db");

@@ -1,3 +1,7 @@
+#[path = "persistence_write_transaction.rs"]
+mod write_transaction;
+pub(crate) use write_transaction::SqliteWriteTransaction;
+
 use anyhow::Context;
 use anyhow::Result;
 use rusqlite::params;

@@ -469,6 +469,134 @@ fn setup() -> Result<(TempDir, Connection)> {
     Ok((root, conn))
 }
 
+// Isolated native-path load test. This is not customer or installed-shell
+// acceptance: the caller must retain the source, binary and measured scope.
+fn measure_eight_writer_projection(duration: Duration) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (root, conn) = setup()?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT")?;
+    crate::crew::ensure_schema(&conn)?;
+    Connection::open(store::rxdb_store_path(root.path()))?
+        .execute_batch("PRAGMA journal_mode=WAL")?;
+    for worker in 0..8 {
+        conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at) VALUES(?1,'leased',?2)",
+            params![format!("load-{worker}"), Utc::now().to_rfc3339()])?;
+    }
+    // Populated durable history, without model calls, external effects or
+    // production identities. Every row is an explicitly isolated fixture.
+    {
+        let tx = conn.unchecked_transaction()?;
+        for n in 0..1600 {
+            tx.execute("INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','',?2,NULL,1,'{}',?3)",
+                params![format!("load-event-{n:06}"), format!("load-{}", n % 8), Utc::now().to_rfc3339()])?;
+        }
+        tx.commit()?;
+    }
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    let warm_started = Instant::now();
+    refresh_selected(
+        root.path(),
+        &WorkerSnapshot::default(),
+        &mut writer,
+        ALL | MAINTENANCE,
+    )?;
+    let warm = warm_started.elapsed();
+    anyhow::ensure!(
+        !writer.crew_maintenance_warned,
+        "fixture warm-up deferred Crew maintenance"
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut workers = Vec::new();
+    for id in 0..8 {
+        let path = root.path().to_path_buf();
+        let stop = stop.clone();
+        workers.push(std::thread::spawn(move || -> Result<u64> {
+            let conn = Connection::open(crate::paths::core_db(&path))?;
+            conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+            let mut mirror = NativeProjectionWriter::open(&path)?;
+            let task = format!("load-{id}");
+            let mut commits = 0;
+            while !stop.load(Ordering::Relaxed) {
+                let now = Utc::now().timestamp_millis();
+                let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "fixture.queue_worker")?;
+                tx.execute("UPDATE communication_routing_state SET updated_at=?2 WHERE message_key=?1",
+                    params![task, Utc::now().to_rfc3339()])?;
+                tx.commit()?;
+                mirror.upsert_source_projection("ctox_queue_tasks", &task, now,
+                    json!({"id":task,"route_status":"leased","updated_at_ms":now,"fixture_sequence":commits}))?;
+                commits += 1;
+                // Work/think time lies outside the writer reservation.
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(commits)
+        }));
+    }
+    let started = Instant::now();
+    let mut passes = 0;
+    let mut max_pass = Duration::ZERO;
+    let mut failures = Vec::new();
+    while started.elapsed() < duration {
+        if workers.iter().any(std::thread::JoinHandle::is_finished) {
+            failures.push("fixture writer ended before the load interval".to_string());
+            break;
+        }
+        let pass_started = Instant::now();
+        if let Err(error) = refresh_selected(
+            root.path(),
+            &WorkerSnapshot::default(),
+            &mut writer,
+            ALL | MAINTENANCE,
+        ) {
+            failures.push(format!("{error:#}"));
+            break;
+        }
+        if writer.crew_maintenance_warned {
+            failures.push("fixture projection deferred Crew maintenance".to_string());
+            break;
+        }
+        max_pass = max_pass.max(pass_started.elapsed());
+        passes += 1;
+        std::thread::sleep(Duration::from_secs(3).min(duration.saturating_sub(started.elapsed())));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let mut counts = Vec::new();
+    for worker in workers {
+        match worker.join() {
+            Ok(Ok(count)) => counts.push(count),
+            Ok(Err(error)) => failures.push(format!("{error:#}")),
+            Err(_) => failures.push("fixture writer panicked".to_string()),
+        }
+    }
+    eprintln!(
+        "CTOX_SQLITE_LOAD {}",
+        json!({
+            "scope":"isolated-native-fixture","duration_ms":started.elapsed().as_millis(),
+            "workers":8,"commits_per_worker":counts,"projection_passes":passes,
+            "warm_projection_us":warm.as_micros(),"max_projection_us":max_pass.as_micros(),
+            "failures":failures
+        })
+    );
+    assert_eq!(counts.len(), 8);
+    assert!(counts.iter().all(|count| *count > 0));
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(
+        max_pass < Duration::from_secs(1),
+        "max projection {max_pass:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cockpit_projection_survives_eight_concurrent_native_writers() -> Result<()> {
+    measure_eight_writer_projection(Duration::from_secs(10))
+}
+
+#[test]
+#[ignore = "explicit one-hour isolated acceptance load; run via the gpu lane"]
+fn cockpit_projection_one_hour_eight_native_writers() -> Result<()> {
+    measure_eight_writer_projection(Duration::from_secs(3600))
+}
+
 fn record(root: &Path, collection: &str, id: &str) -> Result<Value> {
     let raw: String = store::open_store(root)?.query_row(
         "SELECT payload_json FROM business_records WHERE collection=?1 AND record_id=?2",
@@ -1555,6 +1683,63 @@ fn fresh_writer_replay_keeps_unchanged_records_untouched() -> Result<()> {
     assert_eq!(
         record(root.path(), "ctox_harness_events", "event-1")?["title"],
         "Changed"
+    );
+    Ok(())
+}
+
+#[test]
+fn only_lock_errors_keep_the_deferred_pass_flags() -> Result<()> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("lock.sqlite3");
+    let holder = Connection::open(&path)?;
+    holder.execute_batch("CREATE TABLE t(v); BEGIN IMMEDIATE; INSERT INTO t VALUES(1);")?;
+    let waiter = Connection::open(&path)?;
+    waiter.busy_timeout(Duration::from_millis(0))?;
+    let locked = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map_err(anyhow::Error::from)
+        .map_err(|error| error.context("projection pass"))
+        .unwrap_err();
+    assert!(is_sqlite_busy(&locked));
+    let missing = waiter
+        .execute("INSERT INTO missing VALUES(1)", [])
+        .map_err(anyhow::Error::from)
+        .unwrap_err();
+    assert!(!is_sqlite_busy(&missing));
+
+    let root = dir.path().to_path_buf();
+    let now = Instant::now();
+    let mut pending = schedule::Schedule::default();
+    pending.mark(root.clone(), STATUS | QUEUE);
+    let (_, flags) = pending.take_ready(now).pop().unwrap();
+    complete_projection_pass(&mut pending, root.clone(), flags, now, &Err(locked));
+    assert!(
+        pending.take_ready(now).is_empty(),
+        "lock retry must respect cooldown"
+    );
+    let due = now + schedule::MIN_REFRESH_INTERVAL;
+    assert_eq!(
+        pending.take_ready(due),
+        vec![(root.clone(), STATUS | QUEUE)]
+    );
+
+    // Releasing the real writer lock permits delivery; success consumes the work.
+    holder.execute_batch("ROLLBACK;")?;
+    let result = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map(|_| ())
+        .map_err(anyhow::Error::from);
+    assert!(result.is_ok());
+    complete_projection_pass(&mut pending, root.clone(), flags, due, &result);
+    assert!(pending
+        .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+        .is_empty());
+    complete_projection_pass(&mut pending, root, flags, due, &Err(missing));
+    assert!(
+        pending
+            .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+            .is_empty(),
+        "permanent SQL errors must not create a retry loop"
     );
     Ok(())
 }

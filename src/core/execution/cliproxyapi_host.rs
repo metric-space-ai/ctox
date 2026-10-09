@@ -1711,6 +1711,9 @@ pub fn provider_subscription_status(root: &Path) -> serde_json::Value {
                 }),
         );
     }
+    if crate::execution::cliproxyapi_xai::subscription_installed(root) {
+        accounts.push(serde_json::json!({"id": crate::execution::cliproxyapi_xai::ACCOUNT_ID, "provider": "xai", "enabled": true, "status": "authenticated"}));
+    }
     if instance_codex_runtime_config(root).ok().flatten().is_some()
         && !accounts.iter().any(|a| {
             a.get("id").and_then(serde_json::Value::as_str) == Some(INSTANCE_CODEX_ACCOUNT_ID)
@@ -1728,7 +1731,8 @@ pub fn provider_subscription_status(root: &Path) -> serde_json::Value {
             {"id": "codex", "label": "ChatGPT / Codex", "flow": "device_code"},
             {"id": "claude", "label": "Claude", "flow": "browser_callback"},
             {"id": "antigravity", "label": "Google Antigravity", "flow": "browser_callback"},
-            {"id": "kimi", "label": "Kimi Code", "flow": "device_code"}
+            {"id": "kimi", "label": "Kimi Code", "flow": "device_code"},
+            {"id": "xai", "label": "Grok Build", "flow": "device_code"}
         ]
     })
 }
@@ -2100,6 +2104,7 @@ fn effective_instance_proxy_config(
         .kimi_subscription_accounts
         .iter()
         .any(|account| !account.disabled);
+    let xai_enabled = crate::execution::cliproxyapi_xai::subscription_installed(root);
     let stored = load_instance_proxy_config(root)?;
     let automatic_codex = instance_codex_runtime_config(root)?;
     let portable = match (stored, automatic_codex) {
@@ -2140,7 +2145,7 @@ fn effective_instance_proxy_config(
     };
     let (default_provider, runtime) = match portable {
         Some(portable) => portable,
-        None if kimi_enabled => {
+        None if kimi_enabled || xai_enabled => {
             let runtime = CliproxyRuntimeConfig {
                 request_timeout_ms: 30_000,
                 routing_strategy: SchedulerStrategy::RoundRobin,
@@ -2150,7 +2155,14 @@ fn effective_instance_proxy_config(
             }
             .validate_for_extension_host()
             .map_err(|_| anyhow::anyhow!("empty portable proxy config is invalid"))?;
-            ("kimi".to_owned(), runtime)
+            (
+                if kimi_enabled {
+                    "kimi".to_owned()
+                } else {
+                    String::new()
+                },
+                runtime,
+            )
         }
         None => return Ok(None),
     };
@@ -2430,6 +2442,7 @@ impl KimiResponsesHandler {
 /// CTOX-owned extension router. It keeps the portable three-provider router
 /// unchanged while attaching Kimi as a product-integration route.
 pub struct InstanceResponsesRouter {
+    xai_root: Option<PathBuf>,
     default_provider: String,
     portable: Option<Arc<OpenAiResponsesProviderRouter>>,
     kimi: Option<Arc<KimiResponsesHandler>>,
@@ -2467,6 +2480,11 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
             let provider = provider.unwrap_or(&self.default_provider).trim();
+            if provider.eq_ignore_ascii_case("xai") {
+                if let Some(root) = &self.xai_root {
+                    return crate::execution::cliproxyapi_xai::handle_route(root, body).await;
+                }
+            }
             if provider.eq_ignore_ascii_case("kimi") {
                 return match &self.kimi {
                     Some(handler) => handler.handle_route(body).await,
@@ -2763,6 +2781,7 @@ fn build_provider_routes(
     };
     Ok(InstanceProviderRoutes {
         responses: Arc::new(InstanceResponsesRouter {
+            xai_root: Some(root.to_path_buf()),
             default_provider: effective.default_provider.clone(),
             portable,
             kimi,
@@ -5127,6 +5146,7 @@ mod tests {
             )
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
@@ -5881,6 +5901,7 @@ mod tests {
             .unwrap(),
         );
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "antigravity".to_owned(),
             portable: Some(portable),
             kimi: None,
@@ -5977,6 +5998,7 @@ mod tests {
             )
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
+            xai_root: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
