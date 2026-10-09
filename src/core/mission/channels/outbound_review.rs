@@ -3904,6 +3904,27 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS supervisor_owner_inputs (
+            input_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            body_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(task_id, sequence)
+        );
+        CREATE TABLE IF NOT EXISTS supervisor_owner_input_snapshots (
+            task_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            command_attempt INTEGER NOT NULL,
+            lease_worker_id TEXT NOT NULL,
+            through_sequence INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(task_id, attempt_id)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_communication_routing_status_owner
             ON communication_routing_state(route_status, lease_owner, leased_at, updated_at);
 

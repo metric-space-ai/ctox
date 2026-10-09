@@ -71,6 +71,17 @@ struct ObservePayload {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct InputPayload {
+    project_id: String,
+    thread_id: String,
+    target_command_id: String,
+    body: String,
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CancelPayload {
     project_id: String,
     thread_id: String,
@@ -87,6 +98,7 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
             | "ctox.workjet.project.supervisor.turn.watch"
             | "ctox.workjet.project.supervisor.turn.history"
             | "ctox.workjet.project.supervisor.turn.cancel"
+            | "ctox.workjet.project.supervisor.turn.input"
             | "ctox.workjet.project.supervisor.turn.capabilities"
     )
 }
@@ -348,6 +360,21 @@ pub(in crate::business_os) fn control(
                 response["execution_page"] = serde_json::to_value(execution)?;
             }
             Ok(response)
+        }
+        "ctox.workjet.project.supervisor.turn.input" => {
+            let request: InputPayload = serde_json::from_value(command.payload.clone())?;
+            let binding = binding(root, owner, &request.project_id, &request.thread_id, true)?;
+            let turn = owned_turn(root, owner, &binding, &request.target_command_id)?;
+            let body = required(&request.body, "body", 4096)?;
+            let operation = command.id.as_deref().context("command id is required")?;
+            let input_id = stable_id("workjet_supervisor_input", &[owner, operation]);
+            let task_id = turn["task_id"].as_str().context("native task id is required")?;
+            let input = channels::supervisor_owner_input::admit(
+                root, task_id, &request.target_command_id, &input_id, owner, &body,
+            )?;
+            Ok(json!({"ok":true, "contract":"ctox.workjet.supervisor_input.v1",
+                "binding":binding, "turn":turn, "input":input,
+                "delivery":"next_slice", "worker_interrupted":false}))
         }
         "ctox.workjet.project.supervisor.turn.cancel" => {
             let request: CancelPayload = serde_json::from_value(command.payload.clone())?;

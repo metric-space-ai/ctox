@@ -30,6 +30,8 @@ mod supervisor_history;
 mod supervisor_observation;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
+#[path = "supervisor_owner_input_tests.rs"]
+mod supervisor_owner_input;
 #[path = "weekly_report_tests.rs"]
 mod weekly_reports;
 pub(in crate::business_os) fn speech_live_fixture() -> anyhow::Result<TempDir> {

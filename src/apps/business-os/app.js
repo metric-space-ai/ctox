@@ -13943,7 +13943,7 @@ async function workjetProjectControl(request = {}) {
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
-    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history',
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
@@ -14293,14 +14293,16 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (['project.supervisor.turn.capabilities', 'project.supervisor.turn.submit', 'project.supervisor.turn.watch',
-    'project.supervisor.turn.cancel'].includes(action)) {
+    'project.supervisor.turn.cancel', 'project.supervisor.turn.input'].includes(action)) {
     const submitting = action === 'project.supervisor.turn.submit';
     const cancelling = action === 'project.supervisor.turn.cancel';
+    const inputting = action === 'project.supervisor.turn.input';
     const capabilities = action === 'project.supervisor.turn.capabilities';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'threadId']);
     if (submitting) { allowedKeys.add('goal'); allowedKeys.add('turnKind'); }
     else if (!capabilities) allowedKeys.add('targetCommandId');
     if (cancelling) allowedKeys.add('reason');
+    if (inputting) allowedKeys.add('body');
     const observing = action === 'project.supervisor.turn.watch' && request.executionPage !== undefined;
     if (action === 'project.supervisor.turn.watch') allowedKeys.add('executionPage');
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
@@ -14324,6 +14326,7 @@ async function workjetProjectControl(request = {}) {
       payload.target_command_id = boundedWorkjetProjectText(request.targetCommandId, 'targetCommandId', 256);
     }
     if (cancelling) payload.reason = boundedWorkjetProjectText(request.reason, 'reason', 512);
+    if (inputting) payload.body = boundedWorkjetProjectText(request.body, 'body', 4096);
     if (observing) payload.execution_page = boundedWorkjetExecutionRequest(request.executionPage);
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -14339,11 +14342,12 @@ async function workjetProjectControl(request = {}) {
         'project.supervisor.turn.submit': 'ctox.workjet.project.supervisor.turn.submit',
         'project.supervisor.turn.watch': 'ctox.workjet.project.supervisor.turn.watch',
         'project.supervisor.turn.cancel': 'ctox.workjet.project.supervisor.turn.cancel',
+        'project.supervisor.turn.input': 'ctox.workjet.project.supervisor.turn.input',
       }[action], payload,
       client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
     }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
     assertCurrentIdentity();
-    const contract = 'ctox.workjet.supervisor_turn.v1';
+    const contract = inputting ? 'ctox.workjet.supervisor_input.v1' : 'ctox.workjet.supervisor_turn.v1';
     const binding = receipt?.result?.binding;
     const turn = receipt?.result?.turn;
     const threadKey = `business-os/threads/${threadId}`;
@@ -14422,6 +14426,21 @@ async function workjetProjectControl(request = {}) {
       }
       result.executionContract = SUPERVISOR_EXECUTION_SCHEMA;
       result.executionPage = JSON.parse(JSON.stringify(page));
+    }
+    if (inputting) {
+      const input = receipt.result.input;
+      if (receipt.result.delivery !== 'next_slice' || receipt.result.worker_interrupted !== false
+        || !Number.isSafeInteger(input?.sequence) || input.sequence < 1
+        || input.body !== payload.body || typeof input.created_at !== 'string'
+        || !Number.isFinite(Date.parse(input.created_at))) {
+        throw new Error('Workjet supervisor follow-up has no matching durable input receipt.');
+      }
+      result.input = {
+        inputId: boundedWorkjetProjectText(input.input_id, 'native inputId', 256),
+        sequence: input.sequence, body: input.body, createdAt: input.created_at,
+      };
+      result.delivery = 'next_slice';
+      result.workerInterrupted = false;
     }
     if (submitting) result.messageId = boundedWorkjetProjectText(receipt.result.message_id, 'native messageId', 256);
     if (cancelling) {

@@ -1413,6 +1413,10 @@ pub(super) fn transition_business_command_for_task_in_transaction(
     }
     crate::command_lifecycle::validate_execution_phase_transition(&from_phase, to_phase)?;
     if terminal_status == "completed" {
+        anyhow::ensure!(
+            !super::supervisor_owner_input::has_uncaptured(tx, task_id)?,
+            "new Owner input requires another slice of this same task before completion"
+        );
         let review_passed = tx.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM business_command_results result_row
