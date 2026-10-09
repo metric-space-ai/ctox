@@ -405,6 +405,7 @@
     "ctox.task.update",
     "ctox.workjet.computer.assign",
     "ctox.workjet.computer.list",
+    "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
