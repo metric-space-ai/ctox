@@ -16691,8 +16691,31 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
 /// A communication message (email, jami, teams, meeting) waits for the serial
 /// slot; durable queue work steps back until it is routed.
 fn communication_inbound_waiting(root: &Path) -> bool {
-    highest_leasable_inbound_rank(root, &live_service_settings(root))
+    waiting_communication_rank(root, &live_service_settings(root))
         >= COMMUNICATION_INBOUND_DISPATCH_RANK
+}
+
+/// Rank of the communication that waits for the serial slot. A founder or
+/// owner mail with an open rework task is answered by that queue task, and the
+/// router defers the mail itself; counting it here let the mail and its rework
+/// block each other (thesen 09.10.2026, 17:29Z).
+fn waiting_communication_rank(root: &Path, settings: &BTreeMap<String, String>) -> u8 {
+    channels::peek_leasable_inbound_messages(
+        root,
+        ROUTER_INBOUND_RANK_PROBE_LIMIT,
+        CHANNEL_ROUTER_LEASE_OWNER,
+    )
+    .ok()
+    .into_iter()
+    .flatten()
+    .filter(|message| {
+        message.channel == "queue"
+            || !open_founder_communication_rework_for_inbound(root, &message.message_key)
+                .unwrap_or(false)
+    })
+    .map(|message| source_label_dispatch_rank(&inbound_source_label(settings, &message)))
+    .max()
+    .unwrap_or(0)
 }
 
 fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
@@ -17196,7 +17219,7 @@ fn route_external_messages_with_priority_dispatch(
     // remains — bounded to the top rank band so ordinary email/ticket work does not
     // starve the durable queue, and the governance event makes any starvation
     // observable.
-    let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
+    let top_inbound_rank = waiting_communication_rank(root, &settings);
     if top_inbound_rank >= COMMUNICATION_INBOUND_DISPATCH_RANK {
         governance::record_event_or_count(
             root,
@@ -42781,6 +42804,84 @@ Use shell tools to create or update these files."
             &serde_json::json!({"attachments": [{"path": "relative/x"}]})
         )
         .is_empty());
+    }
+
+    /// thesen 09.10.2026, 17:29Z: the owner's mail waited for its rework task
+    /// while the rework (durable queue work) waited for the mail.
+    #[test]
+    fn owner_mail_with_open_rework_lets_the_rework_take_the_slot() {
+        let root = temp_root("ctox-router-owner-mail-rework-deadlock");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        let mail_key = "email:crew@thesen-ag.com::INBOX::owner-rework";
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<owner-rework@example.com>',
+                'remote-owner-rework-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Excel importieren.', '', '',
+                'normal', 'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params![mail_key],
+        )
+        .expect("failed to insert owner inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params![mail_key],
+        )
+        .expect("failed to insert owner routing state");
+        let rework = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "Founder communication rework for the owner's mail.".to_string(),
+                thread_key: "founder-rework-recherche".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(mail_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "parent_message_key": mail_key,
+                    "inbound_message_key": mail_key,
+                })),
+            },
+        )
+        .expect("failed to seed rework task");
+        assert!(open_founder_communication_rework_for_inbound(&root, mail_key).unwrap());
+        assert!(
+            waiting_communication_rank(&root, &live_service_settings(&root))
+                < COMMUNICATION_INBOUND_DISPATCH_RANK,
+            "a mail answered by its rework does not wait for the slot"
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            !pending
+                .iter()
+                .any(|task| task.message_key == rework.message_key),
+            "the rework must be leased instead of waiting for its own mail"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// thesen 09.10.2026: 40 research tasks older than the owner's mail filled the
