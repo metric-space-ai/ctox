@@ -150,7 +150,9 @@ fn owned_turn(
 pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow::Result<bool> {
     let payload = &canonical["payload"];
     let empty_array = |field: &str| {
-        payload.get(field).is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
+        payload
+            .get(field)
+            .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty))
     };
     if canonical["command_type"] != "business_os.chat.task"
         || canonical["module"] != "ctox"
@@ -168,8 +170,11 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
     };
     let conn = open_store(root)?;
     let admitted = store::load_business_command(&conn, id)?;
-    let owner = admitted.client_context.pointer("/actor/id")
-        .and_then(Value::as_str).context("Supervisor reply has no admitted owner")?;
+    let owner = admitted
+        .client_context
+        .pointer("/actor/id")
+        .and_then(Value::as_str)
+        .context("Supervisor reply has no admitted owner")?;
     let Some(thread_id) = admitted.payload["thread_id"].as_str() else {
         return Ok(false);
     };
@@ -189,11 +194,15 @@ pub(crate) fn reply_completion_allowed(root: &Path, canonical: &Value) -> anyhow
     let turn = owned_turn(root, owner, &binding, id)?;
     let result = &turn["result"];
     ensure!(
-        matches!(turn["execution_phase"].as_str(), Some("awaiting_review" | "validating"))
-            && result["command_id"] == id
+        matches!(
+            turn["execution_phase"].as_str(),
+            Some("awaiting_review" | "validating")
+        ) && result["command_id"] == id
             && result["execution_task_id"] == turn["task_id"]
             && result["attempt"] == turn["attempt"]
-            && result["user_reply"].as_str().is_some_and(|reply| !reply.trim().is_empty()),
+            && result["user_reply"]
+                .as_str()
+                .is_some_and(|reply| !reply.trim().is_empty()),
         "Supervisor reply lacks a persisted response for this exact command, task and attempt"
     );
     Ok(true)

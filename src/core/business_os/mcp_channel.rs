@@ -80,10 +80,9 @@ pub(crate) fn workjet_confirmed_plan_service_test_fixture(
 ) -> anyhow::Result<(tempfile::TempDir, String)> {
     workjet_confirmed_plan::service_fixture()
 }
+pub(crate) use super::project_chats::supervisor_turns::reply_completion_allowed as workjet_supervisor_reply_completion_allowed;
 pub(crate) use command_writeback::supports_command_writeback;
 pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supervisor_command;
-pub(crate) use super::project_chats::supervisor_turns::reply_completion_allowed
-    as workjet_supervisor_reply_completion_allowed;
 #[path = "mcp_app_authority.rs"]
 mod app_authority;
 pub(super) use app_authority::AuthenticatedMcpAppCommand;

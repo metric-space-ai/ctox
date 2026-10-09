@@ -3,13 +3,13 @@ use anyhow::Result;
 #[cfg(test)]
 #[path = "service_auth_assist_tests.rs"]
 mod auth_assist_recovery_tests;
-#[cfg(test)]
-#[path = "service_supervisor_reply_tests.rs"]
-mod supervisor_reply_tests;
 #[path = "service_cv_print_recovery.rs"]
 mod cv_print_recovery;
 #[path = "service_runtime_support.rs"]
 mod runtime_support;
+#[cfg(test)]
+#[path = "service_supervisor_reply_tests.rs"]
+mod supervisor_reply_tests;
 use chrono::DateTime;
 use chrono::Utc;
 use cv_print_recovery::*;
@@ -10594,13 +10594,14 @@ fn supervisor_conversation_reply_ready(root: &Path, job: &QueuedPrompt) -> Resul
     {
         return Ok(false);
     }
-    let Some(context) = channels::inspect_business_command_for_task(
-        root, &job.leased_message_keys[0],
-    )? else {
+    let Some(context) =
+        channels::inspect_business_command_for_task(root, &job.leased_message_keys[0])?
+    else {
         return Ok(false);
     };
     crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(
-        root, &context["command"],
+        root,
+        &context["command"],
     )
 }
 
@@ -33449,8 +33450,11 @@ Business OS command:
     fn supervisor_conversation_reply_keeps_unfinished_plan_guard() -> anyhow::Result<()> {
         let (root, job, _) = incomplete_plan_queue_fixture("supervisor-reply-open-plan")?;
         assert!(accepted_queue_plan_failure(
-            &root, &job, &CompletionReviewDisposition::ReplyValidated,
-        )?.is_some());
+            &root,
+            &job,
+            &CompletionReviewDisposition::ReplyValidated,
+        )?
+        .is_some());
         Ok(())
     }
 
