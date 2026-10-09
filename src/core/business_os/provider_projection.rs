@@ -83,6 +83,14 @@ pub(in crate::business_os) fn visible(
     // current native owner/provider/holder, rather than treating data changes
     // as session revocation or trusting a substituted owner/id envelope.
     for account in accounts {
+        let reference = &account["nativeAccountReference"];
+        if !reference.is_null()
+            && (reference["accountId"] != account["id"]
+                || reference["holderInstanceId"] != account["holder"]["id"]
+                || reference["accountRevision"] != account["revision"])
+        {
+            return Ok(false);
+        }
         let owned: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM business_provider_federation_accounts
              WHERE account_id=?1 AND owner_user_id=?2 AND provider=?3 AND holder_instance_id=?4)",
@@ -292,6 +300,18 @@ mod tests {
         }
         assert!(stored["accounts"][0]["modelCatalog"].get("fresh").is_none());
         assert_eq!(stored["accounts"][0]["inferenceVerified"], false);
+        let account = &stored["accounts"][0];
+        assert_eq!(
+            account["nativeAccountReference"],
+            json!({
+                "accountId":account["id"],"holderInstanceId":account["holder"]["id"],
+                "accountRevision":account["revision"]
+            })
+        );
+        let mut forged = stored.clone();
+        forged["accounts"][0]["nativeAccountReference"]["holderInstanceId"] =
+            json!("another-holder");
+        assert!(!visible(&f.conn, &forged, "owner")?);
         assert_eq!(stored["catalog_freshness_ms"], CATALOG_FRESHNESS_MS);
         applied(&f.conn, "owner")?;
         let repeated = store::outbound_load_record(&f.conn, COLLECTION, &reference.id)?.unwrap();

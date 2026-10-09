@@ -713,6 +713,12 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
                 "credentialReady":row.get::<_,bool>(4)?,
                 "revision":row.get::<_,i64>(5)?,
                 "observedAtMs":row.get::<_,i64>(6)?,
+                // Explicit native reference; never a conversion from Workjet-local IDs.
+                "nativeAccountReference":{
+                    "accountId":row.get::<_,String>(0)?,
+                    "holderInstanceId":row.get::<_,String>(1)?,
+                    "accountRevision":row.get::<_,i64>(5)?,
+                },
                 "modelCatalogObserved":false,
                 "inferenceVerified":false
             }))
