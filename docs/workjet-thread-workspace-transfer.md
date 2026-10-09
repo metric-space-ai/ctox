@@ -1,5 +1,11 @@
 # Workjet thread workspace transfer
 
+## Native range failures
+
+Native file timeouts, local admission pressure and a missing chunk sequence get at most three attempts for the same byte range. Every attempt revalidates the original admitted job and grant; partial RPC responses never advance the durable byte checkpoint. A changed account or rejected file stops the retry immediately. Pause/cancel can drop an in-flight attempt or its short backoff.
+
+Job status retains fixed `PEER_FILE_*` codes and `PEER_AUTHORIZATION_FAILED`. Raw RPC messages, URLs and response parameters are never persisted or printed. After exhaustion, `workspace-resume` retains the original jobs, grants and verified byte checkpoints.
+
 Workjet calls the native `ctox workjet-transfer workspace-*` commands on the
 computer owning each endpoint. The Workjet thread ID remains unchanged. These
 commands move a Git workspace; transcript/session import, compaction, goal/loop

@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::watch;
 
 mod peer;
-pub use peer::{PeerAccountBinding, PeerRangeSource, PeerSource};
+pub use peer::{PeerAccountBinding, PeerRangeSource, PeerReadFailure, PeerSource};
 pub mod ssh_exec;
 mod storage;
 pub mod storage_smb;
@@ -412,6 +412,8 @@ impl Worker {
             // Raw engine errors may include URLs or remote response material; persist codes only.
             let code = if error.to_string() == "content identity mismatch" {
                 "CONTENT_IDENTITY_MISMATCH"
+            } else if let Some(failure) = error.downcast_ref::<PeerReadFailure>() {
+                failure.code()
             } else {
                 "TRANSFER_FAILED"
             };

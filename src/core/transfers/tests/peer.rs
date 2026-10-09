@@ -9,6 +9,38 @@ use std::{
     },
 };
 
+struct TimedOutPeer;
+impl PeerRangeSource for TimedOutPeer {
+    fn authorize<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn read_range<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+        _: u64,
+        _: u64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async { Err(ctox_transfers::PeerReadFailure::Timeout.into()) })
+    }
+}
+
+#[tokio::test]
+async fn peer_worker_persists_safe_native_failure_code_without_a_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&temp);
+    store.enqueue(request(b"pending")).unwrap();
+    let worker = store.worker_with_peer(Arc::new(TimedOutPeer)).unwrap();
+    worker.run_next(&AtomicBool::new(false)).await.unwrap();
+    let result = store.get("peer-transfer").unwrap();
+    assert_eq!(result.state, "failed");
+    assert_eq!(result.error_code.as_deref(), Some("PEER_FILE_TIMEOUT"));
+    assert_eq!(result.completed_bytes, 0);
+    assert!(result.receipt.is_none());
+}
+
 struct PendingPeer {
     entered: tokio::sync::Notify,
     dropped: Arc<AtomicBool>,
