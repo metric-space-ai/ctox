@@ -652,7 +652,7 @@ mod tests {
     fn live_models_discards_result_on_route_or_credential_change() {
         let original = route("https://llm.ctox.dev/v1");
         let mut changed = route("https://llm.ctox.dev/v1");
-        changed.model_id = "MiniMax-M3.1-Flash-Preview".to_owned();
+        changed.model_id = "MiniMax-M2.7".to_owned();
         for (current, secret) in [
             (Some(&changed), Some("same")),
             (Some(&original), Some("rotated")),
