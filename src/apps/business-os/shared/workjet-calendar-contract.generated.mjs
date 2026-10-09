@@ -110,6 +110,94 @@ export const CALENDAR_TYPES = deepFreeze({
         "type": "u64"
       }
     }
+  },
+  "CalendarAccountsReadRequest": {
+    "fields": {
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      }
+    }
+  },
+  "CalendarEventsReadRequest": {
+    "fields": {
+      "request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "account_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "start_ms": {
+        "type": "i64"
+      },
+      "end_ms": {
+        "type": "i64"
+      }
+    },
+    "ordered_fields": [
+      {
+        "before": "start_ms",
+        "after": "end_ms"
+      }
+    ]
+  },
+  "CalendarAccount": {
+    "fields": {
+      "id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "calendar_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "label": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "supported": {
+        "type": "bool"
+      }
+    }
+  },
+  "CalendarAccountsPage": {
+    "fields": {
+      "ok": {
+        "type": "bool"
+      },
+      "truncated": {
+        "type": "bool"
+      },
+      "accounts": {
+        "type": "Vec<CalendarAccount>",
+        "max_items": 100
+      }
+    }
+  },
+  "CalendarEventsPage": {
+    "fields": {
+      "ok": {
+        "type": "bool"
+      },
+      "truncated": {
+        "type": "bool"
+      },
+      "synced_at_ms": {
+        "type": "u64"
+      },
+      "events": {
+        "type": "Vec<CalendarEvent>",
+        "max_items": 100
+      }
+    }
   }
 });
 export const CALENDAR_COMMANDS = deepFreeze({

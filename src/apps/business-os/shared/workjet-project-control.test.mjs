@@ -6,12 +6,30 @@ import vm from 'node:vm';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './workjet-supervisor-execution-contract.generated.mjs';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
+import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
 
+test('calendar reads use the authenticated guest without loading project or command windows', async () => {
+  const state = {
+    session: { id: 'owner-1' }, db: {}, syncConfig: { instance_id: 'instance-1' },
+    sync: { requestNative: async () => ({ schema: 'ctox.workjet.calendar.v1', request_id: 'read-1', action: 'accounts', data: { ok: true, accounts: [], truncated: false } }) },
+  };
+  const context = vm.createContext({ state, readWorkjetCalendar, actorContext: session => session });
+  vm.runInContext(controlSource + '\nglobalThis.control = workjetProjectControl;', context);
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.control({ action: 'project.calendar.accounts.read', commandId: 'read-1' }))), {
+    action: 'project.calendar.accounts.read', commandId: 'read-1', calendar: { ok: true, accounts: [], truncated: false },
+  });
+  state.sync.requestNative = async () => {
+    state.session = { id: 'owner-2' };
+    return { schema: 'ctox.workjet.calendar.v1', request_id: 'read-1', action: 'accounts', data: { ok: true, accounts: [], truncated: false } };
+  };
+  await assert.rejects(context.control({ action: 'project.calendar.accounts.read', commandId: 'read-1' }), /scope changed/);
+});
 test('Workjet project control is installed and uses the RxDB command plane', () => {
   assert.match(appSource, /globalThis\.workjetProjectControl = workjetProjectControl/);
   assert.ok(controlStart >= 0 && controlEnd > controlStart, 'project control implementation exists');

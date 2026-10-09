@@ -52,6 +52,8 @@ mod project_crew_request;
 mod remote_worker;
 #[path = "mcp_workjet_calendar.rs"]
 mod workjet_calendar;
+pub(super) use workjet_calendar::read_webrtc as read_workjet_calendar_webrtc;
+pub(super) use workjet_calendar::WEBRTC_METHOD as WORKJET_CALENDAR_READ_METHOD;
 #[path = "mcp_workjet_confirmed_plan.rs"]
 mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;

@@ -256,6 +256,181 @@ impl WireValidate for CalendarEventDelete {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarAccountsReadRequest {
+    pub(crate) request_id: String,
+}
+impl WireValidate for CalendarAccountsReadRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.request_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarAccountsReadRequest.request_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("CalendarAccountsReadRequest.request_id violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarEventsReadRequest {
+    pub(crate) request_id: String,
+    pub(crate) account_id: String,
+    pub(crate) start_ms: i64,
+    pub(crate) end_ms: i64,
+}
+impl WireValidate for CalendarEventsReadRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.request_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEventsReadRequest.request_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("CalendarEventsReadRequest.request_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.account_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarEventsReadRequest.account_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarEventsReadRequest.account_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.start_ms;
+            value.validate()?;
+        }
+        {
+            let value = &self.end_ms;
+            value.validate()?;
+        }
+        if self.end_ms <= self.start_ms {
+            return Err("CalendarEventsReadRequest.end_ms must follow start_ms".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarAccount {
+    pub(crate) id: String,
+    pub(crate) calendar_id: String,
+    pub(crate) label: String,
+    pub(crate) supported: bool,
+}
+impl WireValidate for CalendarAccount {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarAccount.id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarAccount.id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.calendar_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarAccount.calendar_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("CalendarAccount.calendar_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.label;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("CalendarAccount.label violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("CalendarAccount.label violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.supported;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarAccountsPage {
+    pub(crate) ok: bool,
+    pub(crate) truncated: bool,
+    pub(crate) accounts: Vec<CalendarAccount>,
+}
+impl WireValidate for CalendarAccountsPage {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.ok;
+            value.validate()?;
+        }
+        {
+            let value = &self.truncated;
+            value.validate()?;
+        }
+        {
+            let value = &self.accounts;
+            value.validate()?;
+            if value.len() > 100 {
+                return Err("CalendarAccountsPage.accounts violates max_items".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarEventsPage {
+    pub(crate) ok: bool,
+    pub(crate) truncated: bool,
+    pub(crate) synced_at_ms: u64,
+    pub(crate) events: Vec<CalendarEvent>,
+}
+impl WireValidate for CalendarEventsPage {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.ok;
+            value.validate()?;
+        }
+        {
+            let value = &self.truncated;
+            value.validate()?;
+        }
+        {
+            let value = &self.synced_at_ms;
+            value.validate()?;
+        }
+        {
+            let value = &self.events;
+            value.validate()?;
+            if value.len() > 100 {
+                return Err("CalendarEventsPage.events violates max_items".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -269,6 +444,23 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "CalendarEventDelete" => serde_json::from_value::<CalendarEventDelete>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarAccountsReadRequest" => {
+            serde_json::from_value::<CalendarAccountsReadRequest>(value)
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
+        "CalendarEventsReadRequest" => serde_json::from_value::<CalendarEventsReadRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarAccount" => serde_json::from_value::<CalendarAccount>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarAccountsPage" => serde_json::from_value::<CalendarAccountsPage>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "CalendarEventsPage" => serde_json::from_value::<CalendarEventsPage>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),
