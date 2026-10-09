@@ -13169,7 +13169,7 @@ function ensureCtoxSmokeBinary() {
             ok: Boolean(card
               && releaseButton
               && !releaseButton.disabled
-              && /Privat/.test(lifecycleBadge?.textContent || card?.innerText || '')),
+              && /\bprivat\b/i.test(lifecycleBadge?.textContent || card?.innerText || '')),
             hasCard: Boolean(card),
             hasReleaseButton: Boolean(releaseButton),
             releaseDisabled: releaseButton?.disabled ?? null,
