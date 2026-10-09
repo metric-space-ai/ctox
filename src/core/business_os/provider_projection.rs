@@ -8,7 +8,7 @@ use super::super::domain_effect::DomainRecordRef;
 use super::*;
 use sha2::{Digest, Sha256};
 
-pub(super) const COLLECTION: &str = "workjet_provider_registry";
+pub(in crate::business_os) const COLLECTION: &str = "workjet_provider_registry";
 
 fn record_id(owner: &str) -> String {
     format!("provider_registry_{:x}", Sha256::digest(owner.as_bytes()))
@@ -55,7 +55,11 @@ pub(super) fn applied(conn: &Connection, owner: &str) -> Result<AppliedDomainEff
 
 /// Own-registry constraint BEFORE the generic administrative read shortcut.
 /// A foreign administrator or a forged owner field cannot broaden visibility.
-pub(super) fn visible(conn: &Connection, document: &Value, actor: &str) -> Result<bool> {
+pub(in crate::business_os) fn visible(
+    conn: &Connection,
+    document: &Value,
+    actor: &str,
+) -> Result<bool> {
     let owner = management_owner(conn, actor)?;
     let id = record_id(&owner);
     if document["owner_user_id"] != owner || document["id"] != id {
@@ -99,7 +103,7 @@ pub(super) fn visible(conn: &Connection, document: &Value, actor: &str) -> Resul
 
 /// Startup/backfill repair for already adopted accounts. Rebuild only public
 /// metadata from current native policy; never execute a historical command.
-pub(super) fn repair(root: &Path) -> Result<()> {
+pub(in crate::business_os) fn repair(root: &Path) -> Result<()> {
     let mut conn = store::open_store(root)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let owners = {
