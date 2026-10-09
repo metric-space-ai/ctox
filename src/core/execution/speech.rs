@@ -68,6 +68,33 @@ pub struct SpeechRuntimeConfig {
     pub synthesis: SpeechBackend,
     pub transcription: SpeechBackend,
     pub voice_id: Option<String>,
+    /// Pitch-preserving playback rate applied after synthesis by the consumer.
+    #[serde(default)]
+    pub rate: SpeechRate,
+}
+
+/// A bounded scalar on the wire, stored without floating-point equality drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeechRate(u16);
+impl Default for SpeechRate {
+    fn default() -> Self { Self(115) }
+}
+impl SpeechRate {
+    pub fn value(self) -> f64 { f64::from(self.0) / 100.0 }
+}
+impl Serialize for SpeechRate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.value())
+    }
+}
+impl<'de> Deserialize<'de> for SpeechRate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let rate = f64::deserialize(deserializer)?;
+        if !rate.is_finite() || !(0.8..=1.5).contains(&rate) {
+            return Err(serde::de::Error::custom("speech rate must be between 0.8 and 1.5"));
+        }
+        Ok(Self((rate * 100.0).round() as u16))
+    }
 }
 
 impl SpeechRuntimeConfig {
@@ -450,6 +477,15 @@ impl SpeechGateway {
 
     /// Complete a slide narration or short spoken answer using the selected adapter.
     pub fn synthesize(&self, request: &SpeechRequest) -> Result<SpeechOutput, SpeechError> {
+        self.synthesize_with_timeout(request, Duration::from_secs(60))
+    }
+
+    /// A short settings probe has a shorter IO budget than a full slide.
+    pub(crate) fn synthesize_with_timeout(
+        &self,
+        request: &SpeechRequest,
+        timeout: Duration,
+    ) -> Result<SpeechOutput, SpeechError> {
         if request.text.trim().is_empty() || request.text.len() > MAX_TEXT_BYTES {
             return Err(SpeechError::InvalidRequest);
         }
@@ -486,7 +522,8 @@ impl SpeechGateway {
                     "voice_id": voice, "response_format": request.format.label(), "stream": false,
                 });
                 let agent = ureq::AgentBuilder::new()
-                    .timeout(Duration::from_secs(60))
+                    .timeout(timeout)
+                    .redirects(0)
                     .build();
                 let response = agent
                     .post(&mistral_speech_endpoint(&self.root))
@@ -605,7 +642,7 @@ impl SpeechGateway {
     }
 }
 
-fn mistral_key(root: &Path) -> Option<String> {
+pub(crate) fn mistral_key(root: &Path) -> Option<String> {
     // Existing encrypted credentials only. Never read a new ambient env switch.
     ["CTOX_MISTRAL_API_KEY", "MISTRAL_API_KEY"]
         .iter()

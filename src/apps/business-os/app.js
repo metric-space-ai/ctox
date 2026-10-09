@@ -1,23 +1,24 @@
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-collection-retirement';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-collection-retirement';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-collection-retirement';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-collection-retirement';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-collection-retirement';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-collection-retirement';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-collection-retirement';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-collection-retirement';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-collection-retirement';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-collection-retirement';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-collection-retirement';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-collection-retirement';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-collection-retirement';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261009-shell-v2-speech-settings';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-speech-settings';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-speech-settings';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-speech-settings';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-speech-settings';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-speech-settings';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-speech-settings';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-speech-settings';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-speech-settings';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-speech-settings';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-speech-settings';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-speech-settings';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-speech-settings';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-speech-settings';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-speech-settings';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -26,20 +27,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/permissions.js?v=20261009-shell-v2-speech-settings';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-collection-retirement';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/branding.js?v=20261009-shell-v2-speech-settings';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-speech-settings';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/presentation.js?v=20261009-shell-v2-speech-settings';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -50,9 +51,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-collection-retirement';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-collection-retirement';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-speech-settings';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-speech-settings';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-speech-settings';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -60,27 +61,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-speech-settings';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/workspace-session.js?v=20261009-shell-v2-speech-settings';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-speech-settings';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-collection-retirement';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-collection-retirement';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-collection-retirement';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-collection-retirement';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-collection-retirement';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-speech-settings';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-speech-settings';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-speech-settings';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-speech-settings';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-speech-settings';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -88,14 +89,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-collection-retirement';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-collection-retirement';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-collection-retirement';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-speech-settings';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-speech-settings';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-speech-settings';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-collection-retirement';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-collection-retirement';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-speech-settings';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-speech-settings';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -113,7 +114,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-collection-retirement';
+const APP_BUILD = '20261009-shell-v2-speech-settings';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13781,6 +13782,18 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  if (action.startsWith('speech.settings.')) {
+    const sync = state.sync;
+    if (typeof sync?.requestNative !== 'function') throw new Error('Speech settings require a connected CTOX instance.');
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync.config?.instance_id, 'native instanceId', 256);
+    return requestSpeechSettings(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw new Error('Speech settings instance or authority changed.');
+      }
+    });
+  }
   if (action === 'project.calendar.accounts.read' || action === 'project.calendar.events.read') {
     const sync = state.sync;
     const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
