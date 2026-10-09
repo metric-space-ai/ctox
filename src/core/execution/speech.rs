@@ -279,6 +279,8 @@ pub enum VerifiedTranscriptEvent {
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum SpeechError {
     ConfigurationUnavailable,
+    /// Executor setup failed before any provider request was started.
+    ExecutionUnavailable,
     MissingCredential,
     MissingVoice,
     UnsupportedBackend,
@@ -288,7 +290,9 @@ pub enum SpeechError {
     InvalidResponse,
     Backpressure,
     Closed,
-    ProviderRejected { http_status: Option<u16> },
+    ProviderRejected {
+        http_status: Option<u16>,
+    },
 }
 impl fmt::Display for SpeechError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -485,7 +489,7 @@ impl SpeechGateway {
                     .timeout(Duration::from_secs(60))
                     .build();
                 let response = agent
-                    .post("https://api.mistral.ai/v1/audio/speech")
+                    .post(&mistral_speech_endpoint(&self.root))
                     .set("authorization", &format!("Bearer {key}"))
                     .set("content-type", "application/json")
                     .send_bytes(body.to_string().as_bytes())
@@ -584,7 +588,7 @@ impl SpeechGateway {
                     .ok_or(SpeechError::UnsupportedBackend)
             })
             .await
-            .map_err(|_| SpeechError::ConfigurationUnavailable)??;
+            .map_err(|_| SpeechError::Transport)??;
             return TranscriptionStream::open_runtime(
                 binding.transport,
                 binding.request_model,
@@ -608,6 +612,17 @@ fn mistral_key(root: &Path) -> Option<String> {
         .find_map(|k| crate::inference::runtime_env::env_or_config(root, k))
         .filter(|k| !k.trim().is_empty())
 }
+
+fn mistral_speech_endpoint(_root: &Path) -> String {
+    #[cfg(test)]
+    if let Some(endpoint) = tests::mistral_test_endpoint(_root) {
+        return endpoint;
+    }
+    "https://api.mistral.ai/v1/audio/speech".to_owned()
+}
+
+#[cfg(test)]
+pub(crate) use tests::MistralTestEndpoint;
 
 fn decode_mistral_speech(encoded: &[u8]) -> Result<Vec<u8>, SpeechError> {
     if encoded.len() > MAX_AUDIO_BYTES * 2 {

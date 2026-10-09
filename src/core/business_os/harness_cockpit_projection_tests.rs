@@ -1,4 +1,79 @@
 #[test]
+fn jour_fixe_retrospective_uses_persisted_audio_not_worker_claims() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute_batch(
+        "ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT;
+        ALTER TABLE worker_attempt_finalizations ADD COLUMN reply_text TEXT NOT NULL DEFAULT '';",
+    )?;
+    crate::crew::ensure_schema(&conn)?;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
+    ))?;
+    let mut meeting = fixture["validCases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["type"] == "Meeting")
+        .unwrap()["value"]
+        .clone();
+    meeting["state"] = json!("preparing");
+    let total = meeting["slides"].as_array().unwrap().len();
+    assert!(total > 0);
+    for slide in meeting["slides"].as_array_mut().unwrap() {
+        slide["audio"] = Value::Null;
+    }
+    let policy = store::open_store(root.path())?;
+    policy.execute_batch("CREATE TABLE workjet_jour_fixe_meetings (meeting_id TEXT PRIMARY KEY, preparation_task_id TEXT, metadata_json TEXT NOT NULL)")?;
+    policy.execute(
+        "INSERT INTO workjet_jour_fixe_meetings VALUES('meeting','task',?1)",
+        [meeting.to_string()],
+    )?;
+    conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at,crew_member_id) VALUES('task','leased','2026-09-05T12:00:00Z','crew-nori')", [])?;
+    conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES('attempt','task','crew-nori','2026-09-05T12:00:00Z')", [])?;
+    let reply = json!({"crew_retrospective":{"retrospective":"Folien 1-4 vertont, 5-8 blockiert durch Gateway-Ausfall.",
+        "learnings":[{"text":"ConfigurationUnavailable ist deterministisch: nicht erneut hammern.","kind":"pitfall","scope":{}}]}}).to_string();
+    conn.execute("INSERT INTO worker_attempt_finalizations VALUES('attempt','work','succeeded','success','1788609600000','1788609660000','1788609660000',NULL,0,?1)", [&reply])?;
+    conn.execute("INSERT INTO ctox_harness_flow_events VALUES('event','worker.phase','Review','','task',NULL,1,?1,'2026-09-05T12:01:00Z')", [json!({"attempt_id":"attempt","review":{"disposition":"approved"}}).to_string()])?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    project_runs(root.path(), &conn, &mut writer)?;
+    let (retrospective, learnings): (String, String) = conn.query_row(
+        "SELECT retrospective,learning_json FROM crew_attempts WHERE attempt_id='attempt'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(retrospective, format!("Jour fixe: 0/{total} Folien mit gespeicherter Audio-Referenz; Meeting-Status preparing."));
+    assert_eq!(learnings, "[]");
+    // A later successful publication changes the persisted count, regardless
+    // of the same old worker prose. Other tasks still retain their metadata.
+    let ready = fixture["validCases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["type"] == "Meeting")
+        .unwrap()["value"]
+        .clone();
+    policy.execute(
+        "UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",
+        [ready.to_string()],
+    )?;
+    let derived = preparation_reply_from_persisted_meeting(&policy, Some("task"), &reply)?;
+    let parsed = crate::crew::parse_retrospective(&derived).unwrap();
+    assert_eq!(parsed.retrospective,
+        format!("Jour fixe: {total}/{total} Folien mit gespeicherter Audio-Referenz; Meeting-Status review."));
+    assert!(parsed.learnings.is_empty());
+    assert_eq!(
+        record(root.path(), "ctox_runs", "attempt")?["retrospective"],
+        retrospective
+    );
+    // Non-preparation tasks retain their ordinary metadata byte-for-byte.
+    assert_eq!(
+        preparation_reply_from_persisted_meeting(&policy, Some("other-task"), &reply)?,
+        reply
+    );
+    Ok(())
+}
+
+#[test]
 fn crew_maintenance_failure_and_missing_outbox_preserve_status_and_events() -> Result<()> {
     let (root, conn) = setup()?;
     conn.execute_batch("ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT;")?;
