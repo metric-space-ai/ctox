@@ -61,20 +61,29 @@ conflict means: read again (`read_presentation`), then decide.
 Language: the project's language (German unless the project says otherwise).
 Six to nine slides. Suggested order, adapt to the evidence:
 
-| # | Slide | Layout | Content |
-|---|---|---|---|
-| 1 | Titel | `title_statement` | Project, date, the one question this meeting must answer |
-| 2 | Ziel und Stand | `comparison_split` | Previous confirmed goal (left) against what is done (right) |
-| 3 | KPIs | `technical_figure_right` | `business.kpi-bars` scene: current value against the penultimate Regeltermin, two to four bullets reading the deltas |
-| 4 | Exitwert | `technical_figure_right` | `business.trend` scene of the five-year exit value (E5) over the stored Regeltermine (`read_history`) plus today, with target if configured |
-| 5 | Worker-Aktivität | `technical_figure_left` | `business.kpi-bars` of merged PRs or runs per worker, one sentence of reading |
-| 6 | Gemergte PRs | `table_focus` | Table: PR, title, effect; each PR also as a `url` source |
-| 7 | Entscheidungen | `technical_one_column` | `callout` (tone `key`) per decision that needs the Owner |
-| 8 | Nächste Schritte | `technical_one_column` | `numberedList` of next acceptance criteria |
+| # | Slide | Layout | `intent` | Content |
+|---|---|---|---|---|
+| 1 | Titel | `title_statement` | `title` | Project, date, and the one question this meeting must answer: the most important open Owner decision, otherwise the goal question |
+| 2 | Ziel und Stand | `comparison_split` | `comparison` | Previous confirmed goal from `read_meeting` (left) against what is done (right) |
+| 3 | KPIs | `technical_figure_right` | `comparison` | `business.kpi-bars` scene: current value against the penultimate Regeltermin, two to four bullets reading the deltas |
+| 4 | Exitwert | `technical_figure_right` | `explanation` | `business.trend` scene of the five-year exit value (E5) over the stored Regeltermine (`read_history`) plus today, with target if configured |
+| 5 | Worker-Aktivität | `technical_figure_left` | `summary` | `business.kpi-bars` of merged PRs or runs per worker, one sentence of reading |
+| 6 | Gemergte PRs | `table_focus` | `summary` | Table: PR, title, effect; each PR also as a `url` source `https://github.com/<owner>/<repo>/pull/<n>` |
+| 7 | Entscheidungen | `technical_one_column` | `summary` | `callout` (tone `key`) per decision that needs the Owner |
+| 8 | Nächste Schritte | `technical_one_column` | `summary` | `numberedList` of next acceptance criteria |
 
-Text: headings at most 60 characters, bullets short and concrete, no filler,
-no marketing words. Numbers carry units. Say "keine Daten" plainly when a
-source is missing.
+A slide whose evidence is entirely missing is left out; say on slide 2 what
+is missing. Never keep an empty slide.
+
+Every slide's `title` is drawn as its handwritten headline: at most 60
+characters, and do not repeat it as a `heading` block. Use `heading` blocks
+only for sub-headings (on the title slide: one short subtitle line).
+
+Text: bullets short and concrete, no filler, no marketing words. Numbers carry
+units and German formatting in text (`1.980`, `4,8 Mio €`, `−5`, dates
+`12.10.2026`); `data` fields hold plain JSON numbers (`1980`, `4.8`). Say
+"keine Daten" plainly when a source is missing. In the PR table, "effect" is
+one short line you can support from the evidence, otherwise `keine Daten`.
 
 ## Document shape
 
@@ -89,12 +98,13 @@ source is missing.
   "deckSettings": {"defaultTransition": "fade", "showSlideNumbers": true, "allowFragments": false, "mobileMode": "scaled"},
   "slides": [ … ],
   "assets": [],
-  "createdBy": {"mode": "agent", "model": "<your model id>", "promptVersion": "jour-fix-presentation.v1"}
+  "createdBy": {"mode": "agent", "model": "<the model id your runtime reports>", "promptVersion": "jour-fix-presentation.v1"}
 }
 ```
 
 Ids: 1–120 characters, start with a letter or digit, then letters, digits,
-`.` `_` `:` `-`. Every slide, block, note and source id is unique in its scope.
+`.` `_` `:` `-`. Every id is unique within the whole document (prefix ids with
+the slide id, e.g. `s-kpis-scene`, `s-kpis-src-1`).
 Themes: `learnordie-north` (light, default), `learnordie-technical`,
 `learnordie-dark-room`.
 
@@ -112,8 +122,10 @@ Slide:
 
 `intent`: `title`, `concept`, `definition`, `explanation`, `derivation`,
 `example`, `comparison`, `summary`, `quiz`, `transition`.
-`sourceType`: `material`, `asset`, `url` (with `url`), `legacy`, `manual`,
-`import`. At least one and at most 20 sources per slide.
+Sources: `{id, sourceType, label, url?, locator?}`; `label` ≤220 characters,
+`url` for links (use `sourceType: "url"`), `locator` (≤180) for where in the source
+(e.g. `KPI read 12.10. 10:58`). `sourceType`: `material`, `asset`, `url`,
+`legacy`, `manual`, `import`. At least one and at most 20 sources per slide.
 
 Blocks (all fields strict, texts trimmed):
 
@@ -147,18 +159,21 @@ and nothing else; never copy these numbers.
 ```json
 {"id": "s-kpis-scene", "type": "scene3d", "sceneId": "business.kpi-bars",
  "altText": "Vier KPIs mit Vorwert: MRR steigt, offene Bugs sinken.",
- "caption": "Stand 12.10. gegenüber 05.10.",
- "data": {"unit": "", "items": [
+ "caption": "Stand 12.10. gegenüber dem vorletzten Regeltermin (28.09.)",
+ "data": {"items": [
    {"label": "Umsatz MRR", "value": 18400, "previous": 16900, "unit": "€"},
    {"label": "Aktive Nutzer", "value": 1240, "previous": 1310},
    {"label": "Gemergte PRs", "value": 23, "previous": 17},
    {"label": "Offene Bugs", "value": 9, "previous": 14, "better": "lower"}]}}
 ```
 
-One to eight items; `label` ≤48; `previous` is the value shown at the
+One to eight items; `label` ≤48. `unit` on the scene applies to every item
+without its own `unit`; leave it out when items carry units, and never send
+an empty string. `previous` is the value shown at the
 penultimate Regeltermin and is omitted when that value is not stored (no delta then);
 `better` is `lower` for costs, bugs, latency. The scene computes the ±% itself;
-do not write percentages into labels.
+do not write percentages into labels. Bullets name the change in words or in
+absolute numbers (`412 statt 301`).
 
 `business.trend` — one value over time:
 
@@ -170,8 +185,9 @@ do not write percentages into labels.
               {"label": "28.09.", "value": 4.4}, {"label": "12.10.", "value": 4.8}]}}
 ```
 
-Two to twenty-four points, `label` ≤24, only stored or measured values; with
-fewer than two real points, leave the trend out and say why. Business scenes always need `data`;
+Two to twenty-four points, `label` ≤24 (`dd.mm.`), only stored or measured
+values. A meeting without a stored value gets no point; name the gap in the
+caption. With fewer than two real points, leave the trend out and say why. Business scenes always need `data`;
 the lecture scenes (`modell.*`) take no data and do not belong in a Jour fixe.
 Put one scene per slide, in a `technical_figure_right` or `_left` layout.
 
@@ -179,7 +195,9 @@ Put one scene per slide, in a `technical_figure_right` or `_left` layout.
 
 `publish_deck` turns each slide's `talkingPoint` notes into the text that is read
 aloud. Write them as two to five spoken sentences in the deck language, at most
-about 900 characters per slide, no markdown, no lists, no URLs. Say what changed
+about 900 characters per slide, no markdown, no lists, no URLs. Write as you
+would speak: spell out units and signs (Euro, Millisekunden, Pull Request
+Nummer 14). Say what changed
 and what the Owner should decide. Notes of kind `source` hold citations; they
 are not read aloud.
 
