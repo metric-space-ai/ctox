@@ -10689,6 +10689,22 @@ function ensureCtoxSmokeBinary() {
               source: 'business-os-agent-scope-smoke',
               audit_probe: true,
             },
+          }).catch(async (error) => {
+            const native = await state.commandBus.getStatus(commandId).catch(() => null);
+            throw new Error(`agent scope native audit command failed: ${JSON.stringify({
+              code: error?.code || '',
+              message: error?.message || '',
+              status: native?.status || '',
+              replicationPhase: native?.replication_phase || '',
+              executionPhase: native?.execution_phase || '',
+              errorCode: native?.error_code || '',
+              errorMessage: native?.error_message || '',
+              outcome: {
+                ok: native?.result?.outcome?.ok,
+                exitCode: native?.result?.outcome?.exit_code,
+                error: native?.result?.outcome?.error,
+              },
+            })}`);
           });
           const commandCollection = state.db?.raw?.business_commands || state.db?.collection?.('business_commands');
           const persistedCommand = await waitFor(async () => {
