@@ -3159,7 +3159,9 @@ async fn run_native_peer(
                         Box::pin(async move {
                             tokio::task::spawn_blocking(move || {
                                 super::mcp_channel::read_workjet_calendar_webrtc(
-                                    &root, &capability_token, params,
+                                    &root,
+                                    &capability_token,
+                                    params,
                                 )
                             })
                             .await
