@@ -18,12 +18,14 @@ contains its actual `command_id`, linked `task_id`, immutable
 backwards through earlier requests. Equal timestamps use command ID as the
 stable tie breaker; a cursor must name an actual authorized native anchor.
 
-Each selected entry reuses the submit/watch admission checks: current native
+Each selected entry applies the submit/watch admission checks on the held snapshot: current native
 Owner, registered project/Supervisor binding, admitted envelope, canonical
 intent and durable queue link. The reader uses a deferred read-only Core
 snapshot and never initializes the database or enters its writer fence.
 A partial native index keeps this read scoped to Supervisor chat tasks.
 A removed or conflicting binding is rejected, including on final revalidation.
+Admitted payload/client-context and canonical intent reads are capped at 64 KiB;
+oversized legacy envelopes report an explicit bounded-reader error.
 
 For assistant messages and run/attempt facts, the client watches each returned
 command ID using the existing `turn.watch` execution page with

@@ -131,7 +131,7 @@ pub(in crate::business_os) fn binding_from_connection(
     Ok(binding)
 }
 
-pub(super) fn owned_turn(
+fn owned_turn(
     root: &Path,
     owner: &str,
     binding: &supervisor_binding::SupervisorBinding,
@@ -301,8 +301,9 @@ pub(in crate::business_os) fn control(
                 "turn_kinds":["work","conversation"], "default_turn_kind":"work"}),
             )
         }
-        "ctox.workjet.project.supervisor.turn.history" =>
-            super::supervisor_history::history(root, owner, command.payload.clone()),
+        "ctox.workjet.project.supervisor.turn.history" => {
+            super::supervisor_history::history(root, owner, command.payload.clone())
+        }
         "ctox.workjet.project.supervisor.turn.submit" => {
             let request: SubmitPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, true)?;

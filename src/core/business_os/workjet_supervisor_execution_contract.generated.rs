@@ -428,6 +428,189 @@ impl WireValidate for ExecutionPage {
         Ok(())
     }
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TurnHistoryCursor {
+    pub(crate) before_created_at_ms: i64,
+    pub(crate) before_command_id: String,
+}
+impl WireValidate for TurnHistoryCursor {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.before_created_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err("TurnHistoryCursor.before_created_at_ms violates minimum".into());
+            }
+        }
+        {
+            let value = &self.before_command_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryCursor.before_command_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryCursor.before_command_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("TurnHistoryCursor.before_command_id violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TurnHistoryRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cursor: Option<TurnHistoryCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) limit: Option<u64>,
+}
+impl WireValidate for TurnHistoryRequest {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(value) = &self.cursor {
+            value.validate()?;
+        }
+        if let Some(value) = &self.limit {
+            value.validate()?;
+            if *value < 1 {
+                return Err("TurnHistoryRequest.limit violates minimum".into());
+            }
+            if *value > 20 {
+                return Err("TurnHistoryRequest.limit violates maximum".into());
+            }
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TurnHistoryEntry {
+    pub(crate) command_id: String,
+    pub(crate) task_id: String,
+    pub(crate) created_at_ms: i64,
+    pub(crate) user_text: String,
+    pub(crate) user_text_truncated: bool,
+}
+impl WireValidate for TurnHistoryEntry {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.command_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryEntry.command_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryEntry.command_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("TurnHistoryEntry.command_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.task_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryEntry.task_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryEntry.task_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("TurnHistoryEntry.task_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.created_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err("TurnHistoryEntry.created_at_ms violates minimum".into());
+            }
+        }
+        {
+            let value = &self.user_text;
+            value.validate()?;
+            if value.chars().count() > 4096 {
+                return Err("TurnHistoryEntry.user_text violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.user_text_truncated;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TurnHistoryPage {
+    pub(crate) project_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) thread_key: String,
+    pub(crate) turns: Vec<TurnHistoryEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_cursor: Option<TurnHistoryCursor>,
+    pub(crate) has_more: bool,
+}
+impl WireValidate for TurnHistoryPage {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryPage.project_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryPage.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("TurnHistoryPage.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.thread_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryPage.thread_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryPage.thread_id violates min_chars".into());
+            }
+            if value.chars().count() > 36 {
+                return Err("TurnHistoryPage.thread_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.thread_key;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("TurnHistoryPage.thread_key is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("TurnHistoryPage.thread_key violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("TurnHistoryPage.thread_key violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.turns;
+            value.validate()?;
+            if value.len() > 20 {
+                return Err("TurnHistoryPage.turns violates max_items".into());
+            }
+        }
+        if let Some(value) = &self.next_cursor {
+            value.validate()?;
+        }
+        {
+            let value = &self.has_more;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -447,6 +630,18 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "ExecutionPage" => serde_json::from_value::<ExecutionPage>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "TurnHistoryCursor" => serde_json::from_value::<TurnHistoryCursor>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "TurnHistoryRequest" => serde_json::from_value::<TurnHistoryRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "TurnHistoryEntry" => serde_json::from_value::<TurnHistoryEntry>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "TurnHistoryPage" => serde_json::from_value::<TurnHistoryPage>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown observer contract type".into()),

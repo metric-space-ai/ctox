@@ -24,8 +24,8 @@ pub(in crate::business_os) mod presentation;
 pub(in crate::business_os) mod presentation_validator;
 mod privacy;
 pub(in crate::business_os) mod supervisor_binding;
-mod supervisor_observation;
 mod supervisor_history;
+mod supervisor_observation;
 pub(in crate::business_os) mod supervisor_turns;
 mod weekly_reports;
 pub(super) use privacy::{
