@@ -158,7 +158,7 @@ function assertRequiredMarkers() {
     ['addRxPlugin transition shim', /export function addRxPlugin\(_ignored = null\)/],
     ['rxdbCore runtime WebRTC export', /replicateWebRTC/],
     ['rxdbCore runtime connection handler export', /getConnectionHandlerSimplePeer/],
-    ['business os query exec surface', /async exec\(\)/],
+    ['business os query exec surface', /async exec\(\{ signal = this\.signal \} = \{\}\)/],
     ['business os query chaining surface', /where\(field\)/],
     ['business os query skip surface', /skip\(skip\)/],
     ['business os bulk insert surface', /async bulkInsert\(docs = \[\]\)/],

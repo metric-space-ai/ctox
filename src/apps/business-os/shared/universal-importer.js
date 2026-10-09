@@ -494,6 +494,21 @@ function trimTrailingEmptyColumns(rows) {
   return rows.map((row) => (row.length > width ? row.slice(0, width) : row));
 }
 
+function isRecognizedHeaderRow(row) {
+  return row.some((cell) => {
+    const name = normalizeHeader(cell);
+    return COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name);
+  });
+}
+
+function findHeaderRowIndex(rows) {
+  const limit = Math.min(rows.length, HEADER_SEARCH_ROWS);
+  for (let index = 0; index < limit; index += 1) {
+    if (isRecognizedHeaderRow(rows[index])) return index;
+  }
+  return -1;
+}
+
 export function tabularCellsToCompanyRows(matrix, options = {}) {
   const rows = trimTrailingEmptyColumns(Array.isArray(matrix)
     ? matrix
@@ -501,10 +516,12 @@ export function tabularCellsToCompanyRows(matrix, options = {}) {
       .filter((row) => row.some(Boolean))
     : []);
   if (!rows.length) return [];
-  const header = rows[0].map(normalizeHeader);
+  const headerIndex = findHeaderRowIndex(rows);
+  const tableRows = headerIndex > 0 ? rows.slice(headerIndex) : rows;
+  const header = tableRows[0].map(normalizeHeader);
   const hasHeader = header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name))
-    || isSingleColumnListHeader(rows);
-  const dataRows = hasHeader ? rows.slice(1) : rows;
+    || isSingleColumnListHeader(tableRows);
+  const dataRows = hasHeader ? tableRows.slice(1) : tableRows;
   if (hasHeader && !header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name))) {
     return dataRows
       .map((cells, index) => normalizeCompanyRow({ __rowIndex: index, company: cells[0] || '', raw: cells }, index))
@@ -537,7 +554,12 @@ export async function extractCompanyRowsFromWorkbookFile(file, options = {}) {
 
 async function extractWorkbookCompanyRows(file, options) {
   const empty = { rows: [], meta: { skippedOutsideTable: 0, tableRange: null, sheets: {} } };
-  if (!/\.(xlsx)$/i.test(file?.name || '')) return empty;
+  if (/\.xls$/i.test(file?.name || '')) {
+    // The binary Excel 97-2003 format cannot be read here. It returned zero
+    // rows without a word, which looked like a broken importer.
+    throw new Error('Das alte Excel-Format .xls wird nicht unterstützt. Bitte die Datei in Excel als .xlsx speichern und erneut importieren.');
+  }
+  if (!/\.(xlsx|xlsm|xltx|xltm)$/i.test(file?.name || '')) return empty;
   const bytes = file.base64
     ? base64ToBytes(file.base64)
     : new Uint8Array(await file.arrayBuffer?.() || []);
@@ -548,11 +570,10 @@ async function extractWorkbookCompanyRows(file, options) {
   const workbook = parseXml(workbookXml);
   const relsXml = await zipText(zip, 'xl/_rels/workbook.xml.rels');
   const relTargets = workbookRelationshipTargets(relsXml);
-  const sheetEntry = selectWorkbookSheet(workbook, relTargets, options.sheet || '');
-  if (!sheetEntry?.path) return empty;
   const sharedStrings = await readSharedStrings(zip);
-  const sheetXml = await zipText(zip, sheetEntry.path);
-  let matrix = sheetXmlToMatrix(sheetXml, sharedStrings);
+  const { entry: sheetEntry, matrix: chosenMatrix } = await chooseDataSheet(zip, workbook, relTargets, sharedStrings, options.sheet || '');
+  if (!sheetEntry?.path) return empty;
+  let matrix = chosenMatrix;
   // A sheet with an Excel table holds its data inside the table. Rows below
   // it are leftovers (a North Data export carried 16,876 name-only rows under
   // a 32,929-row table); the owner decided they are not imported (06.10.2026).
@@ -579,6 +600,29 @@ async function extractWorkbookCompanyRows(file, options) {
     );
   }
   return { rows, meta: { sheet: sheetEntry.name, skippedOutsideTable, tableRange, sheets } };
+}
+
+// Without an explicit sheet, read the first sheet that carries a recognizable
+// header; otherwise the one with the most filled rows. Workbooks often start
+// with an info or cover sheet, and reading only the first sheet imported its
+// title as a company (thesen 09.10.2026).
+async function chooseDataSheet(zip, workbook, relTargets, sharedStrings, preferredSheet) {
+  const preferred = selectWorkbookSheet(workbook, relTargets, preferredSheet);
+  if (preferredSheet && preferred?.path) {
+    return { entry: preferred, matrix: sheetXmlToMatrix(await zipText(zip, preferred.path), sharedStrings) };
+  }
+  const entries = Array.from(workbook.querySelectorAll('sheet')).map((sheet) => {
+    const relId = sheet.getAttribute('r:id') || sheet.getAttribute('id') || sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || '';
+    return { name: sheet.getAttribute('name') || '', path: relTargets.get(relId) || '' };
+  }).filter((entry) => entry.path);
+  let best = null;
+  for (const entry of entries) {
+    const matrix = sheetXmlToMatrix(await zipText(zip, entry.path), sharedStrings);
+    const filled = matrix.filter((row) => row.some((cell) => cleanCell(cell)));
+    if (findHeaderRowIndex(filled.map((row) => row.map((cell) => cleanCell(cell)))) >= 0) return { entry, matrix };
+    if (!best || filled.length > best.filled) best = { entry, matrix, filled: filled.length };
+  }
+  return best ? { entry: best.entry, matrix: best.matrix } : { entry: preferred, matrix: [] };
 }
 
 async function sheetTableRowRange(zip, sheetPath) {
@@ -803,8 +847,8 @@ export function extractCompanyRowsFromText(text) {
 }
 
 export function normalizeCompanyRow(row, index = 0) {
-  const companyKeys = ['company', 'unternehmen', 'firma', 'organisation', 'organization', 'account', 'name', 'companyname'];
-  const domainKeys = ['domain', 'website', 'url', 'webseite', 'homepage'];
+  const companyKeys = [...COMPANY_HEADER_KEYS];
+  const domainKeys = [...DOMAIN_HEADER_KEYS];
   const cityKeys = ['city', 'ort', 'stadt'];
   const countryKeys = ['country', 'land'];
   const name = firstValue(row, companyKeys) || cleanCompanyName(row.raw?.[0] || '');
@@ -1306,8 +1350,17 @@ function cellValue(cellEl, sharedStrings) {
   return raw;
 }
 
-const COMPANY_HEADER_KEYS = new Set(['company', 'unternehmen', 'firma', 'organisation', 'organization', 'account', 'name', 'companyname']);
-const DOMAIN_HEADER_KEYS = new Set(['domain', 'website', 'url', 'webseite', 'homepage']);
+// Real exports name the company column in many ways ("Firmenname",
+// "Unternehmensname", "Kunde", "Account Name"); with only the first eight
+// terms a header was taken for a company and an ID column for the names
+// (thesen 09.10.2026). Explicit company terms come before the generic "name".
+const COMPANY_HEADER_KEYS = new Set(['company', 'companyname', 'unternehmen', 'unternehmensname', 'firma', 'firmenname',
+  'firmierung', 'firmenbezeichnung', 'gesellschaft', 'kunde', 'kundenname', 'organisation', 'organisationsname',
+  'organization', 'organizationname', 'account', 'accountname', 'name1', 'name']);
+const DOMAIN_HEADER_KEYS = new Set(['domain', 'website', 'url', 'webseite', 'homepage', 'internet', 'internetadresse', 'web']);
+// A header may sit below title rows ("Kundenliste Q3", an empty row, then
+// the header). Search this many leading rows for it.
+const HEADER_SEARCH_ROWS = 20;
 
 function normalizeHeader(value) {
   return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
