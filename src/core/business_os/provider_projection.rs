@@ -218,6 +218,57 @@ mod tests {
     }
 
     #[test]
+    fn registry_reads_use_verified_managed_alias_and_current_canonical_owner() -> Result<()> {
+        let f = Fixture::new()?;
+        let canonical = uuid::Uuid::new_v4().to_string();
+        let alias = "owner-alias@fixture.example";
+        store::issue_business_os_capability_token_for_managed_user_with_email(
+            f.root.path(),
+            &canonical,
+            Some(alias),
+            "Canonical",
+            "chef",
+            store::now_ms() as i64,
+        )?;
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            f.root.path(),
+            alias,
+            "Verified alias",
+            "admin",
+            store::now_ms() as i64,
+        )?;
+        adopt(
+            &f.conn,
+            &canonical,
+            "native-instance",
+            &[account("alias-private")],
+            100,
+        )?;
+        let effect = applied(&f.conn, &canonical)?;
+        let record = store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?
+            .context("canonical registry missing")?;
+        assert!(visible(&f.conn, &record, alias)?);
+        assert!(super::super::super::threads::may_replicate_document(
+            f.root.path(),
+            &token,
+            COLLECTION,
+            &record,
+        ));
+        f.conn.execute(
+            "UPDATE business_users SET active=0 WHERE user_id=?1",
+            [&canonical],
+        )?;
+        assert!(visible(&f.conn, &record, alias).is_err());
+        assert!(!super::super::super::threads::may_replicate_document(
+            f.root.path(),
+            &token,
+            COLLECTION,
+            &record,
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn registry_projection_is_content_only_and_idempotent() -> Result<()> {
         let f = Fixture::new()?;
         f.adopt(&[account("private-selector-never-synced")])?;
