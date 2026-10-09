@@ -185,14 +185,15 @@ mod tests {
         let threads = super::super::super::threads::may_replicate_document;
         assert!(threads(f.root.path(), &owner_token, COLLECTION, &record));
         assert!(!threads(f.root.path(), &foreign_token, COLLECTION, &record));
-        assert!(
-            !super::super::super::threads::may_accept_peer_document_write(
+        // rxdb_peer's collection_write_authz rejects native projections before
+        // the document-specific authorship hook. Exercise that actual gate.
+        for token in [&owner_token, &foreign_token] {
+            assert!(!super::super::super::threads::may_accept_peer_write(
                 f.root.path(),
-                &owner_token,
+                token,
                 COLLECTION,
-                &record,
-            )
-        );
+            ));
+        }
         let core = Connection::open_in_memory()?;
         let projection = Connection::open(store::rxdb_store_path(f.root.path()))?;
         let held =
