@@ -16226,6 +16226,8 @@ function truncateChars(text2, maxChars) {
 }
 
 // src/meeting-lint.ts
+var NARRATION_MAX_CHARS = 450;
+var TITLE_NARRATION_MAX_CHARS = 150;
 var META_PATTERNS = [
   [/\b(?:diese[rsnm]?|auf dieser|in dieser|nächsten?|vorigen?|vorherigen?) Folie\b/iu, "the slide"],
   [/\bFolie (?:zeigt|enthält|bleibt|fasst|stellt)\b/iu, "the slide"],
@@ -16250,6 +16252,8 @@ var META_PATTERNS = [
     /\b(?:Vorschläge|Vorschlag|Details|Konkretes) folg(?:en|t) (?:am Ende|später|im Anschluss)\b/iu,
     "the meeting process"
   ],
+  [/\bIm Folgenden\b/u, "the presentation itself"],
+  [/\bwie Sie (?:hier |oben |unten )?sehen\b/iu, "the display"],
   [/\b(?:this|the next|the previous) slide\b/iu, "the slide"],
   [/\b(?:shown|displayed|appears?) here\b/iu, "the display"],
   [/\bstays? empty\b/iu, "an empty display"]
@@ -16293,6 +16297,7 @@ function lintMeetingDeck(document) {
     });
     for (const segment of slideSegments(slide, base2)) lintWording(segment, issues);
   });
+  document.slides.forEach((slide, slideIndex) => lintNarration(slide, slideIndex, issues));
   lintDuplicates(document, issues);
   return issues;
 }
@@ -16339,6 +16344,106 @@ function lintWording(segment, issues) {
     );
   }
 }
+function lintNarration(slide, slideIndex, issues) {
+  const base2 = ["slides", slideIndex];
+  const notes = (slide.speakerNotes ?? []).map((note, index) => ({ note, index })).filter(({ note }) => note.kind === void 0 || note.kind === "talkingPoint").filter(({ note }) => note.text.trim());
+  if (notes.length === 0) {
+    issues.push(
+      issue2("narration.missing", [...base2, "speakerNotes"], slide.id, {
+        message: `Slide "${slide.title}" has no talking point, so its text would be read aloud.`,
+        repairHint: "Add one talkingPoint note: what this slide means for the project, in spoken German."
+      })
+    );
+    return;
+  }
+  const spoken = notes.map(({ note }) => note.text.trim()).join("\n\n");
+  const budget = slideIndex === 0 ? TITLE_NARRATION_MAX_CHARS : NARRATION_MAX_CHARS;
+  const length = [...spoken].length;
+  if (length > budget) {
+    issues.push(
+      issue2("narration.too_long", [...base2, "speakerNotes"], slide.id, {
+        message: `The narration has ${length} characters; this slide allows ${budget} (about ${Math.round(budget / 15.6)} seconds).`,
+        repairHint: "Shorten the talking point: say what changed and what the Owner decides, nothing else."
+      })
+    );
+  }
+  const shown = slideNumberRuns(slide);
+  const shownSegments = slideSegments(slide, base2, false).flatMap(
+    (segment) => sentences(segment.text).map((text2) => tokens(text2))
+  );
+  for (const { note, index } of notes) {
+    const path = [...base2, "speakerNotes", index, "text"];
+    const unsupported = numberRuns(note.text).filter(
+      (run) => run.length >= 2 && !shown.has(canonicalRun(run))
+    );
+    if (unsupported.length) {
+      issues.push(
+        issue2("narration.unsupported_number", path, slide.id, {
+          message: `The narration says ${[...new Set(unsupported)].join(", ")}, which neither the slide nor its sources show.`,
+          received: excerpt(note.text, note.text.indexOf(unsupported[0])),
+          repairHint: "Speak only numbers the slide shows or its sources state; put a missing number on the slide with its source, or leave it out."
+        })
+      );
+    }
+    for (const sentence of sentences(note.text)) {
+      const spokenTokens = tokens(sentence);
+      if (spokenTokens.size < 5) continue;
+      const copied = shownSegments.find((shownTokens) => {
+        if (shownTokens.size < 5) return false;
+        let common = 0;
+        for (const token of shownTokens) if (spokenTokens.has(token)) common += 1;
+        const union2 = shownTokens.size + spokenTokens.size - common;
+        return common / union2 >= 0.75 || shownTokens.size >= 6 && common / shownTokens.size >= 0.9;
+      });
+      if (!copied) continue;
+      issues.push(
+        issue2("narration.reads_slide", path, slide.id, {
+          message: `"${sentence.trim()}" reads the slide text aloud.`,
+          repairHint: "Say what the slide means instead of reading it: the change, its cause or the decision it asks for."
+        })
+      );
+      break;
+    }
+  }
+}
+function slideNumberRuns(slide) {
+  const texts = [slide.title];
+  for (const segment of slideSegments(slide, [], false)) texts.push(segment.text);
+  const scenes = [];
+  for (const block of slide.blocks) {
+    if (block.type === "scene3d") scenes.push({ sceneId: block.sceneId, data: block.data });
+    if (block.type === "chart") texts.push(JSON.stringify(block.data ?? {}));
+    if (block.type === "table") texts.push(block.columns.join(" "));
+  }
+  for (const element of slide.canvas?.elements ?? []) {
+    const embed = element.customData?.learnordie;
+    if (embed?.type === "scene3d") scenes.push({ sceneId: embed.sceneId, data: embed.data });
+  }
+  for (const { sceneId, data } of scenes) {
+    const summary = businessSceneSummary(sceneId, data);
+    if (summary) texts.push(summary);
+    for (const value of jsonNumbers(data)) texts.push(String(value), formatNumber(value));
+    texts.push(JSON.stringify(data ?? {}));
+  }
+  for (const source of slide.sourceRefs ?? []) {
+    texts.push(source.label, source.locator ?? "", source.url ?? "");
+  }
+  for (const note of slide.speakerNotes ?? []) {
+    if (note.kind === "source") texts.push(note.text);
+  }
+  return new Set(texts.flatMap(numberRuns).map(canonicalRun));
+}
+function jsonNumbers(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return [value];
+  if (Array.isArray(value)) return value.flatMap(jsonNumbers);
+  if (value && typeof value === "object") return Object.values(value).flatMap(jsonNumbers);
+  return [];
+}
+var numberRuns = (text2) => text2.match(/\d+/gu) ?? [];
+var canonicalRun = (run) => run.replace(/^0+(?=\d)/u, "");
+var tokens = (text2) => new Set(
+  normalized(text2).split(" ").filter((token) => token.length > 1)
+);
 function lintDuplicates(document, issues) {
   const seen = /* @__PURE__ */ new Map();
   document.slides.forEach((slide, slideIndex) => {
@@ -16392,9 +16497,10 @@ function slideSegments(slide, base2, withNotes = true) {
     });
   }
   if (withNotes) {
-    (slide.speakerNotes ?? []).forEach(
-      (note, index) => push(note.text, ["speakerNotes", index, "text"])
-    );
+    (slide.speakerNotes ?? []).forEach((note, index) => {
+      if (note.kind === void 0 || note.kind === "talkingPoint")
+        push(note.text, ["speakerNotes", index, "text"]);
+    });
   }
   return segments;
 }

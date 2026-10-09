@@ -155,6 +155,13 @@
           "sourceType": "manual",
           "label": "Bewertungsmodell E5, Version 7"
         }
+      ],
+      "speakerNotes": [
+        {
+          "id": "exitwert-sprechtext",
+          "kind": "talkingPoint",
+          "text": "Der Exitwert ist seit Kalenderwoche 31 von 8,2 auf 11,6 Millionen Euro gestiegen. Bis zum Ziel von 12 Millionen Euro fehlen noch 0,4 Millionen; wiederkehrender Umsatz und Marge sollen sie bis Jahresende bringen."
+        }
       ]
     },
     {

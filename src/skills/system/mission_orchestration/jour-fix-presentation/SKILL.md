@@ -218,14 +218,31 @@ Put one scene per slide, in a `technical_figure_right` or `_left` layout.
 
 ## Speaker notes are the narration
 
-`publish_deck` turns each slide's `talkingPoint` notes into the text that is read
-aloud. Write them as two to five spoken sentences in the deck language, at most
-about 900 characters per slide, no markdown, no lists, no URLs. Write as you
-would speak: spell out units and signs (Euro, Millisekunden, Pull Request
-Nummer 14). Say what changed
-and what the Owner should decide. Notes talk about the project, never about the
-slide layout ("links steht …") or your own choices ("ich zeige keine Werte"). Notes of kind `source` hold citations; they
-are not read aloud.
+`publish_deck` turns each slide's `talkingPoint` notes into the text the meeting
+voice reads aloud while that slide is shown. What is spoken must fit the slide:
+
+- Every slide has one talking point, in the deck language, no markdown, no
+  lists, no URLs. Notes of kind `source` hold citations and are not read aloud.
+- Time budget: the voice speaks about 15.6 characters per second. At most 450
+  characters per slide (about 30 seconds), at most 150 on the title slide.
+- It speaks only about this slide and its sources. Every number, date and name
+  it says appears on the slide, in its scene data or in its `sourceRefs`; use
+  the same terms and the same numbers as the slide.
+- It complements the slide and never reads it out: say what the numbers mean,
+  why they changed and what the Owner should decide. A sentence that repeats a
+  bullet is rejected.
+- Write as you would speak: spell out units and signs (Euro, Millisekunden,
+  Pull Request Nummer 14).
+- Through-line: every slide except the last ends with one short sentence that
+  leads to the next slide's topic. The last slide closes with the decisions the
+  Owner takes today, without repeating "Nächste Schritte".
+- Never narrate the layout or the slide itself ("links sehen Sie", "auf dieser
+  Folie", "Diese Folie zeigt", "Im Folgenden"), never use system terms or ids,
+  and never talk about your own choices ("ich zeige keine Werte").
+
+These rules are checked (`narration.*` and `content.*` issues): a missing or
+too long talking point, a number the slide does not show, or a sentence read
+from the slide stops the deck from being stored.
 
 ## Editing an existing presentation
 
