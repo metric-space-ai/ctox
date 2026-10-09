@@ -1,23 +1,23 @@
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-computer-ssh-key';
-import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-computer-ssh-key';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-computer-ssh-key';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-computer-ssh-key';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-computer-ssh-key';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-computer-ssh-key';
-import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-computer-ssh-key';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261009-shell-v2-collection-access';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261009-shell-v2-collection-access';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261009-shell-v2-collection-access';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261009-shell-v2-collection-access';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261009-shell-v2-collection-access';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261009-shell-v2-collection-access';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261009-shell-v2-collection-access';
+import { CtoxResizer } from './shared/resizer.js?v=20261009-shell-v2-collection-access';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261009-shell-v2-collection-access';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261009-shell-v2-collection-access';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261009-shell-v2-collection-access';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261009-shell-v2-collection-access';
+import { createAppActions } from './shared/app-actions.js?v=20261009-shell-v2-collection-access';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/app-lifecycle.js?v=20261009-shell-v2-collection-access';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -26,20 +26,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/permissions.js?v=20261009-shell-v2-collection-access';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261009-shell-v2-computer-ssh-key';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/branding.js?v=20261009-shell-v2-collection-access';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261009-shell-v2-collection-access';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/presentation.js?v=20261009-shell-v2-collection-access';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -50,9 +50,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-computer-ssh-key';
-import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/shell-permissions-ui.js?v=20261009-shell-v2-collection-access';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261009-shell-v2-collection-access';
+import { createDocumentsFacade } from './shared/documents.js?v=20261009-shell-v2-collection-access';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -60,27 +60,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/maintenance-state.js?v=20261009-shell-v2-collection-access';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/workspace-session.js?v=20261009-shell-v2-collection-access';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/taskbar-pins.js?v=20261009-shell-v2-collection-access';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261009-shell-v2-computer-ssh-key';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-computer-ssh-key';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-computer-ssh-key';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/workjet-theme.js?v=20261009-shell-v2-collection-access';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261009-shell-v2-collection-access';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261009-shell-v2-collection-access';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261009-shell-v2-collection-access';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261009-shell-v2-collection-access';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -88,14 +88,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261009-shell-v2-computer-ssh-key';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-computer-ssh-key';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/startup-deadlines.js?v=20261009-shell-v2-collection-access';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261009-shell-v2-collection-access';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261009-shell-v2-collection-access';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-computer-ssh-key';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-computer-ssh-key';
+} from './shared/jour-fixe-presentation.mjs?v=20261009-shell-v2-collection-access';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261009-shell-v2-collection-access';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -113,7 +113,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261009-shell-v2-computer-ssh-key';
+const APP_BUILD = '20261009-shell-v2-collection-access';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -5028,6 +5028,14 @@ async function openWindowedModule(mod, options = {}) {
       try { win.close?.(); } catch {}
       return null;
     }
+    if (isBusinessOsPermissionError(error)) {
+      // Expected data denial uses the same permission surface as a full-page
+      // app. Keep this window addressable; retrying its mount cannot grant data.
+      root.dataset.modulePermissionDenied = 'true';
+      renderModulePermissionDeniedState(mod, error, content);
+      moduleSyncLeasePromise?.catch?.(() => {});
+      return win.id;
+    }
     console.error(`[module-window:${mod.id}] mount failed:`, error);
     if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
       // The interactive QA runner needs the caught exception to distinguish a
@@ -6251,6 +6259,9 @@ async function openModule(moduleId, options = {}) {
     });
     const fallbackId = visibleModuleFallbackId(mod.id);
     setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
+    showBusinessAlert(shellLang() === 'de'
+      ? 'Diese App ist für diesen Account nicht sichtbar.'
+      : 'This app is not visible to this account.');
     if (currentHashModuleId() === mod.id && fallbackId) {
       replaceModuleHash(fallbackId);
     }
@@ -7651,8 +7662,7 @@ function isBusinessOsPermissionError(error) {
     || error?.name === 'BusinessOsPermissionError';
 }
 
-function renderModulePermissionDeniedState(mod, error) {
-  const host = els.host?.querySelector('[data-module-content]') || els.host;
+function renderModulePermissionDeniedState(mod, error, host = els.host?.querySelector('[data-module-content]') || els.host) {
   if (!host) return;
   const de = shellLang() === 'de';
   const details = error?.details || {};
@@ -16483,14 +16493,25 @@ function openGlobalCtoxContextMenuForTarget(target, clientX, clientY, crew = nul
   initGlobalCtoxContextMenu();
   state.contextMenu?.hide?.();
   removeLegacyCtoxContextMenus();
-  const moduleId = target.closest('[data-module-root]')?.dataset?.moduleRoot || state.activeModule?.id;
-  const mod = state.modules.find((item) => item.id === moduleId) || state.activeModule;
+  const mod = moduleForGlobalCtoxContextTarget(target);
   if (!mod) return;
   const context = extractGlobalCtoxContext(mod, target, {
     clientX,
     clientY,
   });
   showGlobalCtoxContextMenu(context, clientX, clientY, crew);
+}
+
+function moduleForGlobalCtoxContextTarget(target) {
+  const ownerId = target.closest('.shell-window')?.dataset?.ownerId || '';
+  const candidates = [
+    target.closest('[data-context-module-id]')?.dataset?.contextModuleId,
+    ownerId.startsWith('desktop-app:') ? ownerId.slice('desktop-app:'.length) : '',
+    target.closest('[data-module-root]')?.dataset?.moduleRoot,
+  ];
+  // Card metadata describes the selected app; window ownership describes the
+  // surrounding app. Neither the desktop route nor unknown DOM IDs override it.
+  return candidates.map(id => state.modules.find(mod => mod.id === id)).find(Boolean) || state.activeModule;
 }
 
 function isGlobalCtoxContextSurface(target) {
