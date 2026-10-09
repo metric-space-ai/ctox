@@ -68,11 +68,23 @@ fn http_configured_mistral_retry(managed: bool) -> anyhow::Result<()> {
     config.save(root.path())?;
     // The first HTTP call fails for a genuine prerequisite. No provider is called.
     let failed = http_call(root.path(), &token, args(), managed)?;
-    assert!(failed["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("missing_voice"));
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("MissingVoice"),
+        "{failed}"
+    );
     assert_eq!(saved(root.path())?["state"], "preparing");
+    let (failed_state, failed_code): (String, String) = store::open_store(root.path())?.query_row(
+        "SELECT state,error_class FROM workjet_jour_fixe_native_narration WHERE operation_id='narrate-op'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(failed_state, "failed_prerequisite");
+    assert_eq!(
+        serde_json::from_str::<Value>(&failed_code)?["code"],
+        "missing_voice"
+    );
 
     let provider = tiny_http::Server::http("127.0.0.1:0")
         .map_err(|error| anyhow::anyhow!("test speech listener: {error}"))?;

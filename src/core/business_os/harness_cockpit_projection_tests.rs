@@ -9,7 +9,7 @@ fn jour_fixe_retrospective_uses_persisted_audio_not_worker_claims() -> Result<()
     let fixture: Value = serde_json::from_str(include_str!(
         "../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
     ))?;
-    let mut meeting = fixture["validCases"]
+    let mut meeting = fixture["valid_cases"]
         .as_array()
         .unwrap()
         .iter()
@@ -45,7 +45,7 @@ fn jour_fixe_retrospective_uses_persisted_audio_not_worker_claims() -> Result<()
     assert_eq!(learnings, "[]");
     // A later successful publication changes the persisted count, regardless
     // of the same old worker prose. Other tasks still retain their metadata.
-    let ready = fixture["validCases"]
+    let ready = fixture["valid_cases"]
         .as_array()
         .unwrap()
         .iter()
