@@ -2793,8 +2793,9 @@ function quoteSqlIdentifier(identifier) {
 }
 
 // waitForHealthy reports ok as soon as the SHELL is healthy. The strict
-// contract requires COMPLETE initial sync for the requested collection set, so
-// poll until the required tail finishes (bounded) before asserting. Demand-only
+// contract also requires COMPLETE initial sync and bounded transport queues.
+// Poll that entire contract within the original deadline; callers still assert
+// the final status so an unresolved violation remains a failure. Demand-only
 // chunk/blob collections must only be requested by callers that have explicitly
 // leased them first.
 async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null, allowRestart = true } = {}) {
@@ -2805,16 +2806,17 @@ async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredC
       timeoutMs: options.timeoutMs,
       allowRestart: options.allowRestart === true,
       ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
-    }), { timeoutMs, requiredCollections, allowRestart });
-    const initialSync = status?.sync?.initialSync || {};
-    const missing = Array.isArray(initialSync.missingInitialReplication)
-      ? initialSync.missingInitialReplication
-      : [];
-    const incomplete = Array.isArray(initialSync.entries)
-      && initialSync.entries.some((entry) => entry?.state !== 'complete');
-    if (status?.ok && missing.length === 0 && !incomplete) return status;
-    if (Date.now() > deadline) return status;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    }), { timeoutMs: Math.max(1, deadline - Date.now()), requiredCollections, allowRestart });
+    try {
+      assertHealthyAdvancedStatusContract(status);
+      return status;
+    } catch {
+      // Startup may still be draining ACKs after initial sync completes.
+      // Preserve the final invalid status for the caller's strict assertion.
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return status;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, remainingMs)));
   }
 }
 
