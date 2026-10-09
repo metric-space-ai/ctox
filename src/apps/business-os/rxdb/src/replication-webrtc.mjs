@@ -3140,10 +3140,24 @@ function boundedDirectPushBatches(documents = []) {
 function terminalPushRejection(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   if (result.type !== 'ctoxError' || result.scope !== 'replication') return null;
-  const message = String(result.message || '');
+  // The native validator nests its reason: a bulk masterWrite rejection
+  // arrives as { code: 'RC_PUSH', errors: [{ parameters: { message } }] }
+  // with no top-level message. Read the nested reasons too; otherwise
+  // "peer cannot change native-owned document fields" looked transient and
+  // the denied lead writes were retried forever, blocking the collection
+  // (157 writes in one browser on thesen, 09.10.2026).
+  const nested = Array.isArray(result.errors)
+    ? result.errors.flatMap((entry) => [entry?.parameters?.message, entry?.message])
+    : [];
+  const message = [result.message, ...nested]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .find((value) => !/^\s*RxDB Error-Code:/.test(value) && !/^\n/.test(value))
+    || String(result.message || '');
   const code = String(result.code || '');
   const status = String(result.status ?? '');
-  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code);
+  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code)
+    || /cannot change native-owned/i.test(message);
   const isSchema = /schema/i.test(message) || /schema/i.test(code)
     || status === '422' || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
@@ -3151,7 +3165,9 @@ function terminalPushRejection(result) {
     kind: isAuthz ? 'authz' : 'schema',
     code: code || 'RC_WEBRTC_PEER',
     direction: String(result.direction || 'push'),
-    collection: String(result.collection || ''),
+    collection: String(result.collection
+      || (Array.isArray(result.errors) ? result.errors.find((entry) => entry?.parameters?.collection)?.parameters?.collection : '')
+      || ''),
     message: message || code || 'terminal replication rejection',
   };
 }
