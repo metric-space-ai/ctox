@@ -1,0 +1,470 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+
+//! Authoritative account existence and consumer withdrawals. Credentials and
+//! holder-local selectors never leave the native policy store. This increment
+//! adopts native account metadata; remote adoption, live catalog observations,
+//! replicated UI projections and holder execution remain separate adapters.
+
+use super::{
+    consumer_authority::{AdmittedConsumerAuthority, ConsumerFacts},
+    domain_effect::{AppliedDomainEffect, DomainEffectAdmission},
+    store::{self, BusinessCommand},
+    workjet_identity,
+};
+use anyhow::{ensure, Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::path::Path;
+
+pub(super) const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS business_provider_federation_policy (
+    owner_user_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL CHECK(revision > 0)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_accounts (
+    account_id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL,
+    holder_instance_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    private_local_account_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    credential_ready INTEGER NOT NULL CHECK(credential_ready IN (0,1)),
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    observed_at_ms INTEGER NOT NULL,
+    UNIQUE(holder_instance_id,provider,private_local_account_id)
+);
+CREATE INDEX IF NOT EXISTS business_provider_federation_owner
+    ON business_provider_federation_accounts(owner_user_id);
+CREATE TABLE IF NOT EXISTS business_provider_federation_withdrawals (
+    account_id TEXT NOT NULL,
+    computer_id TEXT NOT NULL,
+    PRIMARY KEY(account_id,computer_id),
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);";
+
+const MAX_ACCOUNTS: usize = 256;
+const MAX_ID_BYTES: usize = 256;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyRequest {
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WithdrawRequest {
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+    account_id: String,
+    computer_id: String,
+    withdrawn: bool,
+    expected_revision: i64,
+}
+
+/// Only the native gateway's existing metadata adapter constructs this type.
+/// It deliberately drops preset/configured model names: those are not a live
+/// provider model-list observation, and credential presence is not a Hi check.
+struct NativeAccountObservation {
+    provider: String,
+    local_account_id: String,
+    enabled: bool,
+    credential_ready: bool,
+}
+
+fn bounded_id(value: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty()
+            && value.len() <= MAX_ID_BYTES
+            && value.trim() == value
+            && !value.chars().any(char::is_control),
+        "invalid provider federation identity"
+    );
+    Ok(())
+}
+
+fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
+    let accounts = projection["accounts"]
+        .as_array()
+        .context("native account metadata is unavailable")?;
+    ensure!(
+        accounts.len() <= MAX_ACCOUNTS,
+        "native account limit exceeded"
+    );
+    let mut seen = std::collections::BTreeSet::new();
+    accounts
+        .iter()
+        .map(|account| {
+            let provider = account["provider"]
+                .as_str()
+                .context("native provider is missing")?;
+            let local_account_id = account["id"]
+                .as_str()
+                .context("native account identity is missing")?;
+            bounded_id(provider)?;
+            bounded_id(local_account_id)?;
+            ensure!(
+                seen.insert((provider, local_account_id)),
+                "duplicate native account identity"
+            );
+            let phase = account["status"].as_str().unwrap_or("unknown");
+            Ok(NativeAccountObservation {
+                provider: provider.into(),
+                local_account_id: local_account_id.into(),
+                enabled: account["enabled"].as_bool().unwrap_or(false),
+                // The source's ready status means credential configured, never
+                // provider health, available quota or successful inference.
+                credential_ready: matches!(phase, "ready" | "connected"),
+            })
+        })
+        .collect()
+}
+
+/// The command plane supplies a currently authorized session actor. Validate
+/// the current actor again in the domain transaction, then resolve only a
+/// verified managed alias. No owner field can be supplied in the payload.
+fn management_owner(conn: &Connection, actor: &str) -> Result<String> {
+    let allowed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_users
+         WHERE user_id=?1 AND active=1 AND role IN ('chef','admin'))",
+        [actor],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        allowed,
+        "provider federation management requires current Owner/Admin authority"
+    );
+    workjet_identity::owner_from_connection(conn, actor)
+}
+
+pub(super) fn handle_command(
+    root: &Path,
+    command: &BusinessCommand,
+    actor: &str,
+    admission: Option<&DomainEffectAdmission>,
+) -> Result<Value> {
+    ensure!(
+        command.record_id.is_none(),
+        "provider commands do not accept record_id"
+    );
+    match command.command_type.as_str() {
+        "ctox.workjet.providers.list" => {
+            let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
+            let mut conn = store::open_store(root)?;
+            let snapshot = conn.transaction()?;
+            let owner = management_owner(&snapshot, actor)?;
+            list(&snapshot, &owner)
+        }
+        "ctox.workjet.providers.adopt_native" => {
+            let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
+            let admitted =
+                admission.context("native account adoption requires domain admission")?;
+            let holder = store::existing_instance_id(root)?;
+            bounded_id(&holder)?;
+            // Resolve existing account metadata before taking the policy writer
+            // transaction. No network call, auth refresh or credential mutation.
+            let snapshot = store::provider_subscription_status_for_control_plane(root);
+            let accounts = observations(&snapshot["provider_subscriptions"])?;
+            let mut conn = store::open_store(root)?;
+            let applied = admitted.apply(&mut conn, |tx| {
+                let owner = management_owner(tx, actor)?;
+                adopt(tx, &owner, &holder, &accounts, store::now_ms() as i64)?;
+                Ok(AppliedDomainEffect {
+                    result: list(tx, &owner)?,
+                    projections: vec![],
+                })
+            })?;
+            Ok(applied.result)
+        }
+        "ctox.workjet.providers.withdraw" => {
+            let request: WithdrawRequest = serde_json::from_value(command.payload.clone())?;
+            bounded_id(&request.account_id)?;
+            bounded_id(&request.computer_id)?;
+            ensure!(
+                request.expected_revision > 0,
+                "provider policy revision is missing"
+            );
+            let admitted = admission.context("account withdrawal requires domain admission")?;
+            let mut conn = store::open_store(root)?;
+            let applied = admitted.apply(&mut conn, |tx| {
+                let owner = management_owner(tx, actor)?;
+                withdraw(tx, &owner, &request)?;
+                Ok(AppliedDomainEffect {
+                    result: list(tx, &owner)?,
+                    projections: vec![],
+                })
+            })?;
+            Ok(applied.result)
+        }
+        _ => anyhow::bail!("unsupported provider federation command"),
+    }
+}
+
+fn policy_revision(conn: &Connection, owner: &str) -> Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT revision FROM business_provider_federation_policy WHERE owner_user_id=?1",
+            [owner],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
+fn bump_policy(conn: &Connection, owner: &str) -> Result<()> {
+    let revision = policy_revision(conn, owner)?
+        .checked_add(1)
+        .context("provider policy revision exhausted")?;
+    conn.execute(
+        "INSERT INTO business_provider_federation_policy(owner_user_id,revision) VALUES (?1,?2)
+         ON CONFLICT(owner_user_id) DO UPDATE SET revision=excluded.revision",
+        params![owner, revision],
+    )?;
+    Ok(())
+}
+
+fn adopt(
+    conn: &Connection,
+    owner: &str,
+    holder: &str,
+    accounts: &[NativeAccountObservation],
+    now: i64,
+) -> Result<()> {
+    // This table belongs to this instance; an authenticated Admin must not
+    // reassign an already adopted holder/account to another logical owner.
+    let mut changed = false;
+    for observation in accounts {
+        let existing: Option<(String, String, bool, bool, i64)> = conn
+            .query_row(
+                "SELECT account_id,owner_user_id,enabled,credential_ready,revision
+             FROM business_provider_federation_accounts
+             WHERE holder_instance_id=?1 AND provider=?2 AND private_local_account_id=?3",
+                params![holder, observation.provider, observation.local_account_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((id, previous_owner, enabled, configured, revision)) = existing {
+            ensure!(
+                previous_owner == owner,
+                "native account already belongs to another owner"
+            );
+            if enabled != observation.enabled || configured != observation.credential_ready {
+                let revision = revision
+                    .checked_add(1)
+                    .context("account revision exhausted")?;
+                conn.execute(
+                    "UPDATE business_provider_federation_accounts
+                     SET enabled=?2,credential_ready=?3,revision=?4,observed_at_ms=?5
+                     WHERE account_id=?1",
+                    params![
+                        id,
+                        observation.enabled,
+                        observation.credential_ready,
+                        revision,
+                        now
+                    ],
+                )?;
+                changed = true;
+            } else {
+                conn.execute(
+                    "UPDATE business_provider_federation_accounts SET observed_at_ms=?2 WHERE account_id=?1",
+                    params![id, now],
+                )?;
+            }
+        } else {
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM business_provider_federation_accounts WHERE owner_user_id=?1",
+                [owner],
+                |row| row.get(0),
+            )?;
+            ensure!(count < MAX_ACCOUNTS as i64, "owner account limit exceeded");
+            conn.execute(
+                "INSERT INTO business_provider_federation_accounts
+                 (account_id,owner_user_id,holder_instance_id,provider,private_local_account_id,
+                  enabled,credential_ready,revision,observed_at_ms)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    owner,
+                    holder,
+                    observation.provider,
+                    observation.local_account_id,
+                    observation.enabled,
+                    observation.credential_ready,
+                    now
+                ],
+            )?;
+            changed = true;
+        }
+    }
+    // Missing accounts/holders retain their identity and withdrawals. Only an
+    // explicit holder deletion receipt may remove them in the execution adapter.
+    if changed {
+        bump_policy(conn, owner)?;
+    }
+    Ok(())
+}
+
+fn require_enrolled_computer(conn: &Connection, owner: &str, computer: &str) -> Result<()> {
+    let raw: String = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+         WHERE collection='workjet_computers' AND record_id=?1 AND deleted=0
+           AND json_extract(payload_json,'$.owner_user_id')=?2
+           AND json_extract(payload_json,'$.status')='assigned'
+           AND coalesce(json_extract(payload_json,'$.is_deleted'),0)=0
+           AND coalesce(json_extract(payload_json,'$._deleted'),0)=0
+           AND coalesce(json_extract(payload_json,'$.agentless'),0)=0
+           AND json_extract(payload_json,'$.hosting_mode') IN ('workstation','self_hosted')",
+            params![computer, owner],
+            |row| row.get(0),
+        )
+        .context("withdrawal target is not an enrolled computer")?;
+    let record: Value = serde_json::from_str(&raw)?;
+    let pairing = record["device_binding_id"]
+        .as_str()
+        .context("computer has no paired device")?;
+    let current = super::consumer_authority::validate_owner_binding(conn, owner, pairing)?;
+    ensure!(
+        record["native_device_binding"] == current,
+        "computer enrollment changed"
+    );
+    Ok(())
+}
+
+fn withdraw(conn: &Connection, owner: &str, request: &WithdrawRequest) -> Result<()> {
+    ensure!(
+        policy_revision(conn, owner)? == request.expected_revision,
+        "provider policy revision conflict"
+    );
+    let account_owned: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_provider_federation_accounts
+         WHERE account_id=?1 AND owner_user_id=?2)",
+        params![request.account_id, owner],
+        |row| row.get(0),
+    )?;
+    ensure!(account_owned, "provider account is not owned");
+    require_enrolled_computer(conn, owner, &request.computer_id)?;
+    let changed = if request.withdrawn {
+        conn.execute(
+            "INSERT OR IGNORE INTO business_provider_federation_withdrawals(account_id,computer_id) VALUES (?1,?2)",
+            params![request.account_id, request.computer_id],
+        )?
+    } else {
+        conn.execute(
+            "DELETE FROM business_provider_federation_withdrawals WHERE account_id=?1 AND computer_id=?2",
+            params![request.account_id, request.computer_id],
+        )?
+    };
+    if changed != 0 {
+        bump_policy(conn, owner)?;
+    }
+    Ok(())
+}
+
+fn list(conn: &Connection, owner: &str) -> Result<Value> {
+    let mut stmt = conn.prepare(
+        "SELECT account_id,holder_instance_id,provider,enabled,credential_ready,revision,observed_at_ms
+         FROM business_provider_federation_accounts WHERE owner_user_id=?1 ORDER BY provider,account_id LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![owner, MAX_ACCOUNTS as i64 + 1], |row| {
+            Ok(json!({
+                "id":row.get::<_,String>(0)?,
+                "holder":{"kind":"ctox_instance","id":row.get::<_,String>(1)?},
+                "provider":row.get::<_,String>(2)?,
+                "enabled":row.get::<_,bool>(3)?,
+                "credentialReady":row.get::<_,bool>(4)?,
+                "revision":row.get::<_,i64>(5)?,
+                "observedAtMs":row.get::<_,i64>(6)?,
+                "modelCatalogObserved":false,
+                "inferenceVerified":false
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ensure!(rows.len() <= MAX_ACCOUNTS, "owner account limit exceeded");
+    Ok(
+        json!({"ok":true,"schema":"ctox.provider-federation-registry.v1",
+        "revision":policy_revision(conn, owner)?,"accounts":rows}),
+    )
+}
+
+/// Native-only selected-account context. No Debug, Serialize or Deserialize:
+/// the private selector is resolved on its holding instance, never replicated.
+pub(crate) struct ConsumableAccount {
+    pub(crate) account_id: String,
+    pub(crate) holder_instance_id: String,
+    pub(crate) provider: String,
+    pub(crate) private_local_account_id: String,
+    pub(crate) account_revision: i64,
+    pub(crate) policy_revision: i64,
+}
+
+fn consumable(
+    conn: &Connection,
+    consumer: &ConsumerFacts,
+    id: &str,
+    revision: i64,
+) -> Result<ConsumableAccount> {
+    let account: Option<(String,String,String,bool,bool,i64)> = conn.query_row(
+        "SELECT holder_instance_id,provider,private_local_account_id,enabled,credential_ready,revision
+         FROM business_provider_federation_accounts WHERE account_id=?1 AND owner_user_id=?2",
+        params![id,consumer.owner_user_id],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+    ).optional()?;
+    let (holder, provider, local, enabled, configured, current) =
+        account.context("provider account is unavailable")?;
+    ensure!(
+        enabled && configured,
+        "provider account metadata is not ready"
+    );
+    ensure!(current == revision, "provider account revision changed");
+    let withdrawn: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_provider_federation_withdrawals WHERE account_id=?1 AND computer_id=?2)",
+        params![id,consumer.computer_id], |row| row.get(0),
+    )?;
+    ensure!(
+        !withdrawn,
+        "provider access withdrawn for the actual consumer"
+    );
+    Ok(ConsumableAccount {
+        account_id: id.into(),
+        holder_instance_id: holder,
+        provider,
+        private_local_account_id: local,
+        account_revision: current,
+        policy_revision: policy_revision(conn, &consumer.owner_user_id)?,
+    })
+}
+
+/// Eligibility is default-on for every current enrolled consumer. There is no
+/// account allowlist or DTO-based consumer constructor. This is a local policy
+/// fence only; it is NOT a remotely forwardable grant, live-model authorization,
+/// holder reachability or permission to perform network IO inside the callback.
+pub(crate) fn with_consumable_account<T>(
+    authority: &AdmittedConsumerAuthority,
+    account_id: &str,
+    expected_account_revision: i64,
+    apply: impl FnOnce(&ConsumerFacts, &ConsumableAccount) -> Result<T>,
+) -> Result<T> {
+    bounded_id(account_id)?;
+    authority.with_current(|facts, conn| {
+        let selected = consumable(conn, facts, account_id, expected_account_revision)?;
+        apply(facts, &selected)
+    })
+}
+
+#[cfg(test)]
+#[path = "provider_federation_tests.rs"]
+mod tests;

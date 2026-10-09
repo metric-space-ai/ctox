@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 123] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -357,6 +357,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
     "ctox.subscription_auth.start",
     "ctox.task.delete",
     "ctox.task.update",
+    "ctox.workjet.providers.list",
+    "ctox.workjet.providers.adopt_native",
+    "ctox.workjet.providers.withdraw",
     "ctox.workjet.computer.assign",
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.endpoint.disable",
@@ -1210,7 +1213,13 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if super::store_workjet_computers::requires_capability_management(command) {
+        let fixed = if matches!(
+            command_type,
+            "ctox.workjet.providers.list"
+                | "ctox.workjet.providers.adopt_native"
+                | "ctox.workjet.providers.withdraw"
+        ) || super::store_workjet_computers::requires_capability_management(command)
+        {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::IntegrationsManage,
             ))
@@ -1960,6 +1969,26 @@ fn dispatch_business_command(
                         "ok": false,
                         "error": error.to_string(),
                     }),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.providers.list"
+        | "ctox.workjet.providers.adopt_native"
+        | "ctox.workjet.providers.withdraw" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session)
+                .context("provider command requires an authenticated actor")?;
+            match super::provider_federation::handle_command(
+                root,
+                command,
+                actor,
+                prepared.domain_effect_admission.as_ref(),
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
                     error,
                 )),
             }
