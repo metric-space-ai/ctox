@@ -30,6 +30,15 @@ impl TurnKind {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RouteReadPayload {
+    project_id: String,
+    thread_id: String,
+    #[serde(default, rename = "inbound_channel")]
+    _inbound_channel: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SubmitPayload {
     project_id: String,
     thread_id: String,
@@ -88,6 +97,7 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
             | "ctox.workjet.project.supervisor.turn.history"
             | "ctox.workjet.project.supervisor.turn.cancel"
             | "ctox.workjet.project.supervisor.turn.capabilities"
+            | "ctox.workjet.project.supervisor.route.read.v1"
     )
 }
 
@@ -293,6 +303,15 @@ pub(in crate::business_os) fn control(
 ) -> anyhow::Result<Value> {
     let owner = session_user_id(session).context("authenticated supervisor owner is required")?;
     match command.command_type.as_str() {
+        "ctox.workjet.project.supervisor.route.read.v1" => {
+            let request: RouteReadPayload = serde_json::from_value(command.payload.clone())?;
+            super::super::mcp_channel::read_supervisor_configured_route(
+                root,
+                owner,
+                &request.project_id,
+                &request.thread_id,
+            )
+        }
         "ctox.workjet.project.supervisor.turn.capabilities" => {
             let request: CapabilitiesPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;

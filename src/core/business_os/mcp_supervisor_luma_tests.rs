@@ -251,3 +251,174 @@ fn withdrawn_or_foreign_computer_and_stale_catalog_cannot_capture() -> anyhow::R
     }
     Ok(())
 }
+
+fn owner_route_read(
+    root: &Path,
+    operation: &str,
+    owner: &str,
+    project: &str,
+    thread: &str,
+) -> anyhow::Result<Value> {
+    crate::business_os::command_plane::accept_rxdb_business_command(
+        root,
+        json!({"id":operation,"module":"ctox",
+        "command_type":"ctox.workjet.project.supervisor.route.read.v1",
+        "payload":{"project_id":project,"thread_id":thread},
+        "client_context":{"actor":{"id":owner,"role":"chef","is_admin":true}}}),
+    )
+}
+
+#[test]
+fn configured_route_read_preserves_default_and_legacy_capabilities_without_creating_attempts(
+) -> anyhow::Result<()> {
+    let (root, _) = fixture(false)?;
+    configure(
+        root.path(),
+        json!({"workerProfiles":false,"llmRoutes":false}),
+    )?;
+    let response = owner_route_read(root.path(), "read-default", "owner", "project", THREAD)?;
+    assert_eq!(response["status"], "completed");
+    let result = &response["result"];
+    assert_eq!(result["schema"], "ctox.workjet.supervisor.route-display.v1");
+    assert_eq!(result["configured"], Value::Null);
+    assert_eq!(result["actual"], Value::Null);
+    assert_eq!(result["source"], Value::Null);
+    assert_eq!(routes(root.path())?, 0);
+    let capabilities = crate::business_os::command_plane::accept_rxdb_business_command(
+        root.path(),
+        json!({"id":"legacy-capabilities","module":"ctox",
+        "command_type":"ctox.workjet.project.supervisor.turn.capabilities",
+        "payload":{"project_id":"project","thread_id":THREAD},
+        "client_context":{"actor":{"id":"owner","role":"chef"}}}),
+    )?;
+    assert_eq!(capabilities["status"], "completed");
+    let keys: std::collections::BTreeSet<_> = capabilities["result"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "ok",
+            "contract",
+            "binding",
+            "turn_kinds",
+            "default_turn_kind"
+        ]
+        .into_iter()
+        .collect()
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_route_read_reveals_requested_facts_but_never_private_accounts_or_claimed_actual_execution(
+) -> anyhow::Result<()> {
+    let (root, token) = fixture(true)?;
+    assert_eq!(
+        code(require_executor(root.path(), Some(&token)).unwrap_err()),
+        "claude_code_holding_executor_unavailable"
+    );
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    // A mere private column, even if non-null, is not a verified producer receipt.
+    core.execute("UPDATE workjet_supervisor_route_attempts SET actual_json='{\"model\":\"unverified-claim\"}'",[])?;
+    let response = owner_route_read(root.path(), "read-request", "owner", "project", THREAD)?;
+    assert_eq!(response["status"], "completed", "{response}");
+    let result = &response["result"];
+    assert_eq!(result["configured"]["model"], MODEL);
+    assert_eq!(result["configured"]["harness"], "claude-code");
+    assert_eq!(result["actual"], Value::Null);
+    assert_eq!(
+        result["source"]["error_code"],
+        "claude_code_holding_executor_unavailable"
+    );
+    assert_eq!(
+        result["source"]["request_revision"].as_str().unwrap().len(),
+        64
+    );
+    for secret in [
+        "native-account",
+        "native-holder",
+        "holder-local-workjet-id",
+        "private-selector-not-exported",
+        "unverified-claim",
+    ] {
+        assert!(!result.to_string().contains(secret), "{secret}");
+    }
+    let policy = store::open_store(root.path())?;
+    let mut record =
+        store::outbound_load_record(&policy, "workjet_luma_configuration", "instance")?.unwrap();
+    record["revision"] = json!(2);
+    store::upsert_business_record(&policy, "workjet_luma_configuration", "instance", 2, record)?;
+    let changed = owner_route_read(root.path(), "read-changed", "owner", "project", THREAD)?;
+    assert_eq!(changed["status"], "completed", "{changed}");
+    assert_eq!(changed["result"]["configured"]["configuration_revision"], 2);
+    assert_eq!(changed["result"]["source"], Value::Null);
+    Ok(())
+}
+
+#[test]
+fn configured_route_read_uses_a_read_snapshot_beside_a_core_writer_and_never_repairs_schema(
+) -> anyhow::Result<()> {
+    let (root, _) = fixture(true)?;
+    let mut writer = Connection::open(crate::paths::core_db(root.path()))?;
+    writer.execute_batch("PRAGMA journal_mode=WAL;")?;
+    let writer = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let response = read_configured_route(root.path(), "owner", "project", THREAD)?;
+    assert_eq!(response["configured"]["model"], MODEL);
+    assert_eq!(response["source"], Value::Null);
+    assert_eq!(routes(root.path())?, 0);
+    writer.rollback()?;
+    Ok(())
+}
+
+#[test]
+fn configured_route_read_refuses_foreign_owner_project_thread_and_stale_model_authority(
+) -> anyhow::Result<()> {
+    for (actor, project, thread) in [
+        ("foreign", "project", THREAD),
+        ("owner", "foreign", THREAD),
+        ("owner", "project", "b7b5c13e-aa42-453b-a012-24b96a036033"),
+    ] {
+        let (root, _) = fixture(true)?;
+        let response = owner_route_read(root.path(), "read-invalid", actor, project, thread);
+        assert!(
+            response.is_err()
+                || response
+                    .as_ref()
+                    .is_ok_and(|r| r["status"] == "failed" || r["ok"] == false)
+        );
+    }
+    let (root, _) = fixture(true)?;
+    store::open_store(root.path())?.execute_batch(
+        "UPDATE business_provider_federation_model_observations SET last_success_at_ms=0",
+    )?;
+    let response = owner_route_read(root.path(), "read-stale", "owner", "project", THREAD)?;
+    assert_eq!(response["status"], "failed", "{response}");
+    assert_eq!(routes(root.path())?, 0);
+    Ok(())
+}
+
+#[test]
+fn configured_route_display_native_fixture_corpus_rejects_private_and_unbound_claims(
+) -> anyhow::Result<()> {
+    let spec: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-supervisor-route-display-v1.json"
+    ))?;
+    for (key, expected) in [("valid_cases", true), ("invalid_cases", false)] {
+        for case in spec[key].as_array().unwrap() {
+            assert_eq!(
+                super::super::super::workjet_supervisor_route_display_contract::validate_fixture(
+                    case["type"].as_str().unwrap(),
+                    case["value"].clone()
+                )
+                .is_ok(),
+                expected,
+                "{case}"
+            );
+        }
+    }
+    Ok(())
+}
