@@ -1,9 +1,9 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Enumerate admitted Supervisor turns without replaying prompts or copying replies.
-use super::super::workjet_supervisor_execution_contract as wire;
+use super::super::{store, workjet_supervisor_execution_contract as wire};
 use super::*;
-use rusqlite::{OpenFlags, OptionalExtension};
+use rusqlite::{params, OpenFlags, OptionalExtension};
 use wire::WireValidate;
 
 pub(super) const CONTRACT: &str = "ctox.workjet.supervisor_history.v1";
