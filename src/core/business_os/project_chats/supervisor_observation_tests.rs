@@ -346,6 +346,74 @@ fn run_id_is_exposed_only_from_the_canonical_durable_finalization_record() -> an
 }
 
 #[test]
+fn terminal_finalization_timestamps_preserve_native_history_and_run_identity() -> anyhow::Result<()> {
+    for timestamp in ["1791514245697", "2026-10-09T02:50:45.697Z"] {
+        let (root, turn) = fixture()?;
+        let db = crate::paths::core_db(root.path());
+        let tasks = vec![turn["task_id"].as_str().unwrap().to_owned()];
+        let run_id = crate::lcm::run_register_worker_run(
+            &db,
+            crate::lcm::WorkerRunInput {
+                attempt_id: "terminal-native-attempt",
+                work_key: "terminal-native-work",
+                conversation_id: 42,
+                source_label: "queue",
+                task_ids: &tasks,
+            },
+        )?;
+        let event_id = event(
+            root.path(),
+            &turn,
+            "terminal-native-attempt",
+            "crew.learning",
+            json!({}),
+        )?;
+        let engine = crate::lcm::LcmEngine::open(&db, crate::lcm::LcmConfig::default())?;
+        engine.begin_worker_attempt_finalization(crate::lcm::WorkerAttemptFinalizationInput {
+            attempt_id: "terminal-native-attempt",
+            work_key: "terminal-native-work",
+            conversation_id: 42,
+            source_label: "queue",
+            agent_outcome: crate::lcm::AgentOutcome::Success,
+            reply_text: "Saved native result",
+            error_text: None,
+        })?;
+        let conn = Connection::open(&db)?;
+        conn.execute(
+            "UPDATE worker_attempt_finalizations SET status='failed',terminal_at=?1
+             WHERE attempt_id='terminal-native-attempt'",
+            [timestamp],
+        )?;
+        let first = watch(root.path(), &turn, "terminal-first", Some(json!({})))?;
+        let observed = page(&first);
+        assert_eq!(observed["attempt"]["run_id"], run_id);
+        assert_eq!(observed["attempt"]["attempt_id"], "terminal-native-attempt");
+        assert_eq!(observed["attempt"]["status"], "failed");
+        assert_eq!(observed["attempt"]["finished_at_ms"], 1_791_514_245_697_i64);
+        assert_eq!(observed["events"].as_array().unwrap().len(), 1);
+        assert_eq!(observed["events"][0]["id"], event_id);
+        let reopened = watch(root.path(), &turn, "terminal-reopened", Some(json!({})))?;
+        assert_eq!(page(&reopened), observed);
+        let saved: String = conn.query_row(
+            "SELECT terminal_at FROM worker_attempt_finalizations
+             WHERE attempt_id='terminal-native-attempt'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(saved, timestamp);
+        for invalid in ["-1", "9007199254740992", "not-a-timestamp"] {
+            conn.execute(
+                "UPDATE worker_attempt_finalizations SET terminal_at=?1
+                 WHERE attempt_id='terminal-native-attempt'",
+                [invalid],
+            )?;
+            rejected(watch(root.path(), &turn, invalid, Some(json!({}))));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn event_reader_uses_a_read_snapshot_while_a_core_writer_holds_an_uncommitted_transaction(
 ) -> anyhow::Result<()> {
     let (root, turn) = fixture()?;
