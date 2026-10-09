@@ -36,7 +36,8 @@ pub(crate) fn read_webrtc(
             "calendar read too large"
         );
         let request: WebRtcReadRequest = serde_json::from_value(params[0].clone())?;
-        let (actor, role) = store::verify_webrtc_capability_actor(root, capability_token)?;
+        let (actor, role) = store::verify_webrtc_capability_actor(root, capability_token)
+            .ok_or_else(|| anyhow::anyhow!("calendar browser authority unavailable"))?;
         anyhow::ensure!(
             store::capability_allows_collection_permission(
                 root,
@@ -86,7 +87,9 @@ pub(crate) fn read_webrtc(
                 .map_err(anyhow::Error::msg)?,
         }
         anyhow::ensure!(
-            store::verify_webrtc_capability_actor(root, capability_token)? == (actor, role)
+            store::verify_webrtc_capability_actor(root, capability_token)
+                .ok_or_else(|| anyhow::anyhow!("calendar browser authority unavailable"))?
+                == (actor, role)
                 && store::capability_allows_collection_permission(
                     root,
                     capability_token,
@@ -343,8 +346,9 @@ mod tests {
             )
         };
         save(vec!["shared".into()])?;
+        let issued_at_ms = i64::try_from(store::now_ms())?;
         let issue = |actor| {
-            store::issue_business_os_capability_token(root.path(), actor, store::now_ms())
+            store::issue_business_os_capability_token(root.path(), actor, issued_at_ms)
                 .map(|issued| issued.0)
         };
         let owner = issue("owner")?;
