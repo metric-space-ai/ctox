@@ -31,7 +31,7 @@ Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
 remain atomic. Single-record writes keep their existing boundaries. Cold event
 delivery prepares payloads and deduplication outside the writer, then commits at
-most 32 source records and 32 mirror records per separate transaction, using the
+most 64 source records and 64 mirror records per separate transaction, using the
 same per-row merge/envelope functions. Source commit precedes mirror delivery;
 notifications follow mirror commit. A failed mirror chunk rolls back together,
 retains completed chunks in the dedupe cache and restores the unclaimed replay

@@ -142,7 +142,7 @@ impl BusinessProjectionWriter {
         collection: &str,
         records: Vec<(String, i64, Value)>,
     ) -> Result<()> {
-        for chunk in records.chunks(32) {
+        for chunk in records.chunks(NativeProjectionWriter::MAX_BATCH_RECORDS) {
             let mut changed = Vec::new();
             let mut pending = Vec::new();
             for (id, source_ms, payload) in chunk {

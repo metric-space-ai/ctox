@@ -1122,7 +1122,7 @@ fn failed_event_batch_retries_unpublished_rows_without_advancing_cursor() -> Res
         "INSERT INTO communication_routing_state VALUES('batch-task','leased',?1)",
         [Utc::now().to_rfc3339()],
     )?;
-    for n in 0..65 {
+    for n in 0..129 {
         conn.execute("INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','','batch-task',NULL,1,'{}','2026-01-01T00:00:00Z')",
             [format!("cursor-event-{n:03}")])?;
     }
@@ -1143,24 +1143,24 @@ fn failed_event_batch_retries_unpublished_rows_without_advancing_cursor() -> Res
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        32
+        64
     );
-    let before: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-064'",
+    let before: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
         [], |r|r.get(0))?;
     rxdb.execute_batch("DROP TRIGGER fixture_cursor_failure")?;
     // Exercise the ordinary incremental invocation, not a forced replay:
     // only restoring the unclaimed cursor keeps the failed rows eligible.
     project_events_since(root.path(), &conn, &mut writer, false)?;
-    assert_eq!(writer.event_cursor, Some(65));
+    assert_eq!(writer.event_cursor, Some(129));
     assert_eq!(
         rxdb.query_row(
             "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        65
+        129
     );
-    let after: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-064'",
+    let after: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
         [], |r|r.get(0))?;
     assert_eq!(before, after);
     Ok(())
@@ -1173,10 +1173,10 @@ fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<
     rxdb.execute_batch(
         "CREATE TRIGGER fixture_batch_failure
         BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
-        WHEN new.id='batch-event-040'
+        WHEN new.id='batch-event-080'
         BEGIN SELECT RAISE(ABORT,'injected batch mirror failure'); END;",
     )?;
-    let records = (0..65).map(|n| {
+    let records = (0..129).map(|n| {
         let id = format!("batch-event-{n:03}");
         (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1}))
     }).collect::<Vec<_>>();
@@ -1184,7 +1184,7 @@ fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<
     assert!(writer
         .upsert_source_projection_batch("ctox_harness_events", records.clone())
         .is_err());
-    assert_eq!(writer.payloads.len(), 32);
+    assert_eq!(writer.payloads.len(), 64);
     let count_source = || -> Result<i64> {
         Ok(writer.inner.source_connection().query_row(
             "SELECT COUNT(*) FROM business_records WHERE collection='ctox_harness_events'",
@@ -1192,14 +1192,14 @@ fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<
             |r| r.get(0),
         )?)
     };
-    assert_eq!(count_source()?, 64, "only two source chunks committed");
+    assert_eq!(count_source()?, 128, "only two source chunks committed");
     assert_eq!(
         rxdb.query_row(
             "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
             [],
             |r| r.get::<_, i64>(0)
         )?,
-        32,
+        64,
         "the failed second mirror chunk rolled back completely"
     );
     let first = || -> Result<(String, f64)> {
@@ -1209,7 +1209,7 @@ fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<
     let before = first()?;
     rxdb.execute_batch("DROP TRIGGER fixture_batch_failure")?;
     writer.upsert_source_projection_batch("ctox_harness_events", records)?;
-    assert_eq!(writer.payloads.len(), 65);
+    assert_eq!(writer.payloads.len(), 129);
     assert_eq!(
         first()?,
         before,
@@ -1218,7 +1218,7 @@ fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<
     assert_eq!(rxdb.query_row(
         "SELECT COUNT(*),COUNT(DISTINCT lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
         [], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))
-    )?, (65,65));
+    )?, (129,129));
     Ok(())
 }
 

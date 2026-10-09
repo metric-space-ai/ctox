@@ -13218,7 +13218,9 @@ impl BusinessProjectionWriter {
             .is_some_and(|mirrored| same_projection_payload(&mirrored, payload)))
     }
 
-    /// Commit at most 32 prepared records per source/mirror transaction.
+    pub(crate) const MAX_BATCH_RECORDS: usize = 64;
+
+    /// Commit at most 64 prepared records per source/mirror transaction.
     /// Source delivery remains durable before independently retryable RxDB
     /// delivery; no reservation spans both stores or a complete replay.
     pub(crate) fn upsert_source_projection_batch(
@@ -13226,7 +13228,7 @@ impl BusinessProjectionWriter {
         collection: &str,
         records: &[(String, i64, Value)],
     ) -> anyhow::Result<()> {
-        for chunk in records.chunks(32) {
+        for chunk in records.chunks(Self::MAX_BATCH_RECORDS) {
             let tx = crate::persistence::SqliteWriteTransaction::begin(
                 &self.conn,
                 "projection.source_batch",
@@ -13503,7 +13505,11 @@ impl RxdbCollectionWriter {
         &mut self,
         records: &[(String, i64, Value)],
     ) -> anyhow::Result<()> {
-        anyhow::ensure!(records.len() <= 32, "projection batch exceeds 32 records");
+        anyhow::ensure!(
+            records.len() <= BusinessProjectionWriter::MAX_BATCH_RECORDS,
+            "projection batch exceeds {} records",
+            BusinessProjectionWriter::MAX_BATCH_RECORDS
+        );
         if records.is_empty() {
             return Ok(());
         }
