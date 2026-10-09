@@ -439,7 +439,7 @@ async fn execute_route_at(
         body,
         XaiRequestPolicy {
             model,
-            stream,
+            stream: true,
             ..XaiRequestPolicy::default()
         },
     )
@@ -449,7 +449,7 @@ async fn execute_route_at(
         &mut headers,
         Some(&auth),
         &record.access,
-        stream,
+        true,
         &prepared.session_id,
     );
     let mut upstream = client
@@ -460,10 +460,31 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    Ok((
-        stream,
-        bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?,
-    ))
+    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let data = if stream {
+        data
+    } else {
+        completed_response(&data)?
+    };
+    Ok((stream, data))
+}
+fn completed_response(body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    for line in body.split(|byte| *byte == b'\n') {
+        if let Some(data) = line.strip_prefix(b"data:") {
+            if let Ok(event) = serde_json::from_slice::<serde_json::Value>(data) {
+                if event.get("type").and_then(serde_json::Value::as_str)
+                    == Some("response.completed")
+                {
+                    let response = event
+                        .get("response")
+                        .filter(|value| value.is_object())
+                        .ok_or_else(|| anyhow::anyhow!("invalid Grok response"))?;
+                    return Ok(serde_json::to_vec(response)?);
+                }
+            }
+        }
+    }
+    anyhow::bail!("Grok response did not complete")
 }
 async fn bounded_response(
     response: native_http::Response,

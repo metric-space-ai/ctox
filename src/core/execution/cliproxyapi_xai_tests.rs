@@ -138,7 +138,7 @@ async fn accepted_subscription_routes_only_live_catalog_models() {
             ("GET /models", r#"{"data":[{"id":"grok-4.7"}]}"#),
             (
                 "POST /responses",
-                r#"{"id":"response-fixture","object":"response","output":[]}"#,
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"response-fixture\",\"object\":\"response\",\"output\":[]}}\n\n",
             ),
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
