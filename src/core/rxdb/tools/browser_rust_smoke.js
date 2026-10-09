@@ -10710,7 +10710,7 @@ function ensureCtoxSmokeBinary() {
               replicationPhase: native?.replication_phase || '',
               executionPhase: native?.execution_phase || '',
               errorCode: native?.error_code || '',
-              errorMessage: native?.error_message || '',
+              errorMessage: native?.error_message || native?.error || native?.result?.error || native?.result?.reason || '',
               outcome: {
                 ok: native?.result?.outcome?.ok,
                 exitCode: native?.result?.outcome?.exit_code,
