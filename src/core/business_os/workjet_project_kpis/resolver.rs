@@ -443,3 +443,59 @@ pub(in crate::business_os) fn refresh_test_at(
 ) -> anyhow::Result<()> {
     refresh_at(root, project, force, now)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_task_metrics_exclude_conversations_and_keep_legacy_work() -> anyhow::Result<()> {
+        let core = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE business_command_aggregates (
+                module TEXT, command_type TEXT, execution_mode TEXT, record_id TEXT,
+                created_at_ms INTEGER, updated_at_ms INTEGER, intent_json TEXT,
+                execution_phase TEXT, terminal_status TEXT
+            )",
+        )?;
+        let now = 100 * HOUR;
+        for (kind, phase, status, owner, thread, project) in [
+            (None, "terminal", "completed", "owner", "thread", "project"),
+            (Some("work"), "running", "", "owner", "thread", "project"),
+            (Some("work"), "terminal", "failed", "owner", "thread", "project"),
+            (Some("conversation"), "terminal", "completed", "owner", "thread", "project"),
+            (Some("conversation"), "running", "", "owner", "thread", "project"),
+            (Some("work"), "terminal", "completed", "foreign", "thread", "project"),
+            (Some("work"), "terminal", "completed", "owner", "foreign", "project"),
+            (Some("work"), "terminal", "completed", "owner", "thread", "foreign"),
+        ] {
+            let mut intent = json!({
+                "payload": {"thread_id": thread, "risk_class": "internal"},
+                "client_context": {"actor": {"id": owner}}
+            });
+            if let Some(kind) = kind {
+                intent["payload"]["supervisor_turn"] = json!({"kind": kind, "submit_command_id": "submit"});
+            }
+            core.execute(
+                "INSERT INTO business_command_aggregates VALUES ('ctox','business_os.chat.task','queue',?1,?2,?2,?3,?4,?5)",
+                params![project, now - HOUR, serde_json::to_string(&intent)?, phase, status],
+            )?;
+        }
+        for (recipe, expected) in [
+            (NativeMetricRecipe::ProjectTasksTotal, 3.0),
+            (NativeMetricRecipe::ProjectTasksCompleted, 1.0),
+            (NativeMetricRecipe::ProjectTasksFailed, 1.0),
+            (NativeMetricRecipe::ProjectTasksOpen, 1.0),
+        ] {
+            let request = BindKpiRequest {
+                operation_id: "metric".into(), project_id: "project".into(),
+                kpi_id: "tasks".into(), prompt_revision: 1, expected_revision: 0,
+                recipe, window_days: 7,
+            };
+            let result = calculate(&core, "owner", "thread", &request, now)?;
+            assert_eq!(result.status, KpiState::Ready);
+            assert_eq!(result.snapshot.context("snapshot")?.value, expected);
+        }
+        Ok(())
+    }
+}
