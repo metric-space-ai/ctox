@@ -263,7 +263,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   workjet_computers: "367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595",
   workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
   workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
-  workjet_projects: "45cdfdb3e14234ff7d624baf5475bd865eda2aaf6d7f7f0c6c8becd1b9071a8a",
+  workjet_projects: "eff8a97ccb0cb4fcb7d7ff757b32101673f639e35d234893ee54ec8c8f6751b7",
   workjet_provider_registry: "e919810d8c7b6b8251acf7eb413f2b1d3b1869f73c17f581e47dca1d2f9ad177",
   workjet_session_transfers: "99c3f1805537d732b36d2fa50827a8766efd41872b16c030ef44184342850712",
   workjet_sessions: "82ad8222bb8453b67e6b512f1e114ced576fcff972ef56b67a42a668ddf59088",
