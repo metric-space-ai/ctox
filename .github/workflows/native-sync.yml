@@ -249,7 +249,9 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     name: Full CTOX host acceptance (Linux)
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    # Cold dev/test builds and repeated CTOX compilations exceeded 90 minutes.
+    # Keep every acceptance gate while the corrected target cache warms.
+    timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -260,6 +262,8 @@ jobs:
         run: |
           printf 'CARGO_TARGET_DIR=%s/ctox-full-host-target\nTMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/ctox-host-chromium\nnpm_config_cache=%s/ctox-host-npm\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ctox-host-proof" "$RUNNER_TEMP/ctox-host-fixtures"
+          # rust-cache resolves target paths relative to each workspace.
+          python3 -c 'import os; print("CTOX_HOST_CACHE_TARGET=" + os.path.relpath(os.path.join(os.environ["RUNNER_TEMP"], "ctox-full-host-target"), os.environ["GITHUB_WORKSPACE"]))' >> "$GITHUB_ENV"
           df -h "$RUNNER_TEMP"
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: ./.github/actions/build-pi-sidecar
@@ -279,13 +283,13 @@ jobs:
           npm --prefix src/apps/business-os exec playwright install --with-deps chromium
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
-          key: full-ctox-host-dev-no-debug
+          key: full-ctox-host-dev-no-debug-target-v2
           # Preserve compiled dependencies when a later acceptance gate fails.
           # The full source build and every assertion still run on each revision.
           cache-on-failure: true
           workspaces: |
-            . -> ${{ runner.temp }}/ctox-full-host-target
-            src/core/sync -> ${{ runner.temp }}/ctox-full-host-target
+            . -> ${{ env.CTOX_HOST_CACHE_TARGET }}
+            src/core/sync -> ../../../${{ env.CTOX_HOST_CACHE_TARGET }}
       - name: Build the complete CTOX binary from the checked-out source
         id: native-binary
         run: |
