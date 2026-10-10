@@ -6,7 +6,7 @@ use super::core_resume::NativeGuestCoreOwner;
 use super::target_enrollment::ProtectedEnrollment;
 use super::*;
 use crate::channels::{NativeProviderAdmission, NativeProviderCommand};
-use ctox_sync::authority::{Job, auth::SigningIdentity};
+use ctox_sync::authority::{auth::SigningIdentity, Job};
 use std::{future::Future, pin::Pin};
 
 pub(super) struct TargetAdmission {

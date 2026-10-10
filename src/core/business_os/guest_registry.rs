@@ -7,12 +7,12 @@
 
 #[path = "guest_registry_accounts.rs"]
 pub(crate) mod accounts;
+#[path = "guest_registry_checkpoint_identity.rs"]
+pub(crate) mod checkpoint_identity;
 #[path = "guest_registry_command.rs"]
 mod command;
 #[path = "guest_registry_core_resume.rs"]
 pub(crate) mod core_resume;
-#[path = "guest_registry_checkpoint_identity.rs"]
-pub(crate) mod checkpoint_identity;
 #[path = "guest_registry_machine_config.rs"]
 mod machine_config;
 #[cfg(target_os = "linux")]

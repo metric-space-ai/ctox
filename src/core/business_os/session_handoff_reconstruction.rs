@@ -262,11 +262,9 @@ pub(super) fn assert_native_reconstruction<P: Clone + Eq + Hash + Send + Sync + 
         "revocation fences publication"
     );
     assert_eq!(entries(), 0);
-    assert!(
-        runtime
-            .block_on(stage(target.clone(), store.clone()))
-            .is_err()
-    );
+    assert!(runtime
+        .block_on(stage(target.clone(), store.clone()))
+        .is_err());
     assert_eq!(entries(), 0);
     policy
         .execute(

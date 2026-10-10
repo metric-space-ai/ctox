@@ -2,12 +2,12 @@
 // License: AGPL-3.0-only
 //! Actual Core import/next-turn regression with only the model endpoint mocked.
 //! This does not issue native policy, clean effects or quorum ownership.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     path::Path,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -210,15 +210,13 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
         ] {
             let mut value: Value = serde_json::from_slice(&original).unwrap();
             value[key] = json!("fixture-invalid");
-            assert!(
-                ctox_core::NativeSessionState::from_checkpoint(
-                    &serde_json::to_vec(&value).unwrap(),
-                    source.thread_id,
-                    state.model(),
-                    state.provider_id()
-                )
-                .is_err()
-            );
+            assert!(ctox_core::NativeSessionState::from_checkpoint(
+                &serde_json::to_vec(&value).unwrap(),
+                source.thread_id,
+                state.model(),
+                state.provider_id()
+            )
+            .is_err());
         }
         let target_config = config(
             &root.path().join("target-home"),
@@ -237,17 +235,15 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
                 _ => denied_config.model_provider_id = "foreign-fixture-provider".into(),
             }
             let (denied_manager, denied_auth) = manager(&denied_config);
-            assert!(
-                denied_manager
-                    .resume_thread_from_native_checkpoint(
-                        denied_config,
-                        target_journal.clone(),
-                        denied_auth,
-                        imported(),
-                    )
-                    .await
-                    .is_err()
-            );
+            assert!(denied_manager
+                .resume_thread_from_native_checkpoint(
+                    denied_config,
+                    target_journal.clone(),
+                    denied_auth,
+                    imported(),
+                )
+                .await
+                .is_err());
             assert_eq!(std::fs::read(&target_journal).unwrap(), journal_bytes);
         }
         let mut foreign_journal = Vec::new();
@@ -335,21 +331,15 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
         let (_, after) = target.thread.capture_native_state().await.unwrap();
         let value: Value = serde_json::from_slice(after.as_bytes()).unwrap();
         assert_eq!(value["sessionId"], source.thread_id.to_string());
-        assert!(
-            value["history"]
-                .to_string()
-                .contains("source original fixture message")
-        );
-        assert!(
-            value["history"]
-                .to_string()
-                .contains("source fixture reply")
-        );
-        assert!(
-            value["history"]
-                .to_string()
-                .contains("continue original fixture session")
-        );
+        assert!(value["history"]
+            .to_string()
+            .contains("source original fixture message"));
+        assert!(value["history"]
+            .to_string()
+            .contains("source fixture reply"));
+        assert!(value["history"]
+            .to_string()
+            .contains("continue original fixture session"));
         assert_eq!(
             value["provider"]["lastResponse"]["responseId"],
             "fixture-target-response"
@@ -367,9 +357,7 @@ fn native_core_import_preserves_original_session_context_and_next_response_chain
         requests[1]["previous_response_id"],
         "fixture-source-response"
     );
-    assert!(
-        requests[1]["input"]
-            .to_string()
-            .contains("continue original fixture session")
-    );
+    assert!(requests[1]["input"]
+        .to_string()
+        .contains("continue original fixture session"));
 }

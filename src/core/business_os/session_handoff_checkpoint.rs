@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 //! Bounded checkpoint transport and explicit native ownership controls.
 use super::*;
-use ctox_sync::checkpoint::{CheckpointStore, artifacts};
+use ctox_sync::checkpoint::{artifacts, CheckpointStore};
 use ctox_sync::contracts::{ArtifactRef, CheckpointManifest};
 use std::io::{Read, Seek, SeekFrom};
 const CHUNK: usize = 8192;
@@ -47,11 +47,9 @@ mod machine_control_tests {
         ] {
             let mut bad = original.clone();
             bad[field] = value;
-            assert!(
-                !serde_json::from_value::<CopyRequest>(bad)
-                    .unwrap()
-                    .valid_operation()
-            );
+            assert!(!serde_json::from_value::<CopyRequest>(bad)
+                .unwrap()
+                .valid_operation());
         }
         let mut bad = original;
         bad["baseRaw"] = serde_json::json!("/operator/image.raw");
@@ -493,7 +491,7 @@ async fn exchange<H: WebRTCConnectionHandler + 'static>(
     peer: &H::Peer,
     signed: &ctox_sync::authority::auth::handoff_wire::SignedHandoffRequest,
 ) -> anyhow::Result<SessionHandoffWireReply> {
-    use rxdb::plugins::replication_webrtc::{WebRTCMessage, send_message_and_await_answer};
+    use rxdb::plugins::replication_webrtc::{send_message_and_await_answer, WebRTCMessage};
     anyhow::ensure!(
         pool.is_peer_ready_for_control(peer),
         "checkpoint peer unavailable"
@@ -906,15 +904,13 @@ pub(crate) fn assert_native_checkpoint_path(
         (sent, verified)
     };
     let (sent, verified) = make_fetch(None, 0);
-    assert!(
-        fetch_with_account(
-            server.clone(),
-            ("exact-peer", 2),
-            verified.clone(),
-            auth.clone()
-        )
-        .is_err()
-    );
+    assert!(fetch_with_account(
+        server.clone(),
+        ("exact-peer", 2),
+        verified.clone(),
+        auth.clone()
+    )
+    .is_err());
     let prepared =
         fetch_with_account(server.clone(), peer, verified.clone(), auth.clone()).unwrap();
     prepared.publication.with_current(&mut || Ok(())).unwrap();
@@ -1053,15 +1049,13 @@ pub(crate) fn assert_native_checkpoint_path(
         )
         .unwrap();
     let mut writes = 0;
-    assert!(
-        denied
-            .publication
-            .with_current(&mut || {
-                writes += 1;
-                Ok(())
-            })
-            .is_err()
-    );
+    assert!(denied
+        .publication
+        .with_current(&mut || {
+            writes += 1;
+            Ok(())
+        })
+        .is_err());
     assert_eq!(writes, 0);
     policy
         .execute(

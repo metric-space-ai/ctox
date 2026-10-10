@@ -338,13 +338,11 @@ mod tests {
         assert!(capture.begin_reconciliation(&process).is_err());
         assert!(capture.finish_reconciliation(&process).is_err());
         assert!(!capture.process_reconciled(&process)?);
-        assert!(
-            capture
-                .export(&store, root.path())
-                .unwrap_err()
-                .to_string()
-                .contains("already attempted")
-        );
+        assert!(capture
+            .export(&store, root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("already attempted"));
         {
             let state = capture.state.lock().unwrap();
             assert_eq!(state.desktop.pid(), pid);
