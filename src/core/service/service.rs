@@ -19334,6 +19334,27 @@ fn render_founder_communication_rework_execution_prompt(
     inbound_message_key: &str,
     raw_rework_body: &str,
 ) -> String {
+    render_founder_rework_prompt(root, &message.subject, inbound_message_key, raw_rework_body)
+}
+
+/// The queue paths that lease a rework without the router must hand the agent
+/// the same prompt: the original mail and its attachments. Without it a rework
+/// answered the owner's Excel mail with unrelated companies (10.10.2026).
+fn render_founder_rework_prompt_for_queue_job(root: &Path, job: &mut QueuedPrompt) {
+    let Some(inbound_key) = founder_communication_rework_inbound_key(job).map(str::to_owned) else {
+        return;
+    };
+    let prompt = render_founder_rework_prompt(root, &job.goal, &inbound_key, &job.prompt);
+    job.preview = preview_text(&prompt);
+    job.prompt = prompt;
+}
+
+fn render_founder_rework_prompt(
+    root: &Path,
+    subject: &str,
+    inbound_message_key: &str,
+    raw_rework_body: &str,
+) -> String {
     let rework_body = clean_founder_rework_body_for_agent(raw_rework_body);
     let inbound_context = load_founder_inbound_context_for_rework(root, inbound_message_key)
         .unwrap_or_else(|| {
@@ -19344,7 +19365,7 @@ fn render_founder_communication_rework_execution_prompt(
     let attachments = load_inbound_email_metadata(root, inbound_message_key)
         .map(|metadata| render_inbound_attachments(&metadata))
         .unwrap_or_default();
-    let title = message.subject.trim();
+    let title = subject.trim();
     let title_line = if title.is_empty() {
         String::new()
     } else {
@@ -37887,6 +37908,31 @@ Business OS command:
     fn durable_dispatch_binds_a_founder_rework_to_its_original_mail() {
         let root = temp_root("durable-dispatch-founder-rework-binding");
         let inbound_key = "email:owner@example.test::inbox::original-mail";
+        let attachment_path = root.join("raw/attachments/original-mail/Recherche-Test.xlsx");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:owner@example.test', 'thread-original', 'original-mail',
+                'inbound', 'INBOX', 'Owner', 'owner@example.test', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal',
+                'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                inbound_key,
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": attachment_path.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert original mail");
+        drop(conn);
         let rework_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -37923,6 +37969,16 @@ Business OS command:
             Some(inbound_key)
         );
         assert_eq!(inbound_email_reply_message_key(&leased), Some(inbound_key));
+        // Same prompt as the router path: the original mail and its Excel
+        // (a rework answered with unrelated companies because it never saw
+        // the attachment).
+        assert!(leased
+            .prompt
+            .contains("Bitte die Firmen aus der Excel recherchieren."));
+        assert!(leased.prompt.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes): {}",
+            attachment_path.display()
+        )));
     }
 
     #[test]
