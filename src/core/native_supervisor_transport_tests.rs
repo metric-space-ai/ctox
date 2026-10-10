@@ -1,4 +1,99 @@
 use super::*;
+#[tokio::test]
+async fn lookup_enumerates_only_original_active_instance_accounts_without_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let original = enrolled(root.path());
+    store(
+        root.path(),
+        &original,
+        &original,
+        "isolated-fixture-original",
+    );
+    let host = NativeTransferAccountHost::new(
+        root.path().to_owned(),
+        Arc::new(|_| Box::pin(async { panic!("metadata lookup must not start transport") })),
+    );
+    assert!(host.source_candidates(&original.instance_id).await.unwrap() == vec![original.clone()]);
+    assert!(host
+        .source_candidates("other-instance")
+        .await
+        .unwrap()
+        .is_empty());
+    let mut inactive = original.clone();
+    inactive.active = false;
+    store(
+        root.path(),
+        &inactive,
+        &inactive,
+        "isolated-fixture-inactive",
+    );
+    assert!(host
+        .source_candidates(&original.instance_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn lookup_denies_unverifiable_records_and_candidate_overflow() {
+    let root = tempfile::tempdir().unwrap();
+    let original = enrolled(root.path());
+    let host = NativeTransferAccountHost::new(
+        root.path().to_owned(),
+        Arc::new(|_| Box::pin(async { panic!("metadata lookup must not start transport") })),
+    );
+    for index in 0..5 {
+        let mut account = original.clone();
+        account.target_id = format!("isolated-target-{index}");
+        store(root.path(), &account, &account, "isolated-fixture-original");
+    }
+    assert!(host.source_candidates(&original.instance_id).await.is_err());
+    crate::secrets::write_secret_record(
+        root.path(),
+        "ctox-native-business-data-accounts",
+        "not-original-target-hash",
+        "{}",
+        None,
+        json!({}),
+    )
+    .unwrap();
+    assert!(host.source_candidates("other-instance").await.is_err());
+}
+
+#[test]
+fn selected_source_requires_both_expected_instance_and_real_possession_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let account = enrolled(root.path());
+    let device = account.principal.device.as_ref().unwrap();
+    let association = json!({"version":1,"consumer":{"actorUserId":account.principal.user_id,"actorEpoch":account.principal.authorization_epoch,
+        "pairingId":device.pairing_id,"deviceId":device.device_id,"proofKeyThumbprint":device.proof_key_thumbprint,
+        "ownerUserId":"owner-fixture","computerId":"native-computer","computerRevision":"1-current","pairingRevision":"original-association"}});
+    let selected = ExpectedSource::new(&account.instance_id, "native-computer").unwrap();
+    assert!(selected.matches(&account, &association));
+    for wrong in [
+        ExpectedSource::new("other-instance", "native-computer").unwrap(),
+        ExpectedSource::new(&account.instance_id, "computer-label").unwrap(),
+    ] {
+        assert!(!wrong.matches(&account, &association));
+    }
+    let mut replaced = association;
+    replaced["consumer"]["proofKeyThumbprint"] = json!("other-key");
+    assert!(!selected.matches(&account, &replaced));
+    for invalid in ["", " trailing ", "new\nselector"] {
+        assert!(ExpectedSource::new(invalid, "native-computer").is_err());
+    }
+}
+
+#[tokio::test]
+async fn selected_source_without_enrollment_never_opens_query_database_or_listener() {
+    let root = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let expected = ExpectedSource::new("not-enrolled-instance", "native-computer").unwrap();
+    assert!(resolve(root.path(), &expected, private.path())
+        .await
+        .is_err());
+    assert!(std::fs::read_dir(private.path()).unwrap().next().is_none());
+}
 use crate::native_data_device::{NativeDeviceKeyScope, NativeDeviceProofKey};
 use ctox_sync::business_data_contract::NativeBusinessDataPrincipal;
 use sha2::{Digest, Sha256};

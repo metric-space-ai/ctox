@@ -232,7 +232,7 @@ impl Drop for ModelRegistry {
     }
 }
 impl NativeSupervisorSourceHost {
-    fn model_controller(
+    pub(super) fn original_controller(
         &self,
         authority: &AdmittedConsumerAuthority,
         operation: &wire::SourceOperation,
@@ -275,7 +275,7 @@ impl NativeSupervisorSourceHost {
         let (session, publication, prepared) =
             tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 host.prune()?;
-                let controller = host.model_controller(&authority, &operation)?;
+                let controller = host.original_controller(&authority, &operation)?;
                 let session = host.models.session(controller)?;
                 let publication = session.proxy.publication_for(&authority)?;
                 let prepared = if operation.action == wire::SourceAction::ModelInvoke {

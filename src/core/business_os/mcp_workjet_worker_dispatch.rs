@@ -523,98 +523,128 @@ pub(super) fn execute(
             &intent_id,
             receipt,
         )?,
-        Request::Dispatch {
-            dispatch_key,
+        Request::Dispatch { .. } => dispatch_in_native_scope(
+            &core_tx,
+            &policy_tx,
+            context,
+            trusted.context("native supervisor session unavailable")?,
+            arguments,
+        )?,
+    };
+    // Retain current policy through the durable intent linearization point.
+    core_tx.commit()?;
+    policy_tx.commit()?;
+    Ok(response)
+}
+
+/// Native Source dispatch borrows the original controller's already admitted
+/// Core/Policy reservation. No nested writer, new grant, queue or executor.
+pub(super) fn dispatch_in_native_scope(
+    core: &Connection,
+    policy: &Connection,
+    context: &McpChannelRequestContext,
+    trusted: &Value,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let Request::Dispatch {
+        dispatch_key,
+        task,
+        title,
+        computer_id,
+        worker_profile_id,
+    } = serde_json::from_value(arguments.clone())?
+    else {
+        anyhow::bail!("native Source tool accepts only dispatch");
+    };
+    anyhow::ensure!(
+        context.trusted_role_source.as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
+            && trusted["workjet_supervisor_only"] == true,
+        "native Source dispatch requires the original restricted supervisor session"
+    );
+    enforce_internal_command_session_scope(TOOL, arguments, Some(trusted))?;
+    remote_worker::current_actor(policy, context)?;
+    core.execute_batch(SCHEMA)?;
+    let response = {
+        text(&dispatch_key, 128)?;
+        text(&task, 16 * 1024)?;
+        if let Some(title) = &title {
+            text(title, 200)?;
+        }
+        for value in [&computer_id, &worker_profile_id].into_iter().flatten() {
+            text(value, 256)?;
+        }
+        let (project, thread, _) =
+            workjet_jour_fixe::bound_project(core, policy, context, trusted)?;
+        // Existing column name is retained; the source is either an actual
+        // business command or the exact native confirmed-plan task key.
+        let execution_key = workjet_jour_fixe::execution_key(trusted)?;
+        let epoch = current_project(policy, context, &project, &thread)?;
+        let raw: String = core
+            .query_row(
+                "SELECT record_json FROM workjet_worker_dispatch_sources
+                WHERE owner_user_id=?1 AND project_id=?2",
+                params![context.actor, project],
+                |row| row.get(0),
+            )
+            .optional()?
+            .context("no Workjet source registered for this supervisor")?;
+        let record: Registration = serde_json::from_str(&raw)?;
+        anyhow::ensure!(
+            record.state == "active"
+                && record.authority_epoch == epoch
+                && record.source_supervisor_thread_id == thread,
+            "Workjet source binding stale"
+        );
+        let mut intent = Intent {
+            intent_id: uuid::Uuid::new_v4().to_string(),
+            registration_id: record.registration_id,
+            registration_revision: record.revision,
+            source_environment_id: record.source_environment_id,
+            source_supervisor_thread_id: thread.to_owned(),
+            project_id: project.to_owned(),
             task,
             title,
             computer_id,
             worker_profile_id,
-        } => {
-            text(&dispatch_key, 128)?;
-            text(&task, 16 * 1024)?;
-            if let Some(title) = &title {
-                text(title, 200)?;
-            }
-            for value in [&computer_id, &worker_profile_id].into_iter().flatten() {
-                text(value, 256)?;
-            }
-            let trusted = trusted.context("native supervisor session unavailable")?;
-            let (project, thread, _) =
-                workjet_jour_fixe::bound_project(&core_tx, &policy_tx, context, trusted)?;
-            // Existing column name is retained; the source is either an actual
-            // business command or the exact native confirmed-plan task key.
-            let execution_key = workjet_jour_fixe::execution_key(trusted)?;
-            let epoch = current_project(&policy_tx, context, &project, &thread)?;
-            let raw: String = core_tx
-                .query_row(
-                    "SELECT record_json FROM workjet_worker_dispatch_sources
-                WHERE owner_user_id=?1 AND project_id=?2",
-                    params![context.actor, project],
-                    |row| row.get(0),
-                )
-                .optional()?
-                .context("no Workjet source registered for this supervisor")?;
-            let record: Registration = serde_json::from_str(&raw)?;
-            anyhow::ensure!(
-                record.state == "active"
-                    && record.authority_epoch == epoch
-                    && record.source_supervisor_thread_id == thread,
-                "Workjet source binding stale"
-            );
-            let mut intent = Intent {
-                intent_id: uuid::Uuid::new_v4().to_string(),
-                registration_id: record.registration_id,
-                registration_revision: record.revision,
-                source_environment_id: record.source_environment_id,
-                source_supervisor_thread_id: thread.to_owned(),
-                project_id: project.to_owned(),
-                task,
-                title,
-                computer_id,
-                worker_profile_id,
-            };
-            let digest = format!(
-                "{:x}",
-                Sha256::digest(serde_json::to_vec(&serde_json::json!({
+        };
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&serde_json::json!({
                 "registrationId":intent.registration_id,"revision":intent.registration_revision,"task":intent.task,
                 "title":intent.title,"computerId":intent.computer_id,"workerProfileId":intent.worker_profile_id}))?)
-            );
-            let prior: Option<(String,String,Option<String>)> = core_tx.query_row(
+        );
+        let prior: Option<(String,String,Option<String>)> = core.query_row(
                 "SELECT request_digest,intent_json,result_json FROM workjet_worker_dispatch_intents WHERE command_id=?1 AND dispatch_key=?2",
                 params![execution_key,dispatch_key],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
-            let result = if let Some((old_digest, raw, result)) = prior {
-                anyhow::ensure!(
-                    old_digest == digest,
-                    "dispatch_key reused with different scope or task"
-                );
-                intent = serde_json::from_str(&raw)?;
-                result
-                    .map(|raw| serde_json::from_str::<Value>(&raw))
-                    .transpose()?
-            } else {
-                let pending: i64 = core_tx.query_row(
+        let result = if let Some((old_digest, raw, result)) = prior {
+            anyhow::ensure!(
+                old_digest == digest,
+                "dispatch_key reused with different scope or task"
+            );
+            intent = serde_json::from_str(&raw)?;
+            result
+                .map(|raw| serde_json::from_str::<Value>(&raw))
+                .transpose()?
+        } else {
+            let pending: i64 = core.query_row(
                     "SELECT count(*) FROM workjet_worker_dispatch_intents i JOIN workjet_worker_dispatch_sources s
                      ON s.registration_id=i.registration_id WHERE s.owner_user_id=?1 AND i.result_json IS NULL
                      AND json_extract(s.record_json,'$.state')='active'
                      AND json_extract(s.record_json,'$.revision')=i.registration_revision
                      AND json_extract(s.record_json,'$.authorityEpoch')=?2",
                     params![context.actor,epoch], |row| row.get(0))?;
-                anyhow::ensure!(
-                    pending < 128,
-                    "worker dispatch pending-intent capacity exceeded"
-                );
-                core_tx.execute("INSERT INTO workjet_worker_dispatch_intents(intent_id,registration_id,registration_revision,
+            anyhow::ensure!(
+                pending < 128,
+                "worker dispatch pending-intent capacity exceeded"
+            );
+            core.execute("INSERT INTO workjet_worker_dispatch_intents(intent_id,registration_id,registration_revision,
                     command_id,dispatch_key,request_digest,intent_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
                     params![intent.intent_id,intent.registration_id,intent.registration_revision,execution_key,dispatch_key,digest,serde_json::to_string(&intent)?])?;
-                None
-            };
-            serde_json::json!({"contract":CONTRACT,"state":if result.is_some(){"completed"}else{"pending"},
+            None
+        };
+        serde_json::json!({"contract":CONTRACT,"state":if result.is_some(){"completed"}else{"pending"},
                 "intent":intent,"result":result})
-        }
     };
-    // Retain current policy through the durable intent linearization point.
-    core_tx.commit()?;
-    policy_tx.commit()?;
     Ok(response)
 }
 
