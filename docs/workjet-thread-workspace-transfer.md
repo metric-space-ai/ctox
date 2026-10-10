@@ -18,7 +18,7 @@ commit WIP, pause a worker loop, terminate jobs or remove the source.
 
 ## Download engine provenance
 
-The embedded aria2 tree retains its original upstream revision, file hashes and GPL-2.0-or-later notices. Its `PROVENANCE.json` additionally pins the existing CTOX security overlay from commit `505771b49fe0f0754bb5d9fd7f082817da34481f`: only `Cargo.lock` changes rustls 0.23.44 to 0.23.45 for RUSTSEC-2026-0285. The full-manifest and complete-file-list guards still validate every installed byte against the original hash or this explicit overlay.
+The embedded aria2 tree retains its original upstream revision, file hashes and GPL-2.0-or-later notices. Its `PROVENANCE.json` additionally pins the existing CTOX security overlay from commit `505771b49fe0f0754bb5d9fd7f082817da34481f` (`Cargo.lock`: rustls 0.23.44 to 0.23.45 for RUSTSEC-2026-0285), and the reviewed Windows changes from #486 (README plus checksum, rlimit, sockopt and storage modules). Every overlay names its last source commit and exact installed hash. The full-manifest and complete-file-list guards still validate every installed byte against the original hash or this explicit overlay.
 
 ## Native invocation contract
 
