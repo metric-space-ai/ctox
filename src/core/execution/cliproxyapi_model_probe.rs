@@ -12,7 +12,7 @@ use super::{
 use crate::business_os::consumer_authority::AdmittedConsumerAuthority;
 use ctox_cliproxyapi::internal::auth::xai::native_http;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     future::Future,
@@ -26,20 +26,20 @@ const CURRENT_POLL: Duration = Duration::from_millis(250);
 const MAX_BODY: usize = 131_072;
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProbeStatus {
     Ok,
     Failed,
     Unavailable,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProbeSource {
     Gateway,
     Upstream,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProbeFailure {
     AccountUnavailable,
@@ -58,8 +58,8 @@ pub(crate) enum ProbeFailure {
 }
 /// Only allowlisted metadata can be persisted or sent to Workjet. Never a
 /// credential, private account selector, provider error body or generated text.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct NativeModelProbe {
     pub(crate) model_id: String,
     pub(crate) checked_at_ms: i64,
