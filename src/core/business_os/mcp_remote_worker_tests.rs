@@ -49,6 +49,9 @@ fn remote_worker_actual_gateway_instance_is_distinct_from_workspace_and_unforgea
 use super::*;
 use serde_json::json;
 
+#[path = "mcp_remote_worker_execution_policy_tests.rs"]
+mod execution_policy;
+
 fn binding() -> Binding {
     serde_json::from_value(json!({
         "requestId":"request-1","requestDigest":"a".repeat(64),

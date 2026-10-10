@@ -4,6 +4,9 @@
 //! Source-native admission for a Workjet leaf worker. An opaque permit is a
 //! locator, never a target bearer credential: every operation returns through
 //! the source's authenticated managed MCP connection and current policy store.
+use super::super::workjet_worker_execution_policy_contract::{
+    WireValidate, WorkerExecutionPolicyReference,
+};
 use super::*;
 use rusqlite::{Connection, TransactionBehavior};
 use sha2::{Digest, Sha256};
@@ -67,6 +70,30 @@ struct Binding {
     provider_ref: ProviderRef,
     model_ref: ModelRef,
     capabilities: Vec<Capability>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_execution_policy"
+    )]
+    execution_policy: Option<WorkerExecutionPolicyReference>,
+}
+
+fn present_execution_policy<'de, D>(
+    deserializer: D,
+) -> Result<Option<WorkerExecutionPolicyReference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Absent is the legacy path. Present null must not silently downgrade it.
+    WorkerExecutionPolicyReference::deserialize(deserializer).map(Some)
+}
+
+fn execution_policy_schema() -> Value {
+    let spec: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-worker-execution-policy-v1.json"
+    ))
+    .expect("compiled worker execution policy fixture");
+    super::workjet_jour_fixe::schema(&spec, "WorkerExecutionPolicyReference")
 }
 
 #[derive(Deserialize)]
@@ -170,6 +197,7 @@ pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
                         "targetEnvironmentId":{"type":"string"},"targetConnectionId":{"type":"string"},
                         "targetInstanceId":{"type":"string"},"targetComputerId":{"type":"string"},
                         "repositoryUrl":{"type":"string"},"repositoryHead":{"type":"string"},"workspaceKey":{"type":"string"},
+                        "executionPolicy":execution_policy_schema(),
                         "credentialRef":ref_schema(&["environmentId","accountId"]),
                         "providerRef":ref_schema(&["environmentId","provider"]),
                         "modelRef":ref_schema(&["environmentId","provider","modelId"]),
@@ -469,6 +497,28 @@ fn current_authority(
         &context.actor,
         true,
     )?;
+    if let Some(reference) = &binding.execution_policy {
+        let current = super::super::workjet_project_execution_policy::current(Some(&project))?;
+        anyhow::ensure!(
+            current.mode
+                == super::super::workjet_project_execution_policy_contract::ProjectExecutionPolicyMode::AutonomousWorktree
+                && current.revision == reference.revision,
+            "workjet_worker_execution_policy_stale: expected autonomous_worktree revision {}, current {:?} revision {}",
+            reference.revision,
+            current.mode,
+            current.revision
+        );
+        // External parent/thread labels are not native team identities. Only
+        // the persisted Owner/project supervisor binding and its native
+        // user_threads provenance can satisfy this current producer seam.
+        // Broader Parent enrollment and target confinement remain separate.
+        super::workjet_worker_dispatch::current_project(
+            conn,
+            context,
+            &binding.project_id,
+            &binding.source_supervisor_thread_id,
+        )?;
+    }
     let native_repo = project["repo_url"]
         .as_str()
         .context("owned project has no repository binding")?;
@@ -478,15 +528,22 @@ fn current_authority(
     );
     let computer = current_computer(conn, context, &binding.target_computer_id)?;
     let (target_binding_id, target_revision) = target::current_binding(conn, context, binding)?;
+    let mut authority = serde_json::json!({
+        "owner":context.actor,"epoch":epoch,"workspace":context.workspace,"instance":context.managed_source_instance()?,
+        "project":binding.project_id,"repository":repository_key(native_repo)?,
+        "computer":binding.target_computer_id,"hostingMode":computer["hosting_mode"],
+        "capabilityEpoch":computer["capability_epoch"],"capabilityConfig":computer["capability_config"],
+        "targetBindingId":target_binding_id,"targetRevision":target_revision
+    });
+    if let Some(reference) = &binding.execution_policy {
+        authority["executionPolicy"] = serde_json::to_value(reference)?;
+        authority["nativeSupervisorThreadId"] =
+            serde_json::json!(binding.source_supervisor_thread_id);
+    }
+    // Keep the omitted/default path byte-compatible with existing permits.
     let fingerprint = format!(
         "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&serde_json::json!({
-            "owner":context.actor,"epoch":epoch,"workspace":context.workspace,"instance":context.managed_source_instance()?,
-            "project":binding.project_id,"repository":repository_key(native_repo)?,
-            "computer":binding.target_computer_id,"hostingMode":computer["hosting_mode"],
-            "capabilityEpoch":computer["capability_epoch"],"capabilityConfig":computer["capability_config"],
-            "targetBindingId":target_binding_id,"targetRevision":target_revision
-        }))?)
+        Sha256::digest(serde_json::to_vec(&authority)?)
     );
     Ok((epoch, fingerprint))
 }
@@ -609,6 +666,14 @@ fn validate_binding(binding: &Binding) -> anyhow::Result<()> {
         "worker workspace key must be the path-free request identity"
     );
     repository_key(&binding.repository_url)?;
+    if let Some(reference) = &binding.execution_policy {
+        reference.validate().map_err(anyhow::Error::msg)?;
+        label(&reference.project_id)?;
+        anyhow::ensure!(
+            reference.project_id == binding.project_id,
+            "worker execution policy project differs from binding project"
+        );
+    }
     anyhow::ensure!(
         binding.credential_ref.environment_id == binding.source_environment_id
             && binding.provider_ref.environment_id == binding.source_environment_id

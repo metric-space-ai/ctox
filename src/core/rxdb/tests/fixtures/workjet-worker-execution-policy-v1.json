@@ -1,0 +1,139 @@
+{
+  "schema": "ctox.workjet.worker_execution_policy.v1",
+  "contract_version": 1,
+  "types": {
+    "WorkerExecutionPolicyMode": {
+      "enum": [
+        "autonomous-worktree"
+      ]
+    },
+    "WorkerExecutionPolicyReference": {
+      "derive_eq": true,
+      "fields": {
+        "mode": {
+          "type": "WorkerExecutionPolicyMode"
+        },
+        "projectId": {
+          "type": "String",
+          "rust_name": "project_id",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  },
+  "commands": {
+    "business_os.remote_worker_admission": "Optional binding.executionPolicy is a strict project policy reference, never a team/path/provider grant. Issue/claim/revalidate/renew require current Owner project mode/revision and a genuine current native supervisor/team join. Missing preserves legacy admission; null is rejected; revoke remains usable after reset."
+  },
+  "valid_cases": [
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 1
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 9007199254740991
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": null
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "default",
+        "projectId": "project-1",
+        "revision": 1
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous_worktree",
+        "projectId": "project-1",
+        "revision": 1
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 0
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 9007199254740992
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "",
+        "revision": 1
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 1.5
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 1,
+        "teamRole": "parent"
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 1,
+        "workspaceRoot": "/"
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "mode": "autonomous-worktree",
+        "projectId": "project-1",
+        "revision": 1,
+        "enforced": true
+      }
+    },
+    {
+      "type": "WorkerExecutionPolicyReference",
+      "value": {
+        "projectId": "project-1",
+        "revision": 1
+      }
+    }
+  ]
+}
