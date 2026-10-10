@@ -963,6 +963,29 @@ fn store_provider_message(
 ) -> Result<bool> {
     let message_key = message_key_from_remote(account_key, &item.folder_hint, &item.remote_id);
     if known_communication_message(conn, &message_key)? {
+        // Mails stored before intake kept the Authentication-Results get them
+        // on the next poll; a stored value is never replaced.
+        if matches!(options.provider.as_str(), "ews" | "owa") {
+            if let Some(results) = item
+                .metadata
+                .get("authenticationResults")
+                .filter(|value| value.as_array().is_some_and(|list| !list.is_empty()))
+            {
+                conn.execute(
+                    r#"UPDATE communication_messages
+                       SET metadata_json = json_set(metadata_json, '$.authenticationResults', json(?1))
+                       WHERE message_key = ?2 AND channel = 'email' AND account_key = ?3
+                         AND remote_id = ?4 AND json_valid(metadata_json)
+                         AND json_type(metadata_json, '$.authenticationResults') IS NULL"#,
+                    rusqlite::params![
+                        results.to_string(),
+                        message_key,
+                        account_key,
+                        item.remote_id,
+                    ],
+                )?;
+            }
+        }
         // Older EWS polls persisted envelopes without bodies. Enrich those rows
         // in place rather than replaying the upsert/refresh path, which would
         // overwrite read state, routing metadata and thread customization.
@@ -5918,6 +5941,57 @@ mod tests {
                 before
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_resync_adds_missing_authentication_results_once() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+        let mut options = empty_options();
+        options.email = "agent@example.test".into();
+        options.provider = "ews".into();
+        let account = "email:agent@example.test";
+        let old = ews_recovery_message("Stored text")?;
+        let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, old
+        )?);
+        let stored = |conn: &rusqlite::Connection| -> anyhow::Result<serde_json::Value> {
+            let raw: String = conn.query_row(
+                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        assert!(stored(&conn)?.get("authenticationResults").is_none());
+        let with_results = |value: &str| -> anyhow::Result<super::MailboxMessage> {
+            let mut item = ews_recovery_message("New text")?;
+            item.metadata["authenticationResults"] = serde_json::json!([value]);
+            Ok(item)
+        };
+        super::store_provider_message(
+            &mut conn,
+            &options,
+            account,
+            with_results("mx.example.test; dmarc=pass header.from=example.test")?,
+        )?;
+        assert_eq!(
+            stored(&conn)?["authenticationResults"],
+            serde_json::json!(["mx.example.test; dmarc=pass header.from=example.test"])
+        );
+        // A later poll never replaces what was captured.
+        super::store_provider_message(
+            &mut conn,
+            &options,
+            account,
+            with_results("mx.example.test; dmarc=fail header.from=example.test")?,
+        )?;
+        assert_eq!(
+            stored(&conn)?["authenticationResults"],
+            serde_json::json!(["mx.example.test; dmarc=pass header.from=example.test"])
+        );
         Ok(())
     }
 
