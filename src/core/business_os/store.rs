@@ -13515,16 +13515,7 @@ impl RxdbCollectionWriter {
         }
         let tx =
             crate::persistence::SqliteWriteTransaction::begin(&self.conn, "projection.rxdb_batch")?;
-        // Another retained writer may have published since this cache opened.
-        // Reserve clocks from the persisted high-water mark while owning the
-        // writer, so every committed row stays beyond an earlier feed cursor.
-        let persisted_lwt = tx
-            .prepare_cached(&format!(
-                "SELECT COALESCE(MAX(lastWriteTime), 0) FROM {}",
-                self.table
-            ))?
-            .query_row([], |row| row.get::<_, f64>(0))? as i64;
-        let mut replication_lwt = self.last_replication_lwt.max(persisted_lwt);
+        let mut replication_lwt = self.replication_clock_floor(&tx)?;
         for (id, updated, payload) in records {
             let now = now_ms().min(i64::MAX as u128) as i64;
             replication_lwt = now.max(replication_lwt.saturating_add(1));
@@ -13555,13 +13546,13 @@ impl RxdbCollectionWriter {
         source_updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
-        let replication_now = now_ms().min(i64::MAX as u128) as i64;
-        let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
-        self.last_replication_lwt = replication_lwt;
         let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
             "projection.rxdb_upsert",
         )?;
+        let replication_now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt =
+            replication_now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
         upsert_rxdb_collection_record_with_writer(
             &tx,
             &self.table,
@@ -13575,6 +13566,7 @@ impl RxdbCollectionWriter {
             true,
         )?;
         tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
     }
@@ -13584,13 +13576,13 @@ impl RxdbCollectionWriter {
         record_id: &str,
         source_updated_at_ms: i64,
     ) -> anyhow::Result<()> {
-        let replication_now = now_ms().min(i64::MAX as u128) as i64;
-        let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
-        self.last_replication_lwt = replication_lwt;
         let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
             "projection.rxdb_tombstone",
         )?;
+        let replication_now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt =
+            replication_now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
         upsert_rxdb_collection_record_with_writer(
             &tx,
             &self.table,
@@ -13608,6 +13600,7 @@ impl RxdbCollectionWriter {
             true,
         )?;
         tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
     }
@@ -13619,22 +13612,43 @@ impl RxdbCollectionWriter {
         payload: Value,
         deleted: bool,
     ) -> anyhow::Result<()> {
-        let now = now_ms().min(i64::MAX as u128) as i64;
-        self.last_replication_lwt = now.max(self.last_replication_lwt.saturating_add(1));
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_replace",
+        )?;
+        let now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt = now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
             updated_at_ms,
-            self.last_replication_lwt,
+            replication_lwt,
             payload,
             self.demand_file_storage,
             deleted,
             false,
         )?;
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
+    }
+
+    // Call only after reserving IMMEDIATE: a retained connection's cached
+    // clock can precede a different publisher's already-visible feed cursor.
+    fn replication_clock_floor(
+        &self,
+        writer: &crate::persistence::SqliteWriteTransaction<'_>,
+    ) -> anyhow::Result<i64> {
+        let persisted_lwt = writer
+            .prepare_cached(&format!(
+                "SELECT COALESCE(MAX(lastWriteTime), 0) FROM {}",
+                self.table
+            ))?
+            .query_row([], |row| row.get::<_, f64>(0))? as i64;
+        Ok(self.last_replication_lwt.max(persisted_lwt))
     }
 
     fn notify_committed_change(&self) {
@@ -45444,6 +45458,132 @@ pub(super) mod tests {
         assert!(second_lwt > first_lwt);
         assert_eq!(first_source_version, 42);
         assert_eq!(second_source_version, 43);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_single_projection_writers_publish_after_every_current_feed_cursor(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__clock_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE {table}(id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+                 lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);
+             CREATE INDEX clock_probe_lwt_id_idx ON {table}(lastWriteTime,id);"
+        ))?;
+        let mut left = RxdbCollectionWriter::open(root, "clock_probe")?.context("left writer")?;
+        let mut right = RxdbCollectionWriter::open(root, "clock_probe")?.context("right writer")?;
+        left.upsert_source_projection("cursor", 1, serde_json::json!({"old_field":"preserved"}))?;
+        right.upsert_source_projection(
+            "target",
+            2,
+            serde_json::json!({"old_field":"remove on replacement"}),
+        )?;
+        for operation in 0..4 {
+            // A different connection commits after both writer caches opened.
+            // Skew the persisted clock to make this deterministic, without sleeps.
+            let cursor = (now_ms().min(i64::MAX as u128) as i64) + 60_000 + operation * 10_000;
+            conn.execute(&format!(
+                "UPDATE {table} SET lastWriteTime=?1,data=json_set(data,'$._meta.lwt',?1) WHERE id='cursor'"
+            ), [cursor])?;
+            match operation {
+                0 => {
+                    left.upsert_source_projection("target", 42, serde_json::json!({"name":"left"}))?
+                }
+                1 => right.upsert_source_projection(
+                    "target",
+                    43,
+                    serde_json::json!({"name":"right"}),
+                )?,
+                2 => left.tombstone_source_projection("target", 44)?,
+                _ => right.replace_source(
+                    "target",
+                    45,
+                    serde_json::json!({"name":"replacement"}),
+                    false,
+                )?,
+            }
+            let (lwt, deleted, raw): (f64, i64, String) = conn.query_row(&format!(
+                "SELECT lastWriteTime,deleted,data FROM {table} WHERE id='target' AND lastWriteTime>?1"
+            ), [cursor], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
+            let document: Value = serde_json::from_str(&raw)?;
+            assert_eq!(
+                document.pointer("/_meta/lwt").and_then(Value::as_f64),
+                Some(lwt)
+            );
+            assert_eq!(document["updated_at_ms"], 42 + operation);
+            assert_eq!(deleted, i64::from(operation == 2));
+            assert_eq!(document["_deleted"], operation == 2);
+            if operation == 3 {
+                assert!(
+                    document.get("old_field").is_none(),
+                    "replacement must not merge removed fields"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_single_projection_clock_reservation_does_not_advance_the_writer_cache(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__clock_rollback__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(&format!(
+            "CREATE TABLE {table}(id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);"
+        ))?;
+        conn.execute(
+            &format!("INSERT INTO {table}(id,data) VALUES('cursor',?1)"),
+            [serde_json::json!({"id":"cursor"}).to_string()],
+        )?;
+        let mut writer = RxdbCollectionWriter::open(root, "clock_rollback")?.context("writer")?;
+        let before = writer.last_replication_lwt;
+        let cursor = (now_ms().min(i64::MAX as u128) as i64) + 60_000;
+        conn.execute(
+            &format!("UPDATE {table} SET lastWriteTime=?1 WHERE id='cursor'"),
+            [cursor],
+        )?;
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER reject_clock BEFORE INSERT ON {table} WHEN new.id='target'
+             BEGIN SELECT RAISE(ABORT,'fixture publication failure'); END;"
+        ))?;
+        for operation in 0..3 {
+            let result = match operation {
+                0 => writer.upsert_source_projection(
+                    "target",
+                    42,
+                    serde_json::json!({"name":"retry"}),
+                ),
+                1 => writer.tombstone_source_projection("target", 42),
+                _ => {
+                    writer.replace_source("target", 42, serde_json::json!({"name":"retry"}), false)
+                }
+            };
+            assert!(result.is_err());
+            assert_eq!(
+                writer.last_replication_lwt, before,
+                "failed commit cannot claim its clock"
+            );
+            assert_eq!(
+                conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id='target'"),
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                0
+            );
+        }
+        conn.execute_batch("DROP TRIGGER reject_clock")?;
+        writer.upsert_source_projection("target", 42, serde_json::json!({"name":"retry"}))?;
+        assert!(writer.last_replication_lwt > cursor);
         Ok(())
     }
 

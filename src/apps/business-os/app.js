@@ -3,6 +3,7 @@ import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=2
 import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
@@ -13828,6 +13829,17 @@ async function workjetProjectControl(request = {}) {
     ? { sync: state.sync, instance: boundedWorkjetProjectText(
       state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
     ) } : null;
+  if (action === 'speech.dictation') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'instanceId', 256);
+    return requestDictation(sync, instance, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw new Error('Dictation instance or authority changed.');
+      }
+    });
+  }
   if (action.startsWith('speech.settings.')) {
     const sync = state.sync;
     if (typeof sync?.requestNative !== 'function') throw new Error('Speech settings require a connected CTOX instance.');
