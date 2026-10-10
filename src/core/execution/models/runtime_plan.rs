@@ -6649,10 +6649,28 @@ mod tests {
         );
         assert_eq!(reserves.get(&0).copied(), Some(1_100));
         assert_eq!(reserves.get(&1).copied(), Some(4_200));
-        let tts = engine::auxiliary_model_selection(engine::AuxiliaryRole::Tts, None);
-        let manifest = auxiliary_manifest(None, tts.request_model).unwrap();
-        assert_eq!(reserves.get(&2).copied(), Some(manifest.gpu_reserve_mb));
+        // The current default is Voxtral TTS, whose reservation is 12 GiB.
+        assert_eq!(reserves.get(&2).copied(), Some(12_288));
         assert_eq!(reserves.len(), 3);
+
+        // A runtime manifest must override that default, rather than merely
+        // repeating the model registry's reservation.
+        let root = temp_root("aux-manifest-reserves");
+        let tts = engine::auxiliary_model_selection(engine::AuxiliaryRole::Tts, None);
+        let mut manifest = auxiliary_manifest(None, tts.request_model).unwrap();
+        manifest.gpu_reserve_mb = 1_234;
+        let slug = model_registry::auxiliary_manifest_slug(tts.request_model).unwrap();
+        let directory = root.join("contracts/models/aux_runtime_manifests");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join(format!("{slug}.json")),
+            serde_json::to_vec(&manifest).unwrap(),
+        ).unwrap();
+        let reserves = compute_aux_reserves_mb(
+            Some(&root), &hardware(3, 24_576), &env_map, ChatPreset::Quality, &[],
+        );
+        assert_eq!(reserves, BTreeMap::from([(0, 1_100), (1, 4_200), (2, 1_234)]));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
