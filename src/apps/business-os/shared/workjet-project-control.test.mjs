@@ -1770,3 +1770,75 @@ test('Owner confirmation rejects stale or substituted native goal and meeting re
     assert.equal(fixture.commands.length, 1);
   }
 });
+
+function supervisorInputFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result.contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input = {
+      input_id: 'native-owner-input-1', sequence: 1,
+      body: receipt.payload.body, created_at: '2026-10-09T17:00:00Z',
+    };
+    receipt.result.delivery = 'next_slice';
+    receipt.result.worker_interrupted = false;
+    change(receipt, state);
+  });
+}
+test('Owner follow-up targets the existing native task without submitting another task', async () => {
+  const fixture = supervisorInputFixture();
+  const result = await fixture.invoke(supervisorTurnRequest('input', { body: 'The PR source is attached to the existing task.' }));
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.input');
+  assert.equal(command.payload.target_command_id, nativeTurnId);
+  assert.equal(command.payload.goal, undefined);
+  assert.equal(command.payload.turn_kind, undefined);
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(result.turn.commandId, nativeTurnId);
+  assert.equal(result.turn.taskId, 'queue:system::supervisor-turn');
+  assert.equal(result.turn.attempt, 0);
+  assert.equal(result.input.body, command.payload.body);
+  assert.equal(result.delivery, 'next_slice');
+  assert.equal(result.workerInterrupted, false);
+});
+test('Owner follow-up rejects forged approvals routes oversize text and mismatched receipts', async () => {
+  for (const extra of [
+    { body: '' }, { body: 'x'.repeat(4097) }, { body: 'new facts', turnKind: 'conversation' },
+    { body: 'new facts', approved: true }, { body: 'new facts', ownerUserId: 'foreign' },
+  ]) {
+    const fixture = supervisorInputFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('input', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const change of [
+    receipt => { receipt.result.turn.command_id = 'different-task'; },
+    receipt => { receipt.result.input.body = 'different intent'; },
+    receipt => { receipt.result.input.sequence = 0; },
+    receipt => { receipt.result.worker_interrupted = true; },
+    receipt => { receipt.result.delivery = 'applied'; },
+    receipt => { receipt.result.input.created_at = 'not a date'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorInputFixture(change).invoke(
+    supervisorTurnRequest('input', { body: 'Keep the same task and its approvals.' }),
+  ));
+});
+
+test('same-task input capability is opt-in and comes from the actual scoped native receipt', async () => {
+  const fixture = supervisorCapabilitiesFixture(receipt => {
+    receipt.result.input_contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input_delivery = 'next_slice';
+    receipt.result.max_input_chars = 4096;
+  });
+  const result = await fixture.invoke({ ...supervisorCapabilitiesRequest, includeInput: true });
+  assert.equal(fixture.commands[0].command.payload.include_input, true);
+  assert.equal(result.inputContract, 'ctox.workjet.supervisor_input.v1');
+  assert.equal(result.inputDelivery, 'next_slice');
+  assert.equal(result.maxInputChars, 4096);
+  const legacy = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.equal(Object.hasOwn(legacy, 'inputContract'), false);
+  await assert.rejects(supervisorCapabilitiesFixture().invoke({
+    ...supervisorCapabilitiesRequest, includeInput: true,
+  }), /does not support same-task/);
+  const invalid = supervisorCapabilitiesFixture();
+  await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
+  assert.equal(invalid.commands.length, 0);
+});

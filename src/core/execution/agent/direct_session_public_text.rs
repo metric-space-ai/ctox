@@ -14,16 +14,35 @@ const TURN_CHARS: usize = 262_144;
 const CHUNK_CHARS: usize = 4096;
 const MAX_ITEMS: usize = 64;
 
-#[derive(Default)]
 struct PublicFilter {
     pending: String,
     hidden: bool,
+    hidden_tail: bool,
+    line_start: bool,
+    ordinary_fence: bool,
+    backticks: usize,
+}
+impl Default for PublicFilter {
+    fn default() -> Self {
+        Self {
+            pending: String::new(),
+            hidden: false,
+            hidden_tail: false,
+            line_start: true,
+            ordinary_fence: false,
+            backticks: 0,
+        }
+    }
 }
 impl PublicFilter {
     fn push(&mut self, text: &str, limit: usize) -> (String, bool) {
         const OPEN: &str = "```ctox-crew";
+        const PLAIN_OPEN: &str = "ctox-crew metadata:";
         let mut public = String::new();
         let mut count = 0;
+        if self.hidden_tail {
+            return (public, false);
+        }
         for ch in text.chars() {
             self.pending.push(ch);
             loop {
@@ -31,7 +50,23 @@ impl PublicFilter {
                 if self.pending.starts_with(marker) {
                     self.pending.drain(..marker.len());
                     self.hidden = !self.hidden;
-                } else if marker.starts_with(&self.pending) {
+                } else if !self.hidden
+                    && !self.ordinary_fence
+                    && self.line_start
+                    && self.pending.starts_with(PLAIN_OPEN)
+                {
+                    // Some providers emit the reserved metadata tail without a
+                    // fence. Its header and JSON are private, including when
+                    // the header is split across notifications.
+                    self.pending.clear();
+                    self.hidden_tail = true;
+                    return (public, false);
+                } else if marker.starts_with(&self.pending)
+                    || (!self.hidden
+                        && !self.ordinary_fence
+                        && self.line_start
+                        && PLAIN_OPEN.starts_with(&self.pending))
+                {
                     break;
                 } else {
                     let first = self.pending.chars().next().expect("nonempty pending");
@@ -42,6 +77,16 @@ impl PublicFilter {
                         }
                         public.push(first);
                         count += 1;
+                        if first == '`' {
+                            self.backticks += 1;
+                            if self.backticks == 3 {
+                                self.ordinary_fence = !self.ordinary_fence;
+                            }
+                        } else {
+                            self.backticks = 0;
+                        }
+                        self.line_start = first == '\n'
+                            || (self.line_start && matches!(first, ' ' | '\t' | '\r'));
                     }
                 }
             }
@@ -50,7 +95,7 @@ impl PublicFilter {
     }
     fn finish(&mut self) -> String {
         let tail = std::mem::take(&mut self.pending);
-        if self.hidden {
+        if self.hidden || self.hidden_tail {
             String::new()
         } else {
             tail
@@ -369,6 +414,61 @@ mod tests {
         assert_eq!(text(&all), "Public\n\nEnde");
         assert!(!text(&all).contains("private"));
     }
+    #[test]
+    fn public_text_hides_unfenced_metadata_without_damaging_markdown_or_unicode() {
+        let answer = "Gern. **Nächster Schritt** 🦊\n";
+        let raw = format!("{answer}ctox-crew metadata:\n{{\"memory_updates\":[\"private\"]}}");
+        let chars: Vec<_> = raw.chars().collect();
+        for split in 0..=chars.len() {
+            let mut capture = PublicTextCapture::default();
+            observe(&mut capture, &started(Some(MessagePhase::FinalAnswer)), 0);
+            let mut all = observe(
+                &mut capture,
+                &delta(&chars[..split].iter().collect::<String>()),
+                1,
+            );
+            all.extend(observe(
+                &mut capture,
+                &delta(&chars[split..].iter().collect::<String>()),
+                102,
+            ));
+            all.extend(observe(&mut capture, &completed(&raw), 103));
+            assert_eq!(text(&all), answer, "split {split}");
+            assert!(all.last().unwrap().completed);
+            assert_eq!(all.last().unwrap().offset, answer.chars().count() as u64);
+        }
+        let mut capture = PublicTextCapture::default();
+        observe(&mut capture, &started(None), 0);
+        let mut all = Vec::new();
+        for (index, ch) in raw.chars().enumerate() {
+            all.extend(observe(
+                &mut capture,
+                &delta(&ch.to_string()),
+                index as u64 * 101,
+            ));
+        }
+        all.extend(observe(&mut capture, &completed(&raw), 10_000));
+        assert_eq!(text(&all), answer);
+        for raw in [
+            "Please quote ctox-crew metadata: literally.",
+            "ctox-crew metadat",
+            "```text\nctox-crew metadata:\nordinary code\n```",
+            "```rust\nfn main() {}\n```\n**Antwort**",
+            "c\nct\n🦊 **geänderten**",
+        ] {
+            let mut filter = PublicFilter::default();
+            let (mut public, truncated) = filter.push(raw, ITEM_CHARS);
+            public.push_str(&filter.finish());
+            assert_eq!(public, raw);
+            assert!(!truncated);
+        }
+        let mut filter = PublicFilter::default();
+        let raw = format!("ctox-crew metadata:{}", "x".repeat(1024 * 1024));
+        assert_eq!(filter.push(&raw, 128), (String::new(), false));
+        assert!(filter.pending.is_empty());
+        assert!(filter.finish().is_empty());
+    }
+
     #[test]
     fn public_text_filter_bounds_auxiliary_memory_for_a_large_provider_chunk() {
         let mut filter = PublicFilter::default();
