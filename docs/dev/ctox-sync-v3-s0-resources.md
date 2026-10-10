@@ -18,7 +18,7 @@ Tokio/supervisor threads (Linux comm is truncated to15characters). CPU deltas us
 actual CLK_TCK and process/thread start identity; reuse or resets fail. Thread births/exits carry explicit CPU lower/upper bounds (stable observed peer work/all process work), not invented exact CPU. Server
 CPU and peer-thread CPU are separate. Browser-to-Node callback reception is the
 CPU boundary; browser timestamps and meter overhead are recorded. This observes
-sys+user CPU, not stacks or exclusive attribution to one asynchronous request.
+sys+user CPU, not stacks or exclusive attribution to one asynchronous request. Even a stable observed thread set cannot prove there were no unseen short-lived peer threads: named-thread CPU is the observed sum, with all-process CPU as its upper bound.
 
 The normal lane runner exercises21resource/transport tests, a real SQLite lock
 probe self-test, all three browser/native relay cases, and a20s end-to-end soak

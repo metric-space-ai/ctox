@@ -33,7 +33,7 @@ function cpuInterval(a, b, hz) {
   const exact = newThreads === 0 && vanishedThreads === 0;
   // Unseen thread lifetimes cannot be reconstructed from two procfs snapshots.
   // Bound missing peer work by all process work; snapshots are not atomic.
-  const upper = exact ? lower : Math.max(lower, total.cpuMs);
+  const upper = Math.max(lower, total.cpuMs);
   return { elapsedMs, processCpuMs: total.cpuMs, peerCpuMs: exact ? lower : null,
     peerCpuLowerMs: lower, peerCpuUpperMs: upper, peerPercentOfOneCore: exact ? lower / elapsedMs * 100 : null,
     peerCoverage: exact ? 'stable-thread-set' : 'bounded-thread-churn', newThreads, vanishedThreads };
@@ -51,7 +51,7 @@ function summarize(samples, hz) {
       indexedDbStartBytes: first.indexedDbBytes, indexedDbEndBytes: last.indexedDbBytes,
       indexedDbPeakBytes: Math.max(...samples.map(x => x.indexedDbBytes)),
       indexedDbDeltaBytes: last.indexedDbBytes - first.indexedDbBytes },
-    definition: 'CDP Runtime.getHeapUsage and origin Storage.getUsageAndQuota indexeddb; no forced GC, quota estimates not logical row bytes. CPU procfs process + exactly named native peer threads; counters include sys/user and 1-core basis; callback reception boundaries and CDP sampling overhead recorded, not stack attribution.' };
+    definition: 'CDP Runtime.getHeapUsage and origin Storage.getUsageAndQuota indexeddb; no forced GC, quota estimates not logical row bytes. CPU procfs process + exactly named native peer threads; counters include sys/user and 1-core basis; peerCpuMs is the observed surviving named thread sum when the observed set is stable, not proof of coverage of unseen short-lived threads; peer lower/upper bounds retain that uncertainty. Callback reception boundaries and CDP sampling overhead recorded, not stack attribution.' };
 }
 async function attach(page, pid, origin) {
   const hz = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).trim());
