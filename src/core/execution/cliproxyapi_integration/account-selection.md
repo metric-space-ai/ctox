@@ -12,7 +12,7 @@ Kimi routes also enforce exact configured account/model matching.
 Kimi reauthentication retains the account's enablement, configured models,
 priority, weight and endpoint profile. It replaces only the encrypted credential
 tuple and its private references; a disabled account remains unavailable and
-other stacked accounts retain their policy.
+the existing account keeps its position in the stack; other accounts retain their policy.
 
 `X-CTOX-Account-Selected` acknowledges only an actual configured account chosen
 by the scheduler/route, including upstream failures after selection. Rejected
