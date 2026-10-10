@@ -757,6 +757,12 @@ fn retain_outcome(
     receipt: super::super::workjet_worker_outcome_contract::WorkerTerminalReceipt,
 ) -> anyhow::Result<Value> {
     use super::super::workjet_worker_outcome_contract::WireValidate;
+    text(registration_id, 128)?;
+    text(intent_id, 128)?;
+    anyhow::ensure!(
+        (1..=9_007_199_254_740_991).contains(&revision),
+        "invalid source revision"
+    );
     receipt.validate().map_err(anyhow::Error::msg)?;
     let source = load(core, &context.actor, registration_id)?;
     check_source(policy, context, &source, revision)?;
