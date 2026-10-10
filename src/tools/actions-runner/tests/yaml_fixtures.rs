@@ -18,7 +18,10 @@ fn fixtures() -> Vec<(String, String)> {
     let entries = fs::read_dir(&dir).unwrap_or_else(|err| panic!("cannot read {dir:?}: {err}"));
     for entry in entries {
         let path = entry.expect("dir entry").path();
-        if path.extension().is_none_or(|ext| ext != "yml" && ext != "yaml") {
+        if path
+            .extension()
+            .is_none_or(|ext| ext != "yml" && ext != "yaml")
+        {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -33,8 +36,8 @@ fn fixtures() -> Vec<(String, String)> {
 #[test]
 fn every_real_workflow_parses_and_resolves() {
     for (name, body) in fixtures() {
-        let mut doc = Document::parse(&body)
-            .unwrap_or_else(|err| panic!("{name} must parse, got {err}"));
+        let mut doc =
+            Document::parse(&body).unwrap_or_else(|err| panic!("{name} must parse, got {err}"));
         doc.resolve_aliases()
             .unwrap_or_else(|err| panic!("{name} must resolve aliases, got {err}"));
     }
@@ -87,7 +90,10 @@ fn expressions_in_real_workflows_survive_parsing() {
         );
         found += 1;
     }
-    assert!(found >= 2, "expected fixtures to use expressions, got {found}");
+    assert!(
+        found >= 2,
+        "expected fixtures to use expressions, got {found}"
+    );
 }
 
 fn count_expressions(doc: &Document, id: usize) -> usize {
@@ -95,7 +101,11 @@ fn count_expressions(doc: &Document, id: usize) -> usize {
         return 0;
     };
     let own = usize::from(node.value.contains("${{"));
-    own + node.content.iter().map(|c| count_expressions(doc, *c)).sum::<usize>()
+    own + node
+        .content
+        .iter()
+        .map(|c| count_expressions(doc, *c))
+        .sum::<usize>()
 }
 
 #[test]
@@ -121,7 +131,10 @@ fn anchors_in_real_workflows_resolve() {
     let db = doc.map_get(services, "db").expect("db");
     let db_env = doc.map_get(db, "env").expect("db env");
     assert_eq!(doc.map_get(db_env, "SHARED"), Some(shared));
-    assert_eq!(doc.map_get(db_env, "CI"), Some(doc.map_get(env, "CI").unwrap()));
+    assert_eq!(
+        doc.map_get(db_env, "CI"),
+        Some(doc.map_get(env, "CI").unwrap())
+    );
     assert!(shared_node.is_scalar());
 }
 
@@ -215,7 +228,9 @@ fn expressions_survive_interpolation_inside_run_blocks() {
 }
 
 /// Parses an expression body, re-appending the `}}` terminator the lexer needs.
-fn parse_body(body: &str) -> Result<ctox_actions_runner::expr::ExprNode, ctox_actions_runner::expr::ExprError> {
+fn parse_body(
+    body: &str,
+) -> Result<ctox_actions_runner::expr::ExprNode, ctox_actions_runner::expr::ExprError> {
     let mut source = String::with_capacity(body.len() + 2);
     source.push_str(body);
     source.push_str("}}");
@@ -241,14 +256,8 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
                 "ref".to_string(),
                 Value::String("refs/heads/main".to_string()),
             ),
-            (
-                "ref_name".to_string(),
-                Value::String("main".to_string()),
-            ),
-            (
-                "sha".to_string(),
-                Value::String("deadbeef".to_string()),
-            ),
+            ("ref_name".to_string(), Value::String("main".to_string())),
+            ("sha".to_string(), Value::String("deadbeef".to_string())),
             ("workspace".to_string(), Value::String("ctox".to_string())),
             ("run_id".to_string(), Value::String("42".to_string())),
             (
@@ -261,10 +270,7 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
                     ),
                 ]),
             ),
-            (
-                "actor".to_string(),
-                Value::String("welsch".to_string()),
-            ),
+            ("actor".to_string(), Value::String("welsch".to_string())),
             (
                 "head_ref".to_string(),
                 Value::String("feature/x".to_string()),
@@ -273,8 +279,14 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
                 "repository".to_string(),
                 Value::object([
                     ("name".to_string(), Value::String("ctox".to_string())),
-                    ("owner".to_string(), Value::String("metric-space-ai".to_string())),
-                    ("default_branch".to_string(), Value::String("main".to_string())),
+                    (
+                        "owner".to_string(),
+                        Value::String("metric-space-ai".to_string()),
+                    ),
+                    (
+                        "default_branch".to_string(),
+                        Value::String("main".to_string()),
+                    ),
                 ]),
             ),
             (
@@ -311,10 +323,7 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
             "build".to_string(),
             Value::object([(
                 "outputs".to_string(),
-                Value::object([(
-                    "tag".to_string(),
-                    Value::String("v1".to_string()),
-                )]),
+                Value::object([("tag".to_string(), Value::String("v1".to_string()))]),
             )]),
         )]
         .into_iter()
@@ -325,10 +334,7 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
                 ("result".to_string(), Value::String("success".to_string())),
                 (
                     "outputs".to_string(),
-                    Value::object([(
-                        "version".to_string(),
-                        Value::String("1.2.3".to_string()),
-                    )]),
+                    Value::object([("version".to_string(), Value::String("1.2.3".to_string()))]),
                 ),
             ]),
         )]
@@ -337,18 +343,12 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
         runner: [("os".to_string(), Value::String("Linux".to_string()))]
             .into_iter()
             .collect(),
-        inputs: [(
-            "version".to_string(),
-            Value::String("1.2.3".to_string()),
-        )]
-        .into_iter()
-        .collect(),
-        strategy: [(
-            "fail-fast".to_string(),
-            Value::Bool(true),
-        )]
-        .into_iter()
-        .collect(),
+        inputs: [("version".to_string(), Value::String("1.2.3".to_string()))]
+            .into_iter()
+            .collect(),
+        strategy: [("fail-fast".to_string(), Value::Bool(true))]
+            .into_iter()
+            .collect(),
         vars: [("prefix".to_string(), Value::String("v".to_string()))]
             .into_iter()
             .collect(),
@@ -388,9 +388,7 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
                 source.push_str("}}");
                 let value = interpreter
                     .evaluate(&source, DefaultStatusCheck::None)
-                    .unwrap_or_else(|err| {
-                        panic!("{name}: `{expression}` must evaluate: {err}")
-                    });
+                    .unwrap_or_else(|err| panic!("{name}: `{expression}` must evaluate: {err}"));
                 // Anything may be produced, but the value must be well formed
                 // and renderable, which is what the runner depends on.
                 let _ = format!("{value:?}");
@@ -398,7 +396,10 @@ fn real_workflow_expressions_evaluate_against_a_realistic_environment() {
             }
         }
     }
-    assert!(evaluated >= 20, "expected a real corpus, only saw {evaluated}");
+    assert!(
+        evaluated >= 20,
+        "expected a real corpus, only saw {evaluated}"
+    );
 }
 
 #[test]
@@ -426,14 +427,26 @@ fn representative_workflow_conditions_produce_expected_results() {
     let cases: &[(&str, Value)] = &[
         ("github.event_name == 'push' }}", Value::Bool(true)),
         ("github.event_name == 'pull_request' }}", Value::Bool(false)),
-        ("startsWith(github.ref, 'refs/heads/') }}", Value::Bool(true)),
+        (
+            "startsWith(github.ref, 'refs/heads/') }}",
+            Value::Bool(true),
+        ),
         ("github.ref == 'refs/heads/main' }}", Value::Bool(true)),
         ("matrix.os == 'linux' }}", Value::Bool(true)),
         ("matrix.os == 'windows' }}", Value::Bool(false)),
         ("!github.event_name == 'push' }}", Value::Bool(false)),
-        ("github.event_name == 'push' && matrix.os == 'linux' }}", Value::Bool(true)),
-        ("github.event_name == 'push' || matrix.os == 'windows' }}", Value::Bool(true)),
-        ("format('v{0}', '1.2.3') }}", Value::String("v1.2.3".to_string())),
+        (
+            "github.event_name == 'push' && matrix.os == 'linux' }}",
+            Value::Bool(true),
+        ),
+        (
+            "github.event_name == 'push' || matrix.os == 'windows' }}",
+            Value::Bool(true),
+        ),
+        (
+            "format('v{0}', '1.2.3') }}",
+            Value::String("v1.2.3".to_string()),
+        ),
         ("contains(github.ref, 'main') }}", Value::Bool(true)),
     ];
 
@@ -564,9 +577,10 @@ fn a_matrix_from_a_real_workflow_expands_to_usable_values() {
     );
 
     let ubuntu = |m: &BTreeMap<String, ctox_actions_runner::expr::Value>| {
-        m.get("os") == Some(&ctox_actions_runner::expr::Value::String(
-            "ubuntu-latest".into(),
-        ))
+        m.get("os")
+            == Some(&ctox_actions_runner::expr::Value::String(
+                "ubuntu-latest".into(),
+            ))
     };
     assert_eq!(matrixes.iter().filter(|m| ubuntu(m)).count(), 2);
     assert!(
@@ -608,7 +622,8 @@ fn real_workflows_validate_against_the_embedded_schema() {
         match Validator::workflow().check(&doc, root, "workflow-root") {
             Ok(()) => validated += 1,
             Err(issues) => {
-                let rendered: Vec<String> = issues.iter().take(6).map(ToString::to_string).collect();
+                let rendered: Vec<String> =
+                    issues.iter().take(6).map(ToString::to_string).collect();
                 rejected.push((name, rendered));
             }
         }

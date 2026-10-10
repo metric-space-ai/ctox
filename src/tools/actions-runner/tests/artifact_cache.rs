@@ -21,7 +21,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 
-use ctox_actions_runner::artifactcache::{Call, Cache, Handler};
+use ctox_actions_runner::artifactcache::{Cache, Call, Handler};
 
 const VERSION: &str = "c19da02a2bd7e77277f1ac29ab45c09b7d46a4ee758284e26bb3045ad11d9d20";
 
@@ -76,7 +76,6 @@ fn http_request(
     })
 }
 
-
 /// ---------------------------------------------------------------------------
 // file_collector-style helper: a body of `len` deterministic bytes.
 /// ---------------------------------------------------------------------------
@@ -101,9 +100,8 @@ fn handler() {
     let base = format!("/{token}/_apis/artifactcache");
     std::thread::spawn(move || handler.serve());
 
-    let get = |target: &str| {
-        http_request(wire, "GET", target, &[], b"").expect("the request completes")
-    };
+    let get =
+        |target: &str| http_request(wire, "GET", target, &[], b"").expect("the request completes");
     let post = |target: &str, body: &[u8]| {
         http_request(wire, "POST", target, &[], body).expect("the request completes")
     };
@@ -130,7 +128,10 @@ fn handler() {
         let key = "reserve_and_upload";
         let content = payload(100);
         let id = reserve(wire, &base, key, VERSION, content.len() as i64);
-        assert_eq!(patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status, 200);
+        assert_eq!(
+            patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status,
+            200
+        );
         assert_eq!(post(&format!("{base}/caches/{id}"), b"").status, 200);
     }
 
@@ -153,27 +154,43 @@ fn handler() {
     }
 
     // "upload with bad id"
-    assert_eq!(patch(&format!("{base}/caches/invalid_id"), "bytes 0-99/*", b"").status, 400);
+    assert_eq!(
+        patch(&format!("{base}/caches/invalid_id"), "bytes 0-99/*", b"").status,
+        400
+    );
 
     // "upload without reserve"
-    assert_eq!(patch(&format!("{base}/caches/1000"), "bytes 0-99/*", b"").status, 400);
+    assert_eq!(
+        patch(&format!("{base}/caches/1000"), "bytes 0-99/*", b"").status,
+        400
+    );
 
     // "upload with complete"
     {
         let key = "upload_with_complete";
         let content = payload(100);
         let id = reserve(wire, &base, key, VERSION, 100);
-        assert_eq!(patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status, 200);
+        assert_eq!(
+            patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status,
+            200
+        );
         assert_eq!(post(&format!("{base}/caches/{id}"), b"").status, 200);
         // A second upload of a completed entry is refused.
-        assert_eq!(patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status, 400);
+        assert_eq!(
+            patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status,
+            400
+        );
     }
 
     // "upload with invalid range"
     {
         let key = "upload_with_invalid_range";
         let id = reserve(wire, &base, key, VERSION, 100);
-        let response = patch(&format!("{base}/caches/{id}"), "bytes xx-99/*", &payload(100));
+        let response = patch(
+            &format!("{base}/caches/{id}"),
+            "bytes xx-99/*",
+            &payload(100),
+        );
         assert_eq!(response.status, 400);
     }
 
@@ -188,7 +205,10 @@ fn handler() {
         let key = "duplicate_commit";
         let content = payload(100);
         let id = reserve(wire, &base, key, VERSION, 100);
-        assert_eq!(patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status, 200);
+        assert_eq!(
+            patch(&format!("{base}/caches/{id}"), "bytes 0-99/*", &content).status,
+            200
+        );
         assert_eq!(post(&format!("{base}/caches/{id}"), b"").status, 200);
         assert_eq!(post(&format!("{base}/caches/{id}"), b"").status, 400);
     }
@@ -199,7 +219,12 @@ fn handler() {
         let id = reserve(wire, &base, key, VERSION, 100);
         let content = payload(100);
         assert_eq!(
-            patch(&format!("{base}/caches/{id}"), "bytes 0-59/*", &content[..50]).status,
+            patch(
+                &format!("{base}/caches/{id}"),
+                "bytes 0-59/*",
+                &content[..50]
+            )
+            .status,
             200
         );
         assert_eq!(post(&format!("{base}/caches/{id}"), b"").status, 500);
@@ -244,9 +269,14 @@ fn upload(port: u16, base: &str, key: &str, version: &str, content: &[u8]) {
     let response = http_request(port, "POST", &format!("{base}/caches/{id}"), &[], b"").unwrap();
     assert_eq!(response.status, 200);
 
-    let response =
-        http_request(port, "GET", &format!("{base}/cache?keys={key}&version={version}"), &[], b"")
-            .unwrap();
+    let response = http_request(
+        port,
+        "GET",
+        &format!("{base}/cache?keys={key}&version={version}"),
+        &[],
+        b"",
+    )
+    .unwrap();
     assert_eq!(response.status, 200);
     let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(body["result"], "hit");
@@ -300,7 +330,11 @@ fn handler_lookup_ordering() {
     // the *second* requested key, not the third.
     {
         let key = "get_with_multiple_keys";
-        let keys = [format!("{key}_a_b_c"), format!("{key}_a_b"), format!("{key}_a")];
+        let keys = [
+            format!("{key}_a_b_c"),
+            format!("{key}_a_b"),
+            format!("{key}_a"),
+        ];
         let contents: Vec<Vec<u8>> = keys.iter().map(|_| payload(100)).collect();
         for (i, (key, content)) in keys.iter().zip(contents.iter()).enumerate() {
             let id = reserve(port, &base, key, VERSION, content.len() as i64);
@@ -318,7 +352,9 @@ fn handler_lookup_ordering() {
             .unwrap();
             assert_eq!(response.status, 200);
             assert_eq!(
-                http_request(port, "POST", &format!("{base}/caches/{id}"), &[], b"").unwrap().status,
+                http_request(port, "POST", &format!("{base}/caches/{id}"), &[], b"")
+                    .unwrap()
+                    .status,
                 200
             );
         }
@@ -353,7 +389,14 @@ fn handler_lookup_ordering() {
     // prefix hit even when a later requested key would also match.
     for (label, requested_keys) in [
         ("key 0", vec!["_a", "_a_b"]),
-        ("key 1", vec!["------------------------------------------------------", "_a", "_a_b"]),
+        (
+            "key 1",
+            vec![
+                "------------------------------------------------------",
+                "_a",
+                "_a_b",
+            ],
+        ),
     ] {
         let key = format!("exact_keys_are_preferred_{}", label.replace(' ', "_"));
         let keys = [
@@ -377,7 +420,9 @@ fn handler_lookup_ordering() {
             .unwrap();
             assert_eq!(response.status, 200);
             assert_eq!(
-                http_request(port, "POST", &format!("{base}/caches/{id}"), &[], b"").unwrap().status,
+                http_request(port, "POST", &format!("{base}/caches/{id}"), &[], b"")
+                    .unwrap()
+                    .status,
                 200
             );
         }
@@ -389,7 +434,10 @@ fn handler_lookup_ordering() {
         let response = http_request(
             port,
             "GET",
-            &format!("{base}/cache?keys={}&version={VERSION}", requested.join(",")),
+            &format!(
+                "{base}/cache?keys={}&version={VERSION}",
+                requested.join(",")
+            ),
             &[],
             b"",
         )
@@ -397,20 +445,19 @@ fn handler_lookup_ordering() {
         assert_eq!(response.status, 200);
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(
-            body["cacheKey"],
-            keys[0],
+            body["cacheKey"], keys[0],
             "{label}: an exact match wins over a prefix match"
         );
     }
 }
 
 /// Backdates a reservation so several entries have distinct `CreatedAt` values.
-fn upload_at(
-    service: &Arc<ctox_actions_runner::artifactcache::Service>,
-    id: u64,
-    created_at: i64,
-) {
-    let mut cache = service.database().get(id).unwrap().expect("the reservation exists");
+fn upload_at(service: &Arc<ctox_actions_runner::artifactcache::Service>, id: u64, created_at: i64) {
+    let mut cache = service
+        .database()
+        .get(id)
+        .unwrap()
+        .expect("the reservation exists");
     cache.created_at = created_at;
     cache.used_at = created_at;
     service.database().put(&cache).unwrap();
@@ -513,9 +560,17 @@ fn handler_gc_cache() {
     for (index, (cache, kept)) in cases.iter().enumerate() {
         let found = service.database().get(inserted[index].id).unwrap();
         if *kept {
-            assert!(found.is_some(), "case {index} ({}) should be kept", cache.key);
+            assert!(
+                found.is_some(),
+                "case {index} ({}) should be kept",
+                cache.key
+            );
         } else {
-            assert!(found.is_none(), "case {index} ({}) should be gone", cache.key);
+            assert!(
+                found.is_none(),
+                "case {index} ({}) should be gone",
+                cache.key
+            );
         }
     }
 }
@@ -527,7 +582,8 @@ fn handler_gc_cache() {
 #[test]
 fn unauthorized_access_is_a_bare_404() {
     let dir = tempfile::tempdir().unwrap();
-    let mut handler = Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
+    let mut handler =
+        Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
     let port = handler.actual_port();
     std::thread::spawn(move || handler.serve());
 
@@ -574,7 +630,8 @@ fn bind_address_is_the_one_asked_for() {
 #[test]
 fn custom_external_url_wins() {
     let dir = tempfile::tempdir().unwrap();
-    let mut handler = Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
+    let mut handler =
+        Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
     let port = handler.actual_port();
     let token = handler.token().to_string();
     let base = format!("/{token}/_apis/artifactcache");
@@ -595,8 +652,14 @@ fn custom_external_url_wins() {
     std::thread::spawn(move || handler.serve());
 
     // The service still works on the port it actually bound.
-    let response =
-        http_request(port, "POST", &format!("{base}/caches"), &[], b"{\"key\":\"k\",\"version\":\"v\",\"cacheSize\":1}").unwrap();
+    let response = http_request(
+        port,
+        "POST",
+        &format!("{base}/caches"),
+        &[],
+        b"{\"key\":\"k\",\"version\":\"v\",\"cacheSize\":1}",
+    )
+    .unwrap();
     assert_eq!(response.status, 200);
 }
 
@@ -607,7 +670,8 @@ fn custom_external_url_wins() {
 #[test]
 fn closed_server_is_unreachable() {
     let dir = tempfile::tempdir().unwrap();
-    let mut handler = Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
+    let mut handler =
+        Handler::start(&dir.path().join("artifactcache"), "", "127.0.0.1", 0).unwrap();
     let port = handler.actual_port();
     handler.close();
     // act's subtest posts to a closed server and expects an error.
@@ -632,12 +696,18 @@ fn routing_without_a_socket() {
 
     // No token, no route.
     assert!(service
-        .route("wrong", &Call::get("/_apis/artifactcache/cache?keys=k&version=v"))
+        .route(
+            "wrong",
+            &Call::get("/_apis/artifactcache/cache?keys=k&version=v")
+        )
         .is_none());
     // A token but an unknown path.
     assert!(routed(Call::get(&format!("/{token}/_apis/artifactcache/nope"))).is_none());
     // A subpath of a known route is a different path.
-    assert!(routed(Call::get(&format!("/{token}/_apis/artifactcache/cache/extra"))).is_none());
+    assert!(routed(Call::get(&format!(
+        "/{token}/_apis/artifactcache/cache/extra"
+    )))
+    .is_none());
 
     // A miss is 204.
     let reply = routed(Call::get(&format!(

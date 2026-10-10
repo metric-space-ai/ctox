@@ -51,7 +51,10 @@ fn json(reply: &ctox_actions_runner::http::Reply) -> serde_json::Value {
     serde_json::from_slice(&reply.body).expect("a JSON body")
 }
 
-fn route(service: &Service, call: &Call) -> Result<Option<ctox_actions_runner::http::Reply>, std::io::Error> {
+fn route(
+    service: &Service,
+    call: &Call,
+) -> Result<Option<ctox_actions_runner::http::Reply>, std::io::Error> {
     service.route(call)
 }
 
@@ -61,9 +64,12 @@ fn new_artifact_upload_prepare() {
     let fs = Arc::new(MapFs::new());
     let service = map_service(&fs);
 
-    let reply = route(&service, &call("POST", "/_apis/pipelines/workflows/1/artifacts", b""))
-        .expect("no io failure")
-        .expect("a route");
+    let reply = route(
+        &service,
+        &call("POST", "/_apis/pipelines/workflows/1/artifacts", b""),
+    )
+    .expect("no io failure")
+    .expect("a route");
 
     assert_eq!(reply.status, 200);
     assert_eq!(
@@ -87,7 +93,10 @@ fn artifact_upload_blob() {
 
     assert_eq!(reply.status, 200);
     assert_eq!(json(&reply)["message"], "success");
-    assert_eq!(fs.get("artifact/server/path/1/some/file").as_deref(), Some(&b"content"[..]));
+    assert_eq!(
+        fs.get("artifact/server/path/1/some/file").as_deref(),
+        Some(&b"content"[..])
+    );
 }
 
 // server_test.go: TestFinalizeArtifactUpload
@@ -114,9 +123,12 @@ fn list_artifacts() {
     fs.insert("artifact/server/path/1/file.txt", b"");
     let service = map_service(&fs);
 
-    let reply = route(&service, &call("GET", "/_apis/pipelines/workflows/1/artifacts", b""))
-        .expect("no io failure")
-        .expect("a route");
+    let reply = route(
+        &service,
+        &call("GET", "/_apis/pipelines/workflows/1/artifacts", b""),
+    )
+    .expect("no io failure")
+    .expect("a route");
 
     assert_eq!(reply.status, 200);
     let body = json(&reply);
@@ -135,9 +147,12 @@ fn list_artifact_container() {
     fs.insert("artifact/server/path/1/some/file", b"");
     let service = map_service(&fs);
 
-    let reply = route(&service, &call("GET", "/download/1?itemPath=some/file", b""))
-        .expect("no io failure")
-        .expect("a route");
+    let reply = route(
+        &service,
+        &call("GET", "/download/1?itemPath=some/file", b""),
+    )
+    .expect("no io failure")
+    .expect("a route");
 
     assert_eq!(reply.status, 200);
     let body = json(&reply);
@@ -197,7 +212,10 @@ fn artifact_upload_blob_unsafe_path() {
 
     assert_eq!(reply.status, 200);
     assert_eq!(json(&reply)["message"], "success");
-    assert_eq!(fs.get("artifact/server/path/1/some/file").as_deref(), Some(&b"content"[..]));
+    assert_eq!(
+        fs.get("artifact/server/path/1/some/file").as_deref(),
+        Some(&b"content"[..])
+    );
 }
 
 // server_test.go: TestMkdirFsImplSafeResolve
@@ -219,7 +237,11 @@ fn safe_resolve_table() {
             ("", "/foo/bar"),
         ];
         for (input, want) in table {
-            assert_eq!(safe_resolve("/foo/bar", input), want, "safeResolve({input:?})");
+            assert_eq!(
+                safe_resolve("/foo/bar", input),
+                want,
+                "safeResolve({input:?})"
+            );
         }
     } else {
         // Go's own test table is Unix-shaped; on Windows the same inputs
@@ -300,7 +322,11 @@ fn the_v4_flow_works_over_a_real_directory() {
         "/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test","size":"11","hash":"sha256:00"}"#,
     );
-    let finalized = json(&route(&service, &finalize).expect("no io failure").expect("a route"));
+    let finalized = json(
+        &route(&service, &finalize)
+            .expect("no io failure")
+            .expect("a route"),
+    );
     assert_eq!(finalized["ok"], true);
     assert_eq!(finalized["artifactId"], "2949673445");
 
@@ -309,7 +335,11 @@ fn the_v4_flow_works_over_a_real_directory() {
         "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49"}"#,
     );
-    let listed = json(&route(&service, &list).expect("no io failure").expect("a route"));
+    let listed = json(
+        &route(&service, &list)
+            .expect("no io failure")
+            .expect("a route"),
+    );
     let artifacts = listed["artifacts"].as_array().expect("an array");
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0]["name"], "test");
@@ -326,7 +356,11 @@ fn the_v4_flow_works_over_a_real_directory() {
         "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name_filter":"other"}"#,
     );
-    let listed = json(&route(&service, &filtered).expect("no io failure").expect("a route"));
+    let listed = json(
+        &route(&service, &filtered)
+            .expect("no io failure")
+            .expect("a route"),
+    );
     assert_eq!(listed["artifacts"].as_array().expect("an array").len(), 0);
 
     let sign = call(
@@ -334,8 +368,15 @@ fn the_v4_flow_works_over_a_real_directory() {
         "/twirp/github.actions.results.api.v1.ArtifactService/GetSignedArtifactURL",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#,
     );
-    let signed = json(&route(&service, &sign).expect("no io failure").expect("a route"));
-    let download_url = signed["signedUrl"].as_str().expect("a signed url").to_string();
+    let signed = json(
+        &route(&service, &sign)
+            .expect("no io failure")
+            .expect("a route"),
+    );
+    let download_url = signed["signedUrl"]
+        .as_str()
+        .expect("a signed url")
+        .to_string();
 
     let downloaded = route(&service, &call("GET", &download_url, b""))
         .expect("no io failure")
@@ -348,10 +389,17 @@ fn the_v4_flow_works_over_a_real_directory() {
         "/twirp/github.actions.results.api.v1.ArtifactService/DeleteArtifact",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#,
     );
-    let deleted = json(&route(&service, &delete).expect("no io failure").expect("a route"));
+    let deleted = json(
+        &route(&service, &delete)
+            .expect("no io failure")
+            .expect("a route"),
+    );
     assert_eq!(deleted["ok"], true);
     assert_eq!(deleted["artifactId"], "2949673445");
-    assert!(!archive.exists(), "DeleteArtifact removes the whole directory");
+    assert!(
+        !archive.exists(),
+        "DeleteArtifact removes the whole directory"
+    );
 }
 
 /// The signed URL is only as good as its HMAC, and the check happens before
@@ -366,8 +414,11 @@ fn a_tampered_signed_url_is_rejected() {
         "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#,
     );
-    let signed_upload = json(&route(&service, &create).expect("no io failure").expect("a route"))
-        ["signedUploadUrl"]
+    let signed_upload = json(
+        &route(&service, &create)
+            .expect("no io failure")
+            .expect("a route"),
+    )["signedUploadUrl"]
         .as_str()
         .expect("a signed url")
         .to_string();
@@ -407,8 +458,9 @@ fn a_tampered_signed_url_is_rejected() {
     // An expired link is rejected too. Because `expires` is inside the HMAC,
     // an expiry cannot be edited into place — it has to be *signed*, which is
     // what this does: a correctly signed URL whose expiry is an hour old.
-    let expired_expiry =
-        format_signed_expiry(SystemTime::now() - Duration::from_secs(SIGNED_URL_LIFETIME_SECONDS as u64));
+    let expired_expiry = format_signed_expiry(
+        SystemTime::now() - Duration::from_secs(SIGNED_URL_LIFETIME_SECONDS as u64),
+    );
     let signature = base64_url_encode(&build_signature(
         "UploadArtifact",
         &expired_expiry,
@@ -470,7 +522,9 @@ fn protojson_accepts_both_field_spellings() {
         "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#,
     );
-    let first = route(&service, &snake).expect("no io failure").expect("a route");
+    let first = route(&service, &snake)
+        .expect("no io failure")
+        .expect("a route");
     assert_eq!(first.status, 200);
 
     let camel = call(
@@ -478,7 +532,9 @@ fn protojson_accepts_both_field_spellings() {
         "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact",
         br#"{"workflowRunBackendId":"21","workflowJobRunBackendId":"49","name":"other","version":4}"#,
     );
-    let second = route(&service, &camel).expect("no io failure").expect("a route");
+    let second = route(&service, &camel)
+        .expect("no io failure")
+        .expect("a route");
     assert_eq!(second.status, 200);
 
     // Both artifacts exist under the same run.
@@ -487,7 +543,11 @@ fn protojson_accepts_both_field_spellings() {
         "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts",
         br#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49"}"#,
     );
-    let listed = json(&route(&service, &list).expect("no io failure").expect("a route"));
+    let listed = json(
+        &route(&service, &list)
+            .expect("no io failure")
+            .expect("a route"),
+    );
     let names: Vec<&str> = listed["artifacts"]
         .as_array()
         .expect("an array")
@@ -506,12 +566,8 @@ fn a_gzip_encoded_upload_is_served_with_its_encoding() {
 
     let reply = route(
         &service,
-        &call(
-            "PUT",
-            "/upload/1?itemPath=some/file",
-            b"gzipped bytes",
-        )
-        .with_header("Content-Encoding", "gzip"),
+        &call("PUT", "/upload/1?itemPath=some/file", b"gzipped bytes")
+            .with_header("Content-Encoding", "gzip"),
     )
     .expect("no io failure")
     .expect("a route");
@@ -540,11 +596,17 @@ fn an_empty_run_reports_a_null_list() {
     std::fs::create_dir_all(dir.path().join("1")).expect("an empty run directory");
     let service = Service::new(dir.path(), Arc::new(OsFs)).expect("the path is not empty");
 
-    let reply = route(&service, &call("GET", "/_apis/pipelines/workflows/1/artifacts", b""))
-        .expect("no io failure")
-        .expect("a route");
+    let reply = route(
+        &service,
+        &call("GET", "/_apis/pipelines/workflows/1/artifacts", b""),
+    )
+    .expect("no io failure")
+    .expect("a route");
     assert_eq!(reply.status, 200);
-    assert_eq!(String::from_utf8_lossy(&reply.body), r#"{"count":0,"value":null}"#);
+    assert_eq!(
+        String::from_utf8_lossy(&reply.body),
+        r#"{"count":0,"value":null}"#
+    );
 }
 
 /// A run that does not exist is a `panic` upstream — `fs.ReadDir` on a missing
@@ -556,8 +618,11 @@ fn a_missing_run_directory_fails_the_request() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let service = Service::new(dir.path(), Arc::new(OsFs)).expect("the path is not empty");
 
-    let error = route(&service, &call("GET", "/_apis/pipelines/workflows/9/artifacts", b""))
-        .expect_err("the directory is not there");
+    let error = route(
+        &service,
+        &call("GET", "/_apis/pipelines/workflows/9/artifacts", b""),
+    )
+    .expect_err("the directory is not there");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 }
 
@@ -580,7 +645,11 @@ fn unknown_paths_are_404_and_wrong_methods_are_405() {
 
     let v4_wrong_method = route(
         &service,
-        &call("GET", "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts", b""),
+        &call(
+            "GET",
+            "/twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts",
+            b"",
+        ),
     )
     .expect("no io failure")
     .expect("a reply");
@@ -604,10 +673,9 @@ fn the_server_answers_over_a_socket() {
     use std::net::TcpStream;
 
     let dir = tempfile::tempdir().expect("a temporary directory");
-    let mut server =
-        ctox_actions_runner::artifacts::Server::start(dir.path(), "127.0.0.1", "0")
-            .expect("a bindable address")
-            .expect("the path is not empty");
+    let mut server = ctox_actions_runner::artifacts::Server::start(dir.path(), "127.0.0.1", "0")
+        .expect("a bindable address")
+        .expect("the path is not empty");
     let port = server.actual_port();
     std::thread::spawn(move || server.serve());
 
@@ -622,7 +690,8 @@ fn the_server_answers_over_a_socket() {
         Some((status, head.to_string(), body.as_bytes().to_vec()))
     }
 
-    let body = r#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#;
+    let body =
+        r#"{"workflow_run_backend_id":"21","workflow_job_run_backend_id":"49","name":"test"}"#;
     let (status, head, response_body) = request(
         port,
         &format!(
@@ -643,8 +712,8 @@ fn the_server_answers_over_a_socket() {
 
     // The signed URL is absolute, and the server has to resolve it the way
     // `net/http` does.
-    let signed = serde_json::from_slice::<serde_json::Value>(&response_body)
-        .expect("a JSON body")["signedUploadUrl"]
+    let signed = serde_json::from_slice::<serde_json::Value>(&response_body).expect("a JSON body")
+        ["signedUploadUrl"]
         .as_str()
         .expect("a signed url")
         .to_string();

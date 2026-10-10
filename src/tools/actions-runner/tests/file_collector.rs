@@ -21,10 +21,10 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ctox_actions_runner::filecollector::FileInfo;
 use ctox_actions_runner::filecollector::{
     Cancellation, CopyCollector, DefaultFs, FileCollector, Fs, TarCollector, WalkOutcome,
 };
-use ctox_actions_runner::filecollector::FileInfo;
 use ctox_actions_runner::git_index::{GitIndex, IndexError};
 use ctox_actions_runner::gitignore;
 
@@ -116,11 +116,7 @@ fn git(dir: &Path, args: &[&str]) {
         .stderr(std::process::Stdio::null())
         .status()
         .expect("git must be available to run the filecollector tests");
-    assert!(
-        status.success(),
-        "git {args:?} failed in {}",
-        dir.display()
-    );
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
 }
 
 fn write(repo: &Path, name: &str, contents: &str) {
@@ -191,11 +187,7 @@ fn src_prefix(repo: &Path, style: PrefixStyle) -> String {
 
 /// Collects `repo` into a tar, mirroring the `FileCollector` construction both
 /// upstream tests use.
-fn collect_tar(
-    fs: &dyn Fs,
-    repo: &Path,
-    use_gitignore: bool,
-) -> std::io::Result<Vec<TarEntry>> {
+fn collect_tar(fs: &dyn Fs, repo: &Path, use_gitignore: bool) -> std::io::Result<Vec<TarEntry>> {
     collect_tar_with(fs, repo, use_gitignore, PrefixStyle::SrcPath)
 }
 
@@ -261,7 +253,11 @@ fn ignored_tracked_file() {
 
     let entries = collect_tar(&DotRootFs { inner: DefaultFs }, &repo, true).unwrap();
 
-    assert_eq!(entries.len(), 1, "tar must only contain one element: {entries:?}");
+    assert_eq!(
+        entries.len(),
+        1,
+        "tar must only contain one element: {entries:?}"
+    );
     assert_eq!(entries[0].name, ".gitignore");
     assert_eq!(entries[0].contents, b".*\n");
 }
@@ -363,9 +359,13 @@ fn act_never_pairs_the_src_path_prefix_with_an_ignorer() {
     git(&repo, &["add", "-f", "keep.txt"]);
 
     // No ignorer, the `src_path` prefix: what act actually does.
-    let entries =
-        collect_tar_with(&DotRootFs { inner: DefaultFs }, &repo, false, PrefixStyle::SrcPath)
-            .unwrap();
+    let entries = collect_tar_with(
+        &DotRootFs { inner: DefaultFs },
+        &repo,
+        false,
+        PrefixStyle::SrcPath,
+    )
+    .unwrap();
     let names: Vec<&str> = entries
         .iter()
         .filter(|e| !e.name.starts_with(".git/"))
@@ -510,7 +510,14 @@ fn copy_collector_mirrors_the_directory_layout() {
     // `.gitignore` is tracked, so it survives its own `.*` pattern.
     git(
         &repo,
-        &["add", "-f", ".env", ".gitignore", "pkg/nested/file.txt", "link.env"],
+        &[
+            "add",
+            "-f",
+            ".env",
+            ".gitignore",
+            "pkg/nested/file.txt",
+            "link.env",
+        ],
     );
 
     let dest = dir.path().join("dest");
