@@ -4206,7 +4206,6 @@ function startCtoxServer() {
       // Start its diagnostic recording immediately, outside acceptance runs.
       delayMs: 0,
     }, {
-
       spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
       signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
