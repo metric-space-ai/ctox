@@ -80,7 +80,7 @@ try {
     return results;
   }, { source: app.slice(start, end), capability, route });
   assert.equal(cases.length, 14);
-  console.log('Supervisor route real browser: 14 passed; authenticated command transport, no HTTP data path.');
+  console.log('Supervisor route isolated Chromium: 14 passed; real app control function, simulated session and native receipts. Installed WebRTC acceptance remains separate.');
 } finally {
   await browser.close();
 }

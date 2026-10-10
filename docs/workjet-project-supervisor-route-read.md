@@ -20,3 +20,5 @@ Both DTOs come from fixture `src/core/rxdb/tests/fixtures/workjet-supervisor-rou
 `actual` is explicitly null in the current native reader and is required to remain null at the Shell boundary. The reserved future producer type cannot itself prove execution; the private attempts column is deliberately never queried. A positive producer requires its actual admitted native controller, turn and holder receipts.
 
 No selected Luma preserves Monday's instance-default path; this read never starts a model or worker. An unavailable selected route is reported honestly, and must not be displayed as a successful instance-default execution.
+
+The isolated Chromium regression executes the real app control function and helper with simulated session state and native receipts. It checks scope/receipt validation and authority changes; it does not prove an installed authenticated guest, a physical WebRTC connection or a model turn. Installed Workjet acceptance must establish those separately.
