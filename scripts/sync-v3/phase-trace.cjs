@@ -11,6 +11,18 @@ function installPhaseTrace() {
   trace.mark('boot');
   globalThis.__syncV3BootAt = trace.bootAt;
   trace.drain = async () => { while (pending.size) await Promise.all([...pending]); };
+  trace.pairsFor = stats => {
+    const selected = new Set([...stats.values()].filter(item => item.type === 'transport').map(item => item.selectedCandidatePairId).filter(Boolean));
+    const pairs = [];
+    for (const entry of stats.values()) if (entry.type === 'candidate-pair' && entry.state === 'succeeded'
+      && (selected.size ? selected.has(entry.id) : entry.nominated)) {
+      const remote = stats.get(entry.remoteCandidateId);
+      pairs.push({ currentRoundTripTimeMs: Number.isFinite(entry.currentRoundTripTime) ? entry.currentRoundTripTime * 1000 : null,
+        remoteAddress: remote?.address || remote?.ip || null, remotePort: remote?.port || null,
+        bytesReceived: entry.bytesReceived, bytesSent: entry.bytesSent });
+    }
+    return pairs;
+  };
   const logical = (payload, direction, channel, at, transfer = null) => {
     const envelope = payload?.params?.[0] || {};
     const rows = Array.isArray(envelope) ? envelope : [];

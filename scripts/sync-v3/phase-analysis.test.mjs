@@ -46,6 +46,13 @@ test('observer preserves send behavior and excludes credential/document payloads
     assert.equal(channel.send(JSON.stringify({ id: 'a', method: 'ctoxProtocol', params: [{ credential: 'must-not-survive', padding: 'private-doc' }] })), 123);
     assert.throws(() => channel.send('throw'), /native-send-failed/);
     await globalThis.__syncV3Trace.drain();
+    const selectedStats = new Map([
+      ['transport', { type: 'transport', selectedCandidatePairId: 'selected' }],
+      ['selected', { id: 'selected', type: 'candidate-pair', state: 'succeeded', nominated: false, remoteCandidateId: 'remote' }],
+      ['unrelated', { id: 'unrelated', type: 'candidate-pair', state: 'succeeded', nominated: true, remoteCandidateId: 'foreign' }],
+      ['remote', { address: '127.0.0.1', port: 1234 }], ['foreign', { address: '198.51.100.1', port: 5678 }],
+    ]);
+    assert.deepEqual(globalThis.__syncV3Trace.pairsFor(selectedStats).map(pair => pair.remotePort), [1234]);
     const serialized = JSON.stringify(globalThis.__syncV3Trace);
     assert.ok(!serialized.includes('must-not-survive') && !serialized.includes('private-doc'));
     assert.equal(globalThis.__syncV3Trace.events.filter(event => event.kind === 'logical').length, 1);

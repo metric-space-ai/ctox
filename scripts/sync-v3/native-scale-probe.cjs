@@ -123,6 +123,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       if (!bridge?.state?.peer?.request) throw Error('Actual replication request seam missing');
       const peer = bridge.state.peer;
       const original = peer.request;
+      const requestProofs = [], proofJobs = [];
       try {
         for (let index = 0; index < 5; index++) {
           const marker = `s0-write-${index}`;
@@ -136,10 +137,21 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           peer.request = async function (...args) {
             const selected = args[1] === 'masterWrite' && args[4] === leadName
               && JSON.stringify(args[2]).includes(marker);
+            const connection = selected ? peer.connections?.get?.(args[0]) : null;
+            if (selected) {
+              const observedAt = performance.now();
+              const job = Promise.resolve(connection?.peer?.getStats?.()).then(stats => {
+                requestProofs.push({ sample: index, method: args[1], peerId: args[0], observedAt,
+                  channelState: connection?.channel?.readyState || null,
+                  pairs: stats ? trace.pairsFor(stats) : [] });
+              });
+              job.catch(() => {}); proofJobs.push(job);
+            }
             try {
               const requestStartedAt = performance.now();
               const response = await original.apply(this, args);
               if (selected) {
+                if (!connection || peer.connections?.get?.(args[0]) !== connection) rejectAck(Error('Accepted write changed its actual request connection'));
                 attempts.push({ startAt: requestStartedAt, endAt: performance.now(), conflicts: Array.isArray(response) ? response.length : null });
                 if (!Array.isArray(response)) rejectAck(Error('Native write did not return the canonical ACK/conflict result'));
                 else if (response.length) conflictReplies++; // Let the real engine reconcile and retry.
@@ -160,16 +172,11 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           samples.push({ sample: index, localCommitMs: localMs, nativeAckMs, conflictReplies, sqliteVerified: true, attempts });
         }
       } finally { peer.request = original; }
-      const pairs = [];
-      for (const pc of globalThis.__syncV3Rtc) {
-        const stats = await pc.getStats();
-        for (const entry of stats.values()) if (entry.type === 'candidate-pair' && entry.state === 'succeeded' && entry.nominated) {
-          const remote = stats.get(entry.remoteCandidateId);
-          pairs.push({ currentRoundTripTimeMs: Number.isFinite(entry.currentRoundTripTime) ? entry.currentRoundTripTime * 1000 : null,
-            remoteAddress: remote?.address || remote?.ip || null, remotePort: remote?.port || null,
-            bytesReceived: entry.bytesReceived, bytesSent: entry.bytesSent });
-        }
-      }
+      await Promise.all(proofJobs);
+      const pairs = requestProofs.flatMap(proof => proof.pairs);
+      globalThis.__syncV3RequestProofDiagnostic = requestProofs;
+      if (requestProofs.length !== samples.reduce((count, sample) => count + sample.attempts.length, 0)
+        || requestProofs.some(proof => proof.channelState !== 'open' || !proof.pairs.length)) throw Error('Actual write request relay proof incomplete');
       if (!pairs.length || pairs.some(pair => pair.remoteAddress !== '127.0.0.1' || !Number.isInteger(pair.remotePort))) throw Error('No selected loopback relay candidate proof');
       await trace.drain();
       if (trace.errors.length) throw Error(`Phase trace failed: ${JSON.stringify(trace.errors)}`);
@@ -177,7 +184,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
         coldPageToVisibleMs: visibleAt - globalThis.__syncV3BootAt,
         collectionSetupToVisibleMs: visibleAt - collectionReadyAt,
         queryToVisibleMs: visibleAt - queryStarted, visibleRows: rows.length,
-        writes: samples, selectedCandidatePairs: pairs, installedAcceptance: false,
+        writes: samples, selectedCandidatePairs: pairs, requestConnectionProofs: requestProofs, installedAcceptance: false,
         phaseTrace: { version: trace.version, bootAt: trace.bootAt, marks: trace.marks, events: trace.events, errors: trace.errors },
         visibleDefinition: '20 native demand-query rows painted in isolated shell overlay',
         writeDefinition: 'local upsert to exact native masterWrite ACK, independently verified in SQLite' };
@@ -186,7 +193,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
     const partial = await page.evaluate(async () => {
       const trace = globalThis.__syncV3Trace; await trace?.drain?.();
       return { marks: trace?.marks || {}, events: trace?.events || [], errors: trace?.errors || [],
-        queryWindow: globalThis.__syncV3WindowDiagnostic || null };
+        queryWindow: globalThis.__syncV3WindowDiagnostic || null, requestProofs: globalThis.__syncV3RequestProofDiagnostic || null };
     }).catch(() => ({ unavailable: true }));
     fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-phase-failure.json'), JSON.stringify({ error: error.message, ...partial }, null, 2) + '\n');
     throw error;
