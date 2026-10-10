@@ -64,6 +64,11 @@ use reply_capture::DirectSessionReplyCapture;
 #[path = "direct_session_public_text.rs"]
 mod public_text;
 
+#[cfg(unix)]
+pub(crate) fn filter_native_message_text(text: &str, completed: bool) -> String {
+    public_text::filter_native_message_text(text, completed)
+}
+
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";

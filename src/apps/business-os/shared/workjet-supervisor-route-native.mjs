@@ -1,11 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-import { validateSupervisorRouteDisplayValue } from './workjet-supervisor-route-display-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
+import { validateSupervisorRouteDisplayValue } from './workjet-supervisor-route-display-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+
+import { validateSupervisorRouteComputationValue } from './workjet-supervisor-route-computation-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
 
 const ROUTE_READ = 'project.supervisor.route.read.v1';
 const ROUTE_CAPABILITIES = 'project.supervisor.route.capabilities.v1';
 const ROUTE_SCHEMA = 'ctox.workjet.supervisor.route-display.v1';
 const CAPABILITIES_SCHEMA = 'ctox.workjet.supervisor.route-capabilities.v1';
+const ROUTE_ACTIONS = [ROUTE_READ, ROUTE_CAPABILITIES, 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2'];
 
 function routeScopeText(value, label) {
   if (typeof value !== 'string' || !value || value !== value.trim()
@@ -19,17 +22,19 @@ function routeScopeText(value, label) {
 export async function requestSupervisorRoute(dispatch, request, actor, assertCurrent) {
   if (!request || typeof request !== 'object' || Array.isArray(request)
     || Object.keys(request).some(key => !['action', 'commandId', 'projectId', 'threadId'].includes(key))
-    || ![ROUTE_READ, ROUTE_CAPABILITIES].includes(request.action)) {
+    || !ROUTE_ACTIONS.includes(request.action)) {
     throw new TypeError('Invalid Supervisor route request.');
   }
   const commandId = routeScopeText(request.commandId, 'commandId');
   const projectId = routeScopeText(request.projectId, 'projectId');
   const threadId = routeScopeText(request.threadId, 'threadId');
   routeScopeText(actor?.id, 'authenticated Owner');
-  const capabilities = request.action === ROUTE_CAPABILITIES;
-  const commandType = capabilities
-    ? 'ctox.workjet.project.supervisor.route.capabilities.v1'
-    : 'ctox.workjet.project.supervisor.route.read.v1';
+  const version = request.action.endsWith('.v2') ? 'v2' : 'v1';
+  const capabilities = request.action.includes('.capabilities.');
+  const commandType = 'ctox.workjet.' + request.action;
+  const routeSchema = version === 'v2' ? 'ctox.workjet.supervisor.route-display.v2' : ROUTE_SCHEMA;
+  const capabilitiesSchema = version === 'v2' ? 'ctox.workjet.supervisor.route-capabilities.v2' : CAPABILITIES_SCHEMA;
+  const validate = version === 'v2' ? validateSupervisorRouteComputationValue : validateSupervisorRouteDisplayValue;
   const payload = { project_id: projectId, thread_id: threadId };
   assertCurrent();
   const receipt = await dispatch({
@@ -52,13 +57,13 @@ export async function requestSupervisorRoute(dispatch, request, actor, assertCur
     throw new Error('Supervisor route returned an unmatched native receipt.');
   }
   const type = capabilities ? 'SupervisorRouteCapabilities' : 'SupervisorRouteDisplay';
-  if (!validateSupervisorRouteDisplayValue(type, result).ok) {
+  if (!validate(type, result).ok) {
     throw new Error('Invalid native Supervisor route DTO.');
   }
-  if (result.schema !== (capabilities ? CAPABILITIES_SCHEMA : ROUTE_SCHEMA)
-    || (capabilities && (result.read_schema !== ROUTE_SCHEMA
-      || result.read_command !== 'ctox.workjet.project.supervisor.route.read.v1'))
-    || (!capabilities && result.actual !== null)) {
+  if (result.schema !== (capabilities ? capabilitiesSchema : routeSchema)
+    || (capabilities && (result.read_schema !== routeSchema
+      || result.read_command !== 'ctox.workjet.project.supervisor.route.read.' + version))
+    || (!capabilities && version === 'v1' && result.actual !== null)) {
     throw new Error('Supervisor route returned an unsupported or unproved producer contract.');
   }
   return {

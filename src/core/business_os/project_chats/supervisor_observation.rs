@@ -43,11 +43,14 @@ pub(super) fn page(
 ) -> anyhow::Result<wire::ExecutionPage> {
     request.validate().map_err(anyhow::Error::msg)?;
     let include_public_text = request.include_public_text == Some(true) && cfg!(unix);
-    let event_kinds = if include_public_text {
-        format!("{EVENT_KINDS},'worker.assistant_text'")
-    } else {
-        EVENT_KINDS.to_owned()
-    };
+    let include_native_text = request.include_native_message_text == Some(true) && cfg!(unix);
+    let mut event_kinds = EVENT_KINDS.to_owned();
+    if include_public_text {
+        event_kinds.push_str(",'worker.assistant_text'");
+    }
+    if include_native_text {
+        event_kinds.push_str(",'worker.native_message_text'");
+    }
     let command_id = owned_turn["command_id"]
         .as_str()
         .context("authorized native command missing")?;
@@ -62,6 +65,8 @@ pub(super) fn page(
         next_cursor: None,
         has_more: false,
         public_text_supported: (request.include_public_text == Some(true)).then_some(cfg!(unix)),
+        native_message_text_supported: (request.include_native_message_text == Some(true))
+            .then_some(cfg!(unix)),
     };
     let mut conn = Connection::open_with_flags(
         crate::paths::core_db(root),
@@ -183,17 +188,27 @@ pub(super) fn page(
           json_extract(metadata_json,'$.tool.name'),json_extract(metadata_json,'$.tool.call_id'),
           json_extract(metadata_json,'$.tool.success'),
           CASE WHEN ?5=1 AND event_kind='worker.assistant_text'
-            THEN json_extract(metadata_json,'$.public_text') ELSE NULL END
+            THEN json_extract(metadata_json,'$.public_text') ELSE NULL END,
+          CASE WHEN ?6=1 AND event_kind='worker.native_message_text'
+            THEN json_extract(metadata_json,'$.native_message_text') ELSE NULL END
         FROM ctox_harness_flow_events WHERE message_key=?1
           AND json_extract(metadata_json,'$.attempt_id')=?2 AND rowid>?3
           AND (COALESCE(json_extract(metadata_json,'$.cockpit_eligible'),1)=1
-            OR (?5=1 AND event_kind='worker.assistant_text'))
+            OR (?5=1 AND event_kind='worker.assistant_text')
+            OR (?6=1 AND event_kind='worker.native_message_text'))
           AND event_kind IN ({event_kinds}) ORDER BY rowid LIMIT ?4"
     );
     let mut statement = tx.prepare(&sql)?;
     let rows = statement
         .query_map(
-            rusqlite::params![task_id, attempt_id, after, limit + 1, include_public_text],
+            rusqlite::params![
+                task_id,
+                attempt_id,
+                after,
+                limit + 1,
+                include_public_text,
+                include_native_text
+            ],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -205,13 +220,24 @@ pub(super) fn page(
                     r.get::<_, Option<String>>(6)?,
                     r.get::<_, Option<bool>>(7)?,
                     r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
                 ))
             },
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     result.has_more = rows.len() > limit as usize;
-    for (sequence, id, kind, title, created, tool_name, call_id, success, public_text) in
-        rows.into_iter().take(limit as usize)
+    for (
+        sequence,
+        id,
+        kind,
+        title,
+        created,
+        tool_name,
+        call_id,
+        success,
+        public_text,
+        native_text,
+    ) in rows.into_iter().take(limit as usize)
     {
         let public_text: Option<wire::PublicAssistantText> = public_text
             .as_deref()
@@ -226,6 +252,14 @@ pub(super) fn page(
                 "public assistant text has an unsupported phase"
             );
         }
+        let native_message_text: Option<wire::NativeMessageText> = native_text
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        ensure!(
+            kind != "worker.native_message_text" || native_message_text.is_some(),
+            "native public message chunk missing"
+        );
         result.events.push(wire::ExecutionEvent {
             id,
             sequence: u64::try_from(sequence)?,
@@ -236,6 +270,7 @@ pub(super) fn page(
             call_id,
             success,
             public_text,
+            native_message_text,
         });
     }
     result.next_cursor = result

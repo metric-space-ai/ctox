@@ -88,6 +88,118 @@ fn public_text_is_opt_in_and_backfills_exact_native_chunks_without_private_progr
     ));
     Ok(())
 }
+
+#[test]
+fn native_message_progress_is_opt_in_attempt_scoped_and_backfills_after_reopen(
+) -> anyhow::Result<()> {
+    let (root, turn) = fixture()?;
+    let attempt = "worker-attempt:native-message";
+    let start = event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.turn_started",
+        json!({}),
+    )?;
+    let chunk = json!({"execution_key":"native-execution","model_operation_id":"native-op",
+        "native_message_id":"msg_native","model":"claude-opus-5-5","upstream_request_id":"request_native",
+        "offset":0,"text":"Actual public message 🦊","completed":false});
+    let first_chunk = event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.native_message_text",
+        json!({"native_message_text":chunk,"cockpit_eligible":false}),
+    )?;
+    for request in [
+        json!({"attempt_id":attempt}),
+        json!({"attempt_id":attempt,"include_public_text":true}),
+    ] {
+        let old = watch(
+            root.path(),
+            &turn,
+            &uuid::Uuid::new_v4().to_string(),
+            Some(request),
+        )?;
+        assert_eq!(page(&old)["events"].as_array().unwrap().len(), 1);
+        assert_eq!(page(&old)["events"][0]["id"], start);
+        assert!(page(&old).get("native_message_text_supported").is_none());
+        assert!(page(&old)["events"][0].get("native_message_text").is_none());
+    }
+    let first = watch(
+        root.path(),
+        &turn,
+        "native-page-one",
+        Some(json!({"attempt_id":attempt,"include_native_message_text":true,"limit":1})),
+    )?;
+    assert_eq!(page(&first)["native_message_text_supported"], cfg!(unix));
+    if !cfg!(unix) {
+        return Ok(());
+    }
+    let next = watch(
+        root.path(),
+        &turn,
+        "native-page-two",
+        Some(
+            json!({"attempt_id":attempt,"include_native_message_text":true,"limit":1,
+            "cursor":page(&first)["next_cursor"]}),
+        ),
+    )?;
+    assert_eq!(page(&next)["events"][0]["id"], first_chunk);
+    assert_eq!(page(&next)["events"][0]["native_message_text"], chunk);
+    assert!(page(&next)["events"][0].get("public_text").is_none());
+    assert!(page(&next)["events"][0]["native_message_text"]
+        .get("turn_id")
+        .is_none());
+    let reopened = watch(
+        root.path(),
+        &turn,
+        "native-reopened",
+        Some(json!({"attempt_id":attempt,"include_native_message_text":true})),
+    )?;
+    assert_eq!(page(&reopened)["events"][1], page(&next)["events"][0]);
+    assert!(!serde_json::to_string(page(&reopened))?.contains("PRIVATE RAW REASONING"));
+    let other = event(
+        root.path(),
+        &turn,
+        "other-attempt",
+        "worker.native_message_text",
+        json!({"native_message_text":chunk,"cockpit_eligible":false}),
+    )?;
+    let selected = watch(
+        root.path(),
+        &turn,
+        "native-selected",
+        Some(json!({"attempt_id":attempt,"include_native_message_text":true})),
+    )?;
+    assert!(!serde_json::to_string(page(&selected))?.contains(&other));
+    rejected(watch(
+        root.path(),
+        &turn,
+        "native-cross-attempt",
+        Some(
+            json!({"attempt_id":"other-attempt","include_native_message_text":true,
+            "cursor":page(&next)["next_cursor"]}),
+        ),
+    ));
+    let mut malformed = chunk;
+    malformed["turn_id"] = json!("sdk-is-not-native");
+    event(
+        root.path(),
+        &turn,
+        attempt,
+        "worker.native_message_text",
+        json!({"native_message_text":malformed,"cockpit_eligible":false}),
+    )?;
+    rejected(watch(
+        root.path(),
+        &turn,
+        "native-invalid",
+        Some(json!({"attempt_id":attempt,"include_native_message_text":true})),
+    ));
+    Ok(())
+}
+
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 fn fixture() -> anyhow::Result<(TempDir, Value)> {
     let root = super::supervisor_turns::fixture()?;
@@ -524,6 +636,7 @@ fn event_reader_uses_a_read_snapshot_while_a_core_writer_holds_an_uncommitted_tr
             cursor: None,
             limit: None,
             include_public_text: None,
+            include_native_message_text: None,
         },
     )?;
     assert_eq!(observed.events.len(), 1);
