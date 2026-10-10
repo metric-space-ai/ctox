@@ -1,29 +1,29 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-provider-account-contract';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-provider-account-contract';
-import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-provider-account-contract';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-provider-account-contract';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-provider-account-contract';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-provider-account-contract';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-provider-account-contract';
-import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-provider-account-contract';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/app-lifecycle.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -32,20 +32,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/permissions.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261010-shell-v2-provider-account-contract';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/branding.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/presentation.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -56,9 +56,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-provider-account-contract';
-import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -66,27 +66,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/maintenance-state.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/workspace-session.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/taskbar-pins.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261010-shell-v2-provider-account-contract';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-provider-account-contract';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-provider-account-contract';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/workjet-theme.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -94,14 +94,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261010-shell-v2-provider-account-contract';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-provider-account-contract';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-provider-account-contract';
+} from './shared/startup-deadlines.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-provider-account-contract';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
+} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-supervisor-native-message-progress';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -122,7 +122,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261010-shell-v2-provider-account-contract';
+const APP_BUILD = '20261010-shell-v2-supervisor-native-message-progress';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13835,6 +13835,7 @@ function boundedWorkjetExecutionRequest(value) {
     } }),
     ...(value.limit == null ? {} : { limit: value.limit }),
     ...(value.include_public_text == null ? {} : { include_public_text: value.include_public_text }),
+    ...(value.include_native_message_text == null ? {} : { include_native_message_text: value.include_native_message_text }),
   };
 }
 

@@ -36,6 +36,10 @@
         "include_public_text": {
           "type": "bool",
           "optional": true
+        },
+        "include_native_message_text": {
+          "type": "bool",
+          "optional": true
         }
       }
     },
@@ -151,6 +155,10 @@
         "public_text": {
           "type": "PublicAssistantText",
           "optional": true
+        },
+        "native_message_text": {
+          "type": "NativeMessageText",
+          "optional": true
         }
       }
     },
@@ -182,6 +190,10 @@
           "type": "bool"
         },
         "public_text_supported": {
+          "type": "bool",
+          "optional": true
+        },
+        "native_message_text_supported": {
           "type": "bool",
           "optional": true
         }
@@ -268,6 +280,46 @@
           "type": "bool"
         }
       }
+    },
+    "NativeMessageText": {
+      "fields": {
+        "execution_key": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "model_operation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "native_message_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "upstream_request_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "offset": {
+          "type": "u64",
+          "maximum": 65536
+        },
+        "text": {
+          "type": "String",
+          "max_chars": 4096
+        },
+        "completed": {
+          "type": "bool"
+        }
+      }
     }
   },
   "commands": {
@@ -345,7 +397,7 @@
     {
       "type": "ExecutionPageRequest",
       "value": {
-        "attempt_id": "﻿"
+        "attempt_id": "\ufeff"
       }
     },
     {
@@ -370,6 +422,25 @@
         "thread_key": "business-os/threads/cc6cfe73-2824-4360-9daf-3b3efb079931",
         "turns": [],
         "has_more": false
+      }
+    },
+    {
+      "type": "NativeMessageText",
+      "value": {
+        "execution_key": "native-command",
+        "model_operation_id": "native-model-operation",
+        "native_message_id": "native-message",
+        "model": "claude-opus-5-5",
+        "upstream_request_id": "native-request",
+        "offset": 0,
+        "text": "Actual native text \ud83e\udd8a",
+        "completed": false
+      }
+    },
+    {
+      "type": "ExecutionPageRequest",
+      "value": {
+        "include_native_message_text": true
       }
     }
   ],
@@ -452,7 +523,7 @@
     {
       "type": "ExecutionPageRequest",
       "value": {
-        "attempt_id": ""
+        "attempt_id": "\u0085"
       }
     },
     {
@@ -485,6 +556,59 @@
       "value": {
         "before_created_at_ms": 1,
         "before_command_id": ""
+      }
+    },
+    {
+      "type": "NativeMessageText",
+      "value": {
+        "execution_key": "native-command",
+        "model_operation_id": "native-model-operation",
+        "native_message_id": "native-message",
+        "model": "claude-opus-5-5",
+        "upstream_request_id": "native-request",
+        "offset": 0,
+        "text": "Actual native text \ud83e\udd8a",
+        "completed": false,
+        "turn_id": "inferred-sdk-turn"
+      }
+    },
+    {
+      "type": "NativeMessageText",
+      "value": {
+        "execution_key": "native-command",
+        "model_operation_id": "native-model-operation",
+        "native_message_id": "native-message",
+        "model": "claude-opus-5-5",
+        "upstream_request_id": "native-request",
+        "offset": 65537,
+        "text": "Actual native text \ud83e\udd8a",
+        "completed": false
+      }
+    },
+    {
+      "type": "NativeMessageText",
+      "value": {
+        "execution_key": "native-command",
+        "model_operation_id": "native-model-operation",
+        "native_message_id": "native-message",
+        "model": "claude-opus-5-5",
+        "upstream_request_id": "native-request",
+        "offset": 0,
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "completed": false
+      }
+    },
+    {
+      "type": "NativeMessageText",
+      "value": {
+        "execution_key": "native-command",
+        "model_operation_id": "native-model-operation",
+        "native_message_id": "",
+        "model": "claude-opus-5-5",
+        "upstream_request_id": "native-request",
+        "offset": 0,
+        "text": "Actual native text \ud83e\udd8a",
+        "completed": false
       }
     }
   ]
