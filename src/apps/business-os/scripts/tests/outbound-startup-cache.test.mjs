@@ -17,13 +17,13 @@ const lists = {
 };
 
 test('a snapshot belongs to one user on one host', () => {
-  assert.equal(startupCacheScope({ host: 'thesen.ctox.dev', userId: 'u1' }), 'thesen.ctox.dev|u1');
+  assert.equal(startupCacheScope({ host: 'tenant.example.test', userId: 'u1' }), 'tenant.example.test|u1');
   assert.notEqual(
-    startupCacheScope({ host: 'thesen.ctox.dev', userId: 'u1' }),
-    startupCacheScope({ host: 'thesen.ctox.dev', userId: 'u2' }),
+    startupCacheScope({ host: 'tenant.example.test', userId: 'u1' }),
+    startupCacheScope({ host: 'tenant.example.test', userId: 'u2' }),
   );
   // Without a known user nothing is stored or read.
-  assert.equal(startupCacheScope({ host: 'thesen.ctox.dev', userId: '' }), '');
+  assert.equal(startupCacheScope({ host: 'tenant.example.test', userId: '' }), '');
 });
 
 test('only a recent snapshot with leads is shown', () => {
