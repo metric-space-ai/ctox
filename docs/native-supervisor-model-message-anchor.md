@@ -2,7 +2,7 @@
 
 The selected Supervisor's native model proxy records response_message_id from the
 successful upstream message_start.message.id or buffered message.id, alongside
-the separately observed response_model. Outgoing request IDs, the requested
+the separately observed response_model and native operation_kind (messages or count_tokens). Outgoing request IDs, the requested
 model and Source SDK correlation are never copied into this field.
 
 A conflicting response message identity fails the native observation. Content

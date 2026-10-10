@@ -17,7 +17,7 @@ const MAX_OPERATIONS: usize = 64;
 const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native_model_requests (
  operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
  controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
- state TEXT NOT NULL, requested_model TEXT, response_model TEXT, response_message_id TEXT, upstream_request_id TEXT, http_status INTEGER,
+ state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, upstream_request_id TEXT, http_status INTEGER,
  created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
 
 fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
@@ -26,10 +26,12 @@ fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
         .prepare("PRAGMA table_info(workjet_supervisor_native_model_requests)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    if !columns.iter().any(|column| column == "response_message_id") {
-        core.execute_batch(
-            "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN response_message_id TEXT",
-        )?;
+    for column in ["response_message_id", "operation_kind"] {
+        if !columns.iter().any(|existing| existing == column) {
+            core.execute_batch(&format!(
+                "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN {column} TEXT"
+            ))?;
+        }
     }
     Ok(())
 }
@@ -379,10 +381,14 @@ fn prepare_invocation(
     session.controller.with_current(|_,core,_| {
         ensure_model_schema(core)?;
         core.execute("INSERT INTO workjet_supervisor_native_model_requests
-            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms)
-            VALUES (?1,?2,?3,?4,?5,?6,'accepted',?7)",
+            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms,operation_kind)
+            VALUES (?1,?2,?3,?4,?5,?6,'accepted',?7,?8)",
             params![id,session.controller.execution_key(),session.controller.lease.lease_hash,
-                session.controller.controller_id(),correlation,hash,now_ms()])?;
+                session.controller.controller_id(),correlation,hash,now_ms(),
+                match op {
+                    wire::SourceModelOperation::Messages => "messages",
+                    wire::SourceModelOperation::CountTokens => "count_tokens",
+                }])?;
         Ok(())
     })?;
     let job = Arc::new(ModelJob {
@@ -629,12 +635,16 @@ mod tests {
         ensure_model_schema(&core)?;
         ensure_model_schema(&core)?;
         let row = core.query_row(
-            "SELECT sdk_correlation,response_message_id FROM workjet_supervisor_native_model_requests
+            "SELECT sdk_correlation,response_message_id,operation_kind FROM workjet_supervisor_native_model_requests
              WHERE operation_id='existing'",
             [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?
+            )),
         )?;
-        assert_eq!(row, ("requested-only".into(), None));
+        assert_eq!(row, ("requested-only".into(), None, None));
         Ok(())
     }
 
