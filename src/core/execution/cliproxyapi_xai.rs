@@ -179,7 +179,8 @@ impl CtoxXaiLogin {
                     }
                     login.progress = match result {
                         Some(Ok(Ok(bundle))) if !cancel.is_cancelled() && current() => {
-                            if authorize_commit().is_ok() && save_bundle(&root, &bundle).is_ok() {
+                            if authorize_commit().is_ok() && install_bundle(&root, &bundle).is_ok()
+                            {
                                 XaiLoginProgress::Accepted
                             } else {
                                 XaiLoginProgress::Failed
@@ -251,6 +252,115 @@ impl Drop for CtoxXaiLogin {
         }
     }
 }
+
+/// Direct local CLI, using the existing host-operator/root-key boundary.
+/// This is not a Business OS actor or a remote authorization endpoint.
+pub fn handle_operator_login(root: &Path) -> anyhow::Result<()> {
+    let controller = CtoxXaiLogin::new(root)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let phase = runtime.block_on(operator_login(
+        &controller,
+        |device| {
+            use std::io::Write;
+            let mut output = std::io::stdout().lock();
+            writeln!(output, "{}", serde_json::to_string(device)?)?;
+            output.flush()?;
+            Ok(())
+        },
+        operator_shutdown(),
+    ))?;
+    let status = match phase {
+        XaiLoginProgress::Pending => "pending",
+        XaiLoginProgress::Accepted => "accepted",
+        XaiLoginProgress::Cancelled => "cancelled",
+        XaiLoginProgress::Failed => "failed",
+    };
+    println!(
+        "{}",
+        serde_json::json!({"phase":status,"account_id":ACCOUNT_ID})
+    );
+    anyhow::ensure!(
+        phase == XaiLoginProgress::Accepted,
+        "Grok login did not complete"
+    );
+    Ok(())
+}
+
+async fn operator_shutdown() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await
+}
+
+async fn operator_login(
+    controller: &CtoxXaiLogin,
+    mut publish: impl FnMut(&XaiDeviceLogin) -> anyhow::Result<()>,
+    shutdown: impl std::future::Future<Output = std::io::Result<()>>,
+) -> anyhow::Result<XaiLoginProgress> {
+    tokio::pin!(shutdown);
+    let device = tokio::select! {
+        result = tokio::time::timeout(Duration::from_secs(35), controller.start()) =>
+            result.map_err(|_| anyhow::anyhow!("Grok device authorization timed out"))??,
+        result = &mut shutdown => {
+            result?;
+            controller.cancel_all();
+            return Ok(XaiLoginProgress::Cancelled);
+        }
+    };
+    publish(&device)?;
+    let expires = Duration::from_secs(device.expires_in.clamp(1, 1800) as u64);
+    let outcome = async {
+        loop {
+            let phase = controller.poll(&device.login_id)?;
+            if phase != XaiLoginProgress::Pending {
+                return Ok::<_, anyhow::Error>(phase);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    };
+    tokio::select! {
+        result = tokio::time::timeout(expires, outcome) => match result {
+            Ok(result) => result,
+            Err(_) => {
+                controller.cancel(&device.login_id)?;
+                anyhow::bail!("Grok device authorization expired");
+            }
+        },
+        result = &mut shutdown => {
+            result?;
+            controller.cancel(&device.login_id)?;
+            Ok(XaiLoginProgress::Cancelled)
+        }
+    }
+}
+
+pub fn handle_operator_models(root: &Path) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let models = runtime
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(8), discover_models(root)).await
+        })
+        .map_err(|_| anyhow::anyhow!("Grok catalog request timed out"))?;
+    // Never print an upstream error body, credential or token.
+    let models = models.map_err(|_| anyhow::anyhow!("Grok catalog request failed"))?;
+    println!(
+        "{}",
+        serde_json::json!({"account_id":ACCOUNT_ID,"models":models})
+    );
+    Ok(())
+}
 struct LoginTransport(native_http::Client);
 impl XaiHttpTransport for LoginTransport {
     fn execute<'a>(
@@ -310,8 +420,8 @@ struct Stored {
     expires_at: Option<u64>,
     token_endpoint: String,
 }
-fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
-    let mut record = Stored {
+fn stored_bundle(bundle: &AuthBundle) -> Stored {
+    Stored {
         access: bundle.token_data.access_token().expose_secret().into(),
         refresh: bundle
             .token_data
@@ -327,7 +437,29 @@ fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs()),
         token_endpoint: bundle.token_endpoint.clone(),
-    };
+    }
+}
+// Device authorization adds an account. It must never replace an account
+// installed by another native controller or local operator in the meantime.
+fn install_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
+    let encoded = Zeroizing::new(serde_json::to_string(&stored_bundle(bundle))?);
+    let committed = crate::secrets::compare_and_write_secret_records(
+        root,
+        &[(SCOPE, NAME, None)],
+        &[crate::secrets::SecretRecordWrite {
+            scope: SCOPE,
+            name: NAME,
+            value: &encoded,
+            description: Some("Grok subscription OAuth"),
+            metadata: serde_json::json!({"provider":"xai"}),
+        }],
+        &[],
+    )?;
+    anyhow::ensure!(committed, "Grok subscription already installed");
+    Ok(())
+}
+fn save_bundle(root: &Path, bundle: &AuthBundle) -> anyhow::Result<()> {
+    let mut record = stored_bundle(bundle);
     // Refresh responses may omit an unchanged refresh/identity token.
     if let Ok(previous) = crate::secrets::read_secret_value(root, SCOPE, NAME) {
         let previous = Zeroizing::new(previous);

@@ -6934,10 +6934,11 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
-                    crate::business_os::mcp_channel::require_project_supervisor_executor(
-                        &root,
-                        session_options.business_os_mcp_command_session.as_deref(),
-                    )?;
+                    let selected_supervisor_lease =
+                        crate::business_os::mcp_channel::capture_project_supervisor_lease(
+                            &root,
+                            session_options.business_os_mcp_command_session.as_deref(),
+                        )?;
                     // This branch executes admitted work. Finalization recovery above
                     // never allocates a replacement run or invokes the model again.
                     lcm::run_register_worker_run(
@@ -6957,6 +6958,16 @@ fn start_prompt_worker(
                         worker_activity.lease_worker_id.as_deref(),
                         execution_prompt,
                     )?;
+                    if let Some(lease) = selected_supervisor_lease {
+                        // Keep this admitted worker, heartbeat, review and capacity.
+                        // The selected Source is never an instance-default fallback.
+                        let offer =
+                            crate::business_os::mcp_channel::NativeSupervisorSourceOffer::open(
+                                lease,
+                                &execution_prompt,
+                            )?;
+                        return offer.wait_for_native_result();
+                    }
                     if let Some(command_id) =
                         metadata_string(&job.queue_task_metadata, "business_os_command_id")
                     {

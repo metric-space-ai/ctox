@@ -8,7 +8,7 @@ use crate::execution::cliproxyapi_claude_proxy::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::Digest;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 const MAX_BODY: usize = 96 * 1024;
 const MAX_REPLY: usize = 8 * 1024 * 1024;
@@ -17,19 +17,25 @@ const MAX_OPERATIONS: usize = 64;
 const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native_model_requests (
  operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
  controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
- state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, upstream_request_id TEXT, http_status INTEGER,
+ state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, response_text TEXT, response_stop_reason TEXT, response_complete INTEGER, upstream_request_id TEXT, http_status INTEGER,
  created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
 
-fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
+pub(super) fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
     core.execute_batch(MODEL_SCHEMA)?;
     let columns = core
         .prepare("PRAGMA table_info(workjet_supervisor_native_model_requests)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for column in ["response_message_id", "operation_kind"] {
+    for (column, kind) in [
+        ("response_message_id", "TEXT"),
+        ("operation_kind", "TEXT"),
+        ("response_text", "TEXT"),
+        ("response_stop_reason", "TEXT"),
+        ("response_complete", "INTEGER"),
+    ] {
         if !columns.iter().any(|existing| existing == column) {
             core.execute_batch(&format!(
-                "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN {column} TEXT"
+                "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN {column} {kind}"
             ))?;
         }
     }
@@ -68,9 +74,58 @@ struct ResponseModelObservation {
     model: Option<String>,
     message_id: Option<String>,
     conflicting: bool,
+    text_blocks: BTreeMap<u64, String>,
+    text_bytes: usize,
+    stop_reason: Option<String>,
+    complete: bool,
 }
 impl ResponseModelObservation {
     fn value(&mut self, value: &Value) {
+        match value["type"].as_str() {
+            Some("content_block_start") if value["content_block"]["type"] == "text" => {
+                if let Some(index) = value["index"].as_u64().filter(|index| *index < 128) {
+                    if self.text_blocks.contains_key(&index) {
+                        self.conflicting = true;
+                        return;
+                    }
+                    self.text_blocks.insert(index, String::new());
+                    self.append_text(index, value["content_block"]["text"].as_str().unwrap_or(""));
+                } else {
+                    self.conflicting = true;
+                }
+                return;
+            }
+            Some("content_block_delta") if value["delta"]["type"] == "text_delta" => {
+                match (value["index"].as_u64(), value["delta"]["text"].as_str()) {
+                    (Some(index), Some(text)) => self.append_text(index, text),
+                    _ => self.conflicting = true,
+                }
+                return;
+            }
+            Some("message_delta") => {
+                if let Some(reason) = value["delta"]["stop_reason"].as_str() {
+                    if matches!(
+                        reason,
+                        "end_turn"
+                            | "stop_sequence"
+                            | "tool_use"
+                            | "max_tokens"
+                            | "pause_turn"
+                            | "refusal"
+                    ) {
+                        self.stop_reason = Some(reason.to_owned());
+                    } else {
+                        self.conflicting = true;
+                    }
+                }
+                return;
+            }
+            Some("message_stop") => {
+                self.complete = self.message_id.is_some();
+                return;
+            }
+            _ => {}
+        }
         let message = if value["type"] == "message_start" {
             &value["message"]
         } else {
@@ -102,6 +157,57 @@ impl ResponseModelObservation {
                 self.message_id = Some(id.to_owned());
             }
         }
+        if value["type"] == "message" {
+            if let Some(content) = value["content"]
+                .as_array()
+                .filter(|content| content.len() <= 128)
+            {
+                for (index, block) in content.iter().enumerate() {
+                    if block["type"] != "text" {
+                        continue;
+                    }
+                    if self.text_blocks.contains_key(&(index as u64)) {
+                        self.conflicting = true;
+                        break;
+                    }
+                    self.text_blocks.insert(index as u64, String::new());
+                    match block["text"].as_str() {
+                        Some(text) => self.append_text(index as u64, text),
+                        None => self.conflicting = true,
+                    }
+                }
+                self.stop_reason = value["stop_reason"].as_str().map(str::to_owned);
+                self.complete = self.message_id.is_some() && self.stop_reason.is_some();
+            }
+        }
+    }
+    fn append_text(&mut self, index: u64, text: &str) {
+        if self.complete
+            || self.message_id.is_none()
+            || self.text_bytes.saturating_add(text.len()) > 64 * 1024
+        {
+            self.conflicting = true;
+            return;
+        }
+        let Some(block) = self.text_blocks.get_mut(&index) else {
+            self.conflicting = true;
+            return;
+        };
+        block.push_str(text);
+        self.text_bytes += text.len();
+    }
+    fn completed_text(&self) -> Option<String> {
+        if !self.complete
+            || self.conflicting
+            || !matches!(
+                self.stop_reason.as_deref(),
+                Some("end_turn" | "stop_sequence")
+            )
+        {
+            return None;
+        }
+        let text = self.text_blocks.values().cloned().collect::<String>();
+        (!text.trim().is_empty()).then_some(text)
     }
     fn observe(&mut self, bytes: &[u8], streaming: bool, status: u16) {
         if !(200..300).contains(&status) {
@@ -113,16 +219,17 @@ impl ResponseModelObservation {
             }
             return;
         }
-        // Bounded incremental SSE line decoder; large content deltas are skipped,
-        // never reinterpreted as a new message header.
+        // Bounded incremental SSE decoder. An oversized line makes the complete
+        // text unavailable; dropping a delta must never yield a partial reply.
         for byte in bytes {
             if *byte == b'\n' {
                 if !self.skipping {
                     if let Some(data) = self.pending.strip_prefix(b"data: ") {
                         if let Ok(value) = serde_json::from_slice::<Value>(data) {
-                            if value["type"] == "message_start" {
-                                self.value(&value);
-                            }
+                            self.value(&value);
+                        } else {
+                            // Never silently discard a native answer delta.
+                            self.conflicting = true;
                         }
                     }
                 }
@@ -130,12 +237,18 @@ impl ResponseModelObservation {
                 self.skipping = false;
             } else if !self.skipping {
                 if self.pending.len() == 64 * 1024 {
+                    self.conflicting = true;
                     self.pending.clear();
                     self.skipping = true;
                 } else {
                     self.pending.push(*byte);
                 }
             }
+        }
+    }
+    fn finish(&mut self) {
+        if self.skipping || !self.pending.is_empty() {
+            self.conflicting = true;
         }
     }
 }
@@ -170,6 +283,9 @@ impl ModelRegistry {
             .sessions
             .try_lock()
             .map_err(|_| anyhow::anyhow!("native model registry busy"))?;
+        controller.with_current(|_, core, _| {
+            result::ensure_not_computed(core, controller.controller_id())
+        })?;
         if let Some(session) = sessions.get(controller.controller_id()) {
             anyhow::ensure!(
                 Arc::ptr_eq(&session.controller, &controller),
@@ -362,6 +478,9 @@ fn prepare_invocation(
         .jobs
         .try_lock()
         .map_err(|_| anyhow::anyhow!("native model operation busy"))?;
+    session.controller.with_current(|_, core, _| {
+        result::ensure_not_computed(core, session.controller.controller_id())
+    })?;
     if let Some(job) = jobs.get(id) {
         anyhow::ensure!(job.hash == hash, "native model operation replay differs");
         return Ok(PreparedInvocation {
@@ -379,6 +498,7 @@ fn prepare_invocation(
         "native model operation capacity reached"
     );
     session.controller.with_current(|_,core,_| {
+        result::ensure_not_computed(core, session.controller.controller_id())?;
         ensure_model_schema(core)?;
         core.execute("INSERT INTO workjet_supervisor_native_model_requests
             (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms,operation_kind)
@@ -438,17 +558,29 @@ async fn run_invocation(prepared: PreparedInvocation) {
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    let (observation, response_model, response_message_id, conflicting) = {
+    let (
+        observation,
+        response_model,
+        response_message_id,
+        conflicting,
+        response_text,
+        response_stop_reason,
+        response_complete,
+    ) = {
         let mut state = prepared
             .job
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.response_model.finish();
         (
             state.witness.take(),
             state.response_model.model.clone(),
             state.response_model.message_id.clone(),
             state.response_model.conflicting,
+            state.response_model.completed_text(),
+            state.response_model.stop_reason.clone(),
+            state.response_model.complete,
         )
     };
     let upstream_ok = observation
@@ -463,7 +595,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
         let changed = core.execute(
             "UPDATE workjet_supervisor_native_model_requests SET
             state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,
-            response_model=?8,response_message_id=?9
+            response_model=?8,response_message_id=?9,response_text=?10,response_stop_reason=?11,response_complete=?12
             WHERE operation_id=?6 AND controller_id=?7",
             params![
                 if result.is_ok() && !conflicting && upstream_ok {
@@ -478,7 +610,10 @@ async fn run_invocation(prepared: PreparedInvocation) {
                 prepared.id,
                 prepared.session.controller.controller_id(),
                 response_model,
-                response_message_id
+                response_message_id,
+                response_text,
+                response_stop_reason,
+                response_complete
             ],
         )?;
         anyhow::ensure!(changed == 1, "native model observation row changed");
@@ -576,6 +711,100 @@ mod tests {
             hash: "request".into(),
             state: Mutex::new(ModelState::default()),
             task: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn native_reply_text_requires_a_complete_message_not_a_tool_or_truncated_turn() {
+        let header = json!({"type":"message","id":"msg_observed","model":"claude-opus-5-5",
+            "content":[{"type":"text","text":"Native answer"}],"stop_reason":"end_turn"});
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(&serde_json::to_vec(&header).unwrap(), false, 200);
+        assert_eq!(seen.completed_text().as_deref(), Some("Native answer"));
+        for reason in ["tool_use", "max_tokens", "pause_turn"] {
+            let mut message = header.clone();
+            message["stop_reason"] = json!(reason);
+            let mut partial = ResponseModelObservation::default();
+            partial.observe(&serde_json::to_vec(&message).unwrap(), false, 200);
+            assert!(partial.completed_text().is_none());
+        }
+        let mut denied = ResponseModelObservation::default();
+        denied.observe(&serde_json::to_vec(&header).unwrap(), false, 401);
+        assert!(denied.completed_text().is_none());
+    }
+    #[test]
+    fn fragmented_sse_text_is_bound_to_its_native_message_and_terminal_reason() {
+        let mut seen = ResponseModelObservation::default();
+        for value in [
+            json!({"type":"message_start","message":{"type":"message","id":"msg_observed","model":"claude-opus-5-5"}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Native "}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+        ] {
+            let line = format!("data: {}\n", value);
+            for bytes in line.as_bytes().chunks(7) {
+                seen.observe(bytes, true, 200);
+            }
+        }
+        assert!(seen.completed_text().is_none());
+        seen.observe(b"data: {\"type\":\"message_stop\"}\n", true, 200);
+        assert_eq!(seen.completed_text().as_deref(), Some("Native answer"));
+        seen.observe(b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"late\"}}\n",true,200);
+        assert!(seen.completed_text().is_none());
+    }
+    #[test]
+    fn unanchored_or_oversized_native_text_cannot_become_a_reply() {
+        let mut missing = ResponseModelObservation::default();
+        missing.value(&json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"caller"}}));
+        assert!(missing.conflicting);
+        assert!(missing.completed_text().is_none());
+        let mut seen = ResponseModelObservation::default();
+        seen.value(
+            &json!({"type":"message","id":"msg_observed","model":"claude-opus-5-5",
+            "content":[{"type":"text","text":"x".repeat(65537)}],"stop_reason":"end_turn"}),
+        );
+        assert!(seen.conflicting);
+        assert!(seen.completed_text().is_none());
+        assert_eq!(seen.text_bytes, 0);
+    }
+
+    #[test]
+    fn skipped_or_unterminated_sse_delta_never_publishes_a_partial_reply() {
+        let mut seen = ResponseModelObservation::default();
+        seen.value(&json!({"type":"message_start","message":{"type":"message",
+            "id":"msg_observed","model":"claude-opus-5-5"}}));
+        seen.value(&json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"text","text":"Only a prefix"}}));
+        let oversized = format!(
+            "data: {}\n",
+            json!({"type":"content_block_delta","index":0,
+            "delta":{"type":"text_delta","text":"x".repeat(65537)}})
+        );
+        seen.observe(oversized.as_bytes(), true, 200);
+        seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+        seen.value(&json!({"type":"message_stop"}));
+        assert!(seen.conflicting);
+        assert!(seen.completed_text().is_none());
+    }
+
+    #[test]
+    fn malformed_or_unfinished_sse_line_cannot_hide_a_native_delta() {
+        for tail in [
+            "data: {not-json}\n",
+            "data: {\"type\":\"content_block_delta\"",
+        ] {
+            let mut seen = ResponseModelObservation::default();
+            seen.value(&json!({"type":"message_start","message":{"type":"message",
+                "id":"msg_observed","model":"claude-opus-5-5"}}));
+            seen.value(&json!({"type":"content_block_start","index":0,
+                "content_block":{"type":"text","text":"Only a prefix"}}));
+            seen.observe(tail.as_bytes(), true, 200);
+            seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+            seen.value(&json!({"type":"message_stop"}));
+            seen.finish();
+            assert!(seen.conflicting);
+            assert!(seen.completed_text().is_none());
         }
     }
 

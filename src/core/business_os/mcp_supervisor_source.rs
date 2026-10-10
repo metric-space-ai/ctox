@@ -108,8 +108,8 @@ impl NativeSupervisorSourceOffer {
         })
     }
     /// Bounded service wait; no default-model invocation or replacement task.
-    /// The accepted native SDK/model result path is integrated separately:
-    /// this handshake never accepts a caller-reported "actual" or reply.
+    /// Reads only an immutable native SDK/model result after its guarded final
+    /// response was sent. Caller-reported "actual" or reply text is never accepted.
     pub(crate) fn wait_for_native_result(&self) -> anyhow::Result<String> {
         let until = Instant::now() + WAIT_LIMIT;
         loop {
@@ -125,8 +125,12 @@ impl NativeSupervisorSourceOffer {
                 state != "closed",
                 unavailable("supervisor_execution_fenced", "native Source offer retired")
             );
+            let reply = result::read_in_current(&core, &self.lease, &self.id)?;
             policy.commit()?;
             core.commit()?;
+            if let Some(reply) = reply {
+                return Ok(reply);
+            }
             if now_ms() >= self.deadline_ms || Instant::now() >= until {
                 return Err(unavailable("project_supervisor_source_wait_timeout", "selected Source produced no accepted native SDK/model result before the original offer deadline"));
             }
@@ -164,14 +168,14 @@ pub(crate) struct NativeSupervisorSourceHost {
     root: PathBuf,
     // Real non-deserializable controllers only; never reconstruct from rows.
     controllers: Mutex<HashMap<String, Arc<NativeSupervisorHoldingController>>>,
-    models: model::ModelRegistry,
+    models: Arc<model::ModelRegistry>,
 }
 impl NativeSupervisorSourceHost {
     pub(crate) fn new(root: &Path) -> Arc<Self> {
         Arc::new(Self {
             root: root.to_owned(),
             controllers: Mutex::new(HashMap::new()),
-            models: model::ModelRegistry::default(),
+            models: Arc::new(model::ModelRegistry::default()),
         })
     }
     pub(crate) fn register(
@@ -234,6 +238,7 @@ impl NativeSupervisorSourceHost {
                 self.claim(authority, operation.offer_id.as_deref().unwrap())
             }
             wire::SourceAction::ToolCall => tools::respond(self, authority, &operation),
+            wire::SourceAction::SdkObserve => sdk::respond(self, authority, &operation),
             wire::SourceAction::Status | wire::SourceAction::Cancel => {
                 self.control(authority, &operation)
             }
@@ -557,6 +562,18 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
         );
     }
     let shape = match operation.action {
+        wire::SourceAction::SdkObserve => {
+            operation.offer_id.is_some()
+                && operation.controller_id.is_some()
+                && operation.sdk_observation.is_some()
+                && operation.operation_id.is_none()
+                && operation.model_operation.is_none()
+                && operation.body_json.is_none()
+                && operation.sdk_session_id.is_none()
+                && operation.sequence.is_none()
+                && operation.native_tool.is_none()
+                && operation.tool_arguments_json.is_none()
+        }
         wire::SourceAction::Poll => {
             operation.offer_id.is_none() && operation.controller_id.is_none()
         }
@@ -616,6 +633,10 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
         "native tool fields cannot alter model/control authority"
     );
     anyhow::ensure!(shape, "native Source action fields differ");
+    anyhow::ensure!(
+        operation.action == wire::SourceAction::SdkObserve || operation.sdk_observation.is_none(),
+        "SDK observations cannot alter model/tool/control authority"
+    );
     Ok(operation)
 }
 struct OfferPublication {
@@ -648,6 +669,10 @@ impl WebRTCPublicationGuard for OfferPublication {
 }
 #[path = "mcp_supervisor_source_model.rs"]
 mod model;
+#[path = "mcp_supervisor_source_result.rs"]
+mod result;
+#[path = "mcp_supervisor_source_sdk.rs"]
+mod sdk;
 #[cfg(test)]
 #[path = "mcp_supervisor_source_tests.rs"]
 mod tests;
