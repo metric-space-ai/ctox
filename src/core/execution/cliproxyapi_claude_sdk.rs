@@ -217,7 +217,59 @@ impl NativeClaudeSdkAccountReservation {
         result
     }
 
+    /// Use the actual Crew controller without re-entering its transport fence.
+    /// Secret snapshots are prepared before source/issuer/Core/Policy entry.
+    pub(crate) fn with_current_controller_configuration<T>(
+        &self,
+        controller: &crate::business_os::mcp_channel::NativeSupervisorHoldingController,
+        apply: impl FnOnce(NativeClaudeSdkConfiguration<'_>) -> Result<T>,
+    ) -> Result<T> {
+        if self.root != controller.authority().native_host_root() {
+            self.release();
+            anyhow::bail!("native Claude source host changed");
+        }
+        {
+            let captured = self
+                .captured
+                .try_lock()
+                .map_err(|_| anyhow::anyhow!("native Claude account reservation unavailable"))?;
+            ensure!(
+                captured.is_some(),
+                "native Claude account reservation released"
+            );
+        }
+        let current = match stable_capture(
+            &self.root,
+            &self.selected.account().private_local_account_id,
+        ) {
+            Ok(current) => current,
+            Err(error) => {
+                self.release();
+                return Err(error);
+            }
+        };
+        let result =
+            with_captured_current(&self.captured, &current, &self.private_binding, |prior| {
+                controller.with_current(|facts, _, policy| {
+                    self.selected.assert_current_in_policy(facts, policy)?;
+                    controller
+                        .selection()
+                        .assert_consumer_binding(&self.selected)?;
+                    apply(NativeClaudeSdkConfiguration {
+                        model: self.selected.model(),
+                        access_token: prior.credentials.access_token(),
+                        private_binding: &self.private_binding,
+                    })
+                })
+            });
+        if result.is_err() {
+            self.release();
+        }
+        result
+    }
+
     /// Idempotent retirement, called on native cancellation/selection change,
+
     /// producer teardown and final receipt consumption. A concurrent bounded
     /// callback finishes before release; no later callback can acquire it.
     pub(crate) fn release(&self) {
