@@ -67,6 +67,89 @@ fn add(
     )?;
     Ok(())
 }
+
+#[test]
+fn opted_schedule_read_is_native_owner_scoped_read_only_and_not_inferred_from_snapshot(
+) -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let request =
+        json!({"action":"read","request":{"project_id":"project","include_refresh_schedule":true}});
+    assert!(
+        call(root.path(), &trusted, request.clone())?["kpis"]["items"][0]["result"]
+            .get("next_refresh_ms")
+            .is_none()
+    );
+    call(
+        root.path(),
+        &trusted,
+        args("project_tasks_completed", "schedule-bind", 1),
+    )?;
+    let mut policy = store::open_store(root.path())?;
+    let actual = store::now_ms() as i64 + 7_200_000;
+    policy.execute(
+        "UPDATE workjet_project_kpi_definitions SET next_refresh_ms=?1",
+        [actual],
+    )?;
+    policy.execute("UPDATE workjet_project_kpi_state SET state_json=json_set(state_json,'$.items[0].result.next_refresh_ms',1)",[])?;
+    let context = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &request,
+        Some(&trusted),
+    )?;
+    let lock = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let result = execute(root.path(), &context, &request, Some(&trusted))?;
+    assert_eq!(
+        result["kpis"]["items"][0]["result"]["next_refresh_ms"],
+        actual
+    );
+    assert_ne!(
+        result["kpis"]["items"][0]["result"]["snapshot"]["freshness"]["refresh_at_ms"],
+        actual
+    );
+    let old_request = json!({"action":"read","request":{"project_id":"project"}});
+    let old_context = super::super::context_from_arguments_with_trusted_gateway_context(
+        TOOL,
+        &old_request,
+        Some(&trusted),
+    )?;
+    let old = execute(root.path(), &old_context, &old_request, Some(&trusted))?;
+    assert!(
+        old["kpis"]["items"][0]["result"]
+            .get("next_refresh_ms")
+            .is_none(),
+        "existing installed consumers retain their prior wire shape"
+    );
+    let reader = Connection::open_with_flags(
+        store::business_os_store_path(root.path()),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let owner = kpis::require_project(&reader, "owner", "project")?;
+    let owner_result = kpis::read_state_with_schedule(&reader, "project", &owner, true)?;
+    assert_eq!(owner_result.items[0].result.next_refresh_ms, Some(actual));
+    assert!(kpis::read_state_with_schedule(&reader, "project", "foreign", true).is_err());
+    lock.rollback()?;
+    policy.execute(
+        "UPDATE workjet_project_kpi_definitions SET owner_user_id='foreign'",
+        [],
+    )?;
+    assert!(
+        call(root.path(), &trusted, request.clone())?["kpis"]["items"][0]["result"]
+            .get("next_refresh_ms")
+            .is_none()
+    );
+    policy.execute(
+        "UPDATE workjet_project_kpi_definitions SET owner_user_id='owner',prompt_revision=2",
+        [],
+    )?;
+    assert!(
+        call(root.path(), &trusted, request)?["kpis"]["items"][0]["result"]
+            .get("next_refresh_ms")
+            .is_none(),
+        "superseded prompt exposes no schedule"
+    );
+    Ok(())
+}
+
 #[test]
 fn native_recipe_calculates_real_scoped_receipts_and_retains_definition() -> anyhow::Result<()> {
     let (root, trusted) = fixture()?;

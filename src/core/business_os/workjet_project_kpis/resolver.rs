@@ -49,6 +49,32 @@ pub(super) fn snapshot_binding_is_current(
     }
 }
 
+/// Data-only lookup after the current binding check, inside the same read
+/// snapshot. Foreign Owners and superseded prompt revisions expose no schedule.
+pub(super) fn read_next_refresh_ms(
+    conn: &Connection,
+    project: &str,
+    owner: &str,
+    prompt: &KpiPrompt,
+) -> anyhow::Result<Option<i64>> {
+    if !has(conn, "workjet_project_kpi_definitions")? {
+        return Ok(None);
+    }
+    let next: Option<i64> = conn
+        .query_row(
+            "SELECT next_refresh_ms FROM workjet_project_kpi_definitions
+         WHERE project_id=?1 AND kpi_id=?2 AND owner_user_id=?3 AND prompt_revision=?4",
+            params![project, prompt.kpi_id, owner, prompt.revision],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(
+        next.is_none_or(|next| next >= 0),
+        "invalid native KPI refresh timestamp"
+    );
+    Ok(next)
+}
+
 pub(in crate::business_os) fn catalogue() -> Value {
     json!([
       {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor work requests admitted to this project within the rolling window; explicit conversation replies are excluded."},
@@ -79,6 +105,7 @@ fn missing(code: &str, message: &str) -> KpiResult {
     KpiResult {
         status: KpiState::MissingSource,
         snapshot: None,
+        next_refresh_ms: None,
         reason_code: Some(code.into()),
         message: Some(message.into()),
     }
@@ -280,6 +307,7 @@ fn calculate(
     Ok(KpiResult {
         status: KpiState::Ready,
         snapshot: Some(snapshot),
+        next_refresh_ms: None,
         reason_code: None,
         message: None,
     })

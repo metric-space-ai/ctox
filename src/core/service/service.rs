@@ -47309,6 +47309,7 @@ Was jetzt zu tun ist:\n\
             sheet_name: "s".to_string(),
             row_count: rows,
             headers: headers.iter().map(|h| h.to_string()).collect(),
+            rows: Vec::new(),
         };
         // 19 data rows (< 200) -> row violation naming the threshold.
         assert!(
