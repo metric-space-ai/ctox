@@ -376,11 +376,158 @@ pub(super) fn respond(
         .sdk_observation
         .as_ref()
         .context("SDK observation missing")?;
-    let result = controller.with_current(|_, core, _| append(core, &controller, observation))?;
+    let (result, computed) = controller.with_current(|facts, core, _| {
+        let acknowledgement = append(core, &controller, observation)?;
+        let computed = result::record(core, &controller, facts)?;
+        Ok((acknowledgement, computed))
+    })?;
+    let publication = if let Some(computed) = computed {
+        // Retain the original private model owner through the final physical
+        // acknowledgement; its cancellation also retires the controller.
+        Arc::new(CompletionPublication {
+            original: publication,
+            controller,
+            computed,
+            models: Arc::clone(&host.models),
+        }) as Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>
+    } else {
+        publication
+    };
     Ok(GuardedAuxiliaryResponse {
         result,
         publication,
     })
+}
+
+struct CompletionPublication {
+    original: Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>,
+    controller: Arc<NativeSupervisorHoldingController>,
+    computed: result::StoredComputation,
+    models: Arc<model::ModelRegistry>,
+}
+impl rxdb::plugins::replication_webrtc::WebRTCPublicationGuard for CompletionPublication {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        self.original.with_current(publish)
+    }
+    fn after_send(&self) -> RxResult<()> {
+        self.controller
+            .with_current(|_, core, _| {
+                result::mark_published(core, &self.controller, &self.computed)
+            })
+            .map_err(|_| rxdb::rx_error::new_rx_error("supervisor_execution_fenced", None))?;
+        // All SDK/model drains precede this successful final send. Retire only
+        // this original scoped account/capability/controller; replay cannot
+        // allocate a new session because the immutable computation fences it.
+        self.models.retire(self.controller.controller_id());
+        Ok(())
+    }
+}
+
+pub(super) struct JoinedSdkParent {
+    pub(super) session_id: String,
+    pub(super) turn_id: String,
+    pub(super) assistant_id: String,
+    pub(super) result_id: String,
+    pub(super) child_pids: Vec<u64>,
+    pub(super) operation_id: String,
+    pub(super) message_id: String,
+    pub(super) model: String,
+    pub(super) request_id: String,
+    pub(super) finished_at_ms: i64,
+    pub(super) text: String,
+}
+/// Data extraction inside the retained original controller's reservation.
+/// No authority, model call, completion flag or caller reply is reconstructed.
+pub(super) fn joined_in_current(
+    core: &Connection,
+    controller_id: &str,
+    execution_key: &str,
+    lease_hash: &str,
+) -> anyhow::Result<Option<JoinedSdkParent>> {
+    let rows: Vec<(u64, String)> = core
+        .prepare(
+            "SELECT sequence,observation_json
+        FROM workjet_supervisor_sdk_observations
+        WHERE controller_id=?1 AND execution_key=?2 AND lease_hash=?3 ORDER BY sequence LIMIT 513",
+        )?
+        .query_map(params![controller_id, execution_key, lease_hash], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    anyhow::ensure!(rows.len() <= 512, "SDK completion journal exceeds budget");
+    let mut state = State::default();
+    for (expected, (sequence, raw)) in rows.iter().enumerate() {
+        let observation: wire::SourceSdkObservation = serde_json::from_str(raw)?;
+        anyhow::ensure!(
+            *sequence == expected as u64 && observation.sequence == *sequence,
+            "SDK completion journal sequence differs"
+        );
+        state.apply(&observation)?;
+    }
+    let Some(parent) = join_native_parent(core, controller_id, execution_key, lease_hash, &state)?
+    else {
+        return Ok(None);
+    };
+    let reply_hash = format!("{:x}", sha2::Sha256::digest(parent.text.as_bytes()));
+    let joined: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workjet_supervisor_sdk_parent_joins
+        WHERE controller_id=?1 AND execution_key=?2 AND lease_hash=?3 AND sdk_session_id=?4
+          AND sdk_turn_id=?5 AND sdk_result_id=?6 AND model_operation_id=?7 AND reply_sha256=?8)",
+        params![
+            controller_id,
+            execution_key,
+            lease_hash,
+            state.session,
+            state.turn,
+            state.result.as_ref().map(|result| result.0.as_str()),
+            parent.operation_id,
+            reply_hash
+        ],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(joined, "immutable native parent join unavailable");
+    let (request_id, finished_at_ms): (String, i64) = core.query_row(
+        "SELECT upstream_request_id,finished_at_ms FROM workjet_supervisor_native_model_requests
+         WHERE operation_id=?1 AND controller_id=?2 AND execution_key=?3 AND lease_hash=?4",
+        params![
+            parent.operation_id,
+            controller_id,
+            execution_key,
+            lease_hash
+        ],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    anyhow::ensure!(
+        !request_id.trim().is_empty()
+            && request_id.len() <= 256
+            && !request_id.chars().any(char::is_control),
+        "native upstream request identity unavailable"
+    );
+    let (message_id, model, assistant_id) = state.parent.context("original SDK parent missing")?;
+    Ok(Some(JoinedSdkParent {
+        session_id: state.session.context("original SDK session missing")?,
+        turn_id: state.turn.context("original SDK turn missing")?,
+        assistant_id,
+        result_id: state.result.context("original SDK result missing")?.0,
+        child_pids: state.children.into_keys().collect(),
+        operation_id: parent.operation_id,
+        message_id,
+        model,
+        request_id,
+        finished_at_ms,
+        text: parent.text,
+    }))
+}
+
+#[cfg(test)]
+pub(super) fn append_fixture(
+    core: &Connection,
+    controller: &str,
+    execution: &str,
+    lease: &str,
+    event: &wire::SourceSdkObservation,
+) -> anyhow::Result<Value> {
+    append_in_current(core, controller, execution, lease, event)
 }
 
 #[cfg(test)]
