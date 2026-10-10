@@ -197,6 +197,7 @@ function capabilityControlFixture(receiptTransform = (receipt) => receipt) {
             id: payload.computer_id, owner_user_id: 'owner-1', display_name: payload.display_name,
             hosting_mode: payload.hosting_mode, status: 'assigned', self_hosted_colocation: false,
             capability_config: payload.capability_config, agentless: payload.agentless,
+            device_binding_id: payload.device_binding_id,
             capabilities: payload.capability_config?.map((entry) => entry.kind) || [],
           };
           return receiptTransform({
@@ -219,6 +220,54 @@ function capabilityControlFixture(receiptTransform = (receipt) => receipt) {
   return { commands,
     invoke: async (request) => JSON.parse(JSON.stringify(await context.__control(request))) };
 }
+
+const sourceAssignment = { action: 'computer.assign', commandId: 'assign-source', computerId: 'source-1',
+  displayName: 'Source computer', hostingMode: 'workstation', capabilities: [],
+  selfHostedColocation: false, deviceBindingId: 'native-device-proof' };
+
+test('native device association forwards a bounded proof reference through the Owner command', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  const result = await invoke(sourceAssignment);
+  assert.equal(result.computer.id, sourceAssignment.computerId);
+  assert.equal('deviceBindingId' in result.computer, false);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].command_type, 'ctox.workjet.computer.assign');
+  assert.equal(commands[0].payload.device_binding_id, sourceAssignment.deviceBindingId);
+  assert.equal(commands[0].client_context.actor.id, 'owner-1');
+  assert.equal('owner_user_id' in commands[0].payload, false);
+});
+
+test('device association cannot be confirmed by a stale, foreign or uncorrelated receipt', async () => {
+  const transforms = [
+    (receipt) => ({ ...receipt, ok: false }),
+    (receipt) => ({ ...receipt, status: 'failed' }),
+    (receipt) => ({ ...receipt, command_id: 'other-command' }),
+    (receipt) => ({ ...receipt, result: { ...receipt.result, ok: false } }),
+    (receipt) => { receipt.result.computer.id = 'other-computer'; return receipt; },
+    (receipt) => { receipt.result.computer.owner_user_id = 'foreign'; return receipt; },
+    (receipt) => { receipt.result.computer.status = 'unassigned'; return receipt; },
+    (receipt) => { delete receipt.result.computer.device_binding_id; return receipt; },
+    (receipt) => { receipt.result.computer.device_binding_id = 'old-device'; return receipt; },
+  ];
+  for (const transform of transforms) {
+    await assert.rejects(capabilityControlFixture(transform).invoke(sourceAssignment),
+      /not confirm|did not complete/);
+  }
+});
+
+test('malformed proof references and caller authority never reach device association dispatch', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  for (const deviceBindingId of ['', ' ', 'bad\u0000proof', 'x'.repeat(161), null, 1]) {
+    await assert.rejects(invoke({ ...sourceAssignment, deviceBindingId }));
+  }
+  for (const extra of [
+    { ownerUserId: 'foreign' }, { inviterUserId: 'foreign' },
+    { deviceBinding: { id: 'native-device-proof', credential: 'secret' } },
+  ]) {
+    await assert.rejects(invoke({ ...sourceAssignment, ...extra }));
+  }
+  assert.equal(commands.length, 0);
+});
 
 const storageGrant = { kind: 'storage', endpoint_ref: 'endpoint-nas', protocol: 'ssh',
   root: '/volume1/artifacts', quota_gib: null, purposes: ['exchange', 'artifacts', 'artifacts'] };
