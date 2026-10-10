@@ -58,6 +58,13 @@ impl AdmittedConsumerAuthority {
         &self.root
     }
 
+    /// Read the sealed native host's existing identity; never initialize one
+    /// or resolve a host from caller-supplied facts.
+    pub(crate) fn native_host_instance_id(&self) -> Result<String> {
+        store::existing_instance_id(&self.root)
+    }
+
+
     /// Call from a guarded auxiliary handler, which supplies the accepted
     /// connection by value after the native nonce/possession admission round.
     /// An anonymous/unbound capability is never a computer identity.
