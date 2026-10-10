@@ -164,12 +164,14 @@ pub(crate) struct NativeSupervisorSourceHost {
     root: PathBuf,
     // Real non-deserializable controllers only; never reconstruct from rows.
     controllers: Mutex<HashMap<String, Arc<NativeSupervisorHoldingController>>>,
+    models: model::ModelRegistry,
 }
 impl NativeSupervisorSourceHost {
     pub(crate) fn new(root: &Path) -> Arc<Self> {
         Arc::new(Self {
             root: root.to_owned(),
             controllers: Mutex::new(HashMap::new()),
+            models: model::ModelRegistry::default(),
         })
     }
     pub(crate) fn register(
@@ -184,15 +186,37 @@ impl NativeSupervisorSourceHost {
                 let host = Arc::clone(&host);
                 let transport = Arc::clone(&transport);
                 Box::pin(async move {
-                    tokio::task::spawn_blocking(move || {
-                        host.respond(transport, peer, &token, params)
-                    })
-                    .await
-                    .map_err(|_| "native Supervisor Source unavailable".to_owned())?
-                    .map_err(|_| "native Supervisor Source rejected".to_owned())
+                    host.respond_async(transport, peer, token, params)
+                        .await
+                        .map_err(|_| "native Supervisor Source rejected".to_owned())
                 })
             }),
         )
+    }
+    async fn respond_async(
+        self: Arc<Self>,
+        transport: Arc<WebRTCRsConnectionHandler>,
+        peer: WebRTCRsConnection,
+        token: String,
+        params: Vec<Value>,
+    ) -> anyhow::Result<GuardedAuxiliaryResponse> {
+        let operation = parse_operation(params.clone())?;
+        if matches!(
+            operation.action,
+            wire::SourceAction::ModelInvoke | wire::SourceAction::ModelRead
+        ) {
+            let root = self.root.clone();
+            let authority = tokio::task::spawn_blocking(move || {
+                AdmittedConsumerAuthority::capture(&root, transport, peer, &token)
+            })
+            .await
+            .context("native Source admission context unavailable")??;
+            self.model_respond(authority, operation).await
+        } else {
+            tokio::task::spawn_blocking(move || self.respond(transport, peer, &token, params))
+                .await
+                .context("native Source execution context unavailable")?
+        }
     }
     fn respond(
         &self,
@@ -211,6 +235,9 @@ impl NativeSupervisorSourceHost {
             }
             wire::SourceAction::Status | wire::SourceAction::Cancel => {
                 self.control(authority, &operation)
+            }
+            wire::SourceAction::ModelInvoke | wire::SourceAction::ModelRead => {
+                anyhow::bail!("native model operation needs its managed async responder")
             }
         }
     }
@@ -238,6 +265,7 @@ impl NativeSupervisorSourceHost {
                     .map_err(|_| anyhow::anyhow!("native Source control busy"))?
                     .remove(&id);
                 if let Some(controller) = controller {
+                    self.models.retire(controller.controller_id());
                     controller.cancel()?;
                 }
             }
@@ -406,6 +434,7 @@ impl NativeSupervisorSourceHost {
             Ok(json!({"version":1,"state":"claimed","offer_id":id,"controller_id":controller.controller_id(),"execution_ready":false}))
         })?;
         if operation.action == wire::SourceAction::Cancel {
+            self.models.retire(controller.controller_id());
             controller.cancel()?;
             core(&self.root)?.execute(
                 "UPDATE workjet_supervisor_source_offers SET state='closed'
@@ -439,6 +468,7 @@ impl Drop for NativeSupervisorSourceHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
         {
+            self.models.retire(controller.controller_id());
             let _ = controller.cancel();
         }
     }
@@ -505,15 +535,19 @@ fn claim_value(id: &str, row: &OfferRow, controller: &NativeSupervisorHoldingCon
 }
 fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> {
     anyhow::ensure!(
-        params.len() == 1 && serde_json::to_vec(&params)?.len() <= 2048,
+        params.len() == 1 && serde_json::to_vec(&params)?.len() <= 256 * 1024,
         "invalid native Source operation"
     );
     let operation: wire::SourceOperation =
         serde_json::from_value(params.into_iter().next().unwrap())?;
     operation.validate().map_err(anyhow::Error::msg)?;
-    for id in [&operation.offer_id, &operation.controller_id]
-        .into_iter()
-        .flatten()
+    for id in [
+        &operation.offer_id,
+        &operation.controller_id,
+        &operation.operation_id,
+    ]
+    .into_iter()
+    .flatten()
     {
         anyhow::ensure!(
             uuid::Uuid::parse_str(id).is_ok(),
@@ -530,7 +564,38 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
         wire::SourceAction::Status | wire::SourceAction::Cancel => {
             operation.offer_id.is_some() && operation.controller_id.is_some()
         }
+        wire::SourceAction::ModelInvoke => {
+            operation.offer_id.is_some()
+                && operation.controller_id.is_some()
+                && operation.operation_id.is_some()
+                && operation.model_operation.is_some()
+                && operation.body_json.is_some()
+                && operation.sdk_session_id.is_some()
+                && operation.sequence.is_none()
+        }
+        wire::SourceAction::ModelRead => {
+            operation.offer_id.is_some()
+                && operation.controller_id.is_some()
+                && operation.operation_id.is_some()
+                && operation.sequence.is_some()
+                && operation.model_operation.is_none()
+                && operation.body_json.is_none()
+                && operation.sdk_session_id.is_none()
+        }
     };
+    let is_model = matches!(
+        operation.action,
+        wire::SourceAction::ModelInvoke | wire::SourceAction::ModelRead
+    );
+    anyhow::ensure!(
+        is_model
+            || (operation.operation_id.is_none()
+                && operation.model_operation.is_none()
+                && operation.body_json.is_none()
+                && operation.sdk_session_id.is_none()
+                && operation.sequence.is_none()),
+        "model fields are not control authority"
+    );
     anyhow::ensure!(shape, "native Source action fields differ");
     Ok(operation)
 }
@@ -562,6 +627,8 @@ impl WebRTCPublicationGuard for OfferPublication {
             .map_err(|_| new_rx_error("supervisor_execution_fenced", None))
     }
 }
+#[path = "mcp_supervisor_source_model.rs"]
+mod model;
 #[cfg(test)]
 #[path = "mcp_supervisor_source_tests.rs"]
 mod tests;

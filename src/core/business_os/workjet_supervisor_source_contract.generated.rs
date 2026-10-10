@@ -61,6 +61,10 @@ pub(crate) enum SourceAction {
     Status,
     #[serde(rename = "cancel")]
     Cancel,
+    #[serde(rename = "model_invoke")]
+    ModelInvoke,
+    #[serde(rename = "model_read")]
+    ModelRead,
 }
 impl WireValidate for SourceAction {
     fn validate(&self) -> Result<(), String> {
@@ -92,6 +96,16 @@ pub(crate) struct SourceOperation {
     pub(crate) offer_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) controller_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model_operation: Option<SourceModelOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) body_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sdk_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sequence: Option<u64>,
 }
 impl WireValidate for SourceOperation {
     fn validate(&self) -> Result<(), String> {
@@ -125,6 +139,42 @@ impl WireValidate for SourceOperation {
             }
             if value.chars().count() > 36 {
                 return Err("SourceOperation.controller_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.operation_id {
+            value.validate()?;
+            if value.chars().count() < 36 {
+                return Err("SourceOperation.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 36 {
+                return Err("SourceOperation.operation_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.model_operation {
+            value.validate()?;
+        }
+        if let Some(value) = &self.body_json {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceOperation.body_json violates min_chars".into());
+            }
+            if value.chars().count() > 98304 {
+                return Err("SourceOperation.body_json violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.sdk_session_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceOperation.sdk_session_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceOperation.sdk_session_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.sequence {
+            value.validate()?;
+            if *value > 65535 {
+                return Err("SourceOperation.sequence violates maximum".into());
             }
         }
         Ok(())
@@ -265,6 +315,19 @@ impl WireValidate for SourceOffer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum SourceModelOperation {
+    #[serde(rename = "messages")]
+    Messages,
+    #[serde(rename = "count_tokens")]
+    CountTokens,
+}
+impl WireValidate for SourceModelOperation {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -281,6 +344,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "SourceOffer" => serde_json::from_value::<SourceOffer>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceModelOperation" => serde_json::from_value::<SourceModelOperation>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),

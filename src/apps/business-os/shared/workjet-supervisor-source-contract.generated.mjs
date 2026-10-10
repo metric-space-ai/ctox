@@ -7,7 +7,9 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "poll",
       "claim",
       "status",
-      "cancel"
+      "cancel",
+      "model_invoke",
+      "model_read"
     ]
   },
   "SourceOfferState": {
@@ -37,6 +39,33 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
         "type": "String",
         "min_chars": 36,
         "max_chars": 36,
+        "optional": true
+      },
+      "operation_id": {
+        "type": "String",
+        "min_chars": 36,
+        "max_chars": 36,
+        "optional": true
+      },
+      "model_operation": {
+        "type": "SourceModelOperation",
+        "optional": true
+      },
+      "body_json": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 98304,
+        "optional": true
+      },
+      "sdk_session_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "sequence": {
+        "type": "u64",
+        "maximum": 65535,
         "optional": true
       }
     }
@@ -102,6 +131,12 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
         "type": "SourceOfferState"
       }
     }
+  },
+  "SourceModelOperation": {
+    "enum": [
+      "messages",
+      "count_tokens"
+    ]
   }
 });
 export const SUPERVISOR_SOURCE_COMMANDS = deepFreeze({
