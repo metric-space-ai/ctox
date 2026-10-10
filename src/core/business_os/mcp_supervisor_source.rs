@@ -535,7 +535,7 @@ fn claim_value(id: &str, row: &OfferRow, controller: &NativeSupervisorHoldingCon
 }
 fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> {
     anyhow::ensure!(
-        params.len() == 1 && serde_json::to_vec(&params)?.len() <= 2 * 1024 * 1024,
+        params.len() == 1 && serde_json::to_vec(&params)?.len() <= 256 * 1024,
         "invalid native Source operation"
     );
     let operation: wire::SourceOperation =

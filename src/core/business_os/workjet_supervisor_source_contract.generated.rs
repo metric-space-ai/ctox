@@ -158,7 +158,7 @@ impl WireValidate for SourceOperation {
             if value.chars().count() < 1 {
                 return Err("SourceOperation.body_json violates min_chars".into());
             }
-            if value.chars().count() > 1048576 {
+            if value.chars().count() > 98304 {
                 return Err("SourceOperation.body_json violates max_chars".into());
             }
         }

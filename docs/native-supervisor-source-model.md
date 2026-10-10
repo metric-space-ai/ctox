@@ -7,6 +7,8 @@ The private `ctox.workjet.project.supervisor.execution.v1` receiver adds two add
 
 The server resolves Models' genuine `NativeClaudeLeaseModelProxy` from the exact retained native controller. Its random scoped model capability and provider OAuth stay native. The SDK may not override the account, model or upstream URL. A repeated operation with identical request/correlation returns the existing job; different contents fail. Core records the original operation before dispatch; a vanished process never silently invokes the same request again.
 
+Requests are capped at 96 KiB raw SDK JSON and 256 KiB for the operation envelope, matching the real Source transport. Oversized requests fail explicitly; they are not truncated or dispatched through another route.
+
 Invocation starts one owned Tokio task, bounded by the proxy's 300-second deadline and original controller/Source/account revocation. Cancel, offer pruning and handler drop retire the private account proxy and abort only its model tasks. The native SDK process is separate and requires its own real stop observation.
 
 Reads deliver up to 32 KiB raw bytes as base64 with the real upstream HTTP status and streaming flag. Re-reading a sequence returns the same frame. Requesting exactly the next sequence acknowledges the previous frame; skipping or going backwards fails. A pending reply is neither an upstream failure nor completion. The queue is bounded at 8 MiB per operation and 64 operations per controller. Every physical response uses Models' retained account/config guard together with the original native Source/lease guard.

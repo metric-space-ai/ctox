@@ -54,7 +54,7 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "body_json": {
         "type": "String",
         "min_chars": 1,
-        "max_chars": 1048576,
+        "max_chars": 98304,
         "optional": true
       },
       "sdk_session_id": {

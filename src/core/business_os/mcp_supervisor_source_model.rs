@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::Digest;
 use std::collections::VecDeque;
 
-const MAX_BODY: usize = 1024 * 1024;
+const MAX_BODY: usize = 96 * 1024;
 const MAX_REPLY: usize = 8 * 1024 * 1024;
 const CHUNK: usize = 32 * 1024;
 const MAX_OPERATIONS: usize = 64;
