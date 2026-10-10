@@ -3572,7 +3572,16 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         // Personalized per session: no ETag sharing across users.
         respond_static_success(request, &bytes, mime, cache_control, None)?;
     } else {
-        respond_static_success(request, &bytes, mime, cache_control, None)?;
+        // Runtime app files are served `no-cache, must-revalidate`. Without a
+        // validator every revalidation downloaded the whole file again, so
+        // each start pulled the full app module graph through the tenant
+        // route (10.10.2026). A matching ETag now answers with a bodyless 304.
+        let etag = static_response_etag(&bytes);
+        if request_etag_matches(&request, &etag) {
+            respond_static_not_modified(request, cache_control, &etag)?;
+        } else {
+            respond_static_success(request, &bytes, mime, cache_control, Some(&etag))?;
+        }
     }
     Ok(())
 }

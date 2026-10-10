@@ -38,6 +38,28 @@ SSE is currently bounded-buffered as for the existing native Kimi route, with a
 a generic streaming owner in the portable server and is not claimed here.
 Production login, deployment and installed acceptance are operator/parent duties.
 
+## Local operator fallback
+
+On the holding instance host, run `ctox runtime grok-login` under the same
+local operator and original CTOX root used by its Secret/Runtime CLI. Follow the
+printed public verification URI and approve its user code in your own browser.
+The process stays attached until acceptance, cancellation or device-code expiry
+(at most 30 minutes). Ctrl+C or SIGTERM cancels its retained controller. It prints
+no device secret, access/refresh token or upstream error body, launches no
+browser and leaves the selected runtime model unchanged.
+
+This direct CLI uses existing local root/master-key access, not a synthesized
+Business OS Owner role or a workaround for a denied remote MCP request.
+Device credential installation compares expected absence and writes in one
+encrypted-store transaction; a concurrent account installation wins unchanged.
+Existing accounts are refused rather than rotated or replaced.
+
+After acceptance, `ctox runtime grok-models` reads the real subscription catalog
+with an eight-second bound. Credential presence or catalog membership alone
+does not prove model health: run the normal Workjet model check before the
+supervisor performs an explicit runtime switch. These commands are available
+only once this source is delivered in the installed native binary.
+
 ## Authorized Workjet native control
 
 The retained daemon controller registers `ctox.workjet.grok.v1` with capability

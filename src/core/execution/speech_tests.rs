@@ -231,7 +231,7 @@ pub(crate) async fn fixture(mode: &'static str) -> (String, JoinHandle<()>) {
         let update = socket.next().await.unwrap().unwrap().into_text().unwrap();
         let update: Value = serde_json::from_str(&update).unwrap();
         assert_eq!(update["session"]["audio_format"]["encoding"], "pcm_s16le");
-        assert_eq!(update["session"]["target_streaming_delay_ms"], 240);
+        assert_eq!(update["session"]["target_streaming_delay_ms"], 480);
         socket
             .send(Message::Text(
                 json!({"type":"session.updated","session":{}})

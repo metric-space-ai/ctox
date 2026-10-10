@@ -823,7 +823,8 @@ impl TranscriptionStream {
         send_json(&mut socket, json!({
             "type": "session.update", "session": {
                 "audio_format": { "encoding": "pcm_s16le", "sample_rate": format.sample_rate_hz },
-                "target_streaming_delay_ms": 240,
+                // Give live words more context while retaining headroom for the 1.5 s final target.
+                "target_streaming_delay_ms": 480,
             }
         })).await?;
         let updated = tokio::time::timeout(IO_TIMEOUT, receive_json(&mut socket))
