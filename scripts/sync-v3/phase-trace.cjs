@@ -11,10 +11,11 @@ function installPhaseTrace() {
   trace.mark('boot');
   globalThis.__syncV3BootAt = trace.bootAt;
   trace.drain = async () => { while (pending.size) await Promise.all([...pending]); };
-  trace.pairsFor = stats => {
+  trace.pairsFor = (stats, connectionState = null) => {
     const selected = new Set([...stats.values()].filter(item => item.type === 'transport').map(item => item.selectedCandidatePairId).filter(Boolean));
     const pairs = [];
-    for (const entry of stats.values()) if (entry.type === 'candidate-pair' && entry.state === 'succeeded'
+    for (const entry of stats.values()) if (entry.type === 'candidate-pair'
+      && (entry.state === 'succeeded' || (entry.state === 'in-progress' && connectionState === 'connected'))
       && (selected.size ? selected.has(entry.id) : entry.nominated)) {
       const remote = stats.get(entry.remoteCandidateId);
       pairs.push({ currentRoundTripTimeMs: Number.isFinite(entry.currentRoundTripTime) ? entry.currentRoundTripTime * 1000 : null,

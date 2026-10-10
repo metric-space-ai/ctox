@@ -53,6 +53,11 @@ test('observer preserves send behavior and excludes credential/document payloads
       ['remote', { address: '127.0.0.1', port: 1234 }], ['foreign', { address: '198.51.100.1', port: 5678 }],
     ]);
     assert.deepEqual(globalThis.__syncV3Trace.pairsFor(selectedStats).map(pair => pair.remotePort), [1234]);
+    selectedStats.get('selected').state = 'in-progress';
+    assert.deepEqual(globalThis.__syncV3Trace.pairsFor(selectedStats, 'connected').map(pair => pair.remotePort), [1234]);
+    assert.equal(globalThis.__syncV3Trace.pairsFor(selectedStats, 'connecting').length, 0);
+    selectedStats.get('selected').state = 'failed';
+    assert.equal(globalThis.__syncV3Trace.pairsFor(selectedStats, 'connected').length, 0);
     const serialized = JSON.stringify(globalThis.__syncV3Trace);
     assert.ok(!serialized.includes('must-not-survive') && !serialized.includes('private-doc'));
     assert.equal(globalThis.__syncV3Trace.events.filter(event => event.kind === 'logical').length, 1);

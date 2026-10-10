@@ -145,8 +145,9 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
               requestProofs.push(proof);
               recordProof = boundary => {
                 const job = Promise.resolve(connection?.peer?.getStats?.()).then(stats => {
-                  const pairs = stats ? trace.pairsFor(stats) : [];
-                  proof.snapshots.push({ boundary, capturedAt: performance.now(), pairs,
+                  const connectionState = connection?.peer?.connectionState || null;
+                  const pairs = stats ? trace.pairsFor(stats, connectionState) : [];
+                  proof.snapshots.push({ boundary, capturedAt: performance.now(), pairs, connectionState,
                     candidateStates: stats ? [...stats.values()].filter(item => item.type === 'candidate-pair')
                       .map(item => ({ id: item.id, state: item.state, nominated: item.nominated })) : [] });
                   proof.pairs.push(...pairs);
