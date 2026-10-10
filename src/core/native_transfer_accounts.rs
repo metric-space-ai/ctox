@@ -194,6 +194,60 @@ impl NativeTransferAccountHost {
         Ok(routing)
     }
 
+    /// A bounded publication fence for the exact original native enrollment and
+    /// credential generation. The fingerprint is private and never a wire permit.
+    /// No awaits, secret API reentry, or transport reentry inside apply.
+    pub(crate) fn with_current_enrollment<T>(
+        &self,
+        expected: &NativeTransferAccount,
+        fingerprint: Option<&str>,
+        apply: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct CredentialBinding<'a> {
+            version: u8,
+            account: NativeTransferAccount,
+            // Borrow the bearer without materializing an additional plaintext copy.
+            #[serde(borrow)]
+            capability_token: &'a str,
+        }
+        expected.validate()?;
+        ensure!(expected.active, "native enrollment retired");
+        let authority = authority_name(&expected.target_id);
+        let credentials = expected.credential_name()?;
+        crate::secrets::with_current_secret_values_and_fingerprint(
+            &self.root,
+            &[
+                (AUTHORITY_SCOPE, &authority),
+                (CREDENTIAL_SCOPE, &credentials),
+            ],
+            |values, current_fingerprint| {
+                ensure!(
+                    values.iter().all(|value| value.len() <= MAX_RECORD_BYTES),
+                    "native enrollment record budget exceeded"
+                );
+                let current: NativeTransferAccount = serde_json::from_slice(values[0])?;
+                let credential: CredentialBinding = serde_json::from_slice(values[1])?;
+                ensure!(
+                    !credential.capability_token.is_empty(),
+                    "native credential missing"
+                );
+                ensure!(
+                    current == *expected
+                        && credential.version == 1
+                        && credential.account == *expected,
+                    "native enrollment changed"
+                );
+                ensure!(
+                    fingerprint.is_none_or(|expected| expected == current_fingerprint),
+                    "native credential generation changed"
+                );
+                apply(current_fingerprint)
+            },
+        )
+    }
+
     /// Native service refresh deadline and current ICE snapshot. Callers must
     /// renew through the live source and recreate the session before expiry;
     /// an expired snapshot never falls back to local daemon configuration.

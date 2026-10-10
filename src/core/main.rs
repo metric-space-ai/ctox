@@ -33,6 +33,8 @@ mod iot;
 mod knowledge;
 mod mission;
 mod native_data_device;
+#[cfg(unix)]
+mod native_supervisor_transport;
 mod native_transfer_accounts;
 mod native_transfer_routing;
 mod paths;
