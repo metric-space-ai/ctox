@@ -269,7 +269,6 @@ impl NativeClaudeSdkAccountReservation {
     }
 
     /// Idempotent retirement, called on native cancellation/selection change,
-
     /// producer teardown and final receipt consumption. A concurrent bounded
     /// callback finishes before release; no later callback can acquire it.
     pub(crate) fn release(&self) {

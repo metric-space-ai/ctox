@@ -41,9 +41,12 @@ turn.
 
 This is the account-preparation component for the genuine Crew lease and
 Harness ClaudeDriver/ClaudeAdapter producer. It neither claims a native
-Supervisor lease nor launches a Claude session. The actual private holding
-transport, registered producer session/turn witness, native review and
-installed end-to-end acceptance remain separate requirements. No configured
+Supervisor lease nor launches a Claude session. The private lease model dispatcher described in
+[native-claude-lease-model-proxy.md](native-claude-lease-model-proxy.md)
+composes the account callback with Crew's actual held-policy controller fence;
+its Source broker receives only a scoped capability. A native control receiver,
+registered producer session/turn witness, native review and installed
+end-to-end acceptance remain separate requirements. No configured
 route is reported as an executed Supervisor turn.
 
 Regression coverage uses an isolated encrypted CTOX secret store and native
