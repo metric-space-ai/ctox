@@ -68,6 +68,12 @@ impl NativeSupervisorExecutionLease {
         policy: &Connection,
         facts: &ConsumerFacts,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.trusted["expires_at_ms"]
+                .as_i64()
+                .is_some_and(|expiry| expiry > now_ms()),
+            unavailable("supervisor_execution_fenced", "native session expired")
+        );
         let context = context_from_arguments_with_trusted_gateway_context(
             workjet_worker_dispatch::TOOL,
             &json!({}),
@@ -165,7 +171,7 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_execution_co
 /// Owns the exact admitted peer/generation, not a reconstructed ConsumerFacts.
 /// There can be one controller for an original lease, even after retirement.
 pub(crate) struct NativeSupervisorHoldingController {
-    lease: NativeSupervisorExecutionLease,
+    lease: std::sync::Arc<NativeSupervisorExecutionLease>,
     authority: AdmittedConsumerAuthority,
     id: String,
     consumer_json: String,
@@ -227,6 +233,14 @@ impl NativeSupervisorHoldingController {
     /// accepted connection. No client-supplied lease/controller is accepted.
     pub(crate) fn claim(
         lease: NativeSupervisorExecutionLease,
+        authority: AdmittedConsumerAuthority,
+    ) -> anyhow::Result<Self> {
+        Self::claim_shared(std::sync::Arc::new(lease), authority)
+    }
+    /// Sharing the sealed native object does not create a replacement lease
+    /// or controller. The service keeps the same object throughout its wait.
+    pub(crate) fn claim_shared(
+        lease: std::sync::Arc<NativeSupervisorExecutionLease>,
         authority: AdmittedConsumerAuthority,
     ) -> anyhow::Result<Self> {
         let (id, consumer_json) = lease.with_current(&authority, |facts, core, policy| {
@@ -296,6 +310,12 @@ impl NativeSupervisorHoldingController {
         Ok(())
     }
 }
+#[path = "mcp_supervisor_publication.rs"]
+mod publication;
+pub(crate) use publication::{
+    NativeSupervisorCurrentPublication, NativeSupervisorPublicationCheck,
+};
+
 #[cfg(test)]
 #[path = "mcp_supervisor_holding_tests.rs"]
 mod tests;

@@ -4,6 +4,64 @@ use super::super::{capability::CapabilityDeviceBinding, mobile_invites, store_wo
 use super::*;
 use store::{BusinessCommand, CommandOrigin};
 
+#[test]
+fn retained_core_publication_fences_current_enrollment_and_rolls_back_failed_send() -> Result<()> {
+    let f = Fixture::new(Some("owner"))?;
+    f.assign("owner", "opaque-computer", Some(&f.pairing))?;
+    // Real native policy identity plus regular Core initialization. This is a
+    // lower-fence regression fixture, not a fabricated transport permit.
+    crate::persistence::load_text_value(f.root.path(), "publication-fixture-bootstrap")?;
+    let core = Connection::open(crate::paths::core_db(f.root.path()))?;
+    core.execute_batch("CREATE TABLE publication_probe(value INTEGER);")?;
+    let publication = NativeConsumerCorePublication {
+        root: f.root.path().to_owned(),
+        token: f.token.clone(),
+        facts: f.resolve()?,
+        core: std::sync::Mutex::new(core),
+        policy: std::sync::Mutex::new(store::open_store(f.root.path())?),
+    };
+    let mut called = 0;
+    publication.with_current(|facts, core, _| {
+        assert_eq!(facts.computer_id, "opaque-computer");
+        let writer = Connection::open(crate::paths::core_db(f.root.path()))?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        assert!(writer
+            .execute("INSERT INTO publication_probe VALUES(1)", [])
+            .is_err());
+        called += 1;
+        core.execute("INSERT INTO publication_probe VALUES(2)", [])?;
+        Ok(())
+    })?;
+    assert_eq!(called, 1);
+    assert!(publication
+        .with_current(|_, core, _| -> Result<()> {
+            core.execute("INSERT INTO publication_probe VALUES(3)", [])?;
+            anyhow::bail!("physical send rejected")
+        })
+        .is_err());
+    let core = Connection::open(crate::paths::core_db(f.root.path()))?;
+    assert_eq!(
+        core.query_row("SELECT sum(value) FROM publication_probe", [], |r| r
+            .get::<_, i64>(0))?,
+        2
+    );
+    store::open_store(f.root.path())?.execute(
+        "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='owner'",
+        [],
+    )?;
+    assert!(publication
+        .with_current(|_, _, _| {
+            called += 1;
+            Ok(())
+        })
+        .is_err());
+    assert_eq!(
+        called, 1,
+        "revoked identity cannot poll a physical publication"
+    );
+    Ok(())
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     token: String,
