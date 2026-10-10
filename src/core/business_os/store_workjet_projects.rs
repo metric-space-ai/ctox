@@ -45,6 +45,10 @@ struct ProjectUpsertPayload {
     #[serde(default)]
     supervisor_luma_id: ProjectField<String>,
     #[serde(default)]
+    execution_policy: ProjectField<
+        super::workjet_project_execution_policy_contract::ProjectExecutionPolicyUpdate,
+    >,
+    #[serde(default)]
     archived: Option<bool>,
 }
 
@@ -274,6 +278,15 @@ pub(super) fn handle_workjet_project_upsert_command(
         )?))
     })?;
 
+    anyhow::ensure!(
+        !matches!(payload.execution_policy, ProjectField::Clear),
+        "execution_policy requires a typed default-mode patch with expected_revision, not null"
+    );
+    if let ProjectField::Set(requested) = &payload.execution_policy {
+        use super::workjet_project_execution_policy_contract::WireValidate;
+        requested.validate().map_err(anyhow::Error::msg)?;
+    }
+
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |transaction| {
         // Recheck identity inside the actual domain writer transaction, so an
@@ -333,6 +346,21 @@ pub(super) fn handle_workjet_project_upsert_command(
                 ProjectField::Clear => {}
                 ProjectField::Set(value) => project[field] = value,
             }
+        }
+        match &payload.execution_policy {
+            ProjectField::Keep => {
+                if let Some(value) = existing
+                    .as_ref()
+                    .and_then(|record| record.get("execution_policy"))
+                {
+                    project["execution_policy"] = value.clone();
+                }
+            }
+            ProjectField::Set(requested) => {
+                project["execution_policy"] =
+                    super::workjet_project_execution_policy::apply(existing.as_ref(), requested)?;
+            }
+            ProjectField::Clear => unreachable!("null policy was rejected before mutation"),
         }
         if archived {
             project["archived_at_ms"] = Value::from(archived_at_ms);
@@ -735,6 +763,166 @@ pub(crate) mod tests {
             "active": true,
             "inbound_channel": "ctox"
         }))?;
+        Ok(())
+    }
+
+    #[test]
+    fn execution_policy_contract_native_and_browser_corpus() -> anyhow::Result<()> {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-project-execution-policy-v1.json"
+        ))?;
+        for (group, valid) in [("valid_cases", true), ("invalid_cases", false)] {
+            for sample in corpus[group].as_array().unwrap() {
+                let result =
+                    super::super::workjet_project_execution_policy_contract::validate_fixture(
+                        sample["type"].as_str().unwrap(),
+                        sample["value"].clone(),
+                    );
+                assert_eq!(result.is_ok(), valid, "{sample}: {result:?}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn execution_policy_owner_cas_persists_projects_and_revokes_without_aba() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        create_workjet_rxdb_projection_tables(root.path())?;
+        let legacy = create_project(root.path())?;
+        assert!(legacy["project"].get("execution_policy").is_none());
+        let policy =
+            super::super::workjet_project_execution_policy::current(Some(&legacy["project"]))?;
+        assert_eq!(
+            serde_json::to_value(policy)?,
+            json!({
+                "schema":"ctox.workjet.project_execution_policy.v1","mode":"default","revision":0
+            })
+        );
+        let patch = |mode: &str, expected_revision: u64| {
+            command(
+                "ctox.workjet.project.upsert",
+                json!({
+                    "project_id":"project-1","name":"Project One","execution_policy":{
+                        "schema":"ctox.workjet.project_execution_policy.v1","mode":mode,"expected_revision":expected_revision
+                    }
+                }),
+            )
+        };
+        let request = patch("autonomous_worktree", 0);
+        let first = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        let replay = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        assert_eq!(
+            replay, first,
+            "original domain operation replays its durable receipt"
+        );
+        assert_eq!(first["project"]["execution_policy"]["revision"], 1);
+        let projected =
+            load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?.unwrap();
+        assert_eq!(
+            projected["execution_policy"],
+            first["project"]["execution_policy"]
+        );
+        let changed_name = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1","name":"Renamed"}),
+            ),
+            "owner-1",
+        )?;
+        assert_eq!(
+            changed_name["project"]["execution_policy"],
+            first["project"]["execution_policy"]
+        );
+        let revoked =
+            handle_workjet_project_upsert_command(root.path(), &patch("default", 1), "owner-1")?;
+        assert_eq!(revoked["project"]["execution_policy"]["revision"], 2);
+        assert_eq!(revoked["project"]["execution_policy"]["mode"], "default");
+        // A different command with stale approval cannot re-enable the same intent.
+        let mut stale = patch("autonomous_worktree", 0);
+        stale.payload["name"] = json!("Stale different operation");
+        assert!(format!(
+            "{:#}",
+            handle_workjet_project_upsert_command(root.path(), &stale, "owner-1").unwrap_err()
+        )
+        .contains("workjet_project_execution_policy_revision_conflict"));
+        let restored = handle_workjet_project_upsert_command(
+            root.path(),
+            &patch("autonomous_worktree", 2),
+            "owner-1",
+        )?;
+        assert_eq!(restored["project"]["execution_policy"]["revision"], 3);
+        let unchanged = handle_workjet_project_upsert_command(
+            root.path(),
+            &patch("autonomous_worktree", 3),
+            "owner-1",
+        )?;
+        assert_eq!(unchanged["project"]["execution_policy"]["revision"], 3);
+        let conn = open_store(root.path())?;
+        let stored = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap();
+        assert_eq!(
+            stored["execution_policy"],
+            restored["project"]["execution_policy"]
+        );
+        assert_eq!(stored["owner_user_id"], "owner-1");
+        assert!(stored.get("workspace_root").is_none());
+        assert!(stored.get("runtimeMode").is_none());
+        let list = super::handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({})),
+            "owner-1",
+        )?;
+        assert_eq!(list["project_ids"], json!(["project-1"]));
+        let foreign = super::handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({})),
+            "foreign-owner",
+        )?;
+        assert_eq!(foreign["count"], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn execution_policy_rejects_forged_stale_and_foreign_mutations_atomically() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        let before = create_project(root.path())?;
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-project-execution-policy-v1.json"
+        ))?;
+        for sample in corpus["invalid_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["type"] == "ProjectExecutionPolicyUpdate")
+        {
+            let request = command(
+                "ctox.workjet.project.upsert",
+                json!({
+                    "project_id":"project-1","name":"Invalid","execution_policy":sample["value"]
+                }),
+            );
+            assert!(
+                handle_workjet_project_upsert_command(root.path(), &request, "owner-1").is_err()
+            );
+        }
+        let foreign = command(
+            "ctox.workjet.project.upsert",
+            json!({
+                "project_id":"project-1","name":"Foreign","execution_policy":{
+                    "schema":"ctox.workjet.project_execution_policy.v1","mode":"autonomous_worktree","expected_revision":0
+                }
+            }),
+        );
+        assert!(
+            handle_workjet_project_upsert_command(root.path(), &foreign, "foreign-owner").is_err()
+        );
+        let conn = open_store(root.path())?;
+        assert_eq!(
+            outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap(),
+            before["project"]
+        );
         Ok(())
     }
 
