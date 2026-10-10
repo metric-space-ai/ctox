@@ -65,6 +65,8 @@ pub(crate) enum SourceAction {
     ModelInvoke,
     #[serde(rename = "model_read")]
     ModelRead,
+    #[serde(rename = "tool_call")]
+    ToolCall,
 }
 impl WireValidate for SourceAction {
     fn validate(&self) -> Result<(), String> {
@@ -106,6 +108,10 @@ pub(crate) struct SourceOperation {
     pub(crate) sdk_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_tool: Option<SourceNativeTool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_arguments_json: Option<String>,
 }
 impl WireValidate for SourceOperation {
     fn validate(&self) -> Result<(), String> {
@@ -175,6 +181,18 @@ impl WireValidate for SourceOperation {
             value.validate()?;
             if *value > 65535 {
                 return Err("SourceOperation.sequence violates maximum".into());
+            }
+        }
+        if let Some(value) = &self.native_tool {
+            value.validate()?;
+        }
+        if let Some(value) = &self.tool_arguments_json {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceOperation.tool_arguments_json violates min_chars".into());
+            }
+            if value.chars().count() > 65536 {
+                return Err("SourceOperation.tool_arguments_json violates max_chars".into());
             }
         }
         Ok(())
@@ -328,6 +346,17 @@ impl WireValidate for SourceModelOperation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum SourceNativeTool {
+    #[serde(rename = "worker_dispatch")]
+    WorkerDispatch,
+}
+impl WireValidate for SourceNativeTool {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -347,6 +376,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "SourceModelOperation" => serde_json::from_value::<SourceModelOperation>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceNativeTool" => serde_json::from_value::<SourceNativeTool>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),

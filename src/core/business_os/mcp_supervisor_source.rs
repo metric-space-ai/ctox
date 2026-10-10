@@ -233,6 +233,7 @@ impl NativeSupervisorSourceHost {
             wire::SourceAction::Claim => {
                 self.claim(authority, operation.offer_id.as_deref().unwrap())
             }
+            wire::SourceAction::ToolCall => tools::respond(self, authority, &operation),
             wire::SourceAction::Status | wire::SourceAction::Cancel => {
                 self.control(authority, &operation)
             }
@@ -531,6 +532,7 @@ fn offer_value(
 fn claim_value(id: &str, row: &OfferRow, controller: &NativeSupervisorHoldingController) -> Value {
     json!({"version":1,"state":"claimed","offer_id":id,"execution_key":row.execution_key,
         "controller_id":controller.controller_id(),"prompt":row.prompt,"deadline_ms":row.deadline_ms,
+        "native_tools":tools::descriptors(),
         "execution_ready":false})
 }
 fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> {
@@ -564,6 +566,17 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
         wire::SourceAction::Status | wire::SourceAction::Cancel => {
             operation.offer_id.is_some() && operation.controller_id.is_some()
         }
+        wire::SourceAction::ToolCall => {
+            operation.offer_id.is_some()
+                && operation.controller_id.is_some()
+                && operation.operation_id.is_some()
+                && operation.native_tool.is_some()
+                && operation.tool_arguments_json.is_some()
+                && operation.model_operation.is_none()
+                && operation.body_json.is_none()
+                && operation.sdk_session_id.is_none()
+                && operation.sequence.is_none()
+        }
         wire::SourceAction::ModelInvoke => {
             operation.offer_id.is_some()
                 && operation.controller_id.is_some()
@@ -589,12 +602,18 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
     );
     anyhow::ensure!(
         is_model
+            || operation.action == wire::SourceAction::ToolCall
             || (operation.operation_id.is_none()
                 && operation.model_operation.is_none()
                 && operation.body_json.is_none()
                 && operation.sdk_session_id.is_none()
                 && operation.sequence.is_none()),
         "model fields are not control authority"
+    );
+    anyhow::ensure!(
+        operation.action == wire::SourceAction::ToolCall
+            || (operation.native_tool.is_none() && operation.tool_arguments_json.is_none()),
+        "native tool fields cannot alter model/control authority"
     );
     anyhow::ensure!(shape, "native Source action fields differ");
     Ok(operation)
@@ -632,3 +651,5 @@ mod model;
 #[cfg(test)]
 #[path = "mcp_supervisor_source_tests.rs"]
 mod tests;
+#[path = "mcp_supervisor_source_tools.rs"]
+mod tools;
