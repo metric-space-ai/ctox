@@ -91,15 +91,17 @@ fn account_access_refresh_and_configuration_changes_permanently_retire_a_reserva
             _ => unreachable!(),
         }
         let mut invoked = false;
-        assert!(with_captured_current(&state, &current, &binding, |_| {
-            invoked = true;
-            Ok(())
-        })
-        .is_err());
+        assert!(
+            with_captured_current::<()>(&state, &current, &binding, |_| {
+                invoked = true;
+                Ok(())
+            })
+            .is_err()
+        );
         assert!(!invoked);
         assert!(state.lock().unwrap().is_none());
         // Even restoring the old credential cannot resurrect this reservation.
-        assert!(with_captured_current(
+        assert!(with_captured_current::<()>(
             &state,
             &account("access-private", "refresh-private"),
             &binding,
@@ -121,10 +123,12 @@ fn relogin_in_real_secret_store_never_reuses_the_old_sdk_account() -> Result<()>
     CtoxClaudeSecretStore::new(root.path())
         .store_credentials(&new.account.credential_handles().unwrap(), &new.credentials)?;
     let current = stable_capture(root.path(), "native-claude")?;
-    assert!(with_captured_current(&state, &current, &binding, |_| {
-        panic!("old reservation cannot export a re-login credential")
-    })
-    .is_err());
+    assert!(
+        with_captured_current::<()>(&state, &current, &binding, |_| {
+            panic!("old reservation cannot export a re-login credential")
+        })
+        .is_err()
+    );
     assert!(state.lock().unwrap().is_none());
     assert!(validate(&current, &fingerprint(&current)?).is_ok());
     Ok(())
@@ -175,7 +179,7 @@ fn release_is_idempotent_and_cannot_be_recovered_by_a_retained_callback() -> Res
     release_captured(&state);
     release_captured(&state);
     assert!(state.lock().unwrap().is_none());
-    assert!(with_captured_current(
+    assert!(with_captured_current::<()>(
         &state,
         &account("access-private", "refresh-private"),
         &binding,
