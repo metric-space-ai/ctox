@@ -312,6 +312,10 @@ impl ConsumableModel {
         self.catalog_checked_at_ms
     }
 
+    pub(crate) fn private_configuration_binding(&self) -> Option<&str> {
+        self.private_configuration_binding.as_deref()
+    }
+
     /// Revalidate a captured selection around a later bounded dispatch or
     /// publication. An identity, policy, catalog or private binding change
     /// retires it even if the model was removed and subsequently reselected.
