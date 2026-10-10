@@ -339,6 +339,16 @@ class InventoryStorageTests(unittest.TestCase):
         self.receipts[Path(path)] = dict(file=str(Path(path).relative_to(self.root)),
             bytes=len(text.encode()), sha256=hashlib.sha256(text.encode()).hexdigest())
 
+    def test_external_collection_preserves_actual_merge_commit(self):
+        pr = dict(number=28, url="https://github.com/metric-space-ai/learnordie/pull/28",
+                  state="MERGED", headRefOid="a"*40, mergeCommit=dict(oid="b"*40))
+        with patch.object(r, "jobs", return_value=[dict(pr_url=pr["url"], repository="metric-space-ai/learnordie")]), \
+             patch.object(r, "command", return_value=json.dumps(pr)) as command:
+            snapshot = r.collect(self.base, repositories=[])
+        self.assertEqual(snapshot["prs"][0]["mergeCommit"], pr["mergeCommit"])
+        self.assertIn("mergeCommit", command.call_args.args[-1].split(","))
+        self.assertEqual(r.load(self.current), snapshot)
+
     def test_large_inventory_is_remote_and_build_input_is_reproducible(self):
         self.snapshot["prs"][0]["body"] = "x" * 20_000_001
         reference = r.save_inventory(self.base, self.snapshot)
@@ -386,7 +396,12 @@ class InventoryStorageTests(unittest.TestCase):
             r.load(self.current)
         active = copy.deepcopy(self.snapshot)
         active["prs"][0]["state"] = "OPEN"
-        reference = r.save_inventory(self.base, active)
+        with self.assertRaisesRegex(ValueError, "Active PR"):
+            r.save_inventory(self.base, active)
+        raw_path = self.root / "terminal-inventory" / (r.sha(active) + ".json")
+        self.remote_write(raw_path, active)
+        r.save(self.current, dict(reference, file=str(raw_path.relative_to(self.root)),
+            sha256=self.receipts[raw_path]["sha256"], bytes=self.receipts[raw_path]["bytes"]))
         with self.assertRaisesRegex(ValueError, "metadata mismatch"):
             r.load(self.current)
 

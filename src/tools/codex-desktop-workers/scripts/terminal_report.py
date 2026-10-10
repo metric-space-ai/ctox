@@ -53,6 +53,8 @@ def load(path):
 
 def save_inventory(base, snapshot):
     """Keep full raw inventories on gpu3 and only verified references locally."""
+    if any(not terminal(pr) for pr in snapshot["prs"]):
+        raise ValueError("Active PR in terminal inventory")
     raw_path = evidence_storage.ROOT / "terminal-inventory" / (sha(snapshot) + ".json")
     save_raw(raw_path, snapshot)
     row = evidence_storage.locator(raw_path)
@@ -153,7 +155,7 @@ def collect(base, repositories=REPOS):
     for url in sorted(extra):
         # Existing external registry cases only. Do not inventory unrelated repositories.
         pr = json.loads(command("gh", "pr", "view", url, "--json",
-            "number,title,url,state,baseRefName,headRefName,headRefOid,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
+            "number,title,url,state,baseRefName,headRefName,headRefOid,createdAt,closedAt,mergedAt,mergeCommit,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
         if terminal(pr):
             pr.update(repository=url.split("github.com/")[1].split("/pull/")[0],
                       project="External registry", snapshot_at=now())
