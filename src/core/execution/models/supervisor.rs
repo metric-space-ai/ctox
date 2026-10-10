@@ -975,8 +975,12 @@ fn managed_runtime_ports(root: &Path) -> Result<Vec<u16>> {
 }
 
 fn append_managed_backend_runtime_ports(root: &Path, ports: &mut Vec<u16>) -> Result<()> {
-    // A switch to API/IPC can clear engine_port while a legacy default
-    // listener still belongs to the managed cleanup inventory.
+    // A switch to API/IPC, or a newer model with a different port, can
+    // leave an older managed listener. These legacy ports are inventory
+    // only: cleanup separately verifies exact root/process ownership.
+    for port in 1234..=1239 {
+        push_unique_port(ports, port);
+    }
     push_unique_port(ports, runtime_state::default_local_engine_port());
     if let Some(state) = runtime_state::load_or_resolve_runtime_state(root).ok() {
         if let Some(port) = state.engine_port {
@@ -1990,7 +1994,7 @@ fn ensure_backend_process(
         release_backend_runtime_ownership(root, role);
     }
     dedupe_socket_backed_backend_processes(root, &spec, &pid_path)?;
-    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
         std::fs::write(&pid_path, format!("{matched_pid}\n"))
             .with_context(|| format!("failed to write backend pid file {}", pid_path.display()))?;
         let _ = stop_duplicate_socket_backed_backend_processes(root, &spec, Some(matched_pid));
@@ -2039,7 +2043,7 @@ fn ensure_backend_process(
             release_backend_runtime_ownership(root, role);
         }
     }
-    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
         std::fs::write(&pid_path, format!("{matched_pid}\n"))
             .with_context(|| format!("failed to write backend pid file {}", pid_path.display()))?;
         let _ = stop_duplicate_socket_backed_backend_processes(root, &spec, Some(matched_pid));
@@ -2056,7 +2060,7 @@ fn ensure_backend_process(
     let startup_started = Instant::now();
     let Some(_lease) = acquire_backend_startup_lease(root, spec.port, &spec.request_model)? else {
         while startup_started.elapsed() < Duration::from_secs(startup_wait_secs) {
-            if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+            if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
                 std::fs::write(&pid_path, format!("{matched_pid}\n")).with_context(|| {
                     format!("failed to write backend pid file {}", pid_path.display())
                 })?;
@@ -2603,7 +2607,9 @@ fn wait_for_backend_ready(
                 );
             }
         }
-        if let Some(matched_pid) = ready_backend_process_pid(root, spec, pid_path)? {
+        if let Some(matched_pid) =
+            ready_backend_process_pid(root, spec, pid_path, child.as_ref().map(|child| child.id()))?
+        {
             std::fs::write(pid_path, format!("{matched_pid}\n")).with_context(|| {
                 format!("failed to write backend pid file {}", pid_path.display())
             })?;
@@ -2618,7 +2624,8 @@ fn wait_for_backend_ready(
             return Ok(());
         }
         if let Some(pid) = read_pid(pid_path) {
-            if !process_is_alive(pid) {
+            let owned_child = child.as_ref().is_some_and(|child| child.id() == pid);
+            if !process_is_alive_with_reaping(pid, !owned_child) {
                 // The child may exit during the readiness probe after the
                 // first try_wait. Reap it before losing its real exit status.
                 let exit_status = child
@@ -2711,6 +2718,7 @@ fn ready_backend_process_pid(
     root: &Path,
     spec: &ManagedBackendSpec,
     pid_path: &Path,
+    owned_child_pid: Option<u32>,
 ) -> Result<Option<u32>> {
     if let Some(transport) = spec_local_transport(spec) {
         if !transport_accepts_stably(
@@ -2720,7 +2728,9 @@ fn ready_backend_process_pid(
         ) {
             return Ok(None);
         }
-        if let Some(pid) = read_pid(pid_path).filter(|pid| process_is_alive(*pid)) {
+        if let Some(pid) = read_pid(pid_path)
+            .filter(|pid| process_is_alive_with_reaping(*pid, owned_child_pid != Some(*pid)))
+        {
             if socket_backed_process_matches_spec(root, spec, pid)? {
                 return Ok(Some(pid));
             }
@@ -3681,6 +3691,10 @@ fn read_pid(path: &Path) -> Option<u32> {
 }
 
 fn process_is_alive(pid: u32) -> bool {
+    process_is_alive_with_reaping(pid, true)
+}
+
+fn process_is_alive_with_reaping(pid: u32, reap: bool) -> bool {
     let exists = Command::new("kill")
         .arg("-0")
         .arg(pid.to_string())
@@ -3693,7 +3707,11 @@ fn process_is_alive(pid: u32) -> bool {
         return false;
     }
     if process_is_zombie(pid) {
-        reap_zombie_child(pid);
+        // A retained Child owns waitpid and its real exit status. Generic
+        // persistent-process probes may reap only when no Child owns it.
+        if reap {
+            reap_zombie_child(pid);
+        }
         return false;
     }
     true
@@ -4806,8 +4824,23 @@ mod tests {
         .expect_err("child exit status must be reported");
 
         let message = err.to_string();
-        assert!(message.contains("exit status"));
-        assert!(message.contains("Applying ISQ on 1 threads."));
+        assert!(message.contains("exit status"), "{message}");
+        assert!(message.contains("Applying ISQ on 1 threads."), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_child_liveness_probe_preserves_its_exit_status() -> Result<()> {
+        let mut child = Command::new("/bin/sh").args(["-c", "exit 17"]).spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !process_is_zombie(child.id()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let alive = process_is_alive_with_reaping(child.id(), false);
+        let status = child.wait()?;
+        assert!(!alive);
+        assert_eq!(status.code(), Some(17));
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
