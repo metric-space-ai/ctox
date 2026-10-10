@@ -131,6 +131,8 @@ pub(crate) mod workjet_supervisor_execution_contract;
 #[path = "workjet_supervisor_luma_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_luma_contract;
 pub mod workjet_transfer_git;
+#[path = "workjet_worker_outcome_contract.generated.rs"]
+pub(crate) mod workjet_worker_outcome_contract;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
 pub use browser_control::browser_context_capture;

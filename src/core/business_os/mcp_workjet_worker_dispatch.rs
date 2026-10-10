@@ -5,6 +5,7 @@
 //! This queue never creates a harness, worktree or worker itself.
 use super::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub(super) const TOOL: &str = "business_os.workjet_worker_dispatch";
@@ -98,12 +99,21 @@ enum Request {
         intent_id: String,
         result: Value,
     },
+    ReportOutcome {
+        registration_id: String,
+        revision: u64,
+        intent_id: String,
+        receipt: super::super::workjet_worker_outcome_contract::WorkerTerminalReceipt,
+    },
     Dispatch {
         dispatch_key: String,
         task: String,
         title: Option<String>,
         computer_id: Option<String>,
         worker_profile_id: Option<String>,
+    },
+    Observe {
+        limit: Option<u32>,
     },
 }
 
@@ -115,18 +125,24 @@ CREATE TABLE IF NOT EXISTS workjet_worker_dispatch_intents (
     intent_id TEXT PRIMARY KEY, registration_id TEXT NOT NULL, registration_revision INTEGER NOT NULL,
     command_id TEXT NOT NULL, dispatch_key TEXT NOT NULL, request_digest TEXT NOT NULL,
     intent_json TEXT NOT NULL, result_json TEXT,
-    UNIQUE(command_id,dispatch_key));";
+    UNIQUE(command_id,dispatch_key));
+CREATE TABLE IF NOT EXISTS workjet_worker_dispatch_outcomes (
+    intent_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, project_id TEXT NOT NULL,
+    supervisor_thread_id TEXT NOT NULL, registration_revision INTEGER NOT NULL,
+    receipt_json TEXT NOT NULL, accepted_at_ms INTEGER NOT NULL);";
 
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(TOOL,
-        "Dispatch one worker through the registered Workjet source. Native supervisor sessions may only dispatch: task plus a stable dispatch_key, optional title/computer_id/worker_profile_id. Identity is native-bound. Authenticated source Owner/Admin may register_source, poll (at most one durable intent), complete the exact result, or revoke_source. Replayed intents keep the same UUID; this tool never starts another executor.",
+        "Dispatch through the registered Workjet source, or observe persisted dispatch acknowledgements for the native-bound project. Restricted native supervisors may dispatch or observe (limit 1..32). An acknowledgement of dispatched means started, never completed work or a merged PR. Authenticated source Owner/Admin may register_source, poll, complete startup, report_outcome from its persisted terminal GitHub PR receipt after execution has stopped, or revoke_source. Reports are source evidence, not native completion. Replayed intents keep the same UUID; this tool never starts another executor.",
         serde_json::json!({"type":"object","additionalProperties":false,"required":["action"],
             "properties":{
-                "action":{"type":"string","enum":["register_source","revoke_source","poll","complete","dispatch"]},
+                "action":{"type":"string","enum":["register_source","revoke_source","poll","complete","report_outcome","dispatch","observe"]},
+                "limit":{"type":"integer","minimum":1,"maximum":32},
                 "source_environment_id":{"type":"string"},"source_supervisor_thread_id":{"type":"string"},
                 "project_id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},
                 "registration_id":{"type":"string"},"revision":{"type":"integer","minimum":1},
                 "intent_id":{"type":"string"},"result":{"type":"object"},
+                "receipt":workjet_jour_fixe::schema(&serde_json::from_str::<Value>(include_str!("../rxdb/tests/fixtures/workjet-worker-outcome-v1.json")).expect("worker outcome fixture"),"WorkerTerminalReceipt"),
                 "dispatch_key":{"type":"string"},"task":{"type":"string","maxLength":16384},
                 "title":{"type":"string","maxLength":200},"computer_id":{"type":"string"},
                 "worker_profile_id":{"type":"string"}}}))
@@ -284,10 +300,10 @@ pub(super) fn execute(
 ) -> anyhow::Result<Value> {
     let request: Request = serde_json::from_value(arguments.clone())?;
     let internal = context.trusted_role_source.as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE);
-    if matches!(&request, Request::Dispatch { .. }) {
+    if matches!(&request, Request::Dispatch { .. } | Request::Observe { .. }) {
         anyhow::ensure!(
             internal && trusted.is_some_and(|t| t["workjet_supervisor_only"] == true),
-            "dispatch requires the restricted native supervisor session"
+            "dispatch/observe requires the restricted native supervisor session"
         );
     } else {
         anyhow::ensure!(
@@ -295,6 +311,14 @@ pub(super) fn execute(
                 && context.trusted_role_source.as_deref() == Some("ctox_dev_managed_mcp_token")
                 && context.channel == "ctox_dev_managed_mcp",
             "source controls require authenticated managed Owner/Admin MCP"
+        );
+    }
+    if let Request::Observe { limit } = &request {
+        return observe(
+            root,
+            context,
+            trusted.context("native supervisor session unavailable")?,
+            *limit,
         );
     }
     // Worker/core before policy, matching the native execution lock order.
@@ -310,6 +334,7 @@ pub(super) fn execute(
     let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
     remote_worker::current_actor(&policy_tx, context)?;
     let response = match request {
+        Request::Observe { .. } => unreachable!("observations use read-only snapshots"),
         Request::RegisterSource {
             source_environment_id,
             source_supervisor_thread_id,
@@ -484,6 +509,20 @@ pub(super) fn execute(
             }
             serde_json::json!({"contract":CONTRACT,"intentId":intent_id,"registrationId":registration_id,"revision":revision,"result":result})
         }
+        Request::ReportOutcome {
+            registration_id,
+            revision,
+            intent_id,
+            receipt,
+        } => retain_outcome(
+            &core_tx,
+            &policy_tx,
+            context,
+            &registration_id,
+            revision,
+            &intent_id,
+            receipt,
+        )?,
         Request::Dispatch {
             dispatch_key,
             task,
@@ -577,6 +616,343 @@ pub(super) fn execute(
     core_tx.commit()?;
     policy_tx.commit()?;
     Ok(response)
+}
+
+/// Observation issues no execution authority and never repairs schema or reserves
+/// a writer. As for meeting reads, both snapshots revalidate the actual lease,
+/// canonical admission and current Owner/project/Supervisor binding.
+fn observe(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    trusted: &Value,
+    limit: Option<u32>,
+) -> anyhow::Result<Value> {
+    let limit = limit.unwrap_or(16);
+    anyhow::ensure!((1..=32).contains(&limit), "observe limit must be 1..32");
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let mut core = Connection::open_with_flags(crate::paths::core_db(root), flags)?;
+    core.busy_timeout(std::time::Duration::from_secs(5))?;
+    let mut policy = Connection::open_with_flags(store::business_os_store_path(root), flags)?;
+    policy.busy_timeout(std::time::Duration::from_secs(5))?;
+    let core_tx = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let (project, thread, _) =
+        workjet_jour_fixe::bound_project(&core_tx, &policy_tx, context, trusted)?;
+    let epoch = current_project(&policy_tx, context, &project, &thread)?;
+    anyhow::ensure!(
+        super::super::store_policy::trusted_actor_policy_decision_with_conn(
+            &policy_tx,
+            &context.actor,
+            context
+                .trusted_role
+                .as_deref()
+                .context("native role missing")?,
+            BusinessOsPermission::DataRead,
+            BusinessOsScopeType::Record,
+            Some(&project),
+        )?
+        .allowed,
+        "native dispatch observation policy denied"
+    );
+    let mut response = serde_json::json!({
+        "contract":CONTRACT, "projectId":project, "supervisorThreadId":thread,
+        "observations":[], "truncated":false
+    });
+    let tables: u32 = core_tx.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
+         ('workjet_worker_dispatch_sources','workjet_worker_dispatch_intents')",
+        [],
+        |row| row.get(0),
+    )?;
+    if tables != 2 {
+        return Ok(response);
+    }
+    let mut statement = core_tx.prepare(
+        "SELECT i.command_id,i.dispatch_key,i.intent_json,i.result_json,s.record_json
+         FROM workjet_worker_dispatch_intents i
+         JOIN workjet_worker_dispatch_sources s ON s.registration_id=i.registration_id
+         WHERE s.owner_user_id=?1 AND s.project_id=?2
+         AND json_extract(i.intent_json,'$.sourceSupervisorThreadId')=?3
+         ORDER BY i.rowid DESC LIMIT ?4",
+    )?;
+    let rows = statement.query_map(params![context.actor, project, thread, limit + 1], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut observations = Vec::new();
+    for row in rows {
+        if observations.len() == limit as usize {
+            response["truncated"] = Value::Bool(true);
+            break;
+        }
+        let (execution_key, dispatch_key, intent_raw, result_raw, source_raw) = row?;
+        let intent: Intent = serde_json::from_str(&intent_raw)?;
+        let source: Registration = serde_json::from_str(&source_raw)?;
+        anyhow::ensure!(
+            source.contract == CONTRACT
+                && source.owner_user_id == context.actor
+                && source.project_id == project
+                && intent.project_id == project
+                && intent.source_supervisor_thread_id == thread
+                && intent.registration_id == source.registration_id,
+            "persisted dispatch observation identity differs"
+        );
+        let acknowledgement = if let Some(raw) = result_raw {
+            let result: Value = serde_json::from_str(&raw)?;
+            validate_result(&intent, &result)?;
+            let mut fields = serde_json::Map::new();
+            // Selection metadata is not an actual producer witness. The source
+            // receipt only attests startup (or a typed startup failure).
+            for key in [
+                "status",
+                "reason",
+                "workerThreadId",
+                "environmentId",
+                "computerId",
+                "branch",
+            ] {
+                if let Some(value) = result.get(key) {
+                    fields.insert(key.to_owned(), value.clone());
+                }
+            }
+            Value::Object(fields)
+        } else {
+            Value::Null
+        };
+        let observation = serde_json::json!({
+            "intentId":intent.intent_id, "executionKey":execution_key, "dispatchKey":dispatch_key,
+            "registrationRevision":intent.registration_revision,
+            "registrationCurrent":source.state=="active" && source.revision==intent.registration_revision
+                && source.authority_epoch==epoch && source.source_supervisor_thread_id==thread,
+            "title":intent.title, "taskPreview":intent.task.chars().take(256).collect::<String>(),
+            "computerId":intent.computer_id, "workerProfileId":intent.worker_profile_id,
+            "acknowledgement":acknowledgement, "execution":null,
+            "reportedOutcome":read_outcome(&core_tx, &context.actor, &project, &thread, &intent.intent_id)?
+        });
+        observations.push(observation);
+        // Bound metadata as well as row count, without claiming completeness.
+        if serde_json::to_vec(&observations)?.len() > 60 * 1024 {
+            observations.pop();
+            response["truncated"] = Value::Bool(true);
+            break;
+        }
+    }
+    response["observations"] = serde_json::to_value(observations)?;
+    Ok(response)
+}
+
+/// A terminal report is evidence from the already authenticated source, not
+/// a native review verdict or a physical provider execution witness.
+fn retain_outcome(
+    core: &Connection,
+    policy: &Connection,
+    context: &McpChannelRequestContext,
+    registration_id: &str,
+    revision: u64,
+    intent_id: &str,
+    receipt: super::super::workjet_worker_outcome_contract::WorkerTerminalReceipt,
+) -> anyhow::Result<Value> {
+    use super::super::workjet_worker_outcome_contract::WireValidate;
+    text(registration_id, 128)?;
+    text(intent_id, 128)?;
+    anyhow::ensure!(
+        (1..=9_007_199_254_740_991).contains(&revision),
+        "invalid source revision"
+    );
+    receipt.validate().map_err(anyhow::Error::msg)?;
+    let source = load(core, &context.actor, registration_id)?;
+    check_source(policy, context, &source, revision)?;
+    let (intent_raw, startup_raw): (String, Option<String>) = core
+        .query_row(
+            "SELECT intent_json,result_json FROM workjet_worker_dispatch_intents
+         WHERE intent_id=?1 AND registration_id=?2 AND registration_revision=?3",
+            params![intent_id, registration_id, revision],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .context("worker outcome intent unavailable")?;
+    let intent: Intent = serde_json::from_str(&intent_raw)?;
+    anyhow::ensure!(
+        intent.project_id == source.project_id
+            && intent.source_supervisor_thread_id == source.source_supervisor_thread_id
+            && intent.source_environment_id == source.source_environment_id,
+        "worker outcome source scope differs"
+    );
+    let startup: Value =
+        serde_json::from_str(&startup_raw.context("worker has no startup acknowledgement")?)?;
+    validate_result(&intent, &startup)?;
+    anyhow::ensure!(
+        startup["status"] == "dispatched"
+            && receipt.worker_thread_id == intent.intent_id
+            && startup["workerThreadId"] == receipt.worker_thread_id
+            && startup["environmentId"] == receipt.environment_id
+            && startup["computerId"] == receipt.computer_id
+            && startup["branch"] == receipt.branch
+            && receipt.branch == format!("workjet/worker/{}", receipt.worker_thread_id)
+            && receipt.execution_stopped,
+        "worker outcome does not match a stopped, acknowledged isolated worker"
+    );
+    let pr = &receipt.pull_request;
+    let url = url::Url::parse(&pr.url).context("invalid worker pull request URL")?;
+    let segments: Vec<_> = url
+        .path_segments()
+        .context("invalid pull request path")?
+        .collect();
+    anyhow::ensure!(
+        url.scheme() == "https"
+            && url.host_str() == Some("github.com")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && segments.len() == 4
+            && !segments[0].is_empty()
+            && !segments[1].is_empty()
+            && segments[2] == "pull"
+            && segments[3] == pr.number.to_string()
+            && segments[..2].iter().all(|part| part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)))
+            && matches!(pr.head_oid.len(), 40 | 64)
+            && pr
+                .head_oid
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+        "worker pull request identity or head is invalid"
+    );
+    let receipt_json = serde_json::to_string(&receipt)?;
+    anyhow::ensure!(
+        receipt_json.len() <= 16 * 1024,
+        "worker outcome exceeds bound"
+    );
+    let prior: Option<String> = core
+        .query_row(
+            "SELECT receipt_json FROM workjet_worker_dispatch_outcomes WHERE intent_id=?1",
+            [intent_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(prior) = prior {
+        anyhow::ensure!(
+            serde_json::from_str::<Value>(&prior)? == serde_json::to_value(&receipt)?,
+            "worker terminal outcome differs from its immutable prior receipt"
+        );
+    } else {
+        core.execute(
+            "INSERT INTO workjet_worker_dispatch_outcomes
+             (intent_id,owner_user_id,project_id,supervisor_thread_id,registration_revision,receipt_json,accepted_at_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![intent_id,context.actor,source.project_id,source.source_supervisor_thread_id,
+                revision,receipt_json,now_ms()],
+        )?;
+    }
+    read_outcome(
+        core,
+        &context.actor,
+        &source.project_id,
+        &source.source_supervisor_thread_id,
+        intent_id,
+    )
+}
+fn read_outcome(
+    core: &Connection,
+    owner: &str,
+    project: &str,
+    supervisor: &str,
+    intent_id: &str,
+) -> anyhow::Result<Value> {
+    let exists: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_worker_dispatch_outcomes')",
+        [], |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(Value::Null);
+    }
+    let raw: Option<(String,i64,u64)> = core.query_row(
+        "SELECT receipt_json,accepted_at_ms,registration_revision FROM workjet_worker_dispatch_outcomes
+         WHERE intent_id=?1 AND owner_user_id=?2 AND project_id=?3 AND supervisor_thread_id=?4",
+        params![intent_id,owner,project,supervisor], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+    ).optional()?;
+    let Some((raw, at, revision)) = raw else {
+        return Ok(Value::Null);
+    };
+    anyhow::ensure!(
+        raw.len() <= 16 * 1024,
+        "persisted worker outcome exceeds bound"
+    );
+    let receipt: super::super::workjet_worker_outcome_contract::WorkerTerminalReceipt =
+        serde_json::from_str(&raw)?;
+    use super::super::workjet_worker_outcome_contract::WireValidate;
+    receipt.validate().map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(
+        receipt.worker_thread_id == intent_id,
+        "persisted worker outcome identity differs"
+    );
+    Ok(
+        json!({"provenance":"authenticated_source_report","accepted_at_ms":at,
+        "registration_revision":revision,"receipt":receipt}),
+    )
+}
+
+/// Bounded retained reports for the next deck. Caller has already checked the
+/// current native meeting Owner/project/Supervisor binding. No schema repair.
+pub(in crate::business_os) fn outcomes_for_deck(
+    core: &Connection,
+    meeting: &super::super::workjet_jour_fixe_contract::Meeting,
+) -> anyhow::Result<Value> {
+    let exists: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_worker_dispatch_outcomes')",
+        [], |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(json!({"reports":[],"truncated":false}));
+    }
+    let mut statement = core.prepare(
+        "SELECT o.intent_id,i.command_id FROM workjet_worker_dispatch_outcomes o
+         JOIN workjet_worker_dispatch_intents i ON i.intent_id=o.intent_id
+         WHERE o.owner_user_id=?1 AND o.project_id=?2 AND o.supervisor_thread_id=?3
+           AND o.accepted_at_ms<=?4 ORDER BY o.accepted_at_ms DESC,o.intent_id DESC LIMIT 17",
+    )?;
+    let rows = statement.query_map(
+        params![
+            meeting.owner_user_id,
+            meeting.project_id,
+            meeting.supervisor.workjet_thread_id,
+            meeting.scheduled_at_ms
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    let mut reports = Vec::new();
+    let mut truncated = false;
+    for row in rows {
+        if reports.len() == 16 {
+            truncated = true;
+            break;
+        }
+        let (intent, execution) = row?;
+        let report = read_outcome(
+            core,
+            &meeting.owner_user_id,
+            &meeting.project_id,
+            &meeting.supervisor.workjet_thread_id,
+            &intent,
+        )?;
+        anyhow::ensure!(!report.is_null(), "worker deck outcome missing");
+        reports
+            .push(json!({"intent_id":intent,"execution_key":execution,"reported_outcome":report}));
+        if serde_json::to_vec(&reports)?.len() > 64 * 1024 {
+            reports.pop();
+            truncated = true;
+            break;
+        }
+    }
+    Ok(json!({"reports":reports,"truncated":truncated}))
 }
 
 fn validate_result(intent: &Intent, value: &Value) -> anyhow::Result<()> {

@@ -327,7 +327,8 @@ pub(super) fn execute(
             return Ok(
                 json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project,
                 "previous_goal_definition":previous_goal_definition,
-                "narration_inputs":workjet_narration::inputs(&meeting)}),
+                "narration_inputs":workjet_narration::inputs(&meeting),
+                "worker_outcomes":workjet_worker_dispatch::outcomes_for_deck(&core_tx,&meeting)?}),
             );
         }
         return Ok(if section == "comments" {
