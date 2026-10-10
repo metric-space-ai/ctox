@@ -1300,8 +1300,12 @@ a retained CPU profile still requires analysis and is not tenant acceptance.
 For source-symbol attribution, the full-host workflow runs a separate context
 reproduction **after** the unprofiled acceptance measurements. Its test-driver
 option `--native-symbol-perf=<executable>` attaches Linux perf only to the owned
-native child immediately and records user-space CPU samples at 49 Hz for
-at most 30 seconds. PID start identity is checked before attachment. Fixture
+native child after its native peer reports ready, with no additional delay,
+and records user-space CPU samples at 49 Hz for
+at most 30 seconds. Readiness includes the native worker pools: `--no-inherit`
+does not sample threads created after attachment. A CPU boundary observation
+is captured immediately before attachment.
+PID start identity is checked before attachment. Fixture
 cleanup records a final CPU/thread observation after perf closes and before
 signaling that child. This brackets even a context fixture shorter than the
 periodic sampler interval; the standalone profiler retains its default delay.
