@@ -20,7 +20,7 @@ const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native
  state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, response_text TEXT, response_stop_reason TEXT, response_complete INTEGER, upstream_request_id TEXT, http_status INTEGER,
  created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
 
-fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
+pub(super) fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
     core.execute_batch(MODEL_SCHEMA)?;
     let columns = core
         .prepare("PRAGMA table_info(workjet_supervisor_native_model_requests)")?
@@ -219,8 +219,8 @@ impl ResponseModelObservation {
             }
             return;
         }
-        // Bounded incremental SSE line decoder; large content deltas are skipped,
-        // never reinterpreted as a new message header.
+        // Bounded incremental SSE decoder. An oversized line makes the complete
+        // text unavailable; dropping a delta must never yield a partial reply.
         for byte in bytes {
             if *byte == b'\n' {
                 if !self.skipping {
@@ -234,6 +234,7 @@ impl ResponseModelObservation {
                 self.skipping = false;
             } else if !self.skipping {
                 if self.pending.len() == 64 * 1024 {
+                    self.conflicting = true;
                     self.pending.clear();
                     self.skipping = true;
                 } else {
@@ -750,6 +751,25 @@ mod tests {
         assert!(seen.conflicting);
         assert!(seen.completed_text().is_none());
         assert_eq!(seen.text_bytes, 0);
+    }
+
+    #[test]
+    fn skipped_or_unterminated_sse_delta_never_publishes_a_partial_reply() {
+        let mut seen = ResponseModelObservation::default();
+        seen.value(&json!({"type":"message_start","message":{"type":"message",
+            "id":"msg_observed","model":"claude-opus-5-5"}}));
+        seen.value(&json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"text","text":"Only a prefix"}}));
+        let oversized = format!(
+            "data: {}\n",
+            json!({"type":"content_block_delta","index":0,
+            "delta":{"type":"text_delta","text":"x".repeat(65537)}})
+        );
+        seen.observe(oversized.as_bytes(), true, 200);
+        seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+        seen.value(&json!({"type":"message_stop"}));
+        assert!(seen.conflicting);
+        assert!(seen.completed_text().is_none());
     }
 
     #[test]

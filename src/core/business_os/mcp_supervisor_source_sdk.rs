@@ -3,12 +3,77 @@
 //! Ordered observations from the original enrolled Source's private SDK callbacks.
 //! These records are not execution authority or a caller-reported model result.
 use super::*;
+use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_sdk_observations (
  controller_id TEXT NOT NULL, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
  sequence INTEGER NOT NULL, observation_json TEXT NOT NULL, recorded_at_ms INTEGER NOT NULL,
  PRIMARY KEY(controller_id,sequence));";
+
+// Constructed only from the native Messages row while the original controller
+// remains fenced. SDK strings select candidates; they cannot supply a reply.
+struct NativeParentReply {
+    operation_id: String,
+    text: String,
+}
+fn join_native_parent(
+    core: &Connection,
+    controller_id: &str,
+    execution_key: &str,
+    lease_hash: &str,
+    state: &State,
+) -> anyhow::Result<Option<NativeParentReply>> {
+    if !state.drained_success() {
+        return Ok(None);
+    }
+    let exists: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='workjet_supervisor_native_model_requests')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(None);
+    }
+    let (message_id, message_model, _) = state
+        .parent
+        .as_ref()
+        .context("original SDK parent missing")?;
+    let rows = core
+        .prepare(
+            "SELECT operation_id,response_text FROM workjet_supervisor_native_model_requests
+        WHERE controller_id=?1 AND execution_key=?2 AND lease_hash=?3 AND sdk_correlation=?4
+          AND operation_kind='messages' AND state='observed' AND http_status BETWEEN 200 AND 299
+          AND response_message_id=?5 AND response_model=?6 AND response_complete=1
+          AND response_stop_reason IN ('end_turn','stop_sequence') AND response_text IS NOT NULL
+          AND finished_at_ms IS NOT NULL LIMIT 2",
+        )?
+        .query_map(
+            params![
+                controller_id,
+                execution_key,
+                lease_hash,
+                state.session,
+                message_id,
+                message_model
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "native SDK parent message has multiple model witnesses"
+    );
+    let Some((operation_id, text)) = rows.into_iter().next() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        !text.trim().is_empty() && text.len() <= 64 * 1024,
+        "native parent reply exceeds budget"
+    );
+    Ok(Some(NativeParentReply { operation_id, text }))
+}
 
 #[derive(Default)]
 struct State {
@@ -260,6 +325,39 @@ fn append_in_current(
             ],
         )?;
     }
+    let parent = join_native_parent(core, controller_id, execution_key, lease_hash, &state)?;
+    if let Some(parent) = parent {
+        core.execute_batch("CREATE TABLE IF NOT EXISTS workjet_supervisor_sdk_parent_joins (
+            controller_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
+            sdk_session_id TEXT NOT NULL, sdk_turn_id TEXT NOT NULL, sdk_result_id TEXT NOT NULL,
+            model_operation_id TEXT NOT NULL, reply_sha256 TEXT NOT NULL, joined_at_ms INTEGER NOT NULL);")?;
+        let reply_hash = format!("{:x}", sha2::Sha256::digest(parent.text.as_bytes()));
+        core.execute(
+            "INSERT INTO workjet_supervisor_sdk_parent_joins
+            (controller_id,execution_key,lease_hash,sdk_session_id,sdk_turn_id,sdk_result_id,
+                model_operation_id,reply_sha256,joined_at_ms)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            ON CONFLICT(controller_id) DO NOTHING",
+            params![
+                controller_id,
+                execution_key,
+                lease_hash,
+                state.session,
+                state.turn,
+                state.result.as_ref().map(|result| result.0.as_str()),
+                parent.operation_id,
+                reply_hash,
+                now_ms()
+            ],
+        )?;
+        let same:bool=core.query_row("SELECT EXISTS(SELECT 1 FROM workjet_supervisor_sdk_parent_joins
+            WHERE controller_id=?1 AND execution_key=?2 AND lease_hash=?3 AND sdk_session_id=?4
+              AND sdk_turn_id=?5 AND sdk_result_id=?6 AND model_operation_id=?7 AND reply_sha256=?8)",
+            params![controller_id,execution_key,lease_hash,state.session,state.turn,
+                state.result.as_ref().map(|result|result.0.as_str()),
+                parent.operation_id,reply_hash],|row|row.get(0))?;
+        anyhow::ensure!(same, "native SDK parent join changed");
+    }
     // A drained SDK success is necessary, not sufficient: native upstream model
     // and message anchors must be joined before any actual/result is accepted.
     Ok(
@@ -470,6 +568,160 @@ mod tests {
         let mut bad = operation;
         bad["action"] = json!("status");
         assert!(parse_operation(vec![bad]).is_err());
+        Ok(())
+    }
+
+    fn drained() -> State {
+        let mut state = start();
+        result(&mut state, false);
+        state
+            .apply(&event(5, "sdk-query-close-returned", json!({})))
+            .unwrap();
+        state
+            .apply(&event(6, "sdk-stream-joined", json!({})))
+            .unwrap();
+        state
+            .apply(&event(7, "child-closed", json!({"pid":123,"exit_code":0})))
+            .unwrap();
+        state
+    }
+    fn native_message(core: &Connection) -> anyhow::Result<()> {
+        model::ensure_model_schema(core)?;
+        core.execute(
+            "INSERT INTO workjet_supervisor_native_model_requests
+            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,
+             state,created_at_ms,finished_at_ms,operation_kind,requested_model,response_model,
+             response_message_id,response_text,response_stop_reason,response_complete,http_status)
+            VALUES ('native-op','execution','lease','controller','sdk-session','hash',
+             'observed',1,2,'messages','claude-opus-5-5','claude-opus-5-5',
+             'msg_observed','Native upstream reply','end_turn',1,200)",
+            [],
+        )?;
+        Ok(())
+    }
+    #[test]
+    fn sdk_parent_join_requires_the_original_complete_native_messages_witness() -> anyhow::Result<()>
+    {
+        let core = Connection::open_in_memory()?;
+        assert!(
+            join_native_parent(&core, "controller", "execution", "lease", &drained())?.is_none()
+        );
+        native_message(&core)?;
+        assert!(join_native_parent(&core, "controller", "execution", "lease", &start())?.is_none());
+        let parent =
+            join_native_parent(&core, "controller", "execution", "lease", &drained())?.unwrap();
+        assert_eq!(parent.operation_id, "native-op");
+        assert_eq!(parent.text, "Native upstream reply");
+        // Outgoing model labels, count_tokens and SDK text cannot substitute for
+        // the original native upstream Messages observation.
+        for (column, bad, good) in [
+            ("controller_id", "foreign", "controller"),
+            ("execution_key", "foreign", "execution"),
+            ("lease_hash", "stale", "lease"),
+            ("sdk_correlation", "foreign", "sdk-session"),
+            ("operation_kind", "count_tokens", "messages"),
+            ("state", "accepted", "observed"),
+            ("response_message_id", "other-message", "msg_observed"),
+            ("response_model", "requested-only", "claude-opus-5-5"),
+            ("response_stop_reason", "max_tokens", "end_turn"),
+        ] {
+            core.execute(
+                &format!("UPDATE workjet_supervisor_native_model_requests SET {column}=?1"),
+                [bad],
+            )?;
+            assert!(
+                join_native_parent(&core, "controller", "execution", "lease", &drained())?
+                    .is_none(),
+                "{column}"
+            );
+            core.execute(
+                &format!("UPDATE workjet_supervisor_native_model_requests SET {column}=?1"),
+                [good],
+            )?;
+        }
+        for (column, bad, good) in [("http_status", 500, 200), ("response_complete", 0, 1)] {
+            core.execute(
+                &format!("UPDATE workjet_supervisor_native_model_requests SET {column}=?1"),
+                [bad],
+            )?;
+            assert!(
+                join_native_parent(&core, "controller", "execution", "lease", &drained())?
+                    .is_none(),
+                "{column}"
+            );
+            core.execute(
+                &format!("UPDATE workjet_supervisor_native_model_requests SET {column}=?1"),
+                [good],
+            )?;
+        }
+        core.execute("INSERT INTO workjet_supervisor_native_model_requests SELECT
+            'duplicate',execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,
+            operation_kind,requested_model,response_model,response_message_id,response_text,
+            response_stop_reason,response_complete,upstream_request_id,http_status,created_at_ms,finished_at_ms
+            FROM workjet_supervisor_native_model_requests WHERE operation_id='native-op'",[])?;
+        assert!(join_native_parent(&core, "controller", "execution", "lease", &drained()).is_err());
+        Ok(())
+    }
+    #[test]
+    fn journal_parent_join_is_immutable_and_does_not_claim_execution_ready() -> anyhow::Result<()> {
+        let mut core = Connection::open_in_memory()?;
+        native_message(&core)?;
+        let observations = [
+            event(0, "child-spawned", json!({"pid":123})),
+            event(
+                1,
+                "sdk-init",
+                json!({"session_id":"sdk-session","init_id":"init-id"}),
+            ),
+            event(2, "turn-submitted", json!({"turn_id":"original-turn"})),
+            event(
+                3,
+                "parent-assistant",
+                json!({"session_id":"sdk-session","turn_id":"original-turn",
+                "message_id":"msg_observed","message_model":"claude-opus-5-5","assistant_id":"assistant-id"}),
+            ),
+            event(
+                4,
+                "sdk-result",
+                json!({"session_id":"sdk-session","turn_id":"original-turn",
+                "result_id":"result-id","subtype":"success","is_error":false}),
+            ),
+            event(5, "sdk-stream-joined", json!({})),
+            event(6, "sdk-query-close-returned", json!({})),
+            event(7, "child-closed", json!({"pid":123,"exit_code":0})),
+        ];
+        for observation in &observations {
+            assert_eq!(
+                append_in_current(&core, "controller", "execution", "lease", observation)?
+                    ["execution_ready"],
+                false
+            );
+        }
+        let saved: (String, String) = core.query_row(
+            "SELECT model_operation_id,reply_sha256 FROM workjet_supervisor_sdk_parent_joins",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(saved.0, "native-op");
+        assert_eq!(
+            saved.1,
+            format!("{:x}", sha2::Sha256::digest(b"Native upstream reply"))
+        );
+        let tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE workjet_supervisor_native_model_requests SET response_text='Different native reply'",[])?;
+        assert!(
+            append_in_current(&tx, "controller", "execution", "lease", &observations[7]).is_err()
+        );
+        tx.rollback()?;
+        append_in_current(&core, "controller", "execution", "lease", &observations[7])?;
+        assert_eq!(
+            core.query_row(
+                "SELECT count(*) FROM workjet_supervisor_sdk_parent_joins",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            1
+        );
         Ok(())
     }
 
