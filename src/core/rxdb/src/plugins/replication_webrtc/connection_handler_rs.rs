@@ -265,6 +265,19 @@ impl WebRTCRsConnectionHandler {
         Some(apply())
     }
 
+    /// Fence a bounded physical publication on this exact open generation.
+    /// This establishes transport lifetime only, never actor/device authorization.
+    /// Hosts must compose their own current policy/credential guard. No awaits,
+    /// transport reentry or blocking waits are allowed inside apply.
+    pub fn with_current_connection<T>(
+        &self,
+        peer: &WebRTCRsConnection,
+        apply: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        self.is_current_connection(peer).then(apply)
+    }
+
     /// Resolve a routing hint to the currently open local connection.
     pub fn connection_for_peer(&self, peer_id: &str) -> Option<WebRTCRsConnection> {
         if self.closed.load(Ordering::SeqCst) {

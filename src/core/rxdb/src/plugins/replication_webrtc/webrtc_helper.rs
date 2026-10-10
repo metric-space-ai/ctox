@@ -52,6 +52,32 @@ pub async fn send_message_and_await_answer<H>(
 where
     H: WebRTCConnectionHandler + ?Sized,
 {
+    send_message_and_await_answer_inner(handler, peer, message, None).await
+}
+
+/// The same exact-peer/ID correlation, with a mandatory physical send fence.
+/// Unsupported guards fail closed; this never falls back to ordinary send.
+pub async fn send_message_and_await_answer_guarded<H>(
+    handler: Arc<H>,
+    peer: H::Peer,
+    message: WebRTCMessage,
+    publication: Arc<dyn crate::plugins::replication_webrtc::WebRTCPublicationGuard>,
+) -> Result<WebRTCResponse, RxError>
+where
+    H: WebRTCConnectionHandler + ?Sized,
+{
+    send_message_and_await_answer_inner(handler, peer, message, Some(publication)).await
+}
+
+async fn send_message_and_await_answer_inner<H>(
+    handler: Arc<H>,
+    peer: H::Peer,
+    message: WebRTCMessage,
+    publication: Option<Arc<dyn crate::plugins::replication_webrtc::WebRTCPublicationGuard>>,
+) -> Result<WebRTCResponse, RxError>
+where
+    H: WebRTCConnectionHandler + ?Sized,
+{
     let request_id = message.id.clone();
     let peer_for_filter = peer.clone();
     // Subscribe to the response + disconnect streams BEFORE sending to avoid
@@ -59,9 +85,18 @@ where
     // subscribe().
     let mut response_stream = handler.response_stream();
     let mut disconnect_stream = handler.disconnect_stream();
-    handler
-        .send(&peer, WebRTCWireFrame::Message(message))
-        .await?;
+    match publication {
+        Some(guard) => {
+            handler
+                .send_guarded(&peer, WebRTCWireFrame::Message(message), guard)
+                .await?
+        }
+        None => {
+            handler
+                .send(&peer, WebRTCWireFrame::Message(message))
+                .await?
+        }
+    }
     let deadline = tokio::time::sleep(REQUEST_ANSWER_TIMEOUT);
     tokio::pin!(deadline);
     loop {

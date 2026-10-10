@@ -44,15 +44,20 @@ impl DatabaseState {
     }
 }
 
-struct QueryDatabase {
+pub(crate) struct QueryDatabase {
     path: PathBuf,
     state: Mutex<DatabaseState>,
 }
 
 impl QueryDatabase {
     fn new(root: &Path) -> Arc<Self> {
+        Self::at_path(crate::paths::runtime_dir(root).join("transfers/native-peer.sqlite3"))
+    }
+
+    /// A distinct service-owned query database; never shares transfer or browser lifetime.
+    pub(crate) fn at_path(path: PathBuf) -> Arc<Self> {
         Arc::new(Self {
-            path: crate::paths::runtime_dir(root).join("transfers/native-peer.sqlite3"),
+            path,
             state: Mutex::new(DatabaseState::default()),
         })
     }
@@ -89,7 +94,7 @@ impl QueryDatabase {
             .context("native transfer database unavailable")
     }
 
-    async fn close(&self) -> Result<()> {
+    pub(crate) async fn close(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         state.closed = true;
         state.finish_open().await?;
@@ -103,7 +108,7 @@ impl QueryDatabase {
         Ok(())
     }
 
-    async fn options(&self) -> Result<NativeSyncOptions> {
+    pub(crate) async fn options(&self) -> Result<NativeSyncOptions> {
         Ok(NativeSyncOptions {
             database: self.get().await?,
             collections: Vec::new(),

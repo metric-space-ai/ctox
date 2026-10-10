@@ -152,6 +152,8 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         }
     }
     match words.as_slice() {
+        ["supervisor-source", target, ipc_directory] =>
+            crate::native_supervisor_transport::serve(&root, target, Path::new(ipc_directory)),
         ["init"] => initialize(&root, None),
         ["import-key", expected] => {
             let bytes = base64::engine::general_purpose::STANDARD.decode(input()?.trim()).context("invalid native Sync key encoding")?;
