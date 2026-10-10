@@ -357,6 +357,8 @@ impl WireValidate for SourceModelOperation {
 pub(crate) enum SourceNativeTool {
     #[serde(rename = "worker_dispatch")]
     WorkerDispatch,
+    #[serde(rename = "confirmed_goal_read")]
+    ConfirmedGoalRead,
 }
 impl WireValidate for SourceNativeTool {
     fn validate(&self) -> Result<(), String> {

@@ -156,7 +156,8 @@
     },
     "SourceNativeTool": {
       "enum": [
-        "worker_dispatch"
+        "worker_dispatch",
+        "confirmed_goal_read"
       ]
     },
     "SourceSdkObservationKind": {
@@ -303,6 +304,10 @@
           "pid": 100
         }
       }
+    },
+    {
+      "type": "SourceNativeTool",
+      "value": "confirmed_goal_read"
     }
   ],
   "invalid_cases": [

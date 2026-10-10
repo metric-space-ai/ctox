@@ -156,7 +156,8 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
   },
   "SourceNativeTool": {
     "enum": [
-      "worker_dispatch"
+      "worker_dispatch",
+      "confirmed_goal_read"
     ]
   },
   "SourceSdkObservationKind": {

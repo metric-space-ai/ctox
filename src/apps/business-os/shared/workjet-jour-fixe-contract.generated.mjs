@@ -2,6 +2,9 @@
 export const JOUR_FIXE_SCHEMA = "ctox.workjet.jour_fixe.v1";
 export const JOUR_FIXE_VERSION = 1;
 export const JOUR_FIXE_TYPES = deepFreeze({
+  "ReadConfirmedGoalRequest": {
+    "fields": {}
+  },
   "MeetingState": {
     "enum": [
       "planned",
