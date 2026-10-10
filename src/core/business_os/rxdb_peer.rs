@@ -3752,19 +3752,33 @@ fn runtime_installed_module_schema_metadata_fingerprint(root: &Path) -> anyhow::
 }
 
 fn runtime_installed_module_schema_fingerprint(root: &Path) -> anyhow::Result<String> {
-    let (modules_root, files) = runtime_installed_module_schema_files(root)?;
+    // Compare the admitted collection configuration used at peer bring-up.
+    // A release changes module.json version/lifecycle, but does not change the
+    // database topology. Hashing those bytes restarted the peer in the middle
+    // of record_module_release's authoritative catalog publication, closing
+    // the very storage instance that publication was using.
+    let mut entries = runtime_module_collection_entries_for_root(root);
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    let configuration: Vec<Value> = entries
+        .into_iter()
+        .map(|entry| {
+            json!({
+                "name": entry.name,
+                "schema": entry.schema,
+                "sync_profile": format!("{:?}", entry.sync_profile),
+                "migration_strategies": entry.migration_strategies,
+            })
+        })
+        .collect();
+    // RxJsonSchema contains HashMaps. Sort object keys recursively, retaining
+    // array order (including compound index order), so repeated parsing is
+    // deterministic. Admission/installed-marker/declaration changes still
+    // change the effective set; schema/profile/migration changes still respawn.
+    let configuration =
+        rxdb::plugins::utils::utils_object::sort_object(&Value::Array(configuration), true);
     let mut hasher = sha2::Sha256::new();
-    hasher.update(b"ctox-runtime-installed-module-schemas-v1");
-    for path in files {
-        let rel = path.strip_prefix(&modules_root).unwrap_or(&path);
-        hasher.update(rel.to_string_lossy().as_bytes());
-        hasher.update([0]);
-        let bytes = fs::read(&path)
-            .with_context(|| format!("failed to read runtime app schema {}", path.display()))?;
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-        hasher.update([0xff]);
-    }
+    hasher.update(b"ctox-runtime-installed-module-schemas-v2");
+    hasher.update(serde_json::to_vec(&configuration)?);
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -13124,10 +13138,43 @@ pub(in crate::business_os) mod tests {
         )?;
 
         let mut state = runtime_installed_module_schema_state(temp.path())?;
+        assert!(collection_creators_for_root(temp.path()).contains_key("subscriptions_records"));
+        for _ in 0..20 {
+            assert_eq!(
+                runtime_installed_module_schema_fingerprint(temp.path())?,
+                state.content_fingerprint,
+                "HashMap parsing order must not change the effective configuration"
+            );
+        }
         assert!(
             !native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
             "unchanged runtime app schemas must not force a respawn"
         );
+        let mut manifest = read_json_file(&module_dir.join("module.json"))?;
+        // These are the writes made by record_module_release. They must not
+        // close the live catalog storage before that command publishes it.
+        manifest["version"] = json!("1.0.0");
+        manifest["lifecycle"] = json!({
+            "visibility_state": "team", "audience": "team", "release_channel": "team"
+        });
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+        assert!(
+            !native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
+            "release version and audience metadata must leave the native database alive"
+        );
+        // Whitespace alone must not reconfigure the peer either.
+        let schema_doc = read_json_file(&module_dir.join("collections.schema.json"))?;
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec(&schema_doc)?,
+        )?;
+        assert!(!native_peer_runtime_installed_schemas_changed(
+            temp.path(),
+            &mut state
+        )?);
         fs::write(
             module_dir.join("collections.schema.json"),
             serde_json::to_vec_pretty(&json!({
@@ -13149,6 +13196,58 @@ pub(in crate::business_os) mod tests {
             native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
             "runtime app schema edits must force a native peer respawn"
         );
+        let mut schema_doc = read_json_file(&module_dir.join("collections.schema.json"))?;
+        let schema = schema_doc["collections"]["subscriptions_records"].clone();
+        schema_doc["collections"]["subscriptions_records"] =
+            json!({"syncProfile": "demand-only", "schema": schema});
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec(&schema_doc)?,
+        )?;
+        assert!(
+            native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
+            "a transport profile change must still reconfigure the peer"
+        );
+        schema_doc["migration_strategies"] =
+            json!({"subscriptions_records": {"1": {"rename": {"title": "name"}}}});
+        fs::write(
+            module_dir.join("collections.schema.json"),
+            serde_json::to_vec(&schema_doc)?,
+        )?;
+        assert!(
+            native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
+            "migration changes must still reconfigure the peer"
+        );
+        manifest["collections"] = json!([]);
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        assert!(
+            native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
+            "removing an admitted declaration must retire its collection"
+        );
+        assert!(!collection_creators_for_root(temp.path()).contains_key("subscriptions_records"));
+        manifest["collections"] = json!(["subscriptions_records"]);
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        assert!(native_peer_runtime_installed_schemas_changed(
+            temp.path(),
+            &mut state
+        )?);
+        manifest["entry"] = json!("index.html");
+        manifest.as_object_mut().unwrap().remove("install_scope");
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec(&manifest)?,
+        )?;
+        assert!(
+            native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
+            "losing runtime-installed admission must retire the collection"
+        );
+        assert!(!collection_creators_for_root(temp.path()).contains_key("subscriptions_records"));
         Ok(())
     }
 

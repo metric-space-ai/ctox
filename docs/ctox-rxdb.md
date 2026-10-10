@@ -1,5 +1,19 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Runtime schema reconfiguration and app release
+
+The native schema watcher compares the admitted collection configuration used
+at peer bring-up: collection names, normalized schemas, transport profiles and
+migration strategies. It canonicalizes object keys while preserving array
+order. File metadata still bounds when that comparison runs. Release version
+and audience changes in `module.json` update the authoritative catalog without
+restarting an unchanged database topology. A declaration, installed admission,
+schema, profile or migration change still triggers supervised reconfiguration.
+This prevents release-only metadata from closing the catalog storage while
+`record_module_release` publishes its required projection. Genuine schema
+reconfiguration still closes the retired peer; this change does not introduce
+a retry or certify all operations racing that shutdown.
+
 ### Native peer lock and private subscription ordering
 
 The native peer and offline recovery writers retain a `NativePeerProcessLock`.
