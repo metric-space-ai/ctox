@@ -2,7 +2,7 @@
 
 `ctox sync supervisor-source TARGET IPC_DIRECTORY` opens a separately owned
 query-only native data session for an existing encrypted native account. The
-Root/NodeService owns this process and its private IPC directory across UI Quit;
+managed Root/NodeService consumer must own this process and its private IPC directory across UI Quit;
 a BrowserWindow or guest never owns this connection. This command neither
 installs a service nor enrolls, assigns, grants, claims or starts an SDK producer.
 

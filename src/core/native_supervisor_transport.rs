@@ -437,7 +437,16 @@ impl IpcService for SourceIpc {
         })
     }
 }
-/// Root/NodeService retains this process across UI Quit. No install or grant here.
+async fn stop_signal() -> io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+/// The managed Root/NodeService consumer must retain this process across UI Quit.
+/// This entry point does not install that consumer or enroll/grant authority.
 pub(crate) fn serve(root: &Path, target: &str, directory: &Path) -> Result<()> {
     let _directory = HostDirectoryLock::acquire(directory)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -451,7 +460,16 @@ pub(crate) fn serve(root: &Path, target: &str, directory: &Path) -> Result<()> {
             Err(_) => {source.shutdown().await?; return Err(unavailable());}
         };
         println!("{}", json!({"protocolVersion":1,"endpoint":local.endpoint(),"transportReady":true,"executionReady":false}));
-        let ended = tokio::select! {result = tokio::signal::ctrl_c() => result, result = local.wait_stopped() => result};
+        let expires_in = Duration::from_millis(
+            source.enrollment.expires_at_ms.saturating_sub(chrono::Utc::now().timestamp_millis()).max(0) as u64,
+        );
+        let pool = source.session.pool();
+        let ended = tokio::select! {
+            result = stop_signal() => result,
+            result = local.wait_stopped() => result,
+            _ = pool.cancelled() => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "native Source generation stopped")),
+            _ = tokio::time::sleep(expires_in) => Err(io::Error::new(io::ErrorKind::PermissionDenied, "native Source enrollment expired")),
+        };
         source.enrollment.retire();
         let ipc = local.shutdown().await;
         let native = source.shutdown().await;
