@@ -7687,7 +7687,8 @@ fn enforce_internal_command_session_scope(
     }
     if context["workjet_supervisor_only"] == true {
         anyhow::ensure!(
-            (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
+            (tool_name == workjet_worker_dispatch::TOOL
+                && matches!(arguments["action"].as_str(), Some("dispatch" | "observe")))
                 || workjet_jour_fixe::allows(tool_name, arguments)
                 || workjet_presentation::allows(tool_name, arguments)
                 || workjet_kpis::allows(tool_name, arguments),
