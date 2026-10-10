@@ -61,4 +61,4 @@ provider. Typed topology loading accepts the dormant route. The outer Responses
 router always supplies that selected provider explicitly; requests report it
 unavailable rather than calling a different provider. The portable router's
 constructor may use an available internal default, but outer requests never
-use that default. No model or project execution default is changed.
+use that default. The running listener uses a persistent config polling interval\nand also revalidates its retained configuration at each incoming connection.\nAfter a change, new traffic receives rebuilt routes; an unavailable rebuild\nfails closed. Already admitted traffic keeps its routes. No model or project\nexecution default is changed.

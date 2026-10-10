@@ -2982,6 +2982,23 @@ pub fn start_instance_codex_proxy_supervisor(root: PathBuf) -> anyhow::Result<()
     Ok(())
 }
 
+/// Revalidate the retained listener configuration before admitting new traffic.
+/// A connection accepted before a mutation keeps its original routes; later
+/// connections receive rebuilt routes or fail closed if rebuilding is unavailable.
+fn routes_for_connection_admission(
+    root: &Path,
+    retained: &EffectiveInstanceProxyConfig,
+) -> anyhow::Result<Option<InstanceProviderRoutes>> {
+    let current = effective_instance_proxy_config(root)?
+        .context("subscription configuration is unavailable at connection admission")?;
+    if &current == retained {
+        return Ok(None);
+    }
+    Ok(Some(build_instance_provider_routes(root)?.context(
+        "subscription routes are unavailable at connection admission",
+    )?))
+}
+
 async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
     use ctox_cliproxyapi::internal::api::server::serve_provider_connection_with_auxiliary_logging;
     use ctox_cliproxyapi::internal::api::server_middleware::{
@@ -3091,14 +3108,27 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
             }))
         };
 
+        let mut config_poll = tokio::time::interval(std::time::Duration::from_secs(
+            INSTANCE_CODEX_PROXY_RETRY_SECONDS,
+        ));
+        config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
                     Ok((mut stream, _peer)) => {
-                        let responses = Arc::clone(&routes.responses);
-                        let messages = routes.messages.clone();
-                        let auxiliary = routes.auxiliary.clone();
-                        let models = routes.models.clone();
+                        let refreshed = match routes_for_connection_admission(&root, &config) {
+                            Ok(routes) => routes,
+                            Err(error) => {
+                                set_instance_codex_proxy_status(&root, InstanceCodexProxyPhase::Faulted, Some(error.to_string()));
+                                break;
+                            }
+                        };
+                        let config_changed = refreshed.is_some();
+                        let admitted_routes = refreshed.as_ref().unwrap_or(&routes);
+                        let responses = Arc::clone(&admitted_routes.responses);
+                        let messages = admitted_routes.messages.clone();
+                        let auxiliary = admitted_routes.auxiliary.clone();
+                        let models = admitted_routes.models.clone();
                         let logging_policy = Arc::clone(&logging_policy);
                         tokio::spawn(async move {
                             let result = serve_provider_connection_with_auxiliary_logging(
@@ -3113,6 +3143,9 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
                                 eprintln!("ctox subscription proxy connection failed: {error}");
                             }
                         });
+                        if config_changed {
+                            break;
+                        }
                     }
                     Err(error) => {
                         set_instance_codex_proxy_status(
@@ -3123,9 +3156,7 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
                         break;
                     }
                 },
-                _ = tokio::time::sleep(std::time::Duration::from_secs(
-                    INSTANCE_CODEX_PROXY_RETRY_SECONDS,
-                )) => {
+                _ = config_poll.tick() => {
                     match effective_instance_proxy_config(&root) {
                         Ok(Some(current)) if current == config => {}
                         _ => break,

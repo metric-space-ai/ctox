@@ -16,17 +16,6 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
         "dormant-claude",
     )?
     .unwrap();
-    apply(
-        root.path(),
-        "disable-default",
-        "hash-disable",
-        "owner",
-        "dormant-claude",
-        &binding,
-        Some(false),
-        || Ok(()),
-    )?;
-    finish(root.path(), "disable-default", "hash-disable", "owner")?;
     // A different provider is genuinely configured in this isolated fixture.
     // The dormant Claude default must still fail locally, without calling it.
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -41,11 +30,29 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
         None,
         serde_json::json!({"test":true}),
     )?;
+    let retained_config = effective_instance_proxy_config(root.path())?.unwrap();
+    let retained_routes = build_instance_provider_routes(root.path())?.unwrap();
+    assert!(routes_for_connection_admission(root.path(), &retained_config)?.is_none());
+    apply(
+        root.path(),
+        "disable-default",
+        "hash-disable",
+        "owner",
+        "dormant-claude",
+        &binding,
+        Some(false),
+        || Ok(()),
+    )?;
+    finish(root.path(), "disable-default", "hash-disable", "owner")?;
     let stored = load_instance_proxy_config(root.path())?.unwrap();
     assert_eq!(stored.default_provider, "claude");
     assert!(stored.runtime.claude_accounts[0].disabled);
-    let routes =
-        build_instance_provider_routes(root.path())?.context("dormant routes must be loadable")?;
+    // Exercise the same admission hook used by the running listener, retaining
+    // the old router across the committed control instead of constructing a
+    // fresh listener. New traffic must receive the disabled topology.
+    let routes = routes_for_connection_admission(root.path(), &retained_config)?
+        .context("retained listener must rebuild disabled routes")?;
+    assert!(!Arc::ptr_eq(&retained_routes.responses, &routes.responses));
     let explicit = routes
         .responses
         .handle_provider_route(Some("codex"), b"{}")
@@ -58,6 +65,8 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
     assert!(
         matches!(response,OpenAiResponsesRouteResponse::Buffered(ref response) if response.status()==400)
     );
+    let retained_config = effective_instance_proxy_config(root.path())?.unwrap();
+    assert!(routes_for_connection_admission(root.path(), &retained_config)?.is_none());
     let binding = super::super::super::cliproxyapi_claude_catalog::account_binding(
         root.path(),
         "dormant-claude",
@@ -80,8 +89,10 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
             .default_provider,
         "claude"
     );
-    let routes = build_instance_provider_routes(root.path())?
-        .context("removed dormant routes must be loadable")?;
+    let removed_routes = routes_for_connection_admission(root.path(), &retained_config)?
+        .context("retained listener must rebuild removed routes")?;
+    assert!(!Arc::ptr_eq(&routes.responses, &removed_routes.responses));
+    let routes = removed_routes;
     let explicit = routes
         .responses
         .handle_provider_route(Some("codex"), b"{}")
