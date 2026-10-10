@@ -1815,6 +1815,7 @@ impl CodexMessageProcessor {
             &cli_overrides,
             config_overrides,
             typesafe_overrides,
+            &listener_task_context.codex_home,
             &cloud_requirements,
         )
         .await
@@ -7283,6 +7284,7 @@ async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
+    codex_home: &Path,
     cloud_requirements: &CloudRequirementsLoader,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
@@ -7297,6 +7299,7 @@ async fn derive_config_from_params(
         .collect::<Vec<_>>();
 
     ctox_core::config::ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())

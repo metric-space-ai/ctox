@@ -426,6 +426,16 @@ without changing existing error Display strings or unrelated retry behavior:
 
 Ticket: I-074.
 
+## 2026-10 Bound In-process Configuration Home
+
+The in-process thread/start config reload uses the already bound codex_home.
+It previously rediscovered the ambient home and could send an isolated mock
+turn to the default provider instead. The standard process home is unchanged.
+The exact-turn interrupt regression asserts the mock provider and isolated cwd,
+then exercises real completed and interrupted turns with the original timeouts.
+No ambient environment override or credentials are required by the fixture.
+
+
 ## 2026-09 Named Persistent Thread Resume Test
 
 CTOX native workers reuse one named non-ephemeral harness thread. The
