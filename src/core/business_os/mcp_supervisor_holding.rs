@@ -339,6 +339,14 @@ pub(crate) use publication::{
     NativeSupervisorCurrentPublication, NativeSupervisorPublicationCheck,
 };
 
+pub(super) fn read_owned_computation(
+    core: &Connection,
+    owner: &str,
+    requested: &RequestedRoute,
+) -> anyhow::Result<Option<Value>> {
+    source::read_owned_computation(core, owner, requested)
+}
+
 #[cfg(test)]
 #[path = "mcp_supervisor_holding_tests.rs"]
 mod tests;
