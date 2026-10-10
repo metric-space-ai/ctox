@@ -1,0 +1,30 @@
+{
+  "capturedAt": "2026-10-10",
+  "upstreamPortCommit": "e215ae179b9e6de10fea369c84f170e7916c2c1f",
+  "workflows": [
+    {
+      "repo": "metric-space-ai/ctox",
+      "commit": "55dbcf2f49d82d80e4e879a327dba0ecd0a95802",
+      "path": ".github/workflows/ci.yml",
+      "fixture": "ctox-ci.yml"
+    },
+    {
+      "repo": "metric-space-ai/workjet",
+      "commit": "64a1d82a9b002695fce350b3698540a6cbe1ac40",
+      "path": ".github/workflows/ci.yml",
+      "fixture": "workjet-ci.yml"
+    },
+    {
+      "repo": "metric-space-ai/greppy",
+      "commit": "6cc6bd4264e390954d4c0fedcc36c6038aaa0ff3",
+      "path": ".github/workflows/ci.yml",
+      "fixture": "greppy-ci.yml"
+    }
+  ],
+  "privateCorpus": {
+    "repo": "metric-space-ai/molecularity",
+    "commit": "8ff63d9db2a7d2bb82faba8983db3ef58654ff87",
+    "path": ".github/workflows/femfx-svd-fixtures.yml",
+    "status": "not vendored: private repository; pilot validation must use an authorized private snapshot"
+  }
+}
