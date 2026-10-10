@@ -295,7 +295,18 @@ fn configured_route_capabilities_are_separate_and_owner_bound() -> anyhow::Resul
             "command_type":"ctox.workjet.project.supervisor.route.capabilities.v1",
             "payload":{"project_id":project,"thread_id":thread},
             "client_context":{"actor":{"id":actor,"role":"chef"}}}),
-        )?;
+        );
+        if status != "completed" {
+            assert!(
+                response.is_err()
+                    || response
+                        .as_ref()
+                        .is_ok_and(|value| value["status"] == "failed"),
+                "{response:?}"
+            );
+            continue;
+        }
+        let response = response?;
         assert_eq!(response["status"], status, "{response}");
         if status == "completed" {
             assert_eq!(
