@@ -43,6 +43,7 @@ fn native_execution_page_roundtrip_retains_real_keys_and_safe_cursor() {
             call_id: None,
             success: None,
             public_text: None,
+            native_message_text: None,
         }],
         next_cursor: Some(contract::EventCursor {
             after_sequence: 23,
@@ -50,6 +51,7 @@ fn native_execution_page_roundtrip_retains_real_keys_and_safe_cursor() {
         }),
         has_more: false,
         public_text_supported: None,
+        native_message_text_supported: None,
     };
     page.validate().unwrap();
     let before = serde_json::to_value(page).unwrap();

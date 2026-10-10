@@ -1711,6 +1711,32 @@ test('public assistant text opt-in survives the Shell bridge and preserves nativ
   assert.equal(invalid.commands.length, 0);
 });
 
+test('native Messages opt-in preserves upstream identity without inventing a provider turn', async () => {
+  const nativeText={ execution_key:'execution', model_operation_id:'model-op',
+    native_message_id:'msg_native', model:'claude-opus-5-5', upstream_request_id:'request_native',
+    offset:0, text:'Native response 🦊', completed:false };
+  const fixture=executionFixture(receipt => {
+    receipt.result.execution_page.native_message_text_supported=true;
+    receipt.result.execution_page.events[0]={ id:'native-text-event', sequence:12,
+      kind:'worker.native_message_text',title:'Assistant response',created_at_ms:1791410400000,
+      native_message_text:nativeText };
+    receipt.result.execution_page.next_cursor.after_event_id='native-text-event';
+  });
+  const result=await fixture.invoke(supervisorTurnRequest('watch', {
+    executionPage:{include_native_message_text:true,attempt_id:'native-attempt',limit:1},
+  }));
+  assert.equal(fixture.commands[0].command.payload.execution_page.include_native_message_text,true);
+  assert.equal(result.executionPage.native_message_text_supported,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.executionPage.events[0].native_message_text)),nativeText);
+  assert.equal(result.executionPage.events[0].public_text,undefined);
+  assert.equal(result.executionPage.events[0].native_message_text.turn_id,undefined);
+  const bad=executionFixture();
+  await assert.rejects(bad.invoke(supervisorTurnRequest('watch',{
+    executionPage:{include_native_message_text:'true'},
+  })));
+  assert.equal(bad.commands.length,0);
+});
+
 test('an opted-in queued supervisor turn preserves the absence of an actual attempt', async () => {
   const fixture = executionFixture(receipt => {
     receipt.result.execution_page = { command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn', events: [], has_more: false };
