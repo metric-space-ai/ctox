@@ -18145,20 +18145,62 @@ include!("service_business_os_app_recovery.rs");
 include!("service_queue_capacity.rs");
 include!("service_command_writeback.rs");
 
+/// The original mail and its sender role for a founder communication rework
+/// queue task, read from the task's own metadata (same rules as the router's
+/// `founder_rework_inbound_message_key` / `founder_rework_origin_source_label`).
+fn founder_rework_job_binding(metadata: &Value) -> (Option<String>, Option<String>) {
+    let kind = metadata
+        .get("ticket_self_work_kind")
+        .and_then(Value::as_str);
+    if kind != Some(FOUNDER_COMMUNICATION_REWORK_KIND) {
+        return (None, None);
+    }
+    let inbound_key = metadata
+        .get("inbound_message_key")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("parent_message_key").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| value.starts_with("email:"))
+        .map(ToOwned::to_owned);
+    let source_label = metadata
+        .get("origin_source_label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| matches!(*value, "email:owner" | "email:founder" | "email:admin"))
+        .map(ToOwned::to_owned);
+    match inbound_key {
+        Some(key) => (Some(key), source_label),
+        None => (None, None),
+    }
+}
+
 fn queued_prompt_from_queue_task(task: channels::QueueTaskView) -> QueuedPrompt {
     let mut metadata = task.metadata.clone();
     if !metadata.is_object() {
         metadata = serde_json::json!({});
     }
     metadata["cockpit_lease_attempt"] = serde_json::json!(task.attempt);
+    // A founder communication rework answers its original mail. The router
+    // attaches that mail to the job; the durable and priority queue paths
+    // build jobs here and did not, so the review held the finished rework
+    // ("cannot use a different or missing leased inbound email") and the
+    // mail stayed unanswered (10.10.2026, after serial queue work started to
+    // run beside research chats).
+    let (rework_inbound_key, rework_source_label) = founder_rework_job_binding(&metadata);
+    let mut leased_message_keys = vec![task.message_key];
+    if let Some(inbound_key) = rework_inbound_key {
+        if !leased_message_keys.contains(&inbound_key) {
+            leased_message_keys.push(inbound_key);
+        }
+    }
     QueuedPrompt {
         queue_task_metadata: metadata,
         preview: preview_text(&task.prompt),
-        source_label: "queue".to_string(),
+        source_label: rework_source_label.unwrap_or_else(|| "queue".to_string()),
         goal: task.title.clone(),
         prompt: task.prompt.clone(),
         suggested_skill: task.suggested_skill.clone(),
-        leased_message_keys: vec![task.message_key],
+        leased_message_keys,
         leased_ticket_event_keys: Vec::new(),
         thread_key: Some(task.thread_key.clone()),
         workspace_root: task.workspace_root.clone(),
@@ -37785,6 +37827,71 @@ Business OS command:
         assert!(leased
             .prompt
             .contains(BUSINESS_OS_APP_VALIDATION_FAILURE_MARKER));
+    }
+
+    #[test]
+    fn durable_dispatch_binds_a_founder_rework_to_its_original_mail() {
+        let root = temp_root("durable-dispatch-founder-rework-binding");
+        let inbound_key = "email:owner@example.test::inbox::original-mail";
+        let rework_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "INTERNAL WORK ITEM - rework the reply".to_string(),
+                thread_key: "founder-rework/original-mail".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(inbound_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                    "inbound_message_key": inbound_key,
+                    "origin_source_label": "email:founder",
+                })),
+            },
+        )
+        .expect("failed to create rework queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("dispatcher should not fail")
+            .expect("expected a leased prompt");
+
+        // The reviewed reply needs the original mail on the job; without it the
+        // finished rework was held and the mail stayed unanswered.
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![rework_task.message_key.clone(), inbound_key.to_string()]
+        );
+        assert_eq!(leased.source_label, "email:founder");
+        assert_eq!(
+            founder_communication_rework_inbound_key(&leased),
+            Some(inbound_key)
+        );
+        assert_eq!(inbound_email_reply_message_key(&leased), Some(inbound_key));
+    }
+
+    #[test]
+    fn ordinary_queue_tasks_keep_their_single_queue_lease() {
+        let root = temp_root("ordinary-queue-task-single-lease");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Plain queue work".to_string(),
+                prompt: "Reconcile the fixture".to_string(),
+                thread_key: "plain/queue".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some("email:owner@example.test::inbox::other".to_string()),
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let key = task.message_key.clone();
+        let job = queued_prompt_from_queue_task(task);
+        assert_eq!(job.leased_message_keys, vec![key]);
+        assert_eq!(job.source_label, "queue");
     }
 
     #[test]
