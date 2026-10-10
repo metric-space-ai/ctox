@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "id": "ctox-sync-v3-thesen-scale-20261010",
+  "source": "ctox-sync-v3 RFC v2 PR586 (6954a1fd36e0f4fc056d7f276b41fd0dd78c3ccb) sections 2 K6 and 4; original size evidence from draft d1b0c0f1f",
+  "unit": "UTF-8 JSON document bytes; decimal KB/MB",
+  "kind": "synthetic-size-envelope-not-a-production-seed",
+  "collections": [
+    { "name": "outbound_lead_generation_leads", "count": 850, "documentBytes": 80000, "basis": "RFC: 850 leads at 80 KB" },
+    { "name": "business_commands", "count": 6000, "documentBytes": 29500, "basis": "RFC: 6000 commands; section 1.2 aggregate 177 MB" },
+    { "name": "ctox_queue_tasks", "count": 400, "documentBytes": 27000, "basis": "RFC: 400 tasks; section 1.2 average 27 KB" },
+    { "name": "business_chats", "count": 2000, "documentBytes": 1024, "basis": "RFC count; byte size is an explicit provisional assumption, not a field measurement" }
+  ]
+}

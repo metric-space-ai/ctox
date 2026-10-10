@@ -156,6 +156,7 @@ jobs:
       - name: Business OS production browser gate
         run: |
           npm --prefix src/apps/business-os ci
+          TMPDIR="$RUNNER_TEMP" bash scripts/sync-v3-release-gate.sh "$PWD/src/apps/business-os/node_modules/playwright"
           npm --prefix src/apps/business-os run qa:design-gates
           node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
