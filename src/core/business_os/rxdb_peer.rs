@@ -876,6 +876,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-app-runtime-v1",
     "ctox-workjet-device-control-v1",
     super::rxdb_peer_speech_settings::CAPABILITY,
+    super::provider_model_checks::CAPABILITY,
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
     super::rxdb_peer_dictation::CAPABILITY,
     super::rxdb_peer_grok::CAPABILITY,

@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use std::{path::Path, sync::Arc};
 
 pub(super) const METHOD: &str = "ctox.workjet.models.check.v1";
+pub(super) const CAPABILITY: &str = "ctox-workjet-model-check-v1";
 const MAX_MODELS: usize = 256;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
