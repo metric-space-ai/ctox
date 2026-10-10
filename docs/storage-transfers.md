@@ -57,13 +57,27 @@ acceptance uses no declared quota until that server setting is enrolled.
 
 The native resolver, CLI and daemon worker are wired. Component tests and real
 loopback SFTP/SMB3 pause/restart/upload/download/no-replace fixtures passed on gpu3.
-Native root checks and installed acceptance remain open. The root linker exposed
-an OpenSSL/BoringSSL collision in libssh2; SSH now uses russh/russh-sftp and its
-protocol fixtures must pass again. The required real acceptance is gpu3 → ASUSTOR
-`flashstore24-nas` at 10.0.0.28, including interruption and resume of the same
-durable job. The operator approved `/volume1/Build-Tmp/build-lane-offload` and the
-pinned SSH endpoint. Native Owner enrollment and SecretStore provisioning remain
-owned by Instances; no credential value is stored in this document.
+SSH uses russh/russh-sftp to avoid the former libssh2 OpenSSL/BoringSSL link
+collision.
+
+The real gpu3 → ASUSTOR `flashstore24-nas` offload passed with native revision
+`037a47cf8a2bb602085ccaaba177dcfe8f592c2c` and native Owner enrollment revision
+`44e5520234577b8038d762f3d056aeb2cc348835`. An owned 833,736,360-byte artifact
+was paused after 2,097,152 bytes, then completed after worker restart using the
+same upload job and endpoint fingerprint. A fresh download, with the local
+upload cache removed, independently read the NAS and matched SHA-256
+`15ce709d47e74da3c3659d6bb1aee1f18dc10a4c3294edf387371d012a3a837c` and length.
+The continuation and download took 863.824 seconds; the source stayed unchanged
+and all owned workers stopped. These measurements apply to that isolated native
+CLI run, not to later revisions or Workjet UI acceptance.
+
+The retained operator evidence is
+`~/.codex/task-evidence/ctox-transfers/nas-offload-037a47cf8a2b-continued-receipt.json`;
+the preceding bounded attempt remains recorded separately as a negative result.
+Both completed receipts use `ctox-storage-v1`. The destination was the approved
+`/volume1/Build-Tmp/build-lane-offload` with its pinned SSH endpoint. Native Owner
+enrollment and SecretStore provisioning are owned by Instances; credentials
+never enter transfer requests or receipts.
 
 ## SSH/SMB dependency compatibility
 
