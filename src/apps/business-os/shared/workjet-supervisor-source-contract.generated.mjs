@@ -9,7 +9,8 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "status",
       "cancel",
       "model_invoke",
-      "model_read"
+      "model_read",
+      "tool_call"
     ]
   },
   "SourceOfferState": {
@@ -66,6 +67,16 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "sequence": {
         "type": "u64",
         "maximum": 65535,
+        "optional": true
+      },
+      "native_tool": {
+        "type": "SourceNativeTool",
+        "optional": true
+      },
+      "tool_arguments_json": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 65536,
         "optional": true
       }
     }
@@ -136,6 +147,11 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
     "enum": [
       "messages",
       "count_tokens"
+    ]
+  },
+  "SourceNativeTool": {
+    "enum": [
+      "worker_dispatch"
     ]
   }
 });
