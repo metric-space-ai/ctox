@@ -562,48 +562,33 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn module_catalog_refresh_recovers_a_real_sqlite_schema_invalidation() -> anyhow::Result<()> {
+    fn module_catalog_refresh_rebuilds_after_schema_invalidation() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let schema_path = root.join("schema-race.sqlite");
         let reader = Connection::open(&schema_path)?;
         reader.execute_batch("CREATE TABLE schema_fixture(value TEXT)")?;
-        let sql = std::ffi::CString::new("SELECT value FROM schema_fixture")?;
-        let mut statement = std::ptr::null_mut();
-        // The legacy entry point deterministically exposes SQLITE_SCHEMA;
-        // SQLite's v2 API normally reparses before returning that error.
-        // libsqlite3-sys omits this declaration, but bundled SQLite exports it.
-        extern "C" {
-            fn sqlite3_prepare(
-                db: *mut rusqlite::ffi::sqlite3,
-                sql: *const std::os::raw::c_char,
-                length: std::os::raw::c_int,
-                statement: *mut *mut rusqlite::ffi::sqlite3_stmt,
-                tail: *mut *const std::os::raw::c_char,
-            ) -> std::os::raw::c_int;
-        }
-        let prepared = unsafe {
-            sqlite3_prepare(
-                reader.handle(),
-                sql.as_ptr(),
-                -1,
-                &mut statement,
-                std::ptr::null_mut(),
-            )
-        };
-        assert_eq!(prepared, rusqlite::ffi::SQLITE_OK);
+        reader.execute("INSERT INTO schema_fixture VALUES ('retained')", [])?;
+        let version_before: i64 =
+            reader.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+        let mut statement = reader.prepare_cached("SELECT value FROM schema_fixture")?;
         let registrar = Connection::open(&schema_path)?;
         registrar.execute_batch("CREATE TABLE registered_collection(id TEXT)")?;
-        let (stepped, reset) = unsafe {
-            let stepped = rusqlite::ffi::sqlite3_step(statement);
-            let reset = rusqlite::ffi::sqlite3_reset(statement);
-            rusqlite::ffi::sqlite3_finalize(statement);
-            (stepped, reset)
-        };
-        assert_eq!(stepped, rusqlite::ffi::SQLITE_ERROR);
-        assert_eq!(reset, rusqlite::ffi::SQLITE_SCHEMA);
+        let version_after: i64 =
+            registrar.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
+        assert_ne!(version_before, version_after);
+        // rusqlite's supported prepare API transparently reparses this statement.
+        assert_eq!(
+            statement.query_row([], |row| row.get::<_, String>(0))?,
+            "retained"
+        );
+        drop(statement);
+        drop(reader);
+        drop(registrar);
+        // Inject the typed failure retained by the production startup log at the
+        // refresh boundary; do not require SQLite's obsolete prepare entry point.
         let mut invalidated = Some(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(reset),
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_SCHEMA),
             None,
         ));
 
