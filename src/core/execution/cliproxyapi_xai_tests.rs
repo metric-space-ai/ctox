@@ -17,7 +17,9 @@ fn operator_catalog_metadata_failure_does_not_expose_private_path() {
     let root = tempfile::tempdir().unwrap();
     let invalid_root = root.path().join("private-operator-path");
     std::fs::write(&invalid_root, "not a directory").unwrap();
-    let error = handle_operator_models(&invalid_root).unwrap_err().to_string();
+    let error = handle_operator_models(&invalid_root)
+        .unwrap_err()
+        .to_string();
     assert!(error.starts_with("native_subscription_store_unavailable:"));
     assert!(error.contains("no catalog request was made"));
     assert!(!error.contains(invalid_root.to_str().unwrap()));
