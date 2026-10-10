@@ -5,6 +5,13 @@ const net = require('net');
 const host = process.env.SIGNALING_HOST || '127.0.0.1';
 const port = Number(process.env.SIGNALING_PORT || process.argv[2] || 18990);
 const debug = process.env.SIGNALING_DEBUG === '1';
+const relayRtt = process.argv.find(arg => arg.startsWith('--sync-v3-relay-rtt='));
+const relayEvidence = process.argv.find(arg => arg.startsWith('--sync-v3-relay-evidence='));
+const relay = relayRtt ? new (require('../../../../scripts/sync-v3/udp-relay.cjs').UdpRelay)(
+  Number(relayRtt.split('=')[1]), relayEvidence?.slice('--sync-v3-relay-evidence='.length),
+) : null;
+if (relay && host !== '127.0.0.1') throw Error('S0 relay signaling must bind loopback');
+let relaySignals = Promise.resolve();
 
 function token(len = 12) {
   const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -346,7 +353,16 @@ const server = net.createServer((socket) => {
           const sdpBytes = typeof data?.sdp === 'string' ? Buffer.byteLength(data.sdp) : 0;
           console.error(`[signaling] signal from=${peer.id} to=${message.receiverPeerId} room=${redactRoom(roomKey(peer, message.room))} receiver=${receiver ? 'yes' : 'no'} sameRoom=${receiver?.rooms.has(roomKey(peer, message.room)) ? 'yes' : 'no'} type=${signalType} candidateType=${candidateType || '-'} candidate=${candidateAddress || '-'} sdpBytes=${sdpBytes}`);
         }
-        if (receiver && receiver.rooms.has(roomKey(peer, message.room))) receiver.send(message);
+        if (receiver && receiver.rooms.has(roomKey(peer, message.room))) {
+          if (!relay) receiver.send(message);
+          else {
+            const sender = peer;
+            relaySignals = relaySignals.then(async () => {
+              const rewritten = await relay.rewrite(message, sender, receiver);
+              if (rewritten) receiver.send(rewritten);
+            }).catch(error => { console.error(`S0 relay failed: ${error.message}`); process.exitCode = 1; });
+          }
+        }
       } else if (message.type !== 'ping') {
         socket.destroy();
         break;
@@ -409,3 +425,12 @@ if (process.env.SIGNALING_SELF_TEST === '1') {
 server.listen(port, host, () => {
   console.log(`CTOX RxDB signaling listening on ws://${host}:${port}`);
 });
+if (relay) {
+  const stop = async () => {
+    await relaySignals;
+    await relay.close();
+    process.exit(process.exitCode || 0);
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+}
