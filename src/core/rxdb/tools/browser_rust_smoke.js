@@ -8476,7 +8476,7 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
               }
               if (payload === null || payload !== expectedContent || !metadataFresh) {
                 mismatched.push({
