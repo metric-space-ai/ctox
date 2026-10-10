@@ -7,6 +7,7 @@ import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from '.
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './workjet-project-execution-policy-contract.generated.mjs';
 import { validateSupervisorLumaValue } from './workjet-supervisor-luma-contract.generated.mjs';
 
 
@@ -257,6 +258,10 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
             project[field] = command.payload[field];
           }
         }
+        if (Object.hasOwn(command.payload, 'execution_policy')) {
+          const update = command.payload.execution_policy;
+          project.execution_policy = { schema: update.schema, mode: update.mode, revision: update.expected_revision + 1 };
+        }
         const receipt = {
           command_id: command.id, target_record_id: command.payload.project_id,
           status: 'completed', ok: true,
@@ -267,7 +272,8 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
       },
     },
   };
-  const context = { state, actorContext: (session) => ({ id: session.id }), URL, validateSupervisorLumaValue };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL, validateSupervisorLumaValue,
+    PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return {
     commands,
@@ -594,6 +600,96 @@ test('local final snapshots exact UTF-8 text while awaiting native receipt', asy
   assert.equal(fixture.commands[0].payload.text, 'é'.repeat(2048));
 });
 
+
+test('execution policy configure uses a typed Owner CAS and native receipt, without a tool grant', async () => {
+  const schema = PROJECT_EXECUTION_POLICY_SCHEMA;
+  const fixture = projectConfigurationFixture();
+  const result = await fixture.invoke(projectConfigurationRequest({
+    executionPolicy: { schema, mode: 'autonomous_worktree', expected_revision: 0 },
+  }));
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.execution_policy)), { schema, mode: 'autonomous_worktree', expected_revision: 0 });
+  assert.deepEqual(result.project.executionPolicy, { schema, mode: 'autonomous_worktree', revision: 1 });
+  assert.equal(fixture.commands[0].client_context.actor.id, 'owner-1');
+  assert.equal(Object.hasOwn(result.project, 'runtimeMode'), false);
+  const reset = await projectConfigurationFixture().invoke(projectConfigurationRequest({
+    executionPolicy: { schema, mode: 'default', expected_revision: 4 },
+  }));
+  assert.equal(reset.project.executionPolicy.mode, 'default');
+  const omitted = projectConfigurationFixture(receipt => {
+    receipt.result.project.execution_policy = { schema, mode: 'autonomous_worktree', revision: 5 };
+  });
+  assert.equal(Object.hasOwn((await omitted.invoke(projectConfigurationRequest())).project, 'executionPolicy'), false);
+  assert.equal(Object.hasOwn(omitted.commands[0].payload, 'execution_policy'), false);
+});
+
+test('execution policy rejects unqualified overrides and uncorrelated policy receipts', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-execution-policy-v1.json', import.meta.url), 'utf8'));
+  for (const sample of corpus.invalid_cases.filter(({ type }) => type === 'ProjectExecutionPolicyUpdate')) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ executionPolicy: sample.value })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const returned of [
+    undefined, null, { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'default', revision: 1 },
+    { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', revision: 0 },
+    { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', revision: 7 },
+    { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', revision: 1, granted: true },
+  ]) {
+    const fixture = projectConfigurationFixture(receipt => {
+      receipt.result.project.execution_policy = returned;
+    });
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({
+      executionPolicy: { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', expected_revision: 0 },
+    })));
+  }
+});
+
+test('policy list is separately opt-in, retains Owner scope, and resolves the old default', async () => {
+  const fixture = nativeProjectListFixture();
+  const policy = { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', revision: 8 };
+  fixture.rows.workjet_projects[0].execution_policy = policy;
+  for (const request of [{}, { includeConfiguration: true }, { includeSupervisorLuma: true }]) {
+    assert.equal(Object.hasOwn((await fixture.invoke(request)).projects[0], 'executionPolicy'), false);
+  }
+  assert.deepEqual((await fixture.invoke({ includeExecutionPolicy: true })).projects[0].executionPolicy, policy);
+  delete fixture.rows.workjet_projects[0].execution_policy;
+  assert.deepEqual((await fixture.invoke({ includeExecutionPolicy: true })).projects[0].executionPolicy,
+    { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'default', revision: 0 });
+  for (const invalid of ['true', 1, {}, null]) {
+    await assert.rejects(fixture.invoke({ includeExecutionPolicy: invalid }), /includeExecutionPolicy/);
+  }
+  assert.ok(fixture.reads.every(({ query }) => query.selector.owner_user_id.$eq === 'owner-1'));
+  assert.ok(fixture.commands.every(({ command }) => !Object.hasOwn(command.payload, 'includeExecutionPolicy')));
+});
+
+test('policy configure snapshots the CAS patch before waiting and drops a changed Owner session', async () => {
+  const request = projectConfigurationRequest({
+    executionPolicy: { schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', expected_revision: 0 },
+  });
+  const fixture = projectConfigurationFixture(() => {
+    request.executionPolicy.mode = 'default';
+    request.executionPolicy.expected_revision = 20;
+  });
+  assert.equal((await fixture.invoke(request)).project.executionPolicy.mode, 'autonomous_worktree');
+  assert.equal(fixture.commands[0].payload.execution_policy.expected_revision, 0);
+  await assert.rejects(projectConfigurationFixture((receipt, state) => { state.session = { id: 'foreign' }; })
+    .invoke(projectConfigurationRequest({ executionPolicy: {
+      schema: PROJECT_EXECUTION_POLICY_SCHEMA, mode: 'autonomous_worktree', expected_revision: 0,
+    } })), /session changed/);
+});
+
+test('execution policy generated native/browser fixtures agree and migration preserves old documents', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-execution-policy-v1.json', import.meta.url), 'utf8'));
+  for (const [group, ok] of [['valid_cases', true], ['invalid_cases', false]]) {
+    for (const { type, value } of corpus[group]) assert.equal(validateProjectExecutionPolicyValue(type, value).ok, ok);
+  }
+  const { collections, migrationStrategies } = await import('../modules/ctox/schema.js');
+  const old = { id: 'legacy', name: 'Old', owner_user_id: 'owner-1', status: 'active' };
+  assert.deepEqual(migrationStrategies.workjet_projects[4](old), old);
+  assert.equal(collections.workjet_projects.version, 4);
+  assert.equal(collections.workjet_projects.required.includes('execution_policy'), false);
+});
+
 function projectConfigurationRequest(extra = {}) {
   return {
     action: 'project.configure', commandId: 'project-config-1',
@@ -829,7 +925,8 @@ function nativeProjectListFixture({ start, dispatch, exec, ownerUserId = 'owner-
   };
   let sequence = 0;
   const context = { state, actorContext: (session) => ({ id: session.id }),
-    newId: () => `list-${++sequence}`, AbortController, URL, setTimeout, clearTimeout };
+    newId: () => `list-${++sequence}`, AbortController, URL, setTimeout, clearTimeout,
+    PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { state, context, starts, commands, reads, rows, peers,
     invoke: async (request = {}) => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list', ...request }))) };

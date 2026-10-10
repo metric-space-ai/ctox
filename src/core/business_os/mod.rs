@@ -134,6 +134,9 @@ mod worker_profile_bindings;
 pub(crate) mod workjet_jour_fixe_contract;
 #[path = "workjet_presentation_contract.generated.rs"]
 pub(crate) mod workjet_presentation_contract;
+mod workjet_project_execution_policy;
+#[path = "workjet_project_execution_policy_contract.generated.rs"]
+pub(crate) mod workjet_project_execution_policy_contract;
 mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;
