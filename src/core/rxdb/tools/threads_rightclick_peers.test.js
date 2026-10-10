@@ -52,6 +52,15 @@ function paintDriver() {
   });
   return {
     measure: submit => measure(submit, 'fixture prompt'),
+    guard(submit) {
+      const start = source.indexOf('    const submit = () => form.dispatchEvent(');
+      const end = source.indexOf('    await waitFor(() => ({', start);
+      assert.ok(start >= 0 && end > start);
+      return vm.runInNewContext('(async () => {' + source.slice(start, end) + '})()', {
+        measureContextPrompt: measure, message: 'fixture prompt', mode: 'ask', needsApproval: false,
+        form: { dispatchEvent: submit }, Event: class {}, console: { log() {} },
+      });
+    },
     show(time, openMenu = false) { now = time; shown = true; menuOpen = openMenu; mutation(); },
     hide(time) { now = time; shown = false; mutation(); },
     frame(time, timestamp = time) {
@@ -119,6 +128,21 @@ test('open menu and transient visibility cannot satisfy the two-frame paint conf
   assert.equal(timing.firstRenderFrameMs, 170);
   assert.equal(timing.firstPaintMs, 186, 'real slow rendering must remain above the unchanged 150-ms gate');
   driver.assertClean();
+});
+
+test('actual submit guard accepts 149 ms and still rejects exactly 150 ms', async () => {
+  const fast = paintDriver();
+  const accepted = fast.guard(() => fast.show(0));
+  fast.frame(133);
+  fast.frame(149);
+  await accepted;
+  fast.assertClean();
+  const slow = paintDriver();
+  const rejected = slow.guard(() => slow.show(0));
+  slow.frame(134);
+  slow.frame(150);
+  await assert.rejects(rejected, /Context prompt first paint exceeded 150ms: 150.0ms/);
+  slow.assertClean();
 });
 
 test('missing prompt and submit exceptions release frame, timer and performance observers', async () => {
