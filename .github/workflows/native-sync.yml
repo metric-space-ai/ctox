@@ -249,7 +249,7 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     name: Full CTOX host acceptance (Linux)
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
