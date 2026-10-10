@@ -226,58 +226,60 @@ mod queue_capacity_tests {
 
     #[test]
     fn serial_slot_leaves_business_chats_to_the_pool() -> Result<()> {
+        // The predicate is checked directly: the durable dispatch path shares
+        // process-wide idle gates with other tests.
         let root = tempfile::tempdir()?;
-        let chat = channels::create_queue_task(
+        let business_chat = |thread: &str| {
+            channels::create_queue_task(
+                root.path(),
+                channels::QueueTaskCreateRequest {
+                    title: "Neurecherche".into(),
+                    prompt: "Research one lead".into(),
+                    thread_key: thread.into(),
+                    workspace_root: None,
+                    priority: "normal".into(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(
+                        serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                    ),
+                },
+            )
+        };
+        let chat = business_chat("research/one")?;
+        let plain = channels::create_queue_task(
             root.path(),
             channels::QueueTaskCreateRequest {
-                title: "Neurecherche".into(),
-                prompt: "Research one lead".into(),
-                thread_key: "research/one".into(),
+                title: "Founder communication rework".into(),
+                prompt: "Answer the owner".into(),
+                thread_key: "rework/one".into(),
                 workspace_root: None,
-                priority: "normal".into(),
+                priority: "urgent".into(),
                 suggested_skill: None,
                 parent_message_key: None,
-                extra_metadata: Some(
-                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
-                ),
+                extra_metadata: None,
             },
         )?;
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        // With a pool the serial slot stays free for communication.
         runtime_env::set_runtime_env_value(root.path(), "queue.worker_capacity", "2")?;
-        assert!(
-            maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root.path(), &state)?.is_none()
-        );
+        assert!(serial_slot_leaves_task_to_business_pool(root.path(), &chat));
+        assert!(!serial_slot_leaves_task_to_business_pool(
+            root.path(),
+            &plain
+        ));
+        // The pool really takes what the serial slot leaves.
+        let state = Arc::new(Mutex::new(SharedState::default()));
         let pooled = lease_business_queue_capacity(root.path(), &state)?;
         assert_eq!(pooled.len(), 1);
         assert_eq!(
             pooled[0].leased_message_keys,
             vec![chat.message_key.clone()]
         );
-        // Without a pool the serial slot is the only worker and takes it.
-        let single = channels::create_queue_task(
-            root.path(),
-            channels::QueueTaskCreateRequest {
-                title: "Neurecherche".into(),
-                prompt: "Research another lead".into(),
-                thread_key: "research/two".into(),
-                workspace_root: None,
-                priority: "normal".into(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: Some(
-                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
-                ),
-            },
-        )?;
+        // A single-worker setup has no pool; the serial slot runs the chat.
         runtime_env::set_runtime_env_value(root.path(), "queue.worker_capacity", "1")?;
-        let mut shared = lock_shared_state(&state);
-        shared.durable_queue_lease_in_progress = false;
-        shared.parallel_queue_jobs.clear();
-        drop(shared);
-        let serial = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root.path(), &state)?
-            .expect("a single worker runs the chat itself");
-        assert_eq!(serial.leased_message_keys, vec![single.message_key]);
+        assert!(!serial_slot_leaves_task_to_business_pool(
+            root.path(),
+            &business_chat("research/two")?
+        ));
         Ok(())
     }
 
