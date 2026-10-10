@@ -159,6 +159,25 @@ This check prevents "unanchored proactive resends" — the reviewer treats those
 - Do not leak secrets, passwords, root auth material, or BIOS-protected state into outbound channels unless the owner explicitly requests it and the channel choice is justified.
 - If a blocker, approval, or commitment is only present in a workspace artifact or free-form note, treat the communication state as incomplete until it is visible in the CTOX communication or ticket state.
 
+## Work Requested By Mail
+
+A mail that asks for work is answered with the work started or done, never
+with a promise alone. A reply that says "will be done" without a durable task
+behind it is rejected by review.
+
+- Read the attachments named in the prompt (they include files of earlier
+  mails in the same thread). Base the reply only on their content.
+- Companies to research (a list in the mail or a spreadsheet): call
+  `business_os.execute_action` with `module_id: "outbound-lead-generation"`,
+  `action_id: "outbound.leads.import_and_research"` and
+  `payload: { campaign, rows: [{ name, website, city, country }], source_note }`.
+  Use one campaign name per request (e.g. the mail subject and date). The
+  action creates the leads and starts their research like the Outbound app;
+  repeating it does not duplicate anything.
+- Then reply with what was started: the campaign name and each company with
+  its lead. Say that the results follow when the research has finished. Do
+  not invent research results.
+
 ## Communication Shapes
 
 - `tui`: direct answer, immediate clarification, local setup guidance
