@@ -1,8 +1,8 @@
-# Native provider account control contract
+# Native provider account controls
 
 Workjet sends `instance.providers.account.enable` and
 `instance.providers.account.remove` through the admitted RxDB command bus.
-The bridge translates them to `ctox.workjet.providers.account.enable` and
+The shell translates these to `ctox.workjet.providers.account.enable` and
 `ctox.workjet.providers.account.remove`. Both requests contain `version: 1`,
 `operationId` (UUID), `accountId` (canonical opaque registry identity),
 `expectedAccountRevision` (positive integer), and `expectedRevision`
@@ -10,51 +10,55 @@ The bridge translates them to `ctox.workjet.providers.account.enable` and
 (boolean). Remove rejects that field. Results retain
 `{version, operationId, action, registry}`.
 
-Public account metadata may contain `controls: {canEnable, canRemove}`.
-Both fields must be booleans. The bridge strips unknown control fields.
-An omitted controls object means unsupported; consumers must not infer
-mutation support from provider identity or catalog success.
+Public account metadata optionally contains `controls: {canEnable, canRemove}`.
+Both fields are booleans. Omission means unsupported on an older native/shell
+version. Current native supports local configured Claude subscription accounts
+with a retained private adoption binding. Inherited main routes, unsupported
+providers and accounts with an unresolved holder mutation advertise false.
+Consumers must not infer support from provider identity or catalog success.
+Unknown fields, private selectors, bindings, credential handles, OAuth material,
+and raw credential-bearing errors never travel through the public shell result.
 
-## Current support
+## Durable stages and authority
 
-This change prepares the shell contract only. Native handlers and native
-capability advertisement are deliberately absent. Existing accounts therefore
-remain read-only. Calling a prepared action does not establish native support
-and cannot be reported as a successful account mutation without the usual
-matching completed receipt.
+The new admitted Core claim reserves the exact canonical account, holder,
+Owner/Admin actor, Policy revision, account revision and private generation in
+Policy. Only one unfinished holder control per owner is allowed. Current actor,
+account and Core claim are checked again immediately before the external effect.
+No Policy transaction or connection is retained across Runtime or Secrets IO.
 
-## Required native implementation
+The holder compares the exact adoption binding and uses a Runtime configuration
+CAS. Its topology mutation and immutable private effect proof commit in the same
+Runtime transaction. Enablement changes the real configured account's disabled
+flag. Removal removes only that topology entry and captures exact encrypted
+credential content generations, rejecting shared credential references.
 
-The native handler must resolve the canonical UUID under current Owner/Admin
-command authority to the owned local Claude account, exact holder, account
-revision, policy revision, and private configuration/credential generation.
-Inherited main routes and unsupported providers must remain unsupported.
+Proof-bearing recovery never repeats the topology mutation. It checks current
+Core intent and Owner/Admin authority, the unchanged reserved Policy target,
+and the holder's exact applied configuration generation. Removal cleanup holds
+Runtime's writer transaction while deleting the captured Secrets generations
+in one Secrets transaction. Already absent secrets are idempotent; replacements
+are rejected. A changed account or topology stays uncertain and requires
+reconciliation, rather than deleting a re-login or claiming completion.
 
-A safe implementation cannot wrap the existing disconnect API inside
-`DomainEffectAdmission::apply`: that callback is Policy-only, while topology
-is in the Runtime database and encrypted credentials are in Secrets.
-The current Core replay path only resumes a domain mutation when its final
-applied receipt exists; a crash after an external effect but before that
-receipt otherwise becomes an uncertain command. A durable holder-effect
-protocol must retain stage-specific identity and proof, recover only effects
-already applied, reject changed credential generations, and avoid replaying
-a deletion against a re-login. Public results and replicated metadata must
-never include selectors, bindings, credential handles, OAuth material, or
-raw errors containing secrets.
+Only then does Policy commit its account update/removal, current registry
+projection and immutable final domain receipt together. Removal clears that
+account's withdrawals, model observations, exclusions and binding. A shared
+provider selection survives while another owned provider account exists.
+Core's existing terminal projection repair publishes the current registry and
+retains the original correlated command result on replay.
 
-The existing disconnect helper also retries changed configuration revisions
-and changes the default provider when its last enabled account is removed.
-`validate_default_provider` currently requires the selected default to have
-an enabled account. Supporting disable/remove without a default switch
-therefore requires an explicit dormant-default representation and routing
-behavior, or a concrete refusal of that operation; it must never silently
-choose another provider.
+A known rejection before Runtime COMMIT releases the reservation without an
+applied receipt. A crash with only the reservation remains uncertain and never
+authorizes a fresh external mutation. Cancellation/revocation observed before
+the effect rejects it; changes observed after Runtime COMMIT prevent completion
+and remain conservatively uncertain. There is no cross-WAL atomicity claim.
 
-Enablement must persist in the actual topology, survive refresh and
-re-adoption, and affect routing. Removal must delete exactly the selected
-account's topology, encrypted credential tuple, federation binding,
-withdrawals, model observation, and model exclusion. Provider-level model
-selection belonging to other accounts must be preserved. These obligations
-require native integration tests, including stale revisions, foreign ownership,
-credential/config replacement races, and crash/replay boundaries, before
-advertising either capability.
+## Dormant defaults
+
+Disabling or removing the last default account preserves the stored selected
+provider. Typed topology loading accepts the dormant route. The outer Responses
+router always supplies that selected provider explicitly; requests report it
+unavailable rather than calling a different provider. The portable router's
+constructor may use an available internal default, but outer requests never
+use that default. No model or project execution default is changed.
