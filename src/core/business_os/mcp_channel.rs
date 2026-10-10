@@ -634,6 +634,10 @@ struct CommunicationSessionBinding {
     /// The turn's own queue lease: the mail itself, or the founder rework
     /// task that answers it.
     lease_message_key: String,
+    /// `leased_at` of that lease when the session was issued: a later lease
+    /// of the same key must not revive the session.
+    #[serde(default)]
+    lease_started_at: Option<String>,
     sender_role: String,
 }
 
@@ -862,6 +866,15 @@ pub(crate) fn issue_internal_communication_session_token(
         matches!(role.as_str(), "chef" | "admin" | "founder" | "user"),
         "Business OS user role is invalid"
     );
+    let Some((lease_status, lease_started_at)) =
+        crate::mission::channels::inbound_route_state(root, lease_message_key)?
+    else {
+        anyhow::bail!("communication session turn has no queue lease");
+    };
+    anyhow::ensure!(
+        matches!(lease_status.as_str(), "leased" | "running"),
+        "communication session turn is not leased"
+    );
     let issued_at_ms = now_ms();
     let claims = BusinessOsMcpInternalSessionClaims {
         schema: "ctox.business_os.mcp_command_session.v1".to_string(),
@@ -890,6 +903,7 @@ pub(crate) fn issue_internal_communication_session_token(
         communication_binding: Some(CommunicationSessionBinding {
             inbound_message_key: inbound_message_key.to_string(),
             lease_message_key: lease_message_key.to_string(),
+            lease_started_at,
             sender_role: sender_role.to_string(),
         }),
         issued_at_ms,
@@ -918,15 +932,18 @@ fn verify_communication_session(
             }),
         "communication session grant changed"
     );
-    let lease_status =
-        crate::mission::channels::inbound_route_status(root, &binding.lease_message_key)?;
+    let lease = crate::mission::channels::inbound_route_state(root, &binding.lease_message_key)?;
     anyhow::ensure!(
-        matches!(lease_status.as_deref(), Some("leased" | "running")),
+        lease.as_ref().is_some_and(|(status, started_at)| {
+            matches!(status.as_str(), "leased" | "running")
+                && started_at == &binding.lease_started_at
+        }),
         "communication session turn is no longer leased"
     );
     if binding.lease_message_key != binding.inbound_message_key {
         let mail_status =
-            crate::mission::channels::inbound_route_status(root, &binding.inbound_message_key)?;
+            crate::mission::channels::inbound_route_state(root, &binding.inbound_message_key)?
+                .map(|(status, _)| status);
         anyhow::ensure!(
             matches!(
                 mail_status.as_deref(),
@@ -15298,6 +15315,18 @@ mod tests {
         )?;
         assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
         assert!(verify_internal_command_session_token(root, &token).is_err());
+
+        // A new lease of the same key does not revive an older session.
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = '2026-10-10T09:00:00Z' WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = NULL WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
 
         // A demoted sender or a finished turn loses the session.
         seed_business_user(root, "owner@example.test", "user")?;

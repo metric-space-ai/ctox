@@ -7371,9 +7371,12 @@ fn set_routing_status(
     Ok(())
 }
 
-/// Raw routing status of one inbound message, or `None` when it has no
-/// routing row.
-pub(crate) fn inbound_route_status(root: &Path, message_key: &str) -> Result<Option<String>> {
+/// Raw routing status and lease start of one message, or `None` when it has
+/// no routing row. A new lease on the same key has a new `leased_at`.
+pub(crate) fn inbound_route_state(
+    root: &Path,
+    message_key: &str,
+) -> Result<Option<(String, Option<String>)>> {
     let db_path = resolve_db_path(root, None);
     let Some(conn) = open_channel_db_read_only(&db_path)? else {
         return Ok(None);
@@ -7383,9 +7386,9 @@ pub(crate) fn inbound_route_status(root: &Path, message_key: &str) -> Result<Opt
     }
     Ok(conn
         .query_row(
-            "SELECT route_status FROM communication_routing_state WHERE message_key = ?1 LIMIT 1",
+            "SELECT route_status, leased_at FROM communication_routing_state WHERE message_key = ?1 LIMIT 1",
             params![message_key],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?)
 }

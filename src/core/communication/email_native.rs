@@ -3435,6 +3435,7 @@ fn list_ews_folder(
 <t:FieldURI FieldURI="message:InternetMessageId"/>
 <t:FieldURI FieldURI="item:InReplyTo"/>
 <t:FieldURI FieldURI="message:References"/>
+<t:FieldURI FieldURI="item:InternetMessageHeaders"/>
 </t:AdditionalProperties></m:ItemShape><m:ItemIds>{item_ids}</m:ItemIds>"#,
         );
         let hydrated = (|| -> Result<Vec<MailboxMessage>> {
@@ -3673,8 +3674,32 @@ fn normalize_ews_mail_item(
             "inReplyTo": descendant_text(node, "InReplyTo").unwrap_or_default(),
             "references": descendant_text(node, "References").unwrap_or_default(),
             "attachments": ews_file_attachment_metadata(node),
+            "authenticationResults": ews_authentication_results(node),
         }),
     })
+}
+
+/// `Authentication-Results` headers as delivered, for sender authentication
+/// (`communication::sender_authentication`). Other headers are not kept.
+fn ews_authentication_results(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    node.children()
+        .find(|child| child.is_element() && child.tag_name().name() == "InternetMessageHeaders")
+        .map(|headers| {
+            headers
+                .children()
+                .filter(|header| {
+                    header.is_element()
+                        && header.tag_name().name() == "InternetMessageHeader"
+                        && header
+                            .attribute("HeaderName")
+                            .is_some_and(|name| name.eq_ignore_ascii_case("Authentication-Results"))
+                })
+                .filter_map(|header| header.text())
+                .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// File attachments listed by GetItem (`item:Attachments`). Inline images of
@@ -5967,6 +5992,7 @@ mod tests {
                     "item:InReplyTo",
                     "message:References",
                     "message:InternetMessageId",
+                    "item:InternetMessageHeaders",
                 ] {
                     assert!(body.contains(field));
                 }
@@ -6002,6 +6028,31 @@ mod tests {
         assert!(!mail.seen);
         assert!(mail.has_attachments);
         assert_eq!(mail.external_created_at, "2026-09-12T08:00:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn ews_keeps_only_the_authentication_results_headers() -> anyhow::Result<()> {
+        let xml = r#"<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+<t:InternetMessageHeaders>
+<t:InternetMessageHeader HeaderName="Received">from mx.example.test</t:InternetMessageHeader>
+<t:InternetMessageHeader HeaderName="Authentication-Results">mx.thesen.example;
+ dmarc=pass action=none header.from=metric-space.ai</t:InternetMessageHeader>
+<t:InternetMessageHeader HeaderName="authentication-results">attacker.example; dmarc=pass</t:InternetMessageHeader>
+</t:InternetMessageHeaders>
+</t:Message>"#;
+        let document = roxmltree::Document::parse(xml)?;
+        assert_eq!(
+            super::ews_authentication_results(document.root_element()),
+            vec![
+                "mx.thesen.example; dmarc=pass action=none header.from=metric-space.ai",
+                "attacker.example; dmarc=pass",
+            ]
+        );
+        let without = roxmltree::Document::parse(
+            r#"<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"/>"#,
+        )?;
+        assert!(super::ews_authentication_results(without.root_element()).is_empty());
         Ok(())
     }
 
