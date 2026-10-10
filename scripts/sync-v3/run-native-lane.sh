@@ -44,7 +44,7 @@ if [[ "$soak" = 86400 ]]; then
     --property=MemorySwapMax=0 --property="WorkingDirectory=$(pwd)" \
     --setenv="PATH=$PATH" --setenv="TMPDIR=$TMPDIR" --setenv="BUILD_LANE_HEAD=$BUILD_LANE_HEAD" \
     --setenv="CARGO_TARGET_DIR=$CARGO_TARGET_DIR" --setenv="PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" \
-    node scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" \
+    "$(command -v node)" scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" \
     --playwright "$playwright_module" --output "$TMPDIR/sync-v3-native-evidence" \
     --soak-seconds 86400 --soak-status "$status"
 else

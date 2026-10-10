@@ -44,7 +44,7 @@ try {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await writeFile(join(runtimeRoot, 'runner-owner.json'), JSON.stringify({ owner: '01a0879f-d2e0-72c3-9353-4ef802b2998b',
-      pidPgid: child.pid, purpose: `isolated S0 ${rtt}ms RTT`, output: runtimeRoot, stopCondition: 'terminal exit or 240s deadline, own group TERM then KILL after10s' }));
+      pidPgid: child.pid, purpose: `isolated S0 ${rtt}ms RTT`, output: runtimeRoot, stopCondition: `terminal exit or ${240 + (rtt === 0 ? soakSeconds : 0)}s deadline, own group TERM then KILL after10s` }));
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
     const signal = value => { try { process.kill(-child.pid, value); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
     let killTimer;
