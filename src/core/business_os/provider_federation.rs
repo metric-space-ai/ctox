@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     account_id TEXT PRIMARY KEY,
     models_json TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
+);
+CREATE TABLE IF NOT EXISTS business_provider_federation_model_checks (
+    account_id TEXT NOT NULL,
+    account_revision INTEGER NOT NULL CHECK(account_revision > 0),
+    model_id TEXT NOT NULL,
+    checked_at_ms INTEGER NOT NULL CHECK(checked_at_ms > 0),
+    result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+    PRIMARY KEY(account_id,model_id),
+    FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id) ON DELETE CASCADE
 );";
 
 #[path = "provider_account_controls.rs"]
@@ -751,8 +760,10 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
             .as_i64()
             .context("native account revision is missing")?;
         let catalog = catalog_projection(conn, id, revision, now)?;
+        let checks = super::provider_model_checks::project(conn, id, revision)?;
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
+        entry["modelChecks"] = checks;
     }
     account_controls::project(conn, &mut rows)?;
     let providers = models::project(conn, owner, &mut rows)?;

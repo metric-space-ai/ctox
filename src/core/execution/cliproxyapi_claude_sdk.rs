@@ -143,6 +143,30 @@ impl NativeClaudeSdkAccountReservation {
             selection.model(),
         )?;
         selection.assert_consumer_binding(&selected)?;
+        Self::prepare_selected(authority, selected)
+    }
+
+    /// A manual Hi probe uses the genuine admitted consumer/model policy.
+    /// It does not create a project turn, claim, or SDK execution witness.
+    pub(crate) fn prepare_model_check(
+        authority: &AdmittedConsumerAuthority,
+        account_id: &str,
+        account_revision: i64,
+        model: &str,
+    ) -> Result<Self> {
+        let selected = capture_consumable_model(authority, account_id, account_revision, model)?;
+        ensure!(
+            selected.account().provider == "claude"
+                && selected.account().holder_instance_id == authority.native_host_instance_id()?,
+            "model check requires a Claude account held on this native instance"
+        );
+        Self::prepare_selected(authority, selected)
+    }
+
+    fn prepare_selected(
+        authority: &AdmittedConsumerAuthority,
+        selected: ConsumableModel,
+    ) -> Result<Self> {
         let private_binding = selected
             .private_configuration_binding()
             .context("native Claude account requires current holder discovery")?

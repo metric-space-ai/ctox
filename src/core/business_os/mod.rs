@@ -80,6 +80,7 @@ pub mod computer_capabilities;
 pub mod computer_endpoints;
 pub(crate) mod consumer_authority;
 pub(crate) mod provider_federation;
+pub(crate) mod provider_model_checks;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;

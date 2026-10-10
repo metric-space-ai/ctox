@@ -7,6 +7,7 @@ pub(crate) mod cliproxyapi_claude_proxy;
 pub(crate) mod cliproxyapi_claude_sdk;
 pub mod cliproxyapi_host;
 pub mod cliproxyapi_integration;
+pub(crate) mod cliproxyapi_model_probe;
 pub mod cliproxyapi_xai;
 pub mod models;
 pub mod responses;

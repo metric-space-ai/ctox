@@ -1085,8 +1085,11 @@ function runSmokeMatrixSelfTest() {
     throw new Error('Dynamic-app reload fixture must retain its native manifest, authority barriers, and post-reload browser pull barrier');
   }
   if (!runnerSource.includes('const nativePeerOpenTimeoutMs = businessOsAppReleaseUiSmokeMode ? 240000 : 60000;')
-      || !runnerSource.includes("waitForNativePeerOpen(appCommandReplicationState, 'business_commands', nativePeerOpenTimeoutMs)")) {
-    throw new Error('App release smoke must retain its cold-start native-peer deadline without retries');
+      || !runnerSource.includes('const commandCollectionsDeadline = Date.now() + nativePeerOpenTimeoutMs;')
+      || !runnerSource.includes('const remaining = () => Math.max(0, commandCollectionsDeadline - Date.now());')
+      || !runnerSource.includes("waitForNativePeerOpen(appCommandReplicationState, 'business_commands', remaining())")
+      || !runnerSource.includes("waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks', remaining())")) {
+    throw new Error('App release smoke must retain its shared cold-start native-peer deadline without retries');
   }
   const matrixSource = fs.readFileSync(__filename, 'utf8');
   const ensureBinaryIndex = matrixSource.indexOf('\nensureCtoxSmokeBinary();\n');
