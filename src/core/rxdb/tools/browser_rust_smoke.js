@@ -4148,7 +4148,12 @@ function staleRustSeedChunkGeneration(seed) {
 }
 
 async function stopChild(child) {
-  if (child?.__ctoxNativeSymbolProfile) await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+  if (child?.__ctoxNativeSymbolProfile) {
+    await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+    // Retain an observation after perf closed, while the owned native child
+    // is still alive. The periodic tick alone may miss this short interval.
+    child.__ctoxNativeCpuProfile?.sample?.();
+  }
   if (!child || child.exitCode !== null) return;
   terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
@@ -4162,6 +4167,21 @@ async function stopChild(child) {
       clearTimeout(timer);
       resolve();
     });
+  });
+}
+
+function startReadyCtoxSymbolProfile(child) {
+  if (!nativeSymbolPerf) return;
+  // --no-inherit samples only threads present at attachment. Native peer
+  // readiness must precede this call so its worker pools are included.
+  child.__ctoxNativeCpuProfile?.sample?.();
+  child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
+    outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
+    perfExecutable: nativeSymbolPerf,
+    delayMs: 0,
+  }, {
+    spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
+    signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
   });
 }
 
@@ -4188,18 +4208,9 @@ function startCtoxServer() {
     stdio: ['ignore', 'pipe', 'pipe'],
   }), 'ctox-business-os');
   if (smokeProcessLifecyclePath) {
-    startNativeCpuProfile(child, {
+    child.__ctoxNativeCpuProfile = startNativeCpuProfile(child, {
       outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
       phase: () => smokeProcessLifecycle.startupPhase,
-    });
-  }
-  if (nativeSymbolPerf) {
-    child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
-      outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
-      perfExecutable: nativeSymbolPerf,
-    }, {
-      spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
-      signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
   }
   let resolveListening;
@@ -4456,6 +4467,7 @@ function ensureCtoxSmokeBinary() {
     if (!config.native_rxdb_peer_available) {
       throw new Error(`native peer unavailable: ${JSON.stringify(config)}`);
     }
+    startReadyCtoxSymbolProfile(ctox);
     if (smokeMode === 'business-os-sellify-scale-ui') {
       outerPhaseTimings.sellifyScaleSeedMs = sellifyScaleSeedMs;
     }
@@ -8476,7 +8488,7 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
               }
               if (payload === null || payload !== expectedContent || !metadataFresh) {
                 mismatched.push({

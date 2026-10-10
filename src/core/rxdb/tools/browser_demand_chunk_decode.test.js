@@ -12,7 +12,15 @@ const start = source.indexOf('async function waitForFileViaDemandFetch(');
 assert.ok(start >= 0);
 const expression = source.slice(start).match(/const payload = ([^\n]+);\s*\n\s*lastSeen =/)?.[1];
 assert.ok(expression, 'demand payload decoder must be exercised from fixture source');
-const decode = demandChunks => vm.runInNewContext(expression, { demandChunks, atob });
+const workspaceStart = source.indexOf('async function waitForWorkspaceArtifactsProduct(');
+assert.ok(workspaceStart >= 0);
+const workspaceExpression = source.slice(workspaceStart).match(/^\s+payload = (demandChunks[^\n]+);/m)?.[1];
+assert.ok(workspaceExpression, 'workspace payload decoder must be exercised from fixture source');
+const decode = demandChunks => {
+  const payload = vm.runInNewContext(expression, { demandChunks, atob });
+  assert.equal(vm.runInNewContext(workspaceExpression, { demandChunks, atob }), payload);
+  return payload;
+};
 
 test('independent demand frames preserve bytes across padded and unpadded boundaries', () => {
   const bytes = Buffer.from(Array.from({ length: 32771 }, (_, i) => i % 256));
