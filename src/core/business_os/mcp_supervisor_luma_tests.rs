@@ -251,3 +251,57 @@ fn withdrawn_or_foreign_computer_and_stale_catalog_cannot_capture() -> anyhow::R
     }
     Ok(())
 }
+#[test]
+fn clearing_a_sealed_luma_never_falls_back_in_the_same_lease() -> anyhow::Result<()> {
+    let (root, token) = fixture(true)?;
+    assert_eq!(
+        code(require_executor(root.path(), Some(&token)).unwrap_err()),
+        "claude_code_holding_executor_unavailable"
+    );
+    let cleared = crate::business_os::command_plane::accept_rxdb_business_command(
+        root.path(),
+        json!({"id":"clear-luma","module":"ctox","command_type":"ctox.workjet.project.upsert",
+            "payload":{"project_id":"project","name":"Project","supervisor_luma_id":null},
+            "client_context":{"actor":{"id":"owner","role":"chef"}}}),
+    )?;
+    anyhow::ensure!(cleared["status"] == "completed", "{cleared}");
+    assert_eq!(
+        code(require_executor(root.path(), Some(&token)).unwrap_err()),
+        "supervisor_selection_changed_during_lease"
+    );
+    assert_eq!(routes(root.path())?, 1);
+
+    // A new actual native lease may use the newly selected instance default.
+    // Fixture-only replacement; production never receives caller lease fields.
+    let trusted = verify_internal_command_session_token(root.path(), &token)?;
+    let command_id = required_arg(&trusted, "command_id")?;
+    Connection::open(crate::paths::core_db(root.path()))?.execute(
+        "UPDATE communication_routing_state SET lease_worker_id='replacement-native-worker'
+         WHERE message_key IN (SELECT task_id FROM business_command_task_links WHERE command_id=?1)",
+        [&command_id],
+    )?;
+    let command = crate::channels::business_command_projection(root.path(), &command_id)?;
+    let replacement = issue_internal_command_session_token(
+        root.path(),
+        &command_id,
+        command["payload_hash"].as_str().context("hash")?,
+        "owner",
+        "chef",
+        "native-job-workspace",
+        &json!({}),
+    )?;
+    let replacement =
+        restrict_internal_command_session_to_workjet_supervisor(root.path(), &replacement)?;
+    let mut writer = Connection::open(crate::paths::core_db(root.path()))?;
+    let pending_writer = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    require_executor(root.path(), Some(&replacement))?;
+    assert_eq!(routes(root.path())?, 1);
+    pending_writer.rollback()?;
+    let actual: Option<String> = Connection::open(crate::paths::core_db(root.path()))?.query_row(
+        "SELECT actual_json FROM workjet_supervisor_route_attempts",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(actual.is_none());
+    Ok(())
+}

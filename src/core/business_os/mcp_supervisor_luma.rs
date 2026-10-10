@@ -225,6 +225,51 @@ fn resolve(
     }))
 }
 
+fn lease_record(trusted: &Value) -> anyhow::Result<(String, String, String)> {
+    let execution_key = workjet_jour_fixe::execution_key(trusted)?;
+    let lease = json!({"command":trusted["workjet_supervisor_lease"],"plan":trusted["workjet_confirmed_plan"],
+        "epoch":trusted["workjet_supervisor_epoch"]});
+    let lease_json = serde_json::to_string(&lease)?;
+    let lease_hash =
+        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, lease_json.as_bytes()).as_ref());
+    Ok((execution_key, lease_json, lease_hash))
+}
+
+/// Clearing a project selection affects a new execution, not an already
+/// sealed native lease. This default-path read creates no schema/writer.
+fn require_unsealed_default(root: &Path, trusted: &Value, owner: &str) -> anyhow::Result<()> {
+    let mut core = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let exists: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
+         AND name='workjet_supervisor_route_attempts')",
+        [],
+        |row| row.get(0),
+    )?;
+    if exists {
+        let (execution_key, _, lease_hash) = lease_record(trusted)?;
+        let sealed: bool = core.query_row(
+            "SELECT EXISTS(SELECT 1 FROM workjet_supervisor_route_attempts
+             WHERE execution_key=?1 AND lease_hash=?2 AND owner_user_id=?3)",
+            params![execution_key, lease_hash, owner],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            !sealed,
+            unavailable(
+                "supervisor_selection_changed_during_lease",
+                "a sealed project Luma was cleared in this execution lease"
+            )
+        );
+    }
+    core.commit()?;
+    Ok(())
+}
+
 /// The actual service calls this after issuing its restricted command/plan
 /// token, before any model invocation. A configured external harness must not
 /// fall through to PersistentSession with the instance default. Until a genuine
@@ -262,7 +307,7 @@ pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Resu
         .get("supervisor_luma_id")
         .is_none_or(Value::is_null)
     {
-        return Ok(());
+        return require_unsealed_default(root, &trusted, &context.actor);
     }
     drop(policy_snapshot);
     let mut core = Connection::open(crate::paths::core_db(root))?;
@@ -273,14 +318,12 @@ pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Resu
     let (project, thread, _) =
         workjet_jour_fixe::bound_project(&core, &policy, &context, &trusted)?;
     let Some(route) = resolve(&policy, &context.actor, &project, &thread)? else {
-        return Ok(());
+        return Err(unavailable(
+            "supervisor_selection_changed_during_lease",
+            "project Luma was cleared during execution admission",
+        ));
     };
-    let execution_key = workjet_jour_fixe::execution_key(&trusted)?;
-    let lease = json!({"command":trusted["workjet_supervisor_lease"],"plan":trusted["workjet_confirmed_plan"],
-        "epoch":trusted["workjet_supervisor_epoch"]});
-    let lease_json = serde_json::to_string(&lease)?;
-    let lease_hash =
-        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, lease_json.as_bytes()).as_ref());
+    let (execution_key, lease_json, lease_hash) = lease_record(&trusted)?;
     let code = if route.harness == "claude-code" {
         "claude_code_holding_executor_unavailable"
     } else {
