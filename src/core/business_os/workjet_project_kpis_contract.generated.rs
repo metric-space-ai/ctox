@@ -493,6 +493,8 @@ impl WireValidate for KpiSnapshot {
 pub(crate) struct KpiResult {
     pub(crate) status: KpiState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_refresh_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) snapshot: Option<KpiSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason_code: Option<String>,
@@ -504,6 +506,12 @@ impl WireValidate for KpiResult {
         {
             let value = &self.status;
             value.validate()?;
+        }
+        if let Some(value) = &self.next_refresh_ms {
+            value.validate()?;
+            if *value < 0 {
+                return Err("KpiResult.next_refresh_ms violates minimum".into());
+            }
         }
         if let Some(value) = &self.snapshot {
             value.validate()?;
@@ -600,6 +608,8 @@ impl WireValidate for ProjectKpis {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadKpisRequest {
     pub(crate) project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) include_refresh_schedule: Option<bool>,
 }
 impl WireValidate for ReadKpisRequest {
     fn validate(&self) -> Result<(), String> {
@@ -612,6 +622,9 @@ impl WireValidate for ReadKpisRequest {
             if value.chars().count() > 128 {
                 return Err("ReadKpisRequest.project_id violates max_chars".into());
             }
+        }
+        if let Some(value) = &self.include_refresh_schedule {
+            value.validate()?;
         }
         validate_rules(
             "ReadKpisRequest",
