@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::json;
 #[path = "mcp_supervisor_holding.rs"]
 mod holding;
+pub(crate) use holding::source::{NativeSupervisorSourceHost, NativeSupervisorSourceOffer};
 pub(crate) use holding::{
     NativeSupervisorCurrentPublication, NativeSupervisorExecutionLease,
     NativeSupervisorHoldingController, NativeSupervisorPublicationCheck,
@@ -372,7 +373,7 @@ fn require_unsealed_default(root: &Path, trusted: &Value, owner: &str) -> anyhow
 /// fall through to PersistentSession with the instance default. Until a genuine
 /// holding producer is connected, fail explicitly and retain requested facts
 /// under this exact native execution lease; actual execution remains NULL.
-fn capture_lease(
+pub(crate) fn capture_lease(
     root: &Path,
     token: Option<&str>,
 ) -> anyhow::Result<Option<NativeSupervisorExecutionLease>> {
