@@ -98,7 +98,11 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       trace.mark('fixture-query');
       const rows = await withDeadline(raw[leadName].find({ selector: {}, sort: [{ ordinal: 'asc' }], limit: 20 }).exec(), 60000, 'Scale query timeout');
       trace.mark('rows-ready');
-      if (rows.length !== 20 || new Set(rows.map(row => row.id)).size !== 20 || rows[0].ordinal !== 0) throw Error('Scale visible window incomplete');
+      globalThis.__syncV3WindowDiagnostic = { rowCount: rows.length, uniqueIds: new Set(rows.map(row => row.id)).size,
+        firstOrdinal: rows[0]?.ordinal ?? null, ordinals: rows.map(row => row.ordinal ?? null) };
+      if (rows.length !== 20 || new Set(rows.map(row => row.id)).size !== 20 || rows[0].ordinal !== 0) {
+        throw Error(`Scale visible window incomplete: ${JSON.stringify(globalThis.__syncV3WindowDiagnostic)}`);
+      }
       const panel = document.createElement('section');
       panel.id = 'sync-v3-visible-data';
       panel.style.cssText = 'position:fixed;inset:80px 24px auto;z-index:2147483647;background:white;color:black;padding:16px';
@@ -178,7 +182,15 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
         visibleDefinition: '20 native demand-query rows painted in isolated shell overlay',
         writeDefinition: 'local upsert to exact native masterWrite ACK, independently verified in SQLite' };
     } finally { for (const lease of leases) await lease.release(); }
-  }, { schemas: definitions(), rttMs, fixture });
+  }, { schemas: definitions(), rttMs, fixture }).catch(async error => {
+    const partial = await page.evaluate(async () => {
+      const trace = globalThis.__syncV3Trace; await trace?.drain?.();
+      return { marks: trace?.marks || {}, events: trace?.events || [], errors: trace?.errors || [],
+        queryWindow: globalThis.__syncV3WindowDiagnostic || null };
+    }).catch(() => ({ unavailable: true }));
+    fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-phase-failure.json'), JSON.stringify({ error: error.message, ...partial }, null, 2) + '\n');
+    throw error;
+  });
   result.fixture = fixture;
   fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-scale-result.json'), JSON.stringify(result, null, 2) + '\n');
   await page.screenshot({ path: path.join(runtimeRoot, 'sync-v3-visible-data.png') });

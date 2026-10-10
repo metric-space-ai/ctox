@@ -14,7 +14,7 @@ mkdir -p "$evidence"
 retain() {
   for rtt in 0 300 600; do
     cp "$TMPDIR/sync-v3-native-evidence/rtt-$rtt.log" "$evidence/" 2>/dev/null || true
-    for name in sync-v3-scale-result.json sync-v3-scale-partial.json sync-v3-relay.json sync-v3-visible-data.png process-lifecycle.json runner-owner.json; do
+    for name in sync-v3-scale-result.json sync-v3-scale-partial.json sync-v3-phase-failure.json sync-v3-relay.json sync-v3-visible-data.png process-lifecycle.json runner-owner.json; do
       if [[ -f "$TMPDIR/sync-v3-native-evidence/rtt-$rtt/$name" ]]; then
         cp "$TMPDIR/sync-v3-native-evidence/rtt-$rtt/$name" "$evidence/rtt-$rtt-$name"
       fi
