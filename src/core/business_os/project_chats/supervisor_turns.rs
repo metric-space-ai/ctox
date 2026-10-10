@@ -113,6 +113,8 @@ pub(in crate::business_os) fn is_command(command_type: &str) -> bool {
             | "ctox.workjet.project.supervisor.turn.capabilities"
             | "ctox.workjet.project.supervisor.route.read.v1"
             | "ctox.workjet.project.supervisor.route.capabilities.v1"
+            | "ctox.workjet.project.supervisor.route.read.v2"
+            | "ctox.workjet.project.supervisor.route.capabilities.v2"
     )
 }
 
@@ -348,6 +350,32 @@ pub(in crate::business_os) fn control(
                 &request.thread_id,
             )
         }
+
+        "ctox.workjet.project.supervisor.route.capabilities.v2" => {
+            use super::super::workjet_supervisor_route_computation_contract::{
+                SupervisorRouteCapabilities, WireValidate,
+            };
+            let request: RouteReadPayload = serde_json::from_value(command.payload.clone())?;
+            let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
+            let result = json!({"schema":"ctox.workjet.supervisor.route-capabilities.v2",
+                "project_id":binding.project_id,"supervisor_thread_id":binding.thread_id,
+                "read_schema":"ctox.workjet.supervisor.route-display.v2",
+                "read_command":"ctox.workjet.project.supervisor.route.read.v2"});
+            serde_json::from_value::<SupervisorRouteCapabilities>(result.clone())?
+                .validate()
+                .map_err(anyhow::Error::msg)?;
+            Ok(result)
+        }
+        "ctox.workjet.project.supervisor.route.read.v2" => {
+            let request: RouteReadPayload = serde_json::from_value(command.payload.clone())?;
+            super::super::mcp_channel::read_supervisor_computed_route(
+                root,
+                owner,
+                &request.project_id,
+                &request.thread_id,
+            )
+        }
+
         "ctox.workjet.project.supervisor.turn.capabilities" => {
             let request: CapabilitiesPayload = serde_json::from_value(command.payload.clone())?;
             let binding = binding(root, owner, &request.project_id, &request.thread_id, false)?;
