@@ -13,8 +13,8 @@ use ctox_sync::{
     native::NativeSyncSession,
 };
 use rxdb::plugins::replication_webrtc::{
-    webrtc_helper::send_message_and_await_answer_guarded, WebRTCMessage, WebRTCPublicationGuard,
-    WebRTCRsConnection,
+    webrtc_helper::send_message_and_await_answer_guarded, WebRTCConnectionHandler, WebRTCMessage,
+    WebRTCPublicationGuard, WebRTCRsConnection,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
