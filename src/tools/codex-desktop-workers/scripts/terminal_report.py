@@ -419,7 +419,7 @@ def whole_pr_iterations(records, pr_url):
 
 
 def harness_label(value):
-    if value in ("Codex Desktop", "Codex"):
+    if value in ("Codex Desktop", "Codex", "codex_exec"):
         return "codex"
     if value in ("Claude Desktop", "claude-desktop", "Claude Code"):
         return "claude"

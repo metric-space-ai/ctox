@@ -67,7 +67,23 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(groups[0]["rework"]["mean"], 1)
         self.assertEqual([first, second], original)
 
+    def test_codex_exec_joins_codex_harness_without_rewriting_native_client(self):
+        row = dict(pr_url="cli", role="parent", actor_id="cli", schema=r.RUBRIC,
+                   model="gpt-6.1-sol", harness="codex_exec",
+                   parent_completion={"weighted_total":4}, rework_iterations=2,
+                   iteration_scope="pr")
+        desktop = copy.deepcopy(row)
+        desktop.update(pr_url="desktop", actor_id="desktop", harness="Codex Desktop",
+                       parent_completion={"weighted_total":8}, rework_iterations=0)
+        original = copy.deepcopy([row, desktop])
+        group = r.leaderboard_data([row, desktop])[0]
+        self.assertEqual(len(r.leaderboard_data([row, desktop])), 1)
+        self.assertEqual((group["harness"], group["prs"], group["score"]["mean"], group["rework"]["mean"]),
+                         ("codex", 2, 6, 1))
+        self.assertEqual([row, desktop], original)
+
     def merge_fixture(self):
+
 
         pr = dict(url="pr", state="MERGED", headRefOid="a"*40,
                   mergedAt="2026-09-13T05:13:49Z", baseRefName="main")
