@@ -34,8 +34,10 @@ and once a slide has a canvas, the canvas becomes that slide's source of truth.
    meeting. Every slide cites at least one source in `sourceRefs`.
 5. Draft the document and check it without storing:
    `business_os.presentation_read` `validate_document`
-   `{project_id, meeting_id, document}`. Fix every
-   `error` using its `repairHint`; warnings (layout budgets) are advice.
+   `{project_id, meeting_id, document}`. It checks the schema and the content
+   rules below and returns every issue. Fix every `error` using its
+   `repairHint`; warnings (layout budgets, a repeated sentence) are advice. A
+   deck with content errors is not stored and not published.
 6. Store it: `business_os.presentation_update` `create_presentation`
    `{operation_id, project_id, meeting_id, document}`. A meeting has exactly one
    presentation; later changes use `replace_document`, `apply_edits` or
@@ -59,7 +61,7 @@ conflict means: read again (`read_presentation`), then decide.
 ## Deck for a Regeltermin
 
 Language: the project's language (German unless the project says otherwise).
-Six to nine slides. Suggested order, adapt to the evidence:
+Three to nine slides. Suggested order, adapt to the evidence:
 
 | # | Slide | Layout | `intent` | Content |
 |---|---|---|---|---|
@@ -73,7 +75,13 @@ Six to nine slides. Suggested order, adapt to the evidence:
 | 8 | Nächste Schritte | `technical_one_column` | `summary` | `numberedList` of next acceptance criteria |
 
 A slide whose evidence is entirely missing is left out; say on slide 2 what
-is missing. Never keep an empty slide.
+is missing. Never keep an empty slide. When nothing is measured yet (no KPI
+has a stored value), the deck has three slides: the title with the question,
+goal and status naming every gap once, and the decisions for today. As soon as
+one KPI has a stored value, the deck keeps the KPI slide with its
+`business.kpi-bars` scene, also at a first Regeltermin: show the current values
+without `previous` and say once that no comparison exists yet. Numbers belong
+in the scene, not as text in the goal and status slide.
 
 Every slide's `title` is drawn as its handwritten headline: at most 60
 characters, and do not repeat it as a `heading` block. Use `heading` blocks
@@ -84,6 +92,27 @@ units and German formatting in text (`1.980`, `4,8 Mio €`, `−5`, dates
 `12.10.2026`); `data` fields hold plain JSON numbers (`1980`, `4.8`). Say
 "keine Daten" plainly when a source is missing. In the PR table, "effect" is
 one short line you can support from the evidence, otherwise `keine Daten`.
+
+## Write about the project, never about the slides
+
+The Owner reads every sentence. Each one states a project fact, a change or a
+decision. These rules are checked (`content.*` issues) on everything the
+Supervisor stores:
+
+- Never write about the slide, the deck, the layout or the display: no "diese
+  Folie", "bleibt leer", "erscheint hier", "links steht". State the fact.
+- Never make the data plumbing the message: no "laut Katalog", "aus der
+  Konfiguration", "keine frühere Präsentation". Say what is missing for the
+  project: name the measure and say that its source is not connected yet.
+- No internal ids, field names, recipe names or system states in slides or
+  notes: no `missing_source`, `project_tasks_total`, "KPI-Prompts", "Rezepte",
+  "gebundene Werte", "Native-Quellen". Use the Owner's words.
+- Name every gap once, on slide 2. A slide or table that would only say
+  "keine Daten" is left out.
+- A heading never repeats the slide title; a callout title never restates it.
+- "Nächste Schritte" does not restate "Entscheidungen": decisions say what the
+  Owner approves today, next steps say what changes afterwards. Each fact
+  appears once in the deck.
 
 ## Document shape
 
@@ -173,7 +202,10 @@ an empty string. `previous` is the value shown at the
 penultimate Regeltermin and is omitted when that value is not stored (no delta then);
 `better` is `lower` for costs, bugs, latency. The scene computes the ±% itself;
 do not write percentages into labels. Bullets name the change in words or in
-absolute numbers (`412 statt 301`).
+absolute numbers (`412 statt 301`). Bars are drawn on one common scale only when
+every item has the same unit; otherwise each bar is scaled on its own and equal
+heights mislead. So one scene holds KPIs of one unit (for example the task
+counts), and a rate such as a success rate goes into a bullet, not a bar.
 
 `business.trend` — one value over time:
 
@@ -193,13 +225,66 @@ Put one scene per slide, in a `technical_figure_right` or `_left` layout.
 
 ## Speaker notes are the narration
 
-`publish_deck` turns each slide's `talkingPoint` notes into the text that is read
-aloud. Write them as two to five spoken sentences in the deck language, at most
-about 900 characters per slide, no markdown, no lists, no URLs. Write as you
-would speak: spell out units and signs (Euro, Millisekunden, Pull Request
-Nummer 14). Say what changed
-and what the Owner should decide. Notes of kind `source` hold citations; they
-are not read aloud.
+`publish_deck` turns each slide's `talkingPoint` notes into the text the meeting
+voice reads aloud while that slide is shown. What is spoken must fit the slide:
+
+- Every slide has one talking point, in the deck language, no markdown, no
+  lists, no URLs. Notes of kind `source` hold citations and are not read aloud.
+- Time budget: the voice speaks about 15.6 characters per second. At most 450
+  characters per slide (about 30 seconds), at most 150 on the title slide.
+- It speaks only about this slide and its sources. Every number, date and name
+  it says appears on the slide, in its scene data or in its `sourceRefs`; use
+  the same terms and the same numbers as the slide.
+- It complements the slide and never reads it out: say what the numbers mean,
+  why they changed and what the Owner should decide. A sentence that repeats a
+  bullet is rejected, and a paraphrase counts as reading aloud: if a spoken
+  sentence says what an on-screen line already says in other words, replace it
+  with the cause, the meaning or the consequence the slide does not show.
+- Speak the slide's exact key terms and names ("messbares
+  Abschlusskriterium", "Exitwert E5", "gemergte Pull Requests"); never soften,
+  shorten or swap them for a vaguer word. When the slide states a choice ("ob A,
+  B oder beides"), say it as a choice, not as a list of topics.
+- Complete spoken sentences only; no headline fragments such as "Danach der
+  Stand und die Lücken."
+- Write as you would speak: spell out units and signs (Euro, Millisekunden,
+  Pull Request Nummer 14).
+- Through-line: every slide except the last ends with one short, complete
+  sentence that leads to the next slide's topic. Name that topic as a topic,
+  never as an outcome the next slide contradicts (no "vergleichen" when the next
+  slide says no comparison is possible yet). The last slide closes with what
+  the Owner's decisions today make possible, instead of listing them again or
+  repeating "Nächste Schritte". Its closing sentence names each decision by the
+  key term on the slide (for example the goal, the data sources, the exit value
+  E5) and the date from which it takes effect; a bare "das" carries nothing a
+  listener has not heard.
+- Complementing is not leaving out: use the budget for two to four sentences on
+  every slide after the title, and speak the date or number that carries the
+  slide's point (a deadline, a change). A sentence that would fit any project
+  says nothing; say what is true for this one.
+- Speak to the Owner as "Sie". Never talk about the Owner in the third person
+  or by name. The title slide's narration speaks the project name and today's
+  date once (the listener hears the voice, not the subtitle); later slides do
+  not repeat them.
+- When a gap line on the slide already states its cause and effect, do not
+  repeat that chain aloud; say what the gap means for today's decision.
+- Never point at what the slide shows ("diese drei Punkte", "hier oben"); state
+  the scope as a fact. When the slide offers a choice, say what the choice
+  depends on and, where the facts show it, what an option changes; never list
+  for every option that the others are not chosen.
+- Read every sentence once more as the Owner hears it: it must be complete,
+  grammatical German with a verb and a clear subject.
+- Do not add lines to a slide only so the narration may cite them; slide and
+  narration carry each fact once. Say nothing about the future you cannot know:
+  no forecast of what will or will not change.
+- Never copy wording from this guide into a deck. Its examples show a shape,
+  not a sentence to reuse.
+- Never narrate the layout or the slide itself ("links sehen Sie", "auf dieser
+  Folie", "Diese Folie zeigt", "Im Folgenden"), never use system terms or ids,
+  and never talk about your own choices ("ich zeige keine Werte").
+
+These rules are checked (`narration.*` and `content.*` issues): a missing or
+too long talking point, a number the slide does not show, or a sentence read
+from the slide stops the deck from being stored.
 
 ## Editing an existing presentation
 

@@ -117,6 +117,10 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
+    assert!(
+        instruction.chars().count() <= 3840,
+        "reserve 256 characters for native meeting scope"
+    );
     assert!(queue.prompt.contains(&instruction));
     for required in [
         "learnordie.slide-agent.v1",

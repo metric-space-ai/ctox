@@ -1791,6 +1791,11 @@
           ],
           "type": "string"
         },
+        "supervisor_luma_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
         "updated_at_ms": {
           "type": "number"
         }
@@ -1804,7 +1809,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 2
+      "version": 3
     },
     "workjet_provider_registry": {
       "additionalProperties": false,

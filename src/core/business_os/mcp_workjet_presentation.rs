@@ -242,7 +242,7 @@ fn read(
         let document = arguments["request"]["document"].clone();
         anyhow::ensure!(document.is_object(), "request.document must be an object");
         // Dry run against the current, leased meeting scope; nothing is stored.
-        let answer = store_presentation::validate_report(root, document)?;
+        let answer = store_presentation::supervisor_report(root, document)?;
         return bounded(
             json!({"contract":wire::CONTRACT_SCHEMA,"validation":answer}),
             "validation report",
@@ -450,6 +450,9 @@ fn write(
             }
         }
     };
+    // Decks the Supervisor writes speak to the Owner about the project; the
+    // slide engine's content rules reject filler before anything is stored.
+    store_presentation::ensure_meeting_content(root, &next)?;
     let (mut core, mut policy) = connections(root, true)?;
     let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let policy_tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -543,6 +546,8 @@ fn publish_deck(
             serde_json::from_str(scope.document.as_deref().context("document missing")?)?;
         (scope.meeting.id.clone(), document)
     };
+    // A revision stored before the content rules existed is not published as is.
+    store_presentation::ensure_meeting_content(root, &document)?;
     let slides = store_presentation::meeting_slides(root, &document, &meeting_id)?;
     let request = json!({"action":"prepare_deck","request":{"operation_id":operation,"meeting_id":meeting_id,
         "expected_revision":expected_meeting_revision,"deck_revision":deck_revision,"slides":slides}});

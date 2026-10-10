@@ -52,6 +52,12 @@ pub(crate) struct AdmittedConsumerAuthority {
 }
 
 impl AdmittedConsumerAuthority {
+    /// Native-only store location captured from the admitted host, never a
+    /// path supplied by an account/configuration request.
+    pub(crate) fn native_host_root(&self) -> &Path {
+        &self.root
+    }
+
     /// Call from a guarded auxiliary handler, which supplies the accepted
     /// connection by value after the native nonce/possession admission round.
     /// An anonymous/unbound capability is never a computer identity.
@@ -84,6 +90,68 @@ impl AdmittedConsumerAuthority {
         })
     }
 
+    /// Private physical publication for an exactly matching admitted request.
+    /// The guarded send composes its own exact lifecycle/token fence with
+    /// this native fence. Do not reenter that transport. No wire facts create
+    /// this retained issuer/Core/Policy guard.
+    pub(crate) fn prepare_core_publication(
+        &self,
+        request: &Self,
+    ) -> Result<NativeConsumerCorePublication> {
+        anyhow::ensure!(
+            self.root == request.root
+                && Arc::ptr_eq(&self.transport, &request.transport)
+                && self.peer == request.peer
+                && self.token == request.token
+                && self.facts == request.facts,
+            "publication request is not the original admitted connection"
+        );
+        let policy = store::open_store(&self.root)?;
+        policy.busy_timeout(std::time::Duration::ZERO)?;
+        let core = Connection::open_with_flags(
+            crate::paths::core_db(&self.root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(std::time::Duration::ZERO)?;
+        Ok(NativeConsumerCorePublication {
+            root: self.root.clone(),
+            token: self.token.clone(),
+            facts: self.facts.clone(),
+            core: std::sync::Mutex::new(core),
+            policy: std::sync::Mutex::new(policy),
+        })
+    }
+
+    /// Combined original-lease fence. Prepare secret snapshots before entry.
+    /// Order is transport -> issuer -> Core -> Policy, matching native
+    /// command/plan writers. A callback must not enter another transport,
+    /// secret store or transaction, wait for network work, or retain a handle.
+    /// Only a successful bounded callback commits its Core changes.
+    pub(crate) fn with_current_core<T>(
+        &self,
+        apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut policy = store::open_store(&self.root)?;
+        policy.busy_timeout(std::time::Duration::ZERO)?;
+        let mut core = Connection::open_with_flags(
+            crate::paths::core_db(&self.root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(std::time::Duration::ZERO)?;
+        self.transport
+            .with_current_peer_capability(&self.peer, &self.token, || {
+                with_current_policy_core(
+                    &self.root,
+                    &mut core,
+                    &mut policy,
+                    &self.token,
+                    &self.facts,
+                    apply,
+                )
+            })
+            .context("consumer connection or credential retired")?
+    }
+
     /// Re-enter after every await and immediately around a bounded dispatch or
     /// publication operation. Order: consumer transport -> issuer -> policy.
     /// No await, network wait, secret/transport API reentry or retained borrowed
@@ -102,6 +170,39 @@ impl AdmittedConsumerAuthority {
                 with_current_policy(&self.root, &mut conn, &self.token, &self.facts, apply)
             })
             .context("consumer connection or credential retired")?
+    }
+}
+
+/// Only prepare_core_publication constructs this private guard. The caller
+/// must install it on the exact verified request's GuardedAuxiliaryResponse.
+pub(crate) struct NativeConsumerCorePublication {
+    root: PathBuf,
+    token: String,
+    facts: ConsumerFacts,
+    core: std::sync::Mutex<Connection>,
+    policy: std::sync::Mutex<Connection>,
+}
+impl NativeConsumerCorePublication {
+    pub(crate) fn with_current<T>(
+        &self,
+        apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut core = self
+            .core
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("core publication busy"))?;
+        let mut policy = self
+            .policy
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("policy publication busy"))?;
+        with_current_policy_core(
+            &self.root,
+            &mut core,
+            &mut policy,
+            &self.token,
+            &self.facts,
+            apply,
+        )
     }
 }
 
@@ -124,6 +225,33 @@ fn with_current_policy<T>(
         let current = resolve(&tx, &claims)?;
         anyhow::ensure!(&current == expected, "consumer enrollment changed");
         apply(&current, &tx)
+    })
+}
+
+fn with_current_policy_core<T>(
+    root: &Path,
+    core: &mut Connection,
+    policy: &mut Connection,
+    token: &str,
+    expected: &ConsumerFacts,
+    apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+) -> Result<T> {
+    store::with_current_webrtc_capability_signer(root, |secret| {
+        let core = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let policy = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let claims = store::verified_webrtc_capability_claims_from_connection(
+            &policy,
+            token,
+            secret,
+            store::now_ms() as i64,
+        )
+        .context("consumer actor or device was revoked")?;
+        let current = resolve(&policy, &claims)?;
+        anyhow::ensure!(&current == expected, "consumer enrollment changed");
+        let result = apply(&current, &core, &policy)?;
+        policy.commit()?;
+        core.commit()?;
+        Ok(result)
     })
 }
 

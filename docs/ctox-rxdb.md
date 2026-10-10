@@ -116,6 +116,25 @@ not replace that evidence.
 
 
 
+### Durable Supervisor model eligibility
+
+Crew's current admitted command/plan lease and project Owner/binding fence can
+call `provider_federation::resolve_supervisor_model` with its held Policy
+connection, verified canonical Owner, canonical account ID/revision and exact
+model. The sealed native result has no JSON/credential representation. It checks
+current Owner identity, owned enabled/configured account, current revision,
+fresh successful live discovery, shared provider selection and account
+exclusions. Its `revalidate` method rejects changed Owner, holder, private
+selector/binding, policy revision or catalog before dispatch/publication.
+
+This is instance Supervisor eligibility, not an enrolled computer consumer or
+execution authorization. No browser `ConsumerFacts` is synthesized. Crew must
+retain/re-enter its real durable lease and project fence; the holding adapter
+must verify current local credentials and the exact account pin, or obtain
+authenticated remote holder execution authority. No callback may await or
+re-enter secret/network APIs under the Policy transaction. This seam does not
+change an unconfigured project's default route or prove installed inference.
+
 ### Native federation consumer authority
 
 `ctox.workjet.consumer.v1` is a read-only, guarded auxiliary request on the

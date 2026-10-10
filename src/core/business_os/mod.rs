@@ -91,6 +91,8 @@ mod rxdb_peer_transfer_publication;
 mod rxdb_peer_transfer_publication_tests;
 mod transfer_publish;
 pub(crate) use transfer_publish::publish_native_file;
+mod rxdb_peer_dictation;
+mod rxdb_peer_grok;
 mod rxdb_peer_jour_fixe_speech;
 mod rxdb_peer_workjet_devices;
 pub mod server;
@@ -126,7 +128,15 @@ mod workjet_project_kpis;
 pub(crate) mod workjet_project_kpis_contract;
 #[path = "workjet_supervisor_execution_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_execution_contract;
+#[path = "workjet_supervisor_luma_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_luma_contract;
+#[path = "workjet_supervisor_route_display_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_route_display_contract;
+#[path = "workjet_supervisor_source_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_source_contract;
 pub mod workjet_transfer_git;
+#[path = "workjet_worker_outcome_contract.generated.rs"]
+pub(crate) mod workjet_worker_outcome_contract;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
 pub use browser_control::browser_context_capture;
@@ -186,4 +196,5 @@ pub use session_handoff_gate::NativeSessionHandoffGate;
 pub(crate) use external_sql_sync::start_background_sync;
 pub(crate) use person_research_command::recover_once as recover_person_research_commands_once;
 pub use store_workjet_sessions::{run_workjet_session_transfer_recovery, RecoveryOutcome};
-pub(crate) use workjet_transfer_git::execute_cli as execute_workjet_transfer_git_cli;
+mod workjet_transfer_workspace;
+pub(crate) use workjet_transfer_workspace::execute_cli as execute_workjet_transfer_git_cli;

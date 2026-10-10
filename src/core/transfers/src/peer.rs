@@ -7,6 +7,55 @@ use std::{
 
 const RANGE_BYTES: u64 = 1024 * 1024;
 
+/// Safe native failure categories. Raw RPC responses and URLs never enter job state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerReadFailure {
+    Authorization,
+    SourceNotReady,
+    Identity,
+    Grant,
+    FilePermission,
+    Timeout,
+    Busy,
+    SequenceGap,
+    Disconnected,
+    Closed,
+    Rejected,
+    InvalidChunk,
+    Unavailable,
+}
+
+impl PeerReadFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Authorization => "PEER_AUTHORIZATION_FAILED",
+            Self::SourceNotReady => "PEER_SOURCE_NOT_READY",
+            Self::Identity => "PEER_IDENTITY_UNVERIFIED",
+            Self::Grant => "PEER_GRANT_AUTHORIZATION_UNAVAILABLE",
+            Self::FilePermission => "PEER_FILE_PERMISSION_UNAVAILABLE",
+            Self::Timeout => "PEER_FILE_TIMEOUT",
+            Self::Busy => "PEER_FILE_BUSY",
+            Self::SequenceGap => "PEER_FILE_SEQUENCE_GAP",
+            Self::Disconnected => "PEER_FILE_DISCONNECTED",
+            Self::Closed => "PEER_FILE_CLOSED",
+            Self::Rejected => "PEER_FILE_REJECTED",
+            Self::InvalidChunk => "PEER_FILE_INVALID_CHUNK",
+            Self::Unavailable => "PEER_FILE_UNAVAILABLE",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(self, Self::Timeout | Self::Busy | Self::SequenceGap)
+    }
+}
+
+impl std::fmt::Display for PeerReadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+impl std::error::Error for PeerReadFailure {}
+
 /// Original host enrollment/account snapshot, not a credential or permission.
 /// Native admission compares this with current authority on every attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,7 +179,18 @@ impl Worker {
                 return Ok(false);
             }
             tokio::select! {
-                result = &mut check => { result?; return Ok(true); }
+                result = &mut check => {
+                    result.map_err(|error| {
+                        // Preserve only our typed, parameter-free categories.
+                        // Unknown provider text remains a closed authorization failure.
+                        let failure = error
+                            .downcast_ref::<PeerReadFailure>()
+                            .copied()
+                            .unwrap_or(PeerReadFailure::Authorization);
+                        anyhow::Error::from(failure)
+                    })?;
+                    return Ok(true);
+                }
                 _ = ticker.tick() => {}
             }
         }

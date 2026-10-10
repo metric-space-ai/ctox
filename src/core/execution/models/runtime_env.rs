@@ -621,19 +621,33 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    // INTENTIONALLY RED (SM16, 01.08.). The name states the contract; four of the
-    // assertions below contradict it. They expect effective_runtime_env_map to
-    // carry CTOX_CUDA_HOME and CTOX_ENGINE_LOG with values this fixture never
-    // persists — which is the process environment seeping in, the exact thing
-    // "only from store" forbids. It was inconsistent from the day it was written.
-    //
-    // So the failure is the contract working. Flipping those four to None would
-    // make it green and would also be the correct fix; it is left red because
-    // deciding what an effective runtime value may be sourced from is a call for
-    // the owner, not a side effect of tidying a test.
     #[test]
     fn env_or_config_reads_secrets_only_from_store() {
+        // Set conflicting ambient values only in a child test process; changing
+        // this process's environment races every other runtime test.
+        const CHILD: &str = "CTOX_RUNTIME_ENV_STORE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "execution::models::runtime_env::tests::env_or_config_reads_secrets_only_from_store",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("OPENAI_API_KEY", "sk-ambient")
+                .env("OPENROUTER_API_KEY", "or-ambient")
+                .env("CTOX_CUDA_HOME", "/ambient/cuda")
+                .env("CTOX_ENGINE_LOG", "/ambient/engine.log")
+                .env_remove("CTOX_STATE_ROOT")
+                .env_remove("CTOX_ROOT")
+                .status()
+                .unwrap();
+            assert!(result.success());
+            return;
+        }
         let root = make_temp_root();
+        assert_eq!(env_or_config(&root, "OPENAI_API_KEY"), None);
+        assert_eq!(env_or_config(&root, "OPENROUTER_API_KEY"), None);
 
         secrets::set_credential(&root, "OPENAI_API_KEY", "sk-store").unwrap();
         secrets::set_credential(&root, "OPENROUTER_API_KEY", "or-store").unwrap();
@@ -658,14 +672,35 @@ mod tests {
             effective.get("OPENROUTER_API_KEY").map(String::as_str),
             Some("or-store")
         );
+        assert_eq!(effective.get("CTOX_CUDA_HOME").map(String::as_str), None);
+        assert_eq!(effective.get("CTOX_ENGINE_LOG").map(String::as_str), None);
+
+        set_runtime_env_value(&root, "CTOX_CUDA_HOME", "/store/cuda").unwrap();
+        set_runtime_env_value(&root, "CTOX_ENGINE_LOG", "/store/engine.log").unwrap();
+        let effective = effective_runtime_env_map(&root).unwrap();
+        assert_eq!(
+            env_or_config(&root, "CTOX_CUDA_HOME").as_deref(),
+            Some("/store/cuda")
+        );
         assert_eq!(
             effective.get("CTOX_CUDA_HOME").map(String::as_str),
-            Some("/opt/cuda")
+            Some("/store/cuda")
         );
         assert_eq!(
             effective.get("CTOX_ENGINE_LOG").map(String::as_str),
-            Some("/tmp/ctox-engine.log")
+            Some("/store/engine.log")
         );
+        assert_eq!(
+            effective.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-store")
+        );
+        assert_eq!(
+            effective.get("OPENROUTER_API_KEY").map(String::as_str),
+            Some("or-store")
+        );
+        assert!(!load_persisted_runtime_env_map(&root)
+            .unwrap()
+            .contains_key("OPENAI_API_KEY"));
 
         std::fs::remove_dir_all(root).unwrap();
     }

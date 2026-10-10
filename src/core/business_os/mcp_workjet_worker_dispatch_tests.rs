@@ -76,10 +76,13 @@ pub(super) fn fixture() -> anyhow::Result<tempfile::TempDir> {
     Ok(root)
 }
 pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
+    queued_supervisor_named(root, "submit-supervisor")
+}
+fn queued_supervisor_named(root: &Path, submit_id: &str) -> anyhow::Result<String> {
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root,
         json!({
-        "id":"submit-supervisor","module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit",
+        "id":submit_id,"module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit",
         "record_id":"project","payload":{"project_id":"project","thread_id":THREAD,"goal":"Make a small tested change"},
         "client_context":{"actor":{"id":"owner","role":"chef","is_admin":true}}}),
     )?;
@@ -103,7 +106,10 @@ pub(super) fn queued_supervisor(root: &Path) -> anyhow::Result<String> {
     Ok(id)
 }
 pub(super) fn session(root: &Path) -> anyhow::Result<(String, Value)> {
-    let id = queued_supervisor(root)?;
+    session_named(root, "submit-supervisor")
+}
+fn session_named(root: &Path, submit_id: &str) -> anyhow::Result<(String, Value)> {
+    let id = queued_supervisor_named(root, submit_id)?;
     let command = crate::channels::business_command_projection(root, &id)?;
     let token = issue_internal_command_session_token(
         root,
@@ -135,7 +141,7 @@ fn success(intent: &Value) -> Value {
     json!({"schemaVersion":1,"status":"dispatched","environmentId":"target-env",
         "workerThreadId":intent["intentId"],"computerId":"native-computer","branch":"codex/worker",
         "worktreePath":"/private/worktrees/worker","parent":{"environmentId":"source-env","threadId":THREAD},
-        "modelSelection":{"instanceId":"source-env","model":"model-1","options":[{"id":"reasoning","value":"high"}]},
+        "modelSelection":{"instanceId":"source-env","model":"claude-opus-5-5","options":[{"id":"reasoning","value":"high"}]},
         "enabledCapabilityIds":["repository_read","run_checks"]})
 }
 
@@ -392,5 +398,353 @@ fn workjet_dispatch_rejects_forged_context_non_supervisor_and_unbounded_results(
         &intent,
         &json!({"schemaVersion":1,"status":"failed","reason":"remote-dispatch-failed"}),
     )?;
+    Ok(())
+}
+
+fn observe_call(root: &Path, trusted: &Value, limit: Option<u32>) -> anyhow::Result<Value> {
+    let mut request = json!({"action":"observe"});
+    if let Some(limit) = limit {
+        request["limit"] = json!(limit);
+    }
+    super::super::call_tool_inner(root, TOOL, request, Some(trusted))
+}
+
+#[test]
+fn supervisor_observes_retained_start_receipts_in_a_later_real_turn() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    let first = dispatch(root.path(), &trusted)?;
+    let pending = observe_call(root.path(), &trusted, None)?;
+    assert_eq!(pending["projectId"], "project");
+    assert_eq!(pending["supervisorThreadId"], THREAD);
+    assert_eq!(
+        pending["observations"][0]["intentId"],
+        first["intent"]["intentId"]
+    );
+    assert_eq!(pending["observations"][0]["dispatchKey"], "worker-one");
+    assert_eq!(pending["observations"][0]["registrationCurrent"], true);
+    assert!(pending["observations"][0]["acknowledgement"].is_null());
+    assert!(pending["observations"][0]["execution"].is_null());
+    call(
+        root.path(),
+        "owner",
+        complete(&registration, &first["intent"], success(&first["intent"])),
+    )?;
+    let (_, next) = session_named(root.path(), "submit-supervisor-next")?;
+    let observed = observe_call(root.path(), &next, None)?;
+    let ack = &observed["observations"][0]["acknowledgement"];
+    assert_eq!(ack["status"], "dispatched");
+    assert_eq!(ack["workerThreadId"], first["intent"]["intentId"]);
+    assert_eq!(ack["computerId"], "native-computer");
+    assert!(ack.get("modelSelection").is_none());
+    assert!(observed["observations"][0]["execution"].is_null());
+    assert_eq!(observed["truncated"], false);
+    assert_eq!(poll(root.path(), "owner")?["intents"], json!([]));
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_is_bounded_read_only_without_schema_repair() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let (_, trusted) = session(root.path())?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    let absent: bool = core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get(0))?;
+    assert!(absent);
+    let mut read_only = default_mcp_policy();
+    read_only.allow_writes = false;
+    save_mcp_policy(root.path(), &read_only)?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    assert!(core.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='workjet_worker_dispatch_intents')", [], |row| row.get::<_,bool>(0))?);
+    assert!(register(root.path()).is_err());
+    save_mcp_policy(root.path(), &default_mcp_policy())?;
+    let registration = register(root.path())?;
+    for key in ["first", "second", "third"] {
+        let dispatched = super::super::call_tool_inner(
+            root.path(),
+            TOOL,
+            json!({"action":"dispatch","dispatch_key":key,"task":"A real scoped task"}),
+            Some(&trusted),
+        )?;
+        call(
+            root.path(),
+            "owner",
+            complete(
+                &registration,
+                &dispatched["intent"],
+                json!({"schemaVersion":1,"status":"failed","reason":"computer-unavailable"}),
+            ),
+        )?;
+    }
+    core.execute_batch("BEGIN IMMEDIATE")?;
+    let observed = observe_call(root.path(), &trusted, Some(2))?;
+    core.execute_batch("ROLLBACK")?;
+    assert_eq!(observed["observations"].as_array().unwrap().len(), 2);
+    assert_eq!(observed["observations"][0]["dispatchKey"], "third");
+    assert_eq!(
+        observed["observations"][0]["acknowledgement"]["reason"],
+        "computer-unavailable"
+    );
+    assert_eq!(observed["truncated"], true);
+    assert!(serde_json::to_vec(&observed)?.len() < 64 * 1024);
+    assert!(observe_call(root.path(), &trusted, Some(0)).is_err());
+    assert!(observe_call(root.path(), &trusted, Some(33)).is_err());
+    assert!(super::super::call_tool_inner(
+        root.path(),
+        TOOL,
+        json!({"action":"observe","project_id":"foreign"}),
+        Some(&trusted)
+    )
+    .is_err());
+    assert!(call(root.path(), "owner", json!({"action":"observe"})).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_retains_stale_registration_without_reopening_it() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    dispatch(root.path(), &trusted)?;
+    call(
+        root.path(),
+        "owner",
+        json!({"action":"revoke_source","registration_id":registration["registrationId"],"revision":registration["revision"]}),
+    )?;
+    let observed = observe_call(root.path(), &trusted, None)?;
+    assert_eq!(observed["observations"][0]["registrationCurrent"], false);
+    assert!(observed["observations"][0]["acknowledgement"].is_null());
+    assert!(dispatch(root.path(), &trusted).is_err());
+    Ok(())
+}
+
+#[test]
+fn supervisor_observation_rejects_old_leases_and_foreign_owner_rows() -> anyhow::Result<()> {
+    let root = fixture()?;
+    register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    dispatch(root.path(), &trusted)?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET project_id='another-project'",
+        [],
+    )?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET project_id='project'",
+        [],
+    )?;
+    core.execute(
+        "UPDATE workjet_worker_dispatch_sources SET owner_user_id='foreign'",
+        [],
+    )?;
+    assert_eq!(
+        observe_call(root.path(), &trusted, None)?["observations"],
+        json!([])
+    );
+    core.execute("UPDATE communication_routing_state SET lease_worker_id='new-worker' WHERE route_status='leased'", [])?;
+    assert!(observe_call(root.path(), &trusted, None).is_err());
+    Ok(())
+}
+
+fn outcome_receipt(intent: &Value) -> Value {
+    json!({"schema":"ctox.workjet.worker-outcome.v1","worker_thread_id":intent["intentId"],
+        "environment_id":"target-env","computer_id":"native-computer",
+        "branch":format!("workjet/worker/{}",intent["intentId"].as_str().unwrap()),
+        "execution_stopped":true,"pull_request":{"provider":"github","number":7,
+            "url":"https://github.com/metric-space-ai/example/pull/7","head_oid":"a".repeat(40),"state":"merged"}})
+}
+fn report_outcome(registration: &Value, intent: &Value, receipt: Value) -> Value {
+    json!({"action":"report_outcome","registration_id":registration["registrationId"],
+        "revision":registration["revision"],"intent_id":intent["intentId"],"receipt":receipt})
+}
+fn isolated_startup(root: &Path, registration: &Value, intent: &Value) -> anyhow::Result<()> {
+    let mut result = success(intent);
+    result["branch"] = json!(format!(
+        "workjet/worker/{}",
+        intent["intentId"].as_str().unwrap()
+    ));
+    call(root, "owner", complete(registration, intent, result))?;
+    Ok(())
+}
+fn future_meeting(root: &Path) -> anyhow::Result<()> {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
+    ))?;
+    let mut meeting = corpus["valid_cases"][0]["value"].clone();
+    meeting["project_id"] = json!("project");
+    meeting["owner_user_id"] = json!("owner");
+    meeting["supervisor"] = json!({"workjet_thread_id":THREAD,"ctox_thread_key":format!("business-os/threads/{THREAD}")});
+    meeting["state"] = json!("planned");
+    meeting["revision"] = json!(0);
+    meeting["deck_revision"] = json!(0);
+    meeting["slides"] = json!([]);
+    meeting["comments"] = json!([]);
+    meeting["transcript"] = json!([]);
+    meeting["todos"] = Value::Null;
+    meeting["previous_goal"] = Value::Null;
+    meeting["scheduled_at_ms"] = json!(now_ms() + 3_600_000);
+    meeting["prepare_at_ms"] = json!(now_ms());
+    let policy = store::open_store(root)?;
+    policy.execute_batch(
+        "CREATE TABLE workjet_jour_fixe_meetings (
+        meeting_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,owner_user_id TEXT NOT NULL,
+        scheduled_at_ms INTEGER NOT NULL,metadata_json TEXT NOT NULL,preparation_task_id TEXT);",
+    )?;
+    policy.execute(
+        "INSERT INTO workjet_jour_fixe_meetings VALUES ('meeting-1','project','owner',?1,?2,NULL)",
+        params![
+            meeting["scheduled_at_ms"].as_i64().unwrap(),
+            meeting.to_string()
+        ],
+    )?;
+    Ok(())
+}
+
+#[test]
+fn worker_terminal_outcome_replays_after_reopen_and_reaches_next_deck_without_fake_execution(
+) -> anyhow::Result<()> {
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    let dispatched = dispatch(root.path(), &trusted)?;
+    let intent = &dispatched["intent"];
+    let report = report_outcome(&registration, intent, outcome_receipt(intent));
+    assert!(
+        call(root.path(), "owner", report.clone()).is_err(),
+        "startup is required"
+    );
+    isolated_startup(root.path(), &registration, intent)?;
+    let retained = call(root.path(), "owner", report.clone())?;
+    assert_eq!(retained["provenance"], "authenticated_source_report");
+    assert_eq!(
+        call(root.path(), "owner", report.clone())?,
+        retained,
+        "lost ACK replays identical persisted report"
+    );
+    let observed = observe_call(root.path(), &trusted, None)?;
+    assert_eq!(observed["observations"][0]["reportedOutcome"], retained);
+    assert!(observed["observations"][0]["execution"].is_null());
+    let mut contradictory = report.clone();
+    contradictory["receipt"]["pull_request"]["state"] = json!("closed");
+    assert!(call(root.path(), "owner", contradictory).is_err());
+    let mut different_pr = report;
+    different_pr["receipt"]["pull_request"]["number"] = json!(8);
+    different_pr["receipt"]["pull_request"]["url"] =
+        json!("https://github.com/metric-space-ai/example/pull/8");
+    assert!(call(root.path(), "owner", different_pr).is_err());
+    future_meeting(root.path())?;
+    // The real restricted MCP meeting reader opens fresh read-only connections.
+    let deck = super::super::call_tool_inner(
+        root.path(),
+        workjet_jour_fixe::READ_TOOL,
+        json!({"action":"read_meeting","request":{"project_id":"project","meeting_id":"meeting-1"}}),
+        Some(&trusted),
+    )?;
+    assert_eq!(
+        deck["worker_outcomes"]["reports"][0]["reported_outcome"],
+        retained
+    );
+    assert_eq!(
+        deck["worker_outcomes"]["reports"][0]["execution_key"],
+        trusted["command_id"]
+    );
+    assert_eq!(deck["worker_outcomes"]["truncated"], false);
+    assert_eq!(
+        deck["meeting"]["state"], "planned",
+        "worker report does not complete or narrate a meeting"
+    );
+    assert_eq!(
+        deck["previous_goal_definition"],
+        Value::Null,
+        "worker report does not fabricate a confirmed goal"
+    );
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    assert_eq!(
+        core.query_row(
+            "SELECT count(*) FROM workjet_worker_dispatch_outcomes",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}
+
+#[test]
+fn worker_terminal_outcome_requires_current_source_and_exact_stopped_worker() -> anyhow::Result<()>
+{
+    for field in [
+        "worker_thread_id",
+        "environment_id",
+        "computer_id",
+        "branch",
+        "execution_stopped",
+        "head",
+        "url",
+    ] {
+        let root = fixture()?;
+        let registration = register(root.path())?;
+        let (_, trusted) = session(root.path())?;
+        let dispatched = dispatch(root.path(), &trusted)?;
+        let intent = &dispatched["intent"];
+        isolated_startup(root.path(), &registration, intent)?;
+        let mut receipt = outcome_receipt(intent);
+        match field {
+            "execution_stopped" => receipt[field] = json!(false),
+            "head" => receipt["pull_request"]["head_oid"] = json!("not-a-git-head"),
+            "url" => {
+                receipt["pull_request"]["url"] =
+                    json!("https://github.com/metric-space-ai/example/pull/8")
+            }
+            _ => receipt[field] = json!("foreign"),
+        }
+        assert!(
+            call(
+                root.path(),
+                "owner",
+                report_outcome(&registration, intent, receipt)
+            )
+            .is_err(),
+            "{field}"
+        );
+        assert!(read_outcome(
+            &Connection::open(crate::paths::core_db(root.path()))?,
+            "owner",
+            "project",
+            THREAD,
+            intent["intentId"].as_str().unwrap()
+        )?
+        .is_null());
+    }
+    let root = fixture()?;
+    let registration = register(root.path())?;
+    let (_, trusted) = session(root.path())?;
+    let dispatched = dispatch(root.path(), &trusted)?;
+    let intent = &dispatched["intent"];
+    isolated_startup(root.path(), &registration, intent)?;
+    let report = report_outcome(&registration, intent, outcome_receipt(intent));
+    assert!(call(root.path(), "foreign", report.clone()).is_err());
+    assert!(
+        super::super::call_tool_inner(root.path(), TOOL, report.clone(), Some(&trusted)).is_err(),
+        "a model's restricted native session cannot forge a source report"
+    );
+    call(
+        root.path(),
+        "owner",
+        json!({"action":"revoke_source","registration_id":registration["registrationId"],
+        "revision":registration["revision"]}),
+    )?;
+    assert!(call(root.path(), "owner", report).is_err());
     Ok(())
 }

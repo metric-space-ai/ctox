@@ -43,6 +43,8 @@ struct ProjectUpsertPayload {
     #[serde(default)]
     jour_fixe: ProjectField<JourFixe>,
     #[serde(default)]
+    supervisor_luma_id: ProjectField<String>,
+    #[serde(default)]
     archived: Option<bool>,
 }
 
@@ -264,6 +266,14 @@ pub(super) fn handle_workjet_project_upsert_command(
         Ok(serde_json::to_value(meeting)?)
     })?;
 
+    let supervisor_luma_id = project_field_value(payload.supervisor_luma_id, |value| {
+        Ok(Value::String(bounded_required(
+            &value,
+            "supervisor_luma_id",
+            160,
+        )?))
+    })?;
+
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |transaction| {
         // Recheck identity inside the actual domain writer transaction, so an
@@ -312,6 +322,7 @@ pub(super) fn handle_workjet_project_upsert_command(
             ("public_url", public_url),
             ("info", info),
             ("jour_fixe", jour_fixe),
+            ("supervisor_luma_id", supervisor_luma_id),
         ] {
             match patch {
                 ProjectField::Keep => {
@@ -724,6 +735,132 @@ pub(crate) mod tests {
             "active": true,
             "inbound_channel": "ctox"
         }))?;
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_luma_wire_contract_matches_browser_fixture() -> anyhow::Result<()> {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-supervisor-luma-v1.json"
+        ))?;
+        for sample in corpus["valid_cases"].as_array().unwrap() {
+            super::super::workjet_supervisor_luma_contract::validate_fixture(
+                sample["type"].as_str().unwrap(),
+                sample["value"].clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+        for sample in corpus["invalid_cases"].as_array().unwrap() {
+            assert!(
+                super::super::workjet_supervisor_luma_contract::validate_fixture(
+                    sample["type"].as_str().unwrap(),
+                    sample["value"].clone()
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_luma_reference_persists_and_projects_without_selecting_a_route(
+    ) -> anyhow::Result<()> {
+        let root = tempdir()?;
+        create_workjet_rxdb_projection_tables(root.path())?;
+        let request = command(
+            "ctox.workjet.project.upsert",
+            json!({
+                "project_id":"project-1", "name":"Project One", "supervisor_luma_id":"luma-physics"
+            }),
+        );
+        let first = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        let replay = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        assert_eq!(first, replay);
+        let conn = open_store(root.path())?;
+        let stored = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap();
+        let projected =
+            load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?.unwrap();
+        assert_eq!(stored["supervisor_luma_id"], "luma-physics");
+        assert_eq!(
+            projected["supervisor_luma_id"],
+            stored["supervisor_luma_id"]
+        );
+        assert_eq!(stored["owner_user_id"], "owner-1");
+        assert!(stored.get("model").is_none());
+        assert!(stored.get("route").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_luma_omission_keeps_reference_and_null_restores_default() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let legacy = create_project(root.path())?;
+        assert!(legacy["project"].get("supervisor_luma_id").is_none());
+        let set = command(
+            "ctox.workjet.project.upsert",
+            json!({
+                "project_id":"project-1", "name":"Project One", "supervisor_luma_id":"luma-physics"
+            }),
+        );
+        handle_workjet_project_upsert_command(root.path(), &set, "owner-1")?;
+        let renamed = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1", "name":"Renamed"}),
+            ),
+            "owner-1",
+        )?;
+        assert_eq!(renamed["project"]["supervisor_luma_id"], "luma-physics");
+        let cleared = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1", "name":"Renamed", "supervisor_luma_id":null}),
+            ),
+            "owner-1",
+        )?;
+        assert!(cleared["project"].get("supervisor_luma_id").is_none());
+        assert_eq!(cleared["project"]["owner_user_id"], "owner-1");
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_luma_patch_rejects_invalid_and_foreign_writes_atomically() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let before = create_project(root.path())?;
+        for value in [
+            json!(""),
+            json!(" "),
+            json!("x".repeat(161)),
+            json!("bad\u{0000}id"),
+            json!(7),
+            json!({"id":"luma"}),
+        ] {
+            let request = command(
+                "ctox.workjet.project.upsert",
+                json!({
+                    "project_id":"project-1", "name":"Must not change", "supervisor_luma_id":value
+                }),
+            );
+            assert!(
+                handle_workjet_project_upsert_command(root.path(), &request, "owner-1").is_err()
+            );
+        }
+        let foreign = command(
+            "ctox.workjet.project.upsert",
+            json!({
+                "project_id":"project-1", "name":"Must not change", "supervisor_luma_id":"luma-foreign"
+            }),
+        );
+        assert!(
+            handle_workjet_project_upsert_command(root.path(), &foreign, "foreign-owner").is_err()
+        );
+        let conn = open_store(root.path())?;
+        assert_eq!(
+            outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap(),
+            before["project"]
+        );
         Ok(())
     }
 

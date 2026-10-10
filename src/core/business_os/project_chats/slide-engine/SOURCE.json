@@ -2,10 +2,10 @@
   "component": "@workjet/slide-engine validator",
   "source_repository": "https://github.com/metric-space-ai/workjet",
   "source_path": "packages/slide-engine",
-  "source_commit": "48b18fdfc156037b2492992df5cec82c59be2238",
+  "source_commit": "b3009e6ff61b883885afdf374ccfee590396051a",
   "build": "node packages/slide-engine/scripts/build-validator.mjs (esbuild 0.28.1, ESM, platform node, target node22)",
   "bundle": "slide-engine-validator.mjs",
-  "bundle_sha256": "308ec1631be747d4d0cd9c2668d502975ad67e6517f2b85a63cc58fe404ee178",
+  "bundle_sha256": "7c5d491de2cfe22d70b32e719012e635c38a965fe966778f3335b2ebff87dfc6",
   "upstream": "metric-space-ai/learnordie packages/slide-engine at d94f8a594dbea7e4bd9b4872fcdaf5c7342b5dfe, Workjet fork deltas listed in packages/slide-engine/UPSTREAM.md",
   "bundled_dependencies": [
     "zod 4.4.3 (MIT)"

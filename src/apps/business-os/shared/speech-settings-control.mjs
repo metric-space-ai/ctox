@@ -2,7 +2,7 @@
 export async function requestSpeechSettings(sync, request, assertCurrent) {
   if (typeof sync?.requestNative !== 'function') throw new Error('Speech settings require a connected CTOX instance.');
   const actions = new Set(['speech.settings.read', 'speech.settings.configure', 'speech.settings.key',
-    'speech.settings.voices', 'speech.settings.check', 'speech.settings.playback']);
+    'speech.settings.voices', 'speech.settings.check', 'speech.settings.check.transcription', 'speech.settings.playback']);
   if (!request || !actions.has(request.action) || typeof request.commandId !== 'string'
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.commandId)) {
     throw new Error('Invalid speech settings request.');
@@ -11,7 +11,7 @@ export async function requestSpeechSettings(sync, request, assertCurrent) {
   let result;
   try {
     result = await sync.requestNative('ctox.workjet.speech.settings.v1', request, {
-      requiredCapability: 'ctox-workjet-speech-settings-v1', timeoutMs: 25000,
+      requiredCapability: 'ctox-workjet-speech-settings-v1', timeoutMs: request.action === 'speech.settings.check.transcription' ? 30000 : 25000,
     });
   } catch {
     // Native/provider exception bodies must never echo an input secret.

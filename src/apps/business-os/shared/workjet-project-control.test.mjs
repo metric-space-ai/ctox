@@ -7,6 +7,7 @@ import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from '.
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
 import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+import { validateSupervisorLumaValue } from './workjet-supervisor-luma-contract.generated.mjs';
 
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
@@ -251,7 +252,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
           id: command.payload.project_id, name: command.payload.name,
           owner_user_id: 'owner-1', status: 'active', created_at_ms: 1_700_000_000_000,
         };
-        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe']) {
+        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe', 'supervisor_luma_id']) {
           if (Object.hasOwn(command.payload, field) && command.payload[field] !== null) {
             project[field] = command.payload[field];
           }
@@ -266,7 +267,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
       },
     },
   };
-  const context = { state, actorContext: (session) => ({ id: session.id }), URL };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL, validateSupervisorLumaValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return {
     commands,
@@ -599,6 +600,74 @@ function projectConfigurationRequest(extra = {}) {
     projectId: 'project-1', title: 'CTOX', ...extra,
   };
 }
+
+test('Supervisor selection uses the generated native corpus without selecting a producer', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-supervisor-luma-v1.json', import.meta.url), 'utf8'));
+  for (const { value } of corpus.valid_cases) {
+    const fixture = projectConfigurationFixture();
+    const extra = Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {};
+    const result = await fixture.invoke(projectConfigurationRequest(extra));
+    assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), Object.hasOwn(value, 'supervisor_luma_id'));
+    if (Object.hasOwn(value, 'supervisor_luma_id')) {
+      assert.equal(fixture.commands[0].payload.supervisor_luma_id, value.supervisor_luma_id);
+      assert.equal(result.project.supervisorLumaId, value.supervisor_luma_id);
+    } else {
+      assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+    }
+    assert.equal(Object.hasOwn(result.project, 'route'), false);
+    assert.equal(Object.hasOwn(result.project, 'model'), false);
+  }
+});
+
+test('Supervisor selection is bounded, typed and refuses execution or account payloads', async () => {
+  for (const value of ['', ' '.repeat(8), 'x'.repeat(161), 7, {}, undefined, 'luma\nother']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: value })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const key of ['route', 'model', 'nativeAccountReference', 'ownerUserId']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: 'luma-physics', [key]: 'foreign' })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  const fixture = projectConfigurationFixture();
+  const id = '🦊'.repeat(160);
+  assert.equal((await fixture.invoke(projectConfigurationRequest({ supervisorLumaId: id }))).project.supervisorLumaId, id);
+});
+
+test('Supervisor configuration rejects an unconfirmed selection or unsuccessful clear', async () => {
+  for (const [requested, returned] of [['luma-physics', undefined], ['luma-physics', 'luma-other'], [null, 'luma-old']]) {
+    const fixture = projectConfigurationFixture(receipt => {
+      if (returned === undefined) delete receipt.result.project.supervisor_luma_id;
+      else receipt.result.project.supervisor_luma_id = returned;
+    });
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: requested })), /unmatched supervisor Luma/);
+  }
+});
+
+test('Project list exposes configured Supervisor selection only on a dedicated opt-in', async () => {
+  const fixture = nativeProjectListFixture();
+  fixture.context.validateSupervisorLumaValue = validateSupervisorLumaValue;
+  fixture.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
+  assert.equal(Object.hasOwn((await fixture.invoke()).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true, includeSupervisorLuma: false })).projects[0], 'supervisorLumaId'), false);
+  const selected = (await fixture.invoke({ includeSupervisorLuma: true })).projects[0];
+  assert.equal(selected.supervisorLumaId, 'luma-physics');
+  assert.equal(Object.hasOwn(selected, 'model'), false);
+  delete fixture.rows.workjet_projects[0].supervisor_luma_id;
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeSupervisorLuma: true })).projects[0], 'supervisorLumaId'), false);
+  for (const value of ['true', null, 1, {}]) {
+    await assert.rejects(fixture.invoke({ includeSupervisorLuma: value }), /includeSupervisorLuma/);
+  }
+});
+
+test('Old configure callers do not receive a stored Luma selection without sending that field', async () => {
+  const fixture = projectConfigurationFixture(receipt => { receipt.result.project.supervisor_luma_id = 'luma-physics'; });
+  const result = await fixture.invoke(projectConfigurationRequest());
+  assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), false);
+});
 
 test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
   const fixture = projectConfigurationFixture();
@@ -1769,4 +1838,76 @@ test('Owner confirmation rejects stale or substituted native goal and meeting re
     await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.todos.confirm')));
     assert.equal(fixture.commands.length, 1);
   }
+});
+
+function supervisorInputFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result.contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input = {
+      input_id: 'native-owner-input-1', sequence: 1,
+      body: receipt.payload.body, created_at: '2026-10-09T17:00:00Z',
+    };
+    receipt.result.delivery = 'next_slice';
+    receipt.result.worker_interrupted = false;
+    change(receipt, state);
+  });
+}
+test('Owner follow-up targets the existing native task without submitting another task', async () => {
+  const fixture = supervisorInputFixture();
+  const result = await fixture.invoke(supervisorTurnRequest('input', { body: 'The PR source is attached to the existing task.' }));
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.input');
+  assert.equal(command.payload.target_command_id, nativeTurnId);
+  assert.equal(command.payload.goal, undefined);
+  assert.equal(command.payload.turn_kind, undefined);
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(result.turn.commandId, nativeTurnId);
+  assert.equal(result.turn.taskId, 'queue:system::supervisor-turn');
+  assert.equal(result.turn.attempt, 0);
+  assert.equal(result.input.body, command.payload.body);
+  assert.equal(result.delivery, 'next_slice');
+  assert.equal(result.workerInterrupted, false);
+});
+test('Owner follow-up rejects forged approvals routes oversize text and mismatched receipts', async () => {
+  for (const extra of [
+    { body: '' }, { body: 'x'.repeat(4097) }, { body: 'new facts', turnKind: 'conversation' },
+    { body: 'new facts', approved: true }, { body: 'new facts', ownerUserId: 'foreign' },
+  ]) {
+    const fixture = supervisorInputFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('input', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const change of [
+    receipt => { receipt.result.turn.command_id = 'different-task'; },
+    receipt => { receipt.result.input.body = 'different intent'; },
+    receipt => { receipt.result.input.sequence = 0; },
+    receipt => { receipt.result.worker_interrupted = true; },
+    receipt => { receipt.result.delivery = 'applied'; },
+    receipt => { receipt.result.input.created_at = 'not a date'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorInputFixture(change).invoke(
+    supervisorTurnRequest('input', { body: 'Keep the same task and its approvals.' }),
+  ));
+});
+
+test('same-task input capability is opt-in and comes from the actual scoped native receipt', async () => {
+  const fixture = supervisorCapabilitiesFixture(receipt => {
+    receipt.result.input_contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input_delivery = 'next_slice';
+    receipt.result.max_input_chars = 4096;
+  });
+  const result = await fixture.invoke({ ...supervisorCapabilitiesRequest, includeInput: true });
+  assert.equal(fixture.commands[0].command.payload.include_input, true);
+  assert.equal(result.inputContract, 'ctox.workjet.supervisor_input.v1');
+  assert.equal(result.inputDelivery, 'next_slice');
+  assert.equal(result.maxInputChars, 4096);
+  const legacy = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.equal(Object.hasOwn(legacy, 'inputContract'), false);
+  await assert.rejects(supervisorCapabilitiesFixture().invoke({
+    ...supervisorCapabilitiesRequest, includeInput: true,
+  }), /does not support same-task/);
+  const invalid = supervisorCapabilitiesFixture();
+  await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
+  assert.equal(invalid.commands.length, 0);
 });

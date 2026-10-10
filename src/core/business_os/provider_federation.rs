@@ -19,6 +19,17 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub(super) const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS business_provider_account_controls (
+    command_id TEXT PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    actor_user_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    pending_json TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS business_provider_account_controls_active
+    ON business_provider_account_controls(owner_user_id) WHERE completed=0;
+
 CREATE TABLE IF NOT EXISTS business_provider_federation_policy (
     owner_user_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL CHECK(revision > 0)
@@ -67,6 +78,9 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     models_json TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
+
+#[path = "provider_account_controls.rs"]
+pub(in crate::business_os) mod account_controls;
 
 const MAX_ACCOUNTS: usize = 256;
 const MAX_ID_BYTES: usize = 256;
@@ -183,6 +197,9 @@ pub(super) fn handle_command(
         command.record_id.is_none(),
         "provider commands do not accept record_id"
     );
+    if account_controls::supports(&command.command_type) {
+        return account_controls::handle(root, command, actor, admission);
+    }
     match command.command_type.as_str() {
         "ctox.workjet.providers.list" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
@@ -201,6 +218,17 @@ pub(super) fn handle_command(
             // transaction. No network call, auth refresh or credential mutation.
             let snapshot = store::provider_subscription_status_for_control_plane(root);
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
+            for account in accounts
+                .iter_mut()
+                .filter(|account| account.provider == "claude")
+            {
+                account.private_binding =
+                    crate::execution::cliproxyapi_claude_catalog::account_binding(
+                        root,
+                        &account.local_account_id,
+                    )?;
+                account.credential_ready &= account.private_binding.is_some();
+            }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
             if let Ok(Some(metadata)) = &inherited {
@@ -246,17 +274,23 @@ pub(super) fn handle_command(
             let admitted =
                 admission.context("native model observation requires domain admission")?;
             let holder = store::existing_instance_id(root)?;
-            let provider = {
+            let target = {
                 let conn = store::open_store(root)?;
                 let owner = management_owner(&conn, actor)?;
                 native_catalog_target(&conn, &owner, &holder, &request)?
             };
             // Network wait is outside the policy transaction. Caller-supplied
             // endpoints, credentials and model lists are never accepted.
-            let observation =
-                crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?;
+            let observation = if target.local_account_id == INHERITED_NATIVE_ACCOUNT_ID {
+                crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?
+            } else {
+                crate::execution::cliproxyapi_claude_catalog::observe(
+                    root,
+                    &target.local_account_id,
+                )?
+            };
             ensure!(
-                observation.provider == provider,
+                observation.provider == target.provider,
                 "native account provider changed"
             );
             let mut conn = store::open_store(root)?;
@@ -269,14 +303,14 @@ pub(super) fn handle_command(
                 );
                 let current = native_catalog_target(tx, &owner, &holder, &request)?;
                 ensure!(
-                    current == observation.provider,
+                    current == target && current.provider == observation.provider,
                     "native account provider changed"
                 );
                 retain_catalog_observation(tx, &request, &observation)?;
                 models::initialize_inherited_selection(
                     tx,
                     &owner,
-                    &current,
+                    &current.provider,
                     observation.inherited_selected_model.as_deref(),
                     store::now_ms() as i64,
                 )?;
@@ -558,16 +592,23 @@ fn set_native_binding(conn: &Connection, id: &str, binding: Option<&str>) -> Res
     Ok(())
 }
 
+#[derive(PartialEq, Eq)]
+struct NativeCatalogTarget {
+    provider: String,
+    local_account_id: String,
+}
+
 fn native_catalog_target(
     conn: &Connection,
     owner: &str,
     holder: &str,
     request: &ObserveNativeRequest,
-) -> Result<String> {
+) -> Result<NativeCatalogTarget> {
     conn.query_row(
-        "SELECT provider FROM business_provider_federation_accounts
+        "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
          WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
-           AND private_local_account_id=?4 AND revision=?5 AND enabled=1 AND credential_ready=1",
+           AND (private_local_account_id=?4 OR provider='claude')
+           AND revision=?5 AND enabled=1 AND credential_ready=1",
         params![
             request.account_id,
             owner,
@@ -575,7 +616,12 @@ fn native_catalog_target(
             INHERITED_NATIVE_ACCOUNT_ID,
             request.expected_account_revision
         ],
-        |row| row.get(0),
+        |row| {
+            Ok(NativeCatalogTarget {
+                provider: row.get(0)?,
+                local_account_id: row.get(1)?,
+            })
+        },
     )
     .context("selected native catalog account is unavailable or changed")
 }
@@ -684,6 +730,12 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
                 "credentialReady":row.get::<_,bool>(4)?,
                 "revision":row.get::<_,i64>(5)?,
                 "observedAtMs":row.get::<_,i64>(6)?,
+                // Explicit native reference; never a conversion from Workjet-local IDs.
+                "nativeAccountReference":{
+                    "accountId":row.get::<_,String>(0)?,
+                    "holderInstanceId":row.get::<_,String>(1)?,
+                    "accountRevision":row.get::<_,i64>(5)?,
+                },
                 "modelCatalogObserved":false,
                 "inferenceVerified":false
             }))
@@ -702,6 +754,7 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
     }
+    account_controls::project(conn, &mut rows)?;
     let providers = models::project(conn, owner, &mut rows)?;
     Ok(
         json!({"ok":true,"schema":"ctox.provider-federation-registry.v1",
@@ -785,7 +838,10 @@ mod catalog_tests;
 #[path = "provider_models.rs"]
 mod models;
 
-pub(crate) use models::{capture_consumable_model, with_consumable_model, ConsumableModel};
+pub(crate) use models::{
+    capture_consumable_model, resolve_supervisor_model, with_consumable_model, ConsumableModel,
+    SupervisorModelEligibility,
+};
 
 #[path = "provider_projection.rs"]
 mod projection;

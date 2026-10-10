@@ -44,15 +44,20 @@ impl DatabaseState {
     }
 }
 
-struct QueryDatabase {
+pub(crate) struct QueryDatabase {
     path: PathBuf,
     state: Mutex<DatabaseState>,
 }
 
 impl QueryDatabase {
     fn new(root: &Path) -> Arc<Self> {
+        Self::at_path(crate::paths::runtime_dir(root).join("transfers/native-peer.sqlite3"))
+    }
+
+    /// A distinct service-owned query database; never shares transfer or browser lifetime.
+    pub(crate) fn at_path(path: PathBuf) -> Arc<Self> {
         Arc::new(Self {
-            path: crate::paths::runtime_dir(root).join("transfers/native-peer.sqlite3"),
+            path,
             state: Mutex::new(DatabaseState::default()),
         })
     }
@@ -89,7 +94,7 @@ impl QueryDatabase {
             .context("native transfer database unavailable")
     }
 
-    async fn close(&self) -> Result<()> {
+    pub(crate) async fn close(&self) -> Result<()> {
         let mut state = self.state.lock().await;
         state.closed = true;
         state.finish_open().await?;
@@ -103,7 +108,7 @@ impl QueryDatabase {
         Ok(())
     }
 
-    async fn options(&self) -> Result<NativeSyncOptions> {
+    pub(crate) async fn options(&self) -> Result<NativeSyncOptions> {
         Ok(NativeSyncOptions {
             database: self.get().await?,
             collections: Vec::new(),
@@ -196,7 +201,54 @@ fn account_host(
 
 #[path = "transfers_admission.rs"]
 mod admission;
-pub(crate) use admission::{enqueue_peer, pair, PeerDownload};
+pub(crate) use admission::{enqueue_peer, enqueue_workspace_peer, pair, PeerDownload};
+
+/// A local workspace consumer uses its own query database/session lifetime,
+/// revalidating the original grants before and after synchronous reconstruction.
+/// This never takes the running daemon-owned database or creates a replacement grant.
+pub(crate) fn consume_workspace_peers<T>(
+    root: &Path,
+    store: &ctox_transfers::Store,
+    originals: &[DownloadRequest],
+    consume: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let directory = crate::paths::runtime_dir(root).join("transfers/admission");
+    std::fs::create_dir_all(&directory)?;
+    let temporary = tempfile::Builder::new()
+        .prefix("workspace-")
+        .tempdir_in(directory)?;
+    let database = QueryDatabase::new(temporary.path());
+    let host = account_host(root, database.clone());
+    let peer = crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let result = async {
+            for original in originals {
+                ensure!(
+                    store.get(&original.id)?.request == *original,
+                    "workspace job changed"
+                );
+                peer.authorize(original).await?;
+            }
+            let value = consume()?;
+            for original in originals {
+                ensure!(
+                    store.get(&original.id)?.request == *original,
+                    "workspace job changed during reconstruction"
+                );
+                peer.authorize(original).await?;
+            }
+            Ok(value)
+        }
+        .await;
+        peer.shutdown().await?;
+        database.close().await?;
+        result
+    })
+}
 
 #[cfg(test)]
 mod tests {

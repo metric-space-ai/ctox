@@ -695,7 +695,7 @@ pub fn finish_persistent_backend_release_stop(root: &Path) -> Result<()> {
     );
     for port in managed_runtime_ports(root)? {
         anyhow::ensure!(
-            listening_pids_for_port(root, port)?.is_empty(),
+            managed_listener_pids_for_port(root, port)?.is_empty(),
             "refusing release switch: remaining listener on tcp/{port}"
         );
     }
@@ -806,7 +806,7 @@ fn persistent_backend_residue_with_scope(root: &Path) -> Result<Vec<String>> {
     }
     let ports = managed_runtime_ports(root)?;
     for port in ports {
-        let listeners = listening_pids_for_port(root, port)?;
+        let listeners = managed_listener_pids_for_port(root, port)?;
         if !listeners.is_empty() {
             residue.push(format!("tcp/{port} listeners {listeners:?}"));
         }
@@ -975,6 +975,13 @@ fn managed_runtime_ports(root: &Path) -> Result<Vec<u16>> {
 }
 
 fn append_managed_backend_runtime_ports(root: &Path, ports: &mut Vec<u16>) -> Result<()> {
+    // A switch to API/IPC, or a newer model with a different port, can
+    // leave an older managed listener. These legacy ports are inventory
+    // only: cleanup separately verifies exact root/process ownership.
+    for port in 1234..=1239 {
+        push_unique_port(ports, port);
+    }
+    push_unique_port(ports, runtime_state::default_local_engine_port());
     if let Some(state) = runtime_state::load_or_resolve_runtime_state(root).ok() {
         if let Some(port) = state.engine_port {
             push_unique_port(ports, port);
@@ -1987,7 +1994,7 @@ fn ensure_backend_process(
         release_backend_runtime_ownership(root, role);
     }
     dedupe_socket_backed_backend_processes(root, &spec, &pid_path)?;
-    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
         std::fs::write(&pid_path, format!("{matched_pid}\n"))
             .with_context(|| format!("failed to write backend pid file {}", pid_path.display()))?;
         let _ = stop_duplicate_socket_backed_backend_processes(root, &spec, Some(matched_pid));
@@ -2036,7 +2043,7 @@ fn ensure_backend_process(
             release_backend_runtime_ownership(root, role);
         }
     }
-    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+    if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
         std::fs::write(&pid_path, format!("{matched_pid}\n"))
             .with_context(|| format!("failed to write backend pid file {}", pid_path.display()))?;
         let _ = stop_duplicate_socket_backed_backend_processes(root, &spec, Some(matched_pid));
@@ -2053,7 +2060,7 @@ fn ensure_backend_process(
     let startup_started = Instant::now();
     let Some(_lease) = acquire_backend_startup_lease(root, spec.port, &spec.request_model)? else {
         while startup_started.elapsed() < Duration::from_secs(startup_wait_secs) {
-            if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path)? {
+            if let Some(matched_pid) = ready_backend_process_pid(root, &spec, &pid_path, None)? {
                 std::fs::write(&pid_path, format!("{matched_pid}\n")).with_context(|| {
                     format!("failed to write backend pid file {}", pid_path.display())
                 })?;
@@ -2600,7 +2607,9 @@ fn wait_for_backend_ready(
                 );
             }
         }
-        if let Some(matched_pid) = ready_backend_process_pid(root, spec, pid_path)? {
+        if let Some(matched_pid) =
+            ready_backend_process_pid(root, spec, pid_path, child.as_ref().map(|child| child.id()))?
+        {
             std::fs::write(pid_path, format!("{matched_pid}\n")).with_context(|| {
                 format!("failed to write backend pid file {}", pid_path.display())
             })?;
@@ -2615,8 +2624,23 @@ fn wait_for_backend_ready(
             return Ok(());
         }
         if let Some(pid) = read_pid(pid_path) {
-            if !process_is_alive(pid) {
-                let detail = managed_backend_failure_detail(log_path, None);
+            let owned_child = child.as_ref().is_some_and(|child| child.id() == pid);
+            if !process_is_alive_with_reaping(pid, !owned_child) {
+                // The child may exit during the readiness probe after the
+                // first try_wait. Reap it before losing its real exit status.
+                let exit_status = child
+                    .as_deref_mut()
+                    .map(Child::try_wait)
+                    .transpose()
+                    .with_context(|| {
+                        format!(
+                            "failed to poll {} backend child for {}",
+                            role.as_env_value(),
+                            spec.display_model
+                        )
+                    })?
+                    .flatten();
+                let detail = managed_backend_failure_detail(log_path, exit_status);
                 anyhow::bail!(
                     "{} backend for {} exited before becoming ready{}",
                     role.as_env_value(),
@@ -2667,7 +2691,8 @@ fn managed_backend_failure_detail(
     exit_status: Option<ExitStatus>,
 ) -> Option<String> {
     let exit_status_detail = exit_status.map(|status| status.to_string());
-    let raw = std::fs::read_to_string(log_path).ok()?;
+    // A missing/unreadable log must not discard an observed child exit.
+    let raw = std::fs::read_to_string(log_path).unwrap_or_default();
     let lines = raw
         .lines()
         .map(str::trim)
@@ -2693,6 +2718,7 @@ fn ready_backend_process_pid(
     root: &Path,
     spec: &ManagedBackendSpec,
     pid_path: &Path,
+    owned_child_pid: Option<u32>,
 ) -> Result<Option<u32>> {
     if let Some(transport) = spec_local_transport(spec) {
         if !transport_accepts_stably(
@@ -2702,7 +2728,9 @@ fn ready_backend_process_pid(
         ) {
             return Ok(None);
         }
-        if let Some(pid) = read_pid(pid_path).filter(|pid| process_is_alive(*pid)) {
+        if let Some(pid) = read_pid(pid_path)
+            .filter(|pid| process_is_alive_with_reaping(*pid, owned_child_pid != Some(*pid)))
+        {
             if socket_backed_process_matches_spec(root, spec, pid)? {
                 return Ok(Some(pid));
             }
@@ -3034,7 +3062,6 @@ const CHAT_MANAGED_BACKEND_OVERRIDE_KEYS: &[&str] = &[
     "CTOX_ENGINE_ISQ_SINGLETHREAD",
     "CTOX_ENGINE_ISQ_CPU_THREADS",
     "CTOX_ENGINE_PARALLEL_IMMEDIATE_ISQ",
-    "CTOX_CHAT_SHARE_AUXILIARY_GPUS",
     "CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP",
     "CTOX_EMBEDDING_GPU_LAYER_RESERVATION",
     "CTOX_STT_GPU_LAYER_RESERVATION",
@@ -3227,6 +3254,32 @@ fn listening_pids_for_port(root: &Path, port: u16) -> Result<Vec<u32>> {
     Ok(pids)
 }
 
+/// TCP defaults are inventory, not permission to stop another process.
+/// Managed launches use this root as their working directory; verify that
+/// exact directory and the existing launcher/engine identity before cleanup.
+fn managed_listener_pids_for_port(root: &Path, port: u16) -> Result<Vec<u32>> {
+    let mut owned = Vec::new();
+    for pid in listening_pids_for_port(root, port)? {
+        if !process_current_dir_matches_root(pid, root) {
+            continue;
+        }
+        let Some(command) = process_command(root, pid)? else {
+            continue;
+        };
+        let direct = command_is_managed_runtime_launcher(&command)
+            || managed_engine_process_command(&command);
+        let via_launcher = if let Some(launcher) = managed_launcher_ancestor_pid(root, pid)? {
+            process_current_dir_matches_root(launcher, root)
+        } else {
+            false
+        };
+        if direct || via_launcher {
+            owned.push(pid);
+        }
+    }
+    Ok(owned)
+}
+
 fn process_command(root: &Path, pid: u32) -> Result<Option<String>> {
     let output = Command::new("ps")
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
@@ -3244,14 +3297,14 @@ fn process_command(root: &Path, pid: u32) -> Result<Option<String>> {
 }
 
 fn stop_processes_on_port(root: &Path, port: u16) -> Result<()> {
-    for pid in listening_pids_for_port(root, port)? {
+    for pid in managed_listener_pids_for_port(root, port)? {
         if pid == std::process::id() {
             continue;
         }
         terminate_managed_process(root, pid)
             .with_context(|| format!("failed to stop listener pid {pid} on tcp/{port}"))?;
         thread::sleep(Duration::from_millis(150));
-        if listening_pids_for_port(root, port)?.contains(&pid) {
+        if managed_listener_pids_for_port(root, port)?.contains(&pid) {
             force_kill_managed_process(root, pid).with_context(|| {
                 format!("failed to force-stop listener pid {pid} on tcp/{port}")
             })?;
@@ -3638,6 +3691,10 @@ fn read_pid(path: &Path) -> Option<u32> {
 }
 
 fn process_is_alive(pid: u32) -> bool {
+    process_is_alive_with_reaping(pid, true)
+}
+
+fn process_is_alive_with_reaping(pid: u32, reap: bool) -> bool {
     let exists = Command::new("kill")
         .arg("-0")
         .arg(pid.to_string())
@@ -3650,7 +3707,11 @@ fn process_is_alive(pid: u32) -> bool {
         return false;
     }
     if process_is_zombie(pid) {
-        reap_zombie_child(pid);
+        // A retained Child owns waitpid and its real exit status. Generic
+        // persistent-process probes may reap only when no Child owns it.
+        if reap {
+            reap_zombie_child(pid);
+        }
         return false;
     }
     true
@@ -4763,8 +4824,103 @@ mod tests {
         .expect_err("child exit status must be reported");
 
         let message = err.to_string();
-        assert!(message.contains("exit status"));
-        assert!(message.contains("Applying ISQ on 1 threads."));
+        assert!(message.contains("exit status"), "{message}");
+        assert!(message.contains("Applying ISQ on 1 threads."), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_child_liveness_probe_preserves_its_exit_status() -> Result<()> {
+        let mut child = Command::new("/bin/sh").args(["-c", "exit 17"]).spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !process_is_zombie(child.id()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let alive = process_is_alive_with_reaping(child.id(), false);
+        let status = child.wait()?;
+        assert!(!alive);
+        assert_eq!(status.code(), Some(17));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    struct BoundedListener {
+        child: Child,
+        port: u16,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for BoundedListener {
+        fn drop(&mut self) {
+            // EOF ends the fixture; timeout bounds every failure path.
+            self.child.stdin.take();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn listener_fixture(root: &Path, marker: &str) -> BoundedListener {
+        let child = Command::new("timeout")
+            .args([
+                "15s",
+                "python3",
+                "-u",
+                "-c",
+                "import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.read()",
+            ])
+            // The positive fixture uses the existing legacy command marker;
+            // neither fixture loads an inference model.
+            .arg(marker)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut listener = BoundedListener { child, port: 0 };
+        let mut output = std::io::BufReader::new(listener.child.stdout.take().unwrap());
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut output, &mut line).unwrap();
+        listener.port = line.trim().parse().unwrap();
+        listener
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_cleanup_preserves_an_unmanaged_listener_in_the_same_root() -> Result<()> {
+        let root = tempfile::tempdir().unwrap();
+        let mut listener = listener_fixture(root.path(), "unmanaged-test-listener");
+        assert!(!listening_pids_for_port(root.path(), listener.port)?.is_empty());
+        assert!(managed_listener_pids_for_port(root.path(), listener.port)?.is_empty());
+        stop_processes_on_port(root.path(), listener.port)?;
+        assert!(std::net::TcpStream::connect(("127.0.0.1", listener.port)).is_ok());
+        assert!(listener.child.try_wait()?.is_none());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_cleanup_stops_a_root_owned_legacy_launcher() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let listener = listener_fixture(root.path(), MANAGED_ENGINE_FROM_CONFIG_COMMAND);
+        assert!(!managed_listener_pids_for_port(root.path(), listener.port)?.is_empty());
+        stop_processes_on_port(root.path(), listener.port)?;
+        assert!(std::net::TcpStream::connect(("127.0.0.1", listener.port)).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_failure_detail_retains_real_exit_status_without_a_log() {
+        let root = tempfile::tempdir().unwrap();
+        let status = Command::new("/bin/sh")
+            .args(["-c", "exit 17"])
+            .status()
+            .unwrap();
+        let detail =
+            managed_backend_failure_detail(&root.path().join("absent-backend.log"), Some(status))
+                .unwrap();
+        assert!(detail.contains("exit status: 17"), "{detail}");
+        assert!(detail.contains("inspect"), "{detail}");
     }
 
     #[test]

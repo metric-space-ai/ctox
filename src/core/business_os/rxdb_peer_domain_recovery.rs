@@ -125,11 +125,21 @@ pub(super) fn retry_predicate(
     if !has_schema {
         return Ok(None);
     }
+    let has_stages: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM domain_receipt_source.sqlite_master WHERE name=?1)",
+        ["business_provider_account_controls"],
+        |row| row.get(0),
+    )?;
+    let staged = if has_stages {
+        " OR EXISTS(SELECT 1 FROM domain_receipt_source.business_provider_account_controls AS staged WHERE staged.completed=0 AND staged.command_id=COALESCE(json_extract(data, \x27$.command_id\x27), json_extract(data, \x27$.id\x27)))"
+    } else {
+        ""
+    };
     Ok(Some(format!(
-        "({candidate} AND EXISTS(
+        "({candidate} AND (EXISTS(
             SELECT 1 FROM domain_receipt_source.business_command_domain_effects AS receipt
             WHERE receipt.command_id = COALESCE(json_extract(data, '$.command_id'), json_extract(data, '$.id'))
-        ))"
+        ){staged}))"
     )))
 }
 

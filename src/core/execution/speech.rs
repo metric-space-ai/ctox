@@ -226,7 +226,7 @@ impl Default for PcmFormat {
 
 impl PcmFormat {
     fn validate(self) -> Result<(), SpeechError> {
-        if ![8_000, 16_000, 22_050, 44_100, 48_000].contains(&self.sample_rate_hz) {
+        if ![8_000, 16_000, 22_050, 24_000, 44_100, 48_000].contains(&self.sample_rate_hz) {
             return Err(SpeechError::InvalidRequest);
         }
         Ok(())
@@ -1187,6 +1187,10 @@ async fn pump(
         }
     }
 }
+
+#[path = "speech_probe.rs"]
+mod probe;
+pub use probe::SpeechTranscriptionProbe;
 
 /// Replay a supplied 16 kHz mono s16le PCM fixture at its actual capture cadence.
 /// This is an explicit operator smoke, never microphone capture or automatic production inference.

@@ -8,6 +8,61 @@ use tokio::{sync::Mutex, task::JoinHandle};
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+const READINESS_ATTEMPTS: usize = 3;
+const READINESS_BACKOFF: Duration = Duration::from_millis(250);
+
+trait ReadinessAttempt {
+    type Output: Send;
+    fn attempt(&mut self) -> futures_util::future::BoxFuture<'_, Result<Self::Output>>;
+    fn recover(&mut self) -> futures_util::future::BoxFuture<'_, Result<()>>;
+}
+
+async fn with_readiness_recovery<C: ReadinessAttempt>(context: &mut C) -> Result<C::Output> {
+    for attempt in 0..READINESS_ATTEMPTS {
+        let result = context.attempt().await;
+        match result {
+            Err(error)
+                if error.downcast_ref::<PeerReadFailure>()
+                    == Some(&PeerReadFailure::SourceNotReady)
+                    && attempt + 1 < READINESS_ATTEMPTS =>
+            {
+                context.recover().await?;
+            }
+            other => return other,
+        }
+    }
+    unreachable!("the final readiness attempt always returns")
+}
+
+struct NativeReadiness<'a> {
+    resolver: &'a NativeTransferPeerResolver,
+    active: &'a mut Option<ActiveSession>,
+    request: &'a DownloadRequest,
+}
+
+impl ReadinessAttempt for NativeReadiness<'_> {
+    type Output = Arc<NativePeerRangeSource>;
+
+    fn attempt(&mut self) -> futures_util::future::BoxFuture<'_, Result<Self::Output>> {
+        Box::pin(self.resolver.resolve_routed(self.active, self.request))
+    }
+
+    fn recover(&mut self) -> futures_util::future::BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            // Drain the failed transport before starting another. If cleanup is
+            // still pending, retain ownership and fail; never spawn around it.
+            if let Some(session) = self.active.as_mut() {
+                session.close().await?;
+            }
+            *self.active = None;
+            current_account(self.resolver.host.as_ref(), self.request).await?;
+            tokio::time::sleep(READINESS_BACKOFF).await;
+            current_account(self.resolver.host.as_ref(), self.request).await?;
+            Ok(())
+        })
+    }
+}
+
 pub(crate) type NativeTransferProviderLookup = Arc<
     dyn Fn(String) -> futures_util::future::BoxFuture<'static, Result<NativeSessionTargetProvider>>
         + Send
@@ -191,6 +246,19 @@ impl NativeTransferPeerResolver {
         active: &mut Option<ActiveSession>,
         request: &DownloadRequest,
     ) -> Result<Arc<NativePeerRangeSource>> {
+        with_readiness_recovery(&mut NativeReadiness {
+            resolver: self,
+            active,
+            request,
+        })
+        .await
+    }
+
+    async fn resolve_routed(
+        &self,
+        active: &mut Option<ActiveSession>,
+        request: &DownloadRequest,
+    ) -> Result<Arc<NativePeerRangeSource>> {
         // At most one control-only bootstrap followed by one payload session.
         for attempt in 0..2 {
             if let Some(source) = self.resolve_once(active, request, attempt == 0).await? {
@@ -315,7 +383,7 @@ impl NativeTransferPeerResolver {
             }
         })
         .await
-        .context("native transfer source readiness timed out")??;
+        .map_err(|_| anyhow::Error::from(PeerReadFailure::SourceNotReady))??;
         if active.bootstrap {
             let original = request
                 .peer_source
@@ -530,6 +598,93 @@ impl PeerRangeSource for NativeTransferPeerResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ReadinessProbe {
+        outcomes: std::collections::VecDeque<Result<u8>>,
+        recoveries_before_attempt: Vec<usize>,
+        recoveries: usize,
+        revoked_during_recovery: bool,
+    }
+
+    impl ReadinessProbe {
+        fn new(outcomes: Vec<Result<u8>>) -> Self {
+            Self {
+                outcomes: outcomes.into(),
+                recoveries_before_attempt: vec![],
+                recoveries: 0,
+                revoked_during_recovery: false,
+            }
+        }
+    }
+
+    impl ReadinessAttempt for ReadinessProbe {
+        type Output = u8;
+        fn attempt(&mut self) -> futures_util::future::BoxFuture<'_, Result<u8>> {
+            self.recoveries_before_attempt.push(self.recoveries);
+            let result = self.outcomes.pop_front().expect("unexpected new attempt");
+            Box::pin(async move { result })
+        }
+        fn recover(&mut self) -> futures_util::future::BoxFuture<'_, Result<()>> {
+            self.recoveries += 1;
+            let revoked = self.revoked_during_recovery;
+            Box::pin(async move {
+                ensure!(!revoked, "original account revoked");
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_retry_drains_before_reconnection() {
+        let mut probe =
+            ReadinessProbe::new(vec![Err(PeerReadFailure::SourceNotReady.into()), Ok(7)]);
+        assert_eq!(with_readiness_recovery(&mut probe).await.unwrap(), 7);
+        assert_eq!(probe.recoveries, 1);
+        assert_eq!(probe.recoveries_before_attempt, vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn readiness_retry_exhaustion_is_bounded_and_keeps_typed_failure() {
+        let mut probe = ReadinessProbe::new(
+            (0..3)
+                .map(|_| Err(PeerReadFailure::SourceNotReady.into()))
+                .collect(),
+        );
+        let error = with_readiness_recovery(&mut probe).await.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PeerReadFailure>(),
+            Some(&PeerReadFailure::SourceNotReady)
+        );
+        assert_eq!(probe.recoveries_before_attempt, vec![0, 1, 2]);
+        assert_eq!(probe.recoveries, 2);
+    }
+
+    #[tokio::test]
+    async fn readiness_retry_never_retries_authority_failure_or_peer_text() {
+        for error in [
+            anyhow::Error::from(PeerReadFailure::Authorization),
+            anyhow::Error::from(PeerReadFailure::Identity),
+            anyhow::Error::from(PeerReadFailure::Grant),
+            anyhow::Error::from(PeerReadFailure::FilePermission),
+            anyhow::anyhow!("PEER_SOURCE_NOT_READY?token=peer-controlled"),
+        ] {
+            let mut probe = ReadinessProbe::new(vec![Err(error)]);
+            assert!(with_readiness_recovery(&mut probe).await.is_err());
+            assert_eq!(probe.recoveries_before_attempt, vec![0]);
+            assert_eq!(probe.recoveries, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_retry_stops_before_new_traffic_when_recovery_rejects_account() {
+        let mut probe =
+            ReadinessProbe::new(vec![Err(PeerReadFailure::SourceNotReady.into()), Ok(7)]);
+        probe.revoked_during_recovery = true;
+        assert!(with_readiness_recovery(&mut probe).await.is_err());
+        assert_eq!(probe.recoveries_before_attempt, vec![0]);
+        assert_eq!(probe.recoveries, 1);
+        assert_eq!(probe.outcomes.len(), 1);
+    }
 
     #[tokio::test]
     async fn expired_route_does_not_poll_payload_or_authorization() {

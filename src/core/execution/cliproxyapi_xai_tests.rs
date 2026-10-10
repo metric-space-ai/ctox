@@ -1,6 +1,96 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[tokio::test]
+async fn retired_creator_cancels_without_poll_and_never_commits() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let current = Arc::new(AtomicBool::new(true));
+    let c = current.clone();
+    let public = controller
+        .start_authorized(
+            Arc::new(move || c.load(Ordering::SeqCst)),
+            Arc::new(|| Ok(())),
+        )
+        .await
+        .unwrap();
+    current.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        controller.poll(&public.login_id).unwrap(),
+        XaiLoginProgress::Cancelled
+    );
+    assert!(!subscription_installed(root.path()));
+}
+#[tokio::test]
+async fn commit_revalidates_authority_after_upstream_acceptance() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let checks = Arc::new(AtomicUsize::new(0));
+    let c = checks.clone();
+    let public = controller
+        .start_authorized(
+            Arc::new(|| true),
+            Arc::new(move || {
+                anyhow::ensure!(c.fetch_add(1, Ordering::SeqCst) == 0, "retired");
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Pending {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(checks.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        controller.poll(&public.login_id).unwrap(),
+        XaiLoginProgress::Failed
+    );
+    assert!(!subscription_installed(root.path()));
+}
+#[tokio::test]
+async fn removal_invalidates_binding_and_cancels_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let public = controller.start().await.unwrap();
+    controller.remove().await.unwrap();
+    assert_eq!(
+        controller.poll(&public.login_id).unwrap(),
+        XaiLoginProgress::Cancelled
+    );
+    save_bundle(root.path(), &bundle()).unwrap();
+    let before = credential_binding(root.path()).unwrap();
+    assert!(before.is_some());
+    controller.remove().await.unwrap();
+    assert!(credential_binding(root.path()).unwrap().is_none());
+}
 struct StalledLogin;
 impl XaiHttpTransport for StalledLogin {
     fn execute<'a>(

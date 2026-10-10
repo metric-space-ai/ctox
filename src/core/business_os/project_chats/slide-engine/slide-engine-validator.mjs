@@ -1319,7 +1319,7 @@ var initializer = (inst, def) => {
 };
 var $ZodError = $constructor("$ZodError", initializer);
 var $ZodRealError = $constructor("$ZodError", initializer, { Parent: Error });
-function flattenError(error51, mapper = (issue2) => issue2.message) {
+function flattenError(error51, mapper = (issue3) => issue3.message) {
   const fieldErrors = {};
   const formErrors = [];
   for (const sub of error51.issues) {
@@ -1332,20 +1332,20 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
   }
   return { formErrors, fieldErrors };
 }
-function formatError(error51, mapper = (issue2) => issue2.message) {
+function formatError(error51, mapper = (issue3) => issue3.message) {
   const fieldErrors = { _errors: [] };
   const processError = (error52, path = []) => {
-    for (const issue2 of error52.issues) {
-      if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
-      } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
-      } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+    for (const issue3 of error52.issues) {
+      if (issue3.code === "invalid_union" && issue3.errors.length) {
+        issue3.errors.map((issues) => processError({ issues }, [...path, ...issue3.path]));
+      } else if (issue3.code === "invalid_key") {
+        processError({ issues: issue3.issues }, [...path, ...issue3.path]);
+      } else if (issue3.code === "invalid_element") {
+        processError({ issues: issue3.issues }, [...path, ...issue3.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path, ...issue3.path];
         if (fullpath.length === 0) {
-          fieldErrors._errors.push(mapper(issue2));
+          fieldErrors._errors.push(mapper(issue3));
         } else {
           let curr = fieldErrors;
           let i = 0;
@@ -1356,7 +1356,7 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
               curr[el] = curr[el] || { _errors: [] };
             } else {
               curr[el] = curr[el] || { _errors: [] };
-              curr[el]._errors.push(mapper(issue2));
+              curr[el]._errors.push(mapper(issue3));
             }
             curr = curr[el];
             i++;
@@ -1368,21 +1368,21 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
   processError(error51);
   return fieldErrors;
 }
-function treeifyError(error51, mapper = (issue2) => issue2.message) {
+function treeifyError(error51, mapper = (issue3) => issue3.message) {
   const result = { errors: [] };
   const processError = (error52, path = []) => {
     var _a3, _b;
-    for (const issue2 of error52.issues) {
-      if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path, ...issue2.path]));
-      } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
-      } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path, ...issue2.path]);
+    for (const issue3 of error52.issues) {
+      if (issue3.code === "invalid_union" && issue3.errors.length) {
+        issue3.errors.map((issues) => processError({ issues }, [...path, ...issue3.path]));
+      } else if (issue3.code === "invalid_key") {
+        processError({ issues: issue3.issues }, [...path, ...issue3.path]);
+      } else if (issue3.code === "invalid_element") {
+        processError({ issues: issue3.issues }, [...path, ...issue3.path]);
       } else {
-        const fullpath = [...path, ...issue2.path];
+        const fullpath = [...path, ...issue3.path];
         if (fullpath.length === 0) {
-          result.errors.push(mapper(issue2));
+          result.errors.push(mapper(issue3));
           continue;
         }
         let curr = result;
@@ -1400,7 +1400,7 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
             curr = curr.items[el];
           }
           if (terminal) {
-            curr.errors.push(mapper(issue2));
+            curr.errors.push(mapper(issue3));
           }
           i++;
         }
@@ -1431,10 +1431,10 @@ function toDotPath(_path) {
 function prettifyError(error51) {
   const lines = [];
   const issues = [...error51.issues].sort((a, b) => (a.path ?? []).length - (b.path ?? []).length);
-  for (const issue2 of issues) {
-    lines.push(`✖ ${issue2.message}`);
-    if (issue2.path?.length)
-      lines.push(`  → at ${toDotPath(issue2.path)}`);
+  for (const issue3 of issues) {
+    lines.push(`✖ ${issue3.message}`);
+    if (issue3.path?.length)
+      lines.push(`  → at ${toDotPath(issue3.path)}`);
   }
   return lines.join("\n");
 }
@@ -3084,7 +3084,7 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   const _normalized = cached(() => normalizeDef(def));
   const generateFastpass = (shape) => {
     const doc = new Doc(["shape", "payload", "ctx"]);
-    const normalized = _normalized.value;
+    const normalized2 = _normalized.value;
     const parseStr = (key) => {
       const k = esc(key);
       return `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`;
@@ -3092,11 +3092,11 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     doc.write(`const input = payload.value;`);
     const ids = /* @__PURE__ */ Object.create(null);
     let counter = 0;
-    for (const key of normalized.keys) {
+    for (const key of normalized2.keys) {
       ids[key] = `key_${counter++}`;
     }
     doc.write(`const newResult = {};`);
-    for (const key of normalized.keys) {
+    for (const key of normalized2.keys) {
       const id2 = ids[key];
       const k = esc(key);
       const schema = shape[key];
@@ -4471,58 +4471,58 @@ var error = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `مدخلات غير مقبولة: يفترض إدخال instanceof ${issue2.expected}، ولكن تم إدخال ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `مدخلات غير مقبولة: يفترض إدخال instanceof ${issue3.expected}، ولكن تم إدخال ${received}`;
         }
         return `مدخلات غير مقبولة: يفترض إدخال ${expected}، ولكن تم إدخال ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `مدخلات غير مقبولة: يفترض إدخال ${stringifyPrimitive(issue2.values[0])}`;
-        return `اختيار غير مقبول: يتوقع انتقاء أحد هذه الخيارات: ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `مدخلات غير مقبولة: يفترض إدخال ${stringifyPrimitive(issue3.values[0])}`;
+        return `اختيار غير مقبول: يتوقع انتقاء أحد هذه الخيارات: ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return ` أكبر من اللازم: يفترض أن تكون ${issue2.origin ?? "القيمة"} ${adj} ${issue2.maximum.toString()} ${sizing.unit ?? "عنصر"}`;
-        return `أكبر من اللازم: يفترض أن تكون ${issue2.origin ?? "القيمة"} ${adj} ${issue2.maximum.toString()}`;
+          return ` أكبر من اللازم: يفترض أن تكون ${issue3.origin ?? "القيمة"} ${adj} ${issue3.maximum.toString()} ${sizing.unit ?? "عنصر"}`;
+        return `أكبر من اللازم: يفترض أن تكون ${issue3.origin ?? "القيمة"} ${adj} ${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `أصغر من اللازم: يفترض لـ ${issue2.origin} أن يكون ${adj} ${issue2.minimum.toString()} ${sizing.unit}`;
+          return `أصغر من اللازم: يفترض لـ ${issue3.origin} أن يكون ${adj} ${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `أصغر من اللازم: يفترض لـ ${issue2.origin} أن يكون ${adj} ${issue2.minimum.toString()}`;
+        return `أصغر من اللازم: يفترض لـ ${issue3.origin} أن يكون ${adj} ${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
-          return `نَص غير مقبول: يجب أن يبدأ بـ "${issue2.prefix}"`;
+          return `نَص غير مقبول: يجب أن يبدأ بـ "${issue3.prefix}"`;
         if (_issue.format === "ends_with")
           return `نَص غير مقبول: يجب أن ينتهي بـ "${_issue.suffix}"`;
         if (_issue.format === "includes")
           return `نَص غير مقبول: يجب أن يتضمَّن "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `نَص غير مقبول: يجب أن يطابق النمط ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} غير مقبول`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} غير مقبول`;
       }
       case "not_multiple_of":
-        return `رقم غير مقبول: يجب أن يكون من مضاعفات ${issue2.divisor}`;
+        return `رقم غير مقبول: يجب أن يكون من مضاعفات ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `معرف${issue2.keys.length > 1 ? "ات" : ""} غريب${issue2.keys.length > 1 ? "ة" : ""}: ${joinValues(issue2.keys, "، ")}`;
+        return `معرف${issue3.keys.length > 1 ? "ات" : ""} غريب${issue3.keys.length > 1 ? "ة" : ""}: ${joinValues(issue3.keys, "، ")}`;
       case "invalid_key":
-        return `معرف غير مقبول في ${issue2.origin}`;
+        return `معرف غير مقبول في ${issue3.origin}`;
       case "invalid_union":
         return "مدخل غير مقبول";
       case "invalid_element":
-        return `مدخل غير مقبول في ${issue2.origin}`;
+        return `مدخل غير مقبول في ${issue3.origin}`;
       default:
         return "مدخل غير مقبول";
     }
@@ -4578,37 +4578,37 @@ var error2 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Yanlış dəyər: gözlənilən instanceof ${issue2.expected}, daxil olan ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Yanlış dəyər: gözlənilən instanceof ${issue3.expected}, daxil olan ${received}`;
         }
         return `Yanlış dəyər: gözlənilən ${expected}, daxil olan ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Yanlış dəyər: gözlənilən ${stringifyPrimitive(issue2.values[0])}`;
-        return `Yanlış seçim: aşağıdakılardan biri olmalıdır: ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Yanlış dəyər: gözlənilən ${stringifyPrimitive(issue3.values[0])}`;
+        return `Yanlış seçim: aşağıdakılardan biri olmalıdır: ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Çox böyük: gözlənilən ${issue2.origin ?? "dəyər"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "element"}`;
-        return `Çox böyük: gözlənilən ${issue2.origin ?? "dəyər"} ${adj}${issue2.maximum.toString()}`;
+          return `Çox böyük: gözlənilən ${issue3.origin ?? "dəyər"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "element"}`;
+        return `Çox böyük: gözlənilən ${issue3.origin ?? "dəyər"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Çox kiçik: gözlənilən ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
-        return `Çox kiçik: gözlənilən ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+          return `Çox kiçik: gözlənilən ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
+        return `Çox kiçik: gözlənilən ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Yanlış mətn: "${_issue.prefix}" ilə başlamalıdır`;
         if (_issue.format === "ends_with")
@@ -4617,18 +4617,18 @@ var error2 = () => {
           return `Yanlış mətn: "${_issue.includes}" daxil olmalıdır`;
         if (_issue.format === "regex")
           return `Yanlış mətn: ${_issue.pattern} şablonuna uyğun olmalıdır`;
-        return `Yanlış ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Yanlış ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Yanlış ədəd: ${issue2.divisor} ilə bölünə bilən olmalıdır`;
+        return `Yanlış ədəd: ${issue3.divisor} ilə bölünə bilən olmalıdır`;
       case "unrecognized_keys":
-        return `Tanınmayan açar${issue2.keys.length > 1 ? "lar" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Tanınmayan açar${issue3.keys.length > 1 ? "lar" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} daxilində yanlış açar`;
+        return `${issue3.origin} daxilində yanlış açar`;
       case "invalid_union":
         return "Yanlış dəyər";
       case "invalid_element":
-        return `${issue2.origin} daxilində yanlış dəyər`;
+        return `${issue3.origin} daxilində yanlış dəyər`;
       default:
         return `Yanlış dəyər`;
     }
@@ -4729,43 +4729,43 @@ var error3 = () => {
     number: "лік",
     array: "масіў"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Няправільны ўвод: чакаўся instanceof ${issue2.expected}, атрымана ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Няправільны ўвод: чакаўся instanceof ${issue3.expected}, атрымана ${received}`;
         }
         return `Няправільны ўвод: чакаўся ${expected}, атрымана ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Няправільны ўвод: чакалася ${stringifyPrimitive(issue2.values[0])}`;
-        return `Няправільны варыянт: чакаўся адзін з ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Няправільны ўвод: чакалася ${stringifyPrimitive(issue3.values[0])}`;
+        return `Няправільны варыянт: чакаўся адзін з ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const maxValue = Number(issue2.maximum);
+          const maxValue = Number(issue3.maximum);
           const unit2 = getBelarusianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-          return `Занадта вялікі: чакалася, што ${issue2.origin ?? "значэнне"} павінна ${sizing.verb} ${adj}${issue2.maximum.toString()} ${unit2}`;
+          return `Занадта вялікі: чакалася, што ${issue3.origin ?? "значэнне"} павінна ${sizing.verb} ${adj}${issue3.maximum.toString()} ${unit2}`;
         }
-        return `Занадта вялікі: чакалася, што ${issue2.origin ?? "значэнне"} павінна быць ${adj}${issue2.maximum.toString()}`;
+        return `Занадта вялікі: чакалася, што ${issue3.origin ?? "значэнне"} павінна быць ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const minValue = Number(issue2.minimum);
+          const minValue = Number(issue3.minimum);
           const unit2 = getBelarusianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-          return `Занадта малы: чакалася, што ${issue2.origin} павінна ${sizing.verb} ${adj}${issue2.minimum.toString()} ${unit2}`;
+          return `Занадта малы: чакалася, што ${issue3.origin} павінна ${sizing.verb} ${adj}${issue3.minimum.toString()} ${unit2}`;
         }
-        return `Занадта малы: чакалася, што ${issue2.origin} павінна быць ${adj}${issue2.minimum.toString()}`;
+        return `Занадта малы: чакалася, што ${issue3.origin} павінна быць ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Няправільны радок: павінен пачынацца з "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -4774,18 +4774,18 @@ var error3 = () => {
           return `Няправільны радок: павінен змяшчаць "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Няправільны радок: павінен адпавядаць шаблону ${_issue.pattern}`;
-        return `Няправільны ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Няправільны ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Няправільны лік: павінен быць кратным ${issue2.divisor}`;
+        return `Няправільны лік: павінен быць кратным ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Нераспазнаны ${issue2.keys.length > 1 ? "ключы" : "ключ"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Нераспазнаны ${issue3.keys.length > 1 ? "ключы" : "ключ"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Няправільны ключ у ${issue2.origin}`;
+        return `Няправільны ключ у ${issue3.origin}`;
       case "invalid_union":
         return "Няправільны ўвод";
       case "invalid_element":
-        return `Няправільнае значэнне ў ${issue2.origin}`;
+        return `Няправільнае значэнне ў ${issue3.origin}`;
       default:
         return `Няправільны ўвод`;
     }
@@ -4843,38 +4843,38 @@ var error4 = () => {
     number: "число",
     array: "масив"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Невалиден вход: очакван instanceof ${issue2.expected}, получен ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Невалиден вход: очакван instanceof ${issue3.expected}, получен ${received}`;
         }
         return `Невалиден вход: очакван ${expected}, получен ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Невалиден вход: очакван ${stringifyPrimitive(issue2.values[0])}`;
-        return `Невалидна опция: очаквано едно от ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Невалиден вход: очакван ${stringifyPrimitive(issue3.values[0])}`;
+        return `Невалидна опция: очаквано едно от ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Твърде голямо: очаква се ${issue2.origin ?? "стойност"} да съдържа ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "елемента"}`;
-        return `Твърде голямо: очаква се ${issue2.origin ?? "стойност"} да бъде ${adj}${issue2.maximum.toString()}`;
+          return `Твърде голямо: очаква се ${issue3.origin ?? "стойност"} да съдържа ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "елемента"}`;
+        return `Твърде голямо: очаква се ${issue3.origin ?? "стойност"} да бъде ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Твърде малко: очаква се ${issue2.origin} да съдържа ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Твърде малко: очаква се ${issue3.origin} да съдържа ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Твърде малко: очаква се ${issue2.origin} да бъде ${adj}${issue2.minimum.toString()}`;
+        return `Твърде малко: очаква се ${issue3.origin} да бъде ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Невалиден низ: трябва да започва с "${_issue.prefix}"`;
         }
@@ -4895,18 +4895,18 @@ var error4 = () => {
           invalid_adj = "Невалидно";
         if (_issue.format === "duration")
           invalid_adj = "Невалидна";
-        return `${invalid_adj} ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `${invalid_adj} ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Невалидно число: трябва да бъде кратно на ${issue2.divisor}`;
+        return `Невалидно число: трябва да бъде кратно на ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Неразпознат${issue2.keys.length > 1 ? "и" : ""} ключ${issue2.keys.length > 1 ? "ове" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Неразпознат${issue3.keys.length > 1 ? "и" : ""} ключ${issue3.keys.length > 1 ? "ове" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Невалиден ключ в ${issue2.origin}`;
+        return `Невалиден ключ в ${issue3.origin}`;
       case "invalid_union":
         return "Невалиден вход";
       case "invalid_element":
-        return `Невалидна стойност в ${issue2.origin}`;
+        return `Невалидна стойност в ${issue3.origin}`;
       default:
         return `Невалиден вход`;
     }
@@ -4962,38 +4962,38 @@ var error5 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Tipus invàlid: s'esperava instanceof ${issue2.expected}, s'ha rebut ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Tipus invàlid: s'esperava instanceof ${issue3.expected}, s'ha rebut ${received}`;
         }
         return `Tipus invàlid: s'esperava ${expected}, s'ha rebut ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Valor invàlid: s'esperava ${stringifyPrimitive(issue2.values[0])}`;
-        return `Opció invàlida: s'esperava una de ${joinValues(issue2.values, " o ")}`;
+        if (issue3.values.length === 1)
+          return `Valor invàlid: s'esperava ${stringifyPrimitive(issue3.values[0])}`;
+        return `Opció invàlida: s'esperava una de ${joinValues(issue3.values, " o ")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "com a màxim" : "menys de";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "com a màxim" : "menys de";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Massa gran: s'esperava que ${issue2.origin ?? "el valor"} contingués ${adj} ${issue2.maximum.toString()} ${sizing.unit ?? "elements"}`;
-        return `Massa gran: s'esperava que ${issue2.origin ?? "el valor"} fos ${adj} ${issue2.maximum.toString()}`;
+          return `Massa gran: s'esperava que ${issue3.origin ?? "el valor"} contingués ${adj} ${issue3.maximum.toString()} ${sizing.unit ?? "elements"}`;
+        return `Massa gran: s'esperava que ${issue3.origin ?? "el valor"} fos ${adj} ${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? "com a mínim" : "més de";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "com a mínim" : "més de";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Massa petit: s'esperava que ${issue2.origin} contingués ${adj} ${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Massa petit: s'esperava que ${issue3.origin} contingués ${adj} ${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Massa petit: s'esperava que ${issue2.origin} fos ${adj} ${issue2.minimum.toString()}`;
+        return `Massa petit: s'esperava que ${issue3.origin} fos ${adj} ${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Format invàlid: ha de començar amb "${_issue.prefix}"`;
         }
@@ -5003,19 +5003,19 @@ var error5 = () => {
           return `Format invàlid: ha d'incloure "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Format invàlid: ha de coincidir amb el patró ${_issue.pattern}`;
-        return `Format invàlid per a ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Format invàlid per a ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Número invàlid: ha de ser múltiple de ${issue2.divisor}`;
+        return `Número invàlid: ha de ser múltiple de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Clau${issue2.keys.length > 1 ? "s" : ""} no reconeguda${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Clau${issue3.keys.length > 1 ? "s" : ""} no reconeguda${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Clau invàlida a ${issue2.origin}`;
+        return `Clau invàlida a ${issue3.origin}`;
       case "invalid_union":
         return "Entrada invàlida";
       // Could also be "Tipus d'unió invàlid" but "Entrada invàlida" is more general
       case "invalid_element":
-        return `Element invàlid a ${issue2.origin}`;
+        return `Element invàlid a ${issue3.origin}`;
       default:
         return `Entrada invàlida`;
     }
@@ -5075,39 +5075,39 @@ var error6 = () => {
     function: "funkce",
     array: "pole"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Neplatný vstup: očekáváno instanceof ${issue2.expected}, obdrženo ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Neplatný vstup: očekáváno instanceof ${issue3.expected}, obdrženo ${received}`;
         }
         return `Neplatný vstup: očekáváno ${expected}, obdrženo ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Neplatný vstup: očekáváno ${stringifyPrimitive(issue2.values[0])}`;
-        return `Neplatná možnost: očekávána jedna z hodnot ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Neplatný vstup: očekáváno ${stringifyPrimitive(issue3.values[0])}`;
+        return `Neplatná možnost: očekávána jedna z hodnot ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Hodnota je příliš velká: ${issue2.origin ?? "hodnota"} musí mít ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "prvků"}`;
+          return `Hodnota je příliš velká: ${issue3.origin ?? "hodnota"} musí mít ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "prvků"}`;
         }
-        return `Hodnota je příliš velká: ${issue2.origin ?? "hodnota"} musí být ${adj}${issue2.maximum.toString()}`;
+        return `Hodnota je příliš velká: ${issue3.origin ?? "hodnota"} musí být ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Hodnota je příliš malá: ${issue2.origin ?? "hodnota"} musí mít ${adj}${issue2.minimum.toString()} ${sizing.unit ?? "prvků"}`;
+          return `Hodnota je příliš malá: ${issue3.origin ?? "hodnota"} musí mít ${adj}${issue3.minimum.toString()} ${sizing.unit ?? "prvků"}`;
         }
-        return `Hodnota je příliš malá: ${issue2.origin ?? "hodnota"} musí být ${adj}${issue2.minimum.toString()}`;
+        return `Hodnota je příliš malá: ${issue3.origin ?? "hodnota"} musí být ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Neplatný řetězec: musí začínat na "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -5116,18 +5116,18 @@ var error6 = () => {
           return `Neplatný řetězec: musí obsahovat "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Neplatný řetězec: musí odpovídat vzoru ${_issue.pattern}`;
-        return `Neplatný formát ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Neplatný formát ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Neplatné číslo: musí být násobkem ${issue2.divisor}`;
+        return `Neplatné číslo: musí být násobkem ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Neznámé klíče: ${joinValues(issue2.keys, ", ")}`;
+        return `Neznámé klíče: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Neplatný klíč v ${issue2.origin}`;
+        return `Neplatný klíč v ${issue3.origin}`;
       case "invalid_union":
         return "Neplatný vstup";
       case "invalid_element":
-        return `Neplatná hodnota v ${issue2.origin}`;
+        return `Neplatná hodnota v ${issue3.origin}`;
       default:
         return `Neplatný vstup`;
     }
@@ -5190,40 +5190,40 @@ var error7 = () => {
     set: "sæt",
     file: "fil"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ugyldigt input: forventede instanceof ${issue2.expected}, fik ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ugyldigt input: forventede instanceof ${issue3.expected}, fik ${received}`;
         }
         return `Ugyldigt input: forventede ${expected}, fik ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ugyldig værdi: forventede ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ugyldigt valg: forventede en af følgende ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ugyldig værdi: forventede ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ugyldigt valg: forventede en af følgende ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing)
-          return `For stor: forventede ${origin ?? "value"} ${sizing.verb} ${adj} ${issue2.maximum.toString()} ${sizing.unit ?? "elementer"}`;
-        return `For stor: forventede ${origin ?? "value"} havde ${adj} ${issue2.maximum.toString()}`;
+          return `For stor: forventede ${origin ?? "value"} ${sizing.verb} ${adj} ${issue3.maximum.toString()} ${sizing.unit ?? "elementer"}`;
+        return `For stor: forventede ${origin ?? "value"} havde ${adj} ${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing) {
-          return `For lille: forventede ${origin} ${sizing.verb} ${adj} ${issue2.minimum.toString()} ${sizing.unit}`;
+          return `For lille: forventede ${origin} ${sizing.verb} ${adj} ${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `For lille: forventede ${origin} havde ${adj} ${issue2.minimum.toString()}`;
+        return `For lille: forventede ${origin} havde ${adj} ${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Ugyldig streng: skal starte med "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -5232,18 +5232,18 @@ var error7 = () => {
           return `Ugyldig streng: skal indeholde "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Ugyldig streng: skal matche mønsteret ${_issue.pattern}`;
-        return `Ugyldig ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Ugyldig ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Ugyldigt tal: skal være deleligt med ${issue2.divisor}`;
+        return `Ugyldigt tal: skal være deleligt med ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Ukendte nøgler" : "Ukendt nøgle"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Ukendte nøgler" : "Ukendt nøgle"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Ugyldig nøgle i ${issue2.origin}`;
+        return `Ugyldig nøgle i ${issue3.origin}`;
       case "invalid_union":
         return "Ugyldigt input: matcher ingen af de tilladte typer";
       case "invalid_element":
-        return `Ugyldig værdi i ${issue2.origin}`;
+        return `Ugyldig værdi i ${issue3.origin}`;
       default:
         return `Ugyldigt input`;
     }
@@ -5301,38 +5301,38 @@ var error8 = () => {
     number: "Zahl",
     array: "Array"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ungültige Eingabe: erwartet instanceof ${issue2.expected}, erhalten ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ungültige Eingabe: erwartet instanceof ${issue3.expected}, erhalten ${received}`;
         }
         return `Ungültige Eingabe: erwartet ${expected}, erhalten ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ungültige Eingabe: erwartet ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ungültige Option: erwartet eine von ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ungültige Eingabe: erwartet ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ungültige Option: erwartet eine von ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Zu groß: erwartet, dass ${issue2.origin ?? "Wert"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "Elemente"} hat`;
-        return `Zu groß: erwartet, dass ${issue2.origin ?? "Wert"} ${adj}${issue2.maximum.toString()} ist`;
+          return `Zu groß: erwartet, dass ${issue3.origin ?? "Wert"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "Elemente"} hat`;
+        return `Zu groß: erwartet, dass ${issue3.origin ?? "Wert"} ${adj}${issue3.maximum.toString()} ist`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Zu klein: erwartet, dass ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit} hat`;
+          return `Zu klein: erwartet, dass ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit} hat`;
         }
-        return `Zu klein: erwartet, dass ${issue2.origin} ${adj}${issue2.minimum.toString()} ist`;
+        return `Zu klein: erwartet, dass ${issue3.origin} ${adj}${issue3.minimum.toString()} ist`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Ungültiger String: muss mit "${_issue.prefix}" beginnen`;
         if (_issue.format === "ends_with")
@@ -5341,18 +5341,18 @@ var error8 = () => {
           return `Ungültiger String: muss "${_issue.includes}" enthalten`;
         if (_issue.format === "regex")
           return `Ungültiger String: muss dem Muster ${_issue.pattern} entsprechen`;
-        return `Ungültig: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Ungültig: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Ungültige Zahl: muss ein Vielfaches von ${issue2.divisor} sein`;
+        return `Ungültige Zahl: muss ein Vielfaches von ${issue3.divisor} sein`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Unbekannte Schlüssel" : "Unbekannter Schlüssel"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Unbekannte Schlüssel" : "Unbekannter Schlüssel"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Ungültiger Schlüssel in ${issue2.origin}`;
+        return `Ungültiger Schlüssel in ${issue3.origin}`;
       case "invalid_union":
         return "Ungültige Eingabe";
       case "invalid_element":
-        return `Ungültiger Wert in ${issue2.origin}`;
+        return `Ungültiger Wert in ${issue3.origin}`;
       default:
         return `Ungültige Eingabe`;
     }
@@ -5410,38 +5410,38 @@ var error9 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (typeof issue2.expected === "string" && /^[A-Z]/.test(issue2.expected)) {
-          return `Μη έγκυρη είσοδος: αναμενόταν instanceof ${issue2.expected}, λήφθηκε ${received}`;
+        if (typeof issue3.expected === "string" && /^[A-Z]/.test(issue3.expected)) {
+          return `Μη έγκυρη είσοδος: αναμενόταν instanceof ${issue3.expected}, λήφθηκε ${received}`;
         }
         return `Μη έγκυρη είσοδος: αναμενόταν ${expected}, λήφθηκε ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Μη έγκυρη είσοδος: αναμενόταν ${stringifyPrimitive(issue2.values[0])}`;
-        return `Μη έγκυρη επιλογή: αναμενόταν ένα από ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Μη έγκυρη είσοδος: αναμενόταν ${stringifyPrimitive(issue3.values[0])}`;
+        return `Μη έγκυρη επιλογή: αναμενόταν ένα από ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Πολύ μεγάλο: αναμενόταν ${issue2.origin ?? "τιμή"} να έχει ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "στοιχεία"}`;
-        return `Πολύ μεγάλο: αναμενόταν ${issue2.origin ?? "τιμή"} να είναι ${adj}${issue2.maximum.toString()}`;
+          return `Πολύ μεγάλο: αναμενόταν ${issue3.origin ?? "τιμή"} να έχει ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "στοιχεία"}`;
+        return `Πολύ μεγάλο: αναμενόταν ${issue3.origin ?? "τιμή"} να είναι ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Πολύ μικρό: αναμενόταν ${issue2.origin} να έχει ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Πολύ μικρό: αναμενόταν ${issue3.origin} να έχει ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Πολύ μικρό: αναμενόταν ${issue2.origin} να είναι ${adj}${issue2.minimum.toString()}`;
+        return `Πολύ μικρό: αναμενόταν ${issue3.origin} να είναι ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Μη έγκυρη συμβολοσειρά: πρέπει να ξεκινά με "${_issue.prefix}"`;
         }
@@ -5451,18 +5451,18 @@ var error9 = () => {
           return `Μη έγκυρη συμβολοσειρά: πρέπει να περιέχει "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Μη έγκυρη συμβολοσειρά: πρέπει να ταιριάζει με το μοτίβο ${_issue.pattern}`;
-        return `Μη έγκυρο: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Μη έγκυρο: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Μη έγκυρος αριθμός: πρέπει να είναι πολλαπλάσιο του ${issue2.divisor}`;
+        return `Μη έγκυρος αριθμός: πρέπει να είναι πολλαπλάσιο του ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Άγνωστ${issue2.keys.length > 1 ? "α" : "ο"} κλειδ${issue2.keys.length > 1 ? "ιά" : "ί"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Άγνωστ${issue3.keys.length > 1 ? "α" : "ο"} κλειδ${issue3.keys.length > 1 ? "ιά" : "ί"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Μη έγκυρο κλειδί στο ${issue2.origin}`;
+        return `Μη έγκυρο κλειδί στο ${issue3.origin}`;
       case "invalid_union":
         return "Μη έγκυρη είσοδος";
       case "invalid_element":
-        return `Μη έγκυρη τιμή στο ${issue2.origin}`;
+        return `Μη έγκυρη τιμή στο ${issue3.origin}`;
       default:
         return `Μη έγκυρη είσοδος`;
     }
@@ -5522,35 +5522,35 @@ var error10 = () => {
     nan: "NaN"
     // All other type names omitted - they fall back to raw values via ?? operator
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
         return `Invalid input: expected ${expected}, received ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Invalid input: expected ${stringifyPrimitive(issue2.values[0])}`;
-        return `Invalid option: expected one of ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Invalid input: expected ${stringifyPrimitive(issue3.values[0])}`;
+        return `Invalid option: expected one of ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Too big: expected ${issue2.origin ?? "value"} to have ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elements"}`;
-        return `Too big: expected ${issue2.origin ?? "value"} to be ${adj}${issue2.maximum.toString()}`;
+          return `Too big: expected ${issue3.origin ?? "value"} to have ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elements"}`;
+        return `Too big: expected ${issue3.origin ?? "value"} to be ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Too small: expected ${issue2.origin} to have ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Too small: expected ${issue3.origin} to have ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Too small: expected ${issue2.origin} to be ${adj}${issue2.minimum.toString()}`;
+        return `Too small: expected ${issue3.origin} to be ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Invalid string: must start with "${_issue.prefix}"`;
         }
@@ -5560,22 +5560,22 @@ var error10 = () => {
           return `Invalid string: must include "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Invalid string: must match pattern ${_issue.pattern}`;
-        return `Invalid ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Invalid ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Invalid number: must be a multiple of ${issue2.divisor}`;
+        return `Invalid number: must be a multiple of ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Unrecognized key${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Unrecognized key${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Invalid key in ${issue2.origin}`;
+        return `Invalid key in ${issue3.origin}`;
       case "invalid_union":
-        if (issue2.options && Array.isArray(issue2.options) && issue2.options.length > 0) {
-          const opts = issue2.options.map((o) => `'${o}'`).join(" | ");
+        if (issue3.options && Array.isArray(issue3.options) && issue3.options.length > 0) {
+          const opts = issue3.options.map((o) => `'${o}'`).join(" | ");
           return `Invalid discriminator value. Expected ${opts}`;
         }
         return "Invalid input";
       case "invalid_element":
-        return `Invalid value in ${issue2.origin}`;
+        return `Invalid value in ${issue3.origin}`;
       default:
         return `Invalid input`;
     }
@@ -5634,38 +5634,38 @@ var error11 = () => {
     array: "tabelo",
     null: "senvalora"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Nevalida enigo: atendiĝis instanceof ${issue2.expected}, riceviĝis ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Nevalida enigo: atendiĝis instanceof ${issue3.expected}, riceviĝis ${received}`;
         }
         return `Nevalida enigo: atendiĝis ${expected}, riceviĝis ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Nevalida enigo: atendiĝis ${stringifyPrimitive(issue2.values[0])}`;
-        return `Nevalida opcio: atendiĝis unu el ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Nevalida enigo: atendiĝis ${stringifyPrimitive(issue3.values[0])}`;
+        return `Nevalida opcio: atendiĝis unu el ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Tro granda: atendiĝis ke ${issue2.origin ?? "valoro"} havu ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementojn"}`;
-        return `Tro granda: atendiĝis ke ${issue2.origin ?? "valoro"} havu ${adj}${issue2.maximum.toString()}`;
+          return `Tro granda: atendiĝis ke ${issue3.origin ?? "valoro"} havu ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementojn"}`;
+        return `Tro granda: atendiĝis ke ${issue3.origin ?? "valoro"} havu ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Tro malgranda: atendiĝis ke ${issue2.origin} havu ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Tro malgranda: atendiĝis ke ${issue3.origin} havu ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Tro malgranda: atendiĝis ke ${issue2.origin} estu ${adj}${issue2.minimum.toString()}`;
+        return `Tro malgranda: atendiĝis ke ${issue3.origin} estu ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Nevalida karaktraro: devas komenciĝi per "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -5674,18 +5674,18 @@ var error11 = () => {
           return `Nevalida karaktraro: devas inkluzivi "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Nevalida karaktraro: devas kongrui kun la modelo ${_issue.pattern}`;
-        return `Nevalida ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Nevalida ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Nevalida nombro: devas esti oblo de ${issue2.divisor}`;
+        return `Nevalida nombro: devas esti oblo de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Nekonata${issue2.keys.length > 1 ? "j" : ""} ŝlosilo${issue2.keys.length > 1 ? "j" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Nekonata${issue3.keys.length > 1 ? "j" : ""} ŝlosilo${issue3.keys.length > 1 ? "j" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Nevalida ŝlosilo en ${issue2.origin}`;
+        return `Nevalida ŝlosilo en ${issue3.origin}`;
       case "invalid_union":
         return "Nevalida enigo";
       case "invalid_element":
-        return `Nevalida valoro en ${issue2.origin}`;
+        return `Nevalida valoro en ${issue3.origin}`;
       default:
         return `Nevalida enigo`;
     }
@@ -5765,40 +5765,40 @@ var error12 = () => {
     unknown: "desconocido",
     any: "cualquiera"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Entrada inválida: se esperaba instanceof ${issue2.expected}, recibido ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Entrada inválida: se esperaba instanceof ${issue3.expected}, recibido ${received}`;
         }
         return `Entrada inválida: se esperaba ${expected}, recibido ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Entrada inválida: se esperaba ${stringifyPrimitive(issue2.values[0])}`;
-        return `Opción inválida: se esperaba una de ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Entrada inválida: se esperaba ${stringifyPrimitive(issue3.values[0])}`;
+        return `Opción inválida: se esperaba una de ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing)
-          return `Demasiado grande: se esperaba que ${origin ?? "valor"} tuviera ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementos"}`;
-        return `Demasiado grande: se esperaba que ${origin ?? "valor"} fuera ${adj}${issue2.maximum.toString()}`;
+          return `Demasiado grande: se esperaba que ${origin ?? "valor"} tuviera ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementos"}`;
+        return `Demasiado grande: se esperaba que ${origin ?? "valor"} fuera ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing) {
-          return `Demasiado pequeño: se esperaba que ${origin} tuviera ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Demasiado pequeño: se esperaba que ${origin} tuviera ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Demasiado pequeño: se esperaba que ${origin} fuera ${adj}${issue2.minimum.toString()}`;
+        return `Demasiado pequeño: se esperaba que ${origin} fuera ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Cadena inválida: debe comenzar con "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -5807,18 +5807,18 @@ var error12 = () => {
           return `Cadena inválida: debe incluir "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Cadena inválida: debe coincidir con el patrón ${_issue.pattern}`;
-        return `Inválido ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Inválido ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Número inválido: debe ser múltiplo de ${issue2.divisor}`;
+        return `Número inválido: debe ser múltiplo de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Llave${issue2.keys.length > 1 ? "s" : ""} desconocida${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Llave${issue3.keys.length > 1 ? "s" : ""} desconocida${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Llave inválida en ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+        return `Llave inválida en ${TypeDictionary[issue3.origin] ?? issue3.origin}`;
       case "invalid_union":
         return "Entrada inválida";
       case "invalid_element":
-        return `Valor inválido en ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+        return `Valor inválido en ${TypeDictionary[issue3.origin] ?? issue3.origin}`;
       default:
         return `Entrada inválida`;
     }
@@ -5876,40 +5876,40 @@ var error13 = () => {
     number: "عدد",
     array: "آرایه"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `ورودی نامعتبر: می‌بایست instanceof ${issue2.expected} می‌بود، ${received} دریافت شد`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `ورودی نامعتبر: می‌بایست instanceof ${issue3.expected} می‌بود، ${received} دریافت شد`;
         }
         return `ورودی نامعتبر: می‌بایست ${expected} می‌بود، ${received} دریافت شد`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1) {
-          return `ورودی نامعتبر: می‌بایست ${stringifyPrimitive(issue2.values[0])} می‌بود`;
+        if (issue3.values.length === 1) {
+          return `ورودی نامعتبر: می‌بایست ${stringifyPrimitive(issue3.values[0])} می‌بود`;
         }
-        return `گزینه نامعتبر: می‌بایست یکی از ${joinValues(issue2.values, "|")} می‌بود`;
+        return `گزینه نامعتبر: می‌بایست یکی از ${joinValues(issue3.values, "|")} می‌بود`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `خیلی بزرگ: ${issue2.origin ?? "مقدار"} باید ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "عنصر"} باشد`;
+          return `خیلی بزرگ: ${issue3.origin ?? "مقدار"} باید ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "عنصر"} باشد`;
         }
-        return `خیلی بزرگ: ${issue2.origin ?? "مقدار"} باید ${adj}${issue2.maximum.toString()} باشد`;
+        return `خیلی بزرگ: ${issue3.origin ?? "مقدار"} باید ${adj}${issue3.maximum.toString()} باشد`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `خیلی کوچک: ${issue2.origin} باید ${adj}${issue2.minimum.toString()} ${sizing.unit} باشد`;
+          return `خیلی کوچک: ${issue3.origin} باید ${adj}${issue3.minimum.toString()} ${sizing.unit} باشد`;
         }
-        return `خیلی کوچک: ${issue2.origin} باید ${adj}${issue2.minimum.toString()} باشد`;
+        return `خیلی کوچک: ${issue3.origin} باید ${adj}${issue3.minimum.toString()} باشد`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `رشته نامعتبر: باید با "${_issue.prefix}" شروع شود`;
         }
@@ -5922,18 +5922,18 @@ var error13 = () => {
         if (_issue.format === "regex") {
           return `رشته نامعتبر: باید با الگوی ${_issue.pattern} مطابقت داشته باشد`;
         }
-        return `${FormatDictionary[_issue.format] ?? issue2.format} نامعتبر`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} نامعتبر`;
       }
       case "not_multiple_of":
-        return `عدد نامعتبر: باید مضرب ${issue2.divisor} باشد`;
+        return `عدد نامعتبر: باید مضرب ${issue3.divisor} باشد`;
       case "unrecognized_keys":
-        return `کلید${issue2.keys.length > 1 ? "های" : ""} ناشناس: ${joinValues(issue2.keys, ", ")}`;
+        return `کلید${issue3.keys.length > 1 ? "های" : ""} ناشناس: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `کلید ناشناس در ${issue2.origin}`;
+        return `کلید ناشناس در ${issue3.origin}`;
       case "invalid_union":
         return `ورودی نامعتبر`;
       case "invalid_element":
-        return `مقدار نامعتبر در ${issue2.origin}`;
+        return `مقدار نامعتبر در ${issue3.origin}`;
       default:
         return `ورودی نامعتبر`;
     }
@@ -5993,39 +5993,39 @@ var error14 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Virheellinen tyyppi: odotettiin instanceof ${issue2.expected}, oli ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Virheellinen tyyppi: odotettiin instanceof ${issue3.expected}, oli ${received}`;
         }
         return `Virheellinen tyyppi: odotettiin ${expected}, oli ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Virheellinen syöte: täytyy olla ${stringifyPrimitive(issue2.values[0])}`;
-        return `Virheellinen valinta: täytyy olla yksi seuraavista: ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Virheellinen syöte: täytyy olla ${stringifyPrimitive(issue3.values[0])}`;
+        return `Virheellinen valinta: täytyy olla yksi seuraavista: ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Liian suuri: ${sizing.subject} täytyy olla ${adj}${issue2.maximum.toString()} ${sizing.unit}`.trim();
+          return `Liian suuri: ${sizing.subject} täytyy olla ${adj}${issue3.maximum.toString()} ${sizing.unit}`.trim();
         }
-        return `Liian suuri: arvon täytyy olla ${adj}${issue2.maximum.toString()}`;
+        return `Liian suuri: arvon täytyy olla ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Liian pieni: ${sizing.subject} täytyy olla ${adj}${issue2.minimum.toString()} ${sizing.unit}`.trim();
+          return `Liian pieni: ${sizing.subject} täytyy olla ${adj}${issue3.minimum.toString()} ${sizing.unit}`.trim();
         }
-        return `Liian pieni: arvon täytyy olla ${adj}${issue2.minimum.toString()}`;
+        return `Liian pieni: arvon täytyy olla ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Virheellinen syöte: täytyy alkaa "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -6035,12 +6035,12 @@ var error14 = () => {
         if (_issue.format === "regex") {
           return `Virheellinen syöte: täytyy vastata säännöllistä lauseketta ${_issue.pattern}`;
         }
-        return `Virheellinen ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Virheellinen ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Virheellinen luku: täytyy olla luvun ${issue2.divisor} monikerta`;
+        return `Virheellinen luku: täytyy olla luvun ${issue3.divisor} monikerta`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Tuntemattomat avaimet" : "Tuntematon avain"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Tuntemattomat avaimet" : "Tuntematon avain"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
         return "Virheellinen avain tietueessa";
       case "invalid_union":
@@ -6122,37 +6122,37 @@ var error15 = () => {
     nan: "NaN",
     function: "fonction"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Entrée invalide : instanceof ${issue2.expected} attendu, ${received} reçu`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Entrée invalide : instanceof ${issue3.expected} attendu, ${received} reçu`;
         }
         return `Entrée invalide : ${expected} attendu, ${received} reçu`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Entrée invalide : ${stringifyPrimitive(issue2.values[0])} attendu`;
-        return `Option invalide : une valeur parmi ${joinValues(issue2.values, "|")} attendue`;
+        if (issue3.values.length === 1)
+          return `Entrée invalide : ${stringifyPrimitive(issue3.values[0])} attendu`;
+        return `Option invalide : une valeur parmi ${joinValues(issue3.values, "|")} attendue`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Trop grand : ${TypeDictionary[issue2.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "élément(s)"}`;
-        return `Trop grand : ${TypeDictionary[issue2.origin] ?? "valeur"} doit être ${adj}${issue2.maximum.toString()}`;
+          return `Trop grand : ${TypeDictionary[issue3.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "élément(s)"}`;
+        return `Trop grand : ${TypeDictionary[issue3.origin] ?? "valeur"} doit être ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Trop petit : ${TypeDictionary[issue2.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
-        return `Trop petit : ${TypeDictionary[issue2.origin] ?? "valeur"} doit être ${adj}${issue2.minimum.toString()}`;
+          return `Trop petit : ${TypeDictionary[issue3.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
+        return `Trop petit : ${TypeDictionary[issue3.origin] ?? "valeur"} doit être ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Chaîne invalide : doit commencer par "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -6161,18 +6161,18 @@ var error15 = () => {
           return `Chaîne invalide : doit inclure "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Chaîne invalide : doit correspondre au modèle ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} invalide`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} invalide`;
       }
       case "not_multiple_of":
-        return `Nombre invalide : doit être un multiple de ${issue2.divisor}`;
+        return `Nombre invalide : doit être un multiple de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Clé${issue2.keys.length > 1 ? "s" : ""} non reconnue${issue2.keys.length > 1 ? "s" : ""} : ${joinValues(issue2.keys, ", ")}`;
+        return `Clé${issue3.keys.length > 1 ? "s" : ""} non reconnue${issue3.keys.length > 1 ? "s" : ""} : ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Clé invalide dans ${issue2.origin}`;
+        return `Clé invalide dans ${issue3.origin}`;
       case "invalid_union":
         return "Entrée invalide";
       case "invalid_element":
-        return `Valeur invalide dans ${issue2.origin}`;
+        return `Valeur invalide dans ${issue3.origin}`;
       default:
         return `Entrée invalide`;
     }
@@ -6228,38 +6228,38 @@ var error16 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Entrée invalide : attendu instanceof ${issue2.expected}, reçu ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Entrée invalide : attendu instanceof ${issue3.expected}, reçu ${received}`;
         }
         return `Entrée invalide : attendu ${expected}, reçu ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Entrée invalide : attendu ${stringifyPrimitive(issue2.values[0])}`;
-        return `Option invalide : attendu l'une des valeurs suivantes ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Entrée invalide : attendu ${stringifyPrimitive(issue3.values[0])}`;
+        return `Option invalide : attendu l'une des valeurs suivantes ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "≤" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "≤" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Trop grand : attendu que ${issue2.origin ?? "la valeur"} ait ${adj}${issue2.maximum.toString()} ${sizing.unit}`;
-        return `Trop grand : attendu que ${issue2.origin ?? "la valeur"} soit ${adj}${issue2.maximum.toString()}`;
+          return `Trop grand : attendu que ${issue3.origin ?? "la valeur"} ait ${adj}${issue3.maximum.toString()} ${sizing.unit}`;
+        return `Trop grand : attendu que ${issue3.origin ?? "la valeur"} soit ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? "≥" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "≥" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Trop petit : attendu que ${issue2.origin} ait ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Trop petit : attendu que ${issue3.origin} ait ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Trop petit : attendu que ${issue2.origin} soit ${adj}${issue2.minimum.toString()}`;
+        return `Trop petit : attendu que ${issue3.origin} soit ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Chaîne invalide : doit commencer par "${_issue.prefix}"`;
         }
@@ -6269,18 +6269,18 @@ var error16 = () => {
           return `Chaîne invalide : doit inclure "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Chaîne invalide : doit correspondre au motif ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} invalide`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} invalide`;
       }
       case "not_multiple_of":
-        return `Nombre invalide : doit être un multiple de ${issue2.divisor}`;
+        return `Nombre invalide : doit être un multiple de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Clé${issue2.keys.length > 1 ? "s" : ""} non reconnue${issue2.keys.length > 1 ? "s" : ""} : ${joinValues(issue2.keys, ", ")}`;
+        return `Clé${issue3.keys.length > 1 ? "s" : ""} non reconnue${issue3.keys.length > 1 ? "s" : ""} : ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Clé invalide dans ${issue2.origin}`;
+        return `Clé invalide dans ${issue3.origin}`;
       case "invalid_union":
         return "Entrée invalide";
       case "invalid_element":
-        return `Valeur invalide dans ${issue2.origin}`;
+        return `Valeur invalide dans ${issue3.origin}`;
       default:
         return `Entrée invalide`;
     }
@@ -6375,24 +6375,24 @@ var error17 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expectedKey = issue2.expected;
+        const expectedKey = issue3.expected;
         const expected = TypeDictionary[expectedKey ?? ""] ?? typeLabel(expectedKey);
-        const receivedType = parsedType(issue2.input);
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? TypeNames[receivedType]?.label ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `קלט לא תקין: צריך להיות instanceof ${issue2.expected}, התקבל ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `קלט לא תקין: צריך להיות instanceof ${issue3.expected}, התקבל ${received}`;
         }
         return `קלט לא תקין: צריך להיות ${expected}, התקבל ${received}`;
       }
       case "invalid_value": {
-        if (issue2.values.length === 1) {
-          return `ערך לא תקין: הערך חייב להיות ${stringifyPrimitive(issue2.values[0])}`;
+        if (issue3.values.length === 1) {
+          return `ערך לא תקין: הערך חייב להיות ${stringifyPrimitive(issue3.values[0])}`;
         }
-        const stringified = issue2.values.map((v) => stringifyPrimitive(v));
-        if (issue2.values.length === 2) {
+        const stringified = issue3.values.map((v) => stringifyPrimitive(v));
+        if (issue3.values.length === 2) {
           return `ערך לא תקין: האפשרויות המתאימות הן ${stringified[0]} או ${stringified[1]}`;
         }
         const lastValue = stringified[stringified.length - 1];
@@ -6400,55 +6400,55 @@ var error17 = () => {
         return `ערך לא תקין: האפשרויות המתאימות הן ${restValues} או ${lastValue}`;
       }
       case "too_big": {
-        const sizing = getSizing(issue2.origin);
-        const subject = withDefinite(issue2.origin ?? "value");
-        if (issue2.origin === "string") {
-          return `${sizing?.longLabel ?? "ארוך"} מדי: ${subject} צריכה להכיל ${issue2.maximum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או פחות" : "לכל היותר"}`.trim();
+        const sizing = getSizing(issue3.origin);
+        const subject = withDefinite(issue3.origin ?? "value");
+        if (issue3.origin === "string") {
+          return `${sizing?.longLabel ?? "ארוך"} מדי: ${subject} צריכה להכיל ${issue3.maximum.toString()} ${sizing?.unit ?? ""} ${issue3.inclusive ? "או פחות" : "לכל היותר"}`.trim();
         }
-        if (issue2.origin === "number") {
-          const comparison = issue2.inclusive ? `קטן או שווה ל-${issue2.maximum}` : `קטן מ-${issue2.maximum}`;
+        if (issue3.origin === "number") {
+          const comparison = issue3.inclusive ? `קטן או שווה ל-${issue3.maximum}` : `קטן מ-${issue3.maximum}`;
           return `גדול מדי: ${subject} צריך להיות ${comparison}`;
         }
-        if (issue2.origin === "array" || issue2.origin === "set") {
-          const verb = issue2.origin === "set" ? "צריכה" : "צריך";
-          const comparison = issue2.inclusive ? `${issue2.maximum} ${sizing?.unit ?? ""} או פחות` : `פחות מ-${issue2.maximum} ${sizing?.unit ?? ""}`;
+        if (issue3.origin === "array" || issue3.origin === "set") {
+          const verb = issue3.origin === "set" ? "צריכה" : "צריך";
+          const comparison = issue3.inclusive ? `${issue3.maximum} ${sizing?.unit ?? ""} או פחות` : `פחות מ-${issue3.maximum} ${sizing?.unit ?? ""}`;
           return `גדול מדי: ${subject} ${verb} להכיל ${comparison}`.trim();
         }
-        const adj = issue2.inclusive ? "<=" : "<";
-        const be = verbFor(issue2.origin ?? "value");
+        const adj = issue3.inclusive ? "<=" : "<";
+        const be = verbFor(issue3.origin ?? "value");
         if (sizing?.unit) {
-          return `${sizing.longLabel} מדי: ${subject} ${be} ${adj}${issue2.maximum.toString()} ${sizing.unit}`;
+          return `${sizing.longLabel} מדי: ${subject} ${be} ${adj}${issue3.maximum.toString()} ${sizing.unit}`;
         }
-        return `${sizing?.longLabel ?? "גדול"} מדי: ${subject} ${be} ${adj}${issue2.maximum.toString()}`;
+        return `${sizing?.longLabel ?? "גדול"} מדי: ${subject} ${be} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const sizing = getSizing(issue2.origin);
-        const subject = withDefinite(issue2.origin ?? "value");
-        if (issue2.origin === "string") {
-          return `${sizing?.shortLabel ?? "קצר"} מדי: ${subject} צריכה להכיל ${issue2.minimum.toString()} ${sizing?.unit ?? ""} ${issue2.inclusive ? "או יותר" : "לפחות"}`.trim();
+        const sizing = getSizing(issue3.origin);
+        const subject = withDefinite(issue3.origin ?? "value");
+        if (issue3.origin === "string") {
+          return `${sizing?.shortLabel ?? "קצר"} מדי: ${subject} צריכה להכיל ${issue3.minimum.toString()} ${sizing?.unit ?? ""} ${issue3.inclusive ? "או יותר" : "לפחות"}`.trim();
         }
-        if (issue2.origin === "number") {
-          const comparison = issue2.inclusive ? `גדול או שווה ל-${issue2.minimum}` : `גדול מ-${issue2.minimum}`;
+        if (issue3.origin === "number") {
+          const comparison = issue3.inclusive ? `גדול או שווה ל-${issue3.minimum}` : `גדול מ-${issue3.minimum}`;
           return `קטן מדי: ${subject} צריך להיות ${comparison}`;
         }
-        if (issue2.origin === "array" || issue2.origin === "set") {
-          const verb = issue2.origin === "set" ? "צריכה" : "צריך";
-          if (issue2.minimum === 1 && issue2.inclusive) {
-            const singularPhrase = issue2.origin === "set" ? "לפחות פריט אחד" : "לפחות פריט אחד";
+        if (issue3.origin === "array" || issue3.origin === "set") {
+          const verb = issue3.origin === "set" ? "צריכה" : "צריך";
+          if (issue3.minimum === 1 && issue3.inclusive) {
+            const singularPhrase = issue3.origin === "set" ? "לפחות פריט אחד" : "לפחות פריט אחד";
             return `קטן מדי: ${subject} ${verb} להכיל ${singularPhrase}`;
           }
-          const comparison = issue2.inclusive ? `${issue2.minimum} ${sizing?.unit ?? ""} או יותר` : `יותר מ-${issue2.minimum} ${sizing?.unit ?? ""}`;
+          const comparison = issue3.inclusive ? `${issue3.minimum} ${sizing?.unit ?? ""} או יותר` : `יותר מ-${issue3.minimum} ${sizing?.unit ?? ""}`;
           return `קטן מדי: ${subject} ${verb} להכיל ${comparison}`.trim();
         }
-        const adj = issue2.inclusive ? ">=" : ">";
-        const be = verbFor(issue2.origin ?? "value");
+        const adj = issue3.inclusive ? ">=" : ">";
+        const be = verbFor(issue3.origin ?? "value");
         if (sizing?.unit) {
-          return `${sizing.shortLabel} מדי: ${subject} ${be} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `${sizing.shortLabel} מדי: ${subject} ${be} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `${sizing?.shortLabel ?? "קטן"} מדי: ${subject} ${be} ${adj}${issue2.minimum.toString()}`;
+        return `${sizing?.shortLabel ?? "קטן"} מדי: ${subject} ${be} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `המחרוזת חייבת להתחיל ב "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -6464,16 +6464,16 @@ var error17 = () => {
         return `${noun} לא ${adjective}`;
       }
       case "not_multiple_of":
-        return `מספר לא תקין: חייב להיות מכפלה של ${issue2.divisor}`;
+        return `מספר לא תקין: חייב להיות מכפלה של ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `מפתח${issue2.keys.length > 1 ? "ות" : ""} לא מזוה${issue2.keys.length > 1 ? "ים" : "ה"}: ${joinValues(issue2.keys, ", ")}`;
+        return `מפתח${issue3.keys.length > 1 ? "ות" : ""} לא מזוה${issue3.keys.length > 1 ? "ים" : "ה"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key": {
         return `שדה לא תקין באובייקט`;
       }
       case "invalid_union":
         return "קלט לא תקין";
       case "invalid_element": {
-        const place = withDefinite(issue2.origin ?? "array");
+        const place = withDefinite(issue3.origin ?? "array");
         return `ערך לא תקין ב${place}`;
       }
       default:
@@ -6545,40 +6545,40 @@ var error18 = () => {
     function: "funkcija",
     map: "mapa"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Neispravan unos: očekuje se instanceof ${issue2.expected}, a primljeno je ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Neispravan unos: očekuje se instanceof ${issue3.expected}, a primljeno je ${received}`;
         }
         return `Neispravan unos: očekuje se ${expected}, a primljeno je ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Neispravna vrijednost: očekivano ${stringifyPrimitive(issue2.values[0])}`;
-        return `Neispravna opcija: očekivano jedno od ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Neispravna vrijednost: očekivano ${stringifyPrimitive(issue3.values[0])}`;
+        return `Neispravna opcija: očekivano jedno od ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing)
-          return `Preveliko: očekivano da ${origin ?? "vrijednost"} ima ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemenata"}`;
-        return `Preveliko: očekivano da ${origin ?? "vrijednost"} bude ${adj}${issue2.maximum.toString()}`;
+          return `Preveliko: očekivano da ${origin ?? "vrijednost"} ima ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elemenata"}`;
+        return `Preveliko: očekivano da ${origin ?? "vrijednost"} bude ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
         if (sizing) {
-          return `Premalo: očekivano da ${origin} ima ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Premalo: očekivano da ${origin} ima ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Premalo: očekivano da ${origin} bude ${adj}${issue2.minimum.toString()}`;
+        return `Premalo: očekivano da ${origin} bude ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Neispravan tekst: mora započinjati s "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -6587,18 +6587,18 @@ var error18 = () => {
           return `Neispravan tekst: mora sadržavati "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Neispravan tekst: mora odgovarati uzorku ${_issue.pattern}`;
-        return `Neispravna ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Neispravna ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Neispravan broj: mora biti višekratnik od ${issue2.divisor}`;
+        return `Neispravan broj: mora biti višekratnik od ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Neprepoznat${issue2.keys.length > 1 ? "i ključevi" : " ključ"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Neprepoznat${issue3.keys.length > 1 ? "i ključevi" : " ključ"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Neispravan ključ u ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+        return `Neispravan ključ u ${TypeDictionary[issue3.origin] ?? issue3.origin}`;
       case "invalid_union":
         return "Neispravan unos";
       case "invalid_element":
-        return `Neispravna vrijednost u ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+        return `Neispravna vrijednost u ${TypeDictionary[issue3.origin] ?? issue3.origin}`;
       default:
         return `Neispravan unos`;
     }
@@ -6656,38 +6656,38 @@ var error19 = () => {
     number: "szám",
     array: "tömb"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Érvénytelen bemenet: a várt érték instanceof ${issue2.expected}, a kapott érték ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Érvénytelen bemenet: a várt érték instanceof ${issue3.expected}, a kapott érték ${received}`;
         }
         return `Érvénytelen bemenet: a várt érték ${expected}, a kapott érték ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Érvénytelen bemenet: a várt érték ${stringifyPrimitive(issue2.values[0])}`;
-        return `Érvénytelen opció: valamelyik érték várt ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Érvénytelen bemenet: a várt érték ${stringifyPrimitive(issue3.values[0])}`;
+        return `Érvénytelen opció: valamelyik érték várt ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Túl nagy: ${issue2.origin ?? "érték"} mérete túl nagy ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elem"}`;
-        return `Túl nagy: a bemeneti érték ${issue2.origin ?? "érték"} túl nagy: ${adj}${issue2.maximum.toString()}`;
+          return `Túl nagy: ${issue3.origin ?? "érték"} mérete túl nagy ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elem"}`;
+        return `Túl nagy: a bemeneti érték ${issue3.origin ?? "érték"} túl nagy: ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Túl kicsi: a bemeneti érték ${issue2.origin} mérete túl kicsi ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Túl kicsi: a bemeneti érték ${issue3.origin} mérete túl kicsi ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Túl kicsi: a bemeneti érték ${issue2.origin} túl kicsi ${adj}${issue2.minimum.toString()}`;
+        return `Túl kicsi: a bemeneti érték ${issue3.origin} túl kicsi ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Érvénytelen string: "${_issue.prefix}" értékkel kell kezdődnie`;
         if (_issue.format === "ends_with")
@@ -6696,18 +6696,18 @@ var error19 = () => {
           return `Érvénytelen string: "${_issue.includes}" értéket kell tartalmaznia`;
         if (_issue.format === "regex")
           return `Érvénytelen string: ${_issue.pattern} mintának kell megfelelnie`;
-        return `Érvénytelen ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Érvénytelen ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Érvénytelen szám: ${issue2.divisor} többszörösének kell lennie`;
+        return `Érvénytelen szám: ${issue3.divisor} többszörösének kell lennie`;
       case "unrecognized_keys":
-        return `Ismeretlen kulcs${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Ismeretlen kulcs${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Érvénytelen kulcs ${issue2.origin}`;
+        return `Érvénytelen kulcs ${issue3.origin}`;
       case "invalid_union":
         return "Érvénytelen bemenet";
       case "invalid_element":
-        return `Érvénytelen érték: ${issue2.origin}`;
+        return `Érvénytelen érték: ${issue3.origin}`;
       default:
         return `Érvénytelen bemenet`;
     }
@@ -6799,43 +6799,43 @@ var error20 = () => {
     number: "թիվ",
     array: "զանգված"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Սխալ մուտքագրում․ սպասվում էր instanceof ${issue2.expected}, ստացվել է ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Սխալ մուտքագրում․ սպասվում էր instanceof ${issue3.expected}, ստացվել է ${received}`;
         }
         return `Սխալ մուտքագրում․ սպասվում էր ${expected}, ստացվել է ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Սխալ մուտքագրում․ սպասվում էր ${stringifyPrimitive(issue2.values[1])}`;
-        return `Սխալ տարբերակ․ սպասվում էր հետևյալներից մեկը՝ ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Սխալ մուտքագրում․ սպասվում էր ${stringifyPrimitive(issue3.values[1])}`;
+        return `Սխալ տարբերակ․ սպասվում էր հետևյալներից մեկը՝ ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const maxValue = Number(issue2.maximum);
+          const maxValue = Number(issue3.maximum);
           const unit2 = getArmenianPlural(maxValue, sizing.unit.one, sizing.unit.many);
-          return `Չափազանց մեծ արժեք․ սպասվում է, որ ${withDefiniteArticle(issue2.origin ?? "արժեք")} կունենա ${adj}${issue2.maximum.toString()} ${unit2}`;
+          return `Չափազանց մեծ արժեք․ սպասվում է, որ ${withDefiniteArticle(issue3.origin ?? "արժեք")} կունենա ${adj}${issue3.maximum.toString()} ${unit2}`;
         }
-        return `Չափազանց մեծ արժեք․ սպասվում է, որ ${withDefiniteArticle(issue2.origin ?? "արժեք")} լինի ${adj}${issue2.maximum.toString()}`;
+        return `Չափազանց մեծ արժեք․ սպասվում է, որ ${withDefiniteArticle(issue3.origin ?? "արժեք")} լինի ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const minValue = Number(issue2.minimum);
+          const minValue = Number(issue3.minimum);
           const unit2 = getArmenianPlural(minValue, sizing.unit.one, sizing.unit.many);
-          return `Չափազանց փոքր արժեք․ սպասվում է, որ ${withDefiniteArticle(issue2.origin)} կունենա ${adj}${issue2.minimum.toString()} ${unit2}`;
+          return `Չափազանց փոքր արժեք․ սպասվում է, որ ${withDefiniteArticle(issue3.origin)} կունենա ${adj}${issue3.minimum.toString()} ${unit2}`;
         }
-        return `Չափազանց փոքր արժեք․ սպասվում է, որ ${withDefiniteArticle(issue2.origin)} լինի ${adj}${issue2.minimum.toString()}`;
+        return `Չափազանց փոքր արժեք․ սպասվում է, որ ${withDefiniteArticle(issue3.origin)} լինի ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Սխալ տող․ պետք է սկսվի "${_issue.prefix}"-ով`;
         if (_issue.format === "ends_with")
@@ -6844,18 +6844,18 @@ var error20 = () => {
           return `Սխալ տող․ պետք է պարունակի "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Սխալ տող․ պետք է համապատասխանի ${_issue.pattern} ձևաչափին`;
-        return `Սխալ ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Սխալ ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Սխալ թիվ․ պետք է բազմապատիկ լինի ${issue2.divisor}-ի`;
+        return `Սխալ թիվ․ պետք է բազմապատիկ լինի ${issue3.divisor}-ի`;
       case "unrecognized_keys":
-        return `Չճանաչված բանալի${issue2.keys.length > 1 ? "ներ" : ""}. ${joinValues(issue2.keys, ", ")}`;
+        return `Չճանաչված բանալի${issue3.keys.length > 1 ? "ներ" : ""}. ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Սխալ բանալի ${withDefiniteArticle(issue2.origin)}-ում`;
+        return `Սխալ բանալի ${withDefiniteArticle(issue3.origin)}-ում`;
       case "invalid_union":
         return "Սխալ մուտքագրում";
       case "invalid_element":
-        return `Սխալ արժեք ${withDefiniteArticle(issue2.origin)}-ում`;
+        return `Սխալ արժեք ${withDefiniteArticle(issue3.origin)}-ում`;
       default:
         return `Սխալ մուտքագրում`;
     }
@@ -6911,38 +6911,38 @@ var error21 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Input tidak valid: diharapkan instanceof ${issue2.expected}, diterima ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Input tidak valid: diharapkan instanceof ${issue3.expected}, diterima ${received}`;
         }
         return `Input tidak valid: diharapkan ${expected}, diterima ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Input tidak valid: diharapkan ${stringifyPrimitive(issue2.values[0])}`;
-        return `Pilihan tidak valid: diharapkan salah satu dari ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Input tidak valid: diharapkan ${stringifyPrimitive(issue3.values[0])}`;
+        return `Pilihan tidak valid: diharapkan salah satu dari ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Terlalu besar: diharapkan ${issue2.origin ?? "value"} memiliki ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemen"}`;
-        return `Terlalu besar: diharapkan ${issue2.origin ?? "value"} menjadi ${adj}${issue2.maximum.toString()}`;
+          return `Terlalu besar: diharapkan ${issue3.origin ?? "value"} memiliki ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elemen"}`;
+        return `Terlalu besar: diharapkan ${issue3.origin ?? "value"} menjadi ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Terlalu kecil: diharapkan ${issue2.origin} memiliki ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Terlalu kecil: diharapkan ${issue3.origin} memiliki ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Terlalu kecil: diharapkan ${issue2.origin} menjadi ${adj}${issue2.minimum.toString()}`;
+        return `Terlalu kecil: diharapkan ${issue3.origin} menjadi ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `String tidak valid: harus dimulai dengan "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -6951,18 +6951,18 @@ var error21 = () => {
           return `String tidak valid: harus menyertakan "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `String tidak valid: harus sesuai pola ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} tidak valid`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} tidak valid`;
       }
       case "not_multiple_of":
-        return `Angka tidak valid: harus kelipatan dari ${issue2.divisor}`;
+        return `Angka tidak valid: harus kelipatan dari ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Kunci tidak dikenali ${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Kunci tidak dikenali ${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Kunci tidak valid di ${issue2.origin}`;
+        return `Kunci tidak valid di ${issue3.origin}`;
       case "invalid_union":
         return "Input tidak valid";
       case "invalid_element":
-        return `Nilai tidak valid di ${issue2.origin}`;
+        return `Nilai tidak valid di ${issue3.origin}`;
       default:
         return `Input tidak valid`;
     }
@@ -7020,38 +7020,38 @@ var error22 = () => {
     number: "númer",
     array: "fylki"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Rangt gildi: Þú slóst inn ${received} þar sem á að vera instanceof ${issue2.expected}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Rangt gildi: Þú slóst inn ${received} þar sem á að vera instanceof ${issue3.expected}`;
         }
         return `Rangt gildi: Þú slóst inn ${received} þar sem á að vera ${expected}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Rangt gildi: gert ráð fyrir ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ógilt val: má vera eitt af eftirfarandi ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Rangt gildi: gert ráð fyrir ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ógilt val: má vera eitt af eftirfarandi ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Of stórt: gert er ráð fyrir að ${issue2.origin ?? "gildi"} hafi ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "hluti"}`;
-        return `Of stórt: gert er ráð fyrir að ${issue2.origin ?? "gildi"} sé ${adj}${issue2.maximum.toString()}`;
+          return `Of stórt: gert er ráð fyrir að ${issue3.origin ?? "gildi"} hafi ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "hluti"}`;
+        return `Of stórt: gert er ráð fyrir að ${issue3.origin ?? "gildi"} sé ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Of lítið: gert er ráð fyrir að ${issue2.origin} hafi ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Of lítið: gert er ráð fyrir að ${issue3.origin} hafi ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Of lítið: gert er ráð fyrir að ${issue2.origin} sé ${adj}${issue2.minimum.toString()}`;
+        return `Of lítið: gert er ráð fyrir að ${issue3.origin} sé ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Ógildur strengur: verður að byrja á "${_issue.prefix}"`;
         }
@@ -7061,18 +7061,18 @@ var error22 = () => {
           return `Ógildur strengur: verður að innihalda "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Ógildur strengur: verður að fylgja mynstri ${_issue.pattern}`;
-        return `Rangt ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Rangt ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Röng tala: verður að vera margfeldi af ${issue2.divisor}`;
+        return `Röng tala: verður að vera margfeldi af ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Óþekkt ${issue2.keys.length > 1 ? "ir lyklar" : "ur lykill"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Óþekkt ${issue3.keys.length > 1 ? "ir lyklar" : "ur lykill"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Rangur lykill í ${issue2.origin}`;
+        return `Rangur lykill í ${issue3.origin}`;
       case "invalid_union":
         return "Rangt gildi";
       case "invalid_element":
-        return `Rangt gildi í ${issue2.origin}`;
+        return `Rangt gildi í ${issue3.origin}`;
       default:
         return `Rangt gildi`;
     }
@@ -7130,38 +7130,38 @@ var error23 = () => {
     number: "numero",
     array: "vettore"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Input non valido: atteso instanceof ${issue2.expected}, ricevuto ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Input non valido: atteso instanceof ${issue3.expected}, ricevuto ${received}`;
         }
         return `Input non valido: atteso ${expected}, ricevuto ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Input non valido: atteso ${stringifyPrimitive(issue2.values[0])}`;
-        return `Opzione non valida: atteso uno tra ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Input non valido: atteso ${stringifyPrimitive(issue3.values[0])}`;
+        return `Opzione non valida: atteso uno tra ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Troppo grande: ${issue2.origin ?? "valore"} deve avere ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementi"}`;
-        return `Troppo grande: ${issue2.origin ?? "valore"} deve essere ${adj}${issue2.maximum.toString()}`;
+          return `Troppo grande: ${issue3.origin ?? "valore"} deve avere ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementi"}`;
+        return `Troppo grande: ${issue3.origin ?? "valore"} deve essere ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Troppo piccolo: ${issue2.origin} deve avere ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Troppo piccolo: ${issue3.origin} deve avere ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Troppo piccolo: ${issue2.origin} deve essere ${adj}${issue2.minimum.toString()}`;
+        return `Troppo piccolo: ${issue3.origin} deve essere ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Stringa non valida: deve iniziare con "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -7170,18 +7170,18 @@ var error23 = () => {
           return `Stringa non valida: deve includere "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Stringa non valida: deve corrispondere al pattern ${_issue.pattern}`;
-        return `Input non valido: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Input non valido: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Numero non valido: deve essere un multiplo di ${issue2.divisor}`;
+        return `Numero non valido: deve essere un multiplo di ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Chiav${issue2.keys.length > 1 ? "i" : "e"} non riconosciut${issue2.keys.length > 1 ? "e" : "a"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Chiav${issue3.keys.length > 1 ? "i" : "e"} non riconosciut${issue3.keys.length > 1 ? "e" : "a"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Chiave non valida in ${issue2.origin}`;
+        return `Chiave non valida in ${issue3.origin}`;
       case "invalid_union":
         return "Input non valido";
       case "invalid_element":
-        return `Valore non valido in ${issue2.origin}`;
+        return `Valore non valido in ${issue3.origin}`;
       default:
         return `Input non valido`;
     }
@@ -7239,37 +7239,37 @@ var error24 = () => {
     number: "数値",
     array: "配列"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `無効な入力: instanceof ${issue2.expected}が期待されましたが、${received}が入力されました`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `無効な入力: instanceof ${issue3.expected}が期待されましたが、${received}が入力されました`;
         }
         return `無効な入力: ${expected}が期待されましたが、${received}が入力されました`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `無効な入力: ${stringifyPrimitive(issue2.values[0])}が期待されました`;
-        return `無効な選択: ${joinValues(issue2.values, "、")}のいずれかである必要があります`;
+        if (issue3.values.length === 1)
+          return `無効な入力: ${stringifyPrimitive(issue3.values[0])}が期待されました`;
+        return `無効な選択: ${joinValues(issue3.values, "、")}のいずれかである必要があります`;
       case "too_big": {
-        const adj = issue2.inclusive ? "以下である" : "より小さい";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "以下である" : "より小さい";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `大きすぎる値: ${issue2.origin ?? "値"}は${issue2.maximum.toString()}${sizing.unit ?? "要素"}${adj}必要があります`;
-        return `大きすぎる値: ${issue2.origin ?? "値"}は${issue2.maximum.toString()}${adj}必要があります`;
+          return `大きすぎる値: ${issue3.origin ?? "値"}は${issue3.maximum.toString()}${sizing.unit ?? "要素"}${adj}必要があります`;
+        return `大きすぎる値: ${issue3.origin ?? "値"}は${issue3.maximum.toString()}${adj}必要があります`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? "以上である" : "より大きい";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "以上である" : "より大きい";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `小さすぎる値: ${issue2.origin}は${issue2.minimum.toString()}${sizing.unit}${adj}必要があります`;
-        return `小さすぎる値: ${issue2.origin}は${issue2.minimum.toString()}${adj}必要があります`;
+          return `小さすぎる値: ${issue3.origin}は${issue3.minimum.toString()}${sizing.unit}${adj}必要があります`;
+        return `小さすぎる値: ${issue3.origin}は${issue3.minimum.toString()}${adj}必要があります`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `無効な文字列: "${_issue.prefix}"で始まる必要があります`;
         if (_issue.format === "ends_with")
@@ -7278,18 +7278,18 @@ var error24 = () => {
           return `無効な文字列: "${_issue.includes}"を含む必要があります`;
         if (_issue.format === "regex")
           return `無効な文字列: パターン${_issue.pattern}に一致する必要があります`;
-        return `無効な${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `無効な${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `無効な数値: ${issue2.divisor}の倍数である必要があります`;
+        return `無効な数値: ${issue3.divisor}の倍数である必要があります`;
       case "unrecognized_keys":
-        return `認識されていないキー${issue2.keys.length > 1 ? "群" : ""}: ${joinValues(issue2.keys, "、")}`;
+        return `認識されていないキー${issue3.keys.length > 1 ? "群" : ""}: ${joinValues(issue3.keys, "、")}`;
       case "invalid_key":
-        return `${issue2.origin}内の無効なキー`;
+        return `${issue3.origin}内の無効なキー`;
       case "invalid_union":
         return "無効な入力";
       case "invalid_element":
-        return `${issue2.origin}内の無効な値`;
+        return `${issue3.origin}内の無効な値`;
       default:
         return `無効な入力`;
     }
@@ -7350,38 +7350,38 @@ var error25 = () => {
     function: "ფუნქცია",
     array: "მასივი"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `არასწორი შეყვანა: მოსალოდნელი instanceof ${issue2.expected}, მიღებული ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `არასწორი შეყვანა: მოსალოდნელი instanceof ${issue3.expected}, მიღებული ${received}`;
         }
         return `არასწორი შეყვანა: მოსალოდნელი ${expected}, მიღებული ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `არასწორი შეყვანა: მოსალოდნელი ${stringifyPrimitive(issue2.values[0])}`;
-        return `არასწორი ვარიანტი: მოსალოდნელია ერთ-ერთი ${joinValues(issue2.values, "|")}-დან`;
+        if (issue3.values.length === 1)
+          return `არასწორი შეყვანა: მოსალოდნელი ${stringifyPrimitive(issue3.values[0])}`;
+        return `არასწორი ვარიანტი: მოსალოდნელია ერთ-ერთი ${joinValues(issue3.values, "|")}-დან`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `ზედმეტად დიდი: მოსალოდნელი ${issue2.origin ?? "მნიშვნელობა"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit}`;
-        return `ზედმეტად დიდი: მოსალოდნელი ${issue2.origin ?? "მნიშვნელობა"} იყოს ${adj}${issue2.maximum.toString()}`;
+          return `ზედმეტად დიდი: მოსალოდნელი ${issue3.origin ?? "მნიშვნელობა"} ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit}`;
+        return `ზედმეტად დიდი: მოსალოდნელი ${issue3.origin ?? "მნიშვნელობა"} იყოს ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `ზედმეტად პატარა: მოსალოდნელი ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `ზედმეტად პატარა: მოსალოდნელი ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `ზედმეტად პატარა: მოსალოდნელი ${issue2.origin} იყოს ${adj}${issue2.minimum.toString()}`;
+        return `ზედმეტად პატარა: მოსალოდნელი ${issue3.origin} იყოს ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `არასწორი ველი: უნდა იწყებოდეს "${_issue.prefix}"-ით`;
         }
@@ -7391,18 +7391,18 @@ var error25 = () => {
           return `არასწორი ველი: უნდა შეიცავდეს "${_issue.includes}"-ს`;
         if (_issue.format === "regex")
           return `არასწორი ველი: უნდა შეესაბამებოდეს შაბლონს ${_issue.pattern}`;
-        return `არასწორი ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `არასწორი ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `არასწორი რიცხვი: უნდა იყოს ${issue2.divisor}-ის ჯერადი`;
+        return `არასწორი რიცხვი: უნდა იყოს ${issue3.divisor}-ის ჯერადი`;
       case "unrecognized_keys":
-        return `უცნობი გასაღებ${issue2.keys.length > 1 ? "ები" : "ი"}: ${joinValues(issue2.keys, ", ")}`;
+        return `უცნობი გასაღებ${issue3.keys.length > 1 ? "ები" : "ი"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `არასწორი გასაღები ${issue2.origin}-ში`;
+        return `არასწორი გასაღები ${issue3.origin}-ში`;
       case "invalid_union":
         return "არასწორი შეყვანა";
       case "invalid_element":
-        return `არასწორი მნიშვნელობა ${issue2.origin}-ში`;
+        return `არასწორი მნიშვნელობა ${issue3.origin}-ში`;
       default:
         return `არასწორი შეყვანა`;
     }
@@ -7461,38 +7461,38 @@ var error26 = () => {
     array: "អារេ (Array)",
     null: "គ្មានតម្លៃ (null)"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `ទិន្នន័យបញ្ចូលមិនត្រឹមត្រូវ៖ ត្រូវការ instanceof ${issue2.expected} ប៉ុន្តែទទួលបាន ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `ទិន្នន័យបញ្ចូលមិនត្រឹមត្រូវ៖ ត្រូវការ instanceof ${issue3.expected} ប៉ុន្តែទទួលបាន ${received}`;
         }
         return `ទិន្នន័យបញ្ចូលមិនត្រឹមត្រូវ៖ ត្រូវការ ${expected} ប៉ុន្តែទទួលបាន ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `ទិន្នន័យបញ្ចូលមិនត្រឹមត្រូវ៖ ត្រូវការ ${stringifyPrimitive(issue2.values[0])}`;
-        return `ជម្រើសមិនត្រឹមត្រូវ៖ ត្រូវជាមួយក្នុងចំណោម ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `ទិន្នន័យបញ្ចូលមិនត្រឹមត្រូវ៖ ត្រូវការ ${stringifyPrimitive(issue3.values[0])}`;
+        return `ជម្រើសមិនត្រឹមត្រូវ៖ ត្រូវជាមួយក្នុងចំណោម ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `ធំពេក៖ ត្រូវការ ${issue2.origin ?? "តម្លៃ"} ${adj} ${issue2.maximum.toString()} ${sizing.unit ?? "ធាតុ"}`;
-        return `ធំពេក៖ ត្រូវការ ${issue2.origin ?? "តម្លៃ"} ${adj} ${issue2.maximum.toString()}`;
+          return `ធំពេក៖ ត្រូវការ ${issue3.origin ?? "តម្លៃ"} ${adj} ${issue3.maximum.toString()} ${sizing.unit ?? "ធាតុ"}`;
+        return `ធំពេក៖ ត្រូវការ ${issue3.origin ?? "តម្លៃ"} ${adj} ${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `តូចពេក៖ ត្រូវការ ${issue2.origin} ${adj} ${issue2.minimum.toString()} ${sizing.unit}`;
+          return `តូចពេក៖ ត្រូវការ ${issue3.origin} ${adj} ${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `តូចពេក៖ ត្រូវការ ${issue2.origin} ${adj} ${issue2.minimum.toString()}`;
+        return `តូចពេក៖ ត្រូវការ ${issue3.origin} ${adj} ${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `ខ្សែអក្សរមិនត្រឹមត្រូវ៖ ត្រូវចាប់ផ្តើមដោយ "${_issue.prefix}"`;
         }
@@ -7502,18 +7502,18 @@ var error26 = () => {
           return `ខ្សែអក្សរមិនត្រឹមត្រូវ៖ ត្រូវមាន "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `ខ្សែអក្សរមិនត្រឹមត្រូវ៖ ត្រូវតែផ្គូផ្គងនឹងទម្រង់ដែលបានកំណត់ ${_issue.pattern}`;
-        return `មិនត្រឹមត្រូវ៖ ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `មិនត្រឹមត្រូវ៖ ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `លេខមិនត្រឹមត្រូវ៖ ត្រូវតែជាពហុគុណនៃ ${issue2.divisor}`;
+        return `លេខមិនត្រឹមត្រូវ៖ ត្រូវតែជាពហុគុណនៃ ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `រកឃើញសោមិនស្គាល់៖ ${joinValues(issue2.keys, ", ")}`;
+        return `រកឃើញសោមិនស្គាល់៖ ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `សោមិនត្រឹមត្រូវនៅក្នុង ${issue2.origin}`;
+        return `សោមិនត្រឹមត្រូវនៅក្នុង ${issue3.origin}`;
       case "invalid_union":
         return `ទិន្នន័យមិនត្រឹមត្រូវ`;
       case "invalid_element":
-        return `ទិន្នន័យមិនត្រឹមត្រូវនៅក្នុង ${issue2.origin}`;
+        return `ទិន្នន័យមិនត្រឹមត្រូវនៅក្នុង ${issue3.origin}`;
       default:
         return `ទិន្នន័យមិនត្រឹមត្រូវ`;
     }
@@ -7574,42 +7574,42 @@ var error27 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `잘못된 입력: 예상 타입은 instanceof ${issue2.expected}, 받은 타입은 ${received}입니다`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `잘못된 입력: 예상 타입은 instanceof ${issue3.expected}, 받은 타입은 ${received}입니다`;
         }
         return `잘못된 입력: 예상 타입은 ${expected}, 받은 타입은 ${received}입니다`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `잘못된 입력: 값은 ${stringifyPrimitive(issue2.values[0])} 이어야 합니다`;
-        return `잘못된 옵션: ${joinValues(issue2.values, "또는 ")} 중 하나여야 합니다`;
+        if (issue3.values.length === 1)
+          return `잘못된 입력: 값은 ${stringifyPrimitive(issue3.values[0])} 이어야 합니다`;
+        return `잘못된 옵션: ${joinValues(issue3.values, "또는 ")} 중 하나여야 합니다`;
       case "too_big": {
-        const adj = issue2.inclusive ? "이하" : "미만";
+        const adj = issue3.inclusive ? "이하" : "미만";
         const suffix = adj === "미만" ? "이어야 합니다" : "여야 합니다";
-        const sizing = getSizing(issue2.origin);
+        const sizing = getSizing(issue3.origin);
         const unit2 = sizing?.unit ?? "요소";
         if (sizing)
-          return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()}${unit2} ${adj}${suffix}`;
-        return `${issue2.origin ?? "값"}이 너무 큽니다: ${issue2.maximum.toString()} ${adj}${suffix}`;
+          return `${issue3.origin ?? "값"}이 너무 큽니다: ${issue3.maximum.toString()}${unit2} ${adj}${suffix}`;
+        return `${issue3.origin ?? "값"}이 너무 큽니다: ${issue3.maximum.toString()} ${adj}${suffix}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? "이상" : "초과";
+        const adj = issue3.inclusive ? "이상" : "초과";
         const suffix = adj === "이상" ? "이어야 합니다" : "여야 합니다";
-        const sizing = getSizing(issue2.origin);
+        const sizing = getSizing(issue3.origin);
         const unit2 = sizing?.unit ?? "요소";
         if (sizing) {
-          return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()}${unit2} ${adj}${suffix}`;
+          return `${issue3.origin ?? "값"}이 너무 작습니다: ${issue3.minimum.toString()}${unit2} ${adj}${suffix}`;
         }
-        return `${issue2.origin ?? "값"}이 너무 작습니다: ${issue2.minimum.toString()} ${adj}${suffix}`;
+        return `${issue3.origin ?? "값"}이 너무 작습니다: ${issue3.minimum.toString()} ${adj}${suffix}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `잘못된 문자열: "${_issue.prefix}"(으)로 시작해야 합니다`;
         }
@@ -7619,18 +7619,18 @@ var error27 = () => {
           return `잘못된 문자열: "${_issue.includes}"을(를) 포함해야 합니다`;
         if (_issue.format === "regex")
           return `잘못된 문자열: 정규식 ${_issue.pattern} 패턴과 일치해야 합니다`;
-        return `잘못된 ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `잘못된 ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `잘못된 숫자: ${issue2.divisor}의 배수여야 합니다`;
+        return `잘못된 숫자: ${issue3.divisor}의 배수여야 합니다`;
       case "unrecognized_keys":
-        return `인식할 수 없는 키: ${joinValues(issue2.keys, ", ")}`;
+        return `인식할 수 없는 키: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `잘못된 키: ${issue2.origin}`;
+        return `잘못된 키: ${issue3.origin}`;
       case "invalid_union":
         return `잘못된 입력`;
       case "invalid_element":
-        return `잘못된 값: ${issue2.origin}`;
+        return `잘못된 값: ${issue3.origin}`;
       default:
         return `잘못된 입력`;
     }
@@ -7779,39 +7779,39 @@ var error28 = () => {
     object: "objektas",
     null: "nulinė reikšmė"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Gautas tipas ${received}, o tikėtasi - instanceof ${issue2.expected}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Gautas tipas ${received}, o tikėtasi - instanceof ${issue3.expected}`;
         }
         return `Gautas tipas ${received}, o tikėtasi - ${expected}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Privalo būti ${stringifyPrimitive(issue2.values[0])}`;
-        return `Privalo būti vienas iš ${joinValues(issue2.values, "|")} pasirinkimų`;
+        if (issue3.values.length === 1)
+          return `Privalo būti ${stringifyPrimitive(issue3.values[0])}`;
+        return `Privalo būti vienas iš ${joinValues(issue3.values, "|")} pasirinkimų`;
       case "too_big": {
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
-        const sizing = getSizing(issue2.origin, getUnitTypeFromNumber(Number(issue2.maximum)), issue2.inclusive ?? false, "smaller");
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
+        const sizing = getSizing(issue3.origin, getUnitTypeFromNumber(Number(issue3.maximum)), issue3.inclusive ?? false, "smaller");
         if (sizing?.verb)
-          return `${capitalizeFirstCharacter(origin ?? issue2.origin ?? "reikšmė")} ${sizing.verb} ${issue2.maximum.toString()} ${sizing.unit ?? "elementų"}`;
-        const adj = issue2.inclusive ? "ne didesnis kaip" : "mažesnis kaip";
-        return `${capitalizeFirstCharacter(origin ?? issue2.origin ?? "reikšmė")} turi būti ${adj} ${issue2.maximum.toString()} ${sizing?.unit}`;
+          return `${capitalizeFirstCharacter(origin ?? issue3.origin ?? "reikšmė")} ${sizing.verb} ${issue3.maximum.toString()} ${sizing.unit ?? "elementų"}`;
+        const adj = issue3.inclusive ? "ne didesnis kaip" : "mažesnis kaip";
+        return `${capitalizeFirstCharacter(origin ?? issue3.origin ?? "reikšmė")} turi būti ${adj} ${issue3.maximum.toString()} ${sizing?.unit}`;
       }
       case "too_small": {
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
-        const sizing = getSizing(issue2.origin, getUnitTypeFromNumber(Number(issue2.minimum)), issue2.inclusive ?? false, "bigger");
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
+        const sizing = getSizing(issue3.origin, getUnitTypeFromNumber(Number(issue3.minimum)), issue3.inclusive ?? false, "bigger");
         if (sizing?.verb)
-          return `${capitalizeFirstCharacter(origin ?? issue2.origin ?? "reikšmė")} ${sizing.verb} ${issue2.minimum.toString()} ${sizing.unit ?? "elementų"}`;
-        const adj = issue2.inclusive ? "ne mažesnis kaip" : "didesnis kaip";
-        return `${capitalizeFirstCharacter(origin ?? issue2.origin ?? "reikšmė")} turi būti ${adj} ${issue2.minimum.toString()} ${sizing?.unit}`;
+          return `${capitalizeFirstCharacter(origin ?? issue3.origin ?? "reikšmė")} ${sizing.verb} ${issue3.minimum.toString()} ${sizing.unit ?? "elementų"}`;
+        const adj = issue3.inclusive ? "ne mažesnis kaip" : "didesnis kaip";
+        return `${capitalizeFirstCharacter(origin ?? issue3.origin ?? "reikšmė")} turi būti ${adj} ${issue3.minimum.toString()} ${sizing?.unit}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Eilutė privalo prasidėti "${_issue.prefix}"`;
         }
@@ -7821,19 +7821,19 @@ var error28 = () => {
           return `Eilutė privalo įtraukti "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Eilutė privalo atitikti ${_issue.pattern}`;
-        return `Neteisingas ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Neteisingas ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Skaičius privalo būti ${issue2.divisor} kartotinis.`;
+        return `Skaičius privalo būti ${issue3.divisor} kartotinis.`;
       case "unrecognized_keys":
-        return `Neatpažint${issue2.keys.length > 1 ? "i" : "as"} rakt${issue2.keys.length > 1 ? "ai" : "as"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Neatpažint${issue3.keys.length > 1 ? "i" : "as"} rakt${issue3.keys.length > 1 ? "ai" : "as"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
         return "Rastas klaidingas raktas";
       case "invalid_union":
         return "Klaidinga įvestis";
       case "invalid_element": {
-        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
-        return `${capitalizeFirstCharacter(origin ?? issue2.origin ?? "reikšmė")} turi klaidingą įvestį`;
+        const origin = TypeDictionary[issue3.origin] ?? issue3.origin;
+        return `${capitalizeFirstCharacter(origin ?? issue3.origin ?? "reikšmė")} turi klaidingą įvestį`;
       }
       default:
         return "Klaidinga įvestis";
@@ -7892,38 +7892,38 @@ var error29 = () => {
     number: "број",
     array: "низа"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Грешен внес: се очекува instanceof ${issue2.expected}, примено ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Грешен внес: се очекува instanceof ${issue3.expected}, примено ${received}`;
         }
         return `Грешен внес: се очекува ${expected}, примено ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Invalid input: expected ${stringifyPrimitive(issue2.values[0])}`;
-        return `Грешана опција: се очекува една ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Invalid input: expected ${stringifyPrimitive(issue3.values[0])}`;
+        return `Грешана опција: се очекува една ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Премногу голем: се очекува ${issue2.origin ?? "вредноста"} да има ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "елементи"}`;
-        return `Премногу голем: се очекува ${issue2.origin ?? "вредноста"} да биде ${adj}${issue2.maximum.toString()}`;
+          return `Премногу голем: се очекува ${issue3.origin ?? "вредноста"} да има ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "елементи"}`;
+        return `Премногу голем: се очекува ${issue3.origin ?? "вредноста"} да биде ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Премногу мал: се очекува ${issue2.origin} да има ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Премногу мал: се очекува ${issue3.origin} да има ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Премногу мал: се очекува ${issue2.origin} да биде ${adj}${issue2.minimum.toString()}`;
+        return `Премногу мал: се очекува ${issue3.origin} да биде ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Неважечка низа: мора да започнува со "${_issue.prefix}"`;
         }
@@ -7933,18 +7933,18 @@ var error29 = () => {
           return `Неважечка низа: мора да вклучува "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Неважечка низа: мора да одгоара на патернот ${_issue.pattern}`;
-        return `Invalid ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Invalid ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Грешен број: мора да биде делив со ${issue2.divisor}`;
+        return `Грешен број: мора да биде делив со ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Непрепознаени клучеви" : "Непрепознаен клуч"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Непрепознаени клучеви" : "Непрепознаен клуч"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Грешен клуч во ${issue2.origin}`;
+        return `Грешен клуч во ${issue3.origin}`;
       case "invalid_union":
         return "Грешен внес";
       case "invalid_element":
-        return `Грешна вредност во ${issue2.origin}`;
+        return `Грешна вредност во ${issue3.origin}`;
       default:
         return `Грешен внес`;
     }
@@ -8001,38 +8001,38 @@ var error30 = () => {
     nan: "NaN",
     number: "nombor"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Input tidak sah: dijangka instanceof ${issue2.expected}, diterima ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Input tidak sah: dijangka instanceof ${issue3.expected}, diterima ${received}`;
         }
         return `Input tidak sah: dijangka ${expected}, diterima ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Input tidak sah: dijangka ${stringifyPrimitive(issue2.values[0])}`;
-        return `Pilihan tidak sah: dijangka salah satu daripada ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Input tidak sah: dijangka ${stringifyPrimitive(issue3.values[0])}`;
+        return `Pilihan tidak sah: dijangka salah satu daripada ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Terlalu besar: dijangka ${issue2.origin ?? "nilai"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemen"}`;
-        return `Terlalu besar: dijangka ${issue2.origin ?? "nilai"} adalah ${adj}${issue2.maximum.toString()}`;
+          return `Terlalu besar: dijangka ${issue3.origin ?? "nilai"} ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elemen"}`;
+        return `Terlalu besar: dijangka ${issue3.origin ?? "nilai"} adalah ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Terlalu kecil: dijangka ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Terlalu kecil: dijangka ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Terlalu kecil: dijangka ${issue2.origin} adalah ${adj}${issue2.minimum.toString()}`;
+        return `Terlalu kecil: dijangka ${issue3.origin} adalah ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `String tidak sah: mesti bermula dengan "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -8041,18 +8041,18 @@ var error30 = () => {
           return `String tidak sah: mesti mengandungi "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `String tidak sah: mesti sepadan dengan corak ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} tidak sah`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} tidak sah`;
       }
       case "not_multiple_of":
-        return `Nombor tidak sah: perlu gandaan ${issue2.divisor}`;
+        return `Nombor tidak sah: perlu gandaan ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Kunci tidak dikenali: ${joinValues(issue2.keys, ", ")}`;
+        return `Kunci tidak dikenali: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Kunci tidak sah dalam ${issue2.origin}`;
+        return `Kunci tidak sah dalam ${issue3.origin}`;
       case "invalid_union":
         return "Input tidak sah";
       case "invalid_element":
-        return `Nilai tidak sah dalam ${issue2.origin}`;
+        return `Nilai tidak sah dalam ${issue3.origin}`;
       default:
         return `Input tidak sah`;
     }
@@ -8109,40 +8109,40 @@ var error31 = () => {
     nan: "NaN",
     number: "getal"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ongeldige invoer: verwacht instanceof ${issue2.expected}, ontving ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ongeldige invoer: verwacht instanceof ${issue3.expected}, ontving ${received}`;
         }
         return `Ongeldige invoer: verwacht ${expected}, ontving ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ongeldige invoer: verwacht ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ongeldige optie: verwacht één van ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ongeldige invoer: verwacht ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ongeldige optie: verwacht één van ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
-        const longName = issue2.origin === "date" ? "laat" : issue2.origin === "string" ? "lang" : "groot";
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
+        const longName = issue3.origin === "date" ? "laat" : issue3.origin === "string" ? "lang" : "groot";
         if (sizing)
-          return `Te ${longName}: verwacht dat ${issue2.origin ?? "waarde"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementen"} ${sizing.verb}`;
-        return `Te ${longName}: verwacht dat ${issue2.origin ?? "waarde"} ${adj}${issue2.maximum.toString()} is`;
+          return `Te ${longName}: verwacht dat ${issue3.origin ?? "waarde"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementen"} ${sizing.verb}`;
+        return `Te ${longName}: verwacht dat ${issue3.origin ?? "waarde"} ${adj}${issue3.maximum.toString()} is`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
-        const shortName = issue2.origin === "date" ? "vroeg" : issue2.origin === "string" ? "kort" : "klein";
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
+        const shortName = issue3.origin === "date" ? "vroeg" : issue3.origin === "string" ? "kort" : "klein";
         if (sizing) {
-          return `Te ${shortName}: verwacht dat ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit} ${sizing.verb}`;
+          return `Te ${shortName}: verwacht dat ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit} ${sizing.verb}`;
         }
-        return `Te ${shortName}: verwacht dat ${issue2.origin} ${adj}${issue2.minimum.toString()} is`;
+        return `Te ${shortName}: verwacht dat ${issue3.origin} ${adj}${issue3.minimum.toString()} is`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Ongeldige tekst: moet met "${_issue.prefix}" beginnen`;
         }
@@ -8152,18 +8152,18 @@ var error31 = () => {
           return `Ongeldige tekst: moet "${_issue.includes}" bevatten`;
         if (_issue.format === "regex")
           return `Ongeldige tekst: moet overeenkomen met patroon ${_issue.pattern}`;
-        return `Ongeldig: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Ongeldig: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Ongeldig getal: moet een veelvoud van ${issue2.divisor} zijn`;
+        return `Ongeldig getal: moet een veelvoud van ${issue3.divisor} zijn`;
       case "unrecognized_keys":
-        return `Onbekende key${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Onbekende key${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Ongeldige key in ${issue2.origin}`;
+        return `Ongeldige key in ${issue3.origin}`;
       case "invalid_union":
         return "Ongeldige invoer";
       case "invalid_element":
-        return `Ongeldige waarde in ${issue2.origin}`;
+        return `Ongeldige waarde in ${issue3.origin}`;
       default:
         return `Ongeldige invoer`;
     }
@@ -8221,38 +8221,38 @@ var error32 = () => {
     number: "tall",
     array: "liste"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ugyldig input: forventet instanceof ${issue2.expected}, fikk ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ugyldig input: forventet instanceof ${issue3.expected}, fikk ${received}`;
         }
         return `Ugyldig input: forventet ${expected}, fikk ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ugyldig verdi: forventet ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ugyldig valg: forventet en av ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ugyldig verdi: forventet ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ugyldig valg: forventet en av ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `For stor(t): forventet ${issue2.origin ?? "value"} til å ha ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementer"}`;
-        return `For stor(t): forventet ${issue2.origin ?? "value"} til å ha ${adj}${issue2.maximum.toString()}`;
+          return `For stor(t): forventet ${issue3.origin ?? "value"} til å ha ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementer"}`;
+        return `For stor(t): forventet ${issue3.origin ?? "value"} til å ha ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `For lite(n): forventet ${issue2.origin} til å ha ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `For lite(n): forventet ${issue3.origin} til å ha ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `For lite(n): forventet ${issue2.origin} til å ha ${adj}${issue2.minimum.toString()}`;
+        return `For lite(n): forventet ${issue3.origin} til å ha ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Ugyldig streng: må starte med "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -8261,18 +8261,18 @@ var error32 = () => {
           return `Ugyldig streng: må inneholde "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Ugyldig streng: må matche mønsteret ${_issue.pattern}`;
-        return `Ugyldig ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Ugyldig ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Ugyldig tall: må være et multiplum av ${issue2.divisor}`;
+        return `Ugyldig tall: må være et multiplum av ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Ukjente nøkler" : "Ukjent nøkkel"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Ukjente nøkler" : "Ukjent nøkkel"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Ugyldig nøkkel i ${issue2.origin}`;
+        return `Ugyldig nøkkel i ${issue3.origin}`;
       case "invalid_union":
         return "Ugyldig input";
       case "invalid_element":
-        return `Ugyldig verdi i ${issue2.origin}`;
+        return `Ugyldig verdi i ${issue3.origin}`;
       default:
         return `Ugyldig input`;
     }
@@ -8331,38 +8331,38 @@ var error33 = () => {
     array: "saf",
     null: "gayb"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Fâsit giren: umulan instanceof ${issue2.expected}, alınan ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Fâsit giren: umulan instanceof ${issue3.expected}, alınan ${received}`;
         }
         return `Fâsit giren: umulan ${expected}, alınan ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Fâsit giren: umulan ${stringifyPrimitive(issue2.values[0])}`;
-        return `Fâsit tercih: mûteberler ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Fâsit giren: umulan ${stringifyPrimitive(issue3.values[0])}`;
+        return `Fâsit tercih: mûteberler ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Fazla büyük: ${issue2.origin ?? "value"}, ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elements"} sahip olmalıydı.`;
-        return `Fazla büyük: ${issue2.origin ?? "value"}, ${adj}${issue2.maximum.toString()} olmalıydı.`;
+          return `Fazla büyük: ${issue3.origin ?? "value"}, ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elements"} sahip olmalıydı.`;
+        return `Fazla büyük: ${issue3.origin ?? "value"}, ${adj}${issue3.maximum.toString()} olmalıydı.`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Fazla küçük: ${issue2.origin}, ${adj}${issue2.minimum.toString()} ${sizing.unit} sahip olmalıydı.`;
+          return `Fazla küçük: ${issue3.origin}, ${adj}${issue3.minimum.toString()} ${sizing.unit} sahip olmalıydı.`;
         }
-        return `Fazla küçük: ${issue2.origin}, ${adj}${issue2.minimum.toString()} olmalıydı.`;
+        return `Fazla küçük: ${issue3.origin}, ${adj}${issue3.minimum.toString()} olmalıydı.`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Fâsit metin: "${_issue.prefix}" ile başlamalı.`;
         if (_issue.format === "ends_with")
@@ -8371,18 +8371,18 @@ var error33 = () => {
           return `Fâsit metin: "${_issue.includes}" ihtivâ etmeli.`;
         if (_issue.format === "regex")
           return `Fâsit metin: ${_issue.pattern} nakşına uymalı.`;
-        return `Fâsit ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Fâsit ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Fâsit sayı: ${issue2.divisor} katı olmalıydı.`;
+        return `Fâsit sayı: ${issue3.divisor} katı olmalıydı.`;
       case "unrecognized_keys":
-        return `Tanınmayan anahtar ${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Tanınmayan anahtar ${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} için tanınmayan anahtar var.`;
+        return `${issue3.origin} için tanınmayan anahtar var.`;
       case "invalid_union":
         return "Giren tanınamadı.";
       case "invalid_element":
-        return `${issue2.origin} için tanınmayan kıymet var.`;
+        return `${issue3.origin} için tanınmayan kıymet var.`;
       default:
         return `Kıymet tanınamadı.`;
     }
@@ -8440,40 +8440,40 @@ var error34 = () => {
     number: "عدد",
     array: "ارې"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `ناسم ورودي: باید instanceof ${issue2.expected} وای, مګر ${received} ترلاسه شو`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `ناسم ورودي: باید instanceof ${issue3.expected} وای, مګر ${received} ترلاسه شو`;
         }
         return `ناسم ورودي: باید ${expected} وای, مګر ${received} ترلاسه شو`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1) {
-          return `ناسم ورودي: باید ${stringifyPrimitive(issue2.values[0])} وای`;
+        if (issue3.values.length === 1) {
+          return `ناسم ورودي: باید ${stringifyPrimitive(issue3.values[0])} وای`;
         }
-        return `ناسم انتخاب: باید یو له ${joinValues(issue2.values, "|")} څخه وای`;
+        return `ناسم انتخاب: باید یو له ${joinValues(issue3.values, "|")} څخه وای`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `ډیر لوی: ${issue2.origin ?? "ارزښت"} باید ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "عنصرونه"} ولري`;
+          return `ډیر لوی: ${issue3.origin ?? "ارزښت"} باید ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "عنصرونه"} ولري`;
         }
-        return `ډیر لوی: ${issue2.origin ?? "ارزښت"} باید ${adj}${issue2.maximum.toString()} وي`;
+        return `ډیر لوی: ${issue3.origin ?? "ارزښت"} باید ${adj}${issue3.maximum.toString()} وي`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `ډیر کوچنی: ${issue2.origin} باید ${adj}${issue2.minimum.toString()} ${sizing.unit} ولري`;
+          return `ډیر کوچنی: ${issue3.origin} باید ${adj}${issue3.minimum.toString()} ${sizing.unit} ولري`;
         }
-        return `ډیر کوچنی: ${issue2.origin} باید ${adj}${issue2.minimum.toString()} وي`;
+        return `ډیر کوچنی: ${issue3.origin} باید ${adj}${issue3.minimum.toString()} وي`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `ناسم متن: باید د "${_issue.prefix}" سره پیل شي`;
         }
@@ -8486,18 +8486,18 @@ var error34 = () => {
         if (_issue.format === "regex") {
           return `ناسم متن: باید د ${_issue.pattern} سره مطابقت ولري`;
         }
-        return `${FormatDictionary[_issue.format] ?? issue2.format} ناسم دی`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} ناسم دی`;
       }
       case "not_multiple_of":
-        return `ناسم عدد: باید د ${issue2.divisor} مضرب وي`;
+        return `ناسم عدد: باید د ${issue3.divisor} مضرب وي`;
       case "unrecognized_keys":
-        return `ناسم ${issue2.keys.length > 1 ? "کلیډونه" : "کلیډ"}: ${joinValues(issue2.keys, ", ")}`;
+        return `ناسم ${issue3.keys.length > 1 ? "کلیډونه" : "کلیډ"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `ناسم کلیډ په ${issue2.origin} کې`;
+        return `ناسم کلیډ په ${issue3.origin} کې`;
       case "invalid_union":
         return `ناسمه ورودي`;
       case "invalid_element":
-        return `ناسم عنصر په ${issue2.origin} کې`;
+        return `ناسم عنصر په ${issue3.origin} کې`;
       default:
         return `ناسمه ورودي`;
     }
@@ -8555,39 +8555,39 @@ var error35 = () => {
     number: "liczba",
     array: "tablica"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Nieprawidłowe dane wejściowe: oczekiwano instanceof ${issue2.expected}, otrzymano ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Nieprawidłowe dane wejściowe: oczekiwano instanceof ${issue3.expected}, otrzymano ${received}`;
         }
         return `Nieprawidłowe dane wejściowe: oczekiwano ${expected}, otrzymano ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Nieprawidłowe dane wejściowe: oczekiwano ${stringifyPrimitive(issue2.values[0])}`;
-        return `Nieprawidłowa opcja: oczekiwano jednej z wartości ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Nieprawidłowe dane wejściowe: oczekiwano ${stringifyPrimitive(issue3.values[0])}`;
+        return `Nieprawidłowa opcja: oczekiwano jednej z wartości ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Za duża wartość: oczekiwano, że ${issue2.origin ?? "wartość"} będzie mieć ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementów"}`;
+          return `Za duża wartość: oczekiwano, że ${issue3.origin ?? "wartość"} będzie mieć ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementów"}`;
         }
-        return `Zbyt duż(y/a/e): oczekiwano, że ${issue2.origin ?? "wartość"} będzie wynosić ${adj}${issue2.maximum.toString()}`;
+        return `Zbyt duż(y/a/e): oczekiwano, że ${issue3.origin ?? "wartość"} będzie wynosić ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Za mała wartość: oczekiwano, że ${issue2.origin ?? "wartość"} będzie mieć ${adj}${issue2.minimum.toString()} ${sizing.unit ?? "elementów"}`;
+          return `Za mała wartość: oczekiwano, że ${issue3.origin ?? "wartość"} będzie mieć ${adj}${issue3.minimum.toString()} ${sizing.unit ?? "elementów"}`;
         }
-        return `Zbyt mał(y/a/e): oczekiwano, że ${issue2.origin ?? "wartość"} będzie wynosić ${adj}${issue2.minimum.toString()}`;
+        return `Zbyt mał(y/a/e): oczekiwano, że ${issue3.origin ?? "wartość"} będzie wynosić ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Nieprawidłowy ciąg znaków: musi zaczynać się od "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -8596,18 +8596,18 @@ var error35 = () => {
           return `Nieprawidłowy ciąg znaków: musi zawierać "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Nieprawidłowy ciąg znaków: musi odpowiadać wzorcowi ${_issue.pattern}`;
-        return `Nieprawidłow(y/a/e) ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Nieprawidłow(y/a/e) ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Nieprawidłowa liczba: musi być wielokrotnością ${issue2.divisor}`;
+        return `Nieprawidłowa liczba: musi być wielokrotnością ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Nierozpoznane klucze${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Nierozpoznane klucze${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Nieprawidłowy klucz w ${issue2.origin}`;
+        return `Nieprawidłowy klucz w ${issue3.origin}`;
       case "invalid_union":
         return "Nieprawidłowe dane wejściowe";
       case "invalid_element":
-        return `Nieprawidłowa wartość w ${issue2.origin}`;
+        return `Nieprawidłowa wartość w ${issue3.origin}`;
       default:
         return `Nieprawidłowe dane wejściowe`;
     }
@@ -8665,38 +8665,38 @@ var error36 = () => {
     number: "número",
     null: "nulo"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Tipo inválido: esperado instanceof ${issue2.expected}, recebido ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Tipo inválido: esperado instanceof ${issue3.expected}, recebido ${received}`;
         }
         return `Tipo inválido: esperado ${expected}, recebido ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Entrada inválida: esperado ${stringifyPrimitive(issue2.values[0])}`;
-        return `Opção inválida: esperada uma das ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Entrada inválida: esperado ${stringifyPrimitive(issue3.values[0])}`;
+        return `Opção inválida: esperada uma das ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Muito grande: esperado que ${issue2.origin ?? "valor"} tivesse ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementos"}`;
-        return `Muito grande: esperado que ${issue2.origin ?? "valor"} fosse ${adj}${issue2.maximum.toString()}`;
+          return `Muito grande: esperado que ${issue3.origin ?? "valor"} tivesse ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementos"}`;
+        return `Muito grande: esperado que ${issue3.origin ?? "valor"} fosse ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Muito pequeno: esperado que ${issue2.origin} tivesse ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Muito pequeno: esperado que ${issue3.origin} tivesse ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Muito pequeno: esperado que ${issue2.origin} fosse ${adj}${issue2.minimum.toString()}`;
+        return `Muito pequeno: esperado que ${issue3.origin} fosse ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Texto inválido: deve começar com "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -8705,18 +8705,18 @@ var error36 = () => {
           return `Texto inválido: deve incluir "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Texto inválido: deve corresponder ao padrão ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} inválido`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} inválido`;
       }
       case "not_multiple_of":
-        return `Número inválido: deve ser múltiplo de ${issue2.divisor}`;
+        return `Número inválido: deve ser múltiplo de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Chave${issue2.keys.length > 1 ? "s" : ""} desconhecida${issue2.keys.length > 1 ? "s" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Chave${issue3.keys.length > 1 ? "s" : ""} desconhecida${issue3.keys.length > 1 ? "s" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Chave inválida em ${issue2.origin}`;
+        return `Chave inválida em ${issue3.origin}`;
       case "invalid_union":
         return "Entrada inválida";
       case "invalid_element":
-        return `Valor inválido em ${issue2.origin}`;
+        return `Valor inválido em ${issue3.origin}`;
       default:
         return `Campo inválido`;
     }
@@ -8787,35 +8787,35 @@ var error37 = () => {
     map: "hartă",
     set: "set"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
         return `Intrare invalidă: așteptat ${expected}, primit ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Intrare invalidă: așteptat ${stringifyPrimitive(issue2.values[0])}`;
-        return `Opțiune invalidă: așteptat una dintre ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Intrare invalidă: așteptat ${stringifyPrimitive(issue3.values[0])}`;
+        return `Opțiune invalidă: așteptat una dintre ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Prea mare: așteptat ca ${issue2.origin ?? "valoarea"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemente"}`;
-        return `Prea mare: așteptat ca ${issue2.origin ?? "valoarea"} să fie ${adj}${issue2.maximum.toString()}`;
+          return `Prea mare: așteptat ca ${issue3.origin ?? "valoarea"} ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elemente"}`;
+        return `Prea mare: așteptat ca ${issue3.origin ?? "valoarea"} să fie ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Prea mic: așteptat ca ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Prea mic: așteptat ca ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Prea mic: așteptat ca ${issue2.origin} să fie ${adj}${issue2.minimum.toString()}`;
+        return `Prea mic: așteptat ca ${issue3.origin} să fie ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Șir invalid: trebuie să înceapă cu "${_issue.prefix}"`;
         }
@@ -8825,18 +8825,18 @@ var error37 = () => {
           return `Șir invalid: trebuie să includă "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Șir invalid: trebuie să se potrivească cu modelul ${_issue.pattern}`;
-        return `Format invalid: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Format invalid: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Număr invalid: trebuie să fie multiplu de ${issue2.divisor}`;
+        return `Număr invalid: trebuie să fie multiplu de ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Chei nerecunoscute: ${joinValues(issue2.keys, ", ")}`;
+        return `Chei nerecunoscute: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Cheie invalidă în ${issue2.origin}`;
+        return `Cheie invalidă în ${issue3.origin}`;
       case "invalid_union":
         return "Intrare invalidă";
       case "invalid_element":
-        return `Valoare invalidă în ${issue2.origin}`;
+        return `Valoare invalidă în ${issue3.origin}`;
       default:
         return `Intrare invalidă`;
     }
@@ -8937,43 +8937,43 @@ var error38 = () => {
     number: "число",
     array: "массив"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Неверный ввод: ожидалось instanceof ${issue2.expected}, получено ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Неверный ввод: ожидалось instanceof ${issue3.expected}, получено ${received}`;
         }
         return `Неверный ввод: ожидалось ${expected}, получено ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Неверный ввод: ожидалось ${stringifyPrimitive(issue2.values[0])}`;
-        return `Неверный вариант: ожидалось одно из ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Неверный ввод: ожидалось ${stringifyPrimitive(issue3.values[0])}`;
+        return `Неверный вариант: ожидалось одно из ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const maxValue = Number(issue2.maximum);
+          const maxValue = Number(issue3.maximum);
           const unit2 = getRussianPlural(maxValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-          return `Слишком большое значение: ожидалось, что ${issue2.origin ?? "значение"} будет иметь ${adj}${issue2.maximum.toString()} ${unit2}`;
+          return `Слишком большое значение: ожидалось, что ${issue3.origin ?? "значение"} будет иметь ${adj}${issue3.maximum.toString()} ${unit2}`;
         }
-        return `Слишком большое значение: ожидалось, что ${issue2.origin ?? "значение"} будет ${adj}${issue2.maximum.toString()}`;
+        return `Слишком большое значение: ожидалось, что ${issue3.origin ?? "значение"} будет ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          const minValue = Number(issue2.minimum);
+          const minValue = Number(issue3.minimum);
           const unit2 = getRussianPlural(minValue, sizing.unit.one, sizing.unit.few, sizing.unit.many);
-          return `Слишком маленькое значение: ожидалось, что ${issue2.origin} будет иметь ${adj}${issue2.minimum.toString()} ${unit2}`;
+          return `Слишком маленькое значение: ожидалось, что ${issue3.origin} будет иметь ${adj}${issue3.minimum.toString()} ${unit2}`;
         }
-        return `Слишком маленькое значение: ожидалось, что ${issue2.origin} будет ${adj}${issue2.minimum.toString()}`;
+        return `Слишком маленькое значение: ожидалось, что ${issue3.origin} будет ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Неверная строка: должна начинаться с "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -8982,18 +8982,18 @@ var error38 = () => {
           return `Неверная строка: должна содержать "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Неверная строка: должна соответствовать шаблону ${_issue.pattern}`;
-        return `Неверный ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Неверный ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Неверное число: должно быть кратным ${issue2.divisor}`;
+        return `Неверное число: должно быть кратным ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Нераспознанн${issue2.keys.length > 1 ? "ые" : "ый"} ключ${issue2.keys.length > 1 ? "и" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Нераспознанн${issue3.keys.length > 1 ? "ые" : "ый"} ключ${issue3.keys.length > 1 ? "и" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Неверный ключ в ${issue2.origin}`;
+        return `Неверный ключ в ${issue3.origin}`;
       case "invalid_union":
         return "Неверные входные данные";
       case "invalid_element":
-        return `Неверное значение в ${issue2.origin}`;
+        return `Неверное значение в ${issue3.origin}`;
       default:
         return `Неверные входные данные`;
     }
@@ -9051,38 +9051,38 @@ var error39 = () => {
     number: "število",
     array: "tabela"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Neveljaven vnos: pričakovano instanceof ${issue2.expected}, prejeto ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Neveljaven vnos: pričakovano instanceof ${issue3.expected}, prejeto ${received}`;
         }
         return `Neveljaven vnos: pričakovano ${expected}, prejeto ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Neveljaven vnos: pričakovano ${stringifyPrimitive(issue2.values[0])}`;
-        return `Neveljavna možnost: pričakovano eno izmed ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Neveljaven vnos: pričakovano ${stringifyPrimitive(issue3.values[0])}`;
+        return `Neveljavna možnost: pričakovano eno izmed ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Preveliko: pričakovano, da bo ${issue2.origin ?? "vrednost"} imelo ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elementov"}`;
-        return `Preveliko: pričakovano, da bo ${issue2.origin ?? "vrednost"} ${adj}${issue2.maximum.toString()}`;
+          return `Preveliko: pričakovano, da bo ${issue3.origin ?? "vrednost"} imelo ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "elementov"}`;
+        return `Preveliko: pričakovano, da bo ${issue3.origin ?? "vrednost"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Premajhno: pričakovano, da bo ${issue2.origin} imelo ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Premajhno: pričakovano, da bo ${issue3.origin} imelo ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Premajhno: pričakovano, da bo ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+        return `Premajhno: pričakovano, da bo ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Neveljaven niz: mora se začeti z "${_issue.prefix}"`;
         }
@@ -9092,18 +9092,18 @@ var error39 = () => {
           return `Neveljaven niz: mora vsebovati "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Neveljaven niz: mora ustrezati vzorcu ${_issue.pattern}`;
-        return `Neveljaven ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Neveljaven ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Neveljavno število: mora biti večkratnik ${issue2.divisor}`;
+        return `Neveljavno število: mora biti večkratnik ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Neprepoznan${issue2.keys.length > 1 ? "i ključi" : " ključ"}: ${joinValues(issue2.keys, ", ")}`;
+        return `Neprepoznan${issue3.keys.length > 1 ? "i ključi" : " ključ"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Neveljaven ključ v ${issue2.origin}`;
+        return `Neveljaven ključ v ${issue3.origin}`;
       case "invalid_union":
         return "Neveljaven vnos";
       case "invalid_element":
-        return `Neveljavna vrednost v ${issue2.origin}`;
+        return `Neveljavna vrednost v ${issue3.origin}`;
       default:
         return "Neveljaven vnos";
     }
@@ -9161,39 +9161,39 @@ var error40 = () => {
     number: "antal",
     array: "lista"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ogiltig inmatning: förväntat instanceof ${issue2.expected}, fick ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ogiltig inmatning: förväntat instanceof ${issue3.expected}, fick ${received}`;
         }
         return `Ogiltig inmatning: förväntat ${expected}, fick ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ogiltig inmatning: förväntat ${stringifyPrimitive(issue2.values[0])}`;
-        return `Ogiltigt val: förväntade en av ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ogiltig inmatning: förväntat ${stringifyPrimitive(issue3.values[0])}`;
+        return `Ogiltigt val: förväntade en av ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `För stor(t): förväntade ${issue2.origin ?? "värdet"} att ha ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "element"}`;
+          return `För stor(t): förväntade ${issue3.origin ?? "värdet"} att ha ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "element"}`;
         }
-        return `För stor(t): förväntat ${issue2.origin ?? "värdet"} att ha ${adj}${issue2.maximum.toString()}`;
+        return `För stor(t): förväntat ${issue3.origin ?? "värdet"} att ha ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `För lite(t): förväntade ${issue2.origin ?? "värdet"} att ha ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `För lite(t): förväntade ${issue3.origin ?? "värdet"} att ha ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `För lite(t): förväntade ${issue2.origin ?? "värdet"} att ha ${adj}${issue2.minimum.toString()}`;
+        return `För lite(t): förväntade ${issue3.origin ?? "värdet"} att ha ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `Ogiltig sträng: måste börja med "${_issue.prefix}"`;
         }
@@ -9203,18 +9203,18 @@ var error40 = () => {
           return `Ogiltig sträng: måste innehålla "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Ogiltig sträng: måste matcha mönstret "${_issue.pattern}"`;
-        return `Ogiltig(t) ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Ogiltig(t) ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Ogiltigt tal: måste vara en multipel av ${issue2.divisor}`;
+        return `Ogiltigt tal: måste vara en multipel av ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `${issue2.keys.length > 1 ? "Okända nycklar" : "Okänd nyckel"}: ${joinValues(issue2.keys, ", ")}`;
+        return `${issue3.keys.length > 1 ? "Okända nycklar" : "Okänd nyckel"}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Ogiltig nyckel i ${issue2.origin ?? "värdet"}`;
+        return `Ogiltig nyckel i ${issue3.origin ?? "värdet"}`;
       case "invalid_union":
         return "Ogiltig input";
       case "invalid_element":
-        return `Ogiltigt värde i ${issue2.origin ?? "värdet"}`;
+        return `Ogiltigt värde i ${issue3.origin ?? "värdet"}`;
       default:
         return `Ogiltig input`;
     }
@@ -9273,39 +9273,39 @@ var error41 = () => {
     array: "அணி",
     null: "வெறுமை"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `தவறான உள்ளீடு: எதிர்பார்க்கப்பட்டது instanceof ${issue2.expected}, பெறப்பட்டது ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `தவறான உள்ளீடு: எதிர்பார்க்கப்பட்டது instanceof ${issue3.expected}, பெறப்பட்டது ${received}`;
         }
         return `தவறான உள்ளீடு: எதிர்பார்க்கப்பட்டது ${expected}, பெறப்பட்டது ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `தவறான உள்ளீடு: எதிர்பார்க்கப்பட்டது ${stringifyPrimitive(issue2.values[0])}`;
-        return `தவறான விருப்பம்: எதிர்பார்க்கப்பட்டது ${joinValues(issue2.values, "|")} இல் ஒன்று`;
+        if (issue3.values.length === 1)
+          return `தவறான உள்ளீடு: எதிர்பார்க்கப்பட்டது ${stringifyPrimitive(issue3.values[0])}`;
+        return `தவறான விருப்பம்: எதிர்பார்க்கப்பட்டது ${joinValues(issue3.values, "|")} இல் ஒன்று`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `மிக பெரியது: எதிர்பார்க்கப்பட்டது ${issue2.origin ?? "மதிப்பு"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "உறுப்புகள்"} ஆக இருக்க வேண்டும்`;
+          return `மிக பெரியது: எதிர்பார்க்கப்பட்டது ${issue3.origin ?? "மதிப்பு"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "உறுப்புகள்"} ஆக இருக்க வேண்டும்`;
         }
-        return `மிக பெரியது: எதிர்பார்க்கப்பட்டது ${issue2.origin ?? "மதிப்பு"} ${adj}${issue2.maximum.toString()} ஆக இருக்க வேண்டும்`;
+        return `மிக பெரியது: எதிர்பார்க்கப்பட்டது ${issue3.origin ?? "மதிப்பு"} ${adj}${issue3.maximum.toString()} ஆக இருக்க வேண்டும்`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `மிகச் சிறியது: எதிர்பார்க்கப்பட்டது ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit} ஆக இருக்க வேண்டும்`;
+          return `மிகச் சிறியது: எதிர்பார்க்கப்பட்டது ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit} ஆக இருக்க வேண்டும்`;
         }
-        return `மிகச் சிறியது: எதிர்பார்க்கப்பட்டது ${issue2.origin} ${adj}${issue2.minimum.toString()} ஆக இருக்க வேண்டும்`;
+        return `மிகச் சிறியது: எதிர்பார்க்கப்பட்டது ${issue3.origin} ${adj}${issue3.minimum.toString()} ஆக இருக்க வேண்டும்`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `தவறான சரம்: "${_issue.prefix}" இல் தொடங்க வேண்டும்`;
         if (_issue.format === "ends_with")
@@ -9314,18 +9314,18 @@ var error41 = () => {
           return `தவறான சரம்: "${_issue.includes}" ஐ உள்ளடக்க வேண்டும்`;
         if (_issue.format === "regex")
           return `தவறான சரம்: ${_issue.pattern} முறைபாட்டுடன் பொருந்த வேண்டும்`;
-        return `தவறான ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `தவறான ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `தவறான எண்: ${issue2.divisor} இன் பலமாக இருக்க வேண்டும்`;
+        return `தவறான எண்: ${issue3.divisor} இன் பலமாக இருக்க வேண்டும்`;
       case "unrecognized_keys":
-        return `அடையாளம் தெரியாத விசை${issue2.keys.length > 1 ? "கள்" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `அடையாளம் தெரியாத விசை${issue3.keys.length > 1 ? "கள்" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} இல் தவறான விசை`;
+        return `${issue3.origin} இல் தவறான விசை`;
       case "invalid_union":
         return "தவறான உள்ளீடு";
       case "invalid_element":
-        return `${issue2.origin} இல் தவறான மதிப்பு`;
+        return `${issue3.origin} இல் தவறான மதிப்பு`;
       default:
         return `தவறான உள்ளீடு`;
     }
@@ -9384,38 +9384,38 @@ var error42 = () => {
     array: "อาร์เรย์ (Array)",
     null: "ไม่มีค่า (null)"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `ประเภทข้อมูลไม่ถูกต้อง: ควรเป็น instanceof ${issue2.expected} แต่ได้รับ ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `ประเภทข้อมูลไม่ถูกต้อง: ควรเป็น instanceof ${issue3.expected} แต่ได้รับ ${received}`;
         }
         return `ประเภทข้อมูลไม่ถูกต้อง: ควรเป็น ${expected} แต่ได้รับ ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `ค่าไม่ถูกต้อง: ควรเป็น ${stringifyPrimitive(issue2.values[0])}`;
-        return `ตัวเลือกไม่ถูกต้อง: ควรเป็นหนึ่งใน ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `ค่าไม่ถูกต้อง: ควรเป็น ${stringifyPrimitive(issue3.values[0])}`;
+        return `ตัวเลือกไม่ถูกต้อง: ควรเป็นหนึ่งใน ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "ไม่เกิน" : "น้อยกว่า";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "ไม่เกิน" : "น้อยกว่า";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `เกินกำหนด: ${issue2.origin ?? "ค่า"} ควรมี${adj} ${issue2.maximum.toString()} ${sizing.unit ?? "รายการ"}`;
-        return `เกินกำหนด: ${issue2.origin ?? "ค่า"} ควรมี${adj} ${issue2.maximum.toString()}`;
+          return `เกินกำหนด: ${issue3.origin ?? "ค่า"} ควรมี${adj} ${issue3.maximum.toString()} ${sizing.unit ?? "รายการ"}`;
+        return `เกินกำหนด: ${issue3.origin ?? "ค่า"} ควรมี${adj} ${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? "อย่างน้อย" : "มากกว่า";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "อย่างน้อย" : "มากกว่า";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `น้อยกว่ากำหนด: ${issue2.origin} ควรมี${adj} ${issue2.minimum.toString()} ${sizing.unit}`;
+          return `น้อยกว่ากำหนด: ${issue3.origin} ควรมี${adj} ${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `น้อยกว่ากำหนด: ${issue2.origin} ควรมี${adj} ${issue2.minimum.toString()}`;
+        return `น้อยกว่ากำหนด: ${issue3.origin} ควรมี${adj} ${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `รูปแบบไม่ถูกต้อง: ข้อความต้องขึ้นต้นด้วย "${_issue.prefix}"`;
         }
@@ -9425,18 +9425,18 @@ var error42 = () => {
           return `รูปแบบไม่ถูกต้อง: ข้อความต้องมี "${_issue.includes}" อยู่ในข้อความ`;
         if (_issue.format === "regex")
           return `รูปแบบไม่ถูกต้อง: ต้องตรงกับรูปแบบที่กำหนด ${_issue.pattern}`;
-        return `รูปแบบไม่ถูกต้อง: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `รูปแบบไม่ถูกต้อง: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `ตัวเลขไม่ถูกต้อง: ต้องเป็นจำนวนที่หารด้วย ${issue2.divisor} ได้ลงตัว`;
+        return `ตัวเลขไม่ถูกต้อง: ต้องเป็นจำนวนที่หารด้วย ${issue3.divisor} ได้ลงตัว`;
       case "unrecognized_keys":
-        return `พบคีย์ที่ไม่รู้จัก: ${joinValues(issue2.keys, ", ")}`;
+        return `พบคีย์ที่ไม่รู้จัก: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `คีย์ไม่ถูกต้องใน ${issue2.origin}`;
+        return `คีย์ไม่ถูกต้องใน ${issue3.origin}`;
       case "invalid_union":
         return "ข้อมูลไม่ถูกต้อง: ไม่ตรงกับรูปแบบยูเนียนที่กำหนดไว้";
       case "invalid_element":
-        return `ข้อมูลไม่ถูกต้องใน ${issue2.origin}`;
+        return `ข้อมูลไม่ถูกต้องใน ${issue3.origin}`;
       default:
         return `ข้อมูลไม่ถูกต้อง`;
     }
@@ -9492,37 +9492,37 @@ var error43 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Geçersiz değer: beklenen instanceof ${issue2.expected}, alınan ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Geçersiz değer: beklenen instanceof ${issue3.expected}, alınan ${received}`;
         }
         return `Geçersiz değer: beklenen ${expected}, alınan ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Geçersiz değer: beklenen ${stringifyPrimitive(issue2.values[0])}`;
-        return `Geçersiz seçenek: aşağıdakilerden biri olmalı: ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Geçersiz değer: beklenen ${stringifyPrimitive(issue3.values[0])}`;
+        return `Geçersiz seçenek: aşağıdakilerden biri olmalı: ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Çok büyük: beklenen ${issue2.origin ?? "değer"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "öğe"}`;
-        return `Çok büyük: beklenen ${issue2.origin ?? "değer"} ${adj}${issue2.maximum.toString()}`;
+          return `Çok büyük: beklenen ${issue3.origin ?? "değer"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "öğe"}`;
+        return `Çok büyük: beklenen ${issue3.origin ?? "değer"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Çok küçük: beklenen ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
-        return `Çok küçük: beklenen ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+          return `Çok küçük: beklenen ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
+        return `Çok küçük: beklenen ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Geçersiz metin: "${_issue.prefix}" ile başlamalı`;
         if (_issue.format === "ends_with")
@@ -9531,18 +9531,18 @@ var error43 = () => {
           return `Geçersiz metin: "${_issue.includes}" içermeli`;
         if (_issue.format === "regex")
           return `Geçersiz metin: ${_issue.pattern} desenine uymalı`;
-        return `Geçersiz ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Geçersiz ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Geçersiz sayı: ${issue2.divisor} ile tam bölünebilmeli`;
+        return `Geçersiz sayı: ${issue3.divisor} ile tam bölünebilmeli`;
       case "unrecognized_keys":
-        return `Tanınmayan anahtar${issue2.keys.length > 1 ? "lar" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Tanınmayan anahtar${issue3.keys.length > 1 ? "lar" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} içinde geçersiz anahtar`;
+        return `${issue3.origin} içinde geçersiz anahtar`;
       case "invalid_union":
         return "Geçersiz değer";
       case "invalid_element":
-        return `${issue2.origin} içinde geçersiz değer`;
+        return `${issue3.origin} içinde geçersiz değer`;
       default:
         return `Geçersiz değer`;
     }
@@ -9600,38 +9600,38 @@ var error44 = () => {
     number: "число",
     array: "масив"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Неправильні вхідні дані: очікується instanceof ${issue2.expected}, отримано ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Неправильні вхідні дані: очікується instanceof ${issue3.expected}, отримано ${received}`;
         }
         return `Неправильні вхідні дані: очікується ${expected}, отримано ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Неправильні вхідні дані: очікується ${stringifyPrimitive(issue2.values[0])}`;
-        return `Неправильна опція: очікується одне з ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Неправильні вхідні дані: очікується ${stringifyPrimitive(issue3.values[0])}`;
+        return `Неправильна опція: очікується одне з ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Занадто велике: очікується, що ${issue2.origin ?? "значення"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "елементів"}`;
-        return `Занадто велике: очікується, що ${issue2.origin ?? "значення"} буде ${adj}${issue2.maximum.toString()}`;
+          return `Занадто велике: очікується, що ${issue3.origin ?? "значення"} ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "елементів"}`;
+        return `Занадто велике: очікується, що ${issue3.origin ?? "значення"} буде ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Занадто мале: очікується, що ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Занадто мале: очікується, що ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Занадто мале: очікується, що ${issue2.origin} буде ${adj}${issue2.minimum.toString()}`;
+        return `Занадто мале: очікується, що ${issue3.origin} буде ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Неправильний рядок: повинен починатися з "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -9640,18 +9640,18 @@ var error44 = () => {
           return `Неправильний рядок: повинен містити "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Неправильний рядок: повинен відповідати шаблону ${_issue.pattern}`;
-        return `Неправильний ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Неправильний ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Неправильне число: повинно бути кратним ${issue2.divisor}`;
+        return `Неправильне число: повинно бути кратним ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Нерозпізнаний ключ${issue2.keys.length > 1 ? "і" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Нерозпізнаний ключ${issue3.keys.length > 1 ? "і" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Неправильний ключ у ${issue2.origin}`;
+        return `Неправильний ключ у ${issue3.origin}`;
       case "invalid_union":
         return "Неправильні вхідні дані";
       case "invalid_element":
-        return `Неправильне значення у ${issue2.origin}`;
+        return `Неправильне значення у ${issue3.origin}`;
       default:
         return `Неправильні вхідні дані`;
     }
@@ -9715,38 +9715,38 @@ var error45 = () => {
     array: "آرے",
     null: "نل"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `غلط ان پٹ: instanceof ${issue2.expected} متوقع تھا، ${received} موصول ہوا`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `غلط ان پٹ: instanceof ${issue3.expected} متوقع تھا، ${received} موصول ہوا`;
         }
         return `غلط ان پٹ: ${expected} متوقع تھا، ${received} موصول ہوا`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `غلط ان پٹ: ${stringifyPrimitive(issue2.values[0])} متوقع تھا`;
-        return `غلط آپشن: ${joinValues(issue2.values, "|")} میں سے ایک متوقع تھا`;
+        if (issue3.values.length === 1)
+          return `غلط ان پٹ: ${stringifyPrimitive(issue3.values[0])} متوقع تھا`;
+        return `غلط آپشن: ${joinValues(issue3.values, "|")} میں سے ایک متوقع تھا`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `بہت بڑا: ${issue2.origin ?? "ویلیو"} کے ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "عناصر"} ہونے متوقع تھے`;
-        return `بہت بڑا: ${issue2.origin ?? "ویلیو"} کا ${adj}${issue2.maximum.toString()} ہونا متوقع تھا`;
+          return `بہت بڑا: ${issue3.origin ?? "ویلیو"} کے ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "عناصر"} ہونے متوقع تھے`;
+        return `بہت بڑا: ${issue3.origin ?? "ویلیو"} کا ${adj}${issue3.maximum.toString()} ہونا متوقع تھا`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `بہت چھوٹا: ${issue2.origin} کے ${adj}${issue2.minimum.toString()} ${sizing.unit} ہونے متوقع تھے`;
+          return `بہت چھوٹا: ${issue3.origin} کے ${adj}${issue3.minimum.toString()} ${sizing.unit} ہونے متوقع تھے`;
         }
-        return `بہت چھوٹا: ${issue2.origin} کا ${adj}${issue2.minimum.toString()} ہونا متوقع تھا`;
+        return `بہت چھوٹا: ${issue3.origin} کا ${adj}${issue3.minimum.toString()} ہونا متوقع تھا`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `غلط سٹرنگ: "${_issue.prefix}" سے شروع ہونا چاہیے`;
         }
@@ -9756,18 +9756,18 @@ var error45 = () => {
           return `غلط سٹرنگ: "${_issue.includes}" شامل ہونا چاہیے`;
         if (_issue.format === "regex")
           return `غلط سٹرنگ: پیٹرن ${_issue.pattern} سے میچ ہونا چاہیے`;
-        return `غلط ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `غلط ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `غلط نمبر: ${issue2.divisor} کا مضاعف ہونا چاہیے`;
+        return `غلط نمبر: ${issue3.divisor} کا مضاعف ہونا چاہیے`;
       case "unrecognized_keys":
-        return `غیر تسلیم شدہ کی${issue2.keys.length > 1 ? "ز" : ""}: ${joinValues(issue2.keys, "، ")}`;
+        return `غیر تسلیم شدہ کی${issue3.keys.length > 1 ? "ز" : ""}: ${joinValues(issue3.keys, "، ")}`;
       case "invalid_key":
-        return `${issue2.origin} میں غلط کی`;
+        return `${issue3.origin} میں غلط کی`;
       case "invalid_union":
         return "غلط ان پٹ";
       case "invalid_element":
-        return `${issue2.origin} میں غلط ویلیو`;
+        return `${issue3.origin} میں غلط ویلیو`;
       default:
         return `غلط ان پٹ`;
     }
@@ -9827,38 +9827,38 @@ var error46 = () => {
     number: "raqam",
     array: "massiv"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Noto‘g‘ri kirish: kutilgan instanceof ${issue2.expected}, qabul qilingan ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Noto‘g‘ri kirish: kutilgan instanceof ${issue3.expected}, qabul qilingan ${received}`;
         }
         return `Noto‘g‘ri kirish: kutilgan ${expected}, qabul qilingan ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Noto‘g‘ri kirish: kutilgan ${stringifyPrimitive(issue2.values[0])}`;
-        return `Noto‘g‘ri variant: quyidagilardan biri kutilgan ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Noto‘g‘ri kirish: kutilgan ${stringifyPrimitive(issue3.values[0])}`;
+        return `Noto‘g‘ri variant: quyidagilardan biri kutilgan ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Juda katta: kutilgan ${issue2.origin ?? "qiymat"} ${adj}${issue2.maximum.toString()} ${sizing.unit} ${sizing.verb}`;
-        return `Juda katta: kutilgan ${issue2.origin ?? "qiymat"} ${adj}${issue2.maximum.toString()}`;
+          return `Juda katta: kutilgan ${issue3.origin ?? "qiymat"} ${adj}${issue3.maximum.toString()} ${sizing.unit} ${sizing.verb}`;
+        return `Juda katta: kutilgan ${issue3.origin ?? "qiymat"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Juda kichik: kutilgan ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit} ${sizing.verb}`;
+          return `Juda kichik: kutilgan ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit} ${sizing.verb}`;
         }
-        return `Juda kichik: kutilgan ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+        return `Juda kichik: kutilgan ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Noto‘g‘ri satr: "${_issue.prefix}" bilan boshlanishi kerak`;
         if (_issue.format === "ends_with")
@@ -9867,18 +9867,18 @@ var error46 = () => {
           return `Noto‘g‘ri satr: "${_issue.includes}" ni o‘z ichiga olishi kerak`;
         if (_issue.format === "regex")
           return `Noto‘g‘ri satr: ${_issue.pattern} shabloniga mos kelishi kerak`;
-        return `Noto‘g‘ri ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Noto‘g‘ri ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Noto‘g‘ri raqam: ${issue2.divisor} ning karralisi bo‘lishi kerak`;
+        return `Noto‘g‘ri raqam: ${issue3.divisor} ning karralisi bo‘lishi kerak`;
       case "unrecognized_keys":
-        return `Noma’lum kalit${issue2.keys.length > 1 ? "lar" : ""}: ${joinValues(issue2.keys, ", ")}`;
+        return `Noma’lum kalit${issue3.keys.length > 1 ? "lar" : ""}: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} dagi kalit noto‘g‘ri`;
+        return `${issue3.origin} dagi kalit noto‘g‘ri`;
       case "invalid_union":
         return "Noto‘g‘ri kirish";
       case "invalid_element":
-        return `${issue2.origin} da noto‘g‘ri qiymat`;
+        return `${issue3.origin} da noto‘g‘ri qiymat`;
       default:
         return `Noto‘g‘ri kirish`;
     }
@@ -9936,38 +9936,38 @@ var error47 = () => {
     number: "số",
     array: "mảng"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Đầu vào không hợp lệ: mong đợi instanceof ${issue2.expected}, nhận được ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Đầu vào không hợp lệ: mong đợi instanceof ${issue3.expected}, nhận được ${received}`;
         }
         return `Đầu vào không hợp lệ: mong đợi ${expected}, nhận được ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Đầu vào không hợp lệ: mong đợi ${stringifyPrimitive(issue2.values[0])}`;
-        return `Tùy chọn không hợp lệ: mong đợi một trong các giá trị ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Đầu vào không hợp lệ: mong đợi ${stringifyPrimitive(issue3.values[0])}`;
+        return `Tùy chọn không hợp lệ: mong đợi một trong các giá trị ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Quá lớn: mong đợi ${issue2.origin ?? "giá trị"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "phần tử"}`;
-        return `Quá lớn: mong đợi ${issue2.origin ?? "giá trị"} ${adj}${issue2.maximum.toString()}`;
+          return `Quá lớn: mong đợi ${issue3.origin ?? "giá trị"} ${sizing.verb} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "phần tử"}`;
+        return `Quá lớn: mong đợi ${issue3.origin ?? "giá trị"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `Quá nhỏ: mong đợi ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `Quá nhỏ: mong đợi ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `Quá nhỏ: mong đợi ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+        return `Quá nhỏ: mong đợi ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Chuỗi không hợp lệ: phải bắt đầu bằng "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -9976,18 +9976,18 @@ var error47 = () => {
           return `Chuỗi không hợp lệ: phải bao gồm "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Chuỗi không hợp lệ: phải khớp với mẫu ${_issue.pattern}`;
-        return `${FormatDictionary[_issue.format] ?? issue2.format} không hợp lệ`;
+        return `${FormatDictionary[_issue.format] ?? issue3.format} không hợp lệ`;
       }
       case "not_multiple_of":
-        return `Số không hợp lệ: phải là bội số của ${issue2.divisor}`;
+        return `Số không hợp lệ: phải là bội số của ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Khóa không được nhận dạng: ${joinValues(issue2.keys, ", ")}`;
+        return `Khóa không được nhận dạng: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Khóa không hợp lệ trong ${issue2.origin}`;
+        return `Khóa không hợp lệ trong ${issue3.origin}`;
       case "invalid_union":
         return "Đầu vào không hợp lệ";
       case "invalid_element":
-        return `Giá trị không hợp lệ trong ${issue2.origin}`;
+        return `Giá trị không hợp lệ trong ${issue3.origin}`;
       default:
         return `Đầu vào không hợp lệ`;
     }
@@ -10046,38 +10046,38 @@ var error48 = () => {
     array: "数组",
     null: "空值(null)"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `无效输入：期望 instanceof ${issue2.expected}，实际接收 ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `无效输入：期望 instanceof ${issue3.expected}，实际接收 ${received}`;
         }
         return `无效输入：期望 ${expected}，实际接收 ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `无效输入：期望 ${stringifyPrimitive(issue2.values[0])}`;
-        return `无效选项：期望以下之一 ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `无效输入：期望 ${stringifyPrimitive(issue3.values[0])}`;
+        return `无效选项：期望以下之一 ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `数值过大：期望 ${issue2.origin ?? "值"} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "个元素"}`;
-        return `数值过大：期望 ${issue2.origin ?? "值"} ${adj}${issue2.maximum.toString()}`;
+          return `数值过大：期望 ${issue3.origin ?? "值"} ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "个元素"}`;
+        return `数值过大：期望 ${issue3.origin ?? "值"} ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `数值过小：期望 ${issue2.origin} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `数值过小：期望 ${issue3.origin} ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `数值过小：期望 ${issue2.origin} ${adj}${issue2.minimum.toString()}`;
+        return `数值过小：期望 ${issue3.origin} ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `无效字符串：必须以 "${_issue.prefix}" 开头`;
         if (_issue.format === "ends_with")
@@ -10086,18 +10086,18 @@ var error48 = () => {
           return `无效字符串：必须包含 "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `无效字符串：必须满足正则表达式 ${_issue.pattern}`;
-        return `无效${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `无效${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `无效数字：必须是 ${issue2.divisor} 的倍数`;
+        return `无效数字：必须是 ${issue3.divisor} 的倍数`;
       case "unrecognized_keys":
-        return `出现未知的键(key): ${joinValues(issue2.keys, ", ")}`;
+        return `出现未知的键(key): ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `${issue2.origin} 中的键(key)无效`;
+        return `${issue3.origin} 中的键(key)无效`;
       case "invalid_union":
         return "无效输入";
       case "invalid_element":
-        return `${issue2.origin} 中包含无效值(value)`;
+        return `${issue3.origin} 中包含无效值(value)`;
       default:
         return `无效输入`;
     }
@@ -10153,38 +10153,38 @@ var error49 = () => {
   const TypeDictionary = {
     nan: "NaN"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `無效的輸入值：預期為 instanceof ${issue2.expected}，但收到 ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `無效的輸入值：預期為 instanceof ${issue3.expected}，但收到 ${received}`;
         }
         return `無效的輸入值：預期為 ${expected}，但收到 ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `無效的輸入值：預期為 ${stringifyPrimitive(issue2.values[0])}`;
-        return `無效的選項：預期為以下其中之一 ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `無效的輸入值：預期為 ${stringifyPrimitive(issue3.values[0])}`;
+        return `無效的選項：預期為以下其中之一 ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `數值過大：預期 ${issue2.origin ?? "值"} 應為 ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "個元素"}`;
-        return `數值過大：預期 ${issue2.origin ?? "值"} 應為 ${adj}${issue2.maximum.toString()}`;
+          return `數值過大：預期 ${issue3.origin ?? "值"} 應為 ${adj}${issue3.maximum.toString()} ${sizing.unit ?? "個元素"}`;
+        return `數值過大：預期 ${issue3.origin ?? "值"} 應為 ${adj}${issue3.maximum.toString()}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing) {
-          return `數值過小：預期 ${issue2.origin} 應為 ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+          return `數值過小：預期 ${issue3.origin} 應為 ${adj}${issue3.minimum.toString()} ${sizing.unit}`;
         }
-        return `數值過小：預期 ${issue2.origin} 應為 ${adj}${issue2.minimum.toString()}`;
+        return `數值過小：預期 ${issue3.origin} 應為 ${adj}${issue3.minimum.toString()}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with") {
           return `無效的字串：必須以 "${_issue.prefix}" 開頭`;
         }
@@ -10194,18 +10194,18 @@ var error49 = () => {
           return `無效的字串：必須包含 "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `無效的字串：必須符合格式 ${_issue.pattern}`;
-        return `無效的 ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `無效的 ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `無效的數字：必須為 ${issue2.divisor} 的倍數`;
+        return `無效的數字：必須為 ${issue3.divisor} 的倍數`;
       case "unrecognized_keys":
-        return `無法識別的鍵值${issue2.keys.length > 1 ? "們" : ""}：${joinValues(issue2.keys, "、")}`;
+        return `無法識別的鍵值${issue3.keys.length > 1 ? "們" : ""}：${joinValues(issue3.keys, "、")}`;
       case "invalid_key":
-        return `${issue2.origin} 中有無效的鍵值`;
+        return `${issue3.origin} 中有無效的鍵值`;
       case "invalid_union":
         return "無效的輸入值";
       case "invalid_element":
-        return `${issue2.origin} 中有無效的值`;
+        return `${issue3.origin} 中有無效的值`;
       default:
         return `無效的輸入值`;
     }
@@ -10263,37 +10263,37 @@ var error50 = () => {
     number: "nọ́mbà",
     array: "akopọ"
   };
-  return (issue2) => {
-    switch (issue2.code) {
+  return (issue3) => {
+    switch (issue3.code) {
       case "invalid_type": {
-        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
-        const receivedType = parsedType(issue2.input);
+        const expected = TypeDictionary[issue3.expected] ?? issue3.expected;
+        const receivedType = parsedType(issue3.input);
         const received = TypeDictionary[receivedType] ?? receivedType;
-        if (/^[A-Z]/.test(issue2.expected)) {
-          return `Ìbáwọlé aṣìṣe: a ní láti fi instanceof ${issue2.expected}, àmọ̀ a rí ${received}`;
+        if (/^[A-Z]/.test(issue3.expected)) {
+          return `Ìbáwọlé aṣìṣe: a ní láti fi instanceof ${issue3.expected}, àmọ̀ a rí ${received}`;
         }
         return `Ìbáwọlé aṣìṣe: a ní láti fi ${expected}, àmọ̀ a rí ${received}`;
       }
       case "invalid_value":
-        if (issue2.values.length === 1)
-          return `Ìbáwọlé aṣìṣe: a ní láti fi ${stringifyPrimitive(issue2.values[0])}`;
-        return `Àṣàyàn aṣìṣe: yan ọ̀kan lára ${joinValues(issue2.values, "|")}`;
+        if (issue3.values.length === 1)
+          return `Ìbáwọlé aṣìṣe: a ní láti fi ${stringifyPrimitive(issue3.values[0])}`;
+        return `Àṣàyàn aṣìṣe: yan ọ̀kan lára ${joinValues(issue3.values, "|")}`;
       case "too_big": {
-        const adj = issue2.inclusive ? "<=" : "<";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Tó pọ̀ jù: a ní láti jẹ́ pé ${issue2.origin ?? "iye"} ${sizing.verb} ${adj}${issue2.maximum} ${sizing.unit}`;
-        return `Tó pọ̀ jù: a ní láti jẹ́ ${adj}${issue2.maximum}`;
+          return `Tó pọ̀ jù: a ní láti jẹ́ pé ${issue3.origin ?? "iye"} ${sizing.verb} ${adj}${issue3.maximum} ${sizing.unit}`;
+        return `Tó pọ̀ jù: a ní láti jẹ́ ${adj}${issue3.maximum}`;
       }
       case "too_small": {
-        const adj = issue2.inclusive ? ">=" : ">";
-        const sizing = getSizing(issue2.origin);
+        const adj = issue3.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue3.origin);
         if (sizing)
-          return `Kéré ju: a ní láti jẹ́ pé ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum} ${sizing.unit}`;
-        return `Kéré ju: a ní láti jẹ́ ${adj}${issue2.minimum}`;
+          return `Kéré ju: a ní láti jẹ́ pé ${issue3.origin} ${sizing.verb} ${adj}${issue3.minimum} ${sizing.unit}`;
+        return `Kéré ju: a ní láti jẹ́ ${adj}${issue3.minimum}`;
       }
       case "invalid_format": {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.format === "starts_with")
           return `Ọ̀rọ̀ aṣìṣe: gbọ́dọ̀ bẹ̀rẹ̀ pẹ̀lú "${_issue.prefix}"`;
         if (_issue.format === "ends_with")
@@ -10302,18 +10302,18 @@ var error50 = () => {
           return `Ọ̀rọ̀ aṣìṣe: gbọ́dọ̀ ní "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Ọ̀rọ̀ aṣìṣe: gbọ́dọ̀ bá àpẹẹrẹ mu ${_issue.pattern}`;
-        return `Aṣìṣe: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Aṣìṣe: ${FormatDictionary[_issue.format] ?? issue3.format}`;
       }
       case "not_multiple_of":
-        return `Nọ́mbà aṣìṣe: gbọ́dọ̀ jẹ́ èyà pípín ti ${issue2.divisor}`;
+        return `Nọ́mbà aṣìṣe: gbọ́dọ̀ jẹ́ èyà pípín ti ${issue3.divisor}`;
       case "unrecognized_keys":
-        return `Bọtìnì àìmọ̀: ${joinValues(issue2.keys, ", ")}`;
+        return `Bọtìnì àìmọ̀: ${joinValues(issue3.keys, ", ")}`;
       case "invalid_key":
-        return `Bọtìnì aṣìṣe nínú ${issue2.origin}`;
+        return `Bọtìnì aṣìṣe nínú ${issue3.origin}`;
       case "invalid_union":
         return "Ìbáwọlé aṣìṣe";
       case "invalid_element":
-        return `Iye aṣìṣe nínú ${issue2.origin}`;
+        return `Iye aṣìṣe nínú ${issue3.origin}`;
       default:
         return "Ìbáwọlé aṣìṣe";
     }
@@ -11292,11 +11292,11 @@ function _refine(Class2, fn, _params) {
 // @__NO_SIDE_EFFECTS__
 function _superRefine(fn, params) {
   const ch = /* @__PURE__ */ _check((payload) => {
-    payload.addIssue = (issue2) => {
-      if (typeof issue2 === "string") {
-        payload.issues.push(issue(issue2, payload.value, ch._zod.def));
+    payload.addIssue = (issue3) => {
+      if (typeof issue3 === "string") {
+        payload.issues.push(issue(issue3, payload.value, ch._zod.def));
       } else {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.fatal)
           _issue.continue = false;
         _issue.code ?? (_issue.code = "custom");
@@ -12655,8 +12655,8 @@ var initializer2 = (inst, issues) => {
       // enumerable: false,
     },
     addIssue: {
-      value: (issue2) => {
-        inst.issues.push(issue2);
+      value: (issue3) => {
+        inst.issues.push(issue3);
         inst.message = JSON.stringify(inst.issues, jsonStringifyReplacer, 2);
       }
       // enumerable: false,
@@ -13669,11 +13669,11 @@ var ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
     if (_ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
     }
-    payload.addIssue = (issue2) => {
-      if (typeof issue2 === "string") {
-        payload.issues.push(util_exports.issue(issue2, payload.value, def));
+    payload.addIssue = (issue3) => {
+      if (typeof issue3 === "string") {
+        payload.issues.push(util_exports.issue(issue3, payload.value, def));
       } else {
-        const _issue = issue2;
+        const _issue = issue3;
         if (_issue.fatal)
           _issue.continue = false;
         _issue.code ?? (_issue.code = "custom");
@@ -14472,23 +14472,23 @@ function fromJSONSchema(schema, params) {
   if (typeof schema === "boolean") {
     return schema ? z.any() : z.never();
   }
-  let normalized;
+  let normalized2;
   try {
-    normalized = JSON.parse(JSON.stringify(schema));
+    normalized2 = JSON.parse(JSON.stringify(schema));
   } catch {
     throw new Error("fromJSONSchema input is not valid JSON (possibly cyclic); use $defs/$ref for recursive schemas");
   }
-  const version2 = detectVersion(normalized, params?.defaultTarget);
-  const defs = normalized.$defs || normalized.definitions || {};
+  const version2 = detectVersion(normalized2, params?.defaultTarget);
+  const defs = normalized2.$defs || normalized2.definitions || {};
   const ctx = {
     version: version2,
     defs,
     refs: /* @__PURE__ */ new Map(),
     processing: /* @__PURE__ */ new Set(),
-    rootSchema: normalized,
+    rootSchema: normalized2,
     registry: params?.registry ?? globalRegistry
   };
-  return convertSchema(normalized, ctx);
+  return convertSchema(normalized2, ctx);
 }
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/coerce.js
@@ -14708,7 +14708,7 @@ function scene3dDataIssue(sceneId, data) {
   const parsed = businessSceneDataSchemas[sceneId].safeParse(data);
   if (parsed.success) return null;
   const details = parsed.error.issues.slice(0, 3).map(
-    (issue2) => `${issue2.path.length ? issue2.path.map(String).join(".") : "data"}: ${issue2.message}`
+    (issue3) => `${issue3.path.length ? issue3.path.map(String).join(".") : "data"}: ${issue3.message}`
   ).join("; ");
   return {
     code: "scene3d.invalid_data",
@@ -15093,7 +15093,7 @@ function validateSlideDocument(input) {
     };
   }
   const semanticIssues = validateSlideDocumentSemantics(parsed.data);
-  const hasErrors = semanticIssues.some((issue2) => issue2.severity === "error");
+  const hasErrors = semanticIssues.some((issue3) => issue3.severity === "error");
   if (hasErrors) {
     return {
       ok: false,
@@ -15395,53 +15395,53 @@ function validateComparisonSide(side, sideName, slide, slideIndex, blockIndex, b
 }
 function repairIssuesFromZodIssues(zodIssues, options = {}) {
   return zodIssues.map((zodIssue) => {
-    const issue2 = zodIssueToRepairIssue(zodIssue);
-    const pathSegments = [...options.pathPrefix ?? [], ...issue2.pathSegments];
+    const issue3 = zodIssueToRepairIssue(zodIssue);
+    const pathSegments = [...options.pathPrefix ?? [], ...issue3.pathSegments];
     return {
-      ...issue2,
-      code: options.code ?? issue2.code,
+      ...issue3,
+      code: options.code ?? issue3.code,
       path: pathToString(pathSegments),
       pathSegments,
       ...options.slideId ? { slideId: options.slideId } : {}
     };
   });
 }
-function zodIssueToRepairIssue(issue2) {
-  const pathSegments = issue2.path.map((segment) => typeof segment === "symbol" ? String(segment) : segment);
+function zodIssueToRepairIssue(issue3) {
+  const pathSegments = issue3.path.map((segment) => typeof segment === "symbol" ? String(segment) : segment);
   return makeIssue({
-    code: `schema.${issue2.code}`,
-    message: issue2.message,
+    code: `schema.${issue3.code}`,
+    message: issue3.message,
     pathSegments,
-    expected: "expected" in issue2 ? String(issue2.expected) : void 0,
-    received: "received" in issue2 ? String(issue2.received) : void 0,
-    repairHint: repairHintForZodIssue(issue2)
+    expected: "expected" in issue3 ? String(issue3.expected) : void 0,
+    received: "received" in issue3 ? String(issue3.received) : void 0,
+    repairHint: repairHintForZodIssue(issue3)
   });
 }
-function repairHintForZodIssue(issue2) {
-  if (issue2.path.length === 0) {
+function repairHintForZodIssue(issue3) {
+  if (issue3.path.length === 0) {
     return "Return a single SlideDocument object that matches learnordie.slide.v1.";
   }
-  const path = pathToString(issue2.path.map((segment) => typeof segment === "symbol" ? String(segment) : segment));
-  if (issue2.code === "invalid_type") {
+  const path = pathToString(issue3.path.map((segment) => typeof segment === "symbol" ? String(segment) : segment));
+  if (issue3.code === "invalid_type") {
     return `Set ${path} to the required type or remove it if the field is optional.`;
   }
-  if (issue2.code === "unrecognized_keys") {
+  if (issue3.code === "unrecognized_keys") {
     return `Remove unsupported fields from ${path}; v1 accepts only the documented SlideDocument keys.`;
   }
-  if (issue2.code === "invalid_value") {
+  if (issue3.code === "invalid_value") {
     return `Use one of the allowed enum/literal values at ${path}.`;
   }
-  if (issue2.code === "too_small" || issue2.code === "too_big") {
+  if (issue3.code === "too_small" || issue3.code === "too_big") {
     return `Adjust the value at ${path} to fit the allowed size or range.`;
   }
   return `Repair the value at ${path} so it matches the SlideDocument v1 schema.`;
 }
-function makeIssue(issue2) {
-  const { severity, ...rest } = issue2;
+function makeIssue(issue3) {
+  const { severity, ...rest } = issue3;
   return {
     ...rest,
     severity: severity ?? "error",
-    path: pathToString(issue2.pathSegments)
+    path: pathToString(issue3.pathSegments)
   };
 }
 function pathToString(pathSegments) {
@@ -16225,6 +16225,389 @@ function truncateChars(text2, maxChars) {
   return chars.length <= maxChars ? text2 : `${chars.slice(0, maxChars - 1).join("").trimEnd()}…`;
 }
 
+// src/meeting-lint.ts
+var NARRATION_MAX_CHARS = 450;
+var TITLE_NARRATION_MAX_CHARS = 150;
+var META_PATTERNS = [
+  [/\b(?:diese[rsnm]?|auf dieser|in dieser|nächsten?|vorigen?|vorherigen?) Folie\b/iu, "the slide"],
+  [/\bFolie (?:zeigt|enthält|bleibt|fasst|stellt)\b/iu, "the slide"],
+  [/\b(?:alle|allen) Folien\b/iu, "the slides"],
+  [new RegExp("\\bbleib(?:t|en) (?:\\p{L}+ ){0,3}leer\\b", "iu"), "an empty display"],
+  [new RegExp("\\berscheint (?:\\p{L}+ ){0,2}(?:hier|an dieser Stelle)\\b", "iu"), "where something appears"],
+  [
+    /\bhier (?:erscheint|erscheinen|steht|stehen|sehen Sie|sieht man|zeige ich|zeigen wir)\b/iu,
+    "the display"
+  ],
+  [/\b(?:links|rechts|oben|unten) (?:steht|stehen|sehen Sie|sieht man|zeigt)\b/iu, "the layout"],
+  [/\blaut (?:KPI-)?(?:Katalog|Konfiguration)\b/iu, "the data plumbing"],
+  [/\baus der (?:Projekt-?)?Konfiguration\b/iu, "the data plumbing"],
+  [/\b(?:frühere|vorherige|keine) Präsentation\b/iu, "the presentation system"],
+  [/\b(?:ich|wir) (?:zeige|zeigen|erfinde|erfinden|stelle|stellen) /iu, "the author's own choices"],
+  [/\bwird (?:hier |unten |oben )?(?:angezeigt|dargestellt|visualisiert)\b/iu, "the display"],
+  [
+    /\b(?:Trenddarstellung|Darstellung|Anzeige|Visualisierung) (?:bleibt|entfällt|fehlt)\b/iu,
+    "the display"
+  ],
+  [
+    /\b(?:Vorschläge|Vorschlag|Details|Konkretes) folg(?:en|t) (?:am Ende|später|im Anschluss)\b/iu,
+    "the meeting process"
+  ],
+  [/\bIm Folgenden\b/u, "the presentation itself"],
+  [/\bwie Sie (?:hier |oben |unten )?sehen\b/iu, "the display"],
+  [/\b(?:this|the next|the previous) slide\b/iu, "the slide"],
+  [/\b(?:shown|displayed|appears?) here\b/iu, "the display"],
+  [/\bstays? empty\b/iu, "an empty display"]
+];
+var SNAKE_CASE = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/u;
+var JARGON_PATTERNS = [
+  /\bmissing[ _]source\b/iu,
+  /\bKPI-Prompts?\b/u,
+  /\b(?:Task-|Katalog-|KPI-)?Rezept(?:e|en)?\b/u,
+  /\bNative-Quellen?\b/iu,
+  /\bSupervisor-Befehle?\b/u,
+  /\bqueued\b/iu,
+  /\bgebundene[nr]? (?:Werte|KPIs?|Kennzahlen|Task-Kennzahlen)\b/u,
+  /\b(?:Werte?|KPIs?|Kennzahlen) (?:ist |sind )?(?:noch )?(?:nicht )?gebunden\b/u
+];
+var NO_DATA_TITLE = /\b(?:keine|ohne) (?:Daten|Werte|Belege|Messpunkte|Angaben|Einträge)\b|\bno (?:data|values|evidence)\b/iu;
+var PLACEHOLDER_CELL = /^(?:|[-–—]|n\/?a|k\. ?A\.|keine Daten|keine Werte|no data)$/iu;
+function lintMeetingDeck(document) {
+  const issues = [];
+  document.slides.forEach((slide, slideIndex) => {
+    const base2 = ["slides", slideIndex];
+    lintTitleRepeats(slide, base2, issues);
+    if (slideIndex > 0 && NO_DATA_TITLE.test(slide.title)) {
+      issues.push(
+        issue2("content.empty_slide", [...base2, "title"], slide.id, {
+          message: `Slide "${slide.title}" only states that evidence is missing.`,
+          repairHint: "Leave this slide out and name the missing evidence once, on the goal and status slide."
+        })
+      );
+    }
+    slide.blocks.forEach((block, blockIndex) => {
+      if (block.type === "table" && isPlaceholderTable(block)) {
+        issues.push(
+          issue2("content.placeholder_table", [...base2, "blocks", blockIndex], slide.id, {
+            blockId: block.id,
+            message: 'The table holds no real row, only placeholders such as "—" or "keine Daten".',
+            repairHint: "Remove the table; name the missing evidence once on the goal and status slide."
+          })
+        );
+      }
+    });
+    for (const segment of slideSegments(slide, base2)) lintWording(segment, issues);
+  });
+  document.slides.forEach((slide, slideIndex) => lintNarration(slide, slideIndex, issues));
+  lintDuplicates(document, issues);
+  return issues;
+}
+function lintTitleRepeats(slide, base2, issues) {
+  const title = normalized(slide.title);
+  if (!title) return;
+  slide.blocks.forEach((block, blockIndex) => {
+    if (block.type !== "heading") return;
+    const heading = normalized(block.text);
+    const repeats = heading === title || heading.startsWith(title) || title.startsWith(heading) && heading.length >= title.length * 0.6;
+    if (!repeats) return;
+    issues.push(
+      issue2("content.title_repeated", [...base2, "blocks", blockIndex, "text"], slide.id, {
+        blockId: block.id,
+        message: `Heading "${block.text}" repeats the slide title "${slide.title}".`,
+        repairHint: "Remove the heading; the title is already drawn as the headline. Use headings only for different sub-headings."
+      })
+    );
+  });
+}
+function lintWording(segment, issues) {
+  for (const [pattern, topic] of META_PATTERNS) {
+    const match = pattern.exec(segment.text);
+    if (!match) continue;
+    issues.push(
+      issue2("content.meta_phrase", segment.pathSegments, segment.slideId, {
+        ...segment.blockId ? { blockId: segment.blockId } : {},
+        message: `"${match[0]}" talks about ${topic}, not about the project.`,
+        received: excerpt(segment.text, match.index),
+        repairHint: "State the project fact or the decision instead; never describe the slide, its layout, the display, the data plumbing or your own choices."
+      })
+    );
+    break;
+  }
+  const jargon = SNAKE_CASE.exec(segment.text) ?? firstMatch(JARGON_PATTERNS, segment.text);
+  if (jargon) {
+    issues.push(
+      issue2("content.system_jargon", segment.pathSegments, segment.slideId, {
+        ...segment.blockId ? { blockId: segment.blockId } : {},
+        message: `"${jargon[0]}" is an internal term the Owner does not use.`,
+        received: excerpt(segment.text, jargon.index),
+        repairHint: `Say it in the Owner's words (e.g. "Gemergte PRs: Quelle noch nicht angebunden"); no internal ids, field names or system states.`
+      })
+    );
+  }
+}
+function lintNarration(slide, slideIndex, issues) {
+  const base2 = ["slides", slideIndex];
+  const notes = (slide.speakerNotes ?? []).map((note, index) => ({ note, index })).filter(({ note }) => note.kind === void 0 || note.kind === "talkingPoint").filter(({ note }) => note.text.trim());
+  if (notes.length === 0) {
+    issues.push(
+      issue2("narration.missing", [...base2, "speakerNotes"], slide.id, {
+        message: `Slide "${slide.title}" has no talking point, so its text would be read aloud.`,
+        repairHint: "Add one talkingPoint note: what this slide means for the project, in spoken German."
+      })
+    );
+    return;
+  }
+  const spoken = notes.map(({ note }) => note.text.trim()).join("\n\n");
+  const budget = slideIndex === 0 ? TITLE_NARRATION_MAX_CHARS : NARRATION_MAX_CHARS;
+  const length = [...spoken].length;
+  if (length > budget) {
+    issues.push(
+      issue2("narration.too_long", [...base2, "speakerNotes"], slide.id, {
+        message: `The narration has ${length} characters; this slide allows ${budget} (about ${Math.round(budget / 15.6)} seconds).`,
+        repairHint: "Shorten the talking point: say what changed and what the Owner decides, nothing else."
+      })
+    );
+  }
+  const shown = slideNumberRuns(slide);
+  const shownSegments = slideSegments(slide, base2, false).flatMap(
+    (segment) => sentences(segment.text).map((text2) => tokens(text2))
+  );
+  for (const { note, index } of notes) {
+    const path = [...base2, "speakerNotes", index, "text"];
+    const unsupported = numberRuns(note.text).filter(
+      (run) => run.length >= 2 && !shown.has(canonicalRun(run))
+    );
+    if (unsupported.length) {
+      issues.push(
+        issue2("narration.unsupported_number", path, slide.id, {
+          message: `The narration says ${[...new Set(unsupported)].join(", ")}, which neither the slide nor its sources show.`,
+          received: excerpt(note.text, note.text.indexOf(unsupported[0])),
+          repairHint: "Speak only numbers the slide shows or its sources state; put a missing number on the slide with its source, or leave it out."
+        })
+      );
+    }
+    for (const sentence of sentences(note.text)) {
+      const spokenTokens = tokens(sentence);
+      if (spokenTokens.size < 5) continue;
+      const copied = shownSegments.find((shownTokens) => {
+        if (shownTokens.size < 5) return false;
+        let common = 0;
+        for (const token of shownTokens) if (spokenTokens.has(token)) common += 1;
+        const union2 = shownTokens.size + spokenTokens.size - common;
+        return common / union2 >= 0.75 || shownTokens.size >= 6 && common / shownTokens.size >= 0.9;
+      });
+      if (!copied) continue;
+      issues.push(
+        issue2("narration.reads_slide", path, slide.id, {
+          message: `"${sentence.trim()}" reads the slide text aloud.`,
+          repairHint: "Say what the slide means instead of reading it: the change, its cause or the decision it asks for."
+        })
+      );
+      break;
+    }
+  }
+}
+function slideNumberRuns(slide) {
+  const texts = [slide.title];
+  for (const segment of slideSegments(slide, [], false)) texts.push(segment.text);
+  const scenes = [];
+  for (const block of slide.blocks) {
+    if (block.type === "scene3d") scenes.push({ sceneId: block.sceneId, data: block.data });
+    if (block.type === "chart") texts.push(JSON.stringify(block.data ?? {}));
+    if (block.type === "table") texts.push(block.columns.join(" "));
+  }
+  for (const element of slide.canvas?.elements ?? []) {
+    const embed = element.customData?.learnordie;
+    if (embed?.type === "scene3d") scenes.push({ sceneId: embed.sceneId, data: embed.data });
+  }
+  for (const { sceneId, data } of scenes) {
+    const summary = businessSceneSummary(sceneId, data);
+    if (summary) texts.push(summary);
+    for (const value of jsonNumbers(data)) texts.push(String(value), formatNumber(value));
+    texts.push(JSON.stringify(data ?? {}));
+  }
+  for (const source of slide.sourceRefs ?? []) {
+    texts.push(source.label, source.locator ?? "", source.url ?? "");
+  }
+  for (const note of slide.speakerNotes ?? []) {
+    if (note.kind === "source") texts.push(note.text);
+  }
+  return new Set(texts.flatMap(numberRuns).map(canonicalRun));
+}
+function jsonNumbers(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return [value];
+  if (Array.isArray(value)) return value.flatMap(jsonNumbers);
+  if (value && typeof value === "object") return Object.values(value).flatMap(jsonNumbers);
+  return [];
+}
+var numberRuns = (text2) => text2.match(/\d+/gu) ?? [];
+var canonicalRun = (run) => run.replace(/^0+(?=\d)/u, "");
+var tokens = (text2) => new Set(
+  normalized(text2).split(" ").filter((token) => token.length > 1)
+);
+function lintDuplicates(document, issues) {
+  const seen = /* @__PURE__ */ new Map();
+  document.slides.forEach((slide, slideIndex) => {
+    const local = /* @__PURE__ */ new Set();
+    for (const segment of slideSegments(slide, ["slides", slideIndex], false)) {
+      for (const sentence of sentences(segment.text)) {
+        const key = normalized(sentence);
+        if (key.split(" ").length < 5 || local.has(key)) continue;
+        local.add(key);
+        const first = seen.get(key);
+        if (!first) {
+          seen.set(key, segment);
+          continue;
+        }
+        issues.push(
+          issue2("content.duplicate_text", segment.pathSegments, segment.slideId, {
+            severity: "warning",
+            ...segment.blockId ? { blockId: segment.blockId } : {},
+            message: `"${sentence.trim()}" already stands on slide "${first.slideId}".`,
+            repairHint: "Say each fact once in the deck; keep it where the Owner has to act on it."
+          })
+        );
+      }
+    }
+  });
+}
+function slideSegments(slide, base2, withNotes = true) {
+  const segments = [];
+  const push = (text2, path, blockId) => {
+    if (text2?.trim())
+      segments.push({
+        slideId: slide.id,
+        pathSegments: [...base2, ...path],
+        text: text2,
+        ...blockId ? { blockId } : {}
+      });
+  };
+  if (slide.canvas) {
+    slide.canvas.elements.forEach((element, index) => {
+      if (element.isDeleted || element.id === `${slide.id}:title`) return;
+      if (element.type === "text")
+        push(element.originalText ?? element.text, ["canvas", "elements", index, "text"]);
+      const embed = element.customData?.learnordie;
+      if (embed?.type === "scene3d")
+        push(embed.caption, ["canvas", "elements", index, "customData"]);
+    });
+  } else {
+    slide.blocks.forEach((block, index) => {
+      for (const [text2, path] of blockTexts(block))
+        push(text2, ["blocks", index, ...path], block.id);
+    });
+  }
+  if (withNotes) {
+    (slide.speakerNotes ?? []).forEach((note, index) => {
+      if (note.kind === void 0 || note.kind === "talkingPoint")
+        push(note.text, ["speakerNotes", index, "text"]);
+    });
+  }
+  return segments;
+}
+function blockTexts(block) {
+  switch (block.type) {
+    case "heading":
+    case "paragraph":
+      return [[block.text, ["text"]]];
+    case "bulletList":
+    case "numberedList":
+      return block.items.map((item, index) => [item, ["items", index]]);
+    case "definition":
+      return [
+        [block.term, ["term"]],
+        [block.definition, ["definition"]],
+        [block.example, ["example"]]
+      ];
+    case "callout":
+      return [
+        [block.title, ["title"]],
+        [block.text, ["text"]]
+      ];
+    case "figure":
+      return [[block.caption, ["caption"]]];
+    case "formula":
+      return [[block.caption, ["caption"]]];
+    case "table":
+      return [
+        [block.caption, ["caption"]],
+        ...block.rows.flatMap(
+          (row, rowIndex) => row.map((cell, cellIndex) => [
+            cell,
+            ["rows", rowIndex, cellIndex]
+          ])
+        )
+      ];
+    case "chart":
+      return [
+        [block.title, ["title"]],
+        [block.caption, ["caption"]]
+      ];
+    case "process":
+      return block.steps.flatMap(
+        (step, index) => [
+          [step.title, ["steps", index, "title"]],
+          [step.text, ["steps", index, "text"]]
+        ]
+      );
+    case "comparison":
+      return ["left", "right"].flatMap(
+        (side) => [
+          [block[side].title, [side, "title"]],
+          [block[side].body, [side, "body"]],
+          ...(block[side].items ?? []).map((item, index) => [
+            item,
+            [side, "items", index]
+          ])
+        ]
+      );
+    case "quote":
+      return [[block.text, ["text"]]];
+    case "quizAnchor":
+      return [[block.prompt, ["prompt"]]];
+    case "scene3d":
+      return [[block.caption, ["caption"]]];
+    case "code":
+    case "spacer":
+      return [];
+  }
+}
+function isPlaceholderTable(block) {
+  return block.rows.length > 0 && block.rows.every(
+    (row) => row.every(
+      (cell) => PLACEHOLDER_CELL.test((cell ?? "").trim()) || /keine Daten/iu.test(cell ?? "")
+    )
+  );
+}
+function issue2(code, pathSegments, slideId, detail) {
+  return {
+    severity: detail.severity ?? "error",
+    code,
+    message: detail.message,
+    path: pathSegments.reduce(
+      (path, segment) => typeof segment === "number" ? `${path}[${segment}]` : `${path}.${segment}`,
+      "$"
+    ),
+    pathSegments,
+    repairHint: detail.repairHint,
+    slideId,
+    ...detail.blockId ? { blockId: detail.blockId } : {},
+    ...detail.received ? { received: detail.received } : {}
+  };
+}
+var normalized = (text2) => text2.toLowerCase().normalize("NFKC").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+var sentences = (text2) => text2.split(/(?<=[.!?])\s+|\n+/u).filter((part) => part.trim());
+function firstMatch(patterns, text2) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text2);
+    if (match) return match;
+  }
+  return null;
+}
+function excerpt(text2, index) {
+  const start = Math.max(0, index - 30);
+  return `${start > 0 ? "…" : ""}${text2.slice(start, index + 60).trim()}${index + 60 < text2.length ? "…" : ""}`;
+}
+
 // src/validator/protocol.ts
 var VALIDATOR_MAX_INPUT_BYTES = 24 * 1024 * 1024;
 var validatorOps = [
@@ -16233,7 +16616,8 @@ var validatorOps = [
   "updateCanvas",
   "canvasForSlide",
   "outline",
-  "meetingSlides"
+  "meetingSlides",
+  "lintMeeting"
 ];
 function handleValidatorRequest(request) {
   if (typeof request !== "object" || request === null || Array.isArray(request)) {
@@ -16277,15 +16661,16 @@ var requiredFields = {
   ],
   canvasForSlide: [["slideId", isString, "a string"]],
   outline: [],
-  meetingSlides: []
+  meetingSlides: [],
+  lintMeeting: []
 };
 function runOp(op, fields) {
   if (op === "validate") {
     const result = validateSlideDocument(fields.document);
     return {
       ok: result.ok,
-      issues: result.issues.filter((issue2) => issue2.severity === "error"),
-      warnings: result.issues.filter((issue2) => issue2.severity === "warning")
+      issues: result.issues.filter((issue3) => issue3.severity === "error"),
+      warnings: result.issues.filter((issue3) => issue3.severity === "warning")
     };
   }
   if (op === "applyEdits") return applyEdits(fields.document, fields.operations);
@@ -16304,6 +16689,14 @@ function runOp(op, fields) {
       return { ok: true, ...slideDocumentOutline(document) };
     case "meetingSlides":
       return { ok: true, slides: meetingSlides(document) };
+    case "lintMeeting": {
+      const lint = lintMeetingDeck(document);
+      return {
+        ok: !lint.some((issue3) => issue3.severity === "error"),
+        issues: lint.filter((issue3) => issue3.severity === "error"),
+        warnings: lint.filter((issue3) => issue3.severity === "warning")
+      };
+    }
   }
 }
 var knownOperationKinds = new Set(AGENTIC_SLIDE_EDIT_CONTRACT.operationKinds);

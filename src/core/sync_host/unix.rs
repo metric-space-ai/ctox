@@ -152,6 +152,12 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         }
     }
     match words.as_slice() {
+        ["supervisor-source-lookup", instance, computer, ipc_directory] =>
+            crate::native_supervisor_transport::selected(&root, instance, computer, Path::new(ipc_directory), true),
+        ["supervisor-source-selected", instance, computer, ipc_directory] =>
+            crate::native_supervisor_transport::selected(&root, instance, computer, Path::new(ipc_directory), false),
+        ["supervisor-source", target, ipc_directory] =>
+            crate::native_supervisor_transport::serve(&root, target, Path::new(ipc_directory)),
         ["init"] => initialize(&root, None),
         ["import-key", expected] => {
             let bytes = base64::engine::general_purpose::STANDARD.decode(input()?.trim()).context("invalid native Sync key encoding")?;
@@ -254,7 +260,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
         }, |started, _authority, _guests, _control| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
-        _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-import-guest <binding-digest> <guest-id> | handoff-restore-guest <binding-digest> <guest-id> | handoff-acknowledge-copy <binding-digest> | handoff-protect-checkpoint <binding-digest> (public receipt array on stdin) | handoff-take-over <binding-digest> | handoff-enroll-guest <binding-digest> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
+        _ => anyhow::bail!("usage: ctox sync supervisor-source <target> <ipc-directory> | supervisor-source-selected <instance> <computer> <ipc-directory> | supervisor-source-lookup <instance> <computer> <ipc-directory> | init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | handoff-enroll-source (public JSON on stdin) | handoff-target-challenge | handoff-source-offer <binding> <challenge> | handoff-configure-target-repository (public JSON on stdin) | handoff-enroll-target (public JSON on stdin) | handoff-copy <binding-digest> <source-route> | handoff-reconstruct <binding-digest> | handoff-import-guest <binding-digest> <guest-id> | handoff-restore-guest <binding-digest> <guest-id> | handoff-acknowledge-copy <binding-digest> | handoff-protect-checkpoint <binding-digest> (public receipt array on stdin) | handoff-take-over <binding-digest> | handoff-enroll-guest <binding-digest> | handoff-revoke <binding> | handoff-reauthorize-source <binding> | configure-guests (public JSON on stdin) | revoke-guest-provider <owner> <profile> | revoke-guest-workspace <owner> <profile> <project> | guest-enroll <project> <thread> <profile> (opaque session on stdin) | status | run"),
     }
 }
 

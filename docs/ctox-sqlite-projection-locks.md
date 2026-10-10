@@ -14,7 +14,12 @@ Retention now discovers candidates outside a transaction and reserves an
 IMMEDIATE writer separately for each orphan. It rechecks the attempt identity,
 start/finalization state, current lease and durable finalization before deleting
 the selection event, tombstone outbox, attempt and assignment together.
-A candidate started or leased in the meantime survives. The existing limits
+A candidate started or leased in the meantime survives. Empty maintenance is
+read-only: SQLite reserves its sole writer even for an UPDATE or DELETE that
+matches zero rows. Finalization evidence and finished-retention candidates are
+therefore discovered outside a transaction, and current guards are rechecked
+under one short IMMEDIATE reservation per candidate. Reopened routes and rows
+that entered the newest-500 window survive. The existing limits
 (128 orphans and 128 completed rows; newest 500 completed rows retained) remain.
 
 Batch queue admission previously reserved IMMEDIATE before ranking all pending
@@ -29,9 +34,30 @@ attached canonical projection writes still commit together.
 
 Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
-remain atomic. Source and RxDB projection writers reserve one record at a time;
-source commit precedes mirror delivery, and notifications follow mirror commit.
-No writer reservation spans a full pass or both independently delivered stores.
+remain atomic. Source-record writes keep their existing boundaries. Cold event
+delivery prepares payloads and deduplication outside the writer, then commits at
+most 64 source records and 64 mirror records per separate transaction, using the
+same per-row merge/envelope functions. Source commit precedes mirror delivery;
+notifications follow mirror commit. Projection replication clocks, for batches,
+individual updates, tombstones
+and domain replacements, are reserved from the persisted collection high-water
+mark under that mirror's IMMEDIATE transaction, including when another retained
+writer has advanced it since this cache opened. Domain replacement now reserves
+the writer around its current-row read and write together; its removed-field
+semantics remain unchanged. The cached clock advances only after commit.
+Each row is strictly later than the earlier feed cursor; rollback publishes no
+reservation. A failed mirror chunk rolls back together,
+retains completed chunks in the dedupe cache and restores the unclaimed replay
+cursor so its unpublished rows stay eligible. No writer reservation spans a full
+pass or both independently delivered stores. Repeated source upserts and mirror
+lookups/upserts reuse the connection's bounded prepared-statement cache. The
+SQL, bound values, secret redaction and per-execution canonical version guards
+remain unchanged; caching does not reuse a policy or write decision.
+
+Cold event replay also looks up the plan at each event's emission. A partial
+Core index on task/time/event ID for worker.plan_updated skips unrelated
+phase/tool history, including tasks with no plan. The query and its attempt
+filter are unchanged; the query-plan regression requires the ordered index.
 
 ## Writer diagnostics
 
@@ -39,12 +65,19 @@ Slow native transactions emit `[ctox sqlite writer]` after their own lock
 has been released. The fields are operation, primary database path, wait_us,
 hold_us, outcome and (for failed acquisition) SQLite error code. No SQL,
 document content or credentials are logged. The fixed threshold is 50 ms.
+The hold measurement spans successful reservation through the completed
+commit/rollback call, including SQLite work and I/O. It does not independently
+sample SQLite's operating-system locks. These diagnostics identify slow
+transaction spans; they do not alone prove an exclusive lock owner.
 
 Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,
-crew.retention_orphan, crew.finalize_attempt, projection.source_upsert,
+crew.retention_orphan, crew.retention_start_evidence, crew.retention_finished,
+crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
-projection.rxdb_tombstone. Queue operations may reserve attached projection
+projection.rxdb_tombstone, projection.rxdb_replace, projection.source_batch and
+projection.rxdb_batch.
+Queue operations may reserve attached projection
 databases as well as the reported primary Core database. These labels distinguish
 queue ownership, Crew accounting and source/mirror delivery; other transaction
 paths are not claimed to be traced.
@@ -74,8 +107,9 @@ cargo test --bin ctox cockpit_projection_one_hour_eight_native_writers -- \
 The test reports CTOX_SQLITE_LOAD with duration, commits per writer,
 projection passes, warm-up duration, maximum measured pass and every failure.
 It must finish a full hour, have writes from all eight workers, have zero
-errors and keep every measured steady-state pass below one second.
-Warm-up is reported separately. It uses no model accounts or external effects.
+errors and keep both the populated cold projection and every measured
+steady-state pass below one second. Cold timing is reported separately. It uses
+no model accounts or external effects.
 
 This is an isolated native fixture, not installed-service or customer acceptance.
 An installed proof must identify binary/source revisions, isolated prefix,

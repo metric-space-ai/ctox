@@ -225,21 +225,16 @@ fn forward_event(
 }
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
-    // These terminal events drive surface shutdown/completion state. Dropping
-    // them under backpressure can leave exec/TUI waiting forever even though
-    // the underlying turn has already ended.
+    // Reply selection needs its witnessed start and final message as well as
+    // terminal state. Keep one classifier for runtime and facade so a slow
+    // consumer cannot lose the evidence required to validate the reply.
     match event {
-        InProcessServerEvent::ServerNotification(
-            ctox_app_server_protocol::ServerNotification::TurnCompleted(_)
-            | ctox_app_server_protocol::ServerNotification::ContextCompacted(_),
-        ) => true,
-        InProcessServerEvent::LegacyNotification(notification) => matches!(
-            notification
-                .method
-                .strip_prefix("codex/event/")
-                .unwrap_or(&notification.method),
-            "task_complete" | "turn_aborted" | "shutdown_complete"
-        ),
+        InProcessServerEvent::ServerNotification(notification) => {
+            ctox_app_server::in_process::server_notification_requires_delivery(notification)
+        }
+        InProcessServerEvent::LegacyNotification(notification) => {
+            ctox_app_server::in_process::legacy_notification_requires_delivery(notification)
+        }
         _ => false,
     }
 }
@@ -1660,9 +1655,18 @@ mod tests {
 
     #[tokio::test]
     async fn next_event_surfaces_lagged_markers() {
-        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
         let (event_tx, event_rx) = mpsc::channel(1);
-        let worker_handle = tokio::spawn(async {});
+        let worker_handle = tokio::spawn(async move {
+            match command_rx.recv().await {
+                Some(ClientCommand::Shutdown { response_tx }) => {
+                    response_tx
+                        .send(Ok(()))
+                        .expect("lag marker fixture must acknowledge shutdown");
+                }
+                _ => panic!("lag marker fixture expects shutdown command"),
+            }
+        });
         let config = build_test_config().await;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -1702,6 +1706,141 @@ mod tests {
         ));
 
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[test]
+    fn assistant_text_delivery_survives_saturated_facade_in_order() {
+        use ctox_app_server_protocol::{
+            AgentMessageDeltaNotification, ItemCompletedNotification, ItemStartedNotification,
+            ServerNotification, ThreadItem,
+        };
+        let (tx, mut rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        let answer = "Gerne – Rätselraten 🦊 **geänderten** Deine Freigabe";
+        let mut notifications = vec![ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread".into(),
+            turn_id: "turn".into(),
+            item: ThreadItem::AgentMessage {
+                id: "item".into(),
+                text: String::new(),
+                phase: None,
+            },
+        })];
+        for ch in answer.chars() {
+            notifications.push(ServerNotification::AgentMessageDelta(
+                AgentMessageDeltaNotification {
+                    thread_id: "thread".into(),
+                    turn_id: "turn".into(),
+                    item_id: "item".into(),
+                    delta: ch.to_string(),
+                },
+            ));
+        }
+        notifications.push(ServerNotification::ItemCompleted(
+            ItemCompletedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: ThreadItem::AgentMessage {
+                    id: "item".into(),
+                    text: answer.into(),
+                    phase: None,
+                },
+            },
+        ));
+        let count = notifications.len();
+        for notification in notifications {
+            let event = InProcessServerEvent::ServerNotification(notification);
+            let required = event_requires_delivery(&event);
+            assert!(required);
+            assert!(matches!(
+                forward_event(&tx, &mut pending, event, required, 1024),
+                ForwardOutcome::Forwarded
+            ));
+        }
+        // The producer returned synchronously despite a full consumer queue.
+        assert_eq!(pending.len(), count - 1);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(_))
+        ));
+        let mut streamed = String::new();
+        while let Some(event) = pending.pop_front() {
+            tx.try_send(event).unwrap();
+            match rx.try_recv().unwrap() {
+                InProcessServerEvent::ServerNotification(
+                    ServerNotification::AgentMessageDelta(n),
+                ) => streamed.push_str(&n.delta),
+                InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(_)) => {
+                    assert_eq!(streamed, answer)
+                }
+                _ => panic!("unexpected assistant stream event"),
+            }
+        }
+        assert_eq!(streamed, answer);
+        let private = InProcessServerEvent::ServerNotification(ServerNotification::ItemStarted(
+            ItemStartedNotification {
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                item: ThreadItem::Reasoning {
+                    id: "private".into(),
+                    summary: vec!["private".into()],
+                    content: vec![],
+                },
+            },
+        ));
+        assert!(!event_requires_delivery(&private));
+    }
+
+    #[test]
+    fn assistant_text_delivery_keeps_legacy_reply_witnesses_in_order() {
+        let (tx, mut rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let mut pending = VecDeque::new();
+        // Parameters remain opaque to this buffer. The adapter still owns
+        // typed decoding and exact thread/turn validation.
+        let expected = [
+            ("task_started", serde_json::json!({"witness": "turn-start"})),
+            (
+                "agent_message",
+                serde_json::json!({"answer": "Vollständig 🦊 **geändert**"}),
+            ),
+            (
+                "agent_message",
+                serde_json::json!({"metadata": "ctox-crew metadata:"}),
+            ),
+            (
+                "task_complete",
+                serde_json::json!({"witness": "turn-complete"}),
+            ),
+        ];
+        for (method, params) in &expected {
+            let event = InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: format!("codex/event/{method}"),
+                params: Some(params.clone()),
+            });
+            assert!(event_requires_delivery(&event));
+            assert!(matches!(
+                forward_event(&tx, &mut pending, event, true, 16),
+                ForwardOutcome::Forwarded
+            ));
+        }
+        assert_eq!(pending.len(), expected.len() - 1);
+        for (index, (method, params)) in expected.iter().enumerate() {
+            if index > 0 {
+                tx.try_send(pending.pop_front().unwrap()).unwrap();
+            }
+            let InProcessServerEvent::LegacyNotification(event) = rx.try_recv().unwrap() else {
+                panic!("lost native reply witness")
+            };
+            assert_eq!(event.method, format!("codex/event/{method}"));
+            assert_eq!(event.params.as_ref(), Some(params));
+        }
+        assert!(pending.is_empty());
+        assert!(!event_requires_delivery(
+            &InProcessServerEvent::LegacyNotification(JSONRPCNotification {
+                method: "codex/event/agent_message_delta".into(),
+                params: None,
+            })
+        ));
     }
 
     #[test]

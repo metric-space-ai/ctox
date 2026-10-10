@@ -90,7 +90,7 @@ fn guide_and_dry_run_validation_reach_the_supervisor() -> anyhow::Result<()> {
     )?;
     assert_eq!(valid["validation"]["ok"], true, "{valid}");
     let mut broken = deck();
-    broken["slides"][1]["blocks"][2]["data"] = Value::Null;
+    broken["slides"][1]["blocks"][1]["data"] = Value::Null;
     let invalid = call(
         root.path(),
         &trusted,
@@ -98,6 +98,54 @@ fn guide_and_dry_run_validation_reach_the_supervisor() -> anyhow::Result<()> {
         json!({"action":"validate_document","request":scope(json!({"document":broken}))}),
     )?;
     assert_eq!(invalid["validation"]["ok"], false, "{invalid}");
+    Ok(())
+}
+
+#[test]
+fn supervisor_decks_must_pass_the_content_rules() -> anyhow::Result<()> {
+    if !node_available() {
+        eprintln!("SKIP: node not available");
+        return Ok(());
+    }
+    let (root, trusted) = fixture()?;
+    // Wording from the first real decks (09.10.2026): a slide that only says
+    // "keine Daten" and a sentence about the display instead of the project.
+    let mut filler = deck();
+    filler["slides"][2]["title"] = json!("Exitwert E5: keine Daten");
+    filler["slides"][3]["blocks"][1]["text"] =
+        json!("Die Trenddarstellung bleibt deshalb bewusst leer.");
+    let dry = call(
+        root.path(),
+        &trusted,
+        READ_TOOL,
+        json!({"action":"validate_document","request":scope(json!({"document":filler}))}),
+    )?;
+    assert_eq!(dry["validation"]["ok"], false, "{dry}");
+    let codes: Vec<&str> = dry["validation"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|issue| issue["code"].as_str())
+        .collect();
+    assert!(codes.contains(&"content.empty_slide"), "{dry}");
+    assert!(codes.contains(&"content.meta_phrase"), "{dry}");
+    let rejected = call(
+        root.path(),
+        &trusted,
+        WRITE_TOOL,
+        json!({"action":"create_presentation","request":scope(json!({"operation_id":"create-filler","document":filler}))}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(rejected.contains("content.empty_slide"), "{rejected}");
+    assert!(rejected.contains("Repair:"), "{rejected}");
+    let created = call(
+        root.path(),
+        &trusted,
+        WRITE_TOOL,
+        json!({"action":"create_presentation","request":scope(json!({"operation_id":"create-clean","document":deck()}))}),
+    )?;
+    assert_eq!(created["mutation"]["revision"], 1, "{created}");
     Ok(())
 }
 

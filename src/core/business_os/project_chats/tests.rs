@@ -28,6 +28,8 @@ mod supervisor;
 mod supervisor_history;
 #[path = "supervisor_observation_tests.rs"]
 mod supervisor_observation;
+#[path = "supervisor_owner_input_tests.rs"]
+mod supervisor_owner_input;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]

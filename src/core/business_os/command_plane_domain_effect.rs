@@ -5,7 +5,8 @@ use super::*;
 
 /// Native intake can reconcile an already-applied local effect without a
 /// retained browser bearer token. It uses only the durable receipt identity and
-/// Core intent, rechecks today's user/policy, and has no route to a mutation.
+/// Core intent and today's policy. Staged holder controls may finish only
+/// cleanup proven by their immutable Runtime effect; they never repeat topology.
 pub(in crate::business_os) fn recover_applied_domain_effect_for_intake(
     root: &Path,
     command_id: &str,
@@ -74,6 +75,12 @@ pub(super) fn recover_applied_domain_effect(
     actor_user_id: &str,
 ) -> anyhow::Result<Option<Value>> {
     let command_id = command.id.as_deref().context("command id is required")?;
+    super::super::provider_federation::account_controls::recover(
+        root,
+        command,
+        payload_hash,
+        actor_user_id,
+    )?;
     let conn = open_store(root)?;
     let Some(applied) =
         domain_effect::load_at_root(root, &conn, command_id, payload_hash, actor_user_id)?
