@@ -71,12 +71,14 @@ async function install(browser) {
 }
 
 async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
+  await page.exposeFunction('__syncV3EvidenceCheckpoint', value => fs.writeFileSync(
+    path.join(runtimeRoot, 'sync-v3-scale-partial.json'), JSON.stringify(value, null, 2) + '\n'));
   await page.exposeFunction('__syncV3NativeReadback', (name, id, marker) => {
     if (!names.includes(name) || !/^sync-v3-[a-z0-9_-]+$/.test(id) || !/^s0-write-[0-9]+$/.test(marker)) throw Error('Invalid isolated readback');
     const row = sqlite(`SELECT data FROM "ctox_business_os__${name}__v0" WHERE id='${id}' AND deleted=0;`).trim();
     return row ? JSON.parse(row).write_marker === marker : false;
   });
-  const result = await page.evaluate(async ({ schemas, rttMs }) => {
+  const result = await page.evaluate(async ({ schemas, rttMs, fixture }) => {
     const state = globalThis.ctoxBusinessOsSmoke.state;
     const raw = state.db.raw;
     const missing = Object.fromEntries(Object.entries(schemas).filter(([name]) => !raw[name]));
@@ -110,6 +112,10 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const visibleAt = performance.now();
       if (panel.getBoundingClientRect().height <= 0 || getComputedStyle(panel).visibility !== 'visible') throw Error('Scale rows not visible');
+      await globalThis.__syncV3EvidenceCheckpoint({ requestedRttMs: rttMs,
+        coldPageToVisibleMs: visibleAt - globalThis.__syncV3BootAt,
+        collectionSetupToVisibleMs: visibleAt - collectionReadyAt,
+        queryToVisibleMs: visibleAt - queryStarted, visibleRows: rows.length, fixture });
       const first = rows[0].toJSON();
       const bridge = bridges[0];
       if (!bridge?.state?.peer?.request) throw Error('Actual replication request seam missing');
@@ -122,14 +128,16 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const ack = new Promise((resolve, reject) => { resolveAck = resolve; rejectAck = reject; });
           ack.catch(() => {});
           const started = performance.now();
+          let conflictReplies = 0;
           peer.request = async function (...args) {
             const selected = args[1] === 'masterWrite' && args[4] === leadName
               && JSON.stringify(args[2]).includes(marker);
             try {
               const response = await original.apply(this, args);
               if (selected) {
-                if (!Array.isArray(response) || response.length) throw Error('Native write rejected or conflicted');
-                resolveAck(performance.now() - started);
+                if (!Array.isArray(response)) rejectAck(Error('Native write did not return the canonical ACK/conflict result'));
+                else if (response.length) conflictReplies++; // Let the real engine reconcile and retry.
+                else resolveAck(performance.now() - started);
               }
               return response;
             } catch (error) { if (selected) rejectAck(error); throw error; }
@@ -140,7 +148,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const nativeAckMs = await withDeadline(ack, 30000, 'Native masterWrite ACK timeout');
           if (rttMs && nativeAckMs < rttMs * 0.75) throw Error('Write ACK bypassed delayed relay');
           if (!await globalThis.__syncV3NativeReadback(leadName, first.id, marker)) throw Error('Native ACK not backed by SQLite write');
-          samples.push({ sample: index, localCommitMs: localMs, nativeAckMs, sqliteVerified: true });
+          samples.push({ sample: index, localCommitMs: localMs, nativeAckMs, conflictReplies, sqliteVerified: true });
         }
       } finally { peer.request = original; }
       const pairs = [];
@@ -162,7 +170,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
         visibleDefinition: '20 native demand-query rows painted in isolated shell overlay',
         writeDefinition: 'local upsert to exact native masterWrite ACK, independently verified in SQLite' };
     } finally { for (const lease of leases) await lease.release(); }
-  }, { schemas: definitions(), rttMs });
+  }, { schemas: definitions(), rttMs, fixture });
   result.fixture = fixture;
   fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-scale-result.json'), JSON.stringify(result, null, 2) + '\n');
   await page.screenshot({ path: path.join(runtimeRoot, 'sync-v3-visible-data.png') });
