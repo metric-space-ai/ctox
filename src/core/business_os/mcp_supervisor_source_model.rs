@@ -283,6 +283,9 @@ impl ModelRegistry {
             .sessions
             .try_lock()
             .map_err(|_| anyhow::anyhow!("native model registry busy"))?;
+        controller.with_current(|_, core, _| {
+            result::ensure_not_computed(core, controller.controller_id())
+        })?;
         if let Some(session) = sessions.get(controller.controller_id()) {
             anyhow::ensure!(
                 Arc::ptr_eq(&session.controller, &controller),
@@ -475,6 +478,9 @@ fn prepare_invocation(
         .jobs
         .try_lock()
         .map_err(|_| anyhow::anyhow!("native model operation busy"))?;
+    session.controller.with_current(|_, core, _| {
+        result::ensure_not_computed(core, session.controller.controller_id())
+    })?;
     if let Some(job) = jobs.get(id) {
         anyhow::ensure!(job.hash == hash, "native model operation replay differs");
         return Ok(PreparedInvocation {
@@ -492,6 +498,7 @@ fn prepare_invocation(
         "native model operation capacity reached"
     );
     session.controller.with_current(|_,core,_| {
+        result::ensure_not_computed(core, session.controller.controller_id())?;
         ensure_model_schema(core)?;
         core.execute("INSERT INTO workjet_supervisor_native_model_requests
             (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms,operation_kind)
