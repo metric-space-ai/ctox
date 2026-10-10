@@ -421,7 +421,7 @@ def whole_pr_iterations(records, pr_url):
 def harness_label(value):
     if value in ("Codex Desktop", "Codex"):
         return "codex"
-    if value in ("Claude Desktop", "claude-desktop"):
+    if value in ("Claude Desktop", "claude-desktop", "Claude Code"):
         return "claude"
     return "grok" if value in ("native Grok Build CLI", "Grok Build CLI") else value
 
