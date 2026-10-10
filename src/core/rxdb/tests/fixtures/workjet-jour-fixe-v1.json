@@ -2,6 +2,7 @@
   "schema": "ctox.workjet.jour_fixe.v1",
   "contract_version": 1,
   "types": {
+    "ReadConfirmedGoalRequest": {"fields": {}},
     "MeetingState": {"enum":["planned","preparing","ready","live","review","confirmed","cancelled","failed"]},
     "Speaker": {"enum":["owner","supervisor"]},
     "Modality": {"enum":["text","speech"]},
@@ -67,7 +68,8 @@
     {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":1,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},
     {"type":"LocalNarrationReceipt","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","deck_revision":1,"owner_user_id":"owner-1","revision":4,"audio":{"file_id":"narration-file-1","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mime_type":"audio/wav","duration_ms":4500,"narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source_run_id":"local-audio-op","model":"owner-uploaded-local-audio","format":"wav","synthesis_duration_ms":0,"provenance":"authenticated_owner_local_audio","generation_id":"native-generation"},"persisted_at_ms":1791450012000,"provenance":"authenticated_owner_local_audio","provider_verified":false}},
     {"type":"LocalTranscriptCandidateRequest","value":{"operation_id":"local-op","request_id":"helper-1:final-1","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","deck_revision":1,"expected_revision":3,"text":"Lokaler Kandidat."}},
-    {"type":"LocalTranscriptCandidateReceipt","value":{"operation_id":"local-op","request_id":"helper-1:final-1","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","deck_revision":1,"owner_user_id":"owner-1","turn_id":"local-turn-1","sequence":1,"revision":4,"text_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","persisted_at_ms":1791450012000,"provenance":"authenticated_owner_local_candidate","provider_verified":false}}
+    {"type":"LocalTranscriptCandidateReceipt","value":{"operation_id":"local-op","request_id":"helper-1:final-1","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","deck_revision":1,"owner_user_id":"owner-1","turn_id":"local-turn-1","sequence":1,"revision":4,"text_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","persisted_at_ms":1791450012000,"provenance":"authenticated_owner_local_candidate","provider_verified":false}},
+    {"type":"ReadConfirmedGoalRequest","value":{}}
   ],
   "invalid_cases": [
     {"type":"NarrateRequest","value":{"operation_id":"native-narrate-1","meeting_id":"meeting-1","slide_id":"slide-1","deck_revision":1,"expected_revision":3,"narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","model":"paid-other-model"},"reason":"Narration input and authority come from the native stored deck and gateway"},
@@ -97,6 +99,11 @@
     {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":1,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","owner_user_id":"forged"},"reason":"Owner is native"},
     {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":1,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","model":"Apple-provider"},"reason":"No provider attestation from a client"},
     {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":1,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","duration_ms":42},"reason":"Duration comes from the actual WAV"},
-    {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":0,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reason":"Draft revision required"}
+    {"type":"LocalNarrationRequest","value":{"operation_id":"local-audio-op","instance_id":"biz_fixture","project_id":"project-1","meeting_id":"meeting-1","slide_id":"slide-1","file_id":"owner-upload","generation_id":"gen-1","deck_revision":0,"expected_revision":3,"audio_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","narration_text_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reason":"Draft revision required"},
+    {"type":"ReadConfirmedGoalRequest","value":{"owner_user_id":"caller"}},
+    {"type":"ReadConfirmedGoalRequest","value":{"project_id":"caller"}},
+    {"type":"ReadConfirmedGoalRequest","value":{"goal_id":"caller"}},
+    {"type":"ReadConfirmedGoalRequest","value":{"lease":"caller"}},
+    {"type":"ReadConfirmedGoalRequest","value":{"action":"caller"}}
   ]
 }

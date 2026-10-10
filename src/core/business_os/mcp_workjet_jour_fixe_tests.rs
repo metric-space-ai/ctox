@@ -35,6 +35,20 @@ fn fixture(state: &str) -> anyhow::Result<(tempfile::TempDir, Value)> {
 fn call(root: &Path, trusted: &Value, tool: &str, args: Value) -> anyhow::Result<Value> {
     super::super::call_tool_inner(root, tool, args, Some(trusted))
 }
+
+#[test]
+fn unconfirmed_project_goal_is_absent_and_caller_identity_is_not_accepted() -> anyhow::Result<()> {
+    let (root, trusted) = fixture("planned")?;
+    let args = json!({"action":"read_confirmed_goal","request":{}});
+    let result = call(root.path(), &trusted, READ_TOOL, args.clone())?;
+    assert_eq!(result["project_id"], "project");
+    assert!(result["confirmed_goal"].is_null());
+    let mut foreign = trusted.clone();
+    foreign["actor"] = json!("foreign");
+    assert!(call(root.path(), &foreign, READ_TOOL, args).is_err());
+    Ok(())
+}
+
 fn read_args(action: &str) -> Value {
     json!({"action":action,"request":{"project_id":"project","meeting_id":"meeting-1"}})
 }
