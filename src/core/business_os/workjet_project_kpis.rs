@@ -102,12 +102,28 @@ pub(super) fn read_state(
     project: &str,
     owner: &str,
 ) -> anyhow::Result<ProjectKpis> {
+    read_state_with_schedule(conn, project, owner, false)
+}
+
+pub(super) fn read_state_with_schedule(
+    conn: &Connection,
+    project: &str,
+    owner: &str,
+    include_refresh_schedule: bool,
+) -> anyhow::Result<ProjectKpis> {
     let mut state = load(conn, project, owner)?;
     let now = super::store::now_ms() as i64;
     for item in &mut state.items {
-        if item.result.status == KpiState::Ready
-            && !resolver::snapshot_binding_is_current(conn, project, owner, &item.prompt)?
-        {
+        let binding_current =
+            resolver::snapshot_binding_is_current(conn, project, owner, &item.prompt)?;
+        // Read the actual native schedule in this same Owner snapshot; never
+        // trust a persisted DTO field or infer due time from freshness alone.
+        item.result.next_refresh_ms = if include_refresh_schedule && binding_current {
+            resolver::read_next_refresh_ms(conn, project, owner, &item.prompt)?
+        } else {
+            None
+        };
+        if item.result.status == KpiState::Ready && !binding_current {
             item.result.status = KpiState::Stale;
             item.result.reason_code = Some("source_binding_changed".into());
             item.result.message =
@@ -171,7 +187,12 @@ pub(super) fn handle_command(
             // a read neither initializes the store nor takes its writer lock.
             let snapshot = reader.transaction()?;
             let owner = require_project(&snapshot, actor, &request.project_id)?;
-            let state = read_state(&snapshot, &request.project_id, &owner)?;
+            let state = read_state_with_schedule(
+                &snapshot,
+                &request.project_id,
+                &owner,
+                request.include_refresh_schedule.unwrap_or(false),
+            )?;
             Ok(json!({"ok":true,"kpis":state}))
         }
         "ctox.workjet.project.kpis.configure" => {
@@ -242,7 +263,7 @@ fn configure(
         items.push(KpiRecord {
             prompt: KpiPrompt {kpi_id:prompt.kpi_id.clone(),prompt:prompt.prompt.clone(),
                 revision:prompt_revision},
-            result:KpiResult {status:KpiState::MissingSource,snapshot:None,
+            result:KpiResult {status:KpiState::MissingSource,snapshot:None,next_refresh_ms:None,
                 reason_code:Some("source_not_bound".into()),
                 message:Some("The project supervisor has not bound a verified metric source for this prompt.".into())},
         });

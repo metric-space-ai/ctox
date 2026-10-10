@@ -199,6 +199,11 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
       "status": {
         "type": "KpiState"
       },
+      "next_refresh_ms": {
+        "type": "i64",
+        "minimum": 0,
+        "optional": true
+      },
       "snapshot": {
         "type": "KpiSnapshot",
         "optional": true
@@ -250,6 +255,10 @@ export const PROJECT_KPIS_TYPES = deepFreeze({
         "type": "String",
         "min_chars": 1,
         "max_chars": 128
+      },
+      "include_refresh_schedule": {
+        "type": "bool",
+        "optional": true
       }
     }
   },
