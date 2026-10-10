@@ -146,6 +146,7 @@ async fn device_commit_does_not_overwrite_a_concurrently_installed_account() {
                     None,
                     serde_json::json!({}),
                 )
+                .map(|_| ())
             },
             futures_util::future::pending(),
         ),
