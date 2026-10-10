@@ -38356,7 +38356,8 @@ Business OS command:
             .expect("open channel db")
             .execute(
                 "INSERT INTO communication_routing_state (message_key, route_status, updated_at)
-                 VALUES (?1, 'review_rework', '2026-10-10T00:00:00Z')",
+                 VALUES (?1, 'review_rework', '2026-10-10T00:00:00Z')
+                 ON CONFLICT(message_key) DO UPDATE SET route_status = 'review_rework'",
                 [inbound_key],
             )
             .expect("mail waits in rework");
