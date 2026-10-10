@@ -94,3 +94,38 @@ Ledger/leases use `control`; retained log chunks use `demand`, live progress
 uses `stream`. Large/cold collections must not be eager browser replication.
 Fixture changes under `src/core/rxdb/` require the owner's `sync-v3:S<n>`
 label and `sync-scope-guard` review. This S2 changes no Sync-core contracts.
+
+### Collection profile/ownership proposal for the S3 owner review
+
+Each persisted collection has exactly one profile. All fields are native-owned;
+the browser has read permission only after server-side project/computer policy.
+The owning native tables and projection writer are declared in the generated
+fixture (Sync-v3 S2); the single native outbox → RxDB writer is registered as
+Sync-v3 S4 work. Node agents submit authenticated observations/commands to the
+native owner; they cannot edit projected documents.
+
+| Collection | Profile | Scoped consumption |
+|---|---|---|
+| workjet_actions_nodes | control | Node status/heartbeat revisions for admitted computers; no global browser eager pull |
+| workjet_actions_volumes | control | Budget/capacity status revisions for relevant nodes |
+| workjet_actions_requests | control | Native accepted intake and command status; never browser-owned intake documents |
+| workjet_actions_runs | control | Small run status revisions, subscribed by project/thread |
+| workjet_actions_jobs | control | Job allocation/attempt/status revisions |
+| workjet_actions_steps | demand | Retained step detail/results; current-step changes also ephemeral stream events |
+| workjet_actions_queue | control | Fairness/admission/position revisions for the caller's scope |
+| workjet_actions_leases | control | Sanitized lease/reservation status; no execution token in the projection |
+| workjet_actions_log_chunks | demand | Retained compressed chunks by run/job/cursor; live tail is a stream subscription |
+| workjet_actions_receipts | demand | Immutable result detail and hashes on request |
+| workjet_actions_ledger | control | Native inventory/lease/delete status through bounded, authorized command reads |
+| workjet_actions_quotas | control | Own-project usage/reservation/budget status |
+| workjet_actions_gc_runs | demand | GC receipts, candidate/error detail on request |
+| workjet_actions_decisions | demand | Candidate observations and placement reasons for explain |
+| workjet_actions_policy | replicated | Small authorized project/node policy snapshot, ≤8 KB per document |
+
+Control is command/status traffic with revisions, not an excuse to send all
+historical documents to every browser. Reads/subscriptions remain capability-
+and view-scoped; long detail belongs to demand. Stream progress/log events carry
+a persisted cursor/revision for resumption but create no browser history and no
+second projection writer. Readiness follows ctx.data and known/unknown/stale,
+never collection phase guessing. The RFC owner must validate this mapping
+before the S3 fixture PR and assign its sync-v3:S<n> label; no label is self-issued.

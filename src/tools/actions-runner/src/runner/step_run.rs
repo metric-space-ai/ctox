@@ -398,7 +398,7 @@ pub struct AssembledScript {
     pub script: String,
     /// The command line, with the script's full path substituted for `{0}`.
     pub cmdline: String,
-    /// `cmdline` split into an argv.
+    /// Shell template split into argv, then the script path inserted as data.
     pub cmd: Vec<String>,
 }
 
@@ -410,12 +410,9 @@ pub struct AssembledScript {
 /// wrap the body according to the shell, substitute the path into
 /// `ShellCommand`'s template and split it.
 ///
-/// The split is the only part that can fail. `shellquote.Split` rejects an
-/// unbalanced quote — a `working-directory` containing one is enough, because
-/// the path goes into the command line — and upstream returns that error from
-/// `setupShellCommand` and therefore from the executor. The script has already
-/// been written into the struct's fields by then, which is why the error is
-/// returned rather than raised: Go has no way to un-assign a field.
+/// Only malformed shell-template syntax makes argv splitting fail. Unlike the
+/// upstream string-based split, native script paths (including spaces and quotes)
+/// are inserted after parsing so they stay a single argv element.
 pub fn setup_shell_command(
     rc: &mut RunContext,
     git: &GitLookups,
@@ -455,9 +452,18 @@ pub fn setup_shell_command(
     // path in the log line shows.
     let script_path = format!("{act_path}/{name}");
     let cmdline = substitute_script_path(&sc_cmd, &script_path);
-    let cmd = crate::container::shell_quote::split(&cmdline).map_err(|error| {
+    // Split the shell template before inserting a filesystem path. Otherwise
+    // spaces or quotes in a native build root become extra argv elements.
+    let mut replaced = false;
+    let mut cmd = crate::container::shell_quote::split(&sc_cmd).map_err(|error| {
         format!("{error}")
     })?;
+    for arg in &mut cmd {
+        if !replaced && arg.contains("{0}") {
+            *arg = substitute_script_path(arg, &script_path);
+            replaced = true;
+        }
+    }
 
     Ok((
         AssembledScript {
@@ -1075,36 +1081,32 @@ mod tests {
         );
     }
 
-    /// The `run:` body is interpolated on the way into the file. A `working-
-    /// directory:` holding a quote is the way to make the split fail, which is
-    /// the only error this function can return.
+    /// Native paths are argv data, including quotes and spaces.
     #[test]
-    fn an_unbalanced_quote_in_the_script_path_is_an_error_not_a_panic() {
-        let rc = fixture(
-            "",
-            "steps:\n  - id: s1\n    run: echo hi\n    working-directory: /tmp/\"",
-        );
+    fn a_script_path_with_spaces_or_quotes_stays_one_argument() {
+        for path in ["/var/run/a b", "/var/run/\"act", "/var/run/'act"] {
+            let mut rc = fixture("", "steps:\n  - id: s1\n    run: echo hi\n    shell: bash");
+            let mut step = step_model(&rc);
+            rc.job_container = Some(ContainerPaths {
+                act_path: path.to_string(),
+                ..ContainerPaths::default()
+            });
+            let (assembled, _) = setup_shell_command(
+                &mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None,
+            ).expect("filesystem names are not shell syntax");
+            assert_eq!(assembled.cmd.last().unwrap(), &format!("{path}/workflow/s1.sh"));
+            assert_eq!(assembled.cmd.len(), 3);
+        }
+    }
+
+    /// Invalid shell syntax still fails; paths are never used to hide it.
+    #[test]
+    fn an_unbalanced_quote_in_the_shell_template_remains_an_error() {
+        let mut rc = fixture("", "steps:\n  - id: s1\n    run: echo hi\n    shell: 'bash -e \"{0}'");
         let mut step = step_model(&rc);
-        let mut rc = rc;
-        rc.job_container = Some(ContainerPaths {
-            // The directory is part of the script path, so an unbalanced quote
-            // in *it* is what reaches the split.
-            act_path: "/var/run/\"act".to_string(),
-            ..ContainerPaths::default()
-        });
-        let error = setup_shell_command(
-            &mut rc,
-            &no_git(),
-            &DefaultStatus,
-            &mut step,
-            &map(&[]),
-            None,
-        )
-        .expect_err("the split refuses an unbalanced quote");
-        assert!(
-            !error.is_empty(),
-            "upstream returns this from setupShellCommand and so from the executor"
-        );
+        assert!(setup_shell_command(
+            &mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None,
+        ).is_err());
     }
 
     // ---------------------------------------------------------- localEnv --

@@ -74,6 +74,7 @@ jobs:
 /// This is a bounded test driver, not the production job orchestrator.
 /// It binds each step's files to the job temp root and feeds the port's own
 /// env/output/path parsers. Future service limits must surround this driver.
+#[cfg(unix)]
 #[test]
 fn unchanged_act_environment_file_workflow_runs_natively() {
     let parsed = HostWorkflow::parse("environment-files.yml",
@@ -107,8 +108,10 @@ fn unchanged_act_environment_file_workflow_runs_natively() {
         if step.id.is_empty() { step.id = format!("step-{index}"); }
         rc.current_step = step.id.clone();
         let github = rc.get_github_context(&git()).unwrap();
+        rc.env.extend(rc.global_env.clone());
         let mut env = BTreeMap::new();
         setup_env(&mut rc, &git(), &DefaultStatus, &mut env, &step, &github).unwrap();
+        rc.apply_extra_path(&host, &mut env);
         for (key, value) in file_command_env(runner.to_str().unwrap()) {
             fs::write(&value, "").unwrap();
             env.insert(key, value);
@@ -132,6 +135,7 @@ fn unchanged_act_environment_file_workflow_runs_natively() {
     assert_eq!(rc.step_results["write-multi-output"].outputs["KEY2"], "value2");
 }
 
+#[cfg(unix)]
 #[test]
 fn native_exit_and_output_are_observable() {
     let root = tempfile::tempdir().unwrap();
@@ -146,4 +150,55 @@ fn native_exit_and_output_are_observable() {
     let messages: Vec<_> = sink.lines().into_iter().map(|(_, text)| text).collect();
     assert!(messages.iter().any(|line| line == "stdout"));
     assert!(messages.iter().any(|line| line == "stderr"));
+}
+
+#[test]
+fn preparing_a_step_cannot_bypass_a_job_container_declaration() {
+    let parsed = HostWorkflow::parse("forbidden.yml", r#"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ubuntu:latest
+    steps:
+      - id: check
+        run: echo forbidden
+"#).unwrap();
+    let run = parsed.run("build").unwrap();
+    let mut step = run.job().unwrap().steps[0].clone();
+    let mut rc = RunContext { run: Some(run), ..Default::default() };
+    let root = tempfile::tempdir().unwrap();
+    let host = HostEnvironment::new(root.path().into(), root.path().into(),
+        root.path().into(), root.path().to_str().unwrap());
+    assert!(prepare_run_step(&mut rc, &git(), &DefaultStatus, &mut step, &BTreeMap::new(), &host).is_err());
+    assert!(rc.job_container.is_none(), "reject before mutating the backend");
+}
+
+#[cfg(unix)]
+#[test]
+fn prepared_script_runs_with_a_quoted_build_root() {
+    let root = tempfile::Builder::new().prefix("workjet native 'root ").tempdir().unwrap();
+    let mut host = HostEnvironment::new(root.path().into(), root.path().into(),
+        root.path().into(), root.path().to_str().unwrap());
+    host.act_path = root.path().join("runner");
+    fs::create_dir_all(host.act_path.join("workflow")).unwrap();
+    let parsed = HostWorkflow::parse("smoke.yml", r#"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - id: check
+        shell: bash
+        run: printf '%s' "$VALUE" > result.txt
+"#).unwrap();
+    let run = parsed.run("build").unwrap();
+    let mut step = run.job().unwrap().steps[0].clone();
+    let mut rc = RunContext { run: Some(run), ..Default::default() };
+    let env = BTreeMap::from([
+        ("PATH".into(), std::env::var("PATH").unwrap()),
+        ("VALUE".into(), "spaces 'quotes' $literal".into()),
+    ]);
+    let prepared = prepare_run_step(&mut rc, &git(), &DefaultStatus, &mut step, &env, &host).unwrap();
+    fs::write(host.act_path.join(&prepared.script.name), &prepared.script.script).unwrap();
+    host.exec(&prepared.script.cmd, &env, &prepared.working_directory).unwrap();
+    assert_eq!(fs::read_to_string(root.path().join("result.txt")).unwrap(), env["VALUE"]);
 }

@@ -115,6 +115,16 @@ pub fn prepare_run_step(
     if step.id.is_empty() || step.id.contains(['/', '\\']) || step.id == ".." {
         return Err(anyhow!("step id must be a nonempty path component"));
     }
+    if let Some(run) = &rc.run {
+        let job = run.job().ok_or_else(|| anyhow!("unknown workflow job"))?;
+        let has_services = run.document().root()
+            .and_then(|root| run.document().map_get(root, "jobs"))
+            .and_then(|jobs| run.document().map_get(jobs, &run.job_id))
+            .and_then(|job| run.document().map_get(job, "services")).is_some();
+        if job.raw_container.is_some() || has_services || !job.uses.is_empty() {
+            return Err(anyhow!("native step cannot bypass prohibited containers/services or a reusable workflow"));
+        }
+    }
     rc.job_container = Some(crate::runner::run_context::ContainerPaths {
         act_path: host.act_path_string(),
         workdir: host.path.to_string_lossy().into_owned(),
