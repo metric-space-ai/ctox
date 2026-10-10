@@ -26,6 +26,10 @@ struct Handler {
 #[async_trait::async_trait]
 impl WebRTCConnectionHandler for Handler {
     type Peer = (String, u64);
+    // This transport fixture only carries correlation strings, no documents.
+    fn document_fields_for_peer(&self, _: &Self::Peer, _: &str) -> Option<Vec<String>> {
+        None
+    }
     fn connect_stream(&self) -> RxStream<Self::Peer> {
         RxSubject::new().subscribe()
     }
