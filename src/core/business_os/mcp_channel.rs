@@ -15068,20 +15068,22 @@ mod tests {
             Some(serde_json::json!({ "public": true })),
         )?;
         seed_default_mcp_admin(root)?;
-        store::push_collection_records(
-            root,
-            serde_json::json!({
-                "collection": "outbound_lead_generation_leads",
-                "documents": [{ "id": "lead_seed", "name": "Seed GmbH", "campaign": "Alt" }]
-            }),
-        )?;
-        store::push_collection_records(
-            root,
-            serde_json::json!({
-                "collection": "outbound_lead_generation_imports",
-                "documents": [{ "id": "import_seed", "title": "Alt" }]
-            }),
-        )?;
+        // The leads live in the RxDB store (native row layout).
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let rxdb = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        for table in [
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "ctox_business_os__outbound_lead_generation_imports__v0",
+            "ctox_business_os__business_commands__v2",
+        ] {
+            rxdb.execute_batch(&format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+                    deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL,
+                    data TEXT NOT NULL
+                )"
+            ))?;
+        }
 
         let actions = list_module_actions(
             root,
@@ -15129,6 +15131,50 @@ mod tests {
         let error = execute_outbound_lead_import(root, &context, &with_research)
             .expect_err("research without an app template must fail loudly");
         assert!(error.to_string().contains("Outbound app"));
+
+        // With a research task the app started, each new lead gets its own.
+        let template = serde_json::json!({
+            "id": "leadgen-lead-research-app",
+            "command_id": "leadgen-lead-research-app",
+            "module": "outbound-lead-generation",
+            "command_type": "business_os.chat.task",
+            "record_id": "lead_app",
+            "created_at_ms": 1,
+            "payload": {
+                "lead_id": "lead_app",
+                "company": "App GmbH",
+                "mode": "update_firm",
+                "fields": ["firma_name"],
+                "source_policy": { "skill": "outbound-lead-generation-research" },
+                "required_skills": ["outbound-lead-generation-research"],
+                "writeback_contract": {
+                    "collection": "outbound_lead_generation_leads",
+                    "command_type": "outbound.lead.research_writeback",
+                    "record_ids": ["lead_app"]
+                },
+                "prompt": "Starte eine Outbound Nachrecherche für App GmbH [lead_app] (Auftrag leadgen-lead-research-app)."
+            }
+        });
+        rxdb.execute(
+            "INSERT INTO ctox_business_os__business_commands__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, '1-a', 0, 1, ?2)",
+            rusqlite::params!["leadgen-lead-research-app", template.to_string()],
+        )?;
+        let started = execute_outbound_lead_import(root, &context, &with_research)?;
+        let command_id = started["leads"][0]["research"]["command_id"]
+            .as_str()
+            .context("research command id")?
+            .to_string();
+        let lead =
+            store::read_rxdb_collection_record(root, "outbound_lead_generation_leads", &lead_id)?
+                .context("lead after research start")?;
+        assert_eq!(lead["research_status"], "queued");
+        assert_eq!(lead["command_id"], serde_json::json!(command_id));
+        let projection = crate::mission::channels::business_command_projection(root, &command_id)?;
+        assert_eq!(projection["record_id"], serde_json::json!(lead_id));
+        // Starting again keeps the running research.
+        let again = execute_outbound_lead_import(root, &context, &with_research)?;
+        assert_eq!(again["leads"][0]["research"]["status"], "already_started");
         Ok(())
     }
 
