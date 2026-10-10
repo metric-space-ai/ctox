@@ -10,6 +10,18 @@ const MODEL: &str = "claude-opus-5-5";
 fn fixture(selected: bool) -> anyhow::Result<(tempfile::TempDir, String)> {
     let (root, trusted) = workjet_worker_dispatch::meeting_test_fixture()?;
     if selected {
+        // The native binding command publishes its domain effect into the
+        // generated projection collection, just as an installed tenant does.
+        let schemas: Value =
+            serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+        let version = schemas["workjet_worker_profile_bindings"]["version"]
+            .as_u64()
+            .context("binding projection schema")?;
+        Connection::open(store::rxdb_store_path(root.path()))?.execute_batch(&format!(
+            "CREATE TABLE ctox_business_os__workjet_worker_profile_bindings__v{version}
+            (id TEXT PRIMARY KEY NOT NULL,revision TEXT,deleted INTEGER NOT NULL DEFAULT 0,
+             lastWriteTime REAL NOT NULL DEFAULT 0,data TEXT NOT NULL);"
+        ))?;
         let policy = store::open_store(root.path())?;
         store::upsert_business_record(
             &policy,
