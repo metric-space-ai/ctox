@@ -90,6 +90,38 @@ impl AdmittedConsumerAuthority {
         })
     }
 
+    /// Private physical publication for an exactly matching admitted request.
+    /// The guarded send composes its own exact lifecycle/token fence with
+    /// this native fence. Do not reenter that transport. No wire facts create
+    /// this retained issuer/Core/Policy guard.
+    pub(crate) fn prepare_core_publication(
+        &self,
+        request: &Self,
+    ) -> Result<NativeConsumerCorePublication> {
+        anyhow::ensure!(
+            self.root == request.root
+                && Arc::ptr_eq(&self.transport, &request.transport)
+                && self.peer == request.peer
+                && self.token == request.token
+                && self.facts == request.facts,
+            "publication request is not the original admitted connection"
+        );
+        let policy = store::open_store(&self.root)?;
+        policy.busy_timeout(std::time::Duration::ZERO)?;
+        let core = Connection::open_with_flags(
+            crate::paths::core_db(&self.root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(std::time::Duration::ZERO)?;
+        Ok(NativeConsumerCorePublication {
+            root: self.root.clone(),
+            token: self.token.clone(),
+            facts: self.facts.clone(),
+            core: std::sync::Mutex::new(core),
+            policy: std::sync::Mutex::new(policy),
+        })
+    }
+
     /// Combined original-lease fence. Prepare secret snapshots before entry.
     /// Order is transport -> issuer -> Core -> Policy, matching native
     /// command/plan writers. A callback must not enter another transport,
@@ -138,6 +170,39 @@ impl AdmittedConsumerAuthority {
                 with_current_policy(&self.root, &mut conn, &self.token, &self.facts, apply)
             })
             .context("consumer connection or credential retired")?
+    }
+}
+
+/// Only prepare_core_publication constructs this private guard. The caller
+/// must install it on the exact verified request's GuardedAuxiliaryResponse.
+pub(crate) struct NativeConsumerCorePublication {
+    root: PathBuf,
+    token: String,
+    facts: ConsumerFacts,
+    core: std::sync::Mutex<Connection>,
+    policy: std::sync::Mutex<Connection>,
+}
+impl NativeConsumerCorePublication {
+    pub(crate) fn with_current<T>(
+        &self,
+        apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut core = self
+            .core
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("core publication busy"))?;
+        let mut policy = self
+            .policy
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("policy publication busy"))?;
+        with_current_policy_core(
+            &self.root,
+            &mut core,
+            &mut policy,
+            &self.token,
+            &self.facts,
+            apply,
+        )
     }
 }
 

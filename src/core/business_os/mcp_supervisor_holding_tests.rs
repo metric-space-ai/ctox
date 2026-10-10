@@ -3,6 +3,26 @@
 // DB/source facts below are synthetic regression fixtures, never holder or SDK
 // execution evidence. Production claim accepts only AdmittedConsumerAuthority.
 use super::*;
+
+#[test]
+fn physical_publication_rechecks_the_original_session_expiry() -> anyhow::Result<()> {
+    let (root, mut lease, facts) = fixture()?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    let policy = store::open_store(root.path())?;
+    claim_in_fence(&lease, &core, &policy, &facts)?;
+    // Private fixture-only expiry; no caller DTO can change the captured token.
+    lease.trusted["expires_at_ms"] = json!(0);
+    let error = lease.current(&core, &policy, &facts).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<SupervisorLumaUnavailable>()
+            .unwrap()
+            .code,
+        "supervisor_execution_fenced"
+    );
+    Ok(())
+}
+
 fn fixture() -> anyhow::Result<(
     tempfile::TempDir,
     NativeSupervisorExecutionLease,

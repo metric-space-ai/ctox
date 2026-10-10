@@ -9,7 +9,10 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::json;
 #[path = "mcp_supervisor_holding.rs"]
 mod holding;
-pub(crate) use holding::{NativeSupervisorExecutionLease, NativeSupervisorHoldingController};
+pub(crate) use holding::{
+    NativeSupervisorCurrentPublication, NativeSupervisorExecutionLease,
+    NativeSupervisorHoldingController, NativeSupervisorPublicationCheck,
+};
 
 #[derive(Debug)]
 pub(crate) struct SupervisorLumaUnavailable {
