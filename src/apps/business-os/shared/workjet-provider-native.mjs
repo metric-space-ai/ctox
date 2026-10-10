@@ -95,6 +95,12 @@ export function projectNativeProviderRegistry(value) {
       effectiveModels: models(account.effectiveModels, 1024),
       // A GET /models result cannot attest a successful inference request.
       inferenceVerified: false,
+      ...(account.modelChecks === undefined ? {} : { modelChecks: (() => {
+        if (!Array.isArray(account.modelChecks) || account.modelChecks.length > 256) invalid();
+        const checks = account.modelChecks.map(projectNativeModelProbe);
+        if (new Set(checks.map(check => check.modelId)).size !== checks.length) invalid();
+        return checks;
+      })() }),
     };
   });
   const providersSeen = new Set();
@@ -171,4 +177,63 @@ export async function requestNativeProviders(request, { dispatch, assertCurrent 
     throw Object.assign(new Error('Native provider control is unavailable. Check the connection, Owner/Admin access and installed CTOX version.'),
       { code: 'PROVIDER_CONTROL_UNAVAILABLE' });
   } finally { clearTimeout(timer); }
+}
+export function projectNativeModelProbe(value) {
+  object(value);
+  const result = {
+    modelId: text(value.modelId), checkedAtMs: integer(value.checkedAtMs, 1),
+    elapsedMs: integer(value.elapsedMs), status: value.status, source: value.source,
+    failure: value.failure === null ? null : text(value.failure, 64),
+    httpStatus: nullableInteger(value.httpStatus, 100, 599),
+    retryAtMs: nullableInteger(value.retryAtMs, 1),
+  };
+  const gatewayFailures = ['account_unavailable', 'authority_unavailable', 'gateway_cooldown',
+    'gateway_state_unavailable', 'unverified_failure', 'transport', 'timeout', 'response_too_large'];
+  if (result.status === 'ok') {
+    if (result.source !== 'upstream' || result.failure !== null || result.retryAtMs !== null
+      || result.httpStatus < 200 || result.httpStatus >= 300) invalid();
+  } else if (result.status === 'unavailable') {
+    if (result.source !== 'gateway' || !gatewayFailures.includes(result.failure)) invalid();
+  } else if (result.status === 'failed') {
+    const statuses = { auth: [401,403], model_not_found: [400,404], quota_rate_limit: [402,429] };
+    const valid = result.failure === 'invalid_response'
+      ? result.httpStatus >= 200 && result.httpStatus < 300
+      : result.failure === 'provider'
+        ? result.httpStatus >= 400 && result.httpStatus <= 599
+        : statuses[result.failure]?.includes(result.httpStatus);
+    if (result.source !== 'upstream' || !valid || result.retryAtMs !== null) invalid();
+  } else invalid();
+  return result;
+}
+export async function requestNativeModelCheck(sync, request, assertCurrent) {
+  object(request);
+  if (request.version !== 1 || request.action !== 'instance.providers.models.check'
+    || Object.keys(request).some(key => !['version','action','operationId','accountId',
+      'expectedAccountRevision','modelId'].includes(key))) invalid();
+  const operationId = text(request.operationId, 128);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) invalid();
+  const accountId = text(request.accountId);
+  const accountRevision = integer(request.expectedAccountRevision, 1);
+  const modelId = text(request.modelId);
+  if (typeof sync?.requestNative !== 'function') throw new Error('Model checks require a connected CTOX instance.');
+  assertCurrent();
+  let value;
+  let timer;
+  try {
+    value = await Promise.race([
+      sync.requestNative('ctox.workjet.models.check.v1', {
+        version: 1, op: 'check', commandId: operationId, accountId, accountRevision, modelId,
+      }, { requiredCapability: 'ctox-workjet-model-check-v1', timeoutMs: 25000 }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Timed out')), 25000); }),
+    ]);
+  } catch {
+    throw Object.assign(new Error('Native model check unavailable. Check the connection, account and installed CTOX version.'),
+      { code: 'PROVIDER_MODEL_CHECK_UNAVAILABLE' });
+  } finally { clearTimeout(timer); }
+  assertCurrent();
+  if (value?.version !== 1 || value.op !== 'check' || value.commandId !== operationId
+    || value.accountId !== accountId || value.accountRevision !== accountRevision
+    || value.probe?.modelId !== modelId) invalid();
+  return { version: 1, action: request.action, operationId, accountId, accountRevision,
+    probe: projectNativeModelProbe(value.probe) };
 }
