@@ -283,6 +283,10 @@ const integratedModuleToolSessions = new Map();
 const shellV2VersionMenus = new Map();
 let syncRecoveryRepairTimer = null;
 let syncRecoveryRepairRunning = false;
+// Declared before any top-level await: recovery status events can arrive
+// while the module body is still evaluating.
+const RECOVERY_WARNING_MIN_PENDING_AGE_MS = 120_000;
+let recoveryWarningRecheckTimer = null;
 let moduleScriptPreloadPending = false;
 let moduleScriptPreloadHealthySinceMs = 0;
 let moduleScriptPreloadResumeTimer = null;
@@ -10594,11 +10598,28 @@ function updateRecoveryWarningFromEvent(event) {
       ?? 0,
   );
   const exportCoversPending = oldestPendingAtMs > 0 && lastExportAtMs >= oldestPendingAtMs;
-  const risky = detail.event === 'freeze'
-    || detail.event === 'pagehide'
-    || detail.ephemeralLikely === true
+  const lifecycleRisk = detail.event === 'freeze' || detail.event === 'pagehide';
+  const storageRisk = detail.ephemeralLikely === true
     || storage.ephemeralLikely === true
     || pressureRatio >= 0.8;
+  // Writes normally reach CTOX within a sync cycle. Safari never grants
+  // persistent storage, so every young write counted as "at risk" and the red
+  // Recovery button flashed after each start while the shell's own startup
+  // writes waited for their push (thesen 10.10.2026). Storage risk alone now
+  // warns only for writes CTOX has not confirmed for a while.
+  const pendingAgeMs = oldestPendingAtMs > 0 ? Math.max(0, Date.now() - oldestPendingAtMs) : 0;
+  const stalePending = pendingAgeMs >= RECOVERY_WARNING_MIN_PENDING_AGE_MS;
+  const risky = lifecycleRisk || (storageRisk && stalePending);
+  if (recoveryWarningRecheckTimer) {
+    clearTimeout(recoveryWarningRecheckTimer);
+    recoveryWarningRecheckTimer = null;
+  }
+  if (pendingWrites > 0 && storageRisk && !lifecycleRisk && !stalePending && oldestPendingAtMs > 0) {
+    recoveryWarningRecheckTimer = setTimeout(() => {
+      recoveryWarningRecheckTimer = null;
+      updateRecoveryWarningFromEvent({ detail: {} });
+    }, RECOVERY_WARNING_MIN_PENDING_AGE_MS - pendingAgeMs + 250);
+  }
   state.recoveryWarning = pendingWrites > 0 && risky && !exportCoversPending
     ? { pendingWrites, pressureRatio, updatedAtMs: Date.now() }
     : null;
