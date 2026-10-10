@@ -7,7 +7,9 @@
         "poll",
         "claim",
         "status",
-        "cancel"
+        "cancel",
+        "model_invoke",
+        "model_read"
       ]
     },
     "SourceOfferState": {
@@ -37,6 +39,33 @@
           "type": "String",
           "min_chars": 36,
           "max_chars": 36,
+          "optional": true
+        },
+        "operation_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        },
+        "model_operation": {
+          "type": "SourceModelOperation",
+          "optional": true
+        },
+        "body_json": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 1048576,
+          "optional": true
+        },
+        "sdk_session_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "sequence": {
+          "type": "u64",
+          "maximum": 65535,
           "optional": true
         }
       }
@@ -102,6 +131,12 @@
           "type": "SourceOfferState"
         }
       }
+    },
+    "SourceModelOperation": {
+      "enum": [
+        "messages",
+        "count_tokens"
+      ]
     }
   },
   "valid_cases": [
@@ -110,6 +145,17 @@
       "value": {
         "version": 1,
         "action": "poll"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "model_read",
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "controller_id": "22222222-2222-4222-8222-222222222222",
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "sequence": 0
       }
     }
   ],
@@ -143,6 +189,15 @@
         "version": 1,
         "action": "claim",
         "offer_id": "short"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "model_invoke",
+        "model_operation": "arbitrary_upstream",
+        "actual": true
       }
     }
   ],
