@@ -19,7 +19,7 @@ fn fixture() -> Result<(Fixture, String)> {
         &credentials("first"),
     )?;
     proxy::install_claude_subscription(f.root.path(), "local-claude-other", &credentials("other"))?;
-    let holder = store::existing_instance_id(f.root.path())?;
+    let holder = store::stable_instance_id(f.root.path())?;
     let mut conn = store::open_store(f.root.path())?;
     let tx = conn.transaction()?;
     let observations =
@@ -290,6 +290,57 @@ fn native_controls_canceled_or_revoked_after_reservation_never_mutate_holder() -
         );
         assert!(catalog::account_binding(f.root.path(), "local-claude-control")?.is_some());
     }
+    Ok(())
+}
+
+#[test]
+fn native_controls_cas_boundary_rechecks_cancellation_after_credential_io() -> Result<()> {
+    let (f, id) = fixture()?;
+    let (cmd, _, hash) = admitted(&f, &id, Some(false), "owner")?;
+    let request: Request = serde_json::from_value(cmd.payload.clone())?;
+    let pending = Pending {
+        target: target(
+            &f.conn,
+            "owner",
+            &store::existing_instance_id(f.root.path())?,
+            &request,
+        )?,
+        request,
+    };
+    validate_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
+    let revision = proxy::load_instance_proxy_config(f.root.path())?
+        .unwrap()
+        .revision;
+    let result = holder::apply(
+        f.root.path(),
+        cmd.id.as_deref().unwrap(),
+        &hash,
+        "owner",
+        &pending.target.local,
+        &pending.target.binding,
+        Some(false),
+        || {
+            crate::channels::complete_business_control_command(
+                f.root.path(),
+                cmd.id.as_deref().unwrap(),
+                "cancelled",
+                &json!({"cancelled":true}),
+                None,
+            )?;
+            validate_reserved(f.root.path(), &cmd, &hash, "owner", &pending)
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        revision,
+        proxy::load_instance_proxy_config(f.root.path())?
+            .unwrap()
+            .revision
+    );
+    assert!(!holder::has_effect(
+        f.root.path(),
+        cmd.id.as_deref().unwrap()
+    )?);
     Ok(())
 }
 

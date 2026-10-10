@@ -62,6 +62,7 @@ pub(crate) fn apply(
     local: &str,
     expected_binding: &str,
     enabled: Option<bool>,
+    validate_current_authority: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let _guard = crate::secrets::credential_lifecycle_guard();
     let mut stored =
@@ -169,6 +170,9 @@ pub(crate) fn apply(
         current == stored.revision,
         "native account configuration changed; refresh account metadata"
     );
+    // Recheck the real command/owner at the CAS boundary, after credential IO.
+    // This callback must not retain a Policy transaction or call Runtime APIs.
+    validate_current_authority()?;
     tx.execute(&format!("UPDATE {INSTANCE_PROXY_CONFIG_TABLE} SET revision=?1,config_json=?2,updated_at_ms=?3 WHERE config_id=1"), params![revision,serde_json::to_string(&stored.runtime)?,chrono::Utc::now().timestamp_millis()])?;
     tx.execute(
         &format!("INSERT INTO {TABLE}(command_id,effect_json) VALUES (?1,?2)"),

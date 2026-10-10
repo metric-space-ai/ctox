@@ -131,6 +131,29 @@ fn execute_reserved(
     actor: &str,
     pending: &Pending,
 ) -> Result<()> {
+    validate_reserved(root, command, hash, actor, pending)?;
+    holder::apply(
+        root,
+        command
+            .id
+            .as_deref()
+            .context("account operation id is missing")?,
+        hash,
+        actor,
+        &pending.target.local,
+        &pending.target.binding,
+        pending.request.enabled,
+        || validate_reserved(root, command, hash, actor, pending),
+    )
+}
+
+fn validate_reserved(
+    root: &Path,
+    command: &BusinessCommand,
+    hash: &str,
+    actor: &str,
+    pending: &Pending,
+) -> Result<()> {
     let id = command
         .id
         .as_deref()
@@ -150,15 +173,7 @@ fn execute_reserved(
             && core["execution_phase"] != "terminal",
         "account Core claim changed before the holder effect"
     );
-    holder::apply(
-        root,
-        id,
-        hash,
-        actor,
-        &pending.target.local,
-        &pending.target.binding,
-        pending.request.enabled,
-    )
+    Ok(())
 }
 
 pub(in crate::business_os) fn identity(

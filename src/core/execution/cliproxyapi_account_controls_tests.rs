@@ -24,6 +24,7 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
         "dormant-claude",
         &binding,
         Some(false),
+        || Ok(()),
     )?;
     finish(root.path(), "disable-default", "hash-disable", "owner")?;
     // A different provider is genuinely configured in this isolated fixture.
@@ -70,6 +71,7 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
         "dormant-claude",
         &binding,
         None,
+        || Ok(()),
     )?;
     finish(root.path(), "remove-default", "hash-remove", "owner")?;
     assert_eq!(
