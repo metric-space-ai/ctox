@@ -7,7 +7,11 @@ function installPhaseTrace() {
     if (trace.events.length >= 20000) { if (!trace.errors.includes('event-budget')) trace.errors.push('event-budget'); return; }
     trace.events.push({ at: performance.now(), ...event });
   };
-  trace.mark = name => { trace.marks[name] = performance.now(); };
+  trace.recording = true;
+  trace.mark = (name, at = performance.now()) => {
+    trace.marks[name] = at;
+    if (trace.resourceRecording !== false && globalThis.__syncV3ResourcePoint) globalThis.__syncV3ResourcePoint(name, at).catch(error => trace.errors.push(error.message));
+  };
   trace.mark('boot');
   globalThis.__syncV3BootAt = trace.bootAt;
   trace.drain = async () => { while (pending.size) await Promise.all([...pending]); };
@@ -53,6 +57,7 @@ function installPhaseTrace() {
     return JSON.parse(output + decoder.decode());
   };
   const observe = (value, direction, channel) => {
+    if (trace.recording === false) return;
     const at = performance.now();
     if (typeof value !== 'string') return;
     let payload; try { payload = JSON.parse(value); } catch { return; }

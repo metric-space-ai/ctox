@@ -8,7 +8,9 @@ export PLAYWRIGHT_BROWSERS_PATH="$CARGO_TARGET_DIR/core-only-browser-cache/brows
 export BUILD_LANE_HEAD=$(git rev-parse HEAD)
 package=${1:?shared native archive required}
 playwright_module=${2:?pinned Playwright required}
-evidence="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-phase-rtts/$(basename "$TMPDIR")"
+evidence="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-resources/$(basename "$TMPDIR")"
+soak=${3:-20}
+[[ "$soak" = 20 || "$soak" = 86400 ]] || exit 64
 mkdir -p "$evidence"
 # Preserve only bounded evidence, not databases, caches, fixture copies or secrets.
 retain() {
@@ -29,7 +31,24 @@ mkdir "$TMPDIR/native"
 tar -xzf "$package" -C "$TMPDIR/native" ./bin/ctox
 printf '%s  %s\n' 741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba "$TMPDIR/native/bin/ctox" | sha256sum -c -
 node -e 'const p=require(process.argv[1]+"/package.json");if(p.version!=="1.60.0")throw Error("Pinned Playwright mismatch")' "$playwright_module"
-node --test scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs
+node --test scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs scripts/sync-v3/resource-observer.test.mjs
+python3 scripts/sync-v3/sqlite-lock-probe.py --self-test
 SIGNALING_SELF_TEST=1 node src/core/rxdb/tools/local_signaling_server.js
-node scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" --playwright "$playwright_module" --output "$TMPDIR/sync-v3-native-evidence"
+if [[ "$soak" = 86400 ]]; then
+  status="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-resources/soak-20261010/status.json"
+  [[ ! -e "$status" ]] || { echo 'Refusing to replace an existing soak observation'; exit 64; }
+  mkdir -p "$(dirname "$status")"
+  systemd-run --user --unit=ctox-sync-v3-s0-locks-20261010 --wait --quiet \
+    --property=Type=exec --property=RuntimeMaxSec=86900 --property=TimeoutStopSec=20 \
+    --property=KillMode=control-group --property=CPUQuota=200% --property=MemoryMax=6G \
+    --property=MemorySwapMax=0 --property="WorkingDirectory=$(pwd)" \
+    --setenv="PATH=$PATH" --setenv="TMPDIR=$TMPDIR" --setenv="BUILD_LANE_HEAD=$BUILD_LANE_HEAD" \
+    --setenv="CARGO_TARGET_DIR=$CARGO_TARGET_DIR" --setenv="PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" \
+    node scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" \
+    --playwright "$playwright_module" --output "$TMPDIR/sync-v3-native-evidence" \
+    --soak-seconds 86400 --soak-status "$status"
+else
+  node scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" --playwright "$playwright_module" \
+    --output "$TMPDIR/sync-v3-native-evidence" --soak-seconds 20 --soak-status "$evidence/short-soak.json"
+fi
 git diff --check

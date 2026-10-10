@@ -11,10 +11,12 @@ import { analyzeCase, compareCases } from './sync-v3/phase-analysis.mjs';
 const values = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
   const name = process.argv[index];
-  if (!['--binary', '--playwright', '--output'].includes(name) || !process.argv[index + 1] || values.has(name)) throw Error('Supply --binary PATH --playwright PATH --output NEW_DIRECTORY');
-  values.set(name, resolve(process.argv[index + 1]));
+  if (!['--binary', '--playwright', '--output', '--soak-seconds', '--soak-status'].includes(name) || !process.argv[index + 1] || values.has(name)) throw Error('Supply binary/playwright/output, optional soak-seconds/status');
+  values.set(name, name === '--soak-seconds' ? process.argv[index + 1] : resolve(process.argv[index + 1]));
 }
-if (values.size !== 3 || !process.env.TMPDIR) throw Error('A supplied native binary, pinned Playwright and admitted TMPDIR are required');
+if (!['--binary', '--playwright', '--output'].every(key => values.has(key)) || !process.env.TMPDIR) throw Error('A supplied native binary, pinned Playwright and admitted TMPDIR are required');
+const soakSeconds = Number(values.get('--soak-seconds') || 0);
+if (![0,20,86400].includes(soakSeconds) || (soakSeconds && !values.has('--soak-status'))) throw Error('Bounded soak duration and status path required');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = values.get('--output');
 if (!output.startsWith(resolve(process.env.TMPDIR) + '/')) throw Error('Evidence must be in the admitted TMPDIR');
@@ -28,12 +30,13 @@ const report = { version: 1, stage: 'sync-v3:S0', sourceHead: process.env.BUILD_
   cases: [], pass: false };
 const percentile = (numbers, quantile) => [...numbers].sort((a, b) => a - b)[Math.ceil(numbers.length * quantile) - 1];
 try {
-  for (const [index, rtt] of [0, 300, 600].entries()) {
+  for (const [index, rtt] of (soakSeconds === 86400 ? [0] : [0, 300, 600]).entries()) {
     const runtimeRoot = join(output, `rtt-${rtt}`);
     await mkdir(runtimeRoot, { mode: 0o700 });
     const log = createWriteStream(join(output, `rtt-${rtt}.log`), { flags: 'wx', mode: 0o600 });
     const start = Date.now();
-    const child = spawn(process.execPath, [join(root, 'src/core/rxdb/tools/browser_rust_smoke.js'), `--sync-v3-relay-rtt=${rtt}`], {
+    const soakArgs = soakSeconds && rtt === 0 ? [`--sync-v3-soak-seconds=${soakSeconds}`, `--sync-v3-soak-status=${values.get('--soak-status')}`] : [];
+    const child = spawn(process.execPath, [join(root, 'src/core/rxdb/tools/browser_rust_smoke.js'), `--sync-v3-relay-rtt=${rtt}`, ...soakArgs], {
       cwd: root, detached: true, env: { ...process.env, CTOX_BIN: values.get('--binary'),
         PLAYWRIGHT_MODULE_PATH: values.get('--playwright'), CTOX_SMOKE_ROOT: runtimeRoot,
         SMOKE_MODE: 'sync-v3-scale-relay', BUSINESS_PORT: String(61931 + index * 2),
@@ -45,7 +48,7 @@ try {
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
     const signal = value => { try { process.kill(-child.pid, value); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
     let killTimer;
-    const deadline = setTimeout(() => { signal('SIGTERM'); killTimer = setTimeout(() => signal('SIGKILL'), 10000); }, 240000);
+    const deadline = setTimeout(() => { signal('SIGTERM'); killTimer = setTimeout(() => signal('SIGKILL'), 10000); }, 240000 + (rtt === 0 ? soakSeconds * 1000 : 0));
     const exit = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolveExit({ code, signal })); });
     clearTimeout(deadline); clearTimeout(killTimer);
     await new Promise(resolveLog => log.end(resolveLog));
@@ -64,7 +67,7 @@ try {
       criterion: 'complete visible native rows, five accepted ACKs with SQLite readback, real relay path and delay validated; RFC product budget is measured separately' });
   }
   report.pass = true;
-  report.phaseComparison = compareCases(report.cases);
+  if (soakSeconds !== 86400) report.phaseComparison = compareCases(report.cases);
 } catch (error) {
   report.error = error.message;
   process.exitCode = 1;
