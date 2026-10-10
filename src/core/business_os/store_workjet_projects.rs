@@ -199,9 +199,19 @@ pub(super) fn handle_workjet_project_list_command(
                 .context("active Workjet project has no id")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let exit_models = project_ids
+        .iter()
+        .map(|id| {
+            Ok((
+                (*id).to_owned(),
+                super::workjet_exit_model::read_state(&conn, id, &owner_user_id)?,
+            ))
+        })
+        .collect::<anyhow::Result<serde_json::Map<String, Value>>>()?;
     Ok(serde_json::json!({
         "ok": true,
         "collection": PROJECTS_COLLECTION,
+        "exit_models": exit_models,
         "owner_user_id": owner_user_id,
         "count": count,
         "project_ids": project_ids,
@@ -316,6 +326,7 @@ pub(super) fn handle_workjet_project_upsert_command(
             "updated_at_ms": now,
             "is_deleted": false,
         });
+        // Exit assessment history remains in its owner-scoped core table, outside this projection.
         for (field, patch) in [
             ("description", description),
             ("repo_url", repo_url),
