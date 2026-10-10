@@ -34,7 +34,7 @@ attached canonical projection writes still commit together.
 
 Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
-remain atomic. Single-record writes keep their existing boundaries. Cold event
+remain atomic. Source-record writes keep their existing boundaries. Cold event
 delivery prepares payloads and deduplication outside the writer, then commits at
 most 64 source records and 64 mirror records per separate transaction, using the
 same per-row merge/envelope functions. Source commit precedes mirror delivery;
@@ -65,6 +65,10 @@ Slow native transactions emit `[ctox sqlite writer]` after their own lock
 has been released. The fields are operation, primary database path, wait_us,
 hold_us, outcome and (for failed acquisition) SQLite error code. No SQL,
 document content or credentials are logged. The fixed threshold is 50 ms.
+The hold measurement spans successful reservation through the completed
+commit/rollback call, including SQLite work and I/O. It does not independently
+sample SQLite's operating-system locks. These diagnostics identify slow
+transaction spans; they do not alone prove an exclusive lock owner.
 
 Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,

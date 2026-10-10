@@ -13638,7 +13638,10 @@ impl RxdbCollectionWriter {
 
     // Call only after reserving IMMEDIATE: a retained connection's cached
     // clock can precede a different publisher's already-visible feed cursor.
-    fn replication_clock_floor(&self, writer: &Connection) -> anyhow::Result<i64> {
+    fn replication_clock_floor(
+        &self,
+        writer: &crate::persistence::SqliteWriteTransaction<'_>,
+    ) -> anyhow::Result<i64> {
         let persisted_lwt = writer
             .prepare_cached(&format!(
                 "SELECT COALESCE(MAX(lastWriteTime), 0) FROM {}",
