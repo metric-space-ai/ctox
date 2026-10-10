@@ -60,14 +60,7 @@ async function seed(runtimeRoot, sqlite) {
 }
 
 async function install(browser) {
-  await browser.addInitScript(() => {
-    const Original = globalThis.RTCPeerConnection;
-    globalThis.__syncV3Rtc = [];
-    globalThis.RTCPeerConnection = class extends Original {
-      constructor(...args) { super(...args); globalThis.__syncV3Rtc.push(this); }
-    };
-    globalThis.__syncV3BootAt = performance.now();
-  });
+  await browser.addInitScript(require('./phase-trace.cjs').installPhaseTrace);
 }
 
 async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
@@ -79,6 +72,8 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
     return row ? JSON.parse(row).write_marker === marker : false;
   });
   const result = await page.evaluate(async ({ schemas, rttMs, fixture }) => {
+    const trace = globalThis.__syncV3Trace;
+    trace.mark('fixture-setup');
     const state = globalThis.ctoxBusinessOsSmoke.state;
     const raw = state.db.raw;
     const missing = Object.fromEntries(Object.entries(schemas).filter(([name]) => !raw[name]));
@@ -100,7 +95,9 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       }));
       const leadName = names[0];
       const queryStarted = performance.now();
+      trace.mark('fixture-query');
       const rows = await withDeadline(raw[leadName].find({ selector: {}, sort: [{ ordinal: 'asc' }], limit: 20 }).exec(), 60000, 'Scale query timeout');
+      trace.mark('rows-ready');
       if (rows.length !== 20 || new Set(rows.map(row => row.id)).size !== 20 || rows[0].ordinal !== 0) throw Error('Scale visible window incomplete');
       const panel = document.createElement('section');
       panel.id = 'sync-v3-visible-data';
@@ -111,6 +108,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       document.body.append(panel);
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const visibleAt = performance.now();
+      trace.mark('visible');
       if (panel.getBoundingClientRect().height <= 0 || getComputedStyle(panel).visibility !== 'visible') throw Error('Scale rows not visible');
       await globalThis.__syncV3EvidenceCheckpoint({ requestedRttMs: rttMs,
         coldPageToVisibleMs: visibleAt - globalThis.__syncV3BootAt,
@@ -128,13 +126,17 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const ack = new Promise((resolve, reject) => { resolveAck = resolve; rejectAck = reject; });
           ack.catch(() => {});
           const started = performance.now();
+          trace.marks[`write-${index}-start`] = started;
           let conflictReplies = 0;
+          const attempts = [];
           peer.request = async function (...args) {
             const selected = args[1] === 'masterWrite' && args[4] === leadName
               && JSON.stringify(args[2]).includes(marker);
             try {
+              const requestStartedAt = performance.now();
               const response = await original.apply(this, args);
               if (selected) {
+                attempts.push({ startAt: requestStartedAt, endAt: performance.now(), conflicts: Array.isArray(response) ? response.length : null });
                 if (!Array.isArray(response)) rejectAck(Error('Native write did not return the canonical ACK/conflict result'));
                 else if (response.length) conflictReplies++; // Let the real engine reconcile and retry.
                 else resolveAck(performance.now() - started);
@@ -145,10 +147,13 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const current = index ? (await raw[leadName].findOne(first.id).exec()).toJSON() : first;
           await raw[leadName].upsert({ ...current, write_marker: marker, updated_at_ms: Date.now() });
           const localMs = performance.now() - started;
+          trace.mark(`write-${index}-local-commit`);
           const nativeAckMs = await withDeadline(ack, 30000, 'Native masterWrite ACK timeout');
+          trace.marks[`write-${index}-ack`] = started + nativeAckMs;
           if (rttMs && nativeAckMs < rttMs * 0.75) throw Error('Write ACK bypassed delayed relay');
           if (!await globalThis.__syncV3NativeReadback(leadName, first.id, marker)) throw Error('Native ACK not backed by SQLite write');
-          samples.push({ sample: index, localCommitMs: localMs, nativeAckMs, conflictReplies, sqliteVerified: true });
+          trace.mark(`write-${index}-sqlite-verified`);
+          samples.push({ sample: index, localCommitMs: localMs, nativeAckMs, conflictReplies, sqliteVerified: true, attempts });
         }
       } finally { peer.request = original; }
       const pairs = [];
@@ -162,11 +167,14 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
         }
       }
       if (!pairs.length || pairs.some(pair => pair.remoteAddress !== '127.0.0.1' || !Number.isInteger(pair.remotePort))) throw Error('No selected loopback relay candidate proof');
+      await trace.drain();
+      if (trace.errors.length) throw Error(`Phase trace failed: ${JSON.stringify(trace.errors)}`);
       return { mode: 'sync-v3-scale-relay', requestedRttMs: rttMs,
         coldPageToVisibleMs: visibleAt - globalThis.__syncV3BootAt,
         collectionSetupToVisibleMs: visibleAt - collectionReadyAt,
         queryToVisibleMs: visibleAt - queryStarted, visibleRows: rows.length,
         writes: samples, selectedCandidatePairs: pairs, installedAcceptance: false,
+        phaseTrace: { version: trace.version, bootAt: trace.bootAt, marks: trace.marks, events: trace.events, errors: trace.errors },
         visibleDefinition: '20 native demand-query rows painted in isolated shell overlay',
         writeDefinition: 'local upsert to exact native masterWrite ACK, independently verified in SQLite' };
     } finally { for (const lease of leases) await lease.release(); }

@@ -8,7 +8,7 @@ export PLAYWRIGHT_BROWSERS_PATH="$CARGO_TARGET_DIR/core-only-browser-cache/brows
 export BUILD_LANE_HEAD=$(git rev-parse HEAD)
 package=${1:?shared native archive required}
 playwright_module=${2:?pinned Playwright required}
-evidence="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-relay-latency/$(basename "$TMPDIR")"
+evidence="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-phase-rtts/$(basename "$TMPDIR")"
 mkdir -p "$evidence"
 # Preserve only bounded evidence, not databases, caches, fixture copies or secrets.
 retain() {
@@ -29,7 +29,7 @@ mkdir "$TMPDIR/native"
 tar -xzf "$package" -C "$TMPDIR/native" ./bin/ctox
 printf '%s  %s\n' 741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba "$TMPDIR/native/bin/ctox" | sha256sum -c -
 node -e 'const p=require(process.argv[1]+"/package.json");if(p.version!=="1.60.0")throw Error("Pinned Playwright mismatch")' "$playwright_module"
-node --test scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs
+node --test scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs
 SIGNALING_SELF_TEST=1 node src/core/rxdb/tools/local_signaling_server.js
 node scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" --playwright "$playwright_module" --output "$TMPDIR/sync-v3-native-evidence"
 git diff --check
