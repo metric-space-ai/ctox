@@ -45,6 +45,14 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
     assert!(stored.runtime.claude_accounts[0].disabled);
     let routes =
         build_instance_provider_routes(root.path())?.context("dormant routes must be loadable")?;
+    let explicit = routes
+        .responses
+        .handle_provider_route(Some("codex"), b"{}")
+        .await;
+    assert!(
+        matches!(explicit, OpenAiResponsesRouteResponse::Buffered(ref response)
+        if response.status() == 400 && !String::from_utf8_lossy(response.body()).contains("requested provider is not configured"))
+    );
     let response = routes.responses.handle_provider_route(None, b"{}").await;
     assert!(
         matches!(response,OpenAiResponsesRouteResponse::Buffered(ref response) if response.status()==400)
@@ -72,6 +80,14 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
     );
     let routes = build_instance_provider_routes(root.path())?
         .context("removed dormant routes must be loadable")?;
+    let explicit = routes
+        .responses
+        .handle_provider_route(Some("codex"), b"{}")
+        .await;
+    assert!(
+        matches!(explicit, OpenAiResponsesRouteResponse::Buffered(ref response)
+        if response.status() == 400 && !String::from_utf8_lossy(response.body()).contains("requested provider is not configured"))
+    );
     let response = routes.responses.handle_provider_route(None, b"{}").await;
     assert!(
         matches!(response,OpenAiResponsesRouteResponse::Buffered(ref response) if response.status()==400)

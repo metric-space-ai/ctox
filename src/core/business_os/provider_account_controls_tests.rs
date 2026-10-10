@@ -126,8 +126,8 @@ fn native_controls_persist_disable_enable_and_remove_exact_account() -> Result<(
     let removed = handle(f.root.path(), &cmd, "owner", Some(&admission))?;
     assert_eq!(removed["accounts"].as_array().unwrap().len(), 1);
     assert_ne!(account_id(&removed), id);
-    assert!(catalog::capture(f.root.path(), "local-claude-control")?.is_none());
-    assert!(catalog::capture(f.root.path(), "local-claude-other")?.is_some());
+    assert!(catalog::account_binding(f.root.path(), "local-claude-control")?.is_none());
+    assert!(catalog::account_binding(f.root.path(), "local-claude-other")?.is_some());
     assert!(crate::secrets::secret_record_content_version(
         f.root.path(),
         "provider-subscriptions",
@@ -203,7 +203,7 @@ fn native_controls_recover_after_runtime_and_secrets_commit_without_reapplying()
         f.root.path(),
         cmd.id.as_deref().unwrap()
     )?);
-    assert!(catalog::capture(f.root.path(), "local-claude-control")?.is_none());
+    assert!(catalog::account_binding(f.root.path(), "local-claude-control")?.is_none());
     assert!(crate::secrets::secret_record_content_version(
         f.root.path(),
         "provider-subscriptions",
@@ -245,7 +245,7 @@ fn native_controls_never_delete_relogin_after_topology_commit() -> Result<()> {
     f.conn
         .execute_batch("DROP TRIGGER account_receipt_failure")?;
     assert!(recover(f.root.path(), &cmd, &hash, "owner").is_err());
-    assert!(catalog::capture(f.root.path(), "local-claude-control")?.is_some());
+    assert!(catalog::account_binding(f.root.path(), "local-claude-control")?.is_some());
     Ok(())
 }
 #[test]
@@ -288,7 +288,70 @@ fn native_controls_canceled_or_revoked_after_reservation_never_mutate_holder() -
                 .unwrap()
                 .revision
         );
-        assert!(catalog::capture(f.root.path(), "local-claude-control")?.is_some());
+        assert!(catalog::account_binding(f.root.path(), "local-claude-control")?.is_some());
+    }
+    Ok(())
+}
+
+#[test]
+fn native_controls_intake_repairs_proof_and_never_executes_a_prepared_only_operation() -> Result<()>
+{
+    for applied in [false, true] {
+        let (f, id) = fixture()?;
+        let (cmd, _, hash) = admitted(&f, &id, Some(false), "owner")?;
+        let request: Request = serde_json::from_value(cmd.payload.clone())?;
+        let pending = Pending {
+            target: target(
+                &f.conn,
+                "owner",
+                &store::existing_instance_id(f.root.path())?,
+                &request,
+            )?,
+            request,
+        };
+        f.conn.execute("INSERT INTO business_provider_account_controls(command_id,payload_hash,actor_user_id,owner_user_id,pending_json) VALUES (?1,?2,?3,?3,?4)",params![cmd.id,hash,"owner",serde_json::to_string(&pending)?])?;
+        let revision = proxy::load_instance_proxy_config(f.root.path())?
+            .unwrap()
+            .revision;
+        if applied {
+            execute_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
+        }
+        drop(
+            crate::business_os::store_projections::tests::create_repair_rxdb_tables(f.root.path())?,
+        );
+        let rxdb = Connection::open(store::rxdb_store_path(f.root.path()))?;
+        rxdb.execute_batch("CREATE TABLE ctox_business_os__workjet_provider_registry__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER NOT NULL DEFAULT 0,lastWriteTime REAL NOT NULL DEFAULT 0,data TEXT NOT NULL)")?;
+        let result = crate::business_os::command_plane::recover_applied_domain_effect_for_intake(
+            f.root.path(),
+            cmd.id.as_deref().unwrap(),
+        );
+        let canonical = crate::channels::business_command_projection(
+            f.root.path(),
+            cmd.id.as_deref().unwrap(),
+        )?;
+        if applied {
+            assert!(result?.is_some());
+            assert_eq!(canonical["terminal_status"], "completed");
+            assert_eq!(
+                proxy::load_instance_proxy_config(f.root.path())?
+                    .unwrap()
+                    .revision,
+                revision + 1
+            );
+        } else {
+            assert!(result.is_err());
+            assert_eq!(canonical["terminal_status"], "none");
+            assert_eq!(
+                proxy::load_instance_proxy_config(f.root.path())?
+                    .unwrap()
+                    .revision,
+                revision
+            );
+            assert!(!super::super::super::domain_effect::contains(
+                &f.conn,
+                cmd.id.as_deref().unwrap()
+            )?);
+        }
     }
     Ok(())
 }
