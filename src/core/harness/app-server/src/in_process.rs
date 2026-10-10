@@ -1186,24 +1186,24 @@ mod tests {
     #[test]
     fn guaranteed_delivery_helpers_cover_terminal_notifications() {
         assert!(server_notification_requires_delivery(
-            &ServerNotification::TurnStarted(
-                ctox_app_server_protocol::TurnStartedNotification {
-                    thread_id: "thread-1".into(),
-                    turn: Turn {
-                        id: "turn-1".into(),
-                        items: Vec::new(),
-                        status: TurnStatus::InProgress,
-                        error: None,
-                    },
-                }
-            )
+            &ServerNotification::TurnStarted(ctox_app_server_protocol::TurnStartedNotification {
+                thread_id: "thread-1".into(),
+                turn: Turn {
+                    id: "turn-1".into(),
+                    items: Vec::new(),
+                    status: TurnStatus::InProgress,
+                    error: None,
+                },
+            })
         ));
         for method in ["task_started", "turn_started", "agent_message"] {
             for prefix in ["", "codex/event/"] {
-                assert!(legacy_notification_requires_delivery(&JSONRPCNotification {
-                    method: format!("{prefix}{method}"),
-                    params: None,
-                }));
+                assert!(legacy_notification_requires_delivery(
+                    &JSONRPCNotification {
+                        method: format!("{prefix}{method}"),
+                        params: None,
+                    }
+                ));
             }
         }
         assert!(server_notification_requires_delivery(

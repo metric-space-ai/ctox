@@ -347,20 +347,24 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
             "Hier ist der nächste Schritt.",
         )?;
         let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
-        assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
-            root.path(),
-            &canonical["command"]
-        )?);
+        assert!(
+            crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+                root.path(),
+                &canonical["command"]
+            )?
+        );
         if let Some(revoked) = revoked {
             conn.execute(
                 "UPDATE business_users SET active=0 WHERE user_id=?1",
                 [revoked],
             )?;
-            assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
-                root.path(),
-                &canonical["command"]
-            )
-            .is_err());
+            assert!(
+                crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+                    root.path(),
+                    &canonical["command"]
+                )
+                .is_err()
+            );
         } else {
             // Simulate a changed private provenance actor, not a new trusted
             // alias. Display names and profile fields cannot supply authority.
@@ -370,11 +374,13 @@ fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyh
                 '$.actor.email',?1) WHERE command_id='alias-conversation'",
                 [ALIAS],
             )?;
-            assert!(crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
-                root.path(),
-                &canonical["command"]
-            )
-            .is_err());
+            assert!(
+                crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+                    root.path(),
+                    &canonical["command"]
+                )
+                .is_err()
+            );
         }
     }
     Ok(())

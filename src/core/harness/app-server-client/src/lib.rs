@@ -1655,9 +1655,18 @@ mod tests {
 
     #[tokio::test]
     async fn next_event_surfaces_lagged_markers() {
-        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
         let (event_tx, event_rx) = mpsc::channel(1);
-        let worker_handle = tokio::spawn(async {});
+        let worker_handle = tokio::spawn(async move {
+            match command_rx.recv().await {
+                Some(ClientCommand::Shutdown { response_tx }) => {
+                    response_tx
+                        .send(Ok(()))
+                        .expect("lag marker fixture must acknowledge shutdown");
+                }
+                _ => panic!("lag marker fixture expects shutdown command"),
+            }
+        });
         let config = build_test_config().await;
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
@@ -1790,9 +1799,18 @@ mod tests {
         // typed decoding and exact thread/turn validation.
         let expected = [
             ("task_started", serde_json::json!({"witness": "turn-start"})),
-            ("agent_message", serde_json::json!({"answer": "Vollständig 🦊 **geändert**"})),
-            ("agent_message", serde_json::json!({"metadata": "ctox-crew metadata:"})),
-            ("task_complete", serde_json::json!({"witness": "turn-complete"})),
+            (
+                "agent_message",
+                serde_json::json!({"answer": "Vollständig 🦊 **geändert**"}),
+            ),
+            (
+                "agent_message",
+                serde_json::json!({"metadata": "ctox-crew metadata:"}),
+            ),
+            (
+                "task_complete",
+                serde_json::json!({"witness": "turn-complete"}),
+            ),
         ];
         for (method, params) in &expected {
             let event = InProcessServerEvent::LegacyNotification(JSONRPCNotification {
@@ -1817,12 +1835,12 @@ mod tests {
             assert_eq!(event.params.as_ref(), Some(params));
         }
         assert!(pending.is_empty());
-        assert!(!event_requires_delivery(&InProcessServerEvent::LegacyNotification(
-            JSONRPCNotification {
+        assert!(!event_requires_delivery(
+            &InProcessServerEvent::LegacyNotification(JSONRPCNotification {
                 method: "codex/event/agent_message_delta".into(),
                 params: None,
-            }
-        )));
+            })
+        ));
     }
 
     #[test]
