@@ -607,7 +607,7 @@ test('execution policy configure uses a typed Owner CAS and native receipt, with
   const result = await fixture.invoke(projectConfigurationRequest({
     executionPolicy: { schema, mode: 'autonomous_worktree', expected_revision: 0 },
   }));
-  assert.deepEqual(fixture.commands[0].payload.execution_policy, { schema, mode: 'autonomous_worktree', expected_revision: 0 });
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.commands[0].payload.execution_policy)), { schema, mode: 'autonomous_worktree', expected_revision: 0 });
   assert.deepEqual(result.project.executionPolicy, { schema, mode: 'autonomous_worktree', revision: 1 });
   assert.equal(fixture.commands[0].client_context.actor.id, 'owner-1');
   assert.equal(Object.hasOwn(result.project, 'runtimeMode'), false);
