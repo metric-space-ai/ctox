@@ -198,6 +198,26 @@ mod tests {
     }
 
     #[test]
+    fn native_source_consumes_the_same_bounded_page_fixture_as_the_browser() -> anyhow::Result<()> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-supervisor-source-v1.json"
+        ))?;
+        for case in fixture["valid_cases"].as_array().unwrap() {
+            wire::validate_fixture(case["type"].as_str().unwrap(), case["value"].clone())
+                .map_err(anyhow::Error::msg)?;
+        }
+        for case in fixture["invalid_cases"].as_array().unwrap() {
+            assert!(
+                wire::validate_fixture(case["type"].as_str().unwrap(), case["value"].clone())
+                    .is_err(),
+                "{}",
+                case["reason"]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn large_goal_is_lossless_utf8_and_every_complete_envelope_fits_the_bridge(
     ) -> anyhow::Result<()> {
         let text = "é🧭\\\" \n\t".repeat(12_000);
