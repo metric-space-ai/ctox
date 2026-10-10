@@ -158,7 +158,9 @@ impl NativeClaudeSdkAccountReservation {
         ensure!(
             selected.account().provider == "claude"
                 && selected.account().holder_instance_id
-                    == crate::business_os::store::existing_instance_id(authority.native_host_root())?,
+                    == crate::business_os::store::existing_instance_id(
+                        authority.native_host_root()
+                    )?,
             "model check requires a Claude account held on this native instance"
         );
         Self::prepare_selected(authority, selected)
