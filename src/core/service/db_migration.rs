@@ -8,7 +8,7 @@
 //!   1. Create a fresh `ctox.db.migrating` next to the target.
 //!   2. For each legacy file, `ATTACH` it and walk its `sqlite_master`:
 //!      recreate tables/virtual tables via their original DDL, copy rows
-//!      (FTS5 virtual tables are populated via the VT interface), then
+//!      (FTS5 backing tables retain their index bytes even without content), then
 //!      recreate indexes/triggers/views.
 //!   3. `rename(ctox.db.migrating → ctox.db)` — atomic on POSIX filesystems.
 //!   4. Move the legacy `.db` files (plus any `-wal`/`-shm` side files) into
@@ -17,6 +17,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -108,8 +109,16 @@ fn attach_and_copy(conn: &Connection, legacy_path: &Path, alias: &str) -> Result
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    // SQLite identifies real shadow tables; a suffix also matches ordinary
+    // application tables such as settings_config and event_data.
+    let shadow_tables: HashSet<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_list WHERE schema = ?1 AND type = 'shadow'")?;
+        let rows = stmt.query_map([alias], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()?
+    };
     for (name, sql) in &tables {
-        if is_fts_shadow_name(name) {
+        if shadow_tables.contains(name) {
             continue;
         }
         conn.execute_batch(sql)
@@ -117,36 +126,22 @@ fn attach_and_copy(conn: &Connection, legacy_path: &Path, alias: &str) -> Result
     }
 
     for (name, sql) in &tables {
-        if is_fts_shadow_name(name) {
-            continue;
-        }
         let is_fts = sql.to_ascii_uppercase().contains("USING FTS5");
         if is_fts {
-            let cols: Vec<String> = {
-                let mut cstmt = conn.prepare(
-                    "SELECT name FROM pragma_table_info(?1) WHERE name NOT LIKE 'sqlite_%'",
-                )?;
-                let rows = cstmt.query_map([name.as_str()], |row| row.get::<_, String>(0))?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            if cols.is_empty() {
-                continue;
-            }
-            let col_list = cols
-                .iter()
-                .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
-                .collect::<Vec<_>>()
-                .join(", ");
-            conn.execute_batch(&format!(
-                "INSERT INTO \"{name}\"(rowid, {col_list}) SELECT rowid, {col_list} FROM {alias}.\"{name}\";"
-            ))
-            .with_context(|| format!("failed to copy FTS rows of {name} from {alias}"))?;
-        } else {
-            conn.execute_batch(&format!(
-                "INSERT INTO \"{name}\" SELECT * FROM {alias}.\"{name}\";"
-            ))
-            .with_context(|| format!("failed to copy rows of {name} from {alias}"))?;
+            // Contentless FTS5 returns NULL content. Reinserting those rows
+            // through the virtual table silently discards its search index.
+            // Identical DDL has created fresh backing tables: preserve their
+            // opaque bytes, then close staging before publishing the database.
+            continue;
         }
+        let quoted = name.replace('"', "\"\"");
+        if shadow_tables.contains(name) {
+            conn.execute_batch(&format!("DELETE FROM \"{quoted}\";"))?;
+        }
+        conn.execute_batch(&format!(
+            "INSERT INTO \"{quoted}\" SELECT * FROM {alias}.\"{quoted}\";"
+        ))
+        .with_context(|| format!("failed to copy rows of {name} from {alias}"))?;
     }
 
     let aux: Vec<(String, String)> = {
@@ -167,15 +162,6 @@ fn attach_and_copy(conn: &Connection, legacy_path: &Path, alias: &str) -> Result
 
     conn.execute_batch(&format!("DETACH DATABASE {alias};"))?;
     Ok(())
-}
-
-fn is_fts_shadow_name(name: &str) -> bool {
-    for suffix in ["_data", "_idx", "_content", "_docsize", "_config"] {
-        if name.ends_with(suffix) {
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -228,6 +214,117 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn migration_retains_contentless_fts_index_and_ordinary_suffix_tables() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        seed_legacy_dbs(root);
+        let legacy = Connection::open(paths::legacy_lcm_db(root)).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE settings_config (value TEXT NOT NULL);
+                 INSERT INTO settings_config VALUES ('retained');
+                 CREATE TABLE event_data (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO event_data VALUES (42, 'ordinary');
+                 INSERT INTO messages_fts(rowid, content) VALUES (42, 'hello bright moon');
+                 INSERT INTO messages_fts(rowid, content) VALUES (99, 'hello deleted');
+                 INSERT INTO messages_fts(messages_fts, rowid, content)
+                     VALUES ('delete', 99, 'hello deleted');",
+            )
+            .unwrap();
+        let index_rows = |conn: &Connection| {
+            conn.prepare("SELECT id, block FROM messages_fts_data ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let original_index = index_rows(&legacy);
+        drop(legacy);
+
+        run_if_needed(root).unwrap();
+        let conn = Connection::open(paths::core_db(root)).unwrap();
+        assert_eq!(index_rows(&conn), original_index);
+        let hits = conn
+            .prepare(
+                "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'hello' ORDER BY rowid",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(hits, vec![1, 42]);
+        let phrase: i64 = conn
+            .query_row(
+                "SELECT rowid FROM messages_fts WHERE messages_fts MATCH '\"bright moon\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phrase, 42);
+        let config: String = conn
+            .query_row("SELECT value FROM settings_config", [], |row| row.get(0))
+            .unwrap();
+        let event: String = conn
+            .query_row("SELECT value FROM event_data WHERE id = 42", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(config, "retained");
+        assert_eq!(event, "ordinary");
+    }
+
+    #[test]
+    fn migration_retains_stored_and_external_content_fts_search() {
+        for external in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path();
+            seed_legacy_dbs(root);
+            let legacy = Connection::open(paths::legacy_lcm_db(root)).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE articles (id INTEGER PRIMARY KEY, title TEXT, body TEXT);
+                 INSERT INTO articles VALUES (12, 'Moon', 'bright moon in the sky');",
+                )
+                .unwrap();
+            let content = if external {
+                ", content='articles', content_rowid='id'"
+            } else {
+                ""
+            };
+            legacy.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE article_search USING fts5(title, body{content});
+                 INSERT INTO article_search(rowid, title, body) SELECT id, title, body FROM articles;
+                 INSERT INTO article_search(article_search, rank) VALUES ('automerge', 2);"
+            )).unwrap();
+            drop(legacy);
+
+            run_if_needed(root).unwrap();
+            let conn = Connection::open(paths::core_db(root)).unwrap();
+            let hit: (i64, String, String) = conn
+                .query_row(
+                    "SELECT rowid, title, body FROM article_search
+                 WHERE article_search MATCH '\"bright moon\"'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(hit, (12, "Moon".into(), "bright moon in the sky".into()));
+            let automerge: i64 = conn
+                .query_row(
+                    "SELECT v FROM article_search_config WHERE k = 'automerge'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(automerge, 2);
+        }
     }
 
     #[test]

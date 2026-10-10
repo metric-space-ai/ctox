@@ -68,6 +68,12 @@ async fn completed(client: &mut InProcessClientHandle, thread: &str, turn: &str)
             {
                 assert_eq!(event.thread_id, thread);
                 assert_eq!(event.turn.id, turn, "no other turn may complete");
+                assert_ne!(
+                    event.turn.status,
+                    TurnStatus::Failed,
+                    "unexpected failed model turn: {:?}",
+                    event.turn.error
+                );
                 return event.turn.status;
             }
         }
@@ -125,6 +131,8 @@ async fn exact_turn_interrupt_rpc_preserves_identity_and_successor() {
             ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(1),
                 params: ThreadStartParams {
+                    cwd: Some(home.path().to_string_lossy().into_owned()),
+                    disable_mcp_servers: Some(true),
                     ephemeral: Some(true),
                     ..Default::default()
                 },
@@ -133,6 +141,8 @@ async fn exact_turn_interrupt_rpc_preserves_identity_and_successor() {
         .await
         .expect("thread/start success");
         let thread: ThreadStartResponse = serde_json::from_value(thread).unwrap();
+        assert_eq!(thread.model_provider, "mock_provider");
+        assert_eq!(thread.cwd, home.path());
         let thread = thread.thread.id;
         let old_turn = start_turn(&client, &thread, 2).await;
         assert_eq!(

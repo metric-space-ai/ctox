@@ -205,6 +205,20 @@ effects, independently enrolled capture authority or a transferable provider
 checkpoint. Production capture/transfer and cross-host continuation remain
 unfinished work.
 
+## 2026-10 Public assistant streaming under event pressure
+
+Both in-process runtime and facade use the same required-delivery classifier
+for AgentMessage deltas, their AgentMessage item start/completion, and turn start.
+The shared legacy classifier also preserves the actual task/turn-start witness
+and AgentMessage final used by native reply selection. Previously
+these notifications were droppable under bounded backpressure, producing
+contiguous but incomplete public text. The existing nonblocking required-event
+buffer retains order and its runaway/session-failure bound; interrupt/control
+requests keep their independent processing path. Reasoning and tool progress
+remain droppable. Saturated runtime and facade regressions exercise exact
+Markdown/Unicode text and lifecycle order; existing event-pressure/interrupt
+tests remain required.
+
 ## 2026-10 Rollout writer acknowledgement and publication
 
 Recorder `persist` and `flush` replies carry the writer's actual I/O result.
@@ -411,6 +425,16 @@ without changing existing error Display strings or unrelated retry behavior:
   Display text while using the typed protocol projection.
 
 Ticket: I-074.
+
+## 2026-10 Bound In-process Configuration Home
+
+The in-process thread/start config reload uses the already bound codex_home.
+It previously rediscovered the ambient home and could send an isolated mock
+turn to the default provider instead. The standard process home is unchanged.
+The exact-turn interrupt regression asserts the mock provider and isolated cwd,
+then exercises real completed and interrupted turns with the original timeouts.
+No ambient environment override or credentials are required by the fixture.
+
 
 ## 2026-09 Named Persistent Thread Resume Test
 

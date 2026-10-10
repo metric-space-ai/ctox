@@ -12,14 +12,88 @@ use ctox_sync::{
     business_data_session::{BusinessDataSessionHost, SavedBusinessDataTarget},
     native::NativeSyncSession,
 };
-use ctox_transfers::{DownloadRequest, PeerAccountBinding, PeerRangeSource, Store, Transfer};
+use ctox_transfers::{
+    DownloadRequest, PeerAccountBinding, PeerRangeSource, PeerReadFailure, Store, Transfer,
+};
 use rxdb::plugins::replication_webrtc::{
-    file_fetch_client::fetch_file_range,
+    file_fetch_client::{fetch_file_range, FileRangeBytes},
     file_fetch_handler::{FileFetchRequest, FileRange},
     WebRTCRsConnection,
 };
+use rxdb::rx_error::RxError;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
+
+// The RPC already returns bounded reasons. Never expose its raw message/parameters.
+fn range_failure(error: &RxError) -> PeerReadFailure {
+    if error.code() != "RC_WEBRTC_FILE" {
+        return PeerReadFailure::Unavailable;
+    }
+    match error
+        .parameters()
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("file_timeout") => PeerReadFailure::Timeout,
+        Some("local_fetch_limit") => PeerReadFailure::Busy,
+        Some("chunk_sequence_gap") => PeerReadFailure::SequenceGap,
+        Some("peer_not_ready" | "peer_disconnected") => PeerReadFailure::Disconnected,
+        Some(
+            "file_pool_closed"
+            | "response_stream_closed"
+            | "message_stream_closed"
+            | "disconnect_stream_closed",
+        ) => PeerReadFailure::Closed,
+        Some("file_not_accepted" | "remote_file_error") => PeerReadFailure::Rejected,
+        Some(
+            "chunk_after_completion"
+            | "invalid_chunk"
+            | "chunk_sequence_overflow"
+            | "file_cancelled"
+            | "chunk_too_large"
+            | "invalid_base64"
+            | "range_too_large"
+            | "chunk_hash_mismatch"
+            | "invalid_terminal_chunk"
+            | "empty_data_chunk"
+            | "range_incomplete",
+        ) => PeerReadFailure::InvalidChunk,
+        _ => PeerReadFailure::Unavailable,
+    }
+}
+
+async fn fetch_authorized_range<A, R, AF, RF>(
+    mut authorize: A,
+    mut fetch: R,
+    retry_delay: Duration,
+) -> Result<FileRangeBytes>
+where
+    A: FnMut() -> AF,
+    R: FnMut() -> RF,
+    AF: Future<Output = Result<()>>,
+    RF: Future<Output = std::result::Result<FileRangeBytes, RxError>>,
+{
+    for attempt in 0..3 {
+        // Retain the original job/grant and fail closed if authority changes.
+        authorize()
+            .await
+            .map_err(|_| anyhow::Error::from(PeerReadFailure::Authorization))?;
+        match fetch().await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                let failure = range_failure(&error);
+                if !failure.retryable() || attempt == 2 {
+                    return Err(failure.into());
+                }
+                // fetch_file_range discards partial responses and cancels its RPC
+                // on drop. The worker's durable byte checkpoint does not advance.
+                tokio::time::sleep(retry_delay).await;
+            }
+        }
+    }
+    unreachable!("native range attempts are bounded")
+}
 
 /// Implemented by the daemon's existing account/session host. This must reject
 /// revoked jobs, changed accounts/epochs and stale connection generations, and
@@ -259,24 +333,28 @@ impl PeerRangeSource for NativePeerRangeSource {
         length: u64,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>> {
         Box::pin(async move {
-            self.authorize(request).await?;
             let source = request
                 .peer_source
                 .as_ref()
                 .context("peer source required")?;
-            let result = fetch_file_range(
-                self.pool.clone(),
-                self.connection.clone(),
-                FileFetchRequest {
-                    request_id: String::new(),
-                    collection_name: source.collection.clone(),
-                    file_id: source.file_id.clone(),
-                    range: Some(FileRange { offset, length }),
-                    known_sequences: vec![],
+            let result = fetch_authorized_range(
+                || self.authorize(request),
+                || {
+                    fetch_file_range(
+                        self.pool.clone(),
+                        self.connection.clone(),
+                        FileFetchRequest {
+                            request_id: String::new(),
+                            collection_name: source.collection.clone(),
+                            file_id: source.file_id.clone(),
+                            range: Some(FileRange { offset, length }),
+                            known_sequences: vec![],
+                        },
+                    )
                 },
+                Duration::from_millis(250),
             )
-            .await
-            .map_err(|_| anyhow::anyhow!("authorized peer range unavailable"))?;
+            .await?;
             ensure!(result.offset == offset, "peer range offset mismatch");
             Ok(result.bytes)
         })

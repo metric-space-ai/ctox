@@ -7,6 +7,47 @@ use std::{
 
 const RANGE_BYTES: u64 = 1024 * 1024;
 
+/// Safe native failure categories. Raw RPC responses and URLs never enter job state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerReadFailure {
+    Authorization,
+    Timeout,
+    Busy,
+    SequenceGap,
+    Disconnected,
+    Closed,
+    Rejected,
+    InvalidChunk,
+    Unavailable,
+}
+
+impl PeerReadFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Authorization => "PEER_AUTHORIZATION_FAILED",
+            Self::Timeout => "PEER_FILE_TIMEOUT",
+            Self::Busy => "PEER_FILE_BUSY",
+            Self::SequenceGap => "PEER_FILE_SEQUENCE_GAP",
+            Self::Disconnected => "PEER_FILE_DISCONNECTED",
+            Self::Closed => "PEER_FILE_CLOSED",
+            Self::Rejected => "PEER_FILE_REJECTED",
+            Self::InvalidChunk => "PEER_FILE_INVALID_CHUNK",
+            Self::Unavailable => "PEER_FILE_UNAVAILABLE",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(self, Self::Timeout | Self::Busy | Self::SequenceGap)
+    }
+}
+
+impl std::fmt::Display for PeerReadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+impl std::error::Error for PeerReadFailure {}
+
 /// Original host enrollment/account snapshot, not a credential or permission.
 /// Native admission compares this with current authority on every attempt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,7 +171,10 @@ impl Worker {
                 return Ok(false);
             }
             tokio::select! {
-                result = &mut check => { result?; return Ok(true); }
+                result = &mut check => {
+                    result.map_err(|_| anyhow::Error::from(PeerReadFailure::Authorization))?;
+                    return Ok(true);
+                }
                 _ = ticker.tick() => {}
             }
         }

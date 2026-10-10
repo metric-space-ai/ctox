@@ -38,9 +38,25 @@ pub(crate) fn public_reply_text(reply: &str) -> String {
                 .to_string();
         }
     }
+    // Some providers use a reserved plain header before their metadata JSON.
+    // Keep that tail in the durable attempt, but not in a public answer.
+    let mut offset = 0;
+    let mut fenced = false;
+    let mut plain_tail = None;
+    for line in reply.split_inclusive('\n') {
+        if !fenced && line.trim_start().starts_with("ctox-crew metadata:") {
+            plain_tail = Some(offset);
+            break;
+        }
+        if line.matches("```").count() % 2 == 1 {
+            fenced = !fenced;
+        }
+        offset += line.len();
+    }
+    let reply = &reply[..plain_tail.unwrap_or(reply.len())];
     let mut result = String::new();
     let mut cursor = 0;
-    let mut removed_metadata = false;
+    let mut removed_metadata = plain_tail.is_some();
     while let Some(offset) = reply[cursor..].find("```") {
         let start = cursor + offset;
         result.push_str(&reply[cursor..start]);
@@ -203,6 +219,19 @@ mod tests {
         let reply = format!("Fertig.\n\n```ctox-crew\n{metadata}\n```");
         assert!(parse_retrospective(&reply).is_some());
         assert_eq!(public_reply_text(&reply), "Fertig.");
+        let plain = format!("Fertig.\n\nctox-crew metadata:\n```json\n{metadata}\n```");
+        assert!(parse_retrospective(&plain).is_some());
+        assert_eq!(public_reply_text(&plain), "Fertig.");
+        assert_eq!(
+            public_reply_text("Antwort\nctox-crew metadata:\n{broken secret}"),
+            "Antwort"
+        );
+        let literal = "```text\nctox-crew metadata:\nordinary code\n```";
+        assert_eq!(public_reply_text(literal), literal);
+        assert_eq!(
+            public_reply_text("Quote ctox-crew metadata: literally."),
+            "Quote ctox-crew metadata: literally."
+        );
         let code = "Beispiel:\n```json\n{\"user_data\":1}\n```";
         assert_eq!(public_reply_text(code), code);
         assert_eq!(

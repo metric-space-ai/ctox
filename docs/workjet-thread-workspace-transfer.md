@@ -1,5 +1,11 @@
 # Workjet thread workspace transfer
 
+## Native range failures
+
+Native file timeouts, local admission pressure and a missing chunk sequence get at most three attempts for the same byte range. Every attempt revalidates the original admitted job and grant; partial RPC responses never advance the durable byte checkpoint. A changed account or rejected file stops the retry immediately. Pause/cancel can drop an in-flight attempt or its short backoff.
+
+Job status retains fixed `PEER_FILE_*` codes and `PEER_AUTHORIZATION_FAILED`. Raw RPC messages, URLs and response parameters are never persisted or printed. After exhaustion, `workspace-resume` retains the original jobs, grants and verified byte checkpoints.
+
 Workjet calls the native `ctox workjet-transfer workspace-*` commands on the
 computer owning each endpoint. The Workjet thread ID remains unchanged. These
 commands move a Git workspace; transcript/session import, compaction, goal/loop
@@ -9,6 +15,10 @@ Workjet owners. They grant no checkpoint protection or execution authority.
 Stop the source at a safe tool/turn boundary before exporting. Keep it retained
 until Workjet has observed a successful target turn. This component does not
 commit WIP, pause a worker loop, terminate jobs or remove the source.
+
+## Download engine provenance
+
+The embedded aria2 tree retains its original upstream revision, file hashes and GPL-2.0-or-later notices. Its `PROVENANCE.json` additionally pins the existing CTOX security overlay from commit `505771b49fe0f0754bb5d9fd7f082817da34481f` (`Cargo.lock`: rustls 0.23.44 to 0.23.45 for RUSTSEC-2026-0285), and the reviewed Windows changes from #486 (README plus checksum, rlimit, sockopt and storage modules). Every overlay names its last source commit and exact installed hash. The full-manifest and complete-file-list guards still validate every installed byte against the original hash or this explicit overlay.
 
 ## Native invocation contract
 

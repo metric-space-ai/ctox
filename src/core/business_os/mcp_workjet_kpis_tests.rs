@@ -56,6 +56,15 @@ fn add(
       json_set(intent_json,'$.client_context.actor.id',?4,'$.payload.thread_id',?5,'$.record_id',?6),?7,?7
       FROM business_command_aggregates WHERE command_id=?8",
       rusqlite::params![id,phase,status,owner,thread,project,created,command])?;
+    let payload: String = core(root)?.query_row(
+        "SELECT json_extract(intent_json,'$.payload') FROM business_command_aggregates WHERE command_id=?1",
+        [id], |row| row.get(0),
+    )?;
+    store::open_store(root)?.execute(
+        "INSERT INTO business_commands (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+         VALUES (?1,'ctox','business_os.chat.task',?2,'accepted',?3,?4,?5)",
+        rusqlite::params![id,project,payload,serde_json::to_string(&json!({"actor":{"id":owner}}))?,created],
+    )?;
     Ok(())
 }
 #[test]
@@ -418,5 +427,122 @@ fn resolving_a_recipe_uses_write_policy_when_global_read_tools_are_disabled() ->
         )?["kpis"]["revision"],
         2
     );
+    Ok(())
+}
+
+#[test]
+fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> anyhow::Result<()> {
+    let (root, _) = fixture()?;
+    const OWNER: &str = "c64c5b90-19da-4ffa-9b22-1653f572fd4b";
+    const ALIAS: &str = "owner@example.org";
+    const PROJECT: &str = "alias-project";
+    const SUPERVISOR: &str = "357f2099-f11c-42b6-9db5-1249fed3c21f";
+    let now = store::now_ms() as i64;
+    // Only the authenticated managed issuer may bind an email alias to a UUID.
+    let _ = store::issue_business_os_capability_token_for_managed_user_with_email(
+        root.path(),
+        OWNER,
+        Some(ALIAS),
+        "Owner",
+        "chef",
+        now,
+    )?;
+    let _ = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        ALIAS,
+        "Owner alias",
+        "admin",
+        now,
+    )?;
+    for (id, command_type, payload) in [
+        (
+            "actual-project",
+            "ctox.workjet.project.upsert",
+            json!({"project_id":PROJECT,"name":"Real intake fixture"}),
+        ),
+        (
+            "actual-binding",
+            "ctox.workjet.project.supervisor.bind",
+            json!({"project_id":PROJECT,"thread_id":SUPERVISOR}),
+        ),
+        (
+            "actual-config",
+            "ctox.workjet.project.kpis.configure",
+            json!({"project_id":PROJECT,"operation_id":"actual-config","expected_revision":0,"prompts":[{"kpi_id":"k","prompt":"Project tasks in the last seven days"}]}),
+        ),
+    ] {
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","record_id":PROJECT,
+            "command_type":command_type,"payload":payload,
+            "client_context":{"actor":{"id":ALIAS,"role":"admin"}}}),
+        )?;
+        anyhow::ensure!(accepted["status"] == "completed", "{id}: {accepted}");
+    }
+    let conn = core(root.path())?;
+    let mut ids = Vec::new();
+    for (id, goal) in [
+        ("actual-submit-one", "Implement the first real task"),
+        ("actual-submit-two", "Implement the second real task"),
+        ("actual-submit-three", "Implement the third real task"),
+    ] {
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":id,"module":"ctox","record_id":PROJECT,
+            "command_type":"ctox.workjet.project.supervisor.turn.submit",
+            "payload":{"project_id":PROJECT,"thread_id":SUPERVISOR,"goal":goal},
+            "client_context":{"actor":{"id":ALIAS,"role":"admin"}}}),
+        )?;
+        anyhow::ensure!(accepted["status"] == "completed", "{accepted}");
+        ids.push(
+            accepted["result"]["turn"]["command_id"]
+                .as_str()
+                .context("accepted task")?
+                .to_owned(),
+        );
+    }
+    for id in &ids {
+        let audited: Value = serde_json::from_str(&conn.query_row(
+            "SELECT intent_json FROM business_command_aggregates WHERE command_id=?1",
+            [id],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert!(audited.pointer("/client_context/actor/id").is_none());
+        assert_eq!(
+            store::load_business_command(&store::open_store(root.path())?, id)?.client_context
+                ["actor"]["id"],
+            OWNER
+        );
+    }
+    // Only fixture ledger state is advanced; these are receipt-count tests,
+    // never claims that an actual model or product acceptance ran.
+    for id in &ids[1..] {
+        conn.execute("UPDATE business_command_aggregates SET execution_phase='terminal',terminal_status='completed' WHERE command_id=?1",[id])?;
+    }
+    let policy = store::open_store(root.path())?;
+    // Calculation follows intake; its upper bound must include the newly
+    // admitted commands rather than the earlier identity-issuance timestamp.
+    let now = store::now_ms() as i64;
+    for (i, (recipe, expected)) in [
+        ("project_tasks_total", 3),
+        ("project_tasks_completed", 2),
+        ("project_tasks_open", 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = args(recipe, &format!("actual-{i}"), 1 + i as u64)["request"].clone();
+        request["project_id"] = json!(PROJECT);
+        let request: wire::BindKpiRequest = serde_json::from_value(request)?;
+        let result = resolver::resolve(&conn, &policy, ALIAS, PROJECT, SUPERVISOR, &request, now)?;
+        assert_eq!(
+            result["kpis"]["items"][0]["result"]["snapshot"]["value"],
+            expected
+        );
+        assert!(
+            resolver::resolve(&conn, &policy, "foreign", PROJECT, SUPERVISOR, &request, now)
+                .is_err()
+        );
+    }
     Ok(())
 }
