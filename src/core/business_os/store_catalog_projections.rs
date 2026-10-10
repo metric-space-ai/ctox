@@ -570,8 +570,20 @@ mod tests {
         reader.execute_batch("CREATE TABLE schema_fixture(value TEXT)")?;
         let sql = std::ffi::CString::new("SELECT value FROM schema_fixture")?;
         let mut statement = std::ptr::null_mut();
+        // The legacy entry point deterministically exposes SQLITE_SCHEMA;
+        // SQLite's v2 API normally reparses before returning that error.
+        // libsqlite3-sys omits this declaration, but bundled SQLite exports it.
+        extern "C" {
+            fn sqlite3_prepare(
+                db: *mut rusqlite::ffi::sqlite3,
+                sql: *const std::os::raw::c_char,
+                length: std::os::raw::c_int,
+                statement: *mut *mut rusqlite::ffi::sqlite3_stmt,
+                tail: *mut *const std::os::raw::c_char,
+            ) -> std::os::raw::c_int;
+        }
         let prepared = unsafe {
-            rusqlite::ffi::sqlite3_prepare(
+            sqlite3_prepare(
                 reader.handle(),
                 sql.as_ptr(),
                 -1,
