@@ -99,10 +99,6 @@ enum IoFailure {
 fn classify(model: &str, account: &str, reply: Reply, started: Instant) -> NativeModelProbe {
     let mut result = NativeModelProbe::unavailable(model, ProbeFailure::UnverifiedFailure, started);
     result.http_status = Some(reply.status);
-    // A valid public model name or an HTTP200 cannot acknowledge another account.
-    if reply.selected_account.as_deref() != Some(account) {
-        return result;
-    }
     let body: Option<Value> = serde_json::from_slice(&reply.body).ok();
     if body
         .as_ref()
@@ -124,6 +120,11 @@ fn classify(model: &str, account: &str, reply: Reply, started: Instant) -> Nativ
             .and_then(|body| body.pointer("/error/retry_at_ms"))
             .and_then(Value::as_i64)
             .filter(|value| (1..=9_007_199_254_740_991).contains(value));
+        return result;
+    }
+    // Pre-request gateway errors may have no selected-account acknowledgement.
+    // Only a provider verdict or green result requires an exact account pin.
+    if reply.selected_account.as_deref() != Some(account) {
         return result;
     }
     let Some(upstream_status) = reply.upstream_status else {
