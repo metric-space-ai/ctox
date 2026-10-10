@@ -34,13 +34,17 @@ attached canonical projection writes still commit together.
 
 Finalization parses/validates bounded retrospective metadata before reserving
 the writer. Its finalized_at guard, statistics, learning state and commit
-remain atomic. Single-record writes keep their existing boundaries. Cold event
+remain atomic. Source-record writes keep their existing boundaries. Cold event
 delivery prepares payloads and deduplication outside the writer, then commits at
 most 64 source records and 64 mirror records per separate transaction, using the
 same per-row merge/envelope functions. Source commit precedes mirror delivery;
-notifications follow mirror commit. Batch replication clocks are reserved from the
-persisted collection high-water mark under that mirror's IMMEDIATE transaction,
-including when another retained writer has advanced it since this cache opened.
+notifications follow mirror commit. Projection replication clocks, for batches,
+individual updates, tombstones
+and domain replacements, are reserved from the persisted collection high-water
+mark under that mirror's IMMEDIATE transaction, including when another retained
+writer has advanced it since this cache opened. Domain replacement now reserves
+the writer around its current-row read and write together; its removed-field
+semantics remain unchanged. The cached clock advances only after commit.
 Each row is strictly later than the earlier feed cursor; rollback publishes no
 reservation. A failed mirror chunk rolls back together,
 retains completed chunks in the dedupe cache and restores the unclaimed replay
@@ -61,13 +65,18 @@ Slow native transactions emit `[ctox sqlite writer]` after their own lock
 has been released. The fields are operation, primary database path, wait_us,
 hold_us, outcome and (for failed acquisition) SQLite error code. No SQL,
 document content or credentials are logged. The fixed threshold is 50 ms.
+The hold measurement spans successful reservation through the completed
+commit/rollback call, including SQLite work and I/O. It does not independently
+sample SQLite's operating-system locks. These diagnostics identify slow
+transaction spans; they do not alone prove an exclusive lock owner.
 
 Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,
 crew.retention_orphan, crew.retention_start_evidence, crew.retention_finished,
 crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
-projection.rxdb_tombstone, projection.source_batch and projection.rxdb_batch.
+projection.rxdb_tombstone, projection.rxdb_replace, projection.source_batch and
+projection.rxdb_batch.
 Queue operations may reserve attached projection
 databases as well as the reported primary Core database. These labels distinguish
 queue ownership, Crew accounting and source/mirror delivery; other transaction
