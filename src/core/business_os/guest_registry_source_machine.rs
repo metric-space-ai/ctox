@@ -195,7 +195,7 @@ impl NativeGuestExecution {
                     capture.entries()?;
                     Arc::clone(capture)
                 } else {
-                    observed.verify_controller(entry)?;
+                    observed.verify_controller(entry, &self.registry)?;
                     let desktop = entry
                         .desktop
                         .take()
@@ -242,7 +242,7 @@ impl NativeGuestExecution {
                         && private_directory(&store_root)? == store_identity,
                     "native source machine/store changed during export"
                 );
-                current.verify_controller(entry)?;
+                current.verify_controller(entry, &self.registry)?;
                 Ok(())
             })
         })

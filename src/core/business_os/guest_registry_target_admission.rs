@@ -109,25 +109,29 @@ impl TargetAdmission {
             )? == protected.scope,
             "original target entitlement changed"
         );
-        #[cfg(not(target_os = "linux"))]
-        anyhow::bail!("original target admission requires a restored Linux guest");
-        #[cfg(target_os = "linux")]
-        {
-            let machine = entry
-                .target_machine
-                .clone()
-                .context("original machine is not restored")?;
-            let imported = entry.imported.as_ref().context("original import missing")?;
-            let process = entry
-                .registered_process
-                .as_ref()
-                .context("original process missing")?;
-            machine.verify_ready(
-                imported,
-                process,
-                &protected.service_session,
-                entry.desktop.as_mut(),
-            )?;
+        if protected.service_session.is_none() {
+            core_resume::require_core_only(entry, &protected)?;
+        } else {
+            #[cfg(not(target_os = "linux"))]
+            anyhow::bail!("original target admission requires a restored Linux guest");
+            #[cfg(target_os = "linux")]
+            {
+                let machine = entry
+                    .target_machine
+                    .clone()
+                    .context("original machine is not restored")?;
+                let imported = entry.imported.as_ref().context("original import missing")?;
+                let process = entry
+                    .registered_process
+                    .as_ref()
+                    .context("original process missing")?;
+                machine.verify_ready(
+                    imported,
+                    process,
+                    protected.machine_service_session()?,
+                    entry.desktop.as_mut(),
+                )?;
+            }
         }
         let mut apply = Some(apply);
         let mut result = None;
@@ -250,28 +254,33 @@ impl TargetAdmission {
                     lease.is_some(),
                     "original target workspace requires a current writer lease"
                 );
-                #[cfg(not(target_os = "linux"))]
-                anyhow::bail!("original target continuation requires the real Linux guest");
-                #[cfg(target_os = "linux")]
-                {
-                    ensure!(
-                        entry.desktop.is_none()
-                            && entry.source_boot.is_none()
-                            && entry.source_machine.is_none(),
-                        "target cannot replace an existing machine"
-                    );
-                    let machine = entry
-                        .target_machine
-                        .clone()
-                        .context("original target machine not restored")?;
-                    let imported = entry.imported.as_ref().context("original import missing")?;
-                    let process = entry
-                        .registered_process
-                        .as_ref()
-                        .context("original target process missing")?;
-                    let (desktop, io, _) = machine.take_ready_desktop(imported, process)?;
-                    entry.desktop = Some(desktop);
-                    entry.desktop_io = Some(io);
+                if self.protected.service_session.is_none() {
+                    core_resume::require_core_only(entry, &self.protected)?;
+                } else {
+                    #[cfg(not(target_os = "linux"))]
+                    anyhow::bail!("original target continuation requires the real Linux guest");
+                    #[cfg(target_os = "linux")]
+                    {
+                        ensure!(
+                            entry.desktop.is_none()
+                                && entry.source_boot.is_none()
+                                && entry.source_machine.is_none(),
+                            "target cannot replace an existing machine"
+                        );
+                        let machine = entry
+                            .target_machine
+                            .clone()
+                            .context("original target machine not restored")?;
+                        let imported =
+                            entry.imported.as_ref().context("original import missing")?;
+                        let process = entry
+                            .registered_process
+                            .as_ref()
+                            .context("original target process missing")?;
+                        let (desktop, io, _) = machine.take_ready_desktop(imported, process)?;
+                        entry.desktop = Some(desktop);
+                        entry.desktop_io = Some(io);
+                    }
                 }
                 let binding = ExecutionBinding {
                     spec: spec.clone(),
@@ -407,7 +416,7 @@ mod tests {
             checkpoint_digest: "ab".repeat(32),
             spec: spec.clone(),
             ownership: ownership.clone(),
-            service_session: "original-service".into(),
+            service_session: Some("original-service".into()),
             scope: target_handoff::TargetPolicyScope {
                 owner_user_id: "owner".into(),
                 worker_profile_id: "profile".into(),

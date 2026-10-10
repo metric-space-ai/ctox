@@ -152,7 +152,7 @@ async fn native_source_effect_observation_matches_actual_retained_child_without_
         entry.registered_process = Some(process.clone());
         let mut effects =
             SourceEffects::from_observation_fixture(job.clone(), &job.spec, &job.ownership)?;
-        effects.verify_controller(&entry)?;
+        effects.verify_controller(&entry, &registry)?;
         let bytes = effects.bytes(&job.spec, &job.ownership)?;
         let encoded: serde_json::Value = serde_json::from_slice(&bytes)?;
         assert_eq!(
@@ -175,7 +175,7 @@ async fn native_source_effect_observation_matches_actual_retained_child_without_
                 _ => bad.effect_id = "foreign-effect".into(),
             }
             entry.registered_process = Some(bad);
-            assert!(effects.verify_controller(&entry).is_err());
+            assert!(effects.verify_controller(&entry, &registry).is_err());
         }
         entry.registered_process = Some(process);
         let mut no_pending = job.clone();
@@ -184,17 +184,17 @@ async fn native_source_effect_observation_matches_actual_retained_child_without_
         let mut completed =
             SourceEffects::from_observation_fixture(no_pending, &job.spec, &job.ownership)?;
         assert!(
-            completed.verify_controller(&entry).is_err(),
+            completed.verify_controller(&entry, &registry).is_err(),
             "a live child cannot be certified completed"
         );
         entry.registered_process = None;
         assert!(
-            effects.verify_controller(&entry).is_err(),
+            effects.verify_controller(&entry, &registry).is_err(),
             "a partial process claim is not capture input"
         );
         entry.process_effect = None;
         assert!(
-            effects.verify_controller(&entry).is_err(),
+            effects.verify_controller(&entry, &registry).is_err(),
             "an unregistered retained child cannot be captured"
         );
         assert!(

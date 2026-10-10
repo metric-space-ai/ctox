@@ -37,7 +37,7 @@ impl NativeGuestExecution {
             self.with_held_worker_policy(worker, facts, |entry, verify, _| {
                 self.registry.require_live_transport()?;
                 verify()?;
-                before.verify_controller(entry)?;
+                before.verify_controller(entry, &self.registry)?;
                 let Some(process) = entry.registered_process.clone() else {
                     return Ok(None);
                 };
@@ -117,7 +117,7 @@ impl NativeGuestExecution {
                     "source process/controller changed during completion"
                 );
                 capture.finish_reconciliation(&process)?;
-                current.verify_controller(entry)?;
+                current.verify_controller(entry, &self.registry)?;
                 verify()?;
                 Ok(())
             })

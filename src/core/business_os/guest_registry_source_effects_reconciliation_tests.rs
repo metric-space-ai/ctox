@@ -5,8 +5,7 @@
 use super::*;
 use ctox_core::features::Feature;
 
-#[tokio::test]
-async fn native_source_clean_effects_require_every_retained_witness() -> Result<()> {
+async fn quiet_core_state() -> Result<ctox_core::NativeSessionState> {
     let root = tempfile::tempdir()?;
     let home = root.path().join("core");
     std::fs::create_dir(&home)?;
@@ -61,6 +60,12 @@ async fn native_source_clean_effects_require_every_retained_witness() -> Result<
             .requires_reconciliation(),
         "quiet original Core has unknown startup effects"
     );
+    Ok(state)
+}
+
+#[tokio::test]
+async fn native_source_clean_effects_require_every_retained_witness() -> Result<()> {
+    let state = quiet_core_state().await?;
     let spec = ExecutionSpec {
         job_id: "composition-job".into(),
         session_id: state.session_id().to_string(),
@@ -159,5 +164,84 @@ async fn native_source_clean_effects_require_every_retained_witness() -> Result<
         "wire metadata reconstructed a local Core witness"
     );
     assert_eq!(descriptive.pending("composition-capture")?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_source_core_only_capture_requires_actual_controller_and_local_core() -> Result<()> {
+    let state = quiet_core_state().await?;
+    let spec = ExecutionSpec {
+        job_id: "core-only-component-job".into(),
+        session_id: state.session_id().to_string(),
+        scope_id: "component-scope".into(),
+        harness: ctox_core::native_harness_name().into(),
+        harness_version: ctox_core::native_harness_version().into(),
+        model_route_id: state.provider_id().into(),
+        gateway_account_id: "component-account".into(),
+        model_id: state.model().into(),
+        required_capabilities: BTreeSet::new(),
+    };
+    let ownership = Ownership {
+        node_id: 1,
+        generation: 1,
+    };
+    let (_root, registry, assignment) = super::super::tests::fixture();
+    let registration = registry.registration(&assignment.destination.guest_id)?;
+    let mut entry = registration.lock().unwrap();
+    let mut effects = SourceEffects::fixture(&spec, &ownership, BTreeSet::new());
+    effects.bind_core_state(&state)?;
+    assert!(
+        !effects.reconciled(),
+        "Core alone supplied no controller/configuration witness"
+    );
+    effects.verify_controller(&entry, &registry)?;
+    assert!(effects.reconciled());
+    assert!(effects.pending("core-only-capture")?.is_empty());
+    let runtime = effects
+        .core_runtime_bytes()?
+        .context("Core-only native identity absent")?;
+    let identity: checkpoint_identity::CoreRuntimeIdentity = serde_json::from_slice(&runtime)?;
+    assert_eq!(identity.guest_id, assignment.destination.guest_id);
+    assert_eq!(identity.session_id, state.session_id().to_string());
+    checkpoint_identity::tests::assert_core_only_identity(&state, &spec, &runtime)?;
+
+    let imported = ctox_core::NativeSessionState::from_checkpoint(
+        state.as_bytes(),
+        state.session_id(),
+        state.model(),
+        state.provider_id(),
+    )?;
+    effects.bind_core_state(&imported)?;
+    assert!(
+        !effects.reconciled(),
+        "a descriptive checkpoint reconstructed local Core authority"
+    );
+    effects.bind_core_state(&state)?;
+    effects
+        .job
+        .pending_effects
+        .insert("unknown-external-effect".into());
+    assert!(!effects.reconciled());
+    effects.job.pending_effects.clear();
+    entry.process_effect = Some("uncertain-process".into());
+    assert!(effects.verify_controller(&entry, &registry).is_err());
+    assert!(
+        !effects.reconciled(),
+        "failed controller verification retained a Core-only witness"
+    );
+    entry.process_effect = None;
+    effects.verify_controller(&entry, &registry)?;
+    let before = effects.core_runtime_bytes()?;
+    *registry.machine_configuration.lock().unwrap() =
+        Some(serde_json::from_value(serde_json::json!({
+            "program": "/component/qemu", "baseRaw": "/component/base.raw",
+            "memoryMib": 64, "vcpus": 1, "acceleration": "tcg"
+        }))?);
+    effects.verify_controller(&entry, &registry)?;
+    assert!(
+        !effects.reconciled(),
+        "configured but missing machine silently became Core-only"
+    );
+    assert_ne!(before, effects.core_runtime_bytes()?);
     Ok(())
 }

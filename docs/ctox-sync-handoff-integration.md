@@ -1,5 +1,36 @@
 # Native session handoff integration boundary
 
+## Core-only native checkpoint continuation
+
+A native Core session without a configured or retained machine can produce a
+protected checkpoint on macOS as well as Linux. Its source still requires
+checked shutdown of the actual original Core, its sealed local clean-effects
+capture, current native quorum/account/policy/controller authority, no pending
+effects and an assigned workspace. It publishes native-core-runtime.json with
+the actual enrolled guest ID and original Core UUID in the same protected
+manifest. A deserialized effects report, empty caller list or missing configured
+machine cannot create this witness.
+
+The protected receiver distinguishes this identity from the canonical VM
+artifacts. Missing, ambiguous, malformed or mixed Core/VM identities fail closed.
+Current protected guest enrollment remains a Linux target path. Core-only
+enrollment retains no VM service-session ID or process witness. After durable
+DATA protection, takeover and protected guest import, the genuine target native
+chat queue can load the original Core UUID and admit the already-owned job
+without handoff-restore-guest. It retains the target command/producer fences and
+fresh quorum checks before and after the real TurnStart. Failed or uncertain
+binding retires that target controller; it does not create a replacement Core.
+
+A checkpoint with any VM artifacts continues to require the original verified
+machine identity, restoration and exact retained child. Machine absence is
+derived from the native source controller/configuration and protected manifest,
+never a CLI mode/clean flag. Core-only restore requests reject before creating
+a machine attempt. The Core-only decoder/store and original-Core capsule tests
+are component regressions; installed Mac-to-Linux continuation, independent
+DATA receipts, stale source rejection, reconnect and abort remain acceptance
+work for goals 15/16/18.
+
+
 ## Host-owned target guest import
 
 After protected copy, `ctox sync handoff-import-guest <binding-digest> <guest-id>`
