@@ -1331,7 +1331,8 @@ fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_db_path(root: &Path) -> PathBuf {
+/// Canonical native-only encrypted-store path; opening it does not confer authority.
+pub(crate) fn resolve_db_path(root: &Path) -> PathBuf {
     root.join("runtime").join(SECRET_STORE_FILE)
 }
 

@@ -4,6 +4,8 @@
 `NativeSupervisorHoldingController`, which owns an admitted native peer and
 the original signed command or confirmed-plan execution lease. It cannot be
 created from browser facts, a controller ID, or an arbitrary selected account.
+`reserve_shared` accepts the same genuine `Arc<NativeSupervisorHoldingController>`
+retained by Crew's original native service; sharing it does not create a new lease.
 
 The holder reads the encrypted credential/configuration snapshot outside
 source, issuer and policy fences. The current callback enters the actual
@@ -37,8 +39,16 @@ real HTTP status, body, headers and retry delay.
 
 Publication callbacks enqueue a bounded native result while the real current
 fence is held. They cannot await or re-enter network, secret, controller or
-transport code. The actual receiver must also fence physical transport
-publication; a Rust enqueue does not prove a remote subscriber received it.
+transport code. `publication_for(actualIncomingAdmittedConsumerAuthority)` prepares
+a retained account metadata checker before responder locks and composes it with
+Crew's sealed `NativeSupervisorCurrentPublication` scope. At each physical send
+it requires the exact original Arc controller, current selected-account policy,
+exact native runtime configuration and original encrypted-record generation.
+The existing issuer fence excludes credential rotation; an additional native
+runtime writer reservation excludes account edits during publication. There is
+no nested secret decryption, controller or transport entry. Restoring identical
+credential plaintext does not resurrect a previously pinned encrypted generation.
+A Rust enqueue alone does not prove a remote subscriber received it.
 
 The private exchange witness contains the real selected model/account binding,
 controller, outgoing client request ID, upstream HTTP status and dispatch

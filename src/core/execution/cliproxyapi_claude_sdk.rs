@@ -48,8 +48,9 @@ impl NativeClaudeSdkConfiguration<'_> {
 /// release alone is not an operating-system or provider stop receipt.
 pub(crate) struct NativeClaudeSdkAccountReservation {
     root: PathBuf,
-    selected: ConsumableModel,
+    pub(super) selected: ConsumableModel,
     private_binding: String,
+    encrypted_revision: String,
     captured: Mutex<Option<Captured>>,
 }
 
@@ -151,10 +152,17 @@ impl NativeClaudeSdkAccountReservation {
         let root = authority.native_host_root().to_owned();
         let captured = stable_capture(&root, &selected.account().private_local_account_id)?;
         validate(&captured, &private_binding)?;
+        let encrypted_revision = publication::capture_revision(&root, &captured.account)?;
+        ensure!(
+            stable_capture(&root, &captured.account.id)? == captured
+                && publication::capture_revision(&root, &captured.account)? == encrypted_revision,
+            "native Claude credential changed during preparation"
+        );
         let reservation = Self {
             root,
             selected,
             private_binding,
+            encrypted_revision,
             captured: Mutex::new(Some(captured)),
         };
         // A change during secret preparation cannot relabel the selection.
@@ -201,13 +209,22 @@ impl NativeClaudeSdkAccountReservation {
                 return Err(error);
             }
         };
+        let publication = match NativeClaudeSdkPublicationCheck::prepare(self) {
+            Ok(check) => check,
+            Err(error) => {
+                self.release();
+                return Err(error);
+            }
+        };
         let result =
             with_captured_current(&self.captured, &current, &self.private_binding, |prior| {
                 self.selected.with_current(authority, |_, selected| {
-                    apply(NativeClaudeSdkConfiguration {
-                        model: selected.model(),
-                        access_token: prior.credentials.access_token(),
-                        private_binding: &self.private_binding,
+                    publication.with_current_records(|| {
+                        apply(NativeClaudeSdkConfiguration {
+                            model: selected.model(),
+                            access_token: prior.credentials.access_token(),
+                            private_binding: &self.private_binding,
+                        })
                     })
                 })
             });
@@ -248,6 +265,13 @@ impl NativeClaudeSdkAccountReservation {
                 return Err(error);
             }
         };
+        let publication = match NativeClaudeSdkPublicationCheck::prepare(self) {
+            Ok(check) => check,
+            Err(error) => {
+                self.release();
+                return Err(error);
+            }
+        };
         let result =
             with_captured_current(&self.captured, &current, &self.private_binding, |prior| {
                 controller.with_current(|facts, _, policy| {
@@ -255,10 +279,12 @@ impl NativeClaudeSdkAccountReservation {
                     controller
                         .selection()
                         .assert_consumer_binding(&self.selected)?;
-                    apply(NativeClaudeSdkConfiguration {
-                        model: self.selected.model(),
-                        access_token: prior.credentials.access_token(),
-                        private_binding: &self.private_binding,
+                    publication.with_current_records(|| {
+                        apply(NativeClaudeSdkConfiguration {
+                            model: self.selected.model(),
+                            access_token: prior.credentials.access_token(),
+                            private_binding: &self.private_binding,
+                        })
                     })
                 })
             });
@@ -275,6 +301,10 @@ impl NativeClaudeSdkAccountReservation {
         release_captured(&self.captured);
     }
 }
+
+#[path = "cliproxyapi_claude_publication.rs"]
+mod publication;
+pub(crate) use publication::NativeClaudeSdkPublicationCheck;
 
 #[cfg(test)]
 #[path = "cliproxyapi_claude_sdk_tests.rs"]

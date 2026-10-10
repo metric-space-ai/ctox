@@ -6,8 +6,15 @@
 
 use super::cliproxyapi_claude_sdk::{
     NativeClaudeSdkAccountReservation, NativeClaudeSdkConfiguration,
+    NativeClaudeSdkPublicationCheck,
 };
-use crate::business_os::mcp_channel::NativeSupervisorHoldingController;
+use crate::business_os::{
+    consumer_authority::AdmittedConsumerAuthority,
+    mcp_channel::{
+        NativeSupervisorCurrentPublication, NativeSupervisorHoldingController,
+        NativeSupervisorPublicationCheck,
+    },
+};
 use anyhow::{ensure, Context, Result};
 use ctox_cliproxyapi::internal::{
     auth::claude::SecretString,
@@ -61,6 +68,43 @@ pub(crate) struct NativeClaudeLeaseModelProxy {
     slot: Arc<Semaphore>,
     active_body: Mutex<Option<Weak<AsyncMutex<NativeClaudeBody>>>>,
 }
+
+/// Retained private account checker for Crew's genuine physical responder.
+/// It cannot create the current-publication scope or authenticate a Source.
+struct NativeClaudeModelPublication {
+    proxy: Arc<NativeClaudeLeaseModelProxy>,
+    account: NativeClaudeSdkPublicationCheck,
+}
+impl NativeSupervisorPublicationCheck for NativeClaudeModelPublication {
+    fn with_current(
+        &self,
+        scope: &NativeSupervisorCurrentPublication<'_>,
+        publish: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+    ) -> rxdb::rx_error::RxResult<()> {
+        let result = (|| {
+            ensure!(
+                Arc::ptr_eq(scope.controller(), &self.proxy.controller),
+                "native Claude holding controller changed"
+            );
+            ensure!(
+                !*self.proxy.retired.borrow(),
+                "native Claude model proxy retired"
+            );
+            self.proxy
+                .controller
+                .selection()
+                .assert_consumer_binding(&self.proxy.account.selected)?;
+            self.account.with_current_in_held_policy(
+                &self.proxy.account,
+                scope.facts(),
+                scope.policy(),
+                || publish().map_err(|_| anyhow::anyhow!("native Claude publication failed")),
+            )
+        })();
+        result.map_err(|_| rxdb::rx_error::new_rx_error("native_claude_account_fenced", None))
+    }
+}
+
 enum NativeClaudeBody {
     Buffered(ClaudeMessagesResponse),
     Stream(ClaudeMessagesStreamResponse),
@@ -137,6 +181,13 @@ fn request_stream(
 
 impl NativeClaudeLeaseModelProxy {
     pub(crate) fn reserve(controller: NativeSupervisorHoldingController) -> Result<Arc<Self>> {
+        Self::reserve_shared(Arc::new(controller))
+    }
+    /// Shares only the genuine native controller retained by the original
+    /// holding service. No JSON/facts can reconstruct this ownership.
+    pub(crate) fn reserve_shared(
+        controller: Arc<NativeSupervisorHoldingController>,
+    ) -> Result<Arc<Self>> {
         let account = NativeClaudeSdkAccountReservation::prepare(
             controller.authority(),
             controller.selection(),
@@ -145,7 +196,7 @@ impl NativeClaudeLeaseModelProxy {
         let transport = ClaudeMessagesHttpTransport::new(None)
             .map_err(|_| anyhow::anyhow!("native Claude transport unavailable"))?;
         let proxy = Arc::new(Self {
-            controller: Arc::new(controller),
+            controller,
             account,
             transport,
             capability: Mutex::new(Some(new_capability()?)),
@@ -156,6 +207,30 @@ impl NativeClaudeLeaseModelProxy {
         proxy.with_current(|_| Ok(()))?;
         Ok(proxy)
     }
+    /// Called before entering the physical responder/lifecycle/issuer locks.
+    /// The retained guard uses only Crew's sealed exact-peer publication scope;
+    /// it never reenters transport, controller or secret APIs when polled.
+    pub(crate) fn publication_for(
+        self: &Arc<Self>,
+        incoming: &AdmittedConsumerAuthority,
+    ) -> Result<Arc<dyn rxdb::plugins::replication_webrtc::WebRTCPublicationGuard>> {
+        self.with_current(|_| Ok(()))?;
+        let account = match NativeClaudeSdkPublicationCheck::prepare(&self.account) {
+            Ok(account) => account,
+            Err(error) => {
+                let _ = self.cancel();
+                return Err(error);
+            }
+        };
+        self.controller.publication_for(
+            incoming,
+            Arc::new(NativeClaudeModelPublication {
+                proxy: Arc::clone(self),
+                account,
+            }),
+        )
+    }
+
     /// Only the registered private Source broker receives this scoped token.
     /// OAuth and the private account/config fingerprint remain on the holder.
     /// Bounded synchronous handoff only; no network/secret/controller reentry
