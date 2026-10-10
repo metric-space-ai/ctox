@@ -158,3 +158,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "webrtc_helper_tests.rs"]
+mod tests;
