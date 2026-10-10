@@ -2,6 +2,8 @@
 
 ## Native range failures
 
+Source readiness timeouts get at most three drained session attempts for the original job/account/grant. Every attempt keeps the saved scope and validates current authority; revocation, failed cleanup, an unverifiable identity, a grant check or a file-permission failure stops recovery. Setup status uses fixed `PEER_SOURCE_NOT_READY`, `PEER_IDENTITY_UNVERIFIED`, `PEER_GRANT_AUTHORIZATION_UNAVAILABLE` and `PEER_FILE_PERMISSION_UNAVAILABLE` codes. Unknown provider text stays `PEER_AUTHORIZATION_FAILED`. No raw peer messages are retained.
+
 Native file timeouts, local admission pressure and a missing chunk sequence get at most three attempts for the same byte range. Every attempt revalidates the original admitted job and grant; partial RPC responses never advance the durable byte checkpoint. A changed account or rejected file stops the retry immediately. Pause/cancel can drop an in-flight attempt or its short backoff.
 
 Job status retains fixed `PEER_FILE_*` codes and `PEER_AUTHORIZATION_FAILED`. Raw RPC messages, URLs and response parameters are never persisted or printed. After exhaustion, `workspace-resume` retains the original jobs, grants and verified byte checkpoints.

@@ -208,7 +208,10 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let principal = current_account(self.host.as_ref(), request).await?;
-            self.grant_admission.authorize(request, connection).await?;
+            self.grant_admission
+                .authorize(request, connection)
+                .await
+                .map_err(|_| anyhow::Error::from(PeerReadFailure::Grant))?;
             let source = request
                 .peer_source
                 .as_ref()
@@ -216,7 +219,8 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
             let proof = self
                 .session
                 .peer_identity_proof(connection.clone(), &source.public_key, &source.instance_id)
-                .await?;
+                .await
+                .map_err(|_| anyhow::Error::from(PeerReadFailure::Identity))?;
             ensure!(
                 proof.principal.as_ref() == Some(&principal),
                 "connection principal differs from transfer account"
@@ -240,7 +244,7 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
                     },
                 )
                 .await
-                .map_err(|_| anyhow::anyhow!("current peer file permission unavailable"))?;
+                .map_err(|_| anyhow::Error::from(PeerReadFailure::FilePermission))?;
             ensure!(
                 probe.offset == 0 && probe.bytes.is_empty(),
                 "invalid file permission probe"
@@ -249,7 +253,10 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
                 current_account(self.host.as_ref(), request).await? == principal,
                 "account changed during peer authorization"
             );
-            self.grant_admission.authorize(request, connection).await?;
+            self.grant_admission
+                .authorize(request, connection)
+                .await
+                .map_err(|_| anyhow::Error::from(PeerReadFailure::Grant))?;
             Ok(())
         })
     }
@@ -301,7 +308,8 @@ impl NativePeerRangeSource {
             .context("peer source required")?;
         session
             .peer_identity_proof(connection.clone(), &source.public_key, &source.instance_id)
-            .await?;
+            .await
+            .map_err(|_| anyhow::Error::from(PeerReadFailure::Identity))?;
         admission.authorize(&request, &connection).await?;
         Ok(Self {
             pool: session.pool().clone(),

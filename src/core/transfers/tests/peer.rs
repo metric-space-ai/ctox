@@ -41,6 +41,54 @@ async fn peer_worker_persists_safe_native_failure_code_without_a_receipt() {
     assert!(result.receipt.is_none());
 }
 
+struct AuthorizationFailurePeer(Option<ctox_transfers::PeerReadFailure>);
+impl PeerRangeSource for AuthorizationFailurePeer {
+    fn authorize<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(match self.0 {
+                Some(failure) => failure.into(),
+                None => anyhow::anyhow!("PEER_SOURCE_NOT_READY?token=private-input"),
+            })
+        })
+    }
+    fn read_range<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+        _: u64,
+        _: u64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>> {
+        panic!("authorization failure must never read payload")
+    }
+}
+
+#[tokio::test]
+async fn peer_authorization_preserves_only_typed_codes_and_never_publishes() {
+    for failure in [
+        Some(ctox_transfers::PeerReadFailure::SourceNotReady),
+        Some(ctox_transfers::PeerReadFailure::Identity),
+        Some(ctox_transfers::PeerReadFailure::Grant),
+        Some(ctox_transfers::PeerReadFailure::FilePermission),
+        None,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        store.enqueue(request(b"pending")).unwrap();
+        let worker = store
+            .worker_with_peer(Arc::new(AuthorizationFailurePeer(failure)))
+            .unwrap();
+        worker.run_next(&AtomicBool::new(false)).await.unwrap();
+        let result = store.get("peer-transfer").unwrap();
+        assert_eq!(result.state, "failed");
+        let expected = failure.unwrap_or(ctox_transfers::PeerReadFailure::Authorization);
+        assert_eq!(result.error_code.as_deref(), Some(expected.code()));
+        assert_eq!(result.completed_bytes, 0);
+        assert!(result.receipt.is_none());
+    }
+}
+
 struct PendingPeer {
     entered: tokio::sync::Notify,
     dropped: Arc<AtomicBool>,
