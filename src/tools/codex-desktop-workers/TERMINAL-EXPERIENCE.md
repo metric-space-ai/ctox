@@ -4,6 +4,32 @@ The canonical local registry/reviews live in ~/.codex/proxy-workers/. The offlin
 MODEL-EXPERIENCE.html embeds the identical MODEL-EXPERIENCE.json. No server,
 external assets or npm installation are required.
 
+Raw terminal-learning evidence uses `terminal_report.save_raw(path, value)` and
+goes directly to gpu3, under `/mnt/sata8t/cache/task-evidence/terminal-pr-learning`.
+The local evidence root is `~/.codex/task-evidence/terminal-pr-learning`.
+`save` keeps summaries there only up to 20,000,000 UTF-8 bytes, including the
+final newline, and streams larger new outputs to the same remote target.
+These rules apply to raw evidence; the offline report and immutable rating
+registry retain their ordinary local paths.
+
+The `ts-gpu3` SSH alias must already be configured and its host key trusted.
+Writes use bounded frames and a byte-count/SHA-256 footer. Publication happens
+only after verification and fsync; a per-file remote lock prevents concurrent
+stale writers from replacing a newer version. A changed existing remote file
+is preserved under `.versions` before replacement. Untracked or missing prior
+destinations are refused. Existing local raw files must first be copied and
+individually checksum-verified before removal; the write helper does not delete
+or silently replace them.
+
+Local TSV manifests `MOVED-TO-GPU3-20261010.tsv` and `GPU3-RAW-OUTPUTS.tsv`
+bind original relative filenames to exact remote sizes/hashes/targets.
+`read`/`load` resolve these locators, verify remote bytes and return content
+without creating a local raw cache. `GPU3-RAW-VERSIONS.jsonl` retains prior
+remote version references. Failed transfers or mismatched receipts never add
+an output locator. Tests execute the real framing/reader protocol in isolated
+temporary subprocesses, including corruption, truncation, missing originals,
+version preservation and two competing writers; they do not contact gpu3.
+
 Run scripts/terminal_report.py collect to collect MERGED/CLOSED CTOX, Workjet,
 ctox-dev and existing external-registry PR evidence; build recalculates the
 offline report; assess /absolute/path/assessment.json appends an independent
