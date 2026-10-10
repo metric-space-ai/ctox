@@ -1293,9 +1293,12 @@ a retained CPU profile still requires analysis and is not tenant acceptance.
 For source-symbol attribution, the full-host workflow runs a separate context
 reproduction **after** the unprofiled acceptance measurements. Its test-driver
 option `--native-symbol-perf=<executable>` attaches Linux perf only to the owned
-native child after 30 seconds and records user-space CPU samples at 49 Hz for
-at most 30 seconds. PID start identity is checked before attachment; child
-task inheritance and stack/memory capture are disabled. The profiler receives
+native child immediately and records user-space CPU samples at 49 Hz for
+at most 30 seconds. PID start identity is checked before attachment. Fixture
+cleanup records a final CPU/thread observation after perf closes and before
+signaling that child. This brackets even a context fixture shorter than the
+periodic sampler interval; the standalone profiler retains its default delay.
+Child task inheritance and stack/memory capture are disabled. The profiler receives
 SIGINT at the limit (SIGKILL after three more seconds if needed); it never
 signals the native host. Host cleanup waits for bounded profiler finalization.
 The report subprocess has a 20-second/two-MiB output bound. Permission errors,

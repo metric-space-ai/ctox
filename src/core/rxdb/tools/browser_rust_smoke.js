@@ -4148,7 +4148,12 @@ function staleRustSeedChunkGeneration(seed) {
 }
 
 async function stopChild(child) {
-  if (child?.__ctoxNativeSymbolProfile) await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+  if (child?.__ctoxNativeSymbolProfile) {
+    await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+    // Retain an observation after perf closed, while the owned native child
+    // is still alive. The periodic tick alone may miss this short interval.
+    child.__ctoxNativeCpuProfile?.sample?.();
+  }
   if (!child || child.exitCode !== null) return;
   terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
@@ -4188,7 +4193,7 @@ function startCtoxServer() {
     stdio: ['ignore', 'pipe', 'pipe'],
   }), 'ctox-business-os');
   if (smokeProcessLifecyclePath) {
-    startNativeCpuProfile(child, {
+    child.__ctoxNativeCpuProfile = startNativeCpuProfile(child, {
       outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
       phase: () => smokeProcessLifecycle.startupPhase,
     });
@@ -4197,7 +4202,11 @@ function startCtoxServer() {
     child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
       outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
       perfExecutable: nativeSymbolPerf,
+      // The isolated UI fixture can finish before the default 30 s delay.
+      // Start its diagnostic recording immediately, outside acceptance runs.
+      delayMs: 0,
     }, {
+
       spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
       signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
