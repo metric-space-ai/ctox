@@ -323,7 +323,10 @@ fn configured_route_read_reveals_requested_facts_but_never_private_accounts_or_c
     );
     let core = Connection::open(crate::paths::core_db(root.path()))?;
     // A mere private column, even if non-null, is not a verified producer receipt.
-    core.execute("UPDATE workjet_supervisor_route_attempts SET actual_json='{\"model\":\"unverified-claim\"}'",[])?;
+    core.execute(
+        "UPDATE workjet_supervisor_route_attempts SET actual_json=?1",
+        [json!({"model": MODEL, "unverified_claim": true}).to_string()],
+    )?;
     let response = owner_route_read(root.path(), "read-request", "owner", "project", THREAD)?;
     assert_eq!(response["status"], "completed", "{response}");
     let result = &response["result"];
