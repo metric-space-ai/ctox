@@ -185,3 +185,40 @@ test('v2 keeps observed SDK/native IDs distinct and rejects private selectors or
   const pending=await requestSupervisorRoute(transport(nullRoute).dispatch,wanted,actor,()=>{});
   assert.equal(pending.route.actual,null);
 });
+
+for (const [action, template, field] of [
+  ['project.supervisor.route.read.v1', route, 'route'],
+  ['project.supervisor.route.capabilities.v1', caps, 'capabilities'],
+  ['project.supervisor.route.read.v2', { ...computedRoute, actual: null }, 'route'],
+  ['project.supervisor.route.capabilities.v2', computedCaps, 'capabilities'],
+]) {
+  test(action + ' admits exact Workjet command and lowercase Owner/project/thread UUIDs', async () => {
+    const projectId = 'f791215c-e416-4205-8619-bbf82b999799';
+    const threadId = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
+    const owner = { id: '196a89ba-ee86-4413-885c-04ca60e6f291', role: 'chef' };
+    const commandId = 'supervisor-route-d843c721-6db9-4f5b-b921-81fd5a716d80';
+    const value = { ...structuredClone(template), project_id: projectId, supervisor_thread_id: threadId };
+    const t = transport(value);
+    const result = await requestSupervisorRoute(t.dispatch, { action, commandId, projectId, threadId }, owner, () => {});
+    assert.equal(result.commandId, commandId);
+    assert.equal(result.projectId, projectId);
+    assert.equal(result.threadId, threadId);
+    assert.deepEqual(result[field], value);
+    assert.equal(t.commands[0].command.id, commandId);
+    assert.deepEqual(t.commands[0].command.client_context.actor, owner);
+  });
+}
+
+test('every C0 control byte in a public scope is rejected before dispatch', async () => {
+  for (let byte = 0; byte < 32; byte += 1) {
+    for (const scope of ['commandId', 'projectId', 'threadId', 'owner']) {
+      const t = transport();
+      const changed = { ...request };
+      const owner = { ...actor };
+      if (scope === 'owner') owner.id = 'owner' + String.fromCharCode(byte) + 'suffix';
+      else changed[scope] = changed[scope] + String.fromCharCode(byte) + 'suffix';
+      await assert.rejects(requestSupervisorRoute(t.dispatch, changed, owner, () => {}), /Invalid Supervisor route/);
+      assert.equal(t.commands.length, 0, scope + ':' + byte);
+    }
+  }
+});
