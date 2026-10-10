@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261010-shell-v2-audience-denial-fallback';
-=======
 import { subscriptionModelUnavailable } from './model-access-health.js?v=20261010-shell-v2-native-provider-model-check';
->>>>>>> 66ba74d16 (Keep the complete shell import chain on one generation)
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
