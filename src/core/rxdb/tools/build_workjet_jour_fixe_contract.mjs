@@ -7,6 +7,13 @@ import { execFileSync } from 'node:child_process';
 
 const CONTRACTS = [
   {
+    fixture: 'workjet-worker-outcome-v1.json',
+    rust: '../../business_os/workjet_worker_outcome_contract.generated.rs',
+    js: '../../../apps/business-os/shared/workjet-worker-outcome-contract.generated.mjs',
+    prefix: 'WORKER_OUTCOME',
+    validator: 'validateWorkerOutcomeValue',
+  },
+  {
     fixture: 'workjet-supervisor-luma-v1.json',
     rust: '../../business_os/workjet_supervisor_luma_contract.generated.rs',
     js: '../../../apps/business-os/shared/workjet-supervisor-luma-contract.generated.mjs',

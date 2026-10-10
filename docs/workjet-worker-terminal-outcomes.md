@@ -1,0 +1,11 @@
+# Retained worker PR outcomes for the next Jour fixe
+
+The existing business_os.workjet_worker_dispatch source may publish report_outcome after its real WorkerPullRequestStore has retained a terminal GitHub PR observation and execution_stopped=1. This is an additional action on the existing authenticated source, not another executor or polling loop.
+
+Request: {action:"report_outcome", registration_id, revision, intent_id, receipt}. The generated WorkerTerminalReceipt comes from src/core/rxdb/tests/fixtures/workjet-worker-outcome-v1.json. Map the actual persisted receipt into worker_thread_id, environment_id, computer_id, branch, execution_stopped and pull_request {provider,number,url,head_oid,state}. State is merged or closed; an open PR is not terminal. Initial support is GitHub. Neither credentials, workspace path nor proposed model belongs in the report.
+
+The native handler revalidates the current managed Owner/source registration, authority epoch, project and Supervisor binding. The worker must have an exact retained dispatched acknowledgement with the same UUID/environment/computer/isolated branch. No startup ACK, active execution, a foreign/revoked source or contradictory terminal replay is accepted. Identical retries return the same native accepted_at_ms. The first terminal PR identity/head/state is immutable.
+
+Observe retains the report under reportedOutcome with provenance authenticated_source_report; execution stays null. The native meeting reader returns worker_outcomes (at most16,64KiB,truncated), scoped to its current Owner/project/Supervisor and accepted no later than the meeting. These are retained source reports, never a native plan/review completion, physical model witness or readiness/audio claim. Existing native review still determines whether the confirmed goal closes.
+
+Workjet source integration must use its existing NativeSupervisorWorkerDispatchLive loop and actual WorkerPullRequestStore, re-observing registration and current native connection before publication. Do not derive a PR from model prose or startup data. That producer integration and installed Molecularity acceptance remain separate required work. The live week14Oct–21Oct is not proven by fixture checks.
