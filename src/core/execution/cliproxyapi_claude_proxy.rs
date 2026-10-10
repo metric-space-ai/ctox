@@ -26,10 +26,10 @@ use ring::{
 };
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
-use tokio::sync::{watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(300);
@@ -59,14 +59,17 @@ pub(crate) struct NativeClaudeLeaseModelProxy {
     retired: watch::Sender<bool>,
     transport: ClaudeMessagesHttpTransport,
     slot: Arc<Semaphore>,
+    active_body: Mutex<Option<Weak<AsyncMutex<NativeClaudeBody>>>>,
 }
 enum NativeClaudeBody {
     Buffered(ClaudeMessagesResponse),
     Stream(ClaudeMessagesStreamResponse),
+    Retired,
 }
 pub(crate) struct NativeClaudeLeaseModelReply {
     proxy: Arc<NativeClaudeLeaseModelProxy>,
-    body: NativeClaudeBody,
+    body: Arc<AsyncMutex<NativeClaudeBody>>,
+    streaming: bool,
     exchange: NativeClaudeModelExchange,
     deadline: Instant,
     bytes: usize,
@@ -148,6 +151,7 @@ impl NativeClaudeLeaseModelProxy {
             capability: Mutex::new(Some(new_capability()?)),
             retired: watch::channel(false).0,
             slot: Arc::new(Semaphore::new(1)),
+            active_body: Mutex::new(None),
         });
         proxy.with_current(|_| Ok(()))?;
         Ok(proxy)
@@ -203,6 +207,7 @@ impl NativeClaudeLeaseModelProxy {
     ) -> Result<T> {
         self.with_current(|_| Ok(()))?;
         let mut retired = self.retired.subscribe();
+        ensure!(!*retired.borrow_and_update(), "native model proxy retired");
         let mut poll = tokio::time::interval(CURRENT_POLL);
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let timeout = tokio::time::sleep(deadline.saturating_duration_since(Instant::now()));
@@ -292,12 +297,23 @@ impl NativeClaudeLeaseModelProxy {
         exchange.http_status = match &body {
             NativeClaudeBody::Buffered(response) => response.status(),
             NativeClaudeBody::Stream(response) => response.status(),
+            NativeClaudeBody::Retired => anyhow::bail!("native model reply retired"),
         };
         exchange.elapsed_ms = started.elapsed().as_millis() as u64;
+        self.with_current(|_| Ok(()))?;
+        let streaming = matches!(&body, NativeClaudeBody::Stream(_));
+        let body = Arc::new(AsyncMutex::new(body));
+        *self
+            .active_body
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(&body));
+        // If cancellation wins between validation and registration, this
+        // rejects the result and drops the actual upstream receiver.
         self.with_current(|_| Ok(()))?;
         Ok(NativeClaudeLeaseModelReply {
             proxy: Arc::clone(self),
             body,
+            streaming,
             exchange,
             deadline,
             bytes: 0,
@@ -308,6 +324,7 @@ impl NativeClaudeLeaseModelProxy {
     pub(crate) fn cancel(&self) -> Result<()> {
         self.retired.send_replace(true);
         self.slot.close();
+        retire_active_body(&self.active_body);
         self.capability
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -325,14 +342,18 @@ impl NativeClaudeLeaseModelReply {
     /// A streaming request can yield a buffered upstream HTTP error.
     /// Inspect this before choosing the publication operation.
     pub(crate) fn is_streaming(&self) -> bool {
-        matches!(&self.body, NativeClaudeBody::Stream(_))
+        self.streaming
     }
     pub(crate) fn publish_buffered<T>(
         self,
         publish: impl FnOnce(&[u8], &NativeClaudeModelExchange) -> Result<T>,
     ) -> Result<T> {
-        let NativeClaudeBody::Buffered(ref response) = self.body else {
-            anyhow::bail!("native model reply is streaming");
+        let body = self
+            .body
+            .try_lock()
+            .context("native model reply unavailable")?;
+        let NativeClaudeBody::Buffered(ref response) = *body else {
+            anyhow::bail!("native model reply is not buffered or is retired");
         };
         ensure!(Instant::now() < self.deadline, "native model reply expired");
         self.proxy
@@ -344,10 +365,15 @@ impl NativeClaudeLeaseModelReply {
         &mut self,
         publish: impl FnOnce(&[u8], &NativeClaudeModelExchange) -> Result<T>,
     ) -> Result<Option<T>> {
-        let NativeClaudeBody::Stream(ref mut response) = self.body else {
-            anyhow::bail!("native model reply is buffered");
-        };
         ensure!(self.slot.is_some(), "native model stream already finished");
+        let mut body = self
+            .proxy
+            .while_current(self.deadline, self.body.lock())
+            .await?;
+        let NativeClaudeBody::Stream(ref mut response) = *body else {
+            self.slot.take();
+            anyhow::bail!("native model reply is not streaming or is retired");
+        };
         let result = async {
             let chunk = self
                 .proxy
@@ -369,9 +395,25 @@ impl NativeClaudeLeaseModelReply {
         }
         .await;
         if !matches!(&result, Ok(Some(_))) {
+            *body = NativeClaudeBody::Retired;
             self.slot.take();
         }
         result
+    }
+}
+
+fn retire_active_body(active: &Mutex<Option<Weak<AsyncMutex<NativeClaudeBody>>>>) {
+    let body = active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+        .and_then(|body| body.upgrade());
+    if let Some(body) = body {
+        if let Ok(mut body) = body.try_lock() {
+            *body = NativeClaudeBody::Retired;
+        }
+        // A reader holding the body lock is woken by the cancellation watch;
+        // it drops the upstream response before returning its terminal error.
     }
 }
 
@@ -395,6 +437,24 @@ fn upstream_stream_body(response: ClaudeMessagesStreamResponse) -> Result<Native
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_drops_an_idle_upstream_receiver() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let body = Arc::new(AsyncMutex::new(NativeClaudeBody::Stream(
+            ClaudeMessagesStreamResponse::new(200, None, receiver),
+        )));
+        let active = Mutex::new(Some(Arc::downgrade(&body)));
+        assert!(!sender.is_closed());
+        retire_active_body(&active);
+        assert!(sender.is_closed());
+        assert!(matches!(
+            *body.try_lock().unwrap(),
+            NativeClaudeBody::Retired
+        ));
+        assert!(active.lock().unwrap().is_none());
+        retire_active_body(&active);
+    }
 
     #[test]
     fn rejected_stream_retains_actual_http_status_and_error_body() -> Result<()> {
