@@ -1,0 +1,124 @@
+{
+  "schema": "ctox.workjet.worker-outcome.v1",
+  "contract_version": 1,
+  "types": {
+    "WorkerOutcomeSchema": {
+      "enum": [
+        "ctox.workjet.worker-outcome.v1"
+      ]
+    },
+    "TerminalPullRequestState": {
+      "enum": [
+        "merged",
+        "closed"
+      ]
+    },
+    "PullRequestProvider": {
+      "enum": [
+        "github"
+      ]
+    },
+    "WorkerPullRequestOutcome": {
+      "fields": {
+        "provider": {
+          "type": "PullRequestProvider"
+        },
+        "number": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "url": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 2048
+        },
+        "head_oid": {
+          "type": "String",
+          "min_chars": 40,
+          "max_chars": 64
+        },
+        "state": {
+          "type": "TerminalPullRequestState"
+        }
+      }
+    },
+    "WorkerTerminalReceipt": {
+      "fields": {
+        "schema": {
+          "type": "WorkerOutcomeSchema"
+        },
+        "worker_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "environment_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "computer_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "branch": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "execution_stopped": {
+          "type": "bool"
+        },
+        "pull_request": {
+          "type": "WorkerPullRequestOutcome"
+        }
+      }
+    }
+  },
+  "commands": {
+    "business_os.workjet_worker_dispatch report_outcome": {
+      "scope": "Current authenticated registered source Owner/project/thread/epoch; exact retained startup intent; terminal source report, not a native review or producer execution witness"
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "WorkerTerminalReceipt",
+      "value": {
+        "schema": "ctox.workjet.worker-outcome.v1",
+        "worker_thread_id": "worker-uuid",
+        "environment_id": "network",
+        "computer_id": "assigned",
+        "branch": "workjet/worker/worker-uuid",
+        "execution_stopped": true,
+        "pull_request": {
+          "provider": "github",
+          "number": 7,
+          "url": "https://github.com/metric-space-ai/example/pull/7",
+          "head_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "merged"
+        }
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "WorkerTerminalReceipt",
+      "value": {
+        "schema": "ctox.workjet.worker-outcome.v1",
+        "worker_thread_id": "worker-uuid",
+        "environment_id": "network",
+        "computer_id": "assigned",
+        "branch": "workjet/worker/worker-uuid",
+        "execution_stopped": true,
+        "pull_request": {
+          "provider": "github",
+          "number": 7,
+          "url": "https://github.com/metric-space-ai/example/pull/7",
+          "head_oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "open"
+        }
+      }
+    }
+  ]
+}
