@@ -5952,7 +5952,12 @@ mod tests {
         options.email = "agent@example.test".into();
         options.provider = "ews".into();
         let account = "email:agent@example.test";
-        let old = ews_recovery_message("Stored text")?;
+        // Stored before intake captured the headers: no key at all.
+        let mut old = ews_recovery_message("Stored text")?;
+        old.metadata
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("metadata object"))?
+            .remove("authenticationResults");
         let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
         assert!(super::store_provider_message(
             &mut conn, &options, account, old
