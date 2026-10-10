@@ -104,6 +104,9 @@ const strict = token => ({ selector: {}, limit: 1, requireRevision: token });
   const old = reader(remote, oldAuthority, 'business_commands');
   const current = reader(remote, currentAuthority, 'business_commands');
   const pendingOld = old.loader.resolveQuery(strict('old')).catch(error => error);
+  // Hashing is asynchronous: establish which authority owns request[0] before
+  // asserting that the other authority cannot join its still-live request.
+  await until(() => remote.requests.length === 1);
   const pendingCurrent = current.loader.resolveQuery(strict('new'));
   await until(() => remote.requests.length === 2);
   oldAuthority.generation = 'retired';
