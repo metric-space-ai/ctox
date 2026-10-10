@@ -38,7 +38,13 @@ export async function requestSupervisorRoute(dispatch, request, actor, assertCur
     client_context: { source: 'workjet-project-control', actor },
   }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: 30_000 });
   assertCurrent();
-  const result = receipt?.result;
+  const transported = receipt?.result;
+  if (!transported || transported.status !== 'completed' || transported.task_status !== 'completed') {
+    throw new Error('Supervisor route returned incomplete native result status.');
+  }
+  // command_plane decorates terminal DTOs. Validate these two known fields before decoding
+  // the domain contract; every other extra property is still rejected by its strict validator.
+  const { status: _status, task_status: _taskStatus, ...result } = transported;
   if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
     || receipt.target_record_id !== projectId
     || receipt.payload?.project_id !== projectId || receipt.payload?.thread_id !== threadId

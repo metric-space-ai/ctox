@@ -302,7 +302,9 @@ fn configured_route_capabilities_are_separate_and_owner_bound() -> anyhow::Resul
                 response["result"]["read_command"],
                 "ctox.workjet.project.supervisor.route.read.v1"
             );
-            assert_eq!(response["result"].as_object().unwrap().len(), 5);
+            assert_eq!(response["result"]["status"], "completed");
+            assert_eq!(response["result"]["task_status"], "completed");
+            assert_eq!(response["result"].as_object().unwrap().len(), 7);
         }
     }
     assert_eq!(routes(root.path())?, 0);
@@ -346,7 +348,9 @@ fn configured_route_read_preserves_default_and_legacy_capabilities_without_creat
             "contract",
             "binding",
             "turn_kinds",
-            "default_turn_kind"
+            "default_turn_kind",
+            "status",
+            "task_status"
         ]
         .into_iter()
         .collect()
@@ -439,15 +443,15 @@ fn configured_route_read_refuses_foreign_owner_project_thread_and_stale_model_au
     store::open_store(root.path())?.execute_batch(
         "UPDATE business_provider_federation_model_observations SET last_success_at_ms=0",
     )?;
-    let response = owner_route_read(root.path(), "read-stale", "owner", "project", THREAD)?;
-    assert_eq!(response["status"], "failed", "{response}");
-    assert!(response
-        .to_string()
-        .contains("supervisor_account_model_unavailable"));
-    assert!(!response.to_string().contains("native-account"));
-    assert!(!response
-        .to_string()
-        .contains("private-selector-not-exported"));
+    let error = owner_route_read(root.path(), "read-stale", "owner", "project", THREAD)
+        .expect_err("a stale account is not valid route authority");
+    let message = error.to_string();
+    assert_eq!(
+        message,
+        "supervisor_account_model_unavailable: configured project Supervisor route is unavailable"
+    );
+    assert!(!message.contains("native-account"));
+    assert!(!message.contains("private-selector-not-exported"));
     assert_eq!(routes(root.path())?, 0);
     Ok(())
 }

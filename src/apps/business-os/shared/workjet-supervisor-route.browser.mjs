@@ -47,7 +47,8 @@ try {
           commandBus: { dispatch: async command => {
             calls.push(command);
             const receipt = { command_id: command.id, ok: true, status: 'completed',
-              target_record_id: command.record_id, payload: command.payload, result: structuredClone(value) };
+              target_record_id: command.record_id, payload: command.payload,
+              result: { ...structuredClone(value), status: 'completed', task_status: 'completed' } };
             if (mutation === 'scope') receipt.result.project_id = 'foreign';
             if (mutation === 'private') receipt.result.native_account = 'private';
             if (mutation === 'session') state.session = { id: 'other' };

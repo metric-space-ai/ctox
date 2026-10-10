@@ -20,7 +20,7 @@ function transport(value = route, mutate = () => {}) {
     commands.push({ command, options });
     const receipt = { command_id: command.id, ok: true, status: 'completed',
       target_record_id: command.record_id, payload: structuredClone(command.payload),
-      result: structuredClone(value) };
+      result: { ...structuredClone(value), status: 'completed', task_status: 'completed' } };
     mutate(receipt);
     return receipt;
   } };
@@ -70,6 +70,18 @@ test('cannot replace receipt identity or promote a failed/native-incomplete resp
   ]) {
     const t = transport(route, change);
     await assert.rejects(requestSupervisorRoute(t.dispatch, request, actor, () => {}), /unmatched native receipt/);
+  }
+});
+
+test('terminal transport metadata cannot promote an incomplete domain result', async () => {
+  for (const change of [
+    r => { delete r.result.status; },
+    r => { r.result.status = 'failed'; },
+    r => { r.result.task_status = 'running'; },
+    r => { r.result.unexpected_field = 'private'; },
+  ]) {
+    const t = transport(route, change);
+    await assert.rejects(requestSupervisorRoute(t.dispatch, request, actor, () => {}));
   }
 });
 
