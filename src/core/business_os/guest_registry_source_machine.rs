@@ -260,7 +260,9 @@ mod tests {
     #[test]
     fn failed_machine_capture_retains_exact_child_and_retirement_never_waits_for_io() -> Result<()>
     {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
         let program = root.path().join("owned-child");
         std::fs::write(&program, "#!/bin/sh\nexec /bin/sleep 30\n")?;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;
@@ -336,11 +338,13 @@ mod tests {
         assert!(capture.begin_reconciliation(&process).is_err());
         assert!(capture.finish_reconciliation(&process).is_err());
         assert!(!capture.process_reconciled(&process)?);
-        assert!(capture
-            .export(&store, root.path())
-            .unwrap_err()
-            .to_string()
-            .contains("already attempted"));
+        assert!(
+            capture
+                .export(&store, root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("already attempted")
+        );
         {
             let state = capture.state.lock().unwrap();
             assert_eq!(state.desktop.pid(), pid);
