@@ -127,7 +127,7 @@ fn selected_route_is_requested_evidence_and_never_fake_claude_execution() -> any
     }
     assert_eq!(routes(root.path())?, 1);
     let (requested, actual): (String, Option<String>) =
-        Connection::open(crate::paths::core_db(root))?.query_row(
+        Connection::open(crate::paths::core_db(root.path()))?.query_row(
             "SELECT requested_json,actual_json FROM workjet_supervisor_route_attempts",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
