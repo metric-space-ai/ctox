@@ -31,7 +31,7 @@ mkdir "$TMPDIR/native"
 tar -xzf "$package" -C "$TMPDIR/native" ./bin/ctox
 printf '%s  %s\n' 741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba "$TMPDIR/native/bin/ctox" | sha256sum -c -
 node -e 'const p=require(process.argv[1]+"/package.json");if(p.version!=="1.60.0")throw Error("Pinned Playwright mismatch")' "$playwright_module"
-node --test scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs scripts/sync-v3/resource-observer.test.mjs
+node --test --test-concurrency=2 scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs scripts/sync-v3/resource-observer.test.mjs
 python3 scripts/sync-v3/sqlite-lock-probe.py --self-test
 SIGNALING_SELF_TEST=1 node src/core/rxdb/tools/local_signaling_server.js
 if [[ "$soak" = 86400 ]]; then
