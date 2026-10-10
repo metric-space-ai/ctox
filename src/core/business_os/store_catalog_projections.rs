@@ -407,6 +407,39 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub fn write_module_catalog_projection_to_rxdb(root: &Path) -> anyhow::Result<()> {
+    refresh_module_catalog_after_schema_change(|| write_module_catalog_projection_once(root))
+}
+
+fn refresh_module_catalog_after_schema_change(
+    mut refresh: impl FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let mut schema_retries = 0;
+    loop {
+        match refresh() {
+            Err(err)
+                if schema_retries < 2
+                    && err.chain().any(|cause| {
+                        matches!(
+                            cause.downcast_ref::<rusqlite::Error>(),
+                            Some(rusqlite::Error::SqliteFailure(code, _))
+                                if code.code == rusqlite::ErrorCode::SchemaChanged
+                        )
+                    }) =>
+            {
+                // Native peer collection registration can invalidate a catalog
+                // statement at startup. Drop this attempt's connections and
+                // prepare the complete idempotent projection again; do not
+                // reuse the invalid statement or retry unrelated SQL errors.
+                schema_retries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            result => return result,
+        }
+    }
+}
+
+fn write_module_catalog_projection_once(root: &Path) -> anyhow::Result<()> {
+
     let mut document = module_catalog_for_rxdb(root)?;
     let now = now_ms();
     let revision = format!("{now}-ctox-module-catalog");
@@ -518,7 +551,11 @@ mod tests {
         resolve_business_os_installed_app_root, rollback_module_release, rxdb_store_path,
         ModuleReleaseRequest, ModuleRollbackRequest,
     };
-    use super::{module_catalog_for_rxdb, write_module_catalog_projection_to_rxdb};
+    use super::{
+        module_catalog_for_rxdb, refresh_module_catalog_after_schema_change,
+        write_module_catalog_projection_once, write_module_catalog_projection_to_rxdb,
+    };
+
     use anyhow::Context;
     use rusqlite::{params, Connection};
     use serde_json::Value;
@@ -526,7 +563,79 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn module_catalog_refresh_recovers_a_real_sqlite_schema_invalidation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let schema_path = root.join("schema-race.sqlite");
+        let reader = Connection::open(&schema_path)?;
+        reader.execute_batch("CREATE TABLE schema_fixture(value TEXT)")?;
+        let sql = std::ffi::CString::new("SELECT value FROM schema_fixture")?;
+        let mut statement = std::ptr::null_mut();
+        let prepared = unsafe {
+            rusqlite::ffi::sqlite3_prepare(
+                reader.handle(), sql.as_ptr(), -1, &mut statement, std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(prepared, rusqlite::ffi::SQLITE_OK);
+        let registrar = Connection::open(&schema_path)?;
+        registrar.execute_batch("CREATE TABLE registered_collection(id TEXT)")?;
+        let (stepped, reset) = unsafe {
+            let stepped = rusqlite::ffi::sqlite3_step(statement);
+            let reset = rusqlite::ffi::sqlite3_reset(statement);
+            rusqlite::ffi::sqlite3_finalize(statement);
+            (stepped, reset)
+        };
+        assert_eq!(stepped, rusqlite::ffi::SQLITE_ERROR);
+        assert_eq!(reset, rusqlite::ffi::SQLITE_SCHEMA);
+        let mut invalidated = Some(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(reset), None,
+        ));
+
+        let module_dir = root.join("src/apps/business-os/modules/ctox");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(root.join("src/apps/business-os/index.html"), "<!doctype html>")?;
+        fs::write(module_dir.join("module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#)?;
+        let mut attempts = 0;
+        refresh_module_catalog_after_schema_change(|| {
+            attempts += 1;
+            if let Some(err) = invalidated.take() {
+                return Err(anyhow::Error::new(err).context("catalog schema registration race"));
+            }
+            write_module_catalog_projection_once(root)
+        })?;
+        assert_eq!(attempts, 2);
+        let catalog = load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+            .context("recovered catalog must be persisted")?;
+        assert!(catalog["modules"].as_array().unwrap().iter().any(|module| module["id"] == "ctox"));
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_schema_recovery_is_bounded_and_preserves_other_errors() {
+        for (code, expected_attempts) in [(rusqlite::ffi::SQLITE_SCHEMA, 3), (rusqlite::ffi::SQLITE_BUSY, 1)] {
+            let mut attempts = 0;
+            let err = refresh_module_catalog_after_schema_change(|| {
+                attempts += 1;
+                Err(anyhow::Error::new(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(code), None,
+                )).context("retained catalog failure"))
+            }).unwrap_err();
+            assert_eq!(attempts, expected_attempts);
+            assert_eq!(err.downcast_ref::<rusqlite::Error>().unwrap().sqlite_error().unwrap().extended_code, code);
+            assert!(err.to_string().contains("retained catalog failure"));
+        }
+        let mut attempts = 0;
+        assert!(refresh_module_catalog_after_schema_change(|| {
+            attempts += 1;
+            anyhow::bail!("database schema has changed")
+        }).is_err());
+        assert_eq!(attempts, 1, "error text alone must never authorize retry");
+    }
+
+    #[test]
     fn direct_module_catalog_projection_includes_installed_modules() -> anyhow::Result<()> {
+
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");
