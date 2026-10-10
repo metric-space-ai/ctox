@@ -12,6 +12,7 @@ use ctox_sync::{
     local_host::{HostDirectoryLock, LocalIpcHost},
     native::NativeSyncSession,
 };
+use futures_util::StreamExt;
 use rxdb::plugins::replication_webrtc::{
     webrtc_helper::send_message_and_await_answer_guarded, WebRTCConnectionHandler, WebRTCMessage,
     WebRTCPublicationGuard, WebRTCRsConnection,
@@ -455,18 +456,35 @@ pub(crate) fn serve(root: &Path, target: &str, directory: &Path) -> Result<()> {
         .build()?;
     runtime.block_on(async {
         let source = Arc::new(Source::open(root, target, directory).await?);
+        let pool = source.session.pool();
+        // Subscribe before exposing IPC, then revalidate to cover an earlier disconnect.
+        let mut disconnected = pool.connection_handler.disconnect_stream();
         let mut local = match LocalIpcHost::start(directory.to_owned(), Arc::new(SourceIpc {source:source.clone(), slots:tokio::sync::Semaphore::new(2)})).await {
             Ok(local) => local,
             Err(_) => {source.shutdown().await?; return Err(unavailable());}
         };
+        if let Err(error) = source.live() {
+            source.enrollment.retire();
+            let _ = local.shutdown().await;
+            let _ = source.shutdown().await;
+            return Err(error);
+        }
         println!("{}", json!({"protocolVersion":1,"endpoint":local.endpoint(),"transportReady":true,"executionReady":false}));
         let expires_in = Duration::from_millis(
             source.enrollment.expires_at_ms.saturating_sub(chrono::Utc::now().timestamp_millis()).max(0) as u64,
         );
-        let pool = source.session.pool();
+        let lost_generation = async {
+            while let Some(peer) = disconnected.next().await {
+                if peer == source.peer {
+                    return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "original native Source disconnected"));
+                }
+            }
+            Err(io::Error::new(io::ErrorKind::ConnectionAborted, "native Source disconnect stream ended"))
+        };
         let ended = tokio::select! {
             result = stop_signal() => result,
             result = local.wait_stopped() => result,
+            result = lost_generation => result,
             _ = pool.cancelled() => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "native Source generation stopped")),
             _ = tokio::time::sleep(expires_in) => Err(io::Error::new(io::ErrorKind::PermissionDenied, "native Source enrollment expired")),
         };
