@@ -106,8 +106,8 @@ pub(super) async fn enroll<P: Clone + Eq + Hash + Send + Sync + 'static>(
             // account/issuer/policy/controller publication fence.
             store.verify_durable_copy(&target.request.checkpoint_digest)?;
             let manifest = store.load_manifest(&target.request.checkpoint_digest)?;
-            let identity = super::super::super::super::guest_runtime::ProtectedGuestIdentity::from_checkpoint(
-                &store, &manifest.provider_state,
+            let identity = super::super::super::super::guest_registry::checkpoint_identity::ProtectedNativeGuestIdentity::from_checkpoint(
+                &store, &manifest, &target.request.spec,
             )?;
             Ok::<_, anyhow::Error>((target, authority, ownership, scope, identity))
         }).await??;

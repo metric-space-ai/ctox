@@ -76,32 +76,43 @@ pub(super) fn prepare(
                     history: vec![journal.to_vec()],
                     attachments: Vec::new(),
                     workspace: Vec::new(),
-                    provider_state: vec![
-                        CaptureEntry {
-                            path: "native-core-configuration.json".into(),
-                            kind: WorkspaceEntryKind::File,
-                            bytes: configuration_bytes,
-                            executable: false,
-                        },
-                        CaptureEntry {
-                            path: "native-session-state.json".into(),
-                            kind: WorkspaceEntryKind::File,
-                            bytes: state.as_bytes().to_vec(),
-                            executable: false,
-                        },
-                        CaptureEntry {
-                            path: "native-workspace.bundle".into(),
-                            kind: WorkspaceEntryKind::File,
-                            bytes: repository,
-                            executable: false,
-                        },
-                        CaptureEntry {
-                            path: "native-effect-state.json".into(),
-                            kind: WorkspaceEntryKind::File,
-                            bytes: effect_bytes,
-                            executable: false,
-                        },
-                    ],
+                    provider_state: {
+                        let mut entries = vec![
+                            CaptureEntry {
+                                path: "native-core-configuration.json".into(),
+                                kind: WorkspaceEntryKind::File,
+                                bytes: configuration_bytes,
+                                executable: false,
+                            },
+                            CaptureEntry {
+                                path: "native-session-state.json".into(),
+                                kind: WorkspaceEntryKind::File,
+                                bytes: state.as_bytes().to_vec(),
+                                executable: false,
+                            },
+                            CaptureEntry {
+                                path: "native-workspace.bundle".into(),
+                                kind: WorkspaceEntryKind::File,
+                                bytes: repository,
+                                executable: false,
+                            },
+                            CaptureEntry {
+                                path: "native-effect-state.json".into(),
+                                kind: WorkspaceEntryKind::File,
+                                bytes: effect_bytes,
+                                executable: false,
+                            },
+                        ];
+                        if let Some(bytes) = effects.core_runtime_bytes()? {
+                            entries.push(CaptureEntry {
+                                path: checkpoint_identity::CORE_RUNTIME_PATH.into(),
+                                kind: WorkspaceEntryKind::File,
+                                bytes,
+                                executable: false,
+                            });
+                        }
+                        entries
+                    },
                     pending_effects,
                 })
                 .await?;
