@@ -195,9 +195,7 @@ pub fn parse_authorization_token(header: Option<&str>) -> Result<i64> {
 pub fn verify(token: &str) -> Result<Claims> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
-        return Err(anyhow!(
-            "token contains an invalid number of segments"
-        ));
+        return Err(anyhow!("token contains an invalid number of segments"));
     }
     let (encoded_header, encoded_claims, encoded_signature) = (parts[0], parts[1], parts[2]);
 
@@ -285,8 +283,9 @@ mod tests {
     #[test]
     fn the_claim_names_match_what_buildx_expects() {
         let token = create_authorization_token(23, 1, 2).expect("a token");
-        let claims_json = String::from_utf8(base64url::decode(token.split('.').nth(1).expect("payload")))
-            .expect("utf-8");
+        let claims_json =
+            String::from_utf8(base64url::decode(token.split('.').nth(1).expect("payload")))
+                .expect("utf-8");
         assert!(claims_json.contains("\"TaskID\":23"), "{claims_json}");
         assert!(claims_json.contains("\"RunID\":1"), "{claims_json}");
         assert!(claims_json.contains("\"JobID\":2"), "{claims_json}");
@@ -340,7 +339,12 @@ mod tests {
         let parts: Vec<&str> = token.split('.').collect();
 
         // A different signature.
-        let forged = format!("{}.{}.{}", parts[0], parts[1], base64url::encode_raw(b"nope"));
+        let forged = format!(
+            "{}.{}.{}",
+            parts[0],
+            parts[1],
+            base64url::encode_raw(b"nope")
+        );
         assert!(verify(&forged).is_err(), "a forged signature");
 
         // A different payload, original signature.
@@ -403,8 +407,11 @@ mod tests {
         // An absent claim is an empty list, not an error.
         assert!(Claims::default().cache_scopes().expect("empty").is_empty());
         // Garbage is an error rather than an empty list.
-        assert!(Claims { ac: "not json".into(), ..Claims::default() }
-            .cache_scopes()
-            .is_err());
+        assert!(Claims {
+            ac: "not json".into(),
+            ..Claims::default()
+        }
+        .cache_scopes()
+        .is_err());
     }
 }

@@ -54,7 +54,10 @@ pub fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         // act creates the directory with the source's mode. `create_dir_all`
         // applies the umask, so the mode is set explicitly afterwards.
-        fs::set_permissions(dest, fs::Permissions::from_mode(source_info.permissions().mode()))?;
+        fs::set_permissions(
+            dest,
+            fs::Permissions::from_mode(source_info.permissions().mode()),
+        )?;
     }
     #[cfg(not(unix))]
     let _ = &source_info;
@@ -128,6 +131,8 @@ mod tests {
         write(&source, "#!/bin/sh\n");
         fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).expect("chmod");
 
+        write(&dest, "old destination");
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o644)).expect("chmod destination");
         copy_file(&source, &dest).expect("copied");
         let mode = fs::metadata(&dest).expect("readable").permissions().mode();
         assert_eq!(

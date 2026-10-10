@@ -247,7 +247,6 @@ pub fn rel(base: &str, target: &str) -> Option<String> {
     Some(out.join("/"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,10 +391,7 @@ mod tests {
             "./.././../x",
         ] {
             let resolved = super::super::safe_resolve(base, input);
-            assert!(
-                resolved.starts_with(base),
-                "{input:?} escaped: {resolved}",
-            );
+            assert!(resolved.starts_with(base), "{input:?} escaped: {resolved}",);
         }
     }
 

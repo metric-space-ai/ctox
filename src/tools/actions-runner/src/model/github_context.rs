@@ -65,7 +65,6 @@ pub type FindInRepository = Box<dyn Fn(&str) -> anyhow::Result<String>>;
 /// The repository lookup, which also needs the instance and the remote name.
 pub type FindGithubRepo = Box<dyn Fn(&str, &str, &str) -> anyhow::Result<String>>;
 
-
 impl std::fmt::Debug for GitLookups {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("GitLookups")
@@ -173,8 +172,7 @@ impl GithubContext {
                 .map(|(key, value)| (key.clone(), from_json_value(value)))
                 .collect(),
         );
-        Value::object(
-            [
+        Value::object([
             ("event", event),
             ("event_path", string(&self.event_path)),
             ("workflow", string(&self.workflow)),
@@ -206,8 +204,7 @@ impl GithubContext {
             ("server_url", string(&self.server_url)),
             ("api_url", string(&self.api_url)),
             ("graphql_url", string(&self.graphql_url)),
-            ]
-        )
+        ])
     }
 }
 
@@ -283,11 +280,16 @@ impl GithubContext {
             return;
         }
         if self.base_ref.is_empty() {
-            self.base_ref = as_string(nested_map_lookup(&self.event, &["pull_request", "base", "ref"]));
+            self.base_ref = as_string(nested_map_lookup(
+                &self.event,
+                &["pull_request", "base", "ref"],
+            ));
         }
         if self.head_ref.is_empty() {
-            self.head_ref =
-                as_string(nested_map_lookup(&self.event, &["pull_request", "head", "ref"]));
+            self.head_ref = as_string(nested_map_lookup(
+                &self.event,
+                &["pull_request", "head", "ref"],
+            ));
         }
     }
 
@@ -344,8 +346,10 @@ impl GithubContext {
             _ => {
                 // Deliberately a *different* binding from the parameter below,
                 // shadowing exactly as upstream's `:=` inside this arm does.
-                let branch_from_event =
-                    as_string(nested_map_lookup(&self.event, &["repository", "default_branch"]));
+                let branch_from_event = as_string(nested_map_lookup(
+                    &self.event,
+                    &["repository", "default_branch"],
+                ));
                 if !branch_from_event.is_empty() {
                     self.ref_ = format!("refs/heads/{branch_from_event}");
                 }
@@ -368,7 +372,10 @@ impl GithubContext {
             if self.ref_.is_empty() {
                 self.ref_ = format!(
                     "refs/heads/{}",
-                    as_string(nested_map_lookup(&self.event, &["repository", "default_branch"]))
+                    as_string(nested_map_lookup(
+                        &self.event,
+                        &["repository", "default_branch"]
+                    ))
                 );
             }
         }
@@ -389,8 +396,10 @@ impl GithubContext {
     pub fn set_sha(&mut self, repo_path: &str, git: &GitLookups) {
         match self.event_name.as_str() {
             "pull_request_target" => {
-                self.sha =
-                    as_string(nested_map_lookup(&self.event, &["pull_request", "base", "sha"]));
+                self.sha = as_string(nested_map_lookup(
+                    &self.event,
+                    &["pull_request", "base", "sha"],
+                ));
             }
             "deployment" | "deployment_status" => {
                 self.sha = as_string(nested_map_lookup(&self.event, &["deployment", "sha"]));
@@ -497,7 +506,12 @@ mod tests {
     fn the_ref_follows_the_event() {
         // The table from `TestSetRef`.
         let cases: Vec<(&str, Value, &str, &str)> = vec![
-            ("pull_request_target", json!({}), "refs/heads/master", "master"),
+            (
+                "pull_request_target",
+                json!({}),
+                "refs/heads/master",
+                "master",
+            ),
             (
                 "pull_request",
                 json!({"number": 1234.0}),
@@ -537,7 +551,11 @@ mod tests {
                 event: event.as_object().cloned().unwrap_or_default(),
                 ..GithubContext::default()
             };
-            ghc.set_ref("main", "/some/dir", &git("refs/heads/master", "1234fakesha"));
+            ghc.set_ref(
+                "main",
+                "/some/dir",
+                &git("refs/heads/master", "1234fakesha"),
+            );
             ghc.set_ref_type_and_name();
             assert_eq!(ghc.ref_, *want_ref, "ref for {event_name}");
             assert_eq!(ghc.ref_name, *want_ref_name, "ref_name for {event_name}");
@@ -566,13 +584,13 @@ mod tests {
     /// The two review events share the pull-request ref rule.
     #[test]
     fn the_review_events_use_the_pull_request_ref() {
-        for event_name in [
-            "pull_request_review",
-            "pull_request_review_comment",
-        ] {
+        for event_name in ["pull_request_review", "pull_request_review_comment"] {
             let mut ghc = GithubContext {
                 event_name: event_name.to_string(),
-                event: json!({"number": 42.0}).as_object().cloned().unwrap_or_default(),
+                event: json!({"number": 42.0})
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
                 ..GithubContext::default()
             };
             ghc.set_ref("main", "/some/dir", &git("refs/heads/master", "sha"));
@@ -587,7 +605,10 @@ mod tests {
     fn the_pull_request_number_is_formatted_not_parsed() {
         let mut ghc = GithubContext {
             event_name: "pull_request".to_string(),
-            event: json!({"number": 1.5}).as_object().cloned().unwrap_or_default(),
+            event: json!({"number": 1.5})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
             ..GithubContext::default()
         };
         ghc.set_ref("main", "/some/dir", &git("refs/heads/master", "sha"));
@@ -600,7 +621,11 @@ mod tests {
     /// non-empty the fallback never runs and the garbage becomes the run's ref.
     #[test]
     fn a_pull_request_without_a_number_falls_back_to_git() {
-        for event in [json!({}), json!({"number": "1234"}), json!({"number": true})] {
+        for event in [
+            json!({}),
+            json!({"number": "1234"}),
+            json!({"number": true}),
+        ] {
             let mut ghc = GithubContext {
                 event_name: "pull_request".to_string(),
                 event: event.as_object().cloned().unwrap_or_default(),
@@ -862,7 +887,11 @@ mod tests {
             Some("refs/heads/x")
         );
         assert_eq!(nested_map_lookup(map, &["deployment", "missing"]), None);
-        assert_eq!(nested_map_lookup(map, &["n", "deeper"]), None, "a number is not a map");
+        assert_eq!(
+            nested_map_lookup(map, &["n", "deeper"]),
+            None,
+            "a number is not a map"
+        );
         assert_eq!(nested_map_lookup(map, &[]), None, "no keys at all");
     }
 }

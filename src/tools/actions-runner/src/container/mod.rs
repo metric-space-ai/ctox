@@ -36,10 +36,10 @@ pub mod docker_auth;
 #[cfg(feature = "docker")]
 pub mod docker_build;
 pub mod docker_cli;
-pub mod docker_merge;
 #[cfg(feature = "docker")]
 pub mod docker_engine;
 pub mod docker_log;
+pub mod docker_merge;
 pub mod docker_opts;
 pub mod docker_opts_mounts;
 pub mod docker_opts_types;
@@ -63,7 +63,6 @@ use std::path::PathBuf;
 
 use crate::common::{Executor, RunContext};
 
-pub use host_environment::container_archive;
 pub use docker_auth::{
     load_docker_auth_config, load_docker_auth_configs, registry_host, AuthConfigError,
     DockerConfigFile, RegistryAuthConfig,
@@ -78,6 +77,7 @@ pub use docker_socket::{
     COMMON_SOCKET_LOCATIONS,
 };
 pub use env_file::{parse_env_text, EnvFileError};
+pub use host_environment::container_archive;
 pub use host_environment::HostEnvironment;
 pub use image_ref::{clean_image, parse_any_reference, Reference};
 pub use linux::LinuxContainerEnvironmentExtensions;
@@ -139,8 +139,13 @@ pub trait ExecutionsEnvironment: Send + Sync {
     fn start(&self, attach: bool) -> Executor;
 
     /// Runs `command` inside the container.
-    fn exec(&self, command: &[String], env: &BTreeMap<String, String>, user: &str, workdir: &str)
-        -> Executor;
+    fn exec(
+        &self,
+        command: &[String],
+        env: &BTreeMap<String, String>,
+        user: &str,
+        workdir: &str,
+    ) -> Executor;
 
     /// The variables an env file at `src_path` contributes.
     ///

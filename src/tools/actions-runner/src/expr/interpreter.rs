@@ -366,9 +366,7 @@ impl<'a> Interpreter<'a> {
                 self.evaluate_index_access(operand, index)
             }
             ExprNode::ObjectDeref {
-                receiver,
-                property,
-                ..
+                receiver, property, ..
             } => {
                 let left = self.evaluate_node(receiver)?;
                 if matches!(**receiver, ExprNode::ArrayDeref { .. }) {
@@ -509,9 +507,7 @@ impl<'a> Interpreter<'a> {
             (Value::Float(a), Value::Int(b)) => {
                 Ok(Value::Bool(compare_number(*a, *b as f64, kind)))
             }
-            (Value::Float(a), Value::Float(b)) => {
-                Ok(Value::Bool(compare_number(*a, *b, kind)))
-            }
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Bool(compare_number(*a, *b, kind))),
             (Value::Null, Value::Null) => Ok(Value::Bool(true)),
             (l, r) => Err(EvalError::new(format!(
                 "Compare not implemented for types: left: {}, right: {}",
@@ -640,9 +636,7 @@ impl<'a> Interpreter<'a> {
     /// `contains`, `startsWith` and `endsWith` all fold case.
     fn contains(&self, args: &[Value], which: &str) -> Result<Value, EvalError> {
         let (Some(search), Some(item)) = (args.first(), args.get(1)) else {
-            return Err(EvalError::new(format!(
-                "'{which}' requires two arguments"
-            )));
+            return Err(EvalError::new(format!("'{which}' requires two arguments")));
         };
 
         match search {
@@ -699,9 +693,7 @@ impl<'a> Interpreter<'a> {
                         let parsed: i64 = index.parse().map_err(|_| invalid("invalid"))?;
                         index.clear();
                         let Some(value) = replacements.get(parsed.max(0) as usize) else {
-                            return Err(invalid(
-                                "references more arguments than were supplied",
-                            ));
+                            return Err(invalid("references more arguments than were supplied"));
                         };
                         output.push_str(&self.coerce_to_string(value));
                         state = FormatState::PassThrough;
@@ -789,7 +781,11 @@ fn has_status_check_function(node: &ExprNode) -> bool {
 /// so the check is written as a comparison rather than a pattern.
 fn safe_value(value: Value) -> Value {
     if let Value::Float(f) = value {
-        return if f == 0.0 { Value::Int(0) } else { Value::Float(f) };
+        return if f == 0.0 {
+            Value::Int(0)
+        } else {
+            Value::Float(f)
+        };
     }
     value
 }
@@ -925,10 +921,7 @@ mod tests {
                 ),
                 (
                     "event".to_string(),
-                    Value::object([(
-                        "number".to_string(),
-                        Value::String("42".to_string()),
-                    )]),
+                    Value::object([("number".to_string(), Value::String("42".to_string()))]),
                 ),
             ])),
             env: [("FOO".to_string(), Value::String("bar".to_string()))]
@@ -944,10 +937,7 @@ mod tests {
                 "setup".to_string(),
                 Value::object([(
                     "outputs".to_string(),
-                    Value::object([(
-                        "id".to_string(),
-                        Value::String("abc".to_string()),
-                    )]),
+                    Value::object([("id".to_string(), Value::String("abc".to_string()))]),
                 )]),
             )]
             .into_iter()
@@ -1105,7 +1095,10 @@ mod tests {
 
     #[test]
     fn contains_folds_case() {
-        assert_eq!(eval("contains('Hello World', 'WORLD') }}"), Value::Bool(true));
+        assert_eq!(
+            eval("contains('Hello World', 'WORLD') }}"),
+            Value::Bool(true)
+        );
         assert_eq!(eval("contains('Hello', 'xyz') }}"), Value::Bool(false));
     }
 
@@ -1150,7 +1143,10 @@ mod tests {
             eval("format('{0}', true) }}"),
             Value::String("true".to_string())
         );
-        assert_eq!(eval("format('{0}', 42) }}"), Value::String("42".to_string()));
+        assert_eq!(
+            eval("format('{0}', 42) }}"),
+            Value::String("42".to_string())
+        );
     }
 
     #[test]
@@ -1272,10 +1268,7 @@ mod tests {
     #[test]
     fn property_access_without_deref_does_not_fan_out() {
         // The same lookup without `.*` yields a single value.
-        assert_eq!(
-            eval("fromJson('{\"x\":{\"a\":1}}').x.a }}"),
-            Value::Int(1)
-        );
+        assert_eq!(eval("fromJson('{\"x\":{\"a\":1}}').x.a }}"), Value::Int(1));
     }
 
     #[test]
@@ -1295,12 +1288,21 @@ mod tests {
         let err = interpreter
             .evaluate("nope() }}", DefaultStatusCheck::None)
             .expect_err("unknown function must fail");
-        assert!(err.message.contains("not implemented"), "got {}", err.message);
+        assert!(
+            err.message.contains("not implemented"),
+            "got {}",
+            err.message
+        );
     }
 
     #[test]
     fn has_status_check_function_detects_all_four() {
-        for source in ["success() }}", "always() }}", "cancelled() }}", "failure() }}"] {
+        for source in [
+            "success() }}",
+            "always() }}",
+            "cancelled() }}",
+            "failure() }}",
+        ] {
             let mut text = source.to_string();
             text.push_str("}}");
             let node = parser::parse(&text).expect("parses");

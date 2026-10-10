@@ -33,7 +33,8 @@ pub const SIGNED_URL_LIFETIME_SECONDS: i64 = 60 * 60;
 /// `fmt.Sprint` on the `int64` is plain decimal, with a leading `-` when
 /// negative.
 pub fn build_signature(endp: &str, expires: &str, artifact_name: &str, task_id: i64) -> Vec<u8> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&SIGNING_KEY).expect("hmac accepts any key");
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(&SIGNING_KEY).expect("hmac accepts any key");
     mac.update(endp.as_bytes());
     mac.update(expires.as_bytes());
     mac.update(artifact_name.as_bytes());
@@ -60,18 +61,18 @@ pub fn format_signed_expiry(at: SystemTime) -> String {
     let local = chrono::DateTime::from_timestamp(secs, nanos)
         .expect("timestamp in range")
         .with_timezone(&chrono::Local);
-    format_layout(&local.naive_local(), &local.format("%z").to_string(), &local.format("%Z").to_string())
+    format_layout(
+        &local.naive_local(),
+        &local.format("%z").to_string(),
+        &local.format("%Z").to_string(),
+    )
 }
 
 /// The layout itself, for an instant already in the target zone.
 ///
 /// Split out from [`format_signed_expiry`] so the fraction rule can be pinned
 /// against Go's output without the test having to control `TZ`.
-pub fn format_layout(
-    local: &chrono::NaiveDateTime,
-    numeric_offset: &str,
-    zone: &str,
-) -> String {
+pub fn format_layout(local: &chrono::NaiveDateTime, numeric_offset: &str, zone: &str) -> String {
     let mut out = local.format("%Y-%m-%d %H:%M:%S").to_string();
     let nanos = local.and_utc().timestamp_subsec_nanos();
     if nanos != 0 {
@@ -240,22 +241,47 @@ mod tests {
 
     #[test]
     fn a_tampered_query_fails_the_signature() {
-        let signature = build_signature("UploadArtifact", "2024-01-02 03:04:05 +0000 UTC", "test", 75);
+        let signature = build_signature(
+            "UploadArtifact",
+            "2024-01-02 03:04:05 +0000 UTC",
+            "test",
+            75,
+        );
         // Every one of the four signed fields is load-bearing.
         assert!(!signatures_equal(
-            &build_signature("DownloadArtifact", "2024-01-02 03:04:05 +0000 UTC", "test", 75),
+            &build_signature(
+                "DownloadArtifact",
+                "2024-01-02 03:04:05 +0000 UTC",
+                "test",
+                75
+            ),
             &signature,
         ));
         assert!(!signatures_equal(
-            &build_signature("UploadArtifact", "2024-01-02 03:04:06 +0000 UTC", "test", 75),
+            &build_signature(
+                "UploadArtifact",
+                "2024-01-02 03:04:06 +0000 UTC",
+                "test",
+                75
+            ),
             &signature,
         ));
         assert!(!signatures_equal(
-            &build_signature("UploadArtifact", "2024-01-02 03:04:05 +0000 UTC", "tesT", 75),
+            &build_signature(
+                "UploadArtifact",
+                "2024-01-02 03:04:05 +0000 UTC",
+                "tesT",
+                75
+            ),
             &signature,
         ));
         assert!(!signatures_equal(
-            &build_signature("UploadArtifact", "2024-01-02 03:04:05 +0000 UTC", "test", 76),
+            &build_signature(
+                "UploadArtifact",
+                "2024-01-02 03:04:05 +0000 UTC",
+                "test",
+                76
+            ),
             &signature,
         ));
         assert!(signatures_equal(&signature, &signature));
@@ -267,7 +293,10 @@ mod tests {
         // `hmac.Equal` returns false for a length mismatch, which is what
         // keeps a missing `sig` a 401 instead of a panic.
         assert!(!signatures_equal(&[], &signature));
-        assert!(!signatures_equal(&base64_url_decode("not base64!!"), &signature));
+        assert!(!signatures_equal(
+            &base64_url_decode("not base64!!"),
+            &signature
+        ));
     }
 
     #[test]
@@ -324,10 +353,17 @@ mod tests {
         for nanos in [0u32, 1, 1_000, 208_339_560, 872_846_295, 999_999_999] {
             for offset in [0i64, 3_600, -5 * 3_600] {
                 let instant = 1_704_164_645_i64;
-                let at = chrono::Utc.timestamp_opt(instant, nanos).single().expect("valid");
+                let at = chrono::Utc
+                    .timestamp_opt(instant, nanos)
+                    .single()
+                    .expect("valid");
                 let sign = if offset < 0 { '-' } else { '+' };
                 let absolute = offset.abs();
-                let numeric = format!("{sign}{:02}{:02}", absolute / 3_600, (absolute % 3_600) / 60);
+                let numeric = format!(
+                    "{sign}{:02}{:02}",
+                    absolute / 3_600,
+                    (absolute % 3_600) / 60
+                );
                 let formatted = format_layout(&at.naive_utc(), &numeric, "TEST");
                 // The same wall clock labelled with a different offset names a
                 // different instant, and the numeric offset is what the
@@ -383,9 +419,7 @@ mod tests {
             (12_000_000, "2024-01-02T03:04:05.012Z"),
         ];
         for (nanos, want) in table {
-            let at = chrono::Utc
-                .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
-                .unwrap()
+            let at = chrono::Utc.with_ymd_and_hms(2024, 1, 2, 3, 4, 5).unwrap()
                 + chrono::Duration::nanoseconds(*nanos as i64);
             assert_eq!(
                 proto_timestamp(SystemTime::from(at)),

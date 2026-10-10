@@ -100,7 +100,12 @@ impl<'a> Validator<'a> {
 
     /// Checks a node against a named definition, starting with an empty
     /// context.
-    pub fn check(&self, doc: &Document, node: NodeId, definition: &str) -> Result<(), Vec<SchemaIssue>> {
+    pub fn check(
+        &self,
+        doc: &Document,
+        node: NodeId,
+        definition: &str,
+    ) -> Result<(), Vec<SchemaIssue>> {
         self.check_with_context(doc, node, definition, &[])
     }
 
@@ -216,7 +221,10 @@ impl<'a> Validator<'a> {
                     value = value[offset..].to_string();
                 }
                 Err(err) => {
-                    issues.push(location.clone(), format!("Failed to parse: {}", err.message));
+                    issues.push(
+                        location.clone(),
+                        format!("Failed to parse: {}", err.message),
+                    );
                     // Upstream continues the loop here. The remaining text no
                     // longer starts at this `${{`, so the next `find` either
                     // finds a later expression or terminates the scan.
@@ -277,7 +285,10 @@ impl<'a> Validator<'a> {
         }
 
         for name in variables(node) {
-            if !context.iter().any(|allowed| allowed.eq_ignore_ascii_case(&name)) {
+            if !context
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&name))
+            {
                 issues.push(String::new(), format!("Unknown Variable Access {name}"));
             }
         }
@@ -486,9 +497,7 @@ fn function_argument_count(node: &ExprNode, callee: &str) -> usize {
     crate::expr::ast::visit(node, &mut |node, entering| {
         if entering {
             if let ExprNode::FuncCall {
-                callee: name,
-                args,
-                ..
+                callee: name, args, ..
             } = node
             {
                 if name.eq_ignore_ascii_case(callee) {
@@ -603,7 +612,9 @@ mod tests {
         // No context means only literals may be interpolated.
         let found = issues("value: ${{ some.variable }}\n", "any");
         assert!(
-            found.iter().any(|i| i.contains("expressions are not allowed")),
+            found
+                .iter()
+                .any(|i| i.contains("expressions are not allowed")),
             "got {found:?}"
         );
     }

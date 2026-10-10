@@ -73,8 +73,10 @@ impl Cancellation {
         match scope {
             // A force cancellation stops everything, so a graceful check has
             // to report it too.
-            Scope::Graceful => self.inner.graceful.load(Ordering::SeqCst)
-                || self.inner.force.load(Ordering::SeqCst),
+            Scope::Graceful => {
+                self.inner.graceful.load(Ordering::SeqCst)
+                    || self.inner.force.load(Ordering::SeqCst)
+            }
             Scope::Force => self.inner.force.load(Ordering::SeqCst),
         }
     }
@@ -444,7 +446,9 @@ mod tests {
         let cancellation = Cancellation::new();
         cancellation.cancel(Scope::Force);
         assert_eq!(
-            cancellation.error_if_cancelled(Scope::Graceful).map(|e| e.to_string()),
+            cancellation
+                .error_if_cancelled(Scope::Graceful)
+                .map(|e| e.to_string()),
             Some("context canceled".to_string()),
         );
         let fresh = Cancellation::new();

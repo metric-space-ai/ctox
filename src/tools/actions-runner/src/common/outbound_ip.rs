@@ -64,7 +64,9 @@ pub fn outbound_ip() -> Result<Option<String>, OutboundIpError> {
     }
 
     let mut best: Vec<(String, IpAddr)> = Vec::new();
-    for interface in if_addrs::get_if_addrs().map_err(|err| OutboundIpError::Interfaces(err.to_string()))? {
+    for interface in
+        if_addrs::get_if_addrs().map_err(|err| OutboundIpError::Interfaces(err.to_string()))?
+    {
         let IpAddr::V4(ip) = interface.ip() else {
             continue;
         };

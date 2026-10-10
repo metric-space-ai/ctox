@@ -25,7 +25,7 @@ use crate::yaml_node::{Document, NodeId};
 
 pub mod github_context;
 
-pub use github_context::{as_string, nested_map_lookup, GithubContext, GitLookups};
+pub use github_context::{as_string, nested_map_lookup, GitLookups, GithubContext};
 
 /// A workflow file from `.github/workflows`.
 #[derive(Debug, Clone, Default)]
@@ -157,10 +157,7 @@ impl ContainerSpec {
     /// returns the config secrets for a nil field. A **mapping** yields
     /// `Some`, empty or not, which is what puts `credentials: {}` on the
     /// property-count error rather than the secrets path.
-    pub fn credentials_map(
-        &self,
-        doc: &Document,
-    ) -> Option<BTreeMap<String, String>> {
+    pub fn credentials_map(&self, doc: &Document) -> Option<BTreeMap<String, String>> {
         let id = self.raw_credentials?;
         let node = doc.node(id)?;
         if !node.is_mapping() {
@@ -276,9 +273,7 @@ impl Workflow {
         let node = doc.node(id)?;
         match node.kind {
             crate::yaml_node::NodeKind::Scalar => Some(WorkflowOn::Single(node.value.clone())),
-            crate::yaml_node::NodeKind::Sequence => {
-                doc.string_slice(id).map(WorkflowOn::List)
-            }
+            crate::yaml_node::NodeKind::Sequence => doc.string_slice(id).map(WorkflowOn::List),
             crate::yaml_node::NodeKind::Mapping => {
                 let entries = doc
                     .map_entries(id)
@@ -304,7 +299,10 @@ impl Workflow {
     }
 
     /// The `workflow_dispatch` inputs, when the workflow is dispatchable.
-    pub fn workflow_dispatch_inputs(&self, doc: &Document) -> Option<BTreeMap<String, DispatchInput>> {
+    pub fn workflow_dispatch_inputs(
+        &self,
+        doc: &Document,
+    ) -> Option<BTreeMap<String, DispatchInput>> {
         let id = self.raw_on?;
         let node = doc.node(id)?;
         if node.is_mapping() {
@@ -330,7 +328,10 @@ impl Workflow {
     /// Mirrors [`Workflow::workflow_dispatch_inputs`]: a mapping `on:` is read
     /// through, and a list `on:` answers with an empty map so a caller that
     /// expects "callable with no inputs" gets one rather than `None`.
-    pub fn workflow_call_inputs(&self, doc: &Document) -> Option<BTreeMap<String, WorkflowCallInput>> {
+    pub fn workflow_call_inputs(
+        &self,
+        doc: &Document,
+    ) -> Option<BTreeMap<String, WorkflowCallInput>> {
         let id = self.raw_on?;
         let node = doc.node(id)?;
         if node.is_mapping() {
@@ -339,7 +340,10 @@ impl Workflow {
             if let Some(inputs) = doc.map_get(call, "inputs") {
                 for (name_id, value_id) in doc.map_entries(inputs) {
                     let name = doc.scalar(name_id)?;
-                    out.insert(name.clone(), decode_workflow_call_input(doc, &name, value_id));
+                    out.insert(
+                        name.clone(),
+                        decode_workflow_call_input(doc, &name, value_id),
+                    );
                 }
             }
             return Some(out);
@@ -371,11 +375,7 @@ pub struct WorkflowCallInput {
     pub input_type: String,
 }
 
-fn decode_workflow_call_input(
-    doc: &Document,
-    _name: &str,
-    id: NodeId,
-) -> WorkflowCallInput {
+fn decode_workflow_call_input(doc: &Document, _name: &str, id: NodeId) -> WorkflowCallInput {
     WorkflowCallInput {
         description: doc
             .map_get(id, "description")
@@ -673,12 +673,10 @@ impl Job {
 
         matrixes.retain(|matrix| {
             !excludes.iter().any(|exclude| {
-                matrix
-                    .iter()
-                    .all(|(key, value)| match exclude.get(key) {
-                        Some(other) => other == value,
-                        None => true,
-                    })
+                matrix.iter().all(|(key, value)| match exclude.get(key) {
+                    Some(other) => other == value,
+                    None => true,
+                })
             })
         });
 
@@ -954,7 +952,10 @@ impl StepStatus {
             "success" => Ok(StepStatus::Success),
             "failure" => Ok(StepStatus::Failure),
             "skipped" => Ok(StepStatus::Skipped),
-            other => Err(ModelError::new("", format!("invalid step status {other:?}"))),
+            other => Err(ModelError::new(
+                "",
+                format!("invalid step status {other:?}"),
+            )),
         }
     }
 }
@@ -1198,7 +1199,10 @@ fn decode_job(doc: &Document, id: NodeId) -> Result<Job, ModelError> {
 
     let mut steps = Vec::new();
     if let Some(steps_id) = doc.map_get(id, "steps") {
-        let step_ids = doc.node(steps_id).map(|n| n.content.clone()).unwrap_or_default();
+        let step_ids = doc
+            .node(steps_id)
+            .map(|n| n.content.clone())
+            .unwrap_or_default();
         for step_id in step_ids {
             steps.push(Step {
                 id: doc
@@ -1441,7 +1445,9 @@ mod tests {
 
     #[test]
     fn on_mapping_form() {
-        let (wf, doc) = workflow("on:\n  push:\n    branches: [main]\n  release:\n    tags: ['v*']\njobs: {}\n");
+        let (wf, doc) = workflow(
+            "on:\n  push:\n    branches: [main]\n  release:\n    tags: ['v*']\njobs: {}\n",
+        );
         let mut events = wf.on(&doc);
         events.sort();
         assert_eq!(events, vec!["push", "release"]);
@@ -1492,7 +1498,8 @@ mod tests {
         assert!(inherits.jobs["a"].inherit_secrets(&doc));
         assert!(inherits.jobs["a"].secrets(&doc).is_empty());
 
-        let (explicit, doc) = workflow("jobs:\n  a:\n    secrets:\n      token: ${{ secrets.T }}\n");
+        let (explicit, doc) =
+            workflow("jobs:\n  a:\n    secrets:\n      token: ${{ secrets.T }}\n");
         assert!(!explicit.jobs["a"].inherit_secrets(&doc));
         assert_eq!(explicit.jobs["a"].secrets(&doc).len(), 1);
     }
@@ -1514,8 +1521,9 @@ mod tests {
         );
         let matrixes = wf.jobs["a"].get_matrixes(&doc).expect("expands");
         assert_eq!(matrixes.len(), 4);
-        assert!(matrixes.iter().any(|m| m["os"] == Value::String("mac".into())
-            && m["node"] == Value::Int(20)));
+        assert!(matrixes
+            .iter()
+            .any(|m| m["os"] == Value::String("mac".into()) && m["node"] == Value::Int(20)));
     }
 
     #[test]
@@ -1633,11 +1641,7 @@ mod tests {
                 "jobs:\n  a:\n    strategy:\n      fail-fast: '{fail_fast}'\n      max-parallel: '{max_parallel}'\n"
             ));
             let job = &wf.jobs["a"];
-            assert_eq!(
-                job.fail_fast(),
-                *want_fail_fast,
-                "fail-fast: {fail_fast:?}"
-            );
+            assert_eq!(job.fail_fast(), *want_fail_fast, "fail-fast: {fail_fast:?}");
             assert_eq!(
                 job.max_parallel(),
                 *want_max_parallel,
@@ -1652,7 +1656,10 @@ mod tests {
             "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          repo-token: ${{ secrets.T }}\n          fetch-depth: '0'\n",
         );
         let env = wf.jobs["a"].steps[0].get_env(&doc);
-        assert_eq!(env.get("INPUT_REPO-TOKEN").map(String::as_str), Some("${{ secrets.T }}"));
+        assert_eq!(
+            env.get("INPUT_REPO-TOKEN").map(String::as_str),
+            Some("${{ secrets.T }}")
+        );
         assert_eq!(env.get("INPUT_FETCH-DEPTH").map(String::as_str), Some("0"));
     }
 
@@ -1667,7 +1674,10 @@ mod tests {
         step.shell = "bash".to_string();
         assert_eq!(step.shell_command(), "bash -e {0}");
         step.workflow_shell = "bash".to_string();
-        assert_eq!(step.shell_command(), "bash --noprofile --norc -e -o pipefail {0}");
+        assert_eq!(
+            step.shell_command(),
+            "bash --noprofile --norc -e -o pipefail {0}"
+        );
 
         step = Step {
             shell: "pwsh".to_string(),
@@ -1788,9 +1798,7 @@ mod tests {
         let (wf, doc) = workflow(
             "on:\n  workflow_dispatch:\n    inputs:\n      version:\n        description: tag\n        required: true\n        default: '1.0'\n        type: string\n        options: ['1.0', '2.0']\njobs: {}\n",
         );
-        let inputs = wf
-            .workflow_dispatch_inputs(&doc)
-            .expect("dispatchable");
+        let inputs = wf.workflow_dispatch_inputs(&doc).expect("dispatchable");
         let version = &inputs["version"];
         assert_eq!(version.description, "tag");
         assert!(version.required);
@@ -1811,6 +1819,9 @@ mod tests {
         let (wf, doc) = workflow(
             "env: &base\n  A: '1'\njobs:\n  a:\n    runs-on: ubuntu-latest\n    env: *base\n",
         );
-        assert_eq!(wf.jobs["a"].environment(&doc).get("A").map(String::as_str), Some("1"));
+        assert_eq!(
+            wf.jobs["a"].environment(&doc).get("A").map(String::as_str),
+            Some("1")
+        );
     }
 }

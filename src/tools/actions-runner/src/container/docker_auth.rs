@@ -243,9 +243,7 @@ impl DockerConfigFile {
         let path = config_dir.join("config.json");
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default())
-            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => return Err(AuthConfigError::Unreadable(path, err.to_string())),
         };
         let document: serde_json::Value = serde_json::from_str(&contents)
@@ -350,10 +348,7 @@ pub fn convert_to_hostname(maybe_url: &str) -> String {
             None => return maybe_url.to_string(),
         };
         // Drop the path, then the query or fragment, keeping the authority.
-        let authority = rest
-            .split(['/', '?', '#'])
-            .next()
-            .unwrap_or_default();
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
         // Credentials in the authority are not part of the hostname.
         let authority = authority.rsplit('@').next().unwrap_or(authority);
         if let Some(authority) = authority.strip_prefix('[') {
@@ -577,7 +572,10 @@ mod tests {
             ("https://ghcr.io", "ghcr.io"),
             ("ghcr.io/owner/app", "ghcr.io"),
             ("registry.internal:5000", "registry.internal:5000"),
-            ("https://registry.internal:5000/v2/", "registry.internal:5000"),
+            (
+                "https://registry.internal:5000/v2/",
+                "registry.internal:5000",
+            ),
             ("http://registry.internal:5000", "registry.internal:5000"),
             // Userinfo is not part of the hostname.
             ("https://user:pass@ghcr.io/v2/", "ghcr.io"),
@@ -651,12 +649,20 @@ mod tests {
             ("UPPER/case", DEFAULT_REGISTRY, "UPPER"),
             // These agree.
             ("localhost/ubuntu", "localhost", "localhost"),
-            ("localhost:8000/canonical/ubuntu", "localhost:8000", "localhost:8000"),
+            (
+                "localhost:8000/canonical/ubuntu",
+                "localhost:8000",
+                "localhost:8000",
+            ),
             ("myhost.com/foo/bar", "myhost.com", "myhost.com"),
             ("ghcr.io/owner/app", "ghcr.io", "ghcr.io"),
         ];
         for (image, credential, pull) in table {
-            assert_eq!(&registry_host(image), credential, "credential host for {image}");
+            assert_eq!(
+                &registry_host(image),
+                credential,
+                "credential host for {image}"
+            );
             assert_eq!(
                 split_docker_domain(image).0,
                 *pull,

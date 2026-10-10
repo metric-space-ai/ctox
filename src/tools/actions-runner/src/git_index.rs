@@ -84,8 +84,8 @@ impl GitIndex {
     /// `.git` directory, a `.git` file pointing elsewhere, or a bare git
     /// directory is found.
     pub fn open(path: &Path) -> Result<Self, IndexError> {
-        let git_dir = resolve_git_dir(path)
-            .ok_or_else(|| IndexError::NotARepository(path.to_path_buf()))?;
+        let git_dir =
+            resolve_git_dir(path).ok_or_else(|| IndexError::NotARepository(path.to_path_buf()))?;
         let index_path = git_dir.join("index");
         Self::read(&index_path)
     }
@@ -114,7 +114,9 @@ impl GitIndex {
             .entries()
             .iter()
             .map(|entry| IndexEntry {
-                path: str::from_utf8(entry.path(&file)).unwrap_or_default().to_string(),
+                path: str::from_utf8(entry.path(&file))
+                    .unwrap_or_default()
+                    .to_string(),
                 mode: entry.mode.bits(),
             })
             .collect();
@@ -230,9 +232,18 @@ mod tests {
     fn glob_matches_upstream_fixtures() {
         let index = GitIndex {
             entries: vec![
-                IndexEntry { path: "foo/bar/bar".into(), mode: 0o100644 },
-                IndexEntry { path: "foo/baz/qux".into(), mode: 0o100644 },
-                IndexEntry { path: "fux".into(), mode: 0o100644 },
+                IndexEntry {
+                    path: "foo/bar/bar".into(),
+                    mode: 0o100644,
+                },
+                IndexEntry {
+                    path: "foo/baz/qux".into(),
+                    mode: 0o100644,
+                },
+                IndexEntry {
+                    path: "fux".into(),
+                    mode: 0o100644,
+                },
             ],
         };
 
@@ -254,7 +265,10 @@ mod tests {
     #[test]
     fn glob_rejects_a_malformed_pattern() {
         let index = GitIndex {
-            entries: vec![IndexEntry { path: "foo".into(), mode: 0o100644 }],
+            entries: vec![IndexEntry {
+                path: "foo".into(),
+                mode: 0o100644,
+            }],
         };
         assert_eq!(index.glob("f[o"), Err(GlobError("f[o".into())));
     }
@@ -263,9 +277,18 @@ mod tests {
     fn entry_finds_tracked_paths() {
         let index = GitIndex {
             entries: vec![
-                IndexEntry { path: "foo".into(), mode: 0o100644 },
-                IndexEntry { path: "bar".into(), mode: 0o100755 },
-                IndexEntry { path: "deps/sub".into(), mode: SUBMODULE_MODE },
+                IndexEntry {
+                    path: "foo".into(),
+                    mode: 0o100644,
+                },
+                IndexEntry {
+                    path: "bar".into(),
+                    mode: 0o100755,
+                },
+                IndexEntry {
+                    path: "deps/sub".into(),
+                    mode: SUBMODULE_MODE,
+                },
             ],
         };
         assert_eq!(index.entry("foo").unwrap().mode, 0o100644);

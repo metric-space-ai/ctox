@@ -77,8 +77,6 @@ pub fn is_warning(error: &anyhow::Error) -> bool {
 /// to a channel on every run.
 pub type Executor = std::sync::Arc<dyn Fn(&RunContext) -> Result<()> + Send + Sync>;
 
-
-
 /// A predicate deciding whether a step runs.
 ///
 /// A `Box`: a condition is evaluated inline, never handed to another thread,
@@ -178,10 +176,9 @@ pub fn parallel_executor(parallel: usize, steps: Vec<Executor>) -> Executor {
                         // A panic in a step must not swallow the results the
                         // other steps are still going to send, so it is
                         // reported as a failure of its own.
-                        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            queued(&ctx)
-                        }))
-                        .unwrap_or_else(|_| Err(anyhow!("step panicked")));
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| queued(&ctx)))
+                                .unwrap_or_else(|_| Err(anyhow!("step panicked")));
                         if result_tx.send(outcome).is_err() {
                             break;
                         }
@@ -383,7 +380,9 @@ mod tests {
 
         // Several successes, all of them run.
         let run = Arc::new(AtomicUsize::new(0));
-        assert!(pipeline(vec![counting(Arc::clone(&run)), counting(Arc::clone(&run))])(&ctx).is_ok());
+        assert!(
+            pipeline(vec![counting(Arc::clone(&run)), counting(Arc::clone(&run))])(&ctx).is_ok()
+        );
         assert_eq!(run.load(Ordering::SeqCst), 2);
     }
 
@@ -413,12 +412,12 @@ mod tests {
             std::sync::Arc::new(|_: &RunContext| Err(anyhow!(warning("look at this")))) as Executor,
             counting(Arc::clone(&run)),
         ];
-        assert!(
-            pipeline(steps)(&ctx).is_ok(),
-            "a warning is not a failure",
-        );
+        assert!(pipeline(steps)(&ctx).is_ok(), "a warning is not a failure",);
         assert_eq!(run.load(Ordering::SeqCst), 1, "the chain continued");
-        assert_eq!(sink.messages_at(crate::common::context::Level::Warn), ["look at this"]);
+        assert_eq!(
+            sink.messages_at(crate::common::context::Level::Warn),
+            ["look at this"]
+        );
     }
 
     /// `on_error` runs only for a real failure, and never for a warning.
@@ -427,17 +426,13 @@ mod tests {
         let ctx = RunContext::new();
 
         let recovered = Arc::new(AtomicUsize::new(0));
-        let steps = vec![
-            error_executor("boom"),
-            counting(Arc::clone(&recovered)),
-        ];
+        let steps = vec![error_executor("boom"), counting(Arc::clone(&recovered))];
         let outcome = on_error(pipeline(steps), counting(Arc::clone(&recovered)))(&ctx);
         assert!(outcome.is_err(), "the failure is still reported");
         assert_eq!(recovered.load(Ordering::SeqCst), 1, "only the handler ran");
 
         let handled = Arc::new(AtomicUsize::new(0));
-        let warned: Executor =
-            std::sync::Arc::new(|_: &RunContext| Err(anyhow!(warning("hmm"))));
+        let warned: Executor = std::sync::Arc::new(|_: &RunContext| Err(anyhow!(warning("hmm"))));
         let outcome = on_error(warned, counting(Arc::clone(&handled)))(&ctx);
         assert!(outcome.is_ok(), "a warning is not a failure");
         assert_eq!(handled.load(Ordering::SeqCst), 0, "the handler did not run");
@@ -469,10 +464,7 @@ mod tests {
     #[test]
     fn a_failing_cleanup_reports_both_errors() {
         let ctx = RunContext::new();
-        let outcome = finally(
-            error_executor("original"),
-            error_executor("cleanup"),
-        )(&ctx);
+        let outcome = finally(error_executor("original"), error_executor("cleanup"))(&ctx);
         let message = outcome.unwrap_err().to_string();
         assert_eq!(
             message,
@@ -574,11 +566,14 @@ mod tests {
     fn a_parallel_executor_never_uses_zero_workers() {
         let ctx = RunContext::new();
         let count = Arc::new(AtomicUsize::new(0));
-        parallel_executor(0, vec![
-            counting(Arc::clone(&count)),
-            counting(Arc::clone(&count)),
-            counting(Arc::clone(&count)),
-        ])(&ctx)
+        parallel_executor(
+            0,
+            vec![
+                counting(Arc::clone(&count)),
+                counting(Arc::clone(&count)),
+                counting(Arc::clone(&count)),
+            ],
+        )(&ctx)
         .expect("no failure");
         assert_eq!(count.load(Ordering::SeqCst), 3, "all three still ran");
     }
@@ -590,11 +585,14 @@ mod tests {
         ctx.cancellation().cancel(Scope::Force);
 
         let count = Arc::new(AtomicUsize::new(0));
-        let outcome = parallel_executor(3, vec![
-            error_executor("fake error"),
-            counting(Arc::clone(&count)),
-            counting(Arc::clone(&count)),
-        ])(&ctx);
+        let outcome = parallel_executor(
+            3,
+            vec![
+                error_executor("fake error"),
+                counting(Arc::clone(&count)),
+                counting(Arc::clone(&count)),
+            ],
+        )(&ctx);
 
         // Every step still runs — the port drains them so their resources are
         // released — but the returned error is the cancellation.
@@ -620,11 +618,14 @@ mod tests {
     fn a_parallel_executor_drains_every_step_after_a_failure() {
         let ctx = RunContext::new();
         let count = Arc::new(AtomicUsize::new(0));
-        let outcome = parallel_executor(1, vec![
-            error_executor("first fails"),
-            counting(Arc::clone(&count)),
-            counting(Arc::clone(&count)),
-        ])(&ctx);
+        let outcome = parallel_executor(
+            1,
+            vec![
+                error_executor("first fails"),
+                counting(Arc::clone(&count)),
+                counting(Arc::clone(&count)),
+            ],
+        )(&ctx);
         assert!(outcome.is_err());
         assert_eq!(count.load(Ordering::SeqCst), 2, "the rest still ran");
     }
@@ -635,9 +636,12 @@ mod tests {
     #[test]
     fn a_panicking_step_is_reported_not_propagated() {
         let ctx = RunContext::new();
-        let outcome = parallel_executor(1, vec![
-            std::sync::Arc::new(|_: &RunContext| -> Result<()> { panic!("boom") }) as Executor,
-        ])(&ctx);
+        let outcome = parallel_executor(
+            1,
+            vec![
+                std::sync::Arc::new(|_: &RunContext| -> Result<()> { panic!("boom") }) as Executor,
+            ],
+        )(&ctx);
         assert!(outcome.is_err());
     }
 
@@ -650,7 +654,11 @@ mod tests {
         let count = Arc::new(AtomicUsize::new(0));
         let outcome = then(counting(Arc::clone(&count)), counting(Arc::clone(&count)))(&ctx);
         assert_eq!(outcome.unwrap_err().to_string(), "context canceled");
-        assert_eq!(count.load(Ordering::SeqCst), 1, "the second step was skipped");
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "the second step was skipped"
+        );
     }
 
     /// `then_error` sees the outcome either way, which is how a step's failure
@@ -677,8 +685,14 @@ mod tests {
         let ctx = RunContext::new().with_sink(sink.clone());
         info_executor("hello")(&ctx).expect("no failure");
         debug_executor("there")(&ctx).expect("no failure");
-        assert_eq!(sink.messages_at(crate::common::context::Level::Info), ["hello"]);
-        assert_eq!(sink.messages_at(crate::common::context::Level::Debug), ["there"]);
+        assert_eq!(
+            sink.messages_at(crate::common::context::Level::Info),
+            ["hello"]
+        );
+        assert_eq!(
+            sink.messages_at(crate::common::context::Level::Debug),
+            ["there"]
+        );
     }
 
     #[test]

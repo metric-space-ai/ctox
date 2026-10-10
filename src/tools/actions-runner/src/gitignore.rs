@@ -568,7 +568,8 @@ mod tests {
     #[test]
     fn glob_match_tailing_asterisks() {
         assert_eq!(
-            p("/*lue/vol?ano/**", &[]).matches(&s(&["value", "volcano", "tail", "moretail"]), false),
+            p("/*lue/vol?ano/**", &[])
+                .matches(&s(&["value", "volcano", "tail", "moretail"]), false),
             IgnoreResult::Exclude
         );
         assert_eq!(
@@ -588,7 +589,8 @@ mod tests {
             IgnoreResult::Exclude
         );
         assert_eq!(
-            p("/*lue/**/vol?ano", &[]).matches(&s(&["value", "middle1", "middle2", "volcano"]), false),
+            p("/*lue/**/vol?ano", &[])
+                .matches(&s(&["value", "middle1", "middle2", "volcano"]), false),
             IgnoreResult::Exclude
         );
     }
@@ -605,7 +607,10 @@ mod tests {
             IgnoreResult::NoMatch
         );
         assert_eq!(
-            pattern.matches(&s(&["value", "middle1", "middle2", "volcano", "tail"]), false),
+            pattern.matches(
+                &s(&["value", "middle1", "middle2", "volcano", "tail"]),
+                false
+            ),
             IgnoreResult::Exclude
         );
     }
@@ -642,8 +647,17 @@ mod tests {
     #[test]
     fn glob_match_issue_923() {
         assert_eq!(
-            p("**/android/**/GeneratedPluginRegistrant.java", &[])
-                .matches(&s(&["packages", "flutter_tools", "lib", "src", "android", "gradle.dart"]), false),
+            p("**/android/**/GeneratedPluginRegistrant.java", &[]).matches(
+                &s(&[
+                    "packages",
+                    "flutter_tools",
+                    "lib",
+                    "src",
+                    "android",
+                    "gradle.dart"
+                ]),
+                false
+            ),
             IgnoreResult::NoMatch
         );
     }
@@ -652,10 +666,7 @@ mod tests {
 
     #[test]
     fn matcher_match() {
-        let matcher = Matcher::new(vec![
-            p("**/middle/v[uo]l?ano", &[]),
-            p("!volcano", &[]),
-        ]);
+        let matcher = Matcher::new(vec![p("**/middle/v[uo]l?ano", &[]), p("!volcano", &[])]);
         assert!(matcher.matches(&s(&["head", "middle", "vulkano"]), false));
         assert!(!matcher.matches(&s(&["head", "middle", "volcano"]), false));
     }
@@ -706,8 +717,14 @@ mod tests {
         assert!(m.matches(&s(&["vendor", "gopkg.in"]), true));
         assert!(m.matches(&s(&["ignore_dir", "file"]), false));
         assert!(!m.matches(&s(&["vendor", "github.com"]), true));
-        assert!(m.matches(&s(&["multiple", "sub", "ignores", "first", "ignore_dir"]), true));
-        assert!(m.matches(&s(&["multiple", "sub", "ignores", "second", "ignore_dir"]), true));
+        assert!(m.matches(
+            &s(&["multiple", "sub", "ignores", "first", "ignore_dir"]),
+            true
+        ));
+        assert!(m.matches(
+            &s(&["multiple", "sub", "ignores", "second", "ignore_dir"]),
+            true
+        ));
     }
 
     #[test]
@@ -739,7 +756,11 @@ mod tests {
     #[test]
     fn read_patterns_skips_comments_and_blank_lines() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(".gitignore"), "# a comment\n\n   \ntarget\n").unwrap();
+        fs::write(
+            dir.path().join(".gitignore"),
+            "# a comment\n\n   \ntarget\n",
+        )
+        .unwrap();
         let (ps, err) = read_patterns(dir.path(), &[]);
         assert!(err.is_none());
         assert_eq!(ps.len(), 1);

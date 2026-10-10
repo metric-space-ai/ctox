@@ -153,10 +153,7 @@ struct ErrorDetail {
 /// Upstream branches between `logger.Errorf` and `logger.Debugf`; the level is
 /// the only thing the two differ by, so that is the whole body.
 fn write_log(sink: &dyn LogSink, is_error: bool, message: &str) {
-    sink.log(
-        if is_error { Level::Error } else { Level::Debug },
-        message,
-    );
+    sink.log(if is_error { Level::Error } else { Level::Debug }, message);
 }
 
 /// One line of the Docker stream: log it, and say whether the stream failed.
@@ -223,11 +220,7 @@ pub fn handle_line(line: &[u8], is_error: bool, sink: &dyn LogSink) -> Result<()
                 &format!("{} :: {} :: {}\n", msg.status, msg.id, msg.progress),
             );
         } else {
-            write_log(
-                sink,
-                is_error,
-                &format!("{} :: {}\n", msg.status, msg.id),
-            );
+            write_log(sink, is_error, &format!("{} :: {}\n", msg.status, msg.id));
         }
     } else if !msg.stream.is_empty() {
         write_log(sink, is_error, &msg.stream);
@@ -294,11 +287,7 @@ fn scan_lines(body: &[u8]) -> impl Iterator<Item = &[u8]> {
 /// `errorDetail` yields `anyhow!("")`, which is still a non-`nil` error, so the
 /// loop still stops. Treating an empty message as success would be a silent
 /// behaviour change and is deliberately not done here.
-pub fn log_docker_response(
-    body: &[u8],
-    is_error: bool,
-    sink: &dyn LogSink,
-) -> anyhow::Result<()> {
+pub fn log_docker_response(body: &[u8], is_error: bool, sink: &dyn LogSink) -> anyhow::Result<()> {
     for line in scan_lines(body) {
         handle_line(line, is_error, sink).map_err(anyhow::Error::msg)?;
     }
@@ -374,7 +363,10 @@ mod tests {
     fn a_stream_line_is_logged_verbatim() {
         let sink = CollectingSink::new();
         ok_line(br#"{"stream":"hello from the container\n"}"#, false, &sink);
-        assert_eq!(sink.messages_at(Level::Debug), ["hello from the container\n"]);
+        assert_eq!(
+            sink.messages_at(Level::Debug),
+            ["hello from the container\n"]
+        );
     }
 
     /// `isError` is the level selector for stream content, so the same line
@@ -464,7 +456,11 @@ mod tests {
     #[test]
     fn a_status_does_not_leak_into_a_later_stream_line() {
         let sink = CollectingSink::new();
-        ok_line(br#"{"id":"a","status":"Extracting","progress":"[====]"}"#, false, &sink);
+        ok_line(
+            br#"{"id":"a","status":"Extracting","progress":"[====]"}"#,
+            false,
+            &sink,
+        );
         ok_line(br#"{"stream":"just output\n"}"#, false, &sink);
         assert_eq!(
             sink.messages_at(Level::Debug),
@@ -527,7 +523,10 @@ mod tests {
     fn a_null_line_is_a_no_op_rather_than_a_parse_failure() {
         let sink = CollectingSink::new();
         assert_eq!(handle_line(b"null", false, &sink), Ok(()));
-        assert_eq!(sink.messages_at(Level::Debug), ["Unable to handle line: null"]);
+        assert_eq!(
+            sink.messages_at(Level::Debug),
+            ["Unable to handle line: null"]
+        );
     }
 
     /// `ErrorDetail.Message` has no json tag upstream, so `encoding/json`
@@ -592,7 +591,11 @@ mod tests {
         assert_eq!(as_strings(b"a\n"), ["a"], "no final empty line");
         assert_eq!(as_strings(b"a\nb"), ["a", "b"]);
         assert_eq!(as_strings(b"a\nb\n"), ["a", "b"]);
-        assert_eq!(as_strings(b"a\n\n"), ["a", ""], "a blank line in the middle");
+        assert_eq!(
+            as_strings(b"a\n\n"),
+            ["a", ""],
+            "a blank line in the middle"
+        );
         assert_eq!(as_strings(b"\n"), [""]);
         assert_eq!(as_strings(b"a\r\nb\r\n"), ["a", "b"], "CR is dropped");
     }
@@ -626,11 +629,7 @@ mod tests {
         assert!(outcome.is_ok(), "got {:?}", outcome.err());
         assert_eq!(
             sink.messages_at(Level::Debug),
-            [
-                "Pulling :: a :: [==>] 1MB\n",
-                "Done :: a\n",
-                "ready\n"
-            ]
+            ["Pulling :: a :: [==>] 1MB\n", "Done :: a\n", "ready\n"]
         );
     }
 

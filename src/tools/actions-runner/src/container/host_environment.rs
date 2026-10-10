@@ -89,10 +89,7 @@ impl HostEnvironment {
     }
 
     /// Sends the command's output somewhere else, returning the previous sink.
-    pub fn replace_log_writer(
-        &mut self,
-        stdout: Arc<dyn LogSink>,
-    ) -> Option<Arc<dyn LogSink>> {
+    pub fn replace_log_writer(&mut self, stdout: Arc<dyn LogSink>) -> Option<Arc<dyn LogSink>> {
         Some(std::mem::replace(&mut self.stdout, stdout))
     }
 
@@ -193,7 +190,8 @@ impl HostEnvironment {
             .map(|(_, value)| value.clone())
             .unwrap_or_default();
         let _ = &path;
-        look_path_in(command, &LocalEnv { env }).map_err(|_| anyhow!("Cannot find: {command} in PATH"))
+        look_path_in(command, &LocalEnv { env })
+            .map_err(|_| anyhow!("Cannot find: {command} in PATH"))
     }
 
     /// The platform's answer to "are variable names folded?".
@@ -467,11 +465,7 @@ impl crate::container::ExecutionsEnvironment for HostEnvironment {
                 // A `.gitignore` that cannot be read is logged and the walk
                 // continues unfiltered, which is what upstream does with the
                 // error it drops.
-                let patterns = crate::gitignore::read_patterns(
-                    Path::new(&source),
-                    &[],
-                )
-                .0;
+                let patterns = crate::gitignore::read_patterns(Path::new(&source), &[]).0;
                 walker.ignorer = Some(crate::gitignore::Matcher::new(patterns));
             }
             walker.collect_files(Path::new(&source), &[])?;
@@ -583,8 +577,7 @@ impl crate::container::ExecutionsEnvironment for HostEnvironment {
     }
 
     fn join_path_variable(&self, paths: &[&str]) -> String {
-        paths
-            .join(std::path::MAIN_SEPARATOR_STR)
+        paths.join(std::path::MAIN_SEPARATOR_STR)
     }
 
     fn runner_context(&self, _ctx: &RunContext) -> BTreeMap<String, String> {
@@ -756,7 +749,10 @@ mod tests {
         // A command that is only on the process's PATH is not found, which is
         // the point: the step's environment is the whole world.
         let mut empty = BTreeMap::new();
-        empty.insert(name.to_string(), dir.path().join("nope").to_string_lossy().into_owned());
+        empty.insert(
+            name.to_string(),
+            dir.path().join("nope").to_string_lossy().into_owned(),
+        );
         assert!(environment.look_path("mytool", &empty).is_err());
     }
 
@@ -803,7 +799,10 @@ mod tests {
         std::fs::create_dir_all(&environment.path).expect("a scratch directory");
 
         let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), std::env::var("PATH").unwrap_or_default());
+        env.insert(
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
         env.insert("MARKER".to_string(), "from-the-step".to_string());
 
         // Writes its own environment and its working directory to the log.
@@ -826,7 +825,9 @@ mod tests {
         // the scratch directory.
         let lines = sink.messages_at(crate::common::context::Level::Info);
         assert!(
-            lines.iter().any(|line| line.contains("MARKER=from-the-step")),
+            lines
+                .iter()
+                .any(|line| line.contains("MARKER=from-the-step")),
             "{lines:?}",
         );
         assert!(
@@ -851,10 +852,17 @@ mod tests {
         // anything about the command.
         std::fs::create_dir_all(&environment.path).expect("a scratch directory");
         let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), std::env::var("PATH").unwrap_or_default());
+        env.insert(
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
 
         let error = environment
-            .exec(&["sh".to_string(), "-c".to_string(), "exit 3".to_string()], &env, "")
+            .exec(
+                &["sh".to_string(), "-c".to_string(), "exit 3".to_string()],
+                &env,
+                "",
+            )
             .expect_err("the command failed");
         assert!(
             error.to_string().contains('3'),
@@ -886,7 +894,10 @@ mod tests {
         let mut environment = environment(dir.path());
         std::fs::create_dir_all(&environment.path).expect("a scratch directory");
         let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), std::env::var("PATH").unwrap_or_default());
+        env.insert(
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
 
         let sink = Arc::new(crate::common::context::CollectingSink::new());
         environment.stdout = Arc::clone(&sink) as Arc<dyn crate::common::LogSink>;
@@ -971,7 +982,10 @@ mod tests {
         let mut environment = environment(dir.path());
         std::fs::create_dir_all(&environment.path).expect("a scratch directory");
         let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), std::env::var("PATH").unwrap_or_default());
+        env.insert(
+            "PATH".to_string(),
+            std::env::var("PATH").unwrap_or_default(),
+        );
 
         let sink = Arc::new(SlowSink::new());
         environment.stdout = Arc::clone(&sink) as Arc<dyn crate::common::LogSink>;
@@ -1116,13 +1130,7 @@ mod tests {
         std::fs::write(source.join("node_modules/junk.js"), b"junk").expect("written");
 
         let dest = dir.path().join("staged");
-        environment
-            .copy_dir(
-                &dest.to_string_lossy(),
-                &source.to_string_lossy(),
-                true,
-            )
-            (&ctx)
+        environment.copy_dir(&dest.to_string_lossy(), &source.to_string_lossy(), true)(&ctx)
             .expect("copied");
 
         // Upstream's strip prefix is `filepath.Dir(srcPath)`, never `srcPath`
@@ -1157,14 +1165,16 @@ mod tests {
         environment.pull(false)(&ctx).expect("pulled");
         environment.start(false)(&ctx).expect("started");
         environment.close()(&ctx).expect("closed");
-        assert!(environment.update_from_image_env().expect("no image").is_empty());
+        assert!(environment
+            .update_from_image_env()
+            .expect("no image")
+            .is_empty());
     }
 
     #[cfg(unix)]
     fn make_executable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
     #[cfg(not(unix))]
     fn make_executable(_path: &Path) {}

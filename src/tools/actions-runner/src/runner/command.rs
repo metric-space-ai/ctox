@@ -176,7 +176,10 @@ pub struct CommandContext {
 impl CommandContext {
     /// Whether the unsafe commands have been opted into.
     fn allows_unsecure_commands(&self) -> bool {
-        self.env.get("ACTIONS_ALLOW_UNSECURE_COMMANDS").map(String::as_str) == Some("true")
+        self.env
+            .get("ACTIONS_ALLOW_UNSECURE_COMMANDS")
+            .map(String::as_str)
+            == Some("true")
     }
 
     /// `mergeIntoMapCaseInsensitive` from `step.go`, for one entry.
@@ -191,7 +194,10 @@ impl CommandContext {
             .keys()
             .find(|key| key.to_lowercase() == folded)
             .cloned();
-        target.insert(existing.unwrap_or_else(|| name.to_string()), value.to_string());
+        target.insert(
+            existing.unwrap_or_else(|| name.to_string()),
+            value.to_string(),
+        );
     }
 
     /// `set-env`: write one variable into both the job and the global map.
@@ -323,7 +329,10 @@ pub fn command_handler<'a>(
                         &format!("The `add-path` command is disabled. {UNSECURE_COMMANDS_REFUSED}"),
                     );
                 } else {
-                    sink.log(Level::Info, &format!("  {MARK_HANDLED}  ::add-path:: {arg}"));
+                    sink.log(
+                        Level::Info,
+                        &format!("  {MARK_HANDLED}  ::add-path:: {arg}"),
+                    );
                     context.add_path(&arg);
                 }
             }
@@ -508,10 +517,10 @@ mod tests {
         /// upstream tests set up.
         fn unsecure() -> Self {
             let mut harness = Self::new();
-            harness
-                .context
-                .env
-                .insert("ACTIONS_ALLOW_UNSECURE_COMMANDS".to_string(), "true".to_string());
+            harness.context.env.insert(
+                "ACTIONS_ALLOW_UNSECURE_COMMANDS".to_string(),
+                "true".to_string(),
+            );
             harness
         }
 
@@ -900,8 +909,7 @@ mod tests {
             .insert("my-step".to_string(), StepResult::default());
         h.run("::set-output:: token=secret\n");
         assert_eq!(
-            h.context.step_results["my-step"].outputs[""],
-            " token=secret",
+            h.context.step_results["my-step"].outputs[""], " token=secret",
             "the empty name, and the leading space kept"
         );
         assert_eq!(
@@ -976,8 +984,8 @@ mod tests {
         assert!(command.kv_pairs.is_empty());
         assert_eq!(command.arg, "/zoo");
 
-        let command = try_parse_raw_action_command("##[debug]a=1;b=2::v\n")
-            .expect("the ADO form matches");
+        let command =
+            try_parse_raw_action_command("##[debug]a=1;b=2::v\n").expect("the ADO form matches");
         assert_eq!(command.command, "debug");
         assert!(
             command.kv_pairs.is_empty(),

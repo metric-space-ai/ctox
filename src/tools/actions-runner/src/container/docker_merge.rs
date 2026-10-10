@@ -173,8 +173,14 @@ pub fn merge_host_config(dst: &mut HostConfig, src: &HostConfig) {
         resources.memory_reservation,
     );
     merge_num(&mut dst.resources.memory_swap, resources.memory_swap);
-    merge_num(&mut dst.resources.memory_swappiness, resources.memory_swappiness);
-    merge_bool(&mut dst.resources.oom_kill_disable, resources.oom_kill_disable);
+    merge_num(
+        &mut dst.resources.memory_swappiness,
+        resources.memory_swappiness,
+    );
+    merge_bool(
+        &mut dst.resources.oom_kill_disable,
+        resources.oom_kill_disable,
+    );
     merge_num(&mut dst.resources.nano_cpus, resources.nano_cpus);
     merge_num(&mut dst.resources.cpu_count, resources.cpu_count);
     merge_num(&mut dst.resources.cpu_percent, resources.cpu_percent);
@@ -195,7 +201,10 @@ pub fn merge_host_config(dst: &mut HostConfig, src: &HostConfig) {
     if resources.blkio_weight != 0 {
         dst.resources.blkio_weight = resources.blkio_weight;
     }
-    merge_vec(&mut dst.resources.blkio_weight_device, &resources.blkio_weight_device);
+    merge_vec(
+        &mut dst.resources.blkio_weight_device,
+        &resources.blkio_weight_device,
+    );
     merge_vec(
         &mut dst.resources.blkio_device_read_bps,
         &resources.blkio_device_read_bps,
@@ -216,14 +225,20 @@ pub fn merge_host_config(dst: &mut HostConfig, src: &HostConfig) {
         &mut dst.resources.io_maximum_bandwidth,
         resources.io_maximum_bandwidth,
     );
-    merge_num(&mut dst.resources.io_maximum_iops, resources.io_maximum_iops);
+    merge_num(
+        &mut dst.resources.io_maximum_iops,
+        resources.io_maximum_iops,
+    );
     merge_vec(&mut dst.resources.ulimits, &resources.ulimits);
     merge_vec(
         &mut dst.resources.device_cgroup_rules,
         &resources.device_cgroup_rules,
     );
     merge_vec(&mut dst.resources.devices, &resources.devices);
-    merge_vec(&mut dst.resources.device_requests, &resources.device_requests);
+    merge_vec(
+        &mut dst.resources.device_requests,
+        &resources.device_requests,
+    );
 }
 
 #[cfg(test)]
@@ -274,7 +289,11 @@ mod tests {
         assert_eq!(dst.image, "over");
         assert_eq!(dst.cmd, vec!["src-cmd".to_string()], "a slice is replaced");
         assert_eq!(dst.working_dir, "/ws");
-        assert_eq!(dst.env, vec!["A=1".to_string()], "an empty source slice skips");
+        assert_eq!(
+            dst.env,
+            vec!["A=1".to_string()],
+            "an empty source slice skips"
+        );
         assert!(dst.tty, "false in the source skips");
     }
 
@@ -317,7 +336,10 @@ mod tests {
             ..Default::default()
         };
         merge_host_config(&mut dst, &src);
-        assert_eq!(dst.resources.memory, 100, "an untouched zero does not clear");
+        assert_eq!(
+            dst.resources.memory, 100,
+            "an untouched zero does not clear"
+        );
         assert_eq!(dst.resources.nano_cpus, 999);
     }
 

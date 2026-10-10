@@ -215,8 +215,8 @@ pub fn join_errors(errors: Vec<Option<anyhow::Error>>) -> Option<anyhow::Error> 
 #[cfg(test)]
 mod tests {
     use super::{
-        failure_outcome, file_command_env, file_command_paths, initial_step_result,
-        join_errors, redact_step_string, registers_in_step_results, StepStage,
+        failure_outcome, file_command_env, file_command_paths, initial_step_result, join_errors,
+        redact_step_string, registers_in_step_results, StepStage,
     };
     use crate::model::StepStatus;
 
@@ -416,7 +416,10 @@ mod tests {
 
         // A single error comes back as itself, so a caller can still match it.
         let one = join_errors(vec![Some(anyhow::anyhow!("executor failed"))]);
-        assert_eq!(one.map(|e| e.to_string()), Some("executor failed".to_string()));
+        assert_eq!(
+            one.map(|e| e.to_string()),
+            Some("executor failed".to_string())
+        );
 
         // Several are newline-joined in order, and a nil is skipped.
         let many = join_errors(vec![

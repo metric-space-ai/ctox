@@ -156,10 +156,7 @@ impl Pen {
     /// A row of labelled boxes.
     pub fn draw_boxes(&self, labels: &[&str]) -> Drawing {
         // Byte lengths, as Go's `len` gives them. See the module docs.
-        let width: usize = labels
-            .iter()
-            .map(|label| label.len() + 2 + 2 + 1)
-            .sum();
+        let width: usize = labels.iter().map(|label| label.len() + 2 + 2 + 1).sum();
         let style = &STYLE_DEFS[self.style as usize];
 
         let mut body = String::new();
@@ -173,11 +170,7 @@ impl Pen {
                         let _ = write!(body, "{}{}{}", style.corner_tl, bar, style.corner_tr);
                     }
                     Bar::Labels => {
-                        let _ = write!(
-                            body,
-                            "{} {} {}",
-                            style.line_v, label, style.line_v
-                        );
+                        let _ = write!(body, "{} {} {}", style.line_v, label, style.line_v);
                     }
                     Bar::Bottom => {
                         let bar = style.line_h.repeat(label.len() + 2);

@@ -177,7 +177,8 @@ fn is_alnum(r: char) -> bool {
     is_alpha(r) || is_num(r)
 }
 
-const EXPECTED_PUNCT_CHARS: &str = "''', '}', '(', ')', '[', ']', '.', '!', '<', '>', '=', '&', '|', '*', ',', ' '";
+const EXPECTED_PUNCT_CHARS: &str =
+    "''', '}', '(', ')', '[', ']', '.', '!', '<', '>', '=', '&', '|', '*', ',', ' '";
 const EXPECTED_DIGIT_CHARS: &str = "'0'..'9'";
 const EXPECTED_ALPHA_CHARS: &str = "'a'..'z', 'A'..'Z', '_'";
 
@@ -326,7 +327,8 @@ impl Lexer {
         } else {
             ""
         };
-        let message = format!("got unexpected {what} while lexing {where_}, expecting {expected}{note}");
+        let message =
+            format!("got unexpected {what} while lexing {where_}, expecting {expected}{note}");
         self.record_error(message);
         self.eof_token()
     }
@@ -383,11 +385,7 @@ impl Lexer {
         if r == Some('.') {
             r = self.eat();
             if !r.is_some_and(is_num) {
-                return self.unexpected(
-                    r,
-                    "fraction part of float number",
-                    EXPECTED_DIGIT_CHARS,
-                );
+                return self.unexpected(r, "fraction part of float number", EXPECTED_DIGIT_CHARS);
             }
             loop {
                 r = self.eat();
@@ -646,7 +644,10 @@ mod tests {
 
     #[test]
     fn identifiers_may_contain_dashes_and_underscores() {
-        assert_eq!(kinds("job-status_name }}"), vec![TokenKind::Ident, TokenKind::End]);
+        assert_eq!(
+            kinds("job-status_name }}"),
+            vec![TokenKind::Ident, TokenKind::End]
+        );
         assert_eq!(values("job-status_name }}")[0], "job-status_name");
     }
 

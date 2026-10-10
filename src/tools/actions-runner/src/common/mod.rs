@@ -47,10 +47,9 @@ pub use auth::{
     create_authorization_token, parse_authorization_token, verify, CachePermission, CacheScope,
     Claims, TOKEN_LIFETIME_SECONDS,
 };
-pub use git::{find_git_ref, find_git_revision, find_github_repo, find_git_slug, Slug};
 pub use context::{
-    canceled, early_cancel, Cancellation, CollectingSink, Level, LogSink, RunContext, Scope,
-    Signal, SignalSource, DefaultSignalSource,
+    canceled, early_cancel, Cancellation, CollectingSink, DefaultSignalSource, Level, LogSink,
+    RunContext, Scope, Signal, SignalSource,
 };
 pub use executor::{
     debug_executor, error_executor, finally, if_bool, if_not, if_then, info_executor, is_warning,
@@ -58,5 +57,6 @@ pub use executor::{
     Warning,
 };
 pub use file::{copy_dir, copy_file};
+pub use git::{find_git_ref, find_git_revision, find_git_slug, find_github_repo, Slug};
 pub use line_writer::{LineHandler, LineWriter};
 pub use outbound_ip::{outbound_ip, OutboundIpError};

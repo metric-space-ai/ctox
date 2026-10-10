@@ -61,7 +61,9 @@ pub fn decode(value: &str) -> Vec<u8> {
         if byte == b'=' {
             continue;
         }
-        let Some(index) = value_of(byte) else { continue };
+        let Some(index) = value_of(byte) else {
+            continue;
+        };
         acc = (acc << 6) | index as u32;
         bits += 6;
         if bits >= 8 {

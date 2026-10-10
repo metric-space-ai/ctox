@@ -71,7 +71,6 @@ pub use crate::common::outbound_ip::outbound_ip;
 /// The `pub use` is also what brings them into scope below.
 pub use crate::http::{Call, Reply};
 
-
 /// The path every route hangs off, after the token.
 pub const API_PATH: &str = "/_apis/artifactcache";
 
@@ -233,9 +232,11 @@ impl Database {
     /// the first id being 1, which the upstream tests depend on.
     pub fn last_id(&self) -> Result<u64, DatabaseError> {
         let conn = self.conn.lock().expect("database mutex poisoned");
-        Ok(conn.query_row("SELECT COALESCE(MAX(ID), 0) FROM Cache", [], |row| {
-            row.get::<_, i64>(0)
-        })? as u64)
+        Ok(
+            conn.query_row("SELECT COALESCE(MAX(ID), 0) FROM Cache", [], |row| {
+                row.get::<_, i64>(0)
+            })? as u64,
+        )
     }
 
     /// Reads one entry.
@@ -345,11 +346,7 @@ impl Database {
     }
 
     /// Newest complete entry for exactly `key` and `version`.
-    pub fn find_exact(
-        &self,
-        key: &str,
-        version: &str,
-    ) -> Result<Option<Cache>, DatabaseError> {
+    pub fn find_exact(&self, key: &str, version: &str) -> Result<Option<Cache>, DatabaseError> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT ID, Key, Version, Size, Complete, UsedAt, CreatedAt
@@ -374,11 +371,7 @@ impl Database {
     /// wildcards — so the prefix is bound as a parameter and the range is
     /// expressed with `substr`, which is a byte operation and so agrees with
     /// the regex on every input.
-    pub fn find_prefix(
-        &self,
-        prefix: &str,
-        version: &str,
-    ) -> Result<Option<Cache>, DatabaseError> {
+    pub fn find_prefix(&self, prefix: &str, version: &str) -> Result<Option<Cache>, DatabaseError> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT ID, Key, Version, Size, Complete, UsedAt, CreatedAt
@@ -397,9 +390,7 @@ impl Database {
 
     /// Complete entries grouped by `(Key, Version)`, each group sorted by
     /// `CreatedAt` ascending.
-    pub fn group_by_key_and_version(
-        &self,
-    ) -> Result<Vec<Vec<Cache>>, DatabaseError> {
+    pub fn group_by_key_and_version(&self) -> Result<Vec<Vec<Cache>>, DatabaseError> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT ID, Key, Version, Size, Complete, UsedAt, CreatedAt
@@ -598,10 +589,7 @@ mod tests {
             size: 0,
         };
         assert_eq!(request.to_cache().size, -1);
-        let request = Request {
-            size: 5,
-            ..request
-        };
+        let request = Request { size: 5, ..request };
         assert_eq!(request.to_cache().size, 5);
     }
 
@@ -1085,7 +1073,10 @@ impl Service {
         }
         let Some((start, _stop)) = parse_content_range(call.header("content-range").unwrap_or(""))
         else {
-            return Reply::error(400, unusable_range(call.header("content-range").unwrap_or("")));
+            return Reply::error(
+                400,
+                unusable_range(call.header("content-range").unwrap_or("")),
+            );
         };
 
         let mut body = call.body.as_slice();

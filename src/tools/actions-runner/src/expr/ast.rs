@@ -257,7 +257,7 @@ pub fn variables(node: &ExprNode) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr::lexer::{TokenKind, Token};
+    use crate::expr::lexer::{Token, TokenKind};
 
     fn token(offset: usize) -> Token {
         Token {

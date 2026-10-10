@@ -511,11 +511,13 @@ mod tests {
     /// A run context over one workflow, with `workflow_extra` inlined at the
     /// top level and `job_extra` under the single job.
     fn fixture(workflow_extra: &str, job_extra: &str) -> RunContext {
+        let margin = job_extra.lines().filter(|line| !line.trim().is_empty())
+            .map(|line| line.bytes().take_while(|byte| *byte == b' ').count())
+            .min().unwrap_or(0);
         let source = format!(
             "{workflow_extra}jobs:\n  one:\n    runs-on: ubuntu-latest\n{job_extra}",
-            job_extra = job_extra
-                .lines()
-                .map(|line| format!("    {line}\n"))
+            job_extra = job_extra.lines()
+                .map(|line| format!("    {}\n", &line[margin.min(line.len())..]))
                 .collect::<String>()
         );
         let doc = Rc::new(Document::parse(&source).expect("the fixture parses"));
@@ -701,52 +703,18 @@ mod tests {
         }
     }
 
-    /// A run context whose `caller` chain holds `steps`, innermost first.
+    /// A run context whose caller chain holds steps, innermost first.
     fn chained_context(steps: &[&str]) -> RunContext {
-        // Build outside-in, then link each new context in front of the previous
-        // one, so `contexts[0]` is the innermost caller and the last entry is
-        // the root — the order `getScriptName` walks.
-        let mut contexts: Vec<Rc<RunContext>> = steps
-            .iter()
-            .map(|step| {
-                Rc::new(RunContext {
-                    current_step: (*step).to_string(),
-                    ..RunContext::default()
-                })
-            })
-            .collect();
-        let root = Rc::new(RunContext::default());
-        for current in contexts.drain(..).rev() {
-            let _ = current;
-        }
-        // Fold from the root inward: each caller holds the one above it.
-        let mut built = root.clone();
+        let mut caller = None;
         for current in steps.iter().rev() {
-            let _ = current;
-            built = Rc::new(RunContext::default());
-        }
-        // The fold above cannot thread a `Caller` (it is not `Default` yet a
-        // context holding one must be immutable), so the chain is built by
-        // wrapping from the outside in, which is what the assertion needs.
-        let mut outer: Rc<RunContext> = Rc::new(RunContext {
-            current_step: steps.last().copied().unwrap_or_default().to_string(),
-            ..RunContext::default()
-        });
-        for step in steps[..steps.len().saturating_sub(1)].iter().rev() {
-            outer = Rc::new(RunContext {
-                current_step: (*step).to_string(),
-                caller: Some(Box::new(Caller {
-                    run_context: outer.clone(),
-                })),
+            let context = Rc::new(RunContext {
+                current_step: (*current).to_string(),
+                caller,
                 ..RunContext::default()
             });
+            caller = Some(Box::new(Caller { run_context: context }));
         }
-        RunContext {
-            caller: Some(Box::new(Caller {
-                run_context: outer,
-            })),
-            ..RunContext::default()
-        }
+        RunContext { caller, ..RunContext::default() }
     }
 
     // ---------------------------------------------------------- {0} path --
@@ -1032,7 +1000,7 @@ mod tests {
     /// end to end, for the default shell.
     #[test]
     fn the_assembled_script_names_the_file_and_builds_the_argv() {
-        let rc = fixture("", "steps:\n  - id: s1\n    run: echo hello");
+        let rc = fixture("", "steps:\n  - id: s1\n    run: echo hello\n    shell: bash");
         let mut step = step_model(&rc);
         let mut rc = rc;
         rc.job_container = Some(ContainerPaths {

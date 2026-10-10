@@ -91,8 +91,8 @@ use anyhow::{anyhow, Context as _, Result};
 use bollard::auth::DockerCredentials;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::query_parameters::{
-    CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions, ListContainersOptions,
-    RemoveContainerOptions, RemoveImageOptions, StartContainerOptions,
+    CreateContainerOptions, CreateImageOptions, DownloadFromContainerOptions,
+    ListContainersOptions, RemoveContainerOptions, RemoveImageOptions, StartContainerOptions,
     UploadToContainerOptions,
 };
 use bollard::{body_full, Docker};
@@ -100,8 +100,8 @@ use bollard::{body_full, Docker};
 use crate::common::context::Level;
 use crate::common::{Executor, RunContext};
 use crate::container::{
-    image_ref, linux::LinuxContainerEnvironmentExtensions, ExecutionsEnvironment, FileEntry, Health,
-    NewContainerInput,
+    image_ref, linux::LinuxContainerEnvironmentExtensions, ExecutionsEnvironment, FileEntry,
+    Health, NewContainerInput,
 };
 
 use super::docker_api::{self, Config, EndpointSettings, HostConfig, NetworkMode};
@@ -235,12 +235,11 @@ impl DockerEnvironment {
         }
 
         let options = self.input.options.join(" ");
-        let argv = shell_quote::split(&options).map_err(|err| {
-            anyhow!("Cannot split container options: '{options}': '{err}'")
-        })?;
-        let flags = docker_cli::run_flag_set().parse(&argv).map_err(|err| {
-            anyhow!("Cannot parse container options: '{options}': '{err}'")
-        })?;
+        let argv = shell_quote::split(&options)
+            .map_err(|err| anyhow!("Cannot split container options: '{options}': '{err}'"))?;
+        let flags = docker_cli::run_flag_set()
+            .parse(&argv)
+            .map_err(|err| anyhow!("Cannot parse container options: '{options}': '{err}'"))?;
 
         // `copts.netMode` is empty unless `options:` named a network, and then
         // the *job's* network mode is what it defaults to. Without this a job
@@ -289,15 +288,13 @@ impl DockerEnvironment {
             .input
             .mounts
             .iter()
-            .map(|(source, target)| {
-                super::docker_opts_mounts::mount::Mount {
-                    mount_type: super::docker_opts_mounts::mount::MountType(
-                        super::docker_opts_mounts::mount::TYPE_VOLUME.to_string(),
-                    ),
-                    source: source.clone(),
-                    target: target.clone(),
-                    ..Default::default()
-                }
+            .map(|(source, target)| super::docker_opts_mounts::mount::Mount {
+                mount_type: super::docker_opts_mounts::mount::MountType(
+                    super::docker_opts_mounts::mount::TYPE_VOLUME.to_string(),
+                ),
+                source: source.clone(),
+                target: target.clone(),
+                ..Default::default()
             })
             .collect();
         HostConfig {
@@ -375,7 +372,9 @@ impl DockerEnvironment {
     /// Both streams land at [`Level::Info`], matching
     /// [`super::host_environment`]: a step's stderr is output, not a failure.
     fn drain(
-        output: &mut (impl futures::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>> + Unpin),
+        output: &mut (impl futures::Stream<
+            Item = Result<bollard::container::LogOutput, bollard::errors::Error>,
+        > + Unpin),
         sink: &Arc<dyn crate::common::LogSink>,
     ) {
         use futures::StreamExt;
@@ -386,7 +385,10 @@ impl DockerEnvironment {
                 // follows is what decides pass or fail, and upstream logs this
                 // rather than returning it.
                 Err(err) => {
-                    sink.log(Level::Warn, &format!("failed to read the container's output: {err}"));
+                    sink.log(
+                        Level::Warn,
+                        &format!("failed to read the container's output: {err}"),
+                    );
                     return;
                 }
             }
@@ -410,7 +412,8 @@ impl DockerEnvironment {
             },
         ))
         .ok()?;
-        let output = block_on(client.start_exec(&exec.id, Some(StartExecOptions::default()))).ok()?;
+        let output =
+            block_on(client.start_exec(&exec.id, Some(StartExecOptions::default()))).ok()?;
         let bollard::exec::StartExecResults::Attached { mut output, .. } = output else {
             return None;
         };
@@ -491,8 +494,7 @@ pub fn remove_image(image: &str, force: bool, prune_children: bool) -> Result<bo
     let inspected = match block_on(client.inspect_image(image)) {
         Ok(inspected) => inspected,
         Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 404,
-            ..
+            status_code: 404, ..
         }) => return Ok(false),
         Err(err) => return Err(anyhow!("failed to inspect {image}: {err}")),
     };
@@ -577,8 +579,7 @@ pub(crate) fn connect() -> Result<Docker> {
 /// `GetHostInfo`: what the daemon says about the machine.
 pub fn host_info() -> Result<bollard::models::SystemInfo> {
     let client = connect()?;
-    block_on(client.info())
-        .map_err(|err| anyhow!("failed to get docker host info: {err}"))
+    block_on(client.info()).map_err(|err| anyhow!("failed to get docker host info: {err}"))
 }
 
 /// `RunnerArch`: the daemon's architecture in GitHub's spelling.
@@ -622,8 +623,7 @@ fn image_exists_locally(
         // answers a missing image with a 404 and a JSON body whose `message`
         // is the not-found text.
         Err(bollard::errors::Error::DockerResponseServerError {
-            status_code: 404,
-            ..
+            status_code: 404, ..
         }) => return Ok(false),
         Err(err) => return Err(anyhow!("failed to inspect {image}: {err}")),
     };
@@ -719,7 +719,10 @@ impl ExecutionsEnvironment for DockerEnvironment {
             // The pipeline is `connect` → `find` → `create`, and `find` is what
             // makes a second `create` a no-op rather than a duplicate: it is
             // the step that fills the id.
-            if env.with_client(|client| find_container(client, &env.input.name))?.is_some() {
+            if env
+                .with_client(|client| find_container(client, &env.input.name))?
+                .is_some()
+            {
                 return Ok(());
             }
 
@@ -731,9 +734,7 @@ impl ExecutionsEnvironment for DockerEnvironment {
             host_config.cap_drop = cap_drop.clone();
 
             let mut config = env.base_config();
-            if let Some((merged_config, merged_host)) =
-                env.merge_options(&config, &host_config)?
-            {
+            if let Some((merged_config, merged_host)) = env.merge_options(&config, &host_config)? {
                 config = merged_config;
                 host_config = merged_host;
                 // The merge is on a copy, so put the runner's capabilities back
@@ -744,8 +745,11 @@ impl ExecutionsEnvironment for DockerEnvironment {
 
             env.with_client(|client| {
                 let platform = env.platform_spec(client)?;
-                let networking =
-                    build_networking_config(&host_config, &env.input.network_mode, &env.input.network_aliases);
+                let networking = build_networking_config(
+                    &host_config,
+                    &env.input.network_mode,
+                    &env.input.network_aliases,
+                );
                 // Upstream builds `container.Config{Image: input.Image}` and
                 // never normalises it here — `cleanImage` is only used by the
                 // pull path. The daemon resolves both spellings, so this is
@@ -898,7 +902,9 @@ impl ExecutionsEnvironment for DockerEnvironment {
                 use futures::StreamExt;
                 let mut stream = std::pin::pin!(client.download_from_container(
                     &id,
-                    Some(DownloadFromContainerOptions { path: src_path.to_string() }),
+                    Some(DownloadFromContainerOptions {
+                        path: src_path.to_string()
+                    }),
                 ));
                 while let Some(chunk) = stream.next().await {
                     collected.extend_from_slice(&chunk.map_err(|err| {
@@ -939,11 +945,8 @@ impl ExecutionsEnvironment for DockerEnvironment {
             }
             env.with_client(|client| {
                 let id = env.id()?;
-                block_on(client.start_container(
-                    &id,
-                    Some(StartContainerOptions::default()),
-                ))
-                .map_err(|err| anyhow!("failed to start container: {err}"))
+                block_on(client.start_container(&id, Some(StartContainerOptions::default())))
+                    .map_err(|err| anyhow!("failed to start container: {err}"))
             })?;
             // A non-root container leaves the workspace owned by the host's
             // user, which the job then cannot write to. Upstream chowns it and
@@ -1116,10 +1119,7 @@ impl DockerEnvironment {
         // container, so a Windows client rewrites them before handing the
         // command over.
         let command: Vec<String> = if cfg!(windows) {
-            command
-                .iter()
-                .map(|part| part.replace('\\', "/"))
-                .collect()
+            command.iter().map(|part| part.replace('\\', "/")).collect()
         } else {
             command.to_vec()
         };
@@ -1287,7 +1287,6 @@ impl DockerEnvironment {
             })
         })
     }
-
 }
 
 /// Packs a directory into a `tar`, stripping its **parent** as the prefix.
@@ -1302,11 +1301,7 @@ fn tar_directory(src_path: &str, use_gitignore: bool) -> Result<Vec<u8>> {
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let prefix = format!(
-        "{}{}",
-        parent.to_string_lossy(),
-        std::path::MAIN_SEPARATOR
-    );
+    let prefix = format!("{}{}", parent.to_string_lossy(), std::path::MAIN_SEPARATOR);
 
     let mut buffer = Vec::new();
     {
@@ -1402,7 +1397,7 @@ mod tests {
     use crate::container::docker_opts::DeviceMapping;
     use crate::container::docker_opts_mounts::mount::{Mount, TYPE_BIND, TYPE_VOLUME};
     use crate::container::docker_opts_types::{ThrottleDevice, WeightDevice};
-    
+
     /// The `--platform` gate is a version comparison, and it is a comparison
     /// rather than a pattern because a malformed version is simply "not
     /// supported" rather than an error.
@@ -1446,7 +1441,11 @@ mod tests {
             image: "not a ref".to_string(),
             ..Default::default()
         });
-        assert_eq!(env.image_ref(), "not a ref", "passed through for the daemon");
+        assert_eq!(
+            env.image_ref(),
+            "not a ref",
+            "passed through for the daemon"
+        );
     }
 
     /// Every field name the port writes has to be the Engine API's own.
@@ -1618,26 +1617,41 @@ mod tests {
         assert_eq!(body.hostname.as_deref(), Some("host"));
         assert_eq!(body.domainname.as_deref(), Some("domain"));
         assert_eq!(body.user.as_deref(), Some("1000:1000"));
-        assert_eq!(body.exposed_ports.as_deref(), Some(&["8080/tcp".to_string()][..]));
+        assert_eq!(
+            body.exposed_ports.as_deref(),
+            Some(&["8080/tcp".to_string()][..])
+        );
         assert_eq!(body.tty, Some(true));
         assert_eq!(body.open_stdin, Some(true));
         assert_eq!(body.attach_stdin, Some(true));
         assert_eq!(body.attach_stdout, Some(true));
         assert_eq!(body.attach_stderr, Some(true));
         assert_eq!(body.stdin_once, Some(true));
-        assert_eq!(body.env.as_deref(), Some(&["A=1".to_string(), "B=2".to_string()][..]));
-        assert_eq!(body.cmd.as_deref(), Some(&["/bin/sh".to_string(), "-c".to_string()][..]));
+        assert_eq!(
+            body.env.as_deref(),
+            Some(&["A=1".to_string(), "B=2".to_string()][..])
+        );
+        assert_eq!(
+            body.cmd.as_deref(),
+            Some(&["/bin/sh".to_string(), "-c".to_string()][..])
+        );
         assert_eq!(body.image.as_deref(), Some("ubuntu:latest"));
         assert_eq!(body.volumes.as_deref(), Some(&["data".to_string()][..]));
         assert_eq!(body.entrypoint.as_deref(), Some(&["/init".to_string()][..]));
         assert_eq!(body.working_dir.as_deref(), Some("/github/workspace"));
         assert_eq!(
-            body.labels.as_ref().and_then(|l| l.get("com.example.k")).map(String::as_str),
+            body.labels
+                .as_ref()
+                .and_then(|l| l.get("com.example.k"))
+                .map(String::as_str),
             Some("v")
         );
         assert_eq!(body.stop_signal.as_deref(), Some("SIGTERM"));
         assert_eq!(body.stop_timeout, Some(30));
-        let health = body.healthcheck.as_ref().expect("the health check survived");
+        let health = body
+            .healthcheck
+            .as_ref()
+            .expect("the health check survived");
         assert_eq!(
             health.test.as_deref(),
             Some(&["CMD-SHELL".to_string(), "true".to_string()][..])
@@ -1646,7 +1660,10 @@ mod tests {
 
         // ── HostConfig ──────────────────────────────────────────────────
         let host = body.host_config.expect("the host config survived");
-        assert_eq!(host.binds.as_deref(), Some(&["/work:/github/workspace".to_string()][..]));
+        assert_eq!(
+            host.binds.as_deref(),
+            Some(&["/work:/github/workspace".to_string()][..])
+        );
         assert_eq!(host.container_id_file.as_deref(), Some("/tmp/id"));
         assert_eq!(host.oom_score_adj, Some(500));
         assert_eq!(host.auto_remove, Some(true));
@@ -1654,16 +1671,31 @@ mod tests {
         assert_eq!(host.links.as_deref(), Some(&["db:db".to_string()][..]));
         assert_eq!(host.publish_all_ports, Some(true));
         assert_eq!(host.dns.as_deref(), Some(&["1.1.1.1".to_string()][..]));
-        assert_eq!(host.dns_search.as_deref(), Some(&["example.com".to_string()][..]));
-        assert_eq!(host.dns_options.as_deref(), Some(&["ndots:2".to_string()][..]));
-        assert_eq!(host.extra_hosts.as_deref(), Some(&["host:1.2.3.4".to_string()][..]));
-        assert_eq!(host.volumes_from.as_deref(), Some(&["other".to_string()][..]));
+        assert_eq!(
+            host.dns_search.as_deref(),
+            Some(&["example.com".to_string()][..])
+        );
+        assert_eq!(
+            host.dns_options.as_deref(),
+            Some(&["ndots:2".to_string()][..])
+        );
+        assert_eq!(
+            host.extra_hosts.as_deref(),
+            Some(&["host:1.2.3.4".to_string()][..])
+        );
+        assert_eq!(
+            host.volumes_from.as_deref(),
+            Some(&["other".to_string()][..])
+        );
         assert_eq!(host.ipc_mode.as_deref(), Some("shareable"));
         assert_eq!(host.network_mode.as_deref(), Some("my-net"));
         assert_eq!(host.pid_mode.as_deref(), Some("host"));
         assert_eq!(host.uts_mode.as_deref(), Some("host"));
         assert_eq!(host.userns_mode.as_deref(), Some("host"));
-        assert_eq!(host.cap_add.as_deref(), Some(&["SYS_ADMIN".to_string()][..]));
+        assert_eq!(
+            host.cap_add.as_deref(),
+            Some(&["SYS_ADMIN".to_string()][..])
+        );
         assert_eq!(host.cap_drop.as_deref(), Some(&["MKNOD".to_string()][..]));
         assert_eq!(host.group_add.as_deref(), Some(&["1000".to_string()][..]));
         assert_eq!(
@@ -1671,25 +1703,43 @@ mod tests {
             Some(&["label=disable".to_string()][..])
         );
         assert_eq!(
-            host.storage_opt.as_ref().and_then(|m| m.get("size")).map(String::as_str),
+            host.storage_opt
+                .as_ref()
+                .and_then(|m| m.get("size"))
+                .map(String::as_str),
             Some("10G")
         );
         assert_eq!(host.readonly_rootfs, Some(true));
         assert_eq!(host.volume_driver.as_deref(), Some("local"));
         assert_eq!(host.shm_size, Some(64 * 1024 * 1024));
         assert_eq!(
-            host.tmpfs.as_ref().and_then(|m| m.get("/run")).map(String::as_str),
+            host.tmpfs
+                .as_ref()
+                .and_then(|m| m.get("/run"))
+                .map(String::as_str),
             Some("rw")
         );
         assert_eq!(
-            host.sysctls.as_ref().and_then(|m| m.get("net.ipv4.ip_forward")).map(String::as_str),
+            host.sysctls
+                .as_ref()
+                .and_then(|m| m.get("net.ipv4.ip_forward"))
+                .map(String::as_str),
             Some("1")
         );
         assert_eq!(host.runtime.as_deref(), Some("runc"));
-        assert_eq!(host.masked_paths.as_deref(), Some(&["/proc/kcore".to_string()][..]));
-        assert_eq!(host.readonly_paths.as_deref(), Some(&["/proc/sys".to_string()][..]));
         assert_eq!(
-            host.annotations.as_ref().and_then(|m| m.get("note")).map(String::as_str),
+            host.masked_paths.as_deref(),
+            Some(&["/proc/kcore".to_string()][..])
+        );
+        assert_eq!(
+            host.readonly_paths.as_deref(),
+            Some(&["/proc/sys".to_string()][..])
+        );
+        assert_eq!(
+            host.annotations
+                .as_ref()
+                .and_then(|m| m.get("note"))
+                .map(String::as_str),
             Some("yes")
         );
         assert_eq!(host.init, Some(true));
@@ -1730,7 +1780,11 @@ mod tests {
         assert_eq!(request.device_ids.as_deref(), Some(&["0".to_string()][..]));
         assert_eq!(request.capabilities.as_ref().map(|c| c.len()), Some(1));
         assert_eq!(
-            request.options.as_ref().and_then(|o| o.get("k")).map(String::as_str),
+            request
+                .options
+                .as_ref()
+                .and_then(|o| o.get("k"))
+                .map(String::as_str),
             Some("v")
         );
         let ulimit = &host.ulimits.as_ref().expect("an ulimit")[0];
@@ -1768,12 +1822,18 @@ mod tests {
         let log = host.log_config.as_ref().expect("a log config");
         assert_eq!(log.typ.as_deref(), Some("json-file"));
         assert_eq!(
-            log.config.as_ref().and_then(|c| c.get("max-size")).map(String::as_str),
+            log.config
+                .as_ref()
+                .and_then(|c| c.get("max-size"))
+                .map(String::as_str),
             Some("10m")
         );
         let restart = host.restart_policy.as_ref().expect("a restart policy");
         assert_eq!(
-            format!("{:?}", Some(bollard::models::RestartPolicyNameEnum::ON_FAILURE)),
+            format!(
+                "{:?}",
+                Some(bollard::models::RestartPolicyNameEnum::ON_FAILURE)
+            ),
             format!("{:?}", restart.name),
             "the restart policy name reaches the daemon as the enum it is"
         );
@@ -1787,7 +1847,11 @@ mod tests {
             .as_ref()
             .and_then(|m| m.get("8080/tcp"))
             .expect("the port binding survived");
-        let binding = bindings.as_ref().expect("a binding list").first().expect("a binding");
+        let binding = bindings
+            .as_ref()
+            .expect("a binding list")
+            .first()
+            .expect("a binding");
         assert_eq!(binding.host_port.as_deref(), Some("18080"));
         assert_eq!(binding.host_ip.as_deref(), Some("127.0.0.1"));
     }
@@ -1838,10 +1902,7 @@ mod tests {
         // Anything else must NOT be swallowed, or a daemon that is down would
         // read as "image absent" and trigger a pointless pull.
         let down = bollard::errors::Error::IOError {
-            err: std::io::Error::new(
-                std::io::ErrorKind::ConnectionRefused,
-                "daemon not running",
-            ),
+            err: std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "daemon not running"),
         };
         assert!(!matches!(
             down,
@@ -1891,7 +1952,8 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(
-            env.base_config().image, "ubuntu",
+            env.base_config().image,
+            "ubuntu",
             "no `library/`, no `docker.io/`, no `latest`"
         );
     }
@@ -1957,7 +2019,11 @@ mod tests {
     /// through the split itself, which needs no daemon.
     #[test]
     fn a_platform_must_be_an_os_arch_pair() {
-        assert_eq!(split_platform(""), Ok("".to_string()), "unset is not an error");
+        assert_eq!(
+            split_platform(""),
+            Ok("".to_string()),
+            "unset is not an error"
+        );
         assert_eq!(split_platform("linux/amd64"), Ok("linux/amd64".to_string()));
         assert_eq!(split_platform("linux/arm64"), Ok("linux/arm64".to_string()));
         assert_eq!(
@@ -2004,7 +2070,10 @@ mod tests {
         assert_eq!(body.working_dir.as_deref(), Some("/github/workspace"));
         assert_eq!(body.tty, Some(true));
         let host = body.host_config.expect("the host config survived");
-        assert_eq!(host.binds.as_deref(), Some(&["/work:/github/workspace".to_string()][..]));
+        assert_eq!(
+            host.binds.as_deref(),
+            Some(&["/work:/github/workspace".to_string()][..])
+        );
         assert_eq!(host.network_mode.as_deref(), Some("my-net"));
         assert_eq!(host.mounts.map(|m| m.len()), Some(1));
 
@@ -2016,7 +2085,10 @@ mod tests {
             serde_json::json!({"8080/tcp": {}}),
             "a list here is a parse error at the daemon"
         );
-        assert!(raw.get("HostConfig").is_none(), "Config is inlined, not nested");
+        assert!(
+            raw.get("HostConfig").is_none(),
+            "Config is inlined, not nested"
+        );
     }
 
     /// The `NetworkingConfig` is built from the job's aliases and the job's

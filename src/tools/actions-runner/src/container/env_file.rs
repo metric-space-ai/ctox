@@ -43,7 +43,10 @@ impl std::fmt::Display for EnvFileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidFormat(line) => {
-                write!(f, "invalid format '{line}', expected a line with '=' or '<<'")
+                write!(
+                    f,
+                    "invalid format '{line}', expected a line with '=' or '<<'"
+                )
             }
             Self::DelimiterNotFound(delimiter) => write!(
                 f,
@@ -185,7 +188,10 @@ mod tests {
     #[test]
     fn a_line_without_an_assignment_is_an_error() {
         let error = parse("A=1\nnot an assignment\n").expect_err("an error");
-        assert_eq!(error, EnvFileError::InvalidFormat("not an assignment".to_string()));
+        assert_eq!(
+            error,
+            EnvFileError::InvalidFormat("not an assignment".to_string())
+        );
         assert_eq!(
             error.to_string(),
             "invalid format 'not an assignment', expected a line with '=' or '<<'",

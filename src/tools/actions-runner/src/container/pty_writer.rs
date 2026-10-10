@@ -76,12 +76,14 @@ impl<W: Write> Write for PtyWriter<W> {
             }
             // The cursor has to be at the start of a line for `EOT` to mean
             // end of output, so a partial line is finished first.
-            let cursor_mid_line = self.dirty_line
-                || (buf.len() > 1 && buf[buf.len() - 2] != b'\n');
+            let cursor_mid_line = self.dirty_line || (buf.len() > 1 && buf[buf.len() - 2] != b'\n');
             if cursor_mid_line {
                 let _ = self.out.write(b"\n");
             }
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "end of output"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "end of output",
+            ));
         }
 
         self.dirty_line = buf.last() != Some(&b'\n');

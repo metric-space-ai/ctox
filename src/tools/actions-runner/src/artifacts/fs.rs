@@ -89,9 +89,7 @@ impl ArtifactFs for OsFs {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: entry.file_type().map(|t| t.is_dir()).unwrap_or(false),
                 size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
-                modified: metadata
-                    .as_ref()
-                    .and_then(|m| m.modified().ok()),
+                modified: metadata.as_ref().and_then(|m| m.modified().ok()),
             });
         }
         entries.sort_by(|a, b| a.name.cmp(&b.name));

@@ -124,10 +124,7 @@ pub fn compile_patterns<'a, I>(patterns: I) -> Result<Vec<WorkflowPattern>, Inva
 where
     I: IntoIterator<Item = &'a str>,
 {
-    patterns
-        .into_iter()
-        .map(WorkflowPattern::compile)
-        .collect()
+    patterns.into_iter().map(WorkflowPattern::compile).collect()
 }
 
 /// Compiles a single raw pattern.
@@ -204,7 +201,9 @@ fn pattern_to_regex(pattern: &str) -> Result<Regex, InvalidPattern> {
                             continue;
                         }
                         let (lo, hi) = (chars[pos - 1], chars[pos + 1]);
-                        let in_range = |a: char, b: char| valid_char(a, b, lo) && valid_char(a, b, hi) && lo <= hi;
+                        let in_range = |a: char, b: char| {
+                            valid_char(a, b, lo) && valid_char(a, b, hi) && lo <= hi
+                        };
                         if !in_range('A', 'z') && !in_range('0', '9') {
                             errors.insert(
                                 offsets[pos],
@@ -367,71 +366,386 @@ mod tests {
     #[test]
     fn match_pattern_matches_upstream_expectations() {
         let cases = vec![
-            Case { patterns: &["*"], inputs: &["path/with/slash"], skip_result: true, filter_result: false },
-            Case { patterns: &["path/a", "path/b", "path/c"], inputs: &["meta", "path/b", "otherfile"], skip_result: false, filter_result: false },
-            Case { patterns: &["path/a", "path/b", "path/c"], inputs: &["path/b"], skip_result: false, filter_result: true },
-            Case { patterns: &["path/a", "path/b", "path/c"], inputs: &["path/c", "path/b"], skip_result: false, filter_result: true },
-            Case { patterns: &["path/a", "path/b", "path/c"], inputs: &["path/c", "path/b", "path/a"], skip_result: false, filter_result: true },
-            Case { patterns: &["path/a", "path/b", "path/c"], inputs: &["path/c", "path/b", "path/d", "path/a"], skip_result: false, filter_result: false },
-            Case { patterns: &[], inputs: &[], skip_result: false, filter_result: false },
-            Case { patterns: &["\\!file"], inputs: &["!file"], skip_result: false, filter_result: true },
-            Case { patterns: &["escape\\\\backslash"], inputs: &["escape\\backslash"], skip_result: false, filter_result: true },
-            Case { patterns: &[".yml"], inputs: &["fyml"], skip_result: true, filter_result: false },
+            Case {
+                patterns: &["*"],
+                inputs: &["path/with/slash"],
+                skip_result: true,
+                filter_result: false,
+            },
+            Case {
+                patterns: &["path/a", "path/b", "path/c"],
+                inputs: &["meta", "path/b", "otherfile"],
+                skip_result: false,
+                filter_result: false,
+            },
+            Case {
+                patterns: &["path/a", "path/b", "path/c"],
+                inputs: &["path/b"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["path/a", "path/b", "path/c"],
+                inputs: &["path/c", "path/b"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["path/a", "path/b", "path/c"],
+                inputs: &["path/c", "path/b", "path/a"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["path/a", "path/b", "path/c"],
+                inputs: &["path/c", "path/b", "path/d", "path/a"],
+                skip_result: false,
+                filter_result: false,
+            },
+            Case {
+                patterns: &[],
+                inputs: &[],
+                skip_result: false,
+                filter_result: false,
+            },
+            Case {
+                patterns: &["\\!file"],
+                inputs: &["!file"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["escape\\\\backslash"],
+                inputs: &["escape\\backslash"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &[".yml"],
+                inputs: &["fyml"],
+                skip_result: true,
+                filter_result: false,
+            },
             // https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#patterns-to-match-branches-and-tags
-            Case { patterns: &["feature/*"], inputs: &["feature/my-branch"], skip_result: false, filter_result: true },
-            Case { patterns: &["feature/*"], inputs: &["feature/your-branch"], skip_result: false, filter_result: true },
-            Case { patterns: &["feature/**"], inputs: &["feature/beta-a/my-branch"], skip_result: false, filter_result: true },
-            Case { patterns: &["feature/**"], inputs: &["feature/mona/the/octocat"], skip_result: false, filter_result: true },
-            Case { patterns: &["main", "releases/mona-the-octocat"], inputs: &["main"], skip_result: false, filter_result: true },
-            Case { patterns: &["main", "releases/mona-the-octocat"], inputs: &["releases/mona-the-octocat"], skip_result: false, filter_result: true },
-            Case { patterns: &["*"], inputs: &["main"], skip_result: false, filter_result: true },
-            Case { patterns: &["*"], inputs: &["releases"], skip_result: false, filter_result: true },
-            Case { patterns: &["**"], inputs: &["all/the/branches"], skip_result: false, filter_result: true },
-            Case { patterns: &["**"], inputs: &["every/tag"], skip_result: false, filter_result: true },
-            Case { patterns: &["*feature"], inputs: &["mona-feature"], skip_result: false, filter_result: true },
-            Case { patterns: &["*feature"], inputs: &["feature"], skip_result: false, filter_result: true },
-            Case { patterns: &["*feature"], inputs: &["ver-10-feature"], skip_result: false, filter_result: true },
-            Case { patterns: &["v2*"], inputs: &["v2"], skip_result: false, filter_result: true },
-            Case { patterns: &["v2*"], inputs: &["v2.0"], skip_result: false, filter_result: true },
-            Case { patterns: &["v2*"], inputs: &["v2.9"], skip_result: false, filter_result: true },
-            Case { patterns: &["v[12].[0-9]+.[0-9]+"], inputs: &["v1.10.1"], skip_result: false, filter_result: true },
-            Case { patterns: &["v[12].[0-9]+.[0-9]+"], inputs: &["v2.0.0"], skip_result: false, filter_result: true },
+            Case {
+                patterns: &["feature/*"],
+                inputs: &["feature/my-branch"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["feature/*"],
+                inputs: &["feature/your-branch"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["feature/**"],
+                inputs: &["feature/beta-a/my-branch"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["feature/**"],
+                inputs: &["feature/mona/the/octocat"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["main", "releases/mona-the-octocat"],
+                inputs: &["main"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["main", "releases/mona-the-octocat"],
+                inputs: &["releases/mona-the-octocat"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*"],
+                inputs: &["main"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*"],
+                inputs: &["releases"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**"],
+                inputs: &["all/the/branches"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**"],
+                inputs: &["every/tag"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*feature"],
+                inputs: &["mona-feature"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*feature"],
+                inputs: &["feature"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*feature"],
+                inputs: &["ver-10-feature"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["v2*"],
+                inputs: &["v2"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["v2*"],
+                inputs: &["v2.0"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["v2*"],
+                inputs: &["v2.9"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["v[12].[0-9]+.[0-9]+"],
+                inputs: &["v1.10.1"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["v[12].[0-9]+.[0-9]+"],
+                inputs: &["v2.0.0"],
+                skip_result: false,
+                filter_result: true,
+            },
             // https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#patterns-to-match-file-paths
-            Case { patterns: &["*"], inputs: &["README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["*"], inputs: &["server.rb"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.jsx?"], inputs: &["page.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.jsx?"], inputs: &["page.jsx"], skip_result: false, filter_result: true },
-            Case { patterns: &["**"], inputs: &["all/the/files.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.js"], inputs: &["app.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.js"], inputs: &["index.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["**.js"], inputs: &["index.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["**.js"], inputs: &["js/index.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["**.js"], inputs: &["src/js/app.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/*"], inputs: &["docs/README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/*"], inputs: &["docs/file.txt"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/**"], inputs: &["docs/README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/**"], inputs: &["docs/mona/octocat.txt"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/**/*.md"], inputs: &["docs/README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/**/*.md"], inputs: &["docs/mona/hello-world.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["docs/**/*.md"], inputs: &["docs/a/markdown/file.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/docs/**"], inputs: &["docs/hello.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/docs/**"], inputs: &["dir/docs/my-file.txt"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/docs/**"], inputs: &["space/docs/plan/space.doc"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/README.md"], inputs: &["README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/README.md"], inputs: &["js/README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/*src/**"], inputs: &["a/src/app.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/*src/**"], inputs: &["my-src/code/js/app.js"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/*-post.md"], inputs: &["my-post.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/*-post.md"], inputs: &["path/their-post.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/migrate-*.sql"], inputs: &["migrate-10909.sql"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/migrate-*.sql"], inputs: &["db/migrate-v1.0.sql"], skip_result: false, filter_result: true },
-            Case { patterns: &["**/migrate-*.sql"], inputs: &["db/sept/migrate-v1.sql"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.md", "!README.md"], inputs: &["hello.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.md", "!README.md"], inputs: &["README.md"], skip_result: true, filter_result: true },
-            Case { patterns: &["*.md", "!README.md"], inputs: &["docs/hello.md"], skip_result: true, filter_result: true },
-            Case { patterns: &["*.md", "!README.md", "README*"], inputs: &["hello.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.md", "!README.md", "README*"], inputs: &["README.md"], skip_result: false, filter_result: true },
-            Case { patterns: &["*.md", "!README.md", "README*"], inputs: &["README.doc"], skip_result: false, filter_result: true },
+            Case {
+                patterns: &["*"],
+                inputs: &["README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*"],
+                inputs: &["server.rb"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.jsx?"],
+                inputs: &["page.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.jsx?"],
+                inputs: &["page.jsx"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**"],
+                inputs: &["all/the/files.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.js"],
+                inputs: &["app.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.js"],
+                inputs: &["index.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**.js"],
+                inputs: &["index.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**.js"],
+                inputs: &["js/index.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**.js"],
+                inputs: &["src/js/app.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/*"],
+                inputs: &["docs/README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/*"],
+                inputs: &["docs/file.txt"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/**"],
+                inputs: &["docs/README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/**"],
+                inputs: &["docs/mona/octocat.txt"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/**/*.md"],
+                inputs: &["docs/README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/**/*.md"],
+                inputs: &["docs/mona/hello-world.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["docs/**/*.md"],
+                inputs: &["docs/a/markdown/file.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/docs/**"],
+                inputs: &["docs/hello.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/docs/**"],
+                inputs: &["dir/docs/my-file.txt"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/docs/**"],
+                inputs: &["space/docs/plan/space.doc"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/README.md"],
+                inputs: &["README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/README.md"],
+                inputs: &["js/README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/*src/**"],
+                inputs: &["a/src/app.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/*src/**"],
+                inputs: &["my-src/code/js/app.js"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/*-post.md"],
+                inputs: &["my-post.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/*-post.md"],
+                inputs: &["path/their-post.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/migrate-*.sql"],
+                inputs: &["migrate-10909.sql"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/migrate-*.sql"],
+                inputs: &["db/migrate-v1.0.sql"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["**/migrate-*.sql"],
+                inputs: &["db/sept/migrate-v1.sql"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md"],
+                inputs: &["hello.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md"],
+                inputs: &["README.md"],
+                skip_result: true,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md"],
+                inputs: &["docs/hello.md"],
+                skip_result: true,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md", "README*"],
+                inputs: &["hello.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md", "README*"],
+                inputs: &["README.md"],
+                skip_result: false,
+                filter_result: true,
+            },
+            Case {
+                patterns: &["*.md", "!README.md", "README*"],
+                inputs: &["README.doc"],
+                skip_result: false,
+                filter_result: true,
+            },
         ];
 
         let trace = EmptyTraceWriter;
@@ -466,7 +780,10 @@ mod tests {
     #[test]
     fn missing_closing_bracket_is_rejected() {
         let err = compile_pattern("[abc").expect_err("unterminated bracket must fail");
-        assert_eq!(err.errors[0].message, "Missing closing bracket ']' after '['");
+        assert_eq!(
+            err.errors[0].message,
+            "Missing closing bracket ']' after '['"
+        );
         assert_eq!(err.errors[0].position, 4);
     }
 

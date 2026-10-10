@@ -318,8 +318,11 @@ pub trait Handler {
 /// The filesystem operations the collector needs.
 pub trait Fs {
     /// Walks `root` depth-first, sorted by name, without following symlinks.
-    fn walk(&self, root: &Path, visit: &mut dyn FnMut(&Path, io::Result<FileInfo>) -> WalkOutcome)
-        -> io::Result<()>;
+    fn walk(
+        &self,
+        root: &Path,
+        visit: &mut dyn FnMut(&Path, io::Result<FileInfo>) -> WalkOutcome,
+    ) -> io::Result<()>;
 
     /// Opens the git index of the repository containing `path`.
     fn open_git_index(&self, path: &Path) -> Result<GitIndex, IndexError>;
@@ -503,13 +506,14 @@ impl<W: Write> Handler for TarCollector<'_, W> {
             // `append_data` streams the file and pads it to the block size;
             // writing the bytes to the underlying sink by hand would corrupt
             // the archive.
-            Some(contents) => self
-                .tar
-                .append_data(
-                    &mut header,
-                    &name,
-                    CancellableReader { inner: contents, cancelled },
-                ),
+            Some(contents) => self.tar.append_data(
+                &mut header,
+                &name,
+                CancellableReader {
+                    inner: contents,
+                    cancelled,
+                },
+            ),
         }
     }
 }
@@ -739,11 +743,7 @@ impl<'a> FileCollector<'a> {
     /// relative to `src_prefix`. It is empty for the top-level tree and grows
     /// as submodules are entered, so that index lookups are relative to the
     /// submodule rather than the superproject.
-    pub fn collect_files(
-        &mut self,
-        root: &Path,
-        submodule_path: &[String],
-    ) -> io::Result<()> {
+    pub fn collect_files(&mut self, root: &Path, submodule_path: &[String]) -> io::Result<()> {
         // Upstream: `i, _ := fc.Fs.OpenGitIndex(path.Join(fc.SrcPath,
         // path.Join(submodulePath...)))`. A directory that is not a
         // repository simply has no index, and then every path looks untracked.

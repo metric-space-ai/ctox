@@ -426,7 +426,6 @@ fn docker_credentials(config: RegistryAuthConfig) -> DockerCredentials {
     }
 }
 
-
 /// `createBuildContext`: the uncompressed tar the daemon unpacks as the build
 /// context.
 fn create_build_context(

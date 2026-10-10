@@ -171,8 +171,10 @@ impl Document {
                     if matches!(event, Event::DocumentEnd) {
                         break;
                     }
-                    if matches!(event, Event::Nothing | Event::StreamStart | Event::DocumentStart(_))
-                    {
+                    if matches!(
+                        event,
+                        Event::Nothing | Event::StreamStart | Event::DocumentStart(_)
+                    ) {
                         continue;
                     }
                     let id = doc.build_node(
@@ -307,7 +309,9 @@ impl Document {
 
     /// Decodes a scalar node as a string, whatever its YAML type.
     pub fn scalar(&self, id: NodeId) -> Option<String> {
-        self.node(id).filter(|n| n.is_scalar()).map(|n| n.value.clone())
+        self.node(id)
+            .filter(|n| n.is_scalar())
+            .map(|n| n.value.clone())
     }
 
     /// Decodes a scalar or sequence node as a list of strings.
@@ -582,9 +586,13 @@ mod tests {
 
     #[test]
     fn nested_structures_are_built() {
-        let doc = Document::parse("jobs:\n  build:\n    steps:\n      - run: echo hi\n")
-            .expect("parses");
-        assert!(doc.len() >= 7, "expected a populated arena, got {}", doc.len());
+        let doc =
+            Document::parse("jobs:\n  build:\n    steps:\n      - run: echo hi\n").expect("parses");
+        assert!(
+            doc.len() >= 7,
+            "expected a populated arena, got {}",
+            doc.len()
+        );
     }
 
     #[test]

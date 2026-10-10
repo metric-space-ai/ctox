@@ -527,8 +527,9 @@ pub mod mount {
     pub const TYPE_IMAGE: &str = "image";
 
     /// `mount.Propagations`, the option values that name a bind propagation.
-    pub const PROPAGATIONS: &[&str] =
-        &["rprivate", "private", "rshared", "shared", "rslave", "slave"];
+    pub const PROPAGATIONS: &[&str] = &[
+        "rprivate", "private", "rshared", "shared", "rslave", "slave",
+    ];
 
     /// `mount.Type`: the mount type as a **string**, not an enum.
     ///
@@ -1132,9 +1133,7 @@ const NETWORK_OPT_GW_PRIORITY: &str = "gw-priority";
 fn is_long_network_syntax(value: &str) -> bool {
     static LONG_SYNTAX: OnceLock<Regex> = OnceLock::new();
     LONG_SYNTAX
-        .get_or_init(|| {
-            Regex::new(r"(?-u)\w+=\w+(,\w+=\w+)*").expect("the network option grammar")
-        })
+        .get_or_init(|| Regex::new(r"(?-u)\w+=\w+(,\w+=\w+)*").expect("the network option grammar"))
         .is_match(value)
 }
 
@@ -1299,7 +1298,9 @@ impl GpuOpts {
                 None => (field.as_str(), "", false),
             };
             if !seen.insert(key) {
-                return Err(format!("gpu request key '{key}' can be specified only once"));
+                return Err(format!(
+                    "gpu request key '{key}' can be specified only once"
+                ));
             }
 
             if !with_value {
@@ -1328,8 +1329,7 @@ impl GpuOpts {
                     // and not two.
                     let option_fields = csv::read_record(val)
                         .map_err(|err| format!("failed to read gpu options: {err}"))?;
-                    req.options =
-                        super::docker_opts::convert_kv_strings_to_map(&option_fields);
+                    req.options = super::docker_opts::convert_kv_strings_to_map(&option_fields);
                 }
                 other => return Err(format!("unexpected key '{other}' in '{field}'")),
             }
@@ -1433,10 +1433,7 @@ mod tests {
         );
         // The end of the value is not the end of the reader: a value with no
         // trailing newline is still a record, not an EOF.
-        assert_eq!(
-            csv::read_record("a,b").expect("a record"),
-            vec!["a", "b"],
-        );
+        assert_eq!(csv::read_record("a,b").expect("a record"), vec!["a", "b"],);
         assert_eq!(csv::read_record(""), Err("EOF".to_string()));
     }
 
@@ -1462,13 +1459,17 @@ mod tests {
         // field, which is why it is 3 for `"a` and 5 for `"abc`.
         assert_eq!(
             csv::read_record("\"a"),
-            Err("parse error on line 1, column 3: extraneous or missing \" in quoted-field"
-                .to_string()),
+            Err(
+                "parse error on line 1, column 3: extraneous or missing \" in quoted-field"
+                    .to_string()
+            ),
         );
         assert_eq!(
             csv::read_record("\"abc"),
-            Err("parse error on line 1, column 5: extraneous or missing \" in quoted-field"
-                .to_string()),
+            Err(
+                "parse error on line 1, column 5: extraneous or missing \" in quoted-field"
+                    .to_string()
+            ),
         );
     }
 

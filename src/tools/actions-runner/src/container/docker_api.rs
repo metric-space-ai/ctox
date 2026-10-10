@@ -405,8 +405,6 @@ pub struct LogConfig {
     pub config: BTreeMap<String, String>,
 }
 
-
-
 /// `network.EndpointIPAMConfig`: the addresses assigned to one endpoint.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EndpointIpamConfig {
@@ -431,7 +429,11 @@ impl Serialize for EndpointIpamConfig {
         if let Some(address) = &self.ipv6_address {
             state.serialize_field("IPv6Address", &address.to_string())?;
         }
-        let links: Vec<String> = self.link_local_ips.iter().map(ToString::to_string).collect();
+        let links: Vec<String> = self
+            .link_local_ips
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         state.serialize_field("LinkLocalIPs", &links)?;
         state.end()
     }
@@ -463,7 +465,10 @@ pub struct EndpointSettings {
 /// daemon will only accept the **object** form — `{"80/tcp": {}}` — and a list
 /// is a parse error rather than a tolerated alternative. A `BTreeSet` in Rust
 /// would serialize as a list, so the shape is built by hand here.
-fn serialize_port_set<S>(ports: &BTreeSet<String>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+fn serialize_port_set<S>(
+    ports: &BTreeSet<String>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -853,7 +858,15 @@ mod tests {
         assert!(!CgroupnsMode("shareable".to_string()).valid());
 
         // ipc accepts the widest set, including a bare container prefix.
-        for mode in ["", "none", "private", "host", "shareable", "container:abc", "container:"] {
+        for mode in [
+            "",
+            "none",
+            "private",
+            "host",
+            "shareable",
+            "container:abc",
+            "container:",
+        ] {
             assert!(IpcMode(mode.to_string()).valid(), "{mode} should be valid");
         }
         assert!(!IpcMode("bogus".to_string()).valid());

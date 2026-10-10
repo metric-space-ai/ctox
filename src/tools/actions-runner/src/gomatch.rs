@@ -345,11 +345,21 @@ mod tests {
     }
 
     const fn case(pattern: &'static str, name: &'static str, matched: bool) -> Case {
-        Case { pattern, name, matched, bad_pattern: false }
+        Case {
+            pattern,
+            name,
+            matched,
+            bad_pattern: false,
+        }
     }
 
     const fn bad(pattern: &'static str, name: &'static str) -> Case {
-        Case { pattern, name, matched: false, bad_pattern: true }
+        Case {
+            pattern,
+            name,
+            matched: false,
+            bad_pattern: true,
+        }
     }
 
     /// Go's `matchTests`, verbatim. This is the table go-git's `match` and
@@ -425,10 +435,7 @@ mod tests {
             if pattern.contains('\\') {
                 return None;
             }
-            return Some((
-                pattern.replace('/', "\\"),
-                name.replace('/', "\\"),
-            ));
+            return Some((pattern.replace('/', "\\"), name.replace('/', "\\")));
         }
         Some((pattern.to_string(), name.to_string()))
     }

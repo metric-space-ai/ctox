@@ -97,7 +97,13 @@ impl<'de> Deserialize<'de> for MappingProperty {
                 type_name,
                 required: false,
             }),
-            Repr::Detailed { type_name, required } => Ok(Self { type_name, required }),
+            Repr::Detailed {
+                type_name,
+                required,
+            } => Ok(Self {
+                type_name,
+                required,
+            }),
         }
     }
 }
@@ -133,9 +139,7 @@ pub struct NullDefinition;
 
 /// Accepts any YAML/JSON value and discards it, matching Go's behaviour of
 /// ignoring unknown fields in these empty structs.
-fn accept_ignored<'de, D: Deserializer<'de>, T: Default>(
-    deserializer: D,
-) -> Result<T, D::Error> {
+fn accept_ignored<'de, D: Deserializer<'de>, T: Default>(deserializer: D) -> Result<T, D::Error> {
     serde::de::IgnoredAny::deserialize(deserializer)?;
     Ok(T::default())
 }
@@ -368,10 +372,16 @@ mod tests {
             "string": {"is-expression": true, "constant": "x"}
         }"#;
         let def: Definition = serde_json::from_str(json).expect("definition");
-        assert_eq!(def.one_of.as_deref(), Some(["string".to_string(), "null".to_string()].as_slice()));
+        assert_eq!(
+            def.one_of.as_deref(),
+            Some(["string".to_string(), "null".to_string()].as_slice())
+        );
         assert_eq!(def.allowed_values.as_ref().map(|v| v.len()), Some(2));
         assert_eq!(def.sequence.as_ref().unwrap().item_type, "string");
-        assert_eq!(def.mapping.as_ref().unwrap().loose_key_type, "non-empty-string");
+        assert_eq!(
+            def.mapping.as_ref().unwrap().loose_key_type,
+            "non-empty-string"
+        );
         assert!(def.string.as_ref().unwrap().is_expression);
     }
 
@@ -412,10 +422,7 @@ mod tests {
 
     #[test]
     fn built_in_functions_are_always_present() {
-        let names: Vec<String> = functions_for(&[])
-            .into_iter()
-            .map(|f| f.name)
-            .collect();
+        let names: Vec<String> = functions_for(&[]).into_iter().map(|f| f.name).collect();
         for expected in [
             "contains",
             "endsWith",
@@ -434,7 +441,10 @@ mod tests {
         // `hashFiles(1,255)` is a real signature from workflow_schema.json.
         let context = vec!["hashFiles(1,255)".to_string()];
         let funcs = functions_for(&context);
-        let hash = funcs.iter().find(|f| f.name == "hashFiles").expect("hashFiles");
+        let hash = funcs
+            .iter()
+            .find(|f| f.name == "hashFiles")
+            .expect("hashFiles");
         assert_eq!(hash.min, 1);
         assert_eq!(hash.max, 255);
     }
@@ -489,11 +499,7 @@ mod tests {
             "ok(1,2)".to_string(),
         ];
         let funcs = functions_for(&context);
-        let declared: Vec<&str> = funcs
-            .iter()
-            .skip(7)
-            .map(|f| f.name.as_str())
-            .collect();
+        let declared: Vec<&str> = funcs.iter().skip(7).map(|f| f.name.as_str()).collect();
         assert_eq!(declared, vec!["ok"]);
     }
 

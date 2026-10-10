@@ -174,9 +174,7 @@ fn patterns() -> &'static Patterns {
         let path_component = format!(r"{ALPHANUMERIC}(?:(?:{SEPARATOR}){ALPHANUMERIC})*");
         let remote_name = format!(r"{path_component}(?:/{path_component})*");
         let name_pattern = format!(r"(?:{domain_and_port}/)?{remote_name}");
-        let reference = format!(
-            r"^({name_pattern})(?::({TAG}))?(?:@({DIGEST}))?$"
-        );
+        let reference = format!(r"^({name_pattern})(?::({TAG}))?(?:@({DIGEST}))?$");
         let name = format!(r"^(?:({domain_and_port})/)?({remote_name})$");
         Patterns {
             reference: Regex::new(&reference).expect("the reference grammar"),
@@ -222,9 +220,7 @@ pub fn parse_any_reference(image: &str) -> Option<Reference> {
 /// afterwards.
 fn parse_digest(value: &str) -> Option<String> {
     let pattern = Regex::new(&format!(r"^{DIGEST}$")).ok()?;
-    pattern
-        .is_match(value)
-        .then(|| value.to_string())
+    pattern.is_match(value).then(|| value.to_string())
 }
 
 /// `ParseNormalizedNamed`.
@@ -274,7 +270,10 @@ fn parse(value: &str) -> Option<Reference> {
     let name_captures = patterns.name.captures(&name);
     let (domain, path) = match name_captures {
         Some(found) if found.get(1).is_some() => (
-            found.get(1).map(|domain| domain.as_str().to_string()).unwrap_or_default(),
+            found
+                .get(1)
+                .map(|domain| domain.as_str().to_string())
+                .unwrap_or_default(),
             found.get(2)?.as_str().to_string(),
         ),
         _ => (String::new(), name.clone()),
@@ -302,9 +301,7 @@ pub fn split_docker_domain(name: &str) -> (String, String) {
             // `localhost` is reserved and always a domain.
             LOCALHOST => (maybe_domain.to_string(), maybe_remote.to_string()),
             // Both Docker Hub spellings canonicalise to the same domain.
-            LEGACY_DEFAULT_DOMAIN => {
-                (DEFAULT_DOMAIN.to_string(), maybe_remote.to_string())
-            }
+            LEGACY_DEFAULT_DOMAIN => (DEFAULT_DOMAIN.to_string(), maybe_remote.to_string()),
             // A dot means a domain or an IP; a colon means a port.
             candidate if candidate.contains('.') || candidate.contains(':') => {
                 (candidate.to_string(), maybe_remote.to_string())
@@ -336,8 +333,14 @@ mod tests {
     fn image_names_match_the_upstream_table() {
         let table: &[(&str, &str)] = &[
             ("myhost.com/foo/bar", "myhost.com/foo/bar"),
-            ("localhost:8000/canonical/ubuntu", "localhost:8000/canonical/ubuntu"),
-            ("localhost/canonical/ubuntu:latest", "localhost/canonical/ubuntu:latest"),
+            (
+                "localhost:8000/canonical/ubuntu",
+                "localhost:8000/canonical/ubuntu",
+            ),
+            (
+                "localhost/canonical/ubuntu:latest",
+                "localhost/canonical/ubuntu:latest",
+            ),
             (
                 "localhost:8000/canonical/ubuntu:latest",
                 "localhost:8000/canonical/ubuntu:latest",
@@ -392,14 +395,7 @@ mod tests {
     /// something unexpected.
     #[test]
     fn an_invalid_reference_normalises_to_nothing() {
-        for input in [
-            "",
-            "not a ref",
-            "-leadingdash",
-            "ubuntu:",
-            "Foo/Bar",
-            "  ",
-        ] {
+        for input in ["", "not a ref", "-leadingdash", "ubuntu:", "Foo/Bar", "  "] {
             assert_eq!(clean_image(input), "", "cleanImage({input:?})");
         }
     }
@@ -411,7 +407,10 @@ mod tests {
         // 1. No slash at all: a Docker Hub name, and `library/` is added.
         assert_eq!(
             split_docker_domain("ubuntu:18.04"),
-            (DEFAULT_DOMAIN.to_string(), "library/ubuntu:18.04".to_string()),
+            (
+                DEFAULT_DOMAIN.to_string(),
+                "library/ubuntu:18.04".to_string()
+            ),
         );
         // 2. `localhost` is reserved.
         assert_eq!(
@@ -461,7 +460,10 @@ mod tests {
     #[test]
     fn no_default_tag_is_added() {
         assert!(!clean_image("ubuntu").contains(":"));
-        assert_eq!(clean_image("ubuntu:latest"), "docker.io/library/ubuntu:latest");
+        assert_eq!(
+            clean_image("ubuntu:latest"),
+            "docker.io/library/ubuntu:latest"
+        );
     }
 
     /// A digest survives normalisation, so a workflow pinned by digest pulls
@@ -484,7 +486,10 @@ mod tests {
         let hex = "a".repeat(64);
         assert_eq!(clean_image(&hex), format!("sha256:{hex}"));
         // An explicit digest normalises to the same thing.
-        assert_eq!(clean_image(&format!("sha256:{hex}")), format!("sha256:{hex}"));
+        assert_eq!(
+            clean_image(&format!("sha256:{hex}")),
+            format!("sha256:{hex}")
+        );
         // And it is rejected as a *name*, which is the other half of upstream's
         // rule.
         assert!(parse_normalized_named(&hex).is_none());
@@ -493,13 +498,7 @@ mod tests {
     /// The separators the name grammar allows inside one component.
     #[test]
     fn the_allowed_name_separators_are_accepted() {
-        for image in [
-            "my.image",
-            "my_image",
-            "my__image",
-            "my--image",
-            "my-image",
-        ] {
+        for image in ["my.image", "my_image", "my__image", "my--image", "my-image"] {
             let cleaned = clean_image(&format!("owner/{image}"));
             assert!(
                 cleaned.contains(image),

@@ -78,10 +78,7 @@ impl std::error::Error for SocketError {}
 ///
 /// `docker_host` wins outright when it is set: an explicit `DOCKER_HOST` is
 /// never second-guessed, not even when the file behind it is missing.
-pub fn socket_location_in(
-    locations: &[&str],
-    docker_host: Option<&str>,
-) -> Option<String> {
+pub fn socket_location_in(locations: &[&str], docker_host: Option<&str>) -> Option<String> {
     if let Some(host) = docker_host {
         return Some(host.to_string());
     }
@@ -261,12 +258,9 @@ mod tests {
     #[test]
     fn an_explicit_socket_wins_over_the_default() {
         let host = "unix:///my/docker/host.sock";
-        let result = get_socket_and_host_in(
-            "/path/to/my.socket",
-            COMMON_SOCKET_LOCATIONS,
-            Some(host),
-        )
-        .expect("a socket");
+        let result =
+            get_socket_and_host_in("/path/to/my.socket", COMMON_SOCKET_LOCATIONS, Some(host))
+                .expect("a socket");
         assert_eq!(
             result,
             SocketAndHost {
@@ -295,8 +289,8 @@ mod tests {
     #[test]
     fn a_dash_means_mount_nothing() {
         let host = "unix:///my/docker/host.sock";
-        let result = get_socket_and_host_in("-", COMMON_SOCKET_LOCATIONS, Some(host))
-            .expect("a socket");
+        let result =
+            get_socket_and_host_in("-", COMMON_SOCKET_LOCATIONS, Some(host)).expect("a socket");
         assert_eq!(
             result,
             SocketAndHost {
@@ -376,9 +370,14 @@ mod tests {
         }
         let default = default.expect("found");
 
-        let omitted =
-            get_socket_and_host_in("", COMMON_SOCKET_LOCATIONS, None).expect("a socket");
-        assert_eq!(omitted, SocketAndHost { socket: default.clone(), host: default.clone() });
+        let omitted = get_socket_and_host_in("", COMMON_SOCKET_LOCATIONS, None).expect("a socket");
+        assert_eq!(
+            omitted,
+            SocketAndHost {
+                socket: default.clone(),
+                host: default.clone()
+            }
+        );
 
         // A file path is kept as the socket, and the default becomes the host.
         let path = "/path/to/my.socket";
@@ -437,7 +436,10 @@ mod tests {
     fn environment_variables_expand_like_go() {
         // SAFETY: set and read within this test body only.
         unsafe { std::env::set_var("ACT_SOCK_TEST", "/tmp/sock") };
-        assert_eq!(expand_env("$ACT_SOCK_TEST/docker.sock"), "/tmp/sock/docker.sock");
+        assert_eq!(
+            expand_env("$ACT_SOCK_TEST/docker.sock"),
+            "/tmp/sock/docker.sock"
+        );
         assert_eq!(expand_env("${ACT_SOCK_TEST}/x"), "/tmp/sock/x");
         assert_eq!(
             expand_env("$ACT_SOCK_UNSET/docker.sock"),

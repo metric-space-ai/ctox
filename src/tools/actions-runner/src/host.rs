@@ -8,7 +8,7 @@ use std::rc::Rc;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::container::{ExecutionsEnvironment, HostEnvironment};
+use crate::container::HostEnvironment;
 use crate::model::{GitLookups, Run, Step, Workflow};
 use crate::runner::{run_context::RunContext, step_run};
 use crate::yaml_node::Document;

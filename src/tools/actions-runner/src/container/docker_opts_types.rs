@@ -148,7 +148,9 @@ fn go_quote(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (' '..='~').contains(&c) => out.push(c),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -185,7 +187,9 @@ fn go_atoi(value: &str) -> Result<i64, String> {
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(go_num_error("Atoi", &go_quote(value), "invalid syntax"));
     }
-    value.parse::<i64>().map_err(|_| go_num_error("Atoi", &go_quote(value), "value out of range"))
+    value
+        .parse::<i64>()
+        .map_err(|_| go_num_error("Atoi", &go_quote(value), "value out of range"))
 }
 
 /// `strconv.ParseInt`/`ParseUint` with an explicit base and bit size. Go allows
@@ -196,18 +200,32 @@ fn go_parse_uint_bits(value: &str, bits: u32) -> Option<u64> {
         return None;
     }
     let parsed = value.parse::<u128>().ok()?;
-    let limit = if bits == 64 { u64::MAX as u128 } else { (1u128 << bits) - 1 };
-    if parsed > limit { None } else { Some(parsed as u64) }
+    let limit = if bits == 64 {
+        u64::MAX as u128
+    } else {
+        (1u128 << bits) - 1
+    };
+    if parsed > limit {
+        None
+    } else {
+        Some(parsed as u64)
+    }
 }
 
 /// `strconv.ParseFloat`, reduced to the two outcomes the size parser needs.
 fn go_parse_float(value: &str) -> Result<f64, String> {
     match value.parse::<f64>() {
-        Ok(parsed) if parsed.is_infinite() => {
-            Err(go_num_error("ParseFloat", &go_quote(value), "value out of range"))
-        }
+        Ok(parsed) if parsed.is_infinite() => Err(go_num_error(
+            "ParseFloat",
+            &go_quote(value),
+            "value out of range",
+        )),
         Ok(parsed) => Ok(parsed),
-        Err(_) => Err(go_num_error("ParseFloat", &go_quote(value), "invalid syntax")),
+        Err(_) => Err(go_num_error(
+            "ParseFloat",
+            &go_quote(value),
+            "invalid syntax",
+        )),
     }
 }
 
@@ -540,10 +558,7 @@ impl NanoCPUs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rational {
     /// `m / 10^scale`, where `scale` is negative for a trailing exponent.
-    Decimal {
-        mantissa: i128,
-        scale: i32,
-    },
+    Decimal { mantissa: i128, scale: i32 },
     /// `num / den`, i.e. the `a/b` form.
     Fraction { num: i128, den: i128 },
 }
@@ -683,8 +698,21 @@ pub fn parse_cpus(value: &str) -> Result<i64, String> {
 /// The `ulimitNameMapping` keys, minus `as` — which go-units carries commented
 /// out because it "doesn't seem usable with the way Docker inits a container".
 const ULIMIT_NAMES: [&str; 15] = [
-    "core", "cpu", "data", "fsize", "locks", "memlock", "msgqueue", "nice", "nofile", "nproc", "rss",
-    "rtprio", "rttime", "sigpending", "stack",
+    "core",
+    "cpu",
+    "data",
+    "fsize",
+    "locks",
+    "memlock",
+    "msgqueue",
+    "nice",
+    "nofile",
+    "nproc",
+    "rss",
+    "rtprio",
+    "rttime",
+    "sigpending",
+    "stack",
 ];
 
 /// `units.ParseUlimit`: `name=soft[:hard]`.
@@ -707,17 +735,17 @@ pub fn parse_ulimit(val: &str) -> Result<Ulimit, String> {
         2 => {
             // The hard limit is parsed first — that is the order `fallthrough`
             // runs in, and it decides which error a doubly bad value reports.
-            hard = parts[1].parse::<i64>().map_err(|_| {
-                go_num_error("ParseInt", &go_quote(parts[1]), "invalid syntax")
-            })?;
-            soft = parts[0].parse::<i64>().map_err(|_| {
-                go_num_error("ParseInt", &go_quote(parts[0]), "invalid syntax")
-            })?;
+            hard = parts[1]
+                .parse::<i64>()
+                .map_err(|_| go_num_error("ParseInt", &go_quote(parts[1]), "invalid syntax"))?;
+            soft = parts[0]
+                .parse::<i64>()
+                .map_err(|_| go_num_error("ParseInt", &go_quote(parts[0]), "invalid syntax"))?;
         }
         1 => {
-            soft = parts[0].parse::<i64>().map_err(|_| {
-                go_num_error("ParseInt", &go_quote(parts[0]), "invalid syntax")
-            })?;
+            soft = parts[0]
+                .parse::<i64>()
+                .map_err(|_| go_num_error("ParseInt", &go_quote(parts[0]), "invalid syntax"))?;
             hard = soft;
         }
         _ => {
@@ -831,8 +859,8 @@ pub fn validate_weight_device(val: &str) -> Result<WeightDevice, String> {
     if !key.starts_with("/dev/") {
         return Err(format!("bad format for device path: {val}"));
     }
-    let weight = go_parse_uint_bits(value, 16)
-        .ok_or_else(|| format!("invalid weight for device: {val}"))?;
+    let weight =
+        go_parse_uint_bits(value, 16).ok_or_else(|| format!("invalid weight for device: {val}"))?;
     if weight > 0 && !(10..=1000).contains(&weight) {
         return Err(format!("invalid weight for device: {val}"));
     }
@@ -935,7 +963,10 @@ pub fn validate_extra_host(val: &str) -> Result<String, String> {
             value = &value[1..value.len() - 1];
         }
         if validate_ip_address(value).is_err() {
-            return Err(format!("invalid IP address in add-host: {}", go_quote(value)));
+            return Err(format!(
+                "invalid IP address in add-host: {}",
+                go_quote(value)
+            ));
         }
     }
     Ok(format!("{key}:{value}"))
@@ -1112,7 +1143,10 @@ pub fn parse_link(val: &str) -> Result<(String, String), String> {
         return Ok((val.to_string(), val.to_string()));
     }
     if parts[0].starts_with('/') {
-        return Ok((parts[0][1..].to_string(), go_path_split(parts[1]).1.to_string()));
+        return Ok((
+            parts[0][1..].to_string(),
+            go_path_split(parts[1]).1.to_string(),
+        ));
     }
     Ok((parts[0].to_string(), parts[1].to_string()))
 }
@@ -1207,8 +1241,8 @@ fn read_kv_strings_with<P: AsRef<Path>>(
         let path = file.as_ref();
         // A missing file is reported bare: upstream's `kvfile.Parse` returns the
         // `os.Open` error unwrapped, and only wraps a *parse* error.
-        let raw =
-            std::fs::read(path).map_err(|err| format!("open {}: {}", path.display(), go_os_error(&err)))?;
+        let raw = std::fs::read(path)
+            .map_err(|err| format!("open {}: {}", path.display(), go_os_error(&err)))?;
         let parsed = parse_key_value_lines(&raw, lookup)
             .map_err(|err| format!("invalid env file ({}): {err}", path.display()))?;
         variables.extend(parsed);
@@ -1224,10 +1258,7 @@ fn read_kv_strings_with<P: AsRef<Path>>(
 /// is part of the value and stays. A key with whitespace in it is an error,
 /// which is why leading whitespace is stripped from the whole line before the
 /// key is looked at.
-fn parse_key_value_lines(
-    raw: &[u8],
-    lookup: Lookup<'_>,
-) -> Result<Vec<String>, String> {
+fn parse_key_value_lines(raw: &[u8], lookup: Lookup<'_>) -> Result<Vec<String>, String> {
     let mut lines: Vec<String> = Vec::new();
     for (index, raw_line) in raw.split(|byte| *byte == b'\n').enumerate() {
         // bufio.ScanLines drops a trailing carriage return.
@@ -1313,7 +1344,10 @@ mod tests {
         assert!(!o.get("baz"));
         assert_eq!(o.get_slice(), ["foo", "bar", "bar"]);
         // GetMap is a set of *whole values*: "bar" twice collapses to one.
-        assert_eq!(o.get_map(), BTreeSet::from(["foo".to_string(), "bar".to_string()]));
+        assert_eq!(
+            o.get_map(),
+            BTreeSet::from(["foo".to_string(), "bar".to_string()])
+        );
     }
 
     // opts_test.go: TestListOptsWithValidator
@@ -1436,14 +1470,8 @@ mod tests {
             );
         }
         // The message is the user's only clue, so it is checked exactly.
-        assert_eq!(
-            ram_in_bytes("").unwrap_err(),
-            "invalid size: ''"
-        );
-        assert_eq!(
-            ram_in_bytes("-32").unwrap_err(),
-            "invalid size: '-32'"
-        );
+        assert_eq!(ram_in_bytes("").unwrap_err(), "invalid size: ''");
+        assert_eq!(ram_in_bytes("-32").unwrap_err(), "invalid size: '-32'");
         // The suffix in the message is lower-cased only once the length check
         // has passed, which is why this one keeps its original spelling.
         assert_eq!(ram_in_bytes("32bm").unwrap_err(), "invalid suffix: 'bm'");
@@ -1504,7 +1532,10 @@ mod tests {
             );
         }
         // Just under the boundary still works.
-        assert_eq!(ram_in_bytes("8e18").expect("in range"), 8_000_000_000_000_000_000);
+        assert_eq!(
+            ram_in_bytes("8e18").expect("in range"),
+            8_000_000_000_000_000_000
+        );
         // 1e999 overflows the float parse itself, which Go reports as a range
         // error from strconv rather than a saturation.
         assert_eq!(
@@ -1609,7 +1640,10 @@ mod tests {
         assert_eq!(o.to_string(), "[nofile=512:1024]");
 
         o.set("core=1024:1024").expect("accepted");
-        assert!(o.set("nofile").unwrap_err().contains("invalid ulimit argument"));
+        assert!(o
+            .set("nofile")
+            .unwrap_err()
+            .contains("invalid ulimit argument"));
         assert!(o
             .set("notavalidtype=1024:1024")
             .unwrap_err()
@@ -1813,10 +1847,7 @@ mod tests {
     #[test]
     fn test_read_kv_env_strings() {
         let empty_env_file = TempFile::new("empty", "");
-        let env_file1 = TempFile::new(
-            "env1",
-            "Z1=z\nEMPTY_VAR=\nFROM_ENV\nNO_SUCH_ENV\n",
-        );
+        let env_file1 = TempFile::new("env1", "Z1=z\nEMPTY_VAR=\nFROM_ENV\nNO_SUCH_ENV\n");
         let env_file2 = TempFile::new("env2", "Z2=z\nA2=a");
 
         let previous = std::env::var("FROM_ENV").ok();
@@ -1845,7 +1876,13 @@ mod tests {
         let result = read(vec![&env_file1], &["Z1=override", "EXTRA=extra"]).expect("parsed");
         assert_eq!(
             result,
-            ["Z1=z", "EMPTY_VAR=", "FROM_ENV=from-env", "Z1=override", "EXTRA=extra"]
+            [
+                "Z1=z",
+                "EMPTY_VAR=",
+                "FROM_ENV=from-env",
+                "Z1=override",
+                "EXTRA=extra"
+            ]
         );
 
         let result = read(vec![], &["Z1=z", "EMPTY_VAR="]).expect("parsed");
@@ -1916,9 +1953,11 @@ mod tests {
     #[test]
     fn test_read_kv_strings_composes_with_convert_kv_strings_to_map() {
         let file = TempFile::new("env", "A=1\nB=2\n");
-        let pairs =
-            read_kv_strings(&[file.path()], &["A=override".to_string(), "C=3".to_string()])
-                .expect("parsed");
+        let pairs = read_kv_strings(
+            &[file.path()],
+            &["A=override".to_string(), "C=3".to_string()],
+        )
+        .expect("parsed");
         assert_eq!(pairs, ["A=1", "B=2", "A=override", "C=3"]);
         let map = super::super::docker_opts::convert_kv_strings_to_map(&pairs);
         assert_eq!(map.get("A").map(String::as_str), Some("override"));
@@ -1939,11 +1978,7 @@ mod tests {
             (" ::1 ", "::1", ""),
             ("2001:db8::68", "2001:db8::68", ""),
             ("2001:DB8::68", "2001:db8::68", ""),
-            (
-                "[::1]",
-                "",
-                "IP address is not correctly formatted: [::1]",
-            ),
+            ("[::1]", "", "IP address is not correctly formatted: [::1]"),
             ("127", "", "IP address is not correctly formatted: 127"),
             (
                 "random invalid string",
@@ -1977,7 +2012,6 @@ mod tests {
             "1.2.3.4"
         );
     }
-
 
     // --- ValidateDNSSearch -------------------------------------------------
 
@@ -2111,7 +2145,11 @@ mod tests {
         for (value, expected_err) in cases {
             match expected_err {
                 Some(message) => {
-                    assert_eq!(validate_label(value).unwrap_err(), *message, "for {value:?}")
+                    assert_eq!(
+                        validate_label(value).unwrap_err(),
+                        *message,
+                        "for {value:?}"
+                    )
                 }
                 None => assert_eq!(
                     validate_label(value).expect("valid"),
@@ -2207,17 +2245,21 @@ mod tests {
                 Some(message) => {
                     assert_eq!(validate_env(value).unwrap_err(), *message, "for {value:?}")
                 }
-                None => assert_eq!(validate_env(value).expect("valid"), *expected, "for {value:?}"),
+                None => assert_eq!(
+                    validate_env(value).expect("valid"),
+                    *expected,
+                    "for {value:?}"
+                ),
             }
         }
         // A bare name is expanded from the environment, and an explicit "="
         // wins over it even when it empties the value.
-        assert_eq!(
-            validate_env("PATH").expect("valid"),
-            format!("PATH={path}")
-        );
+        assert_eq!(validate_env("PATH").expect("valid"), format!("PATH={path}"));
         assert_eq!(validate_env("PATH=").expect("valid"), "PATH=");
-        assert_eq!(validate_env("PATH=something").expect("valid"), "PATH=something");
+        assert_eq!(
+            validate_env("PATH=something").expect("valid"),
+            "PATH=something"
+        );
     }
 
     // A bare name that is not set at all is passed through, so the daemon can
@@ -2277,7 +2319,11 @@ mod tests {
                 "ipv6local=[0:0:0:0:0:0:0:1]",
                 "ipv6local:0:0:0:0:0:0:0:1",
             ),
-            ("host-gateway, colon sep", "host.docker.internal:host-gateway", ""),
+            (
+                "host-gateway, colon sep",
+                "host.docker.internal:host-gateway",
+                "",
+            ),
             (
                 "host-gateway, eq sep",
                 "host.docker.internal=host-gateway",
@@ -2404,7 +2450,9 @@ mod tests {
             }
         );
         assert_eq!(
-            validate_weight_device("/dev/sda:1000").expect("valid").weight,
+            validate_weight_device("/dev/sda:1000")
+                .expect("valid")
+                .weight,
             1000
         );
         assert_eq!(
@@ -2427,8 +2475,14 @@ mod tests {
             validate_weight_device("sda:100").unwrap_err(),
             "bad format for device path: sda:100"
         );
-        assert_eq!(validate_weight_device(":100").unwrap_err(), "bad format: :100");
-        assert_eq!(validate_weight_device("/dev/sda").unwrap_err(), "bad format: /dev/sda");
+        assert_eq!(
+            validate_weight_device(":100").unwrap_err(),
+            "bad format: :100"
+        );
+        assert_eq!(
+            validate_weight_device("/dev/sda").unwrap_err(),
+            "bad format: /dev/sda"
+        );
     }
 
     // No upstream test exists; derived from the source.
@@ -2442,7 +2496,9 @@ mod tests {
             }
         );
         assert_eq!(
-            validate_throttle_bps_device("/dev/sda:1024").expect("valid").rate,
+            validate_throttle_bps_device("/dev/sda:1024")
+                .expect("valid")
+                .rate,
             1024
         );
         for rejected in ["/dev/sda:abc", "/dev/sda:-1", "/dev/sda:"] {

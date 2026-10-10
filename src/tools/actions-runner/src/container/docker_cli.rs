@@ -30,7 +30,10 @@ pub fn run_flag_set() -> FlagSet {
     FlagSet::new(vec![
         // ── General purpose ───────────────────────────────────────────────
         FlagDef::new("attach", List(Some(docker_opts::validate_attach))).short('a'),
-        FlagDef::new("device-cgroup-rule", List(Some(docker_opts::validate_device_cgroup_rule))),
+        FlagDef::new(
+            "device-cgroup-rule",
+            List(Some(docker_opts::validate_device_cgroup_rule)),
+        ),
         // Devices can only be validated once the daemon's OS is known, so no
         // validator here — `parse` does it late, deliberately.
         FlagDef::new("device", List(None)),
@@ -145,7 +148,9 @@ mod tests {
 
     fn parse(args: &[&str]) -> ParsedFlags {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        run_flag_set().parse(&args).expect("the flag line should parse")
+        run_flag_set()
+            .parse(&args)
+            .expect("the flag line should parse")
     }
 
     /// The table is the contract a workflow's `options:` is written against, so
@@ -155,23 +160,103 @@ mod tests {
         let flags = run_flag_set();
         let names: Vec<&str> = flags.flags().iter().map(|f| f.long).collect();
         let expected = [
-            "attach", "device-cgroup-rule", "device", "gpus", "env", "env-file", "entrypoint",
-            "group-add", "hostname", "domainname", "interactive", "label", "label-file",
-            "read-only", "restart", "stop-signal", "stop-timeout", "sysctl", "tty", "ulimit",
-            "user", "workdir", "rm", "annotation", "kernel-memory", "cap-add", "cap-drop",
-            "privileged", "security-opt", "userns", "cgroupns", "add-host", "dns", "dns-opt",
-            "dns-option", "dns-search", "expose", "ip", "ip6", "link", "link-local-ip",
-            "mac-address", "publish", "publish-all", "net", "network", "net-alias",
-            "network-alias", "log-driver", "volume-driver", "log-opt", "storage-opt", "tmpfs",
-            "volumes-from", "volume", "mount", "health-cmd", "health-interval", "health-retries",
-            "health-timeout", "health-start-period", "health-start-interval", "no-healthcheck",
-            "blkio-weight", "blkio-weight-device", "cidfile", "cpuset-cpus", "cpuset-mems",
-            "cpu-count", "cpu-percent", "cpu-period", "cpu-quota", "cpu-rt-period",
-            "cpu-rt-runtime", "cpu-shares", "cpus", "device-read-bps", "device-read-iops",
-            "device-write-bps", "device-write-iops", "io-maxbandwidth", "io-maxiops", "memory",
-            "memory-reservation", "memory-swap", "memory-swappiness", "oom-kill-disable",
-            "oom-score-adj", "pids-limit", "cgroup-parent", "ipc", "isolation", "pid", "shm-size",
-            "uts", "runtime", "init",
+            "attach",
+            "device-cgroup-rule",
+            "device",
+            "gpus",
+            "env",
+            "env-file",
+            "entrypoint",
+            "group-add",
+            "hostname",
+            "domainname",
+            "interactive",
+            "label",
+            "label-file",
+            "read-only",
+            "restart",
+            "stop-signal",
+            "stop-timeout",
+            "sysctl",
+            "tty",
+            "ulimit",
+            "user",
+            "workdir",
+            "rm",
+            "annotation",
+            "kernel-memory",
+            "cap-add",
+            "cap-drop",
+            "privileged",
+            "security-opt",
+            "userns",
+            "cgroupns",
+            "add-host",
+            "dns",
+            "dns-opt",
+            "dns-option",
+            "dns-search",
+            "expose",
+            "ip",
+            "ip6",
+            "link",
+            "link-local-ip",
+            "mac-address",
+            "publish",
+            "publish-all",
+            "net",
+            "network",
+            "net-alias",
+            "network-alias",
+            "log-driver",
+            "volume-driver",
+            "log-opt",
+            "storage-opt",
+            "tmpfs",
+            "volumes-from",
+            "volume",
+            "mount",
+            "health-cmd",
+            "health-interval",
+            "health-retries",
+            "health-timeout",
+            "health-start-period",
+            "health-start-interval",
+            "no-healthcheck",
+            "blkio-weight",
+            "blkio-weight-device",
+            "cidfile",
+            "cpuset-cpus",
+            "cpuset-mems",
+            "cpu-count",
+            "cpu-percent",
+            "cpu-period",
+            "cpu-quota",
+            "cpu-rt-period",
+            "cpu-rt-runtime",
+            "cpu-shares",
+            "cpus",
+            "device-read-bps",
+            "device-read-iops",
+            "device-write-bps",
+            "device-write-iops",
+            "io-maxbandwidth",
+            "io-maxiops",
+            "memory",
+            "memory-reservation",
+            "memory-swap",
+            "memory-swappiness",
+            "oom-kill-disable",
+            "oom-score-adj",
+            "pids-limit",
+            "cgroup-parent",
+            "ipc",
+            "isolation",
+            "pid",
+            "shm-size",
+            "uts",
+            "runtime",
+            "init",
         ];
         for name in expected {
             assert!(names.contains(&name), "--{name} is missing from the table");
@@ -233,11 +318,7 @@ mod tests {
                 .iter()
                 .find(|f| f.long == long)
                 .unwrap_or_else(|| panic!("--{long} is missing"));
-            assert_eq!(
-                def.short,
-                Some(short),
-                "--{long} should carry -{short}",
-            );
+            assert_eq!(def.short, Some(short), "--{long} should carry -{short}",);
         }
     }
 
@@ -260,12 +341,12 @@ mod tests {
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::docker_api::{
-    Config, ContainerConfig, EndpointIpamConfig, EndpointSettings, HostConfig, Isolation,
-    LogConfig, PidMode, PortBinding, Resources, UtsMode, UsernsMode, CgroupnsMode,
+    CgroupnsMode, Config, ContainerConfig, EndpointIpamConfig, EndpointSettings, HostConfig,
+    Isolation, LogConfig, PidMode, PortBinding, Resources, UsernsMode, UtsMode,
 };
 use super::docker_opts::{
-    parse_logging_opts, parse_security_opts, parse_storage_opts, parse_system_paths,
-    parse_device, validate_device,
+    parse_device, parse_logging_opts, parse_security_opts, parse_storage_opts, parse_system_paths,
+    validate_device,
 };
 use super::docker_opts_mounts::{GpuOpts, MountOpt, NetworkAttachmentOpts, NetworkOpt};
 use super::docker_opts_types::{parse_restart_policy, read_kv_env_strings, read_kv_strings};
@@ -365,9 +446,8 @@ pub fn parse(flags: &ParsedFlags, server_os: &str) -> Result<ContainerConfig, Pa
 
     // `--expose` also accepts a range, which expands to every port in it.
     for entry in flags.list("expose") {
-        let range = network::parse_port_range(entry).map_err(|err| {
-            format!("invalid range format for --expose: {err}")
-        })?;
+        let range = network::parse_port_range(entry)
+            .map_err(|err| format!("invalid range format for --expose: {err}"))?;
         for port in range.all() {
             exposed_ports.insert(port.to_string());
         }
@@ -413,10 +493,7 @@ pub fn parse(flags: &ParsedFlags, server_os: &str) -> Result<ContainerConfig, Pa
 
     // ── policies ────────────────────────────────────────────────────────
     let restart_policy = parse_restart_policy(flags.text("restart"))?;
-    let logging_opts = parse_logging_opts(
-        flags.text("log-driver"),
-        flags.list("log-opt"),
-    )?;
+    let logging_opts = parse_logging_opts(flags.text("log-driver"), flags.list("log-opt"))?;
     let security_opts = parse_security_opts(flags.list("security-opt"))?;
     let (security_opts, masked_paths, readonly_paths) = parse_system_paths(&security_opts);
     let storage_opts = parse_storage_opts(flags.list("storage-opt"))?;
@@ -483,7 +560,9 @@ pub fn parse(flags: &ParsedFlags, server_os: &str) -> Result<ContainerConfig, Pa
         stop_signal: flags.text("stop-signal").to_string(),
         // Only set when the flag was given, so the daemon's default applies
         // otherwise. This is the same reason `--init` is an `Option<bool>`.
-        stop_timeout: flags.changed("stop-timeout").then(|| flags.number("stop-timeout", 0)),
+        stop_timeout: flags
+            .changed("stop-timeout")
+            .then(|| flags.number("stop-timeout", 0)),
         healthcheck,
     };
 
@@ -534,9 +613,7 @@ pub fn parse(flags: &ParsedFlags, server_os: &str) -> Result<ContainerConfig, Pa
     };
 
     if auto_remove && !host_config.restart_policy.is_none() {
-        return Err(
-            "conflicting options: cannot specify both --restart and --rm".to_string(),
-        );
+        return Err("conflicting options: cannot specify both --restart and --rm".to_string());
     }
 
     // Allocating stdin in attached mode closes it on client disconnect.
@@ -724,11 +801,7 @@ fn parse_mac(value: &str) -> Option<Vec<u8>> {
         }
         return octets
             .iter()
-            .map(|octet| {
-                (octet.len() == 2)
-                    .then(|| hex_byte(octet))
-                    .flatten()
-            })
+            .map(|octet| (octet.len() == 2).then(|| hex_byte(octet)).flatten())
             .collect();
     }
     // The bare twelve-digit form, which is one 48-bit address written without
@@ -793,9 +866,7 @@ mod parse_tests {
         let mut argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         argv.push("ubuntu".to_string());
         argv.push("bash".to_string());
-        let flags = run_flag_set()
-            .parse(&argv)
-            .map_err(|err| err.to_string())?;
+        let flags = run_flag_set().parse(&argv).map_err(|err| err.to_string())?;
         parse(&flags, server_os)
     }
 
@@ -891,16 +962,34 @@ mod parse_tests {
     // docker_cli_test.go: TestParseWithMemorySwap
     #[test]
     fn a_memory_swap_limit_keeps_minus_one() {
-        assert_eq!(must_parse(&["--memory-swap", "2g"]).host_config.resources.memory_swap, 2_147_483_648);
+        assert_eq!(
+            must_parse(&["--memory-swap", "2g"])
+                .host_config
+                .resources
+                .memory_swap,
+            2_147_483_648
+        );
         // `-1` is unlimited, and must survive as `-1` rather than becoming 0.
-        assert_eq!(must_parse(&["--memory-swap=-1"]).host_config.resources.memory_swap, -1);
+        assert_eq!(
+            must_parse(&["--memory-swap=-1"])
+                .host_config
+                .resources
+                .memory_swap,
+            -1
+        );
     }
 
     // docker_cli_test.go: TestRunFlagsParseShmSize
     #[test]
     fn a_shm_size_is_converted_to_bytes() {
-        assert_eq!(must_parse(&["--shm-size=64M"]).host_config.shm_size, 67_108_864);
-        assert_eq!(must_parse(&["--shm-size=2g"]).host_config.shm_size, 2_147_483_648);
+        assert_eq!(
+            must_parse(&["--shm-size=64M"]).host_config.shm_size,
+            67_108_864
+        );
+        assert_eq!(
+            must_parse(&["--shm-size=2g"]).host_config.shm_size,
+            2_147_483_648
+        );
         // A malformed size is an error, not a silent zero.
         assert!(parse_run("linux", &["--shm-size=abc"]).is_err());
     }
@@ -909,7 +998,10 @@ mod parse_tests {
     #[test]
     fn exposed_ports_include_a_range() {
         let parsed = must_parse(&["--expose", "80"]);
-        assert!(parsed.config.exposed_ports.contains("80/tcp"), "80 should be exposed");
+        assert!(
+            parsed.config.exposed_ports.contains("80/tcp"),
+            "80 should be exposed"
+        );
 
         // A range expands to every port in it.
         let parsed = must_parse(&["--expose", "8000-8005"]);
@@ -970,11 +1062,17 @@ mod parse_tests {
         for (input, name, retries) in table {
             let policy = must_parse(&["--restart", input]).host_config.restart_policy;
             assert_eq!(policy.name, *name, "name for --restart={input:?}");
-            assert_eq!(policy.maximum_retry_count, *retries, "retries for {input:?}");
+            assert_eq!(
+                policy.maximum_retry_count, *retries,
+                "retries for {input:?}"
+            );
         }
 
         for (input, message) in [
-            (":1", "invalid restart policy format: no policy provided before colon"),
+            (
+                ":1",
+                "invalid restart policy format: no policy provided before colon",
+            ),
             (
                 "always:2:3",
                 "invalid restart policy format: maximum retry count must be an integer",
@@ -1072,7 +1170,10 @@ mod parse_tests {
     #[test]
     fn a_stop_timeout_is_only_set_when_asked_for() {
         assert_eq!(must_parse(&[]).config.stop_timeout, None);
-        assert_eq!(must_parse(&["--stop-timeout=10"]).config.stop_timeout, Some(10));
+        assert_eq!(
+            must_parse(&["--stop-timeout=10"]).config.stop_timeout,
+            Some(10)
+        );
     }
 
     /// `--init` likewise, and `--init=false` is still "changed".
@@ -1110,10 +1211,16 @@ mod parse_tests {
     #[test]
     fn a_tmpfs_is_split_into_path_and_options() {
         let parsed = must_parse(&["--tmpfs", "/tmp:size=1m"]);
-        assert_eq!(parsed.host_config.tmpfs.get("/tmp").map(String::as_str), Some("size=1m"));
+        assert_eq!(
+            parsed.host_config.tmpfs.get("/tmp").map(String::as_str),
+            Some("size=1m")
+        );
 
         let parsed = must_parse(&["--tmpfs", "/tmp"]);
-        assert_eq!(parsed.host_config.tmpfs.get("/tmp").map(String::as_str), Some(""));
+        assert_eq!(
+            parsed.host_config.tmpfs.get("/tmp").map(String::as_str),
+            Some("")
+        );
     }
 
     // docker_cli_test.go: TestParseEnvfileVariables
@@ -1138,16 +1245,28 @@ mod parse_tests {
     #[test]
     fn labels_come_from_flags_and_files() {
         let parsed = must_parse(&["-l", "foo=bar", "-l", "baz=qux"]);
-        assert_eq!(parsed.config.labels.get("foo").map(String::as_str), Some("bar"));
-        assert_eq!(parsed.config.labels.get("baz").map(String::as_str), Some("qux"));
+        assert_eq!(
+            parsed.config.labels.get("foo").map(String::as_str),
+            Some("bar")
+        );
+        assert_eq!(
+            parsed.config.labels.get("baz").map(String::as_str),
+            Some("qux")
+        );
 
         let dir = tempfile::tempdir().expect("a temporary directory");
         let file = dir.path().join("labels");
         std::fs::write(&file, "one=1\ntwo=2\n").expect("written");
         let path = file.to_string_lossy().to_string();
         let parsed = parse_run("linux", &["--label-file", &path]).expect("parsed");
-        assert_eq!(parsed.config.labels.get("one").map(String::as_str), Some("1"));
-        assert_eq!(parsed.config.labels.get("two").map(String::as_str), Some("2"));
+        assert_eq!(
+            parsed.config.labels.get("one").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            parsed.config.labels.get("two").map(String::as_str),
+            Some("2")
+        );
     }
 
     // docker_cli_test.go: TestParseRunLinks
@@ -1162,9 +1281,15 @@ mod parse_tests {
     #[test]
     fn an_unset_network_is_the_default() {
         assert_eq!(must_parse(&[]).host_config.network_mode, "default");
-        assert_eq!(must_parse(&["--network", "net1"]).host_config.network_mode, "net1");
+        assert_eq!(
+            must_parse(&["--network", "net1"]).host_config.network_mode,
+            "net1"
+        );
         // The hidden `--net` spelling reaches the same field.
-        assert_eq!(must_parse(&["--net", "net1"]).host_config.network_mode, "net1");
+        assert_eq!(
+            must_parse(&["--net", "net1"]).host_config.network_mode,
+            "net1"
+        );
     }
 
     /// `--gpus all` becomes a device request.
@@ -1238,11 +1363,7 @@ mod parse_tests {
             ),
         ];
         for (args, want) in cases {
-            assert_eq!(
-                parse_run("linux", args).unwrap_err(),
-                *want,
-                "for {args:?}",
-            );
+            assert_eq!(parse_run("linux", args).unwrap_err(), *want, "for {args:?}",);
         }
     }
 
@@ -1251,10 +1372,7 @@ mod parse_tests {
     fn a_lone_network_with_nothing_configured_is_left_to_the_daemon() {
         // Both the legacy and the advanced spelling name the same network, and
         // neither produces an endpoint entry: the daemon creates the default.
-        for args in [
-            vec!["--network", "net1"],
-            vec!["--network", "name=net1"],
-        ] {
+        for args in [vec!["--network", "net1"], vec!["--network", "name=net1"]] {
             let parsed = must_parse(&args);
             assert_eq!(parsed.host_config.network_mode, "net1", "for {args:?}");
             assert!(
@@ -1295,8 +1413,14 @@ mod parse_tests {
             .expect("an endpoint for net1")
             .as_ref()
             .expect("a configured endpoint");
-        assert_eq!(endpoint.aliases, vec!["web1".to_string(), "web2".to_string()]);
-        assert_eq!(endpoint.links, vec!["foo:bar".to_string(), "bar:baz".to_string()]);
+        assert_eq!(
+            endpoint.aliases,
+            vec!["web1".to_string(), "web2".to_string()]
+        );
+        assert_eq!(
+            endpoint.links,
+            vec!["foo:bar".to_string(), "bar:baz".to_string()]
+        );
 
         let ipam = endpoint.ipam_config.as_ref().expect("addresses were given");
         assert_eq!(ipam.ipv4_address, Some("172.20.88.22".parse().unwrap()));

@@ -174,12 +174,18 @@ mod tests {
         let seen = Arc::new(StdMutex::new(Vec::new()));
         let first_sink = Arc::clone(&seen);
         let first: LineHandler = Arc::new(move |line| {
-            first_sink.lock().expect("poisoned").push(format!("a:{line}"));
+            first_sink
+                .lock()
+                .expect("poisoned")
+                .push(format!("a:{line}"));
             false
         });
         let second_sink = Arc::clone(&seen);
         let second: LineHandler = Arc::new(move |line| {
-            second_sink.lock().expect("poisoned").push(format!("b:{line}"));
+            second_sink
+                .lock()
+                .expect("poisoned")
+                .push(format!("b:{line}"));
             true
         });
 

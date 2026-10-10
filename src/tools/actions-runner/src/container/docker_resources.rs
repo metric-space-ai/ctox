@@ -130,8 +130,9 @@ pub enum VolumeAction {
 pub fn new_docker_network_create_executor(name: String) -> Executor {
     Arc::new(move |ctx: &RunContext| {
         let client = connect()?;
-        let networks = block_on(client.list_networks(Some(ListNetworksOptionsBuilder::new().build())))
-            .map_err(|err| anyhow!("failed to list docker networks: {err}"))?;
+        let networks =
+            block_on(client.list_networks(Some(ListNetworksOptionsBuilder::new().build())))
+                .map_err(|err| anyhow!("failed to list docker networks: {err}"))?;
         ctx.log_debug(&format!("{networks:?}"));
 
         let known: Vec<(String, String)> = networks
@@ -177,8 +178,9 @@ pub fn new_docker_network_create_executor(name: String) -> Executor {
 pub fn new_docker_network_remove_executor(name: String) -> Executor {
     Arc::new(move |ctx: &RunContext| {
         let client = connect()?;
-        let networks = block_on(client.list_networks(Some(ListNetworksOptionsBuilder::new().build())))
-            .map_err(|err| anyhow!("failed to list docker networks: {err}"))?;
+        let networks =
+            block_on(client.list_networks(Some(ListNetworksOptionsBuilder::new().build())))
+                .map_err(|err| anyhow!("failed to list docker networks: {err}"))?;
         ctx.log_debug(&format!("{networks:?}"));
 
         for net in &networks {
@@ -395,7 +397,10 @@ mod tests {
     /// An empty daemon list is a create, not an error.
     #[test]
     fn create_happens_against_an_empty_network_list() {
-        assert_eq!(decide_network_create(&[], "act_default"), NetworkAction::Create);
+        assert_eq!(
+            decide_network_create(&[], "act_default"),
+            NetworkAction::Create
+        );
     }
 
     /// A name match is a whole-name match. `act` must not swallow `act_default`,
@@ -412,7 +417,9 @@ mod tests {
     fn a_network_with_no_attached_endpoints_is_removed() {
         assert_eq!(
             decide_network_removal("abc", 0),
-            NetworkAction::Remove { id: "abc".to_string() },
+            NetworkAction::Remove {
+                id: "abc".to_string()
+            },
         );
     }
 
@@ -422,7 +429,9 @@ mod tests {
     fn a_network_with_an_attached_endpoint_is_not_removed() {
         assert_eq!(
             decide_network_removal("abc", 1),
-            NetworkAction::SkipActiveEndpoints { id: "abc".to_string() },
+            NetworkAction::SkipActiveEndpoints {
+                id: "abc".to_string()
+            },
         );
     }
 
@@ -433,13 +442,17 @@ mod tests {
         let mut endpoints: Option<std::collections::HashMap<String, ()>> = None;
         assert_eq!(
             decide_network_removal("abc", endpoints.as_ref().map_or(0, |map| map.len())),
-            NetworkAction::Remove { id: "abc".to_string() },
+            NetworkAction::Remove {
+                id: "abc".to_string()
+            },
         );
         // An empty map is the same answer, and must not be confused with `None`.
         endpoints = Some(std::collections::HashMap::new());
         assert_eq!(
             decide_network_removal("abc", endpoints.as_ref().map_or(0, |map| map.len())),
-            NetworkAction::Remove { id: "abc".to_string() },
+            NetworkAction::Remove {
+                id: "abc".to_string()
+            },
         );
     }
 
@@ -456,9 +469,15 @@ mod tests {
         assert_eq!(
             plan,
             vec![
-                NetworkAction::SkipActiveEndpoints { id: "aaa".to_string() },
-                NetworkAction::Remove { id: "bbb".to_string() },
-                NetworkAction::SkipActiveEndpoints { id: "ccc".to_string() },
+                NetworkAction::SkipActiveEndpoints {
+                    id: "aaa".to_string()
+                },
+                NetworkAction::Remove {
+                    id: "bbb".to_string()
+                },
+                NetworkAction::SkipActiveEndpoints {
+                    id: "ccc".to_string()
+                },
             ],
             "one action per duplicate, in order, with no break",
         );
@@ -470,11 +489,15 @@ mod tests {
     fn a_failed_removal_is_swallowed_rather_than_propagated() {
         assert_eq!(
             classify_network_removal("abc", &Ok(())),
-            NetworkAction::Remove { id: "abc".to_string() },
+            NetworkAction::Remove {
+                id: "abc".to_string()
+            },
         );
         assert_eq!(
             classify_network_removal("abc", &Err("still has active endpoints".to_string())),
-            NetworkAction::SkipRemoveFailed { id: "abc".to_string() },
+            NetworkAction::SkipRemoveFailed {
+                id: "abc".to_string()
+            },
         );
     }
 
@@ -498,7 +521,10 @@ mod tests {
             decide_volume_remove(&known, "act_cache"),
             VolumeAction::NotFound,
         );
-        assert_eq!(decide_volume_remove(&[], "act_cache"), VolumeAction::NotFound);
+        assert_eq!(
+            decide_volume_remove(&[], "act_cache"),
+            VolumeAction::NotFound
+        );
     }
 
     /// Only the *inner* volume executor checks `dryrun`, and it returns before

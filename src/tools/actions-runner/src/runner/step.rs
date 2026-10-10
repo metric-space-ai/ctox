@@ -255,11 +255,7 @@ pub fn merge_into_map(
 /// `'` is doubled in both paths, upstream's way of quoting for a log line. It
 /// is reproduced because the message is the only thing a user sees when an
 /// action's symlink is refused.
-pub fn symlink_join(
-    filename: &str,
-    sym: &str,
-    parent: &str,
-) -> Result<String, String> {
+pub fn symlink_join(filename: &str, sym: &str, parent: &str) -> Result<String, String> {
     let dir = crate::gopath::dir(filename);
     let dest = crate::gopath::join(&[&dir, sym]);
     let prefix = format!("{}/", crate::gopath::clean(parent));
@@ -451,7 +447,9 @@ pub fn is_continue_on_error(
         crate::expr::DefaultStatusCheck::None,
     )
     .map_err(|error| {
-        format!("  ❌  Error in continue-on-error-expression: \"continue-on-error: {expr}\" ({error})")
+        format!(
+            "  ❌  Error in continue-on-error-expression: \"continue-on-error: {expr}\" ({error})"
+        )
     })
 }
 
@@ -756,8 +754,15 @@ mod tests {
             (
                 "into empty",
                 map(&[]),
-                vec![map(&[("key1", "value1"), ("key2", "value2")]), map(&[("key2", "overridden"), ("key3", "value3")])],
-                map(&[("key1", "value1"), ("key2", "overridden"), ("key3", "value3")]),
+                vec![
+                    map(&[("key1", "value1"), ("key2", "value2")]),
+                    map(&[("key2", "overridden"), ("key3", "value3")]),
+                ],
+                map(&[
+                    ("key1", "value1"),
+                    ("key2", "overridden"),
+                    ("key3", "value3"),
+                ]),
             ),
             (
                 "into existing",
@@ -793,7 +798,11 @@ mod tests {
         ] {
             let mut out = map(&target);
             merge_into_map_case_insensitive(&mut out, &[map(&incoming)]);
-            assert_eq!(out, map(&expected), "target {target:?} incoming {incoming:?}");
+            assert_eq!(
+                out,
+                map(&expected),
+                "target {target:?} incoming {incoming:?}"
+            );
         }
     }
 
@@ -843,12 +852,32 @@ mod tests {
     fn symlink_join_reproduces_every_measured_row() {
         for (filename, sym, parent, want) in [
             ("/a/b/link", "target", "/a/b", Ok("/a/b/target".to_string())),
-            ("/a/b/link", "sub/target", "/a/b", Ok("/a/b/sub/target".to_string())),
-            ("/a/b/link", "target", "/a/b/", Ok("/a/b/target".to_string())),
-            ("/a/b/link", "target", "/a/b/..", Ok("/a/b/target".to_string())),
+            (
+                "/a/b/link",
+                "sub/target",
+                "/a/b",
+                Ok("/a/b/sub/target".to_string()),
+            ),
+            (
+                "/a/b/link",
+                "target",
+                "/a/b/",
+                Ok("/a/b/target".to_string()),
+            ),
+            (
+                "/a/b/link",
+                "target",
+                "/a/b/..",
+                Ok("/a/b/target".to_string()),
+            ),
             ("link", "target", ".", Ok("target".to_string())),
             ("link", "target", "./", Ok("target".to_string())),
-            ("/a/link", "../a/b/target", "/a", Ok("/a/b/target".to_string())),
+            (
+                "/a/link",
+                "../a/b/target",
+                "/a",
+                Ok("/a/b/target".to_string()),
+            ),
             (
                 "/a/b/link",
                 "/a/b/abs",
@@ -862,7 +891,12 @@ mod tests {
                 "/a/b",
                 Ok("/a/b/target".to_string()),
             ),
-            ("/a/b/link", "a/b/target", "/a/b", Ok("/a/b/a/b/target".to_string())),
+            (
+                "/a/b/link",
+                "a/b/target",
+                "/a/b",
+                Ok("/a/b/a/b/target".to_string()),
+            ),
             (
                 "/a/b/link",
                 "../outside",
@@ -885,9 +919,7 @@ mod tests {
                 "/a/b/link",
                 "x",
                 "/a/it's",
-                Err(
-                    "symlink tries to access file '/a/b/x' outside of '/a/it''s'".to_string(),
-                ),
+                Err("symlink tries to access file '/a/b/x' outside of '/a/it''s'".to_string()),
             ),
         ] {
             assert_eq!(
@@ -1024,7 +1056,9 @@ mod tests {
     }
 
     /// The environment and status a step condition is evaluated against.
-    fn condition_parts(rc: &RunContext) -> (
+    fn condition_parts(
+        rc: &RunContext,
+    ) -> (
         crate::expr::EvaluationEnvironment,
         super::super::expression::RunStatus,
     ) {
@@ -1071,10 +1105,7 @@ mod tests {
     /// Not upstream — its table only exercises `Main`.
     #[test]
     fn a_post_step_inherits_always_and_the_others_inherit_success() {
-        let (mut rc, _if) = condition_fixture(
-            "if: true",
-            &[("a", StepStatus::Failure)],
-        );
+        let (mut rc, _if) = condition_fixture("if: true", &[("a", StepStatus::Failure)]);
         rc.step_results.insert(
             "a".to_string(),
             StepResult {
@@ -1129,9 +1160,7 @@ mod tests {
         let error = is_continue_on_error(&environment, &status, "${{ 'test' != test }}")
             .expect_err("a parse error is an error");
         assert!(
-            error.starts_with(
-                "  ❌  Error in continue-on-error-expression: \"continue-on-error: "
-            ),
+            error.starts_with("  ❌  Error in continue-on-error-expression: \"continue-on-error: "),
             "got: {error}"
         );
     }
@@ -1240,7 +1269,8 @@ mod tests {
     #[test]
     fn success_in_an_env_value_reads_the_needs_chain_not_the_step_status() {
         // A job that needs a failed job but has failed nothing itself.
-        let source = "jobs:\n  build:\n    runs-on: ubuntu-latest\n  \"1\":\n    needs: build\n    \
+        let source =
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n  \"1\":\n    needs: build\n    \
                       steps:\n      - uses: ./\n        env:\n          SAW: ${{ success() }}\n";
         let doc = Rc::new(Document::parse(source).expect("the fixture parses"));
         let mut workflow = Workflow::from_document("test.yml", &doc).expect("decodes");
@@ -1389,15 +1419,7 @@ mod tests {
         let status = super::super::expression::RunStatus::new(&rc);
 
         let mut env = BTreeMap::new();
-        setup_env(
-            &mut rc,
-            &no_git(),
-            &status,
-            &mut env,
-            &step,
-            &github,
-        )
-        .expect("setup");
+        setup_env(&mut rc, &no_git(), &status, &mut env, &step, &github).expect("setup");
 
         for key in [
             "GITHUB_REF",
@@ -1492,10 +1514,7 @@ mod tests {
             .and_then(|job| job.steps.first())
             .and_then(|step| step.raw_env);
         assert!(step_env_node.is_some(), "the fixture has an env: block");
-        StepEnvFixture {
-            run,
-            step_env_node,
-        }
+        StepEnvFixture { run, step_env_node }
     }
 
     /// The two passes exist to break a cycle, and this is the cycle.

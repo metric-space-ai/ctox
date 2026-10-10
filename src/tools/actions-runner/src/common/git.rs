@@ -115,10 +115,7 @@ impl Slug {
 pub fn find_git_slug(url: &str, github_instance: &str) -> Slug {
     let group = |pattern: &Regex| -> Option<(String, String)> {
         let captures = pattern.captures(url)?;
-        Some((
-            captures[1].to_string(),
-            captures[2].to_string(),
-        ))
+        Some((captures[1].to_string(), captures[2].to_string()))
     };
 
     if let Some((_, repo)) = group(code_commit_http_regex()) {
@@ -172,8 +169,8 @@ pub fn find_git_slug(url: &str, github_instance: &str) -> Slug {
 
 /// `findGitRemoteURL`: the repository's first URL for `remote_name`.
 pub fn find_git_remote_url(repo_path: &str, remote_name: &str) -> Result<String> {
-    let repository =
-        gix::discover(repo_path).with_context(|| format!("opening the repository at {repo_path}"))?;
+    let repository = gix::discover(repo_path)
+        .with_context(|| format!("opening the repository at {repo_path}"))?;
     let remote = repository
         .find_remote(remote_name)
         .with_context(|| format!("remote {remote_name:?} not found"))?;
@@ -204,12 +201,9 @@ pub fn find_github_repo(
 
 /// `FindGitRevision`: the checked-out commit, short and full.
 pub fn find_git_revision(repo_path: &str) -> Result<(String, String)> {
-    let repository =
-        gix::discover(repo_path).with_context(|| format!("opening the repository at {repo_path}"))?;
-    let head = repository
-        .head_id()
-        .context("resolving HEAD")?
-        .detach();
+    let repository = gix::discover(repo_path)
+        .with_context(|| format!("opening the repository at {repo_path}"))?;
+    let head = repository.head_id().context("resolving HEAD")?.detach();
     let hash = head.to_hex().to_string();
     if hash.chars().all(|c| c == '0') {
         bail!("HEAD sha1 could not be resolved");
@@ -227,8 +221,8 @@ pub fn find_git_revision(repo_path: &str) -> Result<(String, String)> {
 /// branch, and the search does not stop at the first branch — a tag pointing at
 /// the same commit may come later in the iteration.
 pub fn find_git_ref(repo_path: &str) -> Result<String> {
-    let repository =
-        gix::discover(repo_path).with_context(|| format!("opening the repository at {repo_path}"))?;
+    let repository = gix::discover(repo_path)
+        .with_context(|| format!("opening the repository at {repo_path}"))?;
     let head_id = repository.head_id().context("resolving HEAD")?.detach();
     let head = head_id.to_hex().to_string();
     if head.chars().all(|c| c == '0') {
@@ -280,9 +274,7 @@ pub fn find_git_ref(repo_path: &str) -> Result<String> {
     if let Some(branch) = branch {
         return Ok(branch);
     }
-    bail!(
-        "failed to identify reference (tag/branch) for the checked-out revision '{head}'"
-    )
+    bail!("failed to identify reference (tag/branch) for the checked-out revision '{head}'")
 }
 
 /// Short SHA references are not supported.
@@ -339,8 +331,16 @@ mod tests {
         ("http://github.com/nektos/act.git", "GitHub", "nektos/act"),
         ("https://github.com/nektos/act", "GitHub", "nektos/act"),
         ("http://github.com/nektos/act", "GitHub", "nektos/act"),
-        ("git+ssh://git@github.com/owner/repo.git", "GitHub", "owner/repo"),
-        ("http://myotherrepo.com/act.git", "", "http://myotherrepo.com/act.git"),
+        (
+            "git+ssh://git@github.com/owner/repo.git",
+            "GitHub",
+            "owner/repo",
+        ),
+        (
+            "http://myotherrepo.com/act.git",
+            "",
+            "http://myotherrepo.com/act.git",
+        ),
         // --- the greedy prefix, measured ---
         ("https://github.com/a/b/c.git", "GitHub", "b/c"),
         ("https://github.com/a/b.git/c.git", "GitHub", "b.git/c"),
@@ -353,8 +353,16 @@ mod tests {
         ("github.com:", "", "github.com:"),
         ("github.com/", "", "github.com/"),
         // `.git` is stripped case-sensitively, and only once.
-        ("https://github.com/owner/repo.GIT", "GitHub", "owner/repo.GIT"),
-        ("git@github.com:nektos/act.git.git", "GitHub", "nektos/act.git"),
+        (
+            "https://github.com/owner/repo.GIT",
+            "GitHub",
+            "owner/repo.GIT",
+        ),
+        (
+            "git@github.com:nektos/act.git.git",
+            "GitHub",
+            "nektos/act.git",
+        ),
         // The `.*` before `github.com` absorbs credentials.
         (
             "https://user:token@github.com/owner/repo.git",
@@ -405,7 +413,11 @@ mod tests {
                 "GitHubEnterprise",
                 "owner/repo",
             ),
-            ("git@github.example.com:owner/repo", "GitHubEnterprise", "owner/repo"),
+            (
+                "git@github.example.com:owner/repo",
+                "GitHubEnterprise",
+                "owner/repo",
+            ),
             // The GitHub pattern still wins for a github.com URL, because it is
             // checked first and does not depend on the instance.
             ("https://github.com/owner/repo.git", "GitHub", "owner/repo"),
@@ -428,11 +440,12 @@ mod tests {
     fn the_github_patterns_choose_different_owners_for_the_same_nesting() {
         let url = "https://github.com/a/b/c.git";
         let github = find_git_slug(url, "github.com");
-        let enterprise = find_git_slug(
-            "https://github.example.com/a/b/c.git",
-            "github.example.com",
+        let enterprise =
+            find_git_slug("https://github.example.com/a/b/c.git", "github.example.com");
+        assert_eq!(
+            github.slug, "b/c",
+            "the greedy .* leaves the shortest owner"
         );
-        assert_eq!(github.slug, "b/c", "the greedy .* leaves the shortest owner");
         assert_eq!(
             enterprise.slug, "a/b/c",
             "the GHE pattern has no .*, so the greedy group wins"
@@ -562,7 +575,15 @@ mod tests {
     fn the_repository_slug_comes_from_the_remote() {
         let (_temp, dir) = repo_with("remote");
         git(&dir, &["commit", "--allow-empty", "-m", "msg"]);
-        git(&dir, &["remote", "add", "origin", "https://github.com/nektos/act.git"]);
+        git(
+            &dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/nektos/act.git",
+            ],
+        );
         let path = dir.to_str().expect("a path");
 
         assert_eq!(
@@ -587,7 +608,10 @@ mod tests {
     fn an_ssh_remote_gives_the_same_slug() {
         let (_temp, dir) = repo_with("ssh_remote");
         git(&dir, &["commit", "--allow-empty", "-m", "msg"]);
-        git(&dir, &["remote", "add", "origin", "git@github.com:nektos/act.git"]);
+        git(
+            &dir,
+            &["remote", "add", "origin", "git@github.com:nektos/act.git"],
+        );
         assert_eq!(
             find_github_repo(dir.to_str().expect("a path"), "github.com", "origin")
                 .expect("a slug"),

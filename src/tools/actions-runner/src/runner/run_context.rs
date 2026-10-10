@@ -98,9 +98,7 @@ pub struct ServiceContainer(Arc<dyn crate::container::ExecutionsEnvironment>);
 
 impl ServiceContainer {
     /// Boxes a container.
-    pub fn new(
-        container: Arc<dyn crate::container::ExecutionsEnvironment>,
-    ) -> Self {
+    pub fn new(container: Arc<dyn crate::container::ExecutionsEnvironment>) -> Self {
         Self(container)
     }
 
@@ -312,7 +310,9 @@ impl RunContext {
             if let Some(run) = &self.run {
                 merged = merge_maps([
                     run.workflow.env.clone(),
-                    run.job().map(|job| job.environment(run.document())).unwrap_or_default(),
+                    run.job()
+                        .map(|job| job.environment(run.document()))
+                        .unwrap_or_default(),
                     self.config.env.clone(),
                 ]);
             }
@@ -471,8 +471,14 @@ impl RunContext {
             return (binds, mounts);
         }
 
-        mounts.insert("act-toolcache".to_string(), "/opt/hostedtoolcache".to_string());
-        mounts.insert(format!("{name}-env"), crate::container::linux::ACT_PATH.to_string());
+        mounts.insert(
+            "act-toolcache".to_string(),
+            "/opt/hostedtoolcache".to_string(),
+        );
+        mounts.insert(
+            format!("{name}-env"),
+            crate::container::linux::ACT_PATH.to_string(),
+        );
 
         if let Some(spec) = self
             .run
@@ -565,9 +571,9 @@ impl RunContext {
                 text if text.is_empty() => Vec::new(),
                 text => vec![text.clone()],
             },
-            crate::yaml_node::NodeKind::Sequence => document
-                .string_slice(runs_on)
-                .unwrap_or_default(),
+            crate::yaml_node::NodeKind::Sequence => {
+                document.string_slice(runs_on).unwrap_or_default()
+            }
             // A mapping is not a set of labels. GitHub's `{ group, labels }`
             // form is not something act resolves here, and upstream returns
             // nothing for it too.
@@ -721,9 +727,7 @@ impl RunContext {
             &condition,
             crate::expr::DefaultStatusCheck::Success,
         )
-        .map_err(|error| {
-            format!("  ❌  Error in if-expression: \"if: {condition}\" ({error})")
-        })?;
+        .map_err(|error| format!("  ❌  Error in if-expression: \"if: {condition}\" ({error})"))?;
 
         // Upstream evaluates the condition and the job type, then reports the
         // condition's failure first. A job that is both malformed and skipped
@@ -843,7 +847,9 @@ impl RunContext {
         status: &dyn crate::expr::StatusProvider,
     ) -> bool {
         self.container_image(environment, status).is_empty()
-            && self.runs_on_image(environment, status).eq_ignore_ascii_case("-self-hosted")
+            && self
+                .runs_on_image(environment, status)
+                .eq_ignore_ascii_case("-self-hosted")
     }
 
     /// `ActionCacheDir`: where downloaded actions are kept between runs.
@@ -872,7 +878,6 @@ impl RunContext {
     }
 }
 
-
 impl RunContext {
     /// `getGithubContext`: assemble the `github` context for this run.
     ///
@@ -889,10 +894,7 @@ impl RunContext {
     /// Steps 3 before 4 is why a `push` event's `ref` is used but `run_id` still
     /// gets its default, and step 6 after 5 is why `ref_type` is set before the
     /// URLs are decided.
-    pub fn get_github_context(
-        &self,
-        git: &GitLookups,
-    ) -> anyhow::Result<GithubContext> {
+    pub fn get_github_context(&self, git: &GitLookups) -> anyhow::Result<GithubContext> {
         let config_env = &self.config.env;
         let workflow_name = self
             .run
@@ -902,7 +904,10 @@ impl RunContext {
         let mut github = GithubContext {
             event: serde_json::Map::new(),
             workflow: workflow_name,
-            run_attempt: config_env.get("GITHUB_RUN_ATTEMPT").cloned().unwrap_or_default(),
+            run_attempt: config_env
+                .get("GITHUB_RUN_ATTEMPT")
+                .cloned()
+                .unwrap_or_default(),
             run_id: config_env.get("GITHUB_RUN_ID").cloned().unwrap_or_default(),
             run_number: config_env
                 .get("GITHUB_RUN_NUMBER")
@@ -919,7 +924,11 @@ impl RunContext {
                 .get("GITHUB_ACTION_REPOSITORY")
                 .cloned()
                 .unwrap_or_default(),
-            action_ref: self.env.get("GITHUB_ACTION_REF").cloned().unwrap_or_default(),
+            action_ref: self
+                .env
+                .get("GITHUB_ACTION_REF")
+                .cloned()
+                .unwrap_or_default(),
             repository_owner: config_env
                 .get("GITHUB_REPOSITORY_OWNER")
                 .cloned()
@@ -1052,9 +1061,7 @@ impl RunContext {
 pub fn production_git_lookups() -> GitLookups {
     GitLookups::new(
         crate::common::git::find_git_ref,
-        |path| {
-            crate::common::git::find_git_revision(path).map(|(_, revision)| revision)
-        },
+        |path| crate::common::git::find_git_revision(path).map(|(_, revision)| revision),
         crate::common::git::find_github_repo,
     )
 }
@@ -1111,11 +1118,7 @@ pub fn get_service_binds_and_mounts(
 /// `name:/path` and a host path is absolute, so `IsAbs` on the joined string is
 /// what decides. Reading the colon first and the path second would mount a host
 /// file instead of binding it, and the step would find it empty.
-fn split_volume(
-    volume: &str,
-    binds: &mut Vec<String>,
-    mounts: &mut BTreeMap<String, String>,
-) {
+fn split_volume(volume: &str, binds: &mut Vec<String>, mounts: &mut BTreeMap<String, String>) {
     if !volume.contains(':') || is_abs(volume) {
         // A bare path, or an absolute one: Docker creates it.
         binds.push(volume.to_string());
@@ -1126,7 +1129,6 @@ fn split_volume(
         mounts.insert(name.to_string(), path.to_string());
     }
 }
-
 
 /// `filepath.IsAbs`, as the volume rule above needs it.
 ///
@@ -1373,7 +1375,10 @@ pub fn get_docker_daemon_socket_mount_path(daemon_path: &str) -> String {
     if scheme.eq_ignore_ascii_case("unix") {
         return daemon_path[scheme_end + 3..].to_string();
     }
-    if !scheme.chars().any(|character| !character.is_ascii_alphabetic()) {
+    if !scheme
+        .chars()
+        .any(|character| !character.is_ascii_alphabetic())
+    {
         // An unknown protocol, so the default. Note the *positive* test: the
         // fallback is for schemes made only of letters.
         return "/var/run/docker.sock".to_string();
@@ -1453,8 +1458,7 @@ pub fn set_action_runtime_vars_with(
                 Some(raw) => crate::gostrconv::parse_int(raw),
                 None => 1,
             };
-            crate::common::create_authorization_token(run_id, run_id, run_id)
-                .unwrap_or_default()
+            crate::common::create_authorization_token(run_id, run_id, run_id).unwrap_or_default()
         }
     };
     env.insert("ACTIONS_RUNTIME_TOKEN".to_string(), token);
@@ -1567,7 +1571,11 @@ mod tests {
         // Go returns the first byte of `é`, which is not a character. This
         // returns the empty string — see the deviation note.
         assert_eq!(trim_to_len("é", 1), "");
-        assert_eq!(trim_to_len("é", 2), "é", "a limit past the end is the whole string");
+        assert_eq!(
+            trim_to_len("é", 2),
+            "é",
+            "a limit past the end is the whole string"
+        );
         // The path that actually exists is ASCII, so there the two agree.
         assert_eq!(trim_to_len("abcdef", 3), "abc");
     }
@@ -1640,7 +1648,10 @@ mod tests {
                     workdir: "/mnt/linux".to_string(),
                     ..RunConfig::default()
                 },
-                Some(run(&format!("container:\n  volumes: ['{}']\n", case.volume))),
+                Some(run(&format!(
+                    "container:\n  volumes: ['{}']\n",
+                    case.volume
+                ))),
             );
             let (binds, mounts) = rc.get_binds_and_mounts();
             if case.want_bind.is_empty() {
@@ -1683,7 +1694,9 @@ mod tests {
         rc.config.container_daemon_socket = "-".to_string();
         let (binds, _) = rc.get_binds_and_mounts();
         assert!(
-            !binds.iter().any(|bind| bind.ends_with(":/var/run/docker.sock")),
+            !binds
+                .iter()
+                .any(|bind| bind.ends_with(":/var/run/docker.sock")),
             "a dash means no socket at all: {binds:?}"
         );
 
@@ -1707,7 +1720,10 @@ mod tests {
     fn the_daemon_socket_path_follows_its_scheme() {
         let cases: &[(&str, &str)] = &[
             ("npipe:////./pipe/docker_engine", "/var/run/docker.sock"),
-            ("unix:///run/user/1000/docker.sock", "/run/user/1000/docker.sock"),
+            (
+                "unix:///run/user/1000/docker.sock",
+                "/run/user/1000/docker.sock",
+            ),
             ("ssh://", "/var/run/docker.sock"),
             ("tcp://127.0.0.1:2375", "/var/run/docker.sock"),
             ("git+ssh://", "git+ssh://"),
@@ -1770,7 +1786,10 @@ mod tests {
     /// cases the upstream test actually runs on this platform.
     #[test]
     fn the_workdir_becomes_a_bind_or_a_mount_as_configured() {
-        for (workdir, want) in [("/mnt/linux", "/mnt/linux"), ("/mnt/path with spaces/linux", "/mnt/path with spaces/linux")] {
+        for (workdir, want) in [
+            ("/mnt/linux", "/mnt/linux"),
+            ("/mnt/path with spaces/linux", "/mnt/path with spaces/linux"),
+        ] {
             for bind_workdir in [true, false] {
                 let rc = rc_with(
                     RunConfig {
@@ -1813,7 +1832,12 @@ mod tests {
 
     /// A run context with a one-job workflow and no job container, which is all
     /// the github context needs.
-    fn ghc_run_context(event: &str, json: &str, instance: &str, env: &[(&str, &str)]) -> RunContext {
+    fn ghc_run_context(
+        event: &str,
+        json: &str,
+        instance: &str,
+        env: &[(&str, &str)],
+    ) -> RunContext {
         RunContext {
             event_json: json.to_string(),
             current_step: "step".to_string(),
@@ -1852,17 +1876,57 @@ mod tests {
     #[test]
     fn the_github_context_ref_follows_the_event() {
         let cases: &[(&str, &str, &str)] = &[
-            ("push", r#"{"ref":"0000000000000000000000000000000000000000"}"#, "0000000000000000000000000000000000000000"),
-            ("create", r#"{"ref":"0000000000000000000000000000000000000000"}"#, "0000000000000000000000000000000000000000"),
-            ("workflow_dispatch", r#"{"ref":"0000000000000000000000000000000000000000"}"#, "0000000000000000000000000000000000000000"),
-            ("delete", r#"{"repository":{"default_branch": "main"}}"#, "refs/heads/main"),
+            (
+                "push",
+                r#"{"ref":"0000000000000000000000000000000000000000"}"#,
+                "0000000000000000000000000000000000000000",
+            ),
+            (
+                "create",
+                r#"{"ref":"0000000000000000000000000000000000000000"}"#,
+                "0000000000000000000000000000000000000000",
+            ),
+            (
+                "workflow_dispatch",
+                r#"{"ref":"0000000000000000000000000000000000000000"}"#,
+                "0000000000000000000000000000000000000000",
+            ),
+            (
+                "delete",
+                r#"{"repository":{"default_branch": "main"}}"#,
+                "refs/heads/main",
+            ),
             ("pull_request", r#"{"number":123}"#, "refs/pull/123/merge"),
-            ("pull_request_review", r#"{"number":123}"#, "refs/pull/123/merge"),
-            ("pull_request_review_comment", r#"{"number":123}"#, "refs/pull/123/merge"),
-            ("pull_request_target", r#"{"pull_request":{"base":{"ref": "main"}}}"#, "refs/heads/main"),
-            ("deployment", r#"{"deployment": {"ref": "tag-name"}}"#, "tag-name"),
-            ("deployment_status", r#"{"deployment": {"ref": "tag-name"}}"#, "tag-name"),
-            ("release", r#"{"release": {"tag_name": "tag-name"}}"#, "refs/tags/tag-name"),
+            (
+                "pull_request_review",
+                r#"{"number":123}"#,
+                "refs/pull/123/merge",
+            ),
+            (
+                "pull_request_review_comment",
+                r#"{"number":123}"#,
+                "refs/pull/123/merge",
+            ),
+            (
+                "pull_request_target",
+                r#"{"pull_request":{"base":{"ref": "main"}}}"#,
+                "refs/heads/main",
+            ),
+            (
+                "deployment",
+                r#"{"deployment": {"ref": "tag-name"}}"#,
+                "tag-name",
+            ),
+            (
+                "deployment_status",
+                r#"{"deployment": {"ref": "tag-name"}}"#,
+                "tag-name",
+            ),
+            (
+                "release",
+                r#"{"release": {"tag_name": "tag-name"}}"#,
+                "refs/tags/tag-name",
+            ),
         ];
 
         for (event, json, want) in cases {
@@ -1890,7 +1954,10 @@ mod tests {
         assert_eq!(github.runner_perflog, "/dev/null", "RunnerPerflog");
         assert_eq!(github.actor, "nektos/act", "Actor");
         assert_eq!(github.repository, "nektos/act", "the git fallback");
-        assert_eq!(github.repository_owner, "nektos", "split on the first slash");
+        assert_eq!(
+            github.repository_owner, "nektos",
+            "split on the first slash"
+        );
         assert_eq!(github.job, "job1", "Job");
         assert_eq!(github.workflow, "GitHubContextTest", "Workflow");
         assert_eq!(github.action, "step", "Action is the current step");
@@ -1947,8 +2014,7 @@ mod tests {
         assert_eq!(github.server_url, "https://proxy.internal");
         assert_eq!(github.api_url, "https://proxy.internal/api");
         assert_eq!(
-            github.graphql_url,
-            "https://ghe.example.com/api/graphql",
+            github.graphql_url, "https://ghe.example.com/api/graphql",
             "an unset override leaves the instance's value"
         );
     }
@@ -2085,7 +2151,10 @@ mod tests {
     #[test]
     fn the_merge_is_memoised_so_later_config_keys_do_not_appear() {
         let mut rc = run_with_workflow_env("env:\n  WORKFLOW_VAR: \"1\"\n", &[]);
-        assert_eq!(rc.get_env().get("WORKFLOW_VAR").map(String::as_str), Some("1"));
+        assert_eq!(
+            rc.get_env().get("WORKFLOW_VAR").map(String::as_str),
+            Some("1")
+        );
         rc.config
             .env
             .insert("ADDED_LATER".to_string(), "2".to_string());
@@ -2107,7 +2176,10 @@ mod tests {
         use super::*;
 
         fn rc_with_step(name: &str, conclusion: StepStatus) -> RunContext {
-            let mut rc = rc_with(RunConfig::default(), Some(super::run("runs-on: ubuntu-latest\n")));
+            let mut rc = rc_with(
+                RunConfig::default(),
+                Some(super::run("runs-on: ubuntu-latest\n")),
+            );
             rc.step_results.insert(
                 name.to_string(),
                 StepResult {
@@ -2120,7 +2192,10 @@ mod tests {
 
         #[test]
         fn no_steps_and_no_cancellation_is_success() {
-            let rc = rc_with(RunConfig::default(), Some(super::run("runs-on: ubuntu-latest\n")));
+            let rc = rc_with(
+                RunConfig::default(),
+                Some(super::run("runs-on: ubuntu-latest\n")),
+            );
             assert_eq!(rc.get_job_context().status, "success");
         }
 
@@ -2213,7 +2288,10 @@ mod tests {
                 "host",
             );
             let (_, created) = rc.network_name();
-            assert!(created, "the mode must not short-circuit the service branch");
+            assert!(
+                created,
+                "the mode must not short-circuit the service branch"
+            );
         }
     }
 
@@ -2235,14 +2313,7 @@ mod tests {
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
                 .collect();
             let mut env = BTreeMap::new();
-            set_action_runtime_vars_with(
-                "myhost",
-                "8000",
-                &config_env,
-                url,
-                token,
-                &mut env,
-            );
+            set_action_runtime_vars_with("myhost", "8000", &config_env, url, token, &mut env);
             env
         }
 
@@ -2253,10 +2324,7 @@ mod tests {
             let bytes = base64url::decode(claims);
             let json: serde_json::Value =
                 serde_json::from_slice(&bytes).expect("the claims are JSON");
-            json["scp"]
-                .as_str()
-                .expect("an scp claim")
-                .to_string()
+            json["scp"].as_str().expect("an scp claim").to_string()
         }
 
         /// Upstream `TestSetRuntimeVariables`: both URLs are the artifact
@@ -2322,7 +2390,10 @@ mod tests {
         fn an_out_of_range_run_id_clamps_to_the_bound() {
             let env = vars(&[("GITHUB_RUN_ID", "99999999999999999999")], None, None);
             let token = env.get("ACTIONS_RUNTIME_TOKEN").expect("a token");
-            assert_eq!(scp(token), "Actions.Results:9223372036854775807:9223372036854775807");
+            assert_eq!(
+                scp(token),
+                "Actions.Results:9223372036854775807:9223372036854775807"
+            );
         }
 
         /// The environment wins over the artifact server, for the URL.
@@ -2440,7 +2511,10 @@ mod tests {
         /// The implicit check is the condition itself, so it passes.
         #[test]
         fn success_with_no_needs_passes() {
-            let rc = rc_with_jobs(&[("job1", "runs-on: ubuntu-latest\nif: success()", "")], "job1");
+            let rc = rc_with_jobs(
+                &[("job1", "runs-on: ubuntu-latest\nif: success()", "")],
+                "job1",
+            );
             assert!(is_enabled(rc).expect("no error"));
         }
 
@@ -2451,7 +2525,11 @@ mod tests {
             let rc = rc_with_jobs(
                 &[
                     ("job1", "runs-on: ubuntu-latest", "failure"),
-                    ("job2", "runs-on: ubuntu-latest\nneeds: [job1]\nif: success()", ""),
+                    (
+                        "job2",
+                        "runs-on: ubuntu-latest\nneeds: [job1]\nif: success()",
+                        "",
+                    ),
                 ],
                 "job2",
             );
@@ -2464,7 +2542,11 @@ mod tests {
             let rc = rc_with_jobs(
                 &[
                     ("job1", "runs-on: ubuntu-latest", "success"),
-                    ("job2", "runs-on: ubuntu-latest\nneeds: [job1]\nif: success()", ""),
+                    (
+                        "job2",
+                        "runs-on: ubuntu-latest\nneeds: [job1]\nif: success()",
+                        "",
+                    ),
                 ],
                 "job2",
             );
@@ -2492,7 +2574,10 @@ mod tests {
         /// `jobFailure` walks an empty list, so it is false.
         #[test]
         fn failure_is_false_with_no_needs() {
-            let rc = rc_with_jobs(&[("job1", "runs-on: ubuntu-latest\nif: failure()", "")], "job1");
+            let rc = rc_with_jobs(
+                &[("job1", "runs-on: ubuntu-latest\nif: failure()", "")],
+                "job1",
+            );
             assert!(!is_enabled(rc).expect("no error"));
         }
 
@@ -2503,7 +2588,11 @@ mod tests {
             let rc = rc_with_jobs(
                 &[
                     ("job1", "runs-on: ubuntu-latest", "failure"),
-                    ("job2", "runs-on: ubuntu-latest\nneeds: [job1]\nif: failure()", ""),
+                    (
+                        "job2",
+                        "runs-on: ubuntu-latest\nneeds: [job1]\nif: failure()",
+                        "",
+                    ),
                 ],
                 "job2",
             );
@@ -2517,7 +2606,11 @@ mod tests {
             let rc = rc_with_jobs(
                 &[
                     ("job1", "runs-on: ubuntu-latest", "success"),
-                    ("job2", "runs-on: ubuntu-latest\nneeds: [job1]\nif: failure()", ""),
+                    (
+                        "job2",
+                        "runs-on: ubuntu-latest\nneeds: [job1]\nif: failure()",
+                        "",
+                    ),
                 ],
                 "job2",
             );
@@ -2545,7 +2638,10 @@ mod tests {
         #[test]
         fn always_is_true_whatever_the_needs_did() {
             for (id, result) in [("job1", ""), ("job1", "failure"), ("job1", "success")] {
-                let rc = rc_with_jobs(&[(id, "runs-on: ubuntu-latest\nif: always()", result)], "job1");
+                let rc = rc_with_jobs(
+                    &[(id, "runs-on: ubuntu-latest\nif: always()", result)],
+                    "job1",
+                );
                 assert!(is_enabled(rc).expect("no error"), "result {result:?}");
             }
         }
@@ -2557,7 +2653,11 @@ mod tests {
                 let rc = rc_with_jobs(
                     &[
                         ("job1", "runs-on: ubuntu-latest", result),
-                        ("job2", "runs-on: ubuntu-latest\nneeds: [job1]\nif: always()", ""),
+                        (
+                            "job2",
+                            "runs-on: ubuntu-latest\nneeds: [job1]\nif: always()",
+                            "",
+                        ),
                     ],
                     "job2",
                 );
@@ -2576,7 +2676,8 @@ mod tests {
         /// difference, so this test removes it on purpose.
         #[test]
         fn a_reusable_workflow_call_runs_without_an_image() {
-            let source = "name: test-workflow\njobs:\n  job1:\n    uses: ./.github/workflows/reusable.yml\n";
+            let source =
+                "name: test-workflow\njobs:\n  job1:\n    uses: ./.github/workflows/reusable.yml\n";
             let doc = Rc::new(Document::parse(source).expect("the fixture parses"));
             let workflow = Workflow::from_document("test.yml", &doc).expect("decodes");
             // No platforms at all: the only reason this job can still run is
@@ -2605,8 +2706,14 @@ mod tests {
         #[test]
         fn a_plain_job_without_an_image_is_skipped() {
             let (enabled, result) = plain_job_image_probe(None);
-            assert!(!enabled.expect("no error"), "no configured platform means no image");
-            assert_eq!(result, "", "measured: the image path does not record a result");
+            assert!(
+                !enabled.expect("no error"),
+                "no configured platform means no image"
+            );
+            assert_eq!(
+                result, "",
+                "measured: the image path does not record a result"
+            );
         }
 
         /// A `platforms:` entry that maps to the **empty** string is the same as
@@ -2621,7 +2728,10 @@ mod tests {
                 .into_iter()
                 .collect();
             let (enabled, _) = plain_job_image_probe(Some(platforms));
-            assert!(!enabled.expect("no error"), "an empty image is not an image");
+            assert!(
+                !enabled.expect("no error"),
+                "an empty image is not an image"
+            );
         }
 
         /// The two skips are not the same skip, and this is the test that says
@@ -2674,7 +2784,8 @@ mod tests {
         /// unable to decide.
         #[test]
         fn a_skipped_job_records_its_result() {
-            let source = "name: test-workflow\njobs:\n  job1:\n    runs-on: ubuntu-latest\n    if: false\n";
+            let source =
+                "name: test-workflow\njobs:\n  job1:\n    runs-on: ubuntu-latest\n    if: false\n";
             let doc = Rc::new(Document::parse(source).expect("the fixture parses"));
             let workflow = Workflow::from_document("test.yml", &doc).expect("decodes");
             let mut rc = rc_with(RunConfig::default(), Some(Run::new(workflow, doc, "job1")));

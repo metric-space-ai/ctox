@@ -479,11 +479,16 @@ mod tests {
         assert_eq!(percent_encode("a b"), "a+b");
         assert_eq!(percent_encode("a/b"), "a%2Fb");
         assert_eq!(percent_encode("a&b=c"), "a%26b%3Dc");
-        assert_eq!(percent_encode("2024-01-02 03:04:05.9 +0200 CEST"),
-                   "2024-01-02+03%3A04%3A05.9+%2B0200+CEST");
+        assert_eq!(
+            percent_encode("2024-01-02 03:04:05.9 +0200 CEST"),
+            "2024-01-02+03%3A04%3A05.9+%2B0200+CEST"
+        );
         // Round trip.
         let encoded = percent_encode("a b/c&d=e%f");
-        assert_eq!(split_target(&format!("/p?k={encoded}")).1[0].1, "a b/c&d=e%f");
+        assert_eq!(
+            split_target(&format!("/p?k={encoded}")).1[0].1,
+            "a b/c&d=e%f"
+        );
     }
 
     #[test]

@@ -393,7 +393,11 @@ impl Service {
         let Some(run_id) = validate_run_id(&body) else {
             return Ok(Reply::status(400));
         };
-        let job_run_id = string_field(&body, "workflow_job_run_backend_id", "workflowJobRunBackendId");
+        let job_run_id = string_field(
+            &body,
+            "workflow_job_run_backend_id",
+            "workflowJobRunBackendId",
+        );
         let run_backend_id = string_field(&body, "workflow_run_backend_id", "workflowRunBackendId");
         let name_filter = optional_string_field(&body, "name_filter", "nameFilter");
         let id_filter = optional_int_field(&body, "id_filter", "idFilter");
@@ -551,11 +555,7 @@ impl Service {
     /// expiry fails the comparison before the expiry check ever runs; the
     /// expiry test only ever rejects a URL act itself issued and that has since
     /// aged past the hour.
-    fn verify_signature(
-        &self,
-        call: &Call,
-        endpoint: &str,
-    ) -> Option<(i64, String, i64, String)> {
+    fn verify_signature(&self, call: &Call, endpoint: &str) -> Option<(i64, String, i64, String)> {
         let raw_task_id = call.query_get("taskID");
         let sig = call.query_get("sig");
         let expires = call.query_get("expires");
@@ -579,7 +579,12 @@ impl Service {
         if instant < now {
             return None;
         }
-        Some((instant, expires.to_string(), task_id, artifact_name.to_string()))
+        Some((
+            instant,
+            expires.to_string(),
+            task_id,
+            artifact_name.to_string(),
+        ))
     }
 }
 
@@ -645,11 +650,7 @@ fn string_field(body: &serde_json::Value, snake: &str, camel: &str) -> String {
 
 /// A `google.protobuf.StringValue` is a bare string on the wire, and an absent
 /// field is a `nil` pointer — which act distinguishes from an empty one.
-fn optional_string_field(
-    body: &serde_json::Value,
-    snake: &str,
-    camel: &str,
-) -> Option<String> {
+fn optional_string_field(body: &serde_json::Value, snake: &str, camel: &str) -> Option<String> {
     for key in [camel, snake] {
         if let Some(serde_json::Value::String(value)) = body.get(key) {
             return Some(value.clone());
@@ -713,10 +714,7 @@ impl Serialize for MonolithArtifact {
         let mut map = serializer.serialize_map(Some(6))?;
         // protobuf field numbers, which is the order protojson emits.
         map.serialize_entry("workflowRunBackendId", &self.workflow_run_backend_id)?;
-        map.serialize_entry(
-            "workflowJobRunBackendId",
-            &self.workflow_job_run_backend_id,
-        )?;
+        map.serialize_entry("workflowJobRunBackendId", &self.workflow_job_run_backend_id)?;
         map.serialize_entry("databaseId", &self.database_id.to_string())?;
         map.serialize_entry("name", &self.name)?;
         map.serialize_entry("size", &self.size.to_string())?;
@@ -800,7 +798,11 @@ impl Server {
     /// An empty `artifact_path` means the server is off, and `None` is
     /// returned without touching a socket — act's `Serve` returns its cancel
     /// function at that point, having registered nothing.
-    pub fn start(artifact_path: &Path, addr: &str, port: &str) -> Result<Option<Self>, ServerError> {
+    pub fn start(
+        artifact_path: &Path,
+        addr: &str,
+        port: &str,
+    ) -> Result<Option<Self>, ServerError> {
         let Some(service) = Service::on_disk(artifact_path) else {
             return Ok(None);
         };

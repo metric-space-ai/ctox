@@ -575,14 +575,16 @@ mod tests {
     #[test]
     fn and_binds_tighter_than_or() {
         match ok("a || b && c }}") {
-            ExprNode::LogicalOp {
-                kind,
-                right,
-                ..
-            } => {
+            ExprNode::LogicalOp { kind, right, .. } => {
                 assert_eq!(kind, LogicalOpKind::Or);
                 assert!(
-                    matches!(*right, ExprNode::LogicalOp { kind: LogicalOpKind::And, .. }),
+                    matches!(
+                        *right,
+                        ExprNode::LogicalOp {
+                            kind: LogicalOpKind::And,
+                            ..
+                        }
+                    ),
                     "`&&` must bind tighter than `||`"
                 );
             }
@@ -645,7 +647,9 @@ mod tests {
 
     #[test]
     fn unclosed_call_is_rejected() {
-        assert!(err("format('x' }}").message.contains("arguments of function call"));
+        assert!(err("format('x' }}")
+            .message
+            .contains("arguments of function call"));
     }
 
     #[test]

@@ -194,10 +194,7 @@ impl RunContext {
             }
         }
         if cenv.is_empty() {
-            cenv.insert(
-                path_name.to_string(),
-                container.default_path_variable(),
-            );
+            cenv.insert(path_name.to_string(), container.default_path_variable());
         }
 
         // Upstream swaps both log destinations for two buffers and reads only
@@ -207,21 +204,21 @@ impl RunContext {
         // to the bare word `node`. Upstream passes `--no-warnings` to keep that
         // from happening, and the same argument applies here.
         let sink = std::sync::Arc::new(crate::common::context::CollectingSink::new());
-        let previous =
-            container.replace_log_writer(std::sync::Arc::clone(&sink) as std::sync::Arc<dyn crate::common::LogSink>);
+        let previous = container.replace_log_writer(
+            std::sync::Arc::clone(&sink) as std::sync::Arc<dyn crate::common::LogSink>
+        );
 
-        let outcome = container
-            .exec(
-                &[
-                    "node".to_string(),
-                    "--no-warnings".to_string(),
-                    "-e".to_string(),
-                    "console.log(process.execPath)".to_string(),
-                ],
-                &cenv,
-                "",
-                "",
-            )(ctx);
+        let outcome = container.exec(
+            &[
+                "node".to_string(),
+                "--no-warnings".to_string(),
+                "-e".to_string(),
+                "console.log(process.execPath)".to_string(),
+            ],
+            &cenv,
+            "",
+            "",
+        )(ctx);
 
         // Restored before the answer is read, so a later step's output is not
         // swallowed by the probe's buffer. Upstream uses `Finally` for the same
@@ -355,8 +352,7 @@ fn first_tar_entry_text(archive: &[u8]) -> anyhow::Result<String> {
     let Some(entry) = entries.next() else {
         return Ok(String::new());
     };
-    let mut entry = entry
-        .map_err(|err| anyhow::anyhow!("reading the env file archive: {err}"))?;
+    let mut entry = entry.map_err(|err| anyhow::anyhow!("reading the env file archive: {err}"))?;
     let mut text = String::new();
     std::io::Read::read_to_string(&mut entry, &mut text)
         .map_err(|err| anyhow::anyhow!("reading the env file: {err}"))?;
@@ -365,9 +361,7 @@ fn first_tar_entry_text(archive: &[u8]) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        node_tool_from_output, paths_from_env_file, strip_utf8_bom, RunContext,
-    };
+    use super::{node_tool_from_output, paths_from_env_file, strip_utf8_bom, RunContext};
 
     // -------------------------------------------- nodeToolFullPath --
 
@@ -449,7 +443,10 @@ mod tests {
         // BOM. U+00EF is 0xEF 0x89, so its first three bytes are not the BOM's.
         assert_eq!(strip_utf8_bom("\u{ef}/a"), "\u{ef}/a");
         // Not the first line.
-        assert_eq!(paths_from_env_file("/a\n\u{feff}/b"), vec!["/a", "\u{feff}/b"]);
+        assert_eq!(
+            paths_from_env_file("/a\n\u{feff}/b"),
+            vec!["/a", "\u{feff}/b"]
+        );
     }
 
     /// A CRLF file — which is what a Windows step writes — must not produce
@@ -457,7 +454,10 @@ mod tests {
     /// strips it, and so does this.
     #[test]
     fn a_crlf_file_does_not_leave_carriage_returns_on_the_paths() {
-        assert_eq!(paths_from_env_file("/a/bin\r\n/b/bin\r\n"), vec!["/a/bin", "/b/bin"]);
+        assert_eq!(
+            paths_from_env_file("/a/bin\r\n/b/bin\r\n"),
+            vec!["/a/bin", "/b/bin"]
+        );
     }
 
     // ------------------------------------------------- extra_path --

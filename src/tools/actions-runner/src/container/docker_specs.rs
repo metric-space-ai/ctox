@@ -221,7 +221,9 @@ fn go_join_host_port(host: &str, port: &str) -> String {
 /// `convert_to_standard_notation` turns `-p published=80,target=8080` into
 /// `80:8080/tcp`, and *then* this grammar reads it.
 pub mod nat {
-    use super::{go_join_host_port, go_parse_ip, go_parse_uint, go_parse_uint_error, go_split_host_port};
+    use super::{
+        go_join_host_port, go_parse_ip, go_parse_uint, go_parse_uint_error, go_split_host_port,
+    };
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt;
 
@@ -377,8 +379,8 @@ pub mod nat {
         let mut parts = ports.split('-');
         let start_str = parts.next().unwrap_or_default();
         let end_str = parts.next().unwrap_or_default();
-        let start = go_parse_uint(start_str, 16)
-            .map_err(|r| go_parse_uint_error(start_str, r))? as u16;
+        let start =
+            go_parse_uint(start_str, 16).map_err(|r| go_parse_uint_error(start_str, r))? as u16;
         let end = go_parse_uint(end_str, 16).map_err(|r| go_parse_uint_error(end_str, r))? as u16;
         if end < start {
             return Err(format!("invalid range specified for port: {ports}"));
@@ -487,7 +489,8 @@ pub mod nat {
             // A host range is allowed alongside a *single* container port, where
             // it is the daemon's dynamic allocation range. Alongside a
             // container range it is a genuine mistake.
-            if (end_port - start_port) != (end_host_port - start_host_port) && end_port != start_port
+            if (end_port - start_port) != (end_host_port - start_host_port)
+                && end_port != start_port
             {
                 return Err(format!(
                     "invalid ranges specified for container and host Ports: {container_port} and {host_port}"
@@ -522,9 +525,7 @@ pub mod nat {
     /// The first spec that fails aborts the whole call and **discards** what
     /// came before, which is why act's `parse()` returns the error rather than
     /// a partial config.
-    pub fn parse_port_specs(
-        ports: &[String],
-    ) -> Result<(PortSet, PortMap), String> {
+    pub fn parse_port_specs(ports: &[String]) -> Result<(PortSet, PortMap), String> {
         let mut exposed_ports = PortSet::new();
         let mut bindings: PortMap = BTreeMap::new();
         for p in ports {
@@ -656,18 +657,78 @@ pub mod nat {
                 exp_proto: &'static str,
             }
             let cases = [
-                Case { doc: "empty value", input: "", exp_port: "", exp_proto: "" },
-                Case { doc: "zero value", input: "0", exp_port: "0", exp_proto: "tcp" },
-                Case { doc: "empty port", input: "/udp", exp_port: "", exp_proto: "" },
-                Case { doc: "single port", input: "1234", exp_port: "1234", exp_proto: "tcp" },
-                Case { doc: "single port with empty protocol", input: "1234/", exp_port: "1234", exp_proto: "tcp" },
-                Case { doc: "single port with protocol", input: "1234/udp", exp_port: "1234", exp_proto: "udp" },
-                Case { doc: "port range", input: "80-8080", exp_port: "80-8080", exp_proto: "tcp" },
-                Case { doc: "port range with empty protocol", input: "80-8080/", exp_port: "80-8080", exp_proto: "tcp" },
-                Case { doc: "port range with protocol", input: "80-8080/udp", exp_port: "80-8080", exp_proto: "udp" },
-                Case { doc: "negative value", input: "-1", exp_port: "-1", exp_proto: "tcp" },
-                Case { doc: "uppercase protocol", input: "1234/UDP", exp_port: "1234", exp_proto: "UDP" },
-                Case { doc: "any value", input: "any port value", exp_port: "any port value", exp_proto: "tcp" },
+                Case {
+                    doc: "empty value",
+                    input: "",
+                    exp_port: "",
+                    exp_proto: "",
+                },
+                Case {
+                    doc: "zero value",
+                    input: "0",
+                    exp_port: "0",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "empty port",
+                    input: "/udp",
+                    exp_port: "",
+                    exp_proto: "",
+                },
+                Case {
+                    doc: "single port",
+                    input: "1234",
+                    exp_port: "1234",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "single port with empty protocol",
+                    input: "1234/",
+                    exp_port: "1234",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "single port with protocol",
+                    input: "1234/udp",
+                    exp_port: "1234",
+                    exp_proto: "udp",
+                },
+                Case {
+                    doc: "port range",
+                    input: "80-8080",
+                    exp_port: "80-8080",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "port range with empty protocol",
+                    input: "80-8080/",
+                    exp_port: "80-8080",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "port range with protocol",
+                    input: "80-8080/udp",
+                    exp_port: "80-8080",
+                    exp_proto: "udp",
+                },
+                Case {
+                    doc: "negative value",
+                    input: "-1",
+                    exp_port: "-1",
+                    exp_proto: "tcp",
+                },
+                Case {
+                    doc: "uppercase protocol",
+                    input: "1234/UDP",
+                    exp_port: "1234",
+                    exp_proto: "UDP",
+                },
+                Case {
+                    doc: "any value",
+                    input: "any port value",
+                    exp_port: "any port value",
+                    exp_proto: "tcp",
+                },
                 Case {
                     doc: "any value with protocol",
                     input: "any port value/any proto value",
@@ -693,24 +754,126 @@ pub mod nat {
                 exp_err: Option<&'static str>,
             }
             let cases = [
-                Case { doc: "empty value", input: "", exp_begin: 0, exp_end: 0, exp_err: Some("empty string specified for ports") },
-                Case { doc: "single port", input: "1234", exp_begin: 1234, exp_end: 1234, exp_err: None },
-                Case { doc: "single port range", input: "1234-1234", exp_begin: 1234, exp_end: 1234, exp_err: None },
-                Case { doc: "two port range", input: "1234-1235", exp_begin: 1234, exp_end: 1235, exp_err: None },
-                Case { doc: "large range", input: "8000-9000", exp_begin: 8000, exp_end: 9000, exp_err: None },
-                Case { doc: "zero port", input: "0", exp_begin: 0, exp_end: 0, exp_err: None },
-                Case { doc: "zero range", input: "0-0", exp_begin: 0, exp_end: 0, exp_err: None },
+                Case {
+                    doc: "empty value",
+                    input: "",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("empty string specified for ports"),
+                },
+                Case {
+                    doc: "single port",
+                    input: "1234",
+                    exp_begin: 1234,
+                    exp_end: 1234,
+                    exp_err: None,
+                },
+                Case {
+                    doc: "single port range",
+                    input: "1234-1234",
+                    exp_begin: 1234,
+                    exp_end: 1234,
+                    exp_err: None,
+                },
+                Case {
+                    doc: "two port range",
+                    input: "1234-1235",
+                    exp_begin: 1234,
+                    exp_end: 1235,
+                    exp_err: None,
+                },
+                Case {
+                    doc: "large range",
+                    input: "8000-9000",
+                    exp_begin: 8000,
+                    exp_end: 9000,
+                    exp_err: None,
+                },
+                Case {
+                    doc: "zero port",
+                    input: "0",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: None,
+                },
+                Case {
+                    doc: "zero range",
+                    input: "0-0",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: None,
+                },
                 // invalid cases
-                Case { doc: "non-numeric port", input: "asdf", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"asdf\": invalid syntax") },
-                Case { doc: "reversed range", input: "9000-8000", exp_begin: 0, exp_end: 0, exp_err: Some("invalid range specified for port: 9000-8000") },
-                Case { doc: "range missing end", input: "8000-", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax") },
-                Case { doc: "range missing start", input: "-9000", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax") },
-                Case { doc: "invalid range end", input: "8000-a", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"a\": invalid syntax") },
-                Case { doc: "invalid range end port", input: "8000-9000a", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"9000a\": invalid syntax") },
-                Case { doc: "range range start", input: "a-9000", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"a\": invalid syntax") },
-                Case { doc: "range range start port", input: "8000a-9000", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"8000a\": invalid syntax") },
-                Case { doc: "range with trailing hyphen", input: "-8000-", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax") },
-                Case { doc: "range without ports", input: "-", exp_begin: 0, exp_end: 0, exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax") },
+                Case {
+                    doc: "non-numeric port",
+                    input: "asdf",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"asdf\": invalid syntax"),
+                },
+                Case {
+                    doc: "reversed range",
+                    input: "9000-8000",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("invalid range specified for port: 9000-8000"),
+                },
+                Case {
+                    doc: "range missing end",
+                    input: "8000-",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax"),
+                },
+                Case {
+                    doc: "range missing start",
+                    input: "-9000",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax"),
+                },
+                Case {
+                    doc: "invalid range end",
+                    input: "8000-a",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"a\": invalid syntax"),
+                },
+                Case {
+                    doc: "invalid range end port",
+                    input: "8000-9000a",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"9000a\": invalid syntax"),
+                },
+                Case {
+                    doc: "range range start",
+                    input: "a-9000",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"a\": invalid syntax"),
+                },
+                Case {
+                    doc: "range range start port",
+                    input: "8000a-9000",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"8000a\": invalid syntax"),
+                },
+                Case {
+                    doc: "range with trailing hyphen",
+                    input: "-8000-",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax"),
+                },
+                Case {
+                    doc: "range without ports",
+                    input: "-",
+                    exp_begin: 0,
+                    exp_end: 0,
+                    exp_err: Some("strconv.ParseUint: parsing \"\": invalid syntax"),
+                },
             ];
             for tc in cases {
                 match parse_port_range(tc.input) {
@@ -736,11 +899,17 @@ pub mod nat {
             let expected = vec![
                 PortMapping {
                     port: Port("3333/tcp".into()),
-                    binding: PortBinding { host_ip: "0.0.0.0".into(), host_port: "1234".into() },
+                    binding: PortBinding {
+                        host_ip: "0.0.0.0".into(),
+                        host_port: "1234".into(),
+                    },
                 },
                 PortMapping {
                     port: Port("3334/tcp".into()),
-                    binding: PortBinding { host_ip: "0.0.0.0".into(), host_port: "1235".into() },
+                    binding: PortBinding {
+                        host_ip: "0.0.0.0".into(),
+                        host_port: "1235".into(),
+                    },
                 },
             ];
             assert_eq!(mappings, expected);
@@ -760,7 +929,10 @@ pub mod nat {
                     spec: "[2001:4860:0:2001::68]::333",
                     expected: vec![PortMapping {
                         port: Port("333/tcp".into()),
-                        binding: PortBinding { host_ip: "2001:4860:0:2001::68".into(), host_port: String::new() },
+                        binding: PortBinding {
+                            host_ip: "2001:4860:0:2001::68".into(),
+                            host_port: String::new(),
+                        },
                     }],
                 },
                 Case {
@@ -768,7 +940,10 @@ pub mod nat {
                     spec: "[::1]:80:80",
                     expected: vec![PortMapping {
                         port: Port("80/tcp".into()),
-                        binding: PortBinding { host_ip: "::1".into(), host_port: "80".into() },
+                        binding: PortBinding {
+                            host_ip: "::1".into(),
+                            host_port: "80".into(),
+                        },
                     }],
                 },
                 Case {
@@ -776,7 +951,10 @@ pub mod nat {
                     spec: "2001:4860:0:2001::68::333",
                     expected: vec![PortMapping {
                         port: Port("333/tcp".into()),
-                        binding: PortBinding { host_ip: "2001:4860:0:2001::68".into(), host_port: String::new() },
+                        binding: PortBinding {
+                            host_ip: "2001:4860:0:2001::68".into(),
+                            host_port: String::new(),
+                        },
                     }],
                 },
                 Case {
@@ -784,7 +962,10 @@ pub mod nat {
                     spec: "::1:80:80",
                     expected: vec![PortMapping {
                         port: Port("80/tcp".into()),
-                        binding: PortBinding { host_ip: "::1".into(), host_port: "80".into() },
+                        binding: PortBinding {
+                            host_ip: "::1".into(),
+                            host_port: "80".into(),
+                        },
                     }],
                 },
                 Case {
@@ -792,7 +973,10 @@ pub mod nat {
                     spec: "::::80",
                     expected: vec![PortMapping {
                         port: Port("80/tcp".into()),
-                        binding: PortBinding { host_ip: "::".into(), host_port: String::new() },
+                        binding: PortBinding {
+                            host_ip: "::".into(),
+                            host_port: String::new(),
+                        },
                     }],
                 },
             ];
@@ -813,8 +997,9 @@ pub mod nat {
                 input.iter().map(|s| s.to_string()).collect()
             }
             // container port only
-            let (ports, bindings) = parse_port_specs(&specs(&["1234/tcp", "2345/udp", "3456/sctp"]))
-                .expect("plain specs");
+            let (ports, bindings) =
+                parse_port_specs(&specs(&["1234/tcp", "2345/udp", "3456/sctp"]))
+                    .expect("plain specs");
             for want in ["1234/tcp", "2345/udp", "3456/sctp"] {
                 assert!(ports.contains(&Port(want.into())), "{want} was not exposed");
             }
@@ -825,8 +1010,12 @@ pub mod nat {
             }
 
             // host port equal to the container port, no address
-            let (ports, bindings) = parse_port_specs(&specs(&["1234:1234/tcp", "2345:2345/udp", "3456:3456/sctp"]))
-                .expect("host:container specs");
+            let (ports, bindings) = parse_port_specs(&specs(&[
+                "1234:1234/tcp",
+                "2345:2345/udp",
+                "3456:3456/sctp",
+            ]))
+            .expect("host:container specs");
             for want in ["1234/tcp", "2345/udp", "3456/sctp"] {
                 assert!(ports.contains(&Port(want.into())), "{want} was not exposed");
             }
@@ -864,8 +1053,12 @@ pub mod nat {
             fn specs(input: &[&str]) -> Vec<String> {
                 input.iter().map(|s| s.to_string()).collect()
             }
-            let (ports, bindings) = parse_port_specs(&specs(&["1234-1236/tcp", "2345-2347/udp", "3456-3458/sctp"]))
-                .expect("container ranges");
+            let (ports, bindings) = parse_port_specs(&specs(&[
+                "1234-1236/tcp",
+                "2345-2347/udp",
+                "3456-3458/sctp",
+            ]))
+            .expect("container ranges");
             for want in ["1234/tcp", "1235/tcp", "1236/tcp", "2345/udp", "3456/sctp"] {
                 assert!(ports.contains(&Port(want.into())), "{want} was not exposed");
             }
@@ -907,9 +1100,14 @@ pub mod nat {
         #[test]
         fn a_network_option_binds_an_address_and_maybe_a_port() {
             fn one(spec: &'static str) -> (String, String, String, String) {
-                let (ports, bindings) = parse_port_specs(&[spec.to_string()])
-                    .unwrap_or_else(|e| panic!("{spec}: {e}"));
-                assert_eq!(ports.len(), 1, "{spec}: expected 1 exposed port, got {}", ports.len());
+                let (ports, bindings) =
+                    parse_port_specs(&[spec.to_string()]).unwrap_or_else(|e| panic!("{spec}: {e}"));
+                assert_eq!(
+                    ports.len(),
+                    1,
+                    "{spec}: expected 1 exposed port, got {}",
+                    ports.len()
+                );
                 assert_eq!(bindings.len(), 1, "{spec}: expected 1 binding entry");
                 let (port, bs) = bindings.into_iter().next().expect("one entry");
                 assert_eq!(bs.len(), 1, "{spec}: expected 1 binding");
@@ -921,10 +1119,37 @@ pub mod nat {
                 )
             }
 
-            assert_eq!(one("192.168.1.100::80"), ("tcp".into(), "80".into(), "192.168.1.100".into(), "".into()));
-            assert_eq!(one("192.168.1.100:8080:80"), ("tcp".into(), "80".into(), "192.168.1.100".into(), "8080".into()));
-            assert_eq!(one("192.168.1.100::6000/udp"), ("udp".into(), "6000".into(), "192.168.1.100".into(), "".into()));
-            assert_eq!(one("192.168.1.100::6000/sctp"), ("sctp".into(), "6000".into(), "192.168.1.100".into(), "".into()));
+            assert_eq!(
+                one("192.168.1.100::80"),
+                ("tcp".into(), "80".into(), "192.168.1.100".into(), "".into())
+            );
+            assert_eq!(
+                one("192.168.1.100:8080:80"),
+                (
+                    "tcp".into(),
+                    "80".into(),
+                    "192.168.1.100".into(),
+                    "8080".into()
+                )
+            );
+            assert_eq!(
+                one("192.168.1.100::6000/udp"),
+                (
+                    "udp".into(),
+                    "6000".into(),
+                    "192.168.1.100".into(),
+                    "".into()
+                )
+            );
+            assert_eq!(
+                one("192.168.1.100::6000/sctp"),
+                (
+                    "sctp".into(),
+                    "6000".into(),
+                    "192.168.1.100".into(),
+                    "".into()
+                )
+            );
         }
 
         // nat/nat_test.go: TestParseNetworkOptsPublicNoPort, NegativePorts
@@ -946,15 +1171,43 @@ pub mod nat {
         fn a_mapping_renders_as_a_host_port_pair() {
             let cases: &[(&str, &str, &str)] = &[
                 ("no host mapping", ":8080:6000/tcp", ":8080:6000/tcp"),
-                ("no proto", "192.168.1.100:8080:6000", "192.168.1.100:8080:6000/tcp"),
-                ("no host port", "192.168.1.100::6000/udp", "192.168.1.100::6000/udp"),
+                (
+                    "no proto",
+                    "192.168.1.100:8080:6000",
+                    "192.168.1.100:8080:6000/tcp",
+                ),
+                (
+                    "no host port",
+                    "192.168.1.100::6000/udp",
+                    "192.168.1.100::6000/udp",
+                ),
                 ("no mapping, port, or proto", "::6000", "::6000/tcp"),
-                ("ipv4 mapping", "192.168.1.100:8080:6000/udp", "192.168.1.100:8080:6000/udp"),
-                ("ipv4 mapping without host port", "192.168.1.100::6000/udp", "192.168.1.100::6000/udp"),
+                (
+                    "ipv4 mapping",
+                    "192.168.1.100:8080:6000/udp",
+                    "192.168.1.100:8080:6000/udp",
+                ),
+                (
+                    "ipv4 mapping without host port",
+                    "192.168.1.100::6000/udp",
+                    "192.168.1.100::6000/udp",
+                ),
                 ("ipv6 mapping", "[::1]:8080:6000/udp", "[::1]:8080:6000/udp"),
-                ("ipv6 mapping without host port", "[::1]::6000/udp", "[::1]::6000/udp"),
-                ("ipv6 legacy mapping", "::1:8080:6000/udp", "[::1]:8080:6000/udp"),
-                ("ipv6 legacy mapping without host port", "::::6000/udp", "[::]::6000/udp"),
+                (
+                    "ipv6 mapping without host port",
+                    "[::1]::6000/udp",
+                    "[::1]::6000/udp",
+                ),
+                (
+                    "ipv6 legacy mapping",
+                    "::1:8080:6000/udp",
+                    "[::1]:8080:6000/udp",
+                ),
+                (
+                    "ipv6 legacy mapping without host port",
+                    "::::6000/udp",
+                    "[::]::6000/udp",
+                ),
             ];
             for (doc, input, expected) in cases {
                 let mappings = parse_port_spec(input).unwrap_or_else(|e| panic!("{doc}: {e}"));
@@ -986,8 +1239,14 @@ pub mod nat {
             // message would read as though it applied. It does not: the
             // protocol of the empty remainder is checked first.
             assert_eq!(parse_port_spec("").expect_err("empty"), "invalid proto: ");
-            assert_eq!(parse_port_spec("80:").expect_err("no port"), "invalid proto: ");
-            assert_eq!(parse_port_spec("80/xyz").expect_err("bad proto"), "invalid proto: xyz");
+            assert_eq!(
+                parse_port_spec("80:").expect_err("no port"),
+                "invalid proto: "
+            );
+            assert_eq!(
+                parse_port_spec("80/xyz").expect_err("bad proto"),
+                "invalid proto: xyz"
+            );
             // A protocol is case-insensitive here, unlike in the moby parser.
             assert!(parse_port_spec("80/TCP").is_ok());
         }
@@ -1171,7 +1430,9 @@ pub mod network {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 PortRange::Zero => f.write_str("invalid port range"),
-                PortRange::Valid { start, end, proto } if start == end => write!(f, "{start}/{proto}"),
+                PortRange::Valid { start, end, proto } if start == end => {
+                    write!(f, "{start}/{proto}")
+                }
                 PortRange::Valid { start, end, proto } => write!(f, "{start}-{end}/{proto}"),
             }
         }
@@ -1223,7 +1484,8 @@ pub mod network {
             Some((port, proto)) => (port, proto),
             None => (s, ""),
         };
-        let num = parse_port_number(port).map_err(|reason| format!("invalid port '{port}': {reason}"))?;
+        let num =
+            parse_port_number(port).map_err(|reason| format!("invalid port '{port}': {reason}"))?;
         Ok(Port::Valid {
             num,
             proto: normalize_port_proto(proto),
@@ -1258,8 +1520,8 @@ pub mod network {
                 proto: port_proto,
             });
         }
-        let end_val =
-            parse_port_number(end).map_err(|reason| format!("invalid end port '{end}': {reason}"))?;
+        let end_val = parse_port_number(end)
+            .map_err(|reason| format!("invalid end port '{end}': {reason}"))?;
         if end_val < start_val {
             return Err(format!("invalid port range: {s}"));
         }
@@ -1372,19 +1634,51 @@ pub mod network {
             }
             let cases = [
                 // Zero port
-                Case { input: "0/tcp", port: port(0, TCP), str: "0/tcp" },
+                Case {
+                    input: "0/tcp",
+                    port: port(0, TCP),
+                    str: "0/tcp",
+                },
                 // Max valid port
-                Case { input: "65535/tcp", port: port(65535, TCP), str: "65535/tcp" },
+                Case {
+                    input: "65535/tcp",
+                    port: port(65535, TCP),
+                    str: "65535/tcp",
+                },
                 // Simple valid ports
-                Case { input: "1234/tcp", port: port(1234, TCP), str: "1234/tcp" },
-                Case { input: "1234/udp", port: port(1234, UDP), str: "1234/udp" },
-                Case { input: "1234/sctp", port: port(1234, SCTP), str: "1234/sctp" },
+                Case {
+                    input: "1234/tcp",
+                    port: port(1234, TCP),
+                    str: "1234/tcp",
+                },
+                Case {
+                    input: "1234/udp",
+                    port: port(1234, UDP),
+                    str: "1234/udp",
+                },
+                Case {
+                    input: "1234/sctp",
+                    port: port(1234, SCTP),
+                    str: "1234/sctp",
+                },
                 // Default protocol is tcp
-                Case { input: "1234", port: port(1234, TCP), str: "1234/tcp" },
+                Case {
+                    input: "1234",
+                    port: port(1234, TCP),
+                    str: "1234/tcp",
+                },
                 // Default protocol is tcp
-                Case { input: "1234/", port: port(1234, TCP), str: "1234/tcp" },
+                Case {
+                    input: "1234/",
+                    port: port(1234, TCP),
+                    str: "1234/tcp",
+                },
                 // An unvalidated protocol keeps everything after the slash.
-                Case { input: "1234/tcp:ipv6only", port: port(1234, "tcp:ipv6only"), str: "1234/tcp:ipv6only" },
+                Case {
+                    input: "1234/tcp:ipv6only",
+                    port: port(1234, "tcp:ipv6only"),
+                    str: "1234/tcp:ipv6only",
+                },
             ];
             for tc in cases {
                 let got = parse_port(tc.input).unwrap_or_else(|e| panic!("{}: {e}", tc.input));
@@ -1394,7 +1688,12 @@ pub mod network {
                 // Purity.
                 assert_eq!(parse_port(tc.input).expect("again"), got, "{}", tc.input);
                 // Identity: the canonical form parses back to the same port.
-                assert_eq!(parse_port(&got.to_string()).expect("identity"), got, "{}", tc.input);
+                assert_eq!(
+                    parse_port(&got.to_string()).expect("identity"),
+                    got,
+                    "{}",
+                    tc.input
+                );
                 assert_eq!(got.to_string(), tc.str, "{}", tc.input);
                 // A port is the one-port range of itself.
                 assert_eq!(got.range(), range(got.num(), got.num(), got.proto()));
@@ -1475,28 +1774,75 @@ pub mod network {
             }
             let cases = [
                 // Zero port
-                Case { input: "0-1234/tcp", port_range: range(0, 1234, TCP), str: "0-1234/tcp" },
+                Case {
+                    input: "0-1234/tcp",
+                    port_range: range(0, 1234, TCP),
+                    str: "0-1234/tcp",
+                },
                 // Max valid port
-                Case { input: "1234-65535/tcp", port_range: range(1234, 65535, TCP), str: "1234-65535/tcp" },
+                Case {
+                    input: "1234-65535/tcp",
+                    port_range: range(1234, 65535, TCP),
+                    str: "1234-65535/tcp",
+                },
                 // Simple valid ports
-                Case { input: "1234-4567/tcp", port_range: range(1234, 4567, TCP), str: "1234-4567/tcp" },
-                Case { input: "1234-4567/udp", port_range: range(1234, 4567, UDP), str: "1234-4567/udp" },
+                Case {
+                    input: "1234-4567/tcp",
+                    port_range: range(1234, 4567, TCP),
+                    str: "1234-4567/tcp",
+                },
+                Case {
+                    input: "1234-4567/udp",
+                    port_range: range(1234, 4567, UDP),
+                    str: "1234-4567/udp",
+                },
                 // Default protocol is tcp
-                Case { input: "1234-4567", port_range: range(1234, 4567, TCP), str: "1234-4567/tcp" },
+                Case {
+                    input: "1234-4567",
+                    port_range: range(1234, 4567, TCP),
+                    str: "1234-4567/tcp",
+                },
                 // Default protocol is tcp
-                Case { input: "1234-4567/", port_range: range(1234, 4567, TCP), str: "1234-4567/tcp" },
+                Case {
+                    input: "1234-4567/",
+                    port_range: range(1234, 4567, TCP),
+                    str: "1234-4567/tcp",
+                },
                 // A one-port range collapses to a port.
-                Case { input: "1234/tcp", port_range: range(1234, 1234, TCP), str: "1234/tcp" },
-                Case { input: "1234", port_range: range(1234, 1234, TCP), str: "1234/tcp" },
-                Case { input: "1234-5678/tcp:ipv6only", port_range: range(1234, 5678, "tcp:ipv6only"), str: "1234-5678/tcp:ipv6only" },
+                Case {
+                    input: "1234/tcp",
+                    port_range: range(1234, 1234, TCP),
+                    str: "1234/tcp",
+                },
+                Case {
+                    input: "1234",
+                    port_range: range(1234, 1234, TCP),
+                    str: "1234/tcp",
+                },
+                Case {
+                    input: "1234-5678/tcp:ipv6only",
+                    port_range: range(1234, 5678, "tcp:ipv6only"),
+                    str: "1234-5678/tcp:ipv6only",
+                },
             ];
             for tc in cases {
-                let got = parse_port_range(tc.input).unwrap_or_else(|e| panic!("{}: {e}", tc.input));
+                let got =
+                    parse_port_range(tc.input).unwrap_or_else(|e| panic!("{}: {e}", tc.input));
                 assert_eq!(got, tc.port_range, "{}", tc.input);
                 assert!(!got.is_zero());
                 assert!(got.is_valid());
-                assert_eq!(parse_port_range(tc.input).expect("again"), got, "{}", tc.input);
-                assert_eq!(parse_port_range(&got.to_string()).expect("identity"), got, "{}", tc.input);
+                assert_eq!(
+                    parse_port_range(tc.input).expect("again"),
+                    got,
+                    "{}",
+                    tc.input
+                );
+                assert_eq!(
+                    parse_port_range(&got.to_string()).expect("identity"),
+                    got,
+                    "{}",
+                    tc.input
+                );
                 assert_eq!(got.to_string(), tc.str, "{}", tc.input);
                 assert_eq!(got.range(), tc.port_range, "{}", tc.input);
             }
@@ -1520,7 +1866,10 @@ pub mod network {
                 // Negative end port
                 ("1234--1", "invalid end port '-1': invalid syntax"),
                 // Too large start port
-                ("65536-65537", "invalid start port '65536': value out of range"),
+                (
+                    "65536-65537",
+                    "invalid start port '65536': value out of range",
+                ),
                 // Too large end port
                 ("1234-65536", "invalid end port '65536': value out of range"),
                 // Non-numeric start port
@@ -1530,7 +1879,10 @@ pub mod network {
                 // Start port greater than end port
                 ("1234-1000", "invalid port range: 1234-1000"),
                 // Garbage port range
-                ("asd1234-5678/tcp", "invalid start port 'asd1234': invalid syntax"),
+                (
+                    "asd1234-5678/tcp",
+                    "invalid start port 'asd1234': invalid syntax",
+                ),
             ];
             for (input, expected) in cases {
                 let err = parse_port_range(input).expect_err(input);
@@ -1610,8 +1962,9 @@ pub mod volume {
     pub const TYPE_IMAGE: &str = "image";
 
     /// `mount.Propagations`, the option values that name a bind propagation.
-    const PROPAGATIONS: &[&str] =
-        &["rprivate", "private", "rshared", "shared", "rslave", "slave"];
+    const PROPAGATIONS: &[&str] = &[
+        "rprivate", "private", "rshared", "shared", "rslave", "slave",
+    ];
 
     /// The end-of-spec sentinel `volumespec` appends to the spec.
     ///
@@ -1828,7 +2181,8 @@ pub mod volume {
 
         fn expect_err(spec: &str) -> String {
             let (_, err) = parse(spec);
-            err.err().unwrap_or_else(|| panic!("{spec:?} should not parse"))
+            err.err()
+                .unwrap_or_else(|| panic!("{spec:?} should not parse"))
         }
 
         // volumespec_test.go: TestParseVolumeAnonymousVolume,
@@ -2033,7 +2387,10 @@ pub mod volume {
                 (r"d:\", Some(&[r"d:\"])),
                 (r"d:\pathandmode:rw", Some(&[r"d:\pathandmode", "rw"])),
                 (r"c:\:d:\", Some(&[r"c:\", r"d:\"])),
-                (r"c:\windows:d:\s p a c e:RW", Some(&[r"c:\windows", r"d:\s p a c e", "RW"])),
+                (
+                    r"c:\windows:d:\s p a c e:RW",
+                    Some(&[r"c:\windows", r"d:\s p a c e", "RW"]),
+                ),
                 (r"0123456789name:d:", Some(&["0123456789name", "d:"])),
                 (r"MiXeDcAsEnAmE:d:", Some(&["MiXeDcAsEnAmE", "d:"])),
                 (r"name:D::rW", Some(&["name", "D:", "rW"])),
@@ -2042,7 +2399,10 @@ pub mod volume {
                     Some(&["c:/", "d:/forward/slashes/are/good/too"]),
                 ),
                 (r"c:\Windows", Some(&[r"c:\Windows"])),
-                (r"c:\Program Files (x86)", Some(&[r"c:\Program Files (x86)"])),
+                (
+                    r"c:\Program Files (x86)",
+                    Some(&[r"c:\Program Files (x86)"]),
+                ),
                 ("", None),
                 (".", Some(&["."])),
                 (r"..\", Some(&[r"..\"])),
@@ -2094,12 +2454,17 @@ pub mod volume {
                 let volume = expect(spec);
                 assert_eq!(volume.mount_type, TYPE_BIND, "{spec}");
                 assert_eq!(volume.source, spec.split(':').next().unwrap(), "{spec}");
-                assert!(volume.source.starts_with('/'), "{spec} is an absolute path, so it is not rewritten");
+                assert!(
+                    volume.source.starts_with('/'),
+                    "{spec} is an absolute path, so it is not rewritten"
+                );
             }
             // `:ro` is the one option `Parse` records; `:Z` is not one it knows.
             assert!(expect("/hostTmp:/containerTmp:ro").read_only);
             assert!(!expect("/hostTmp:/containerTmp:rw").read_only);
-            assert!(!expect("/hostTmp:/containerTmp:ro,Z").opts.is_some_and(|o| matches!(o, MountOpts::Bind { .. })));
+            assert!(!expect("/hostTmp:/containerTmp:ro,Z")
+                .opts
+                .is_some_and(|o| matches!(o, MountOpts::Bind { .. })));
         }
     }
 }
@@ -2155,9 +2520,12 @@ pub mod cdi {
                 super::go_quote(device)
             ));
         }
-        validate_vendor_name(&vendor).map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
-        validate_class_name(&class).map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
-        validate_device_name(&name).map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
+        validate_vendor_name(&vendor)
+            .map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
+        validate_class_name(&class)
+            .map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
+        validate_device_name(&name)
+            .map_err(|e| format!("invalid device {}: {e}", super::go_quote(device)))?;
         Ok((vendor, class, name))
     }
 
@@ -2218,7 +2586,10 @@ pub mod cdi {
             return Err("empty name".to_string());
         }
         if !is_letter(name.chars().next().expect("checked non-empty")) {
-            return Err(format!("{}, should start with letter", super::go_quote(name)));
+            return Err(format!(
+                "{}, should start with letter",
+                super::go_quote(name)
+            ));
         }
         let chars: Vec<char> = name.chars().collect();
         // A name of one or two characters has no middle, and for a name of one
@@ -2322,11 +2693,46 @@ pub mod cdi {
             // device, vendor, class, name, is_qualified, is_parsable
             #[allow(clippy::type_complexity)]
             let cases: &[(&str, &str, &str, &str, bool, bool)] = &[
-                ("vendor.com/class=dev", "vendor.com", "class", "dev", true, false),
-                ("vendor.com/class=0", "vendor.com", "class", "0", true, false),
-                ("vendor1.com/class1=dev1", "vendor1.com", "class1", "dev1", true, false),
-                ("vendor1.com/class.subclass=dev1", "vendor1.com", "class.subclass", "dev1", true, false),
-                ("other-vendor1.com/class_1=dev_1", "other-vendor1.com", "class_1", "dev_1", true, false),
+                (
+                    "vendor.com/class=dev",
+                    "vendor.com",
+                    "class",
+                    "dev",
+                    true,
+                    false,
+                ),
+                (
+                    "vendor.com/class=0",
+                    "vendor.com",
+                    "class",
+                    "0",
+                    true,
+                    false,
+                ),
+                (
+                    "vendor1.com/class1=dev1",
+                    "vendor1.com",
+                    "class1",
+                    "dev1",
+                    true,
+                    false,
+                ),
+                (
+                    "vendor1.com/class.subclass=dev1",
+                    "vendor1.com",
+                    "class.subclass",
+                    "dev1",
+                    true,
+                    false,
+                ),
+                (
+                    "other-vendor1.com/class_1=dev_1",
+                    "other-vendor1.com",
+                    "class_1",
+                    "dev_1",
+                    true,
+                    false,
+                ),
                 (
                     "yet_another-vendor2.com/c-lass_2=dev_1:2.3",
                     "yet_another-vendor2.com",
@@ -2335,18 +2741,61 @@ pub mod cdi {
                     true,
                     false,
                 ),
-                ("_invalid.com/class=dev", "_invalid.com", "class", "dev", false, true),
-                ("invalid2.com-/class=dev", "invalid2.com-", "class", "dev", false, true),
-                ("invalid3.com/_class=dev", "invalid3.com", "_class", "dev", false, true),
-                ("invalid4.com/class_=dev", "invalid4.com", "class_", "dev", false, true),
-                ("invalid5.com/class=-dev", "invalid5.com", "class", "-dev", false, true),
-                ("invalid6.com/class=dev:", "invalid6.com", "class", "dev:", false, true),
+                (
+                    "_invalid.com/class=dev",
+                    "_invalid.com",
+                    "class",
+                    "dev",
+                    false,
+                    true,
+                ),
+                (
+                    "invalid2.com-/class=dev",
+                    "invalid2.com-",
+                    "class",
+                    "dev",
+                    false,
+                    true,
+                ),
+                (
+                    "invalid3.com/_class=dev",
+                    "invalid3.com",
+                    "_class",
+                    "dev",
+                    false,
+                    true,
+                ),
+                (
+                    "invalid4.com/class_=dev",
+                    "invalid4.com",
+                    "class_",
+                    "dev",
+                    false,
+                    true,
+                ),
+                (
+                    "invalid5.com/class=-dev",
+                    "invalid5.com",
+                    "class",
+                    "-dev",
+                    false,
+                    true,
+                ),
+                (
+                    "invalid6.com/class=dev:",
+                    "invalid6.com",
+                    "class",
+                    "dev:",
+                    false,
+                    true,
+                ),
                 ("*.com/*dev=*gpu*", "*.com", "*dev", "*gpu*", false, true),
             ];
             for (device, vendor, class, name, is_qualified, is_parsable) in cases {
                 if *is_qualified {
                     assert!(is_qualified_name(device), "qualified name {device:?}");
-                    let (v, c, n) = parse_qualified_name(device).unwrap_or_else(|e| panic!("{device}: {e}"));
+                    let (v, c, n) =
+                        parse_qualified_name(device).unwrap_or_else(|e| panic!("{device}: {e}"));
                     assert_eq!(&v, vendor, "qualified name {device:?}");
                     assert_eq!(&c, class, "qualified name {device:?}");
                     assert_eq!(&n, name, "qualified name {device:?}");
@@ -2356,7 +2805,11 @@ pub mod cdi {
                     assert_eq!(&c, class, "parse name {device:?}");
                     assert_eq!(&n, name, "parsed name {device:?}");
 
-                    assert_eq!(qualified_name(&v, &c, &n), *device, "constructed device {device:?}");
+                    assert_eq!(
+                        qualified_name(&v, &c, &n),
+                        *device,
+                        "constructed device {device:?}"
+                    );
                 } else if *is_parsable {
                     assert!(!is_qualified_name(device), "parsed name {device:?}");
                     let (v, c, n) = parse_device(device);
@@ -2401,13 +2854,19 @@ pub mod cdi {
                 let err = parse_qualified_name(device).expect_err(device);
                 assert_eq!(
                     err,
-                    format!("unqualified device {}, missing vendor", super::super::go_quote(device))
+                    format!(
+                        "unqualified device {}, missing vendor",
+                        super::super::go_quote(device)
+                    )
                 );
                 // The verbatim input comes back as the "name", so the caller
                 // can still see what it was handed.
                 assert_eq!(parse_device(device), ("".into(), "".into(), device.into()));
             }
-            assert_eq!(parse_qualified_name("").expect_err("empty"), "unqualified device \"\", missing vendor");
+            assert_eq!(
+                parse_qualified_name("").expect_err("empty"),
+                "unqualified device \"\", missing vendor"
+            );
             // A trailing `=` makes `ParseDevice` hand the *whole spec* back as
             // the name, with no vendor and no class — so the class and
             // name branches of `ParseQualifiedName` are unreachable upstream,
@@ -2415,7 +2874,10 @@ pub mod cdi {
             for spec in ["vendor.com=", "vendor.com/class=", "vendor.com/class"] {
                 assert_eq!(
                     parse_qualified_name(spec).expect_err(spec),
-                    format!("unqualified device {}, missing vendor", super::super::go_quote(spec))
+                    format!(
+                        "unqualified device {}, missing vendor",
+                        super::super::go_quote(spec)
+                    )
                 );
                 assert_eq!(parse_device(spec), ("".into(), "".into(), spec.into()));
             }
@@ -2479,7 +2941,10 @@ mod tests {
             ("2001:4860:0:2001::68".into(), "".into())
         );
         // An empty bracket is a valid, empty host.
-        assert_eq!(go_split_host_port("[]:").expect("empty host"), ("".into(), "".into()));
+        assert_eq!(
+            go_split_host_port("[]:").expect("empty host"),
+            ("".into(), "".into())
+        );
         assert_eq!(
             go_split_host_port("1.2.3.4:").expect("dotted quad"),
             ("1.2.3.4".into(), "".into())
@@ -2497,7 +2962,11 @@ mod tests {
     fn only_a_host_with_a_colon_gets_bracketed() {
         for (host, port, expected) in [
             ("", "8080:6000/tcp", ":8080:6000/tcp"),
-            ("192.168.1.100", "8080:6000/udp", "192.168.1.100:8080:6000/udp"),
+            (
+                "192.168.1.100",
+                "8080:6000/udp",
+                "192.168.1.100:8080:6000/udp",
+            ),
             ("::1", "80:80/tcp", "[::1]:80:80/tcp"),
             ("", ":8080:6000/tcp", "::8080:6000/tcp"),
             ("192.168.1.100", ":6000/tcp", "192.168.1.100::6000/tcp"),

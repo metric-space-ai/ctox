@@ -316,11 +316,13 @@ impl ParsedFlags {
             FlagKind::Bool => FlagValue::Bool(parse_bool(raw)),
             FlagKind::List(validator) => {
                 let text = match validator {
-                    Some(validator) => validator(raw).map_err(|message| FlagError::InvalidArgument {
-                        value: raw.to_string(),
-                        display: def.display_name(),
-                        message,
-                    })?,
+                    Some(validator) => {
+                        validator(raw).map_err(|message| FlagError::InvalidArgument {
+                            value: raw.to_string(),
+                            display: def.display_name(),
+                            message,
+                        })?
+                    }
                     None => raw.to_string(),
                 };
                 match self.values.get_mut(def.long) {
@@ -402,9 +404,7 @@ impl FlagSet {
     }
 
     fn find_short(&self, short: char) -> Option<&FlagDef> {
-        self.flags
-            .iter()
-            .find(|def| def.short == Some(short))
+        self.flags.iter().find(|def| def.short == Some(short))
     }
 
     /// Parses a command line.
@@ -441,11 +441,12 @@ impl FlagSet {
                     Some(value) => value,
                     None if def.kind.is_bool() => "true".to_string(),
                     None => {
-                        let next = args.get(index).cloned().ok_or_else(|| {
-                            FlagError::MissingValue {
-                                display: format!("--{}", def.long),
-                            }
-                        })?;
+                        let next =
+                            args.get(index)
+                                .cloned()
+                                .ok_or_else(|| FlagError::MissingValue {
+                                    display: format!("--{}", def.long),
+                                })?;
                         index += 1;
                         next
                     }
@@ -463,12 +464,12 @@ impl FlagSet {
                 while offset < body.len() {
                     let short = body[offset..].chars().next().expect("a character");
                     let after = offset + short.len_utf8();
-                    let def = self.find_short(short).ok_or_else(|| {
-                        FlagError::UnknownShorthand {
-                            shorthand: short,
-                            group: body.to_string(),
-                        }
-                    })?;
+                    let def =
+                        self.find_short(short)
+                            .ok_or_else(|| FlagError::UnknownShorthand {
+                                shorthand: short,
+                                group: body.to_string(),
+                            })?;
                     let rest = &body[after..];
                     let value = if let Some(explicit) = rest.strip_prefix('=') {
                         offset = body.len();
@@ -482,11 +483,12 @@ impl FlagSet {
                         offset = body.len();
                         rest.to_string()
                     } else {
-                        let next = args.get(index).cloned().ok_or_else(|| {
-                            FlagError::MissingValue {
-                                display: format!("'{short}' in -{short}"),
-                            }
-                        })?;
+                        let next =
+                            args.get(index)
+                                .cloned()
+                                .ok_or_else(|| FlagError::MissingValue {
+                                    display: format!("'{short}' in -{short}"),
+                                })?;
                         index += 1;
                         offset = after;
                         next
@@ -578,7 +580,11 @@ mod tests {
 
     fn spec() -> FlagSet {
         FlagSet::new(vec![
-            FlagDef::new("attach", FlagKind::List(Some(super::super::docker_opts::validate_attach))).short('a'),
+            FlagDef::new(
+                "attach",
+                FlagKind::List(Some(super::super::docker_opts::validate_attach)),
+            )
+            .short('a'),
             FlagDef::new("interactive", FlagKind::Bool).short('i'),
             FlagDef::new("tty", FlagKind::Bool).short('t'),
             FlagDef::new("publish-all", FlagKind::Bool).short('P'),
@@ -634,9 +640,13 @@ mod tests {
     #[test]
     fn a_repeated_flag_is_validated_each_time() {
         let flags = spec();
-        assert!(flags.parse(&args(&["-a", "invalid", "-a", "stdout"])).is_err());
+        assert!(flags
+            .parse(&args(&["-a", "invalid", "-a", "stdout"]))
+            .is_err());
         // The reverse order is fine, because every value is valid.
-        assert!(flags.parse(&args(&["-a", "stdout", "-a", "stderr"])).is_ok());
+        assert!(flags
+            .parse(&args(&["-a", "stdout", "-a", "stderr"]))
+            .is_ok());
     }
 
     #[test]
@@ -649,7 +659,11 @@ mod tests {
             vec!["-a", "stdin"],
         ] {
             let parsed = flags.parse(&args(&input)).expect("parses");
-            assert_eq!(parsed.list("attach"), ["stdin".to_string()], "for {input:?}");
+            assert_eq!(
+                parsed.list("attach"),
+                ["stdin".to_string()],
+                "for {input:?}"
+            );
         }
     }
 
@@ -675,11 +689,7 @@ mod tests {
             .expect("parses");
         assert_eq!(
             parsed.args,
-            vec![
-                "ubuntu".to_string(),
-                "-a".to_string(),
-                "bash".to_string()
-            ]
+            vec!["ubuntu".to_string(), "-a".to_string(), "bash".to_string()]
         );
         assert!(parsed.list("attach").is_empty());
     }
@@ -687,13 +697,20 @@ mod tests {
     #[test]
     fn a_boolean_flag_needs_no_value_but_accepts_one() {
         let flags = spec();
-        for input in [vec!["-i"], vec!["-i=true"], vec!["--interactive"], vec!["-it"]] {
+        for input in [
+            vec!["-i"],
+            vec!["-i=true"],
+            vec!["--interactive"],
+            vec!["-it"],
+        ] {
             let parsed = flags.parse(&args(&input)).expect("parses");
             assert!(parsed.flag("interactive"), "for {input:?}");
             assert!(parsed.changed("interactive"), "for {input:?}");
         }
         // `false` is a value, not an absence, so it is still "changed".
-        let parsed = flags.parse(&args(&["--interactive=false"])).expect("parses");
+        let parsed = flags
+            .parse(&args(&["--interactive=false"]))
+            .expect("parses");
         assert!(!parsed.flag("interactive"));
         assert!(parsed.changed("interactive"));
     }
@@ -703,11 +720,17 @@ mod tests {
     fn a_value_flag_without_a_value_is_an_error() {
         let flags = spec();
         assert_eq!(
-            flags.parse(&args(&["ubuntu", "--entrypoint"])).unwrap_err().to_string(),
+            flags
+                .parse(&args(&["ubuntu", "--entrypoint"]))
+                .unwrap_err()
+                .to_string(),
             "flag needs an argument: --entrypoint",
         );
         assert_eq!(
-            flags.parse(&args(&["ubuntu", "-a"])).unwrap_err().to_string(),
+            flags
+                .parse(&args(&["ubuntu", "-a"]))
+                .unwrap_err()
+                .to_string(),
             "flag needs an argument: 'a' in -a",
         );
     }

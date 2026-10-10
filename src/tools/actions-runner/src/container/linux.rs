@@ -144,7 +144,11 @@ impl ExecutionsEnvironment for LinuxContainerEnvironmentExtensions {
     fn close(&self) -> crate::common::Executor {
         unreachable!("a path extension is not an execution environment")
     }
-    fn copy(&self, _dest: &str, _files: Vec<crate::container::FileEntry>) -> crate::common::Executor {
+    fn copy(
+        &self,
+        _dest: &str,
+        _files: Vec<crate::container::FileEntry>,
+    ) -> crate::common::Executor {
         unreachable!("a path extension is not an execution environment")
     }
     fn copy_tar_stream(&self, _dest: &str, _tar: &[u8]) -> anyhow::Result<()> {
@@ -264,7 +268,11 @@ mod tests {
         // starts *after* the separator.
         let to_wsl = |input: &str| -> String {
             let drive = input[..1].chars().next().expect("a drive letter");
-            format!("/mnt/{}/{}", drive.to_ascii_lowercase(), input[3..].replace('\\', "/"))
+            format!(
+                "/mnt/{}/{}",
+                drive.to_ascii_lowercase(),
+                input[3..].replace('\\', "/")
+            )
         };
         assert_eq!(
             to_wsl(r"C:\Users\act\go\src\github.com\nektos\act\"),

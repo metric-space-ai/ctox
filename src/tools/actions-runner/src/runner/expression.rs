@@ -141,8 +141,7 @@ pub fn escape_format_string(input: &str) -> String {
 fn string_pattern() -> &'static regex::Regex {
     static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
     PATTERN.get_or_init(|| {
-        regex::Regex::new(r"(?:''|[^'])*'")
-            .expect("the string-literal pattern is a constant")
+        regex::Regex::new(r"(?:''|[^'])*'").expect("the string-literal pattern is a constant")
     })
 }
 
@@ -313,14 +312,8 @@ pub fn strategy_context(run: Option<&Run>) -> BTreeMap<String, crate::expr::Valu
         return BTreeMap::new();
     }
     BTreeMap::from([
-        (
-            "fail-fast".to_string(),
-            Value::Bool(job.fail_fast()),
-        ),
-        (
-            "max-parallel".to_string(),
-            Value::Int(job.max_parallel()),
-        ),
+        ("fail-fast".to_string(), Value::Bool(job.fail_fast())),
+        ("max-parallel".to_string(), Value::Int(job.max_parallel())),
     ])
 }
 
@@ -366,7 +359,10 @@ pub fn needs_context(run: Option<&Run>) -> BTreeMap<String, crate::expr::Value> 
         let result = needed
             .map(|job| Value::String(job.result.clone()))
             .unwrap_or(Value::Null);
-        out.insert(need, Value::object([("outputs", Value::Object(outputs)), ("result", result)]));
+        out.insert(
+            need,
+            Value::object([("outputs", Value::Object(outputs)), ("result", result)]),
+        );
     }
     out
 }
@@ -386,8 +382,14 @@ pub fn steps_context(
             (
                 id.clone(),
                 Value::object([
-                    ("conclusion", Value::String(result.conclusion.as_str().to_string())),
-                    ("outcome", Value::String(result.outcome.as_str().to_string())),
+                    (
+                        "conclusion",
+                        Value::String(result.conclusion.as_str().to_string()),
+                    ),
+                    (
+                        "outcome",
+                        Value::String(result.outcome.as_str().to_string()),
+                    ),
                     (
                         "outputs",
                         Value::Object(
@@ -423,7 +425,9 @@ pub fn secrets_context(secrets: &BTreeMap<String, String>) -> BTreeMap<String, c
 }
 
 /// The already-resolved secrets of a called workflow.
-pub fn secrets_for_call(secrets: &BTreeMap<String, String>) -> BTreeMap<String, crate::expr::Value> {
+pub fn secrets_for_call(
+    secrets: &BTreeMap<String, String>,
+) -> BTreeMap<String, crate::expr::Value> {
     env_context(secrets)
 }
 
@@ -526,9 +530,7 @@ impl RunStatus {
 
 impl crate::expr::StatusProvider for RunStatus {
     fn job_success(&self) -> bool {
-        self.needs_results
-            .iter()
-            .all(|result| result == "success")
+        self.needs_results.iter().all(|result| result == "success")
     }
     fn step_success(&self) -> bool {
         self.job_status == "success"
@@ -703,7 +705,9 @@ pub fn new_expression_evaluator_with_env(
                         crate::expr::Value::Object(
                             job.outputs
                                 .iter()
-                                .map(|(key, value)| (key.clone(), crate::expr::Value::String(value.clone())))
+                                .map(|(key, value)| {
+                                    (key.clone(), crate::expr::Value::String(value.clone()))
+                                })
                                 .collect(),
                         ),
                     )]),
@@ -776,7 +780,6 @@ pub fn new_expression_evaluator_with_env(
         hash_files: None,
     }
 }
-
 
 /// Why [`interpolate`] produced no string.
 ///
@@ -933,7 +936,10 @@ fn is_insert_directive(key: &str) -> bool {
 /// writes the node back and the caller decodes it into a typed field, so
 /// stringifying here would quietly turn a bool into a non-empty string — and a
 /// truthy one.
-fn value_to_node(document: &mut crate::yaml_node::Document, value: &crate::expr::Value) -> crate::yaml_node::NodeId {
+fn value_to_node(
+    document: &mut crate::yaml_node::Document,
+    value: &crate::expr::Value,
+) -> crate::yaml_node::NodeId {
     use crate::expr::Value;
     use crate::yaml_node::{Node, NodeKind};
     match value {
@@ -942,13 +948,13 @@ fn value_to_node(document: &mut crate::yaml_node::Document, value: &crate::expr:
             node.value = text.clone();
             document.alloc(node)
         }
-        Value::Bool(value) => tagged_scalar(document, if *value { "true" } else { "false" }, "!!bool"),
+        Value::Bool(value) => {
+            tagged_scalar(document, if *value { "true" } else { "false" }, "!!bool")
+        }
         Value::Int(value) => tagged_scalar(document, &value.to_string(), "!!int"),
-        Value::Float(value) => tagged_scalar(
-            document,
-            &crate::expr::format_float_g(*value),
-            "!!float",
-        ),
+        Value::Float(value) => {
+            tagged_scalar(document, &crate::expr::format_float_g(*value), "!!float")
+        }
         Value::Null => tagged_scalar(document, "null", "!!null"),
         Value::Array(items) => {
             let children: Vec<_> = items
@@ -1004,7 +1010,8 @@ pub fn evaluate_yaml_node(
     context: crate::expr::EvaluationContext,
     id: crate::yaml_node::NodeId,
 ) -> Result<bool, crate::expr::EvalError> {
-    let Some(replacement) = evaluate_yaml_node_internal(document, environment, status, context.clone(), id)?
+    let Some(replacement) =
+        evaluate_yaml_node_internal(document, environment, status, context.clone(), id)?
     else {
         return Ok(false);
     };
@@ -1161,11 +1168,7 @@ fn evaluate_sequence_yaml_node(
                     rebuilt = Some(original[..index].to_vec());
                 }
                 let content = rebuilt.as_mut().expect("just materialised");
-                if !was_sequence
-                    && document
-                        .node(evaluated)
-                        .is_some_and(Node::is_sequence)
-                {
+                if !was_sequence && document.node(evaluated).is_some_and(Node::is_sequence) {
                     let spliced = document
                         .node(evaluated)
                         .map(|node| node.content.clone())
@@ -1193,7 +1196,9 @@ fn evaluate_sequence_yaml_node(
 }
 
 /// The first `index` mapping entries as a flat key/value child list.
-fn flatten_prefix(entries: &[(crate::yaml_node::NodeId, crate::yaml_node::NodeId)]) -> Vec<crate::yaml_node::NodeId> {
+fn flatten_prefix(
+    entries: &[(crate::yaml_node::NodeId, crate::yaml_node::NodeId)],
+) -> Vec<crate::yaml_node::NodeId> {
     entries
         .iter()
         .flat_map(|(key, value)| [*key, *value])
@@ -1219,7 +1224,11 @@ mod tests {
     const MEASURED: &[(&str, Option<&str>, Option<&str>)] = &[
         // --- upstream's TestRewriteSubExpression table ---
         ("Hello World", Some("Hello World"), Some("Hello World")),
-        ("${{ true }}", Some("${{ true }}"), Some("format('{0}', true)")),
+        (
+            "${{ true }}",
+            Some("${{ true }}"),
+            Some("format('{0}', true)"),
+        ),
         (
             "${{ true }} ${{ true }}",
             Some("format('{0} {1}', true, true)"),
@@ -1230,7 +1239,11 @@ mod tests {
             Some("format('{0} {1}', true || false, true && true)"),
             Some("format('{0} {1}', true || false, true && true)"),
         ),
-        ("${{ '}}' }}", Some("${{ '}}' }}"), Some("format('{0}', '}}')")),
+        (
+            "${{ '}}' }}",
+            Some("${{ '}}' }}"),
+            Some("format('{0}', '}}')"),
+        ),
         (
             "${{ ''' ''' }}",
             Some("${{ ''' ''' }}"),
@@ -1336,8 +1349,8 @@ mod tests {
         ),
         (
             "${{ ''}}' }}",
-            Some("format('{0}'' }}}}', '')" ),
-            Some("format('{0}'' }}}}', '')" ),
+            Some("format('{0}'' }}}}', '')"),
+            Some("format('{0}'' }}}}', '')"),
         ),
         (
             "${{ '''  ' }}x${{ y }}",
@@ -1350,31 +1363,11 @@ mod tests {
             Some("format('{0} tail {1}', '}}', '}}')"),
         ),
         // --- the three cases where upstream panics ---
-        (
-            "${{ '''}}",
-            None,
-            None,
-        ),
-        (
-            "${{ '''''}}",
-            None,
-            None,
-        ),
-        (
-            "${{ a'b }}",
-            None,
-            None,
-        ),
-        (
-            "}} ${{ abc",
-            None,
-            None,
-        ),
-        (
-            "${{ 'abc }}",
-            None,
-            None,
-        ),
+        ("${{ '''}}", None, None),
+        ("${{ '''''}}", None, None),
+        ("${{ a'b }}", None, None),
+        ("}} ${{ abc", None, None),
+        ("${{ 'abc }}", None, None),
     ];
 
     /// Every measured case, for `force_format = false`.
@@ -1477,7 +1470,9 @@ mod tests {
     /// back a string — a boolean `false` arrives as `"false"`, not as a bool.
     /// Asserting it here is what would catch a regression that turned the
     /// forced rewrite back into a bare expression.
-    fn as_interpolated(result: Result<crate::expr::Value, crate::expr::EvalError>) -> Result<String, String> {
+    fn as_interpolated(
+        result: Result<crate::expr::Value, crate::expr::EvalError>,
+    ) -> Result<String, String> {
         match result.map_err(|err| err.message)? {
             crate::expr::Value::String(text) => Ok(text),
             other => Err(format!("{other:?} did not evaluate to a string")),
@@ -1492,9 +1487,18 @@ mod tests {
     fn the_rewritten_form_evaluates_through_the_real_interpreter() {
         let env = EvaluationEnvironment {
             env: [
-                ("KEY-WITH-HYPHENS".to_string(), crate::expr::Value::String("hyphen".into())),
-                ("SOMETHING_TRUE".to_string(), crate::expr::Value::String("true".into())),
-                ("SOMETHING_FALSE".to_string(), crate::expr::Value::String("false".into())),
+                (
+                    "KEY-WITH-HYPHENS".to_string(),
+                    crate::expr::Value::String("hyphen".into()),
+                ),
+                (
+                    "SOMETHING_TRUE".to_string(),
+                    crate::expr::Value::String("true".into()),
+                ),
+                (
+                    "SOMETHING_FALSE".to_string(),
+                    crate::expr::Value::String("false".into()),
+                ),
                 ("x".to_string(), crate::expr::Value::String("X".into())),
             ]
             .into_iter()
@@ -1534,10 +1538,22 @@ mod tests {
         // — and which only work *because* the rewrite was forced.
         assert_eq!(eval("${{ !env.SOMETHING_TRUE }}").as_deref(), Ok("false"));
         assert_eq!(eval("${{ !env.SOMETHING_FALSE }}").as_deref(), Ok("false"));
-        assert_eq!(eval("${{ env.SOMETHING_TRUE && true }}").as_deref(), Ok("true"));
-        assert_eq!(eval("${{ env.SOMETHING_FALSE && true }}").as_deref(), Ok("true"));
-        assert_eq!(eval("${{ env.SOMETHING_TRUE || false }}").as_deref(), Ok("true"));
-        assert_eq!(eval("${{ env.SOMETHING_FALSE || false }}").as_deref(), Ok("false"));
+        assert_eq!(
+            eval("${{ env.SOMETHING_TRUE && true }}").as_deref(),
+            Ok("true")
+        );
+        assert_eq!(
+            eval("${{ env.SOMETHING_FALSE && true }}").as_deref(),
+            Ok("true")
+        );
+        assert_eq!(
+            eval("${{ env.SOMETHING_TRUE || false }}").as_deref(),
+            Ok("true")
+        );
+        assert_eq!(
+            eval("${{ env.SOMETHING_FALSE || false }}").as_deref(),
+            Ok("false")
+        );
         // A *single* unforced expression must not go through `format`, or the
         // boolean would arrive as the string "false" and `if:` would be truthy.
         // This is the whole reason `force_format` exists.
@@ -1631,11 +1647,7 @@ mod tests {
         let doc = Rc::new(Document::parse(source).expect("the fixture parses"));
         let mut workflow = Workflow::from_document("test.yml", &doc).expect("decodes");
         // `result` is set by the runner, not by the YAML.
-        workflow
-            .jobs
-            .get_mut("b")
-            .expect("job b")
-            .result = "success".to_string();
+        workflow.jobs.get_mut("b").expect("job b").result = "success".to_string();
         let run = Run::new(workflow, doc, "a");
 
         let needs = needs_context(Some(&run));
@@ -1662,7 +1674,10 @@ mod tests {
         let run = Run::new(workflow, doc, "a");
 
         let needs = needs_context(Some(&run));
-        let nope = needs.get("nope").and_then(Value::as_object).expect("the key");
+        let nope = needs
+            .get("nope")
+            .and_then(Value::as_object)
+            .expect("the key");
         assert!(nope
             .get("outputs")
             .and_then(Value::as_object)
@@ -1798,7 +1813,10 @@ mod tests {
         assert_eq!(evaluate("matrix.foo"), Ok(text("bar")));
         assert_eq!(evaluate("env.key"), Ok(text("value")));
         assert_eq!(evaluate("job.status"), Ok(text("success")));
-        assert_eq!(evaluate("secrets.CASE_INSENSITIVE_SECRET"), Ok(text("value")));
+        assert_eq!(
+            evaluate("secrets.CASE_INSENSITIVE_SECRET"),
+            Ok(text("value"))
+        );
         assert_eq!(
             evaluate("secrets.case_insensitive_secret"),
             Ok(text("value")),
@@ -1814,7 +1832,10 @@ mod tests {
         // `failure()` (`pkg/exprparser/interpreter.go:648-663`) and none of
         // them calls either. The contexts themselves come from the same
         // builders on both paths.
-        assert_eq!(evaluate("steps.idwithnothing.conclusion"), Ok(text("success")));
+        assert_eq!(
+            evaluate("steps.idwithnothing.conclusion"),
+            Ok(text("success"))
+        );
         assert_eq!(evaluate("steps.idwithnothing.outcome"), Ok(text("failure")));
         assert_eq!(
             evaluate("steps.idwithnothing.outputs.foowithnothing"),
@@ -1881,12 +1902,18 @@ mod tests {
             (" text ", " text "),
             (" $text ", " $text "),
             (" ${text} ", " ${text} "),
-            (" ${{          1                         }} to ${{2}} ", " 1 to 2 "),
+            (
+                " ${{          1                         }} to ${{2}} ",
+                " 1 to 2 ",
+            ),
             (" ${{  (true || false)  }} to ${{2}} ", " true to 2 "),
             (" ${{  (false   ||  '}}'  )    }} to ${{2}} ", " }} to 2 "),
             (" ${{ env.KEYWITHNOTHING }} ", " valuewithnothing "),
             (" ${{ env.KEY-WITH-HYPHENS }} ", " value-with-hyphens "),
-            (" ${{ env.KEY_WITH_UNDERSCORES }} ", " value_with_underscores "),
+            (
+                " ${{ env.KEY_WITH_UNDERSCORES }} ",
+                " value_with_underscores ",
+            ),
             ("${{ secrets.CASE_INSENSITIVE_SECRET }}", "value"),
             ("${{ secrets.case_insensitive_secret }}", "value"),
             ("${{ vars.CASE_INSENSITIVE_VAR }}", "value"),
@@ -1911,7 +1938,10 @@ mod tests {
             // A value that is *not* a string still comes out as text, because
             // the forced `format()` stringifies it. Without the force this
             // would be a `bool` and upstream would panic on the type assertion.
-            ("${{ env.SOMETHING_FALSE }} && ${{ env.SOMETHING_TRUE }}", "false && true"),
+            (
+                "${{ env.SOMETHING_FALSE }} && ${{ env.SOMETHING_TRUE }}",
+                "false && true",
+            ),
             ("${{ fromJSON('{}') < 2 }}", "false"),
         ];
 
@@ -1960,8 +1990,8 @@ mod tests {
                 DefaultStatusCheck::None,
             )
             .expect("evaluates");
-            let as_text = interpolate(&environment, &status, context.clone(), expression)
-                .expect("evaluates");
+            let as_text =
+                interpolate(&environment, &status, context.clone(), expression).expect("evaluates");
             assert_eq!(
                 (as_bool, as_text.as_str()),
                 (false, "false"),
@@ -1988,8 +2018,8 @@ mod tests {
                 DefaultStatusCheck::None,
             )
             .expect("evaluates");
-            let as_text = interpolate(&environment, &status, context.clone(), expression)
-                .expect("evaluates");
+            let as_text =
+                interpolate(&environment, &status, context.clone(), expression).expect("evaluates");
             assert_eq!(
                 (as_bool, as_text.as_str()),
                 (true, "true"),
@@ -2041,7 +2071,11 @@ mod tests {
             matches!(error, InterpolateError::Rewrite(_)),
             "got {error:?}"
         );
-        assert_eq!(error.upstream_value(), "", "what upstream's caller would see");
+        assert_eq!(
+            error.upstream_value(),
+            "",
+            "what upstream's caller would see"
+        );
     }
 
     /// The Go probe's `RunContext` environment, member for member.
@@ -2262,14 +2296,8 @@ mod tests {
         for (label, source, want) in cases {
             let mut document = Document::parse(source).expect("the fixture parses");
             let root: NodeId = document.root().expect("a root");
-            evaluate_yaml_node(
-                &mut document,
-                &environment,
-                &status,
-                context.clone(),
-                root,
-            )
-            .expect("upstream succeeded on every fixture here");
+            evaluate_yaml_node(&mut document, &environment, &status, context.clone(), root)
+                .expect("upstream succeeded on every fixture here");
             assert_eq!(dump_node(&document, root, 1), *want, "case: {label}");
         }
     }
@@ -2309,8 +2337,7 @@ mod tests {
         let environment = node_environment();
         let status = DefaultStatus;
         let context = crate::expr::EvaluationContext::Other(String::new());
-        let mut document =
-            Document::parse("before: 1\n${{ insert }}: plain\n").expect("parses");
+        let mut document = Document::parse("before: 1\n${{ insert }}: plain\n").expect("parses");
         let root = document.root().expect("a root");
         let before = dump_node(&document, root, 0);
 

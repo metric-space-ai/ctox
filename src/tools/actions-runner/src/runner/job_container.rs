@@ -461,22 +461,32 @@ pub fn handle_credentials(
         environment,
         status,
         crate::expr::EvaluationContext::Job,
-        credentials.get("username").map(String::as_str).unwrap_or_default(),
+        credentials
+            .get("username")
+            .map(String::as_str)
+            .unwrap_or_default(),
     )
     .unwrap_or_default();
     if username.is_empty() {
-        return Err(anyhow!("failed to interpolate container.credentials.username"));
+        return Err(anyhow!(
+            "failed to interpolate container.credentials.username"
+        ));
     }
 
     password = crate::runner::expression::interpolate(
         environment,
         status,
         crate::expr::EvaluationContext::Job,
-        credentials.get("password").map(String::as_str).unwrap_or_default(),
+        credentials
+            .get("password")
+            .map(String::as_str)
+            .unwrap_or_default(),
     )
     .unwrap_or_default();
     if password.is_empty() {
-        return Err(anyhow!("failed to interpolate container.credentials.password"));
+        return Err(anyhow!(
+            "failed to interpolate container.credentials.password"
+        ));
     }
 
     Ok((username, password))
@@ -519,7 +529,10 @@ pub fn handle_service_credentials(
         environment,
         status,
         crate::expr::EvaluationContext::Job,
-        credentials.get("username").map(String::as_str).unwrap_or_default(),
+        credentials
+            .get("username")
+            .map(String::as_str)
+            .unwrap_or_default(),
     )
     .unwrap_or_default();
     if username.is_empty() {
@@ -529,7 +542,10 @@ pub fn handle_service_credentials(
         environment,
         status,
         crate::expr::EvaluationContext::Job,
-        credentials.get("password").map(String::as_str).unwrap_or_default(),
+        credentials
+            .get("password")
+            .map(String::as_str)
+            .unwrap_or_default(),
     )
     .unwrap_or_default();
     if password.is_empty() {
@@ -636,10 +652,7 @@ pub fn start_host_environment(
 
     let act_path = environment.act_path();
     let event_json = rc.event_json.clone();
-    let copy = environment.copy(
-        &format!("{act_path}/"),
-        act_files(event_json.as_str()),
-    );
+    let copy = environment.copy(&format!("{act_path}/"), act_files(event_json.as_str()));
     Ok((JobContainer::new(environment), pipeline(vec![copy])))
 }
 
@@ -758,14 +771,10 @@ pub fn start_job_container(
             })
             .collect();
 
-        let (service_username, service_password) = handle_service_credentials(
-            environment,
-            status,
-            service_credentials(spec),
-        )
-        .map_err(|error| {
-            anyhow!("failed to handle service {service_id} credentials: {error}")
-        })?;
+        let (service_username, service_password) =
+            handle_service_credentials(environment, status, service_credentials(spec)).map_err(
+                |error| anyhow!("failed to handle service {service_id} credentials: {error}"),
+            )?;
         // Deliberate deviation, and the reason it is here: this is an
         // *assignment* to the variables the job container is about to be built
         // from, exactly as upstream writes it. The job container therefore ends
@@ -866,7 +875,11 @@ pub fn start_job_container(
 
     let job = new_container(NewContainerInput {
         // `tail -f /dev/null` with no command: a container that stays up.
-        entrypoint: vec!["tail".to_string(), "-f".to_string(), "/dev/null".to_string()],
+        entrypoint: vec![
+            "tail".to_string(),
+            "-f".to_string(),
+            "/dev/null".to_string(),
+        ],
         working_dir: extensions.to_container_path(config.workdir.as_str()),
         image,
         username,
@@ -1125,7 +1138,8 @@ pub fn stop_job_container(rc: &RunContext, job: &JobContainer) -> Executor {
     let reuse = rc.config.reuse_containers;
     // One closure per `IfNot`, because a `Conditional` is consumed by the
     // combinator it is given to.
-    let reused = || -> Conditional { Box::new(move |_: &crate::common::context::RunContext| reuse) };
+    let reused =
+        || -> Conditional { Box::new(move |_: &crate::common::context::RunContext| reuse) };
     let name = rc.job_container_name();
     let env_volume = format!("{name}-env");
 
@@ -1650,10 +1664,7 @@ mod tests {
     /// The default platforms: `ubuntu-latest` mapped, as `-P ubuntu-latest=…`
     /// maps it.
     fn platforms() -> BTreeMap<String, String> {
-        BTreeMap::from([(
-            "ubuntu-latest".to_string(),
-            "cimg/base:latest".to_string(),
-        )])
+        BTreeMap::from([("ubuntu-latest".to_string(), "cimg/base:latest".to_string())])
     }
 
     /// A context with one job and no container, which is the Docker branch.
@@ -1682,8 +1693,7 @@ mod tests {
     fn run_with_credentials(keys: &[&str]) -> Run {
         run(&format!(
             "runs-on: ubuntu-latest\ncontainer:\n  image: img:1\n  credentials:\n{}",
-            keys
-                .iter()
+            keys.iter()
                 .map(|key| format!("    {key}\n"))
                 .collect::<String>()
         ))
@@ -2162,8 +2172,15 @@ mod tests {
 
         // The reduced view the rest of the runner branches on, which is what
         // makes `get_binds_and_mounts` take its host branch.
-        let paths = rc.job_container.clone().expect("the host branch is recorded");
-        assert!(paths.act_path.starts_with(&cache_path), "{}", paths.act_path);
+        let paths = rc
+            .job_container
+            .clone()
+            .expect("the host branch is recorded");
+        assert!(
+            paths.act_path.starts_with(&cache_path),
+            "{}",
+            paths.act_path
+        );
         assert!(paths.act_path.ends_with("/act"), "{}", paths.act_path);
         // The workdir as the scratch environment sees it: a host environment
         // maps the host workdir onto its own path, so this is *not* the host's.
@@ -2190,7 +2207,10 @@ mod tests {
             );
         }
         assert_eq!(
-            rc.env.get("RUNNER_TOOL_CACHE").expect("the tool cache").as_str(),
+            rc.env
+                .get("RUNNER_TOOL_CACHE")
+                .expect("the tool cache")
+                .as_str(),
             format!("{cache_path}/tool_cache")
         );
         assert_eq!(
@@ -2199,7 +2219,10 @@ mod tests {
         );
         // The process environment is merged, and the `RUNNER_*` values above
         // were written first, so a host variable of the same name cannot win.
-        assert!(rc.env.contains_key("PATH"), "the process environment is merged");
+        assert!(
+            rc.env.contains_key("PATH"),
+            "the process environment is merged"
+        );
         assert_eq!(
             rc.env.get("RUNNER_OS").expect("the OS").as_str(),
             crate::container::go_os_to_action_os(std::env::consts::OS)
@@ -2385,7 +2408,11 @@ mod tests {
         assert_eq!(HEALTH_POLL_LIMIT, 30, "`i > 30` breaks on i = 31");
         // The break is tested *after* the poll, so i = 31 is polled and then
         // breaks: 32 polls, and 31 sleeps.
-        assert_eq!((0..=HEALTH_POLL_LIMIT + 1).count(), 32, "i = 0…31 inclusive");
+        assert_eq!(
+            (0..=HEALTH_POLL_LIMIT + 1).count(),
+            32,
+            "i = 0…31 inclusive"
+        );
 
         let mut total = Duration::ZERO;
         let mut delay = HEALTH_INITIAL_DELAY;
@@ -2418,11 +2445,14 @@ mod tests {
                 true,
                 vec![
                     "Cleaning up services for job test".to_string(),
-                    "Cleaning up network for job test, and network name is: act-net-1"
-                        .to_string(),
+                    "Cleaning up network for job test, and network name is: act-net-1".to_string(),
                 ],
             ),
-            (1, false, vec!["Cleaning up services for job test".to_string()]),
+            (
+                1,
+                false,
+                vec!["Cleaning up services for job test".to_string()],
+            ),
             // The quirk: a created network with no services is never removed.
             (0, true, Vec::<String>::new()),
             (0, false, Vec::<String>::new()),
@@ -2449,8 +2479,7 @@ mod tests {
                 )
             };
 
-            stop_job_container(&rc, &job.as_job())(&ctx)
-                .expect("the cleanup never fails the job");
+            stop_job_container(&rc, &job.as_job())(&ctx).expect("the cleanup never fails the job");
             assert_eq!(
                 sink.messages_at(Level::Info),
                 want,
@@ -2558,9 +2587,14 @@ mod tests {
             Some(run("runs-on: self-hosted")),
         );
         host.job_container = None;
-        let (job, _executor) =
-            start_container(&mut host, &environment(), &status(), "x86_64", discarding_sink())
-                .expect("the host branch needs no daemon");
+        let (job, _executor) = start_container(
+            &mut host,
+            &environment(),
+            &status(),
+            "x86_64",
+            discarding_sink(),
+        )
+        .expect("the host branch needs no daemon");
         assert!(
             host.job_container.is_some(),
             "the host branch records ContainerPaths, which is what get_binds_and_mounts branches on"
@@ -2580,9 +2614,14 @@ mod tests {
             Some(run("runs-on: ubuntu-latest")),
         );
         docker.job_container = None;
-        let (job, _executor) =
-            start_container(&mut docker, &environment(), &status(), "x86_64", discarding_sink())
-                .expect("building the job container needs no daemon");
+        let (job, _executor) = start_container(
+            &mut docker,
+            &environment(),
+            &status(),
+            "x86_64",
+            discarding_sink(),
+        )
+        .expect("building the job container needs no daemon");
         assert!(
             docker.job_container.is_none(),
             "the Docker branch records no ContainerPaths"
@@ -2607,8 +2646,7 @@ mod tests {
     fn the_services_are_assembled_and_the_network_recorded_as_data() {
         let mut rc = rc_with(
             RunConfig::default(),
-            Some(run(
-                r#"runs-on: ubuntu-latest
+            Some(run(r#"runs-on: ubuntu-latest
 container:
   image: job:1
 services:
@@ -2622,8 +2660,7 @@ services:
       - db-data:/var/lib/postgresql/data
   empty:
     image: ""
-"#,
-            )),
+"#)),
         );
         rc.job_container = None;
         let (_job, _executor) = start_job_container(
@@ -2644,7 +2681,10 @@ services:
         );
         // The two fields the cleanup executor is built from, in place of
         // upstream's `cleanUpJobContainer` closure.
-        assert!(rc.create_and_delete_network, "a job with services has a network");
+        assert!(
+            rc.create_and_delete_network,
+            "a job with services has a network"
+        );
         assert_eq!(
             rc.job_container_network,
             format!("{}-test-network", rc.job_container_name()),
@@ -2668,8 +2708,14 @@ services:
     fn a_job_without_services_gets_no_network() {
         let mut rc = rc_with(RunConfig::default(), Some(run("runs-on: ubuntu-latest")));
         rc.job_container = None;
-        start_job_container(&mut rc, &environment(), &status(), "x86_64", discarding_sink())
-            .expect("the assembly needs no daemon");
+        start_job_container(
+            &mut rc,
+            &environment(),
+            &status(),
+            "x86_64",
+            discarding_sink(),
+        )
+        .expect("the assembly needs no daemon");
         assert!(!rc.create_and_delete_network);
         assert_eq!(rc.job_container_network, "host");
         assert!(rc.service_containers.is_empty());
@@ -2684,7 +2730,9 @@ services:
         let first = random_suffix();
         assert_eq!(first.len(), 16, "{first}");
         assert!(
-            first.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            first
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
             "{first}"
         );
         assert_ne!(first, random_suffix(), "two calls must not collide");

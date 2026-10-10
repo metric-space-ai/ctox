@@ -287,7 +287,11 @@ mod tests {
     #[test]
     fn what_a_backslash_escapes_depends_on_where_it_is() {
         assert_eq!(split("\\a").unwrap(), vec!["a"], "outside quotes, anything");
-        assert_eq!(split("\"\\a\"").unwrap(), vec!["\\a"], "inside double, not $`\"\\");
+        assert_eq!(
+            split("\"\\a\"").unwrap(),
+            vec!["\\a"],
+            "inside double, not $`\"\\"
+        );
         // `\$` *is* escapable inside double quotes.
         assert_eq!(split("\"\\$\"").unwrap(), vec!["$"]);
         // A backslash before a single quote escapes it outside quotes, and that

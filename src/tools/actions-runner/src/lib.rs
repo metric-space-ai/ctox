@@ -32,8 +32,8 @@ pub mod http;
 pub mod lookpath;
 pub mod model;
 pub mod runner;
-pub mod validate;
 pub mod schema;
+pub mod validate;
 pub mod workflow_pattern;
 pub mod yaml_node;
 

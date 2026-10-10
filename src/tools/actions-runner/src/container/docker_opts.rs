@@ -172,7 +172,9 @@ pub fn parse_storage_opts(storage_opts: &[String]) -> Result<BTreeMap<String, St
 /// Go writes into the caller's backing array (`filtered = securityOpts[:0]`);
 /// this builds a new vector, which is the same observable result without the
 /// aliasing.
-pub fn parse_system_paths(security_opts: &[String]) -> (Vec<String>, Option<Vec<String>>, Option<Vec<String>>) {
+pub fn parse_system_paths(
+    security_opts: &[String],
+) -> (Vec<String>, Option<Vec<String>>, Option<Vec<String>>) {
     let mut filtered = Vec::with_capacity(security_opts.len());
     let mut masked_paths = None;
     let mut readonly_paths = None;
@@ -214,11 +216,10 @@ pub fn parse_security_opts(security_opts: &[String]) -> Result<Vec<String>, Stri
                 // May be a filename, in which case the profile's content is
                 // sent if it is valid JSON.
                 path => {
-                    let contents = std::fs::read_to_string(path).map_err(|err| {
-                        format!("opening seccomp profile ({path}) failed: {err}")
-                    })?;
-                    let compacted = serde_json::from_str::<serde_json::Value>(&contents)
-                        .map_err(|err| {
+                    let contents = std::fs::read_to_string(path)
+                        .map_err(|err| format!("opening seccomp profile ({path}) failed: {err}"))?;
+                    let compacted =
+                        serde_json::from_str::<serde_json::Value>(&contents).map_err(|err| {
                             format!("compacting json for seccomp profile ({path}) failed: {err}")
                         })?;
                     out.push(format!("seccomp={}", compact_json(&compacted)));
@@ -347,10 +348,7 @@ pub fn validate_device(val: &str, server_os: &str) -> Result<String, String> {
 /// two-part form decidable: in `relative:/absolute-path` the second component is
 /// not a valid mode, so it is a path; in `hostPath:/containerPath:r` it is, so it
 /// is a mode.
-pub fn validate_linux_path(
-    val: &str,
-    validator: fn(&str) -> bool,
-) -> Result<String, String> {
+pub fn validate_linux_path(val: &str, validator: fn(&str) -> bool) -> Result<String, String> {
     if val.matches(':').count() > 2 {
         return Err(format!("bad format for path: {val}"));
     }
@@ -415,9 +413,7 @@ pub fn slash_clean(path: &str) -> String {
         if bytes[index] == b'/' {
             // Empty path element.
             index += 1;
-        } else if bytes[index] == b'.'
-            && (index + 1 == bytes.len() || bytes[index + 1] == b'/')
-        {
+        } else if bytes[index] == b'.' && (index + 1 == bytes.len() || bytes[index + 1] == b'/') {
             // `.` element.
             index += 1;
         } else if bytes[index] == b'.'
@@ -527,8 +523,8 @@ mod tests {
             ["published=1500,target,444"],
         ] {
             let ports: Vec<String> = ports.iter().map(|p| p.to_string()).collect();
-            let err = convert_to_standard_notation(&ports)
-                .expect_err("a param without '=' is an error");
+            let err =
+                convert_to_standard_notation(&ports).expect_err("a param without '=' is an error");
             assert!(err.contains("should be name=value"), "got {err:?}");
         }
     }
@@ -555,7 +551,10 @@ mod tests {
         for (input, host, container, mode) in table {
             let mapping = parse_device(input, "linux").expect("a mapping");
             assert_eq!(mapping.path_on_host, *host, "host for {input}");
-            assert_eq!(mapping.path_in_container, *container, "container for {input}");
+            assert_eq!(
+                mapping.path_in_container, *container,
+                "container for {input}"
+            );
             assert_eq!(mapping.cgroup_permissions, *mode, "mode for {input}");
         }
     }
@@ -711,7 +710,9 @@ mod tests {
         assert_eq!(map["something"], "");
 
         // The `none` driver with no options is fine.
-        assert!(parse_logging_opts("none", &[]).expect("accepted").is_empty());
+        assert!(parse_logging_opts("none", &[])
+            .expect("accepted")
+            .is_empty());
     }
 
     /// A repeated key last wins, and a key with no `=` maps to the empty string.
@@ -751,8 +752,8 @@ mod tests {
         let profile = dir.path().join("profile.json");
         std::fs::write(&profile, "{\n  \"defaultAction\": \"SCMP_ACT_ALLOW\"\n}\n")
             .expect("written");
-        let out = parse_security_opts(&[format!("seccomp={}", profile.display())])
-            .expect("accepted");
+        let out =
+            parse_security_opts(&[format!("seccomp={}", profile.display())]).expect("accepted");
         assert_eq!(
             out,
             vec![r#"seccomp={"defaultAction":"SCMP_ACT_ALLOW"}"#.to_string()],
@@ -778,13 +779,13 @@ mod tests {
     #[test]
     fn a_device_cgroup_rule_is_type_major_minor_mode() {
         for rule in ["c 1:3 mr", "a *:* rwm", "b 8:0 r"] {
-            assert_eq!(
-                validate_device_cgroup_rule(rule).expect("a rule"),
-                rule,
-            );
+            assert_eq!(validate_device_cgroup_rule(rule).expect("a rule"), rule,);
         }
         for rule in ["", "c 1:3", "d 1:3 r", "c 1-3 r", "c 1:3 rwmw"] {
-            assert!(validate_device_cgroup_rule(rule).is_err(), "{rule} should fail");
+            assert!(
+                validate_device_cgroup_rule(rule).is_err(),
+                "{rule} should fail"
+            );
         }
     }
 
@@ -830,8 +831,7 @@ mod tests {
         // `/host\path` survives and the second field is read as the container
         // path. `std::path` on Windows would have split it at the backslash.
         assert_eq!(
-            validate_linux_path(r"/host\path:/container:r", valid_device_mode)
-                .expect("a mapping"),
+            validate_linux_path(r"/host\path:/container:r", valid_device_mode).expect("a mapping"),
             r"/host\path:/container:r",
         );
         // The container path itself is judged by the slash rule alone: `\a` is
