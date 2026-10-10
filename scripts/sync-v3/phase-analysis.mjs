@@ -18,8 +18,9 @@ export function correlate(trace) {
   const events = [...trace.events].sort((a, b) => a.at - b.at), requests = [], windows = [], transfers = [];
   const messages = events.filter(event => event.kind === 'logical');
   for (const request of messages.filter(event => event.direction === 'out' && event.id && event.method)) {
-    const response = messages.find(event => event.direction === 'in' && event.id === request.id && !event.method && event.at >= request.at);
-    if (response) requests.push({ id: request.id, method: request.method, collection: request.collection,
+    const response = messages.find(event => event.direction === 'in' && event.channel === request.channel
+      && event.id === request.id && !event.method && event.at >= request.at);
+    if (response) requests.push({ id: request.id, channel: request.channel, method: request.method, collection: request.collection,
       streamId: request.streamId, writeMarker: request.writeMarker, startAt: request.startedAt,
       endAt: response.at, responseRows: response.responseRows, resultDocuments: response.resultDocuments,
       requestTransferId: request.transferId, responseTransferId: response.transferId });
@@ -39,7 +40,14 @@ export function correlate(trace) {
         startAt: chunk.at, endAt: ack.at, final: ack.final });
     }
   }
-  return { requests, windows, transfers, logicalMessages: messages };
+  const queryStreams = requests.filter(request => request.method === 'rxdb.query.fetch' && request.streamId).map(request => {
+    const chunks = messages.filter(event => event.direction === 'in' && event.channel === request.channel
+      && event.method === 'rxdb.query.chunk' && event.streamId === request.streamId && event.at >= request.startAt);
+    return { streamId: request.streamId, collection: request.collection, startAt: request.startAt, fetchAckAt: request.endAt,
+      complete: chunks.some(chunk => chunk.streamFinal), chunkCount: chunks.length,
+      chunks: chunks.map(chunk => ({ completedAt: chunk.at, final: chunk.streamFinal, frames: chunk.frames, transferId: chunk.transferId })) };
+  });
+  return { requests, windows, transfers, queryStreams, logicalMessages: messages };
 }
 const median = numbers => [...numbers].sort((a, b) => a - b)[Math.floor(numbers.length / 2)];
 export function analyzeCase(measurement) {
@@ -61,7 +69,7 @@ export function analyzeCase(measurement) {
       temporalChain: serialRpcChain(requests).map(item => ({ method: item.method, collection: item.collection, startAt: item.startAt, endAt: item.endAt })),
       outboundStopAndWaitWindows: windows.length, outboundWindowWaitUnionMs: unionDuration(windows),
       inboundPipelineWindows: transfers.filter(item => item.direction === 'in').reduce((n, item) => n + item.ackCount, 0),
-      requests, transfers };
+      requests, transfers, queryStreams: correlated.queryStreams.filter(item => item.startAt >= startAt && item.startAt < endAt) };
   });
   const rtcCreated = trace.events.find(event => event.kind === 'rtc-created');
   const opened = trace.events.find(event => event.kind === 'channel-open');

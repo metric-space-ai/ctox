@@ -32,6 +32,19 @@ test('request IDs, not adjacency, bind interleaved responses', () => {
 test('phase conservation rejects missing boundaries rather than reporting a partial pass', () => {
   assert.throws(() => analyzeCase({ phaseTrace: { errors: [], marks: {}, events: [{ kind: 'channel-open', at: 1 }] } }), /Invalid phase/);
 });
+test('equal RPC and stream IDs on different physical channels cannot cross-correlate', () => {
+  const events = [
+    { kind: 'logical', at: 0, startedAt: 0, direction: 'out', channel: 'c1', id: 'same', method: 'rxdb.query.fetch', streamId: 'stream' },
+    { kind: 'logical', at: 1, direction: 'in', channel: 'c2', id: 'same', method: null },
+    { kind: 'logical', at: 2, direction: 'in', channel: 'c1', id: 'same', method: null },
+    { kind: 'logical', at: 3, direction: 'in', channel: 'c2', id: 'chunk', method: 'rxdb.query.chunk', streamId: 'stream', streamFinal: true },
+    { kind: 'logical', at: 4, direction: 'in', channel: 'c1', id: 'chunk', method: 'rxdb.query.chunk', streamId: 'stream', streamFinal: true, frames: 4 },
+  ];
+  const result = correlate({ events });
+  assert.equal(result.requests[0].endAt, 2);
+  assert.equal(result.queryStreams[0].chunkCount, 1);
+  assert.equal(result.queryStreams[0].chunks[0].completedAt, 4);
+});
 test('observer preserves send behavior and excludes credential/document payloads', async () => {
   const saved = Object.fromEntries(['RTCPeerConnection', 'RTCDataChannel', '__syncV3Trace', '__syncV3Rtc', '__syncV3BootAt'].map(key => [key, globalThis[key]]));
   class Channel extends EventTarget {
