@@ -1,0 +1,62 @@
+name: Business OS design matrix
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/design-matrix.yml'
+      - 'src/apps/business-os/app.css'
+      - 'src/apps/business-os/shared/base.css'
+      - 'src/apps/business-os/shared/branding.js'
+      - 'src/apps/business-os/design-lab.html'
+      - 'src/apps/business-os/scripts/capture-design-matrix.mjs'
+      - 'src/apps/business-os/scripts/assert-visual-diff.mjs'
+      - 'src/apps/business-os/qa/design-matrix-baseline/**'
+      - 'src/apps/business-os/package*.json'
+permissions:
+  contents: read
+concurrency:
+  group: design-matrix-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux-design-matrix:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '22'
+      - name: Install pinned browser dependencies
+        run: |
+          npm ci --ignore-scripts --prefix src/apps/business-os
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+      - name: Capture and compare all 24 variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output/playwright/business-os-design-matrix
+          {
+            git rev-parse HEAD
+            cat /etc/os-release
+            node --version
+            npm --prefix src/apps/business-os ls playwright
+            fc-match system-ui
+            fc-list | sort
+          } > output/playwright/business-os-design-matrix/environment.txt
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory src/apps/business-os > "$RUNNER_TEMP/design-lab-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8765/design-lab.html > /dev/null; then break; fi
+            sleep 1
+          done
+          npm --prefix src/apps/business-os run qa:design-matrix
+          npm --prefix src/apps/business-os run qa:visual-diff
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: linux-design-matrix-${{ github.sha }}
+          path: |
+            output/playwright/business-os-design-matrix/
+            output/playwright/business-os-design-diff/
+          if-no-files-found: error
+          retention-days: 14

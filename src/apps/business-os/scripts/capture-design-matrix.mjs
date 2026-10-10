@@ -85,6 +85,7 @@ page.on('console', (message) => {
 
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
+  await page.evaluate(() => document.fonts.ready);
   const captures = [];
   for (const width of widths) {
     for (const theme of themes) {
@@ -114,6 +115,7 @@ try {
           await page.waitForFunction((locale) => document.documentElement.dataset.designLabLocale === locale, locale);
           await page.waitForTimeout(50);
           const metrics = await page.locator('[data-lab-frame]').evaluate((frame) => ({
+            fontFamily: getComputedStyle(frame).fontFamily,
             clientWidth: frame.clientWidth,
             scrollWidth: frame.scrollWidth,
             buttonsWithoutName: Array.from(frame.querySelectorAll('button'))
@@ -140,6 +142,9 @@ try {
   if (consoleErrors.length) throw new Error(`browser console errors:\n${consoleErrors.join('\n')}`);
   await writeFile(path.join(outputDir, 'design-matrix.json'), `${JSON.stringify({
     schema: 'ctox.business_os.design_matrix.v1',
+    platform: process.platform,
+    browserVersion: browser.version(),
+    executablePath,
     baseUrl,
     reducedMotion: true,
     brands,
