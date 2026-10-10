@@ -695,7 +695,7 @@ pub fn finish_persistent_backend_release_stop(root: &Path) -> Result<()> {
     );
     for port in managed_runtime_ports(root)? {
         anyhow::ensure!(
-            listening_pids_for_port(root, port)?.is_empty(),
+            managed_listener_pids_for_port(root, port)?.is_empty(),
             "refusing release switch: remaining listener on tcp/{port}"
         );
     }
@@ -806,7 +806,7 @@ fn persistent_backend_residue_with_scope(root: &Path) -> Result<Vec<String>> {
     }
     let ports = managed_runtime_ports(root)?;
     for port in ports {
-        let listeners = listening_pids_for_port(root, port)?;
+        let listeners = managed_listener_pids_for_port(root, port)?;
         if !listeners.is_empty() {
             residue.push(format!("tcp/{port} listeners {listeners:?}"));
         }
@@ -3244,6 +3244,32 @@ fn listening_pids_for_port(root: &Path, port: u16) -> Result<Vec<u32>> {
     Ok(pids)
 }
 
+/// TCP defaults are inventory, not permission to stop another process.
+/// Managed launches use this root as their working directory; verify that
+/// exact directory and the existing launcher/engine identity before cleanup.
+fn managed_listener_pids_for_port(root: &Path, port: u16) -> Result<Vec<u32>> {
+    let mut owned = Vec::new();
+    for pid in listening_pids_for_port(root, port)? {
+        if !process_current_dir_matches_root(pid, root) {
+            continue;
+        }
+        let Some(command) = process_command(root, pid)? else {
+            continue;
+        };
+        let direct = command_is_managed_runtime_launcher(&command)
+            || managed_engine_process_command(&command);
+        let via_launcher = if let Some(launcher) = managed_launcher_ancestor_pid(root, pid)? {
+            process_current_dir_matches_root(launcher, root)
+        } else {
+            false
+        };
+        if direct || via_launcher {
+            owned.push(pid);
+        }
+    }
+    Ok(owned)
+}
+
 fn process_command(root: &Path, pid: u32) -> Result<Option<String>> {
     let output = Command::new("ps")
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
@@ -3261,14 +3287,14 @@ fn process_command(root: &Path, pid: u32) -> Result<Option<String>> {
 }
 
 fn stop_processes_on_port(root: &Path, port: u16) -> Result<()> {
-    for pid in listening_pids_for_port(root, port)? {
+    for pid in managed_listener_pids_for_port(root, port)? {
         if pid == std::process::id() {
             continue;
         }
         terminate_managed_process(root, pid)
             .with_context(|| format!("failed to stop listener pid {pid} on tcp/{port}"))?;
         thread::sleep(Duration::from_millis(150));
-        if listening_pids_for_port(root, port)?.contains(&pid) {
+        if managed_listener_pids_for_port(root, port)?.contains(&pid) {
             force_kill_managed_process(root, pid).with_context(|| {
                 format!("failed to force-stop listener pid {pid} on tcp/{port}")
             })?;
@@ -4782,6 +4808,48 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("exit status"));
         assert!(message.contains("Applying ISQ on 1 threads."));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_cleanup_preserves_an_unmanaged_listener_in_the_same_root() {
+        struct BoundedChild(Child);
+        impl Drop for BoundedChild {
+            fn drop(&mut self) {
+                // EOF ends the test server; timeout bounds every failure path.
+                self.0.stdin.take();
+                let _ = self.0.wait();
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let mut child = BoundedChild(
+            Command::new("timeout")
+                .args([
+                    "15s",
+                    "python3",
+                    "-u",
+                    "-c",
+                    "import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.read()",
+                ])
+                .current_dir(root.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut output = std::io::BufReader::new(child.0.stdout.take().unwrap());
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut output, &mut line).unwrap();
+        let port: u16 = line.trim().parse().unwrap();
+        assert!(!listening_pids_for_port(root.path(), port)
+            .unwrap()
+            .is_empty());
+        assert!(managed_listener_pids_for_port(root.path(), port)
+            .unwrap()
+            .is_empty());
+        stop_processes_on_port(root.path(), port).unwrap();
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+        assert!(child.0.try_wait().unwrap().is_none());
     }
 
     #[cfg(unix)]
