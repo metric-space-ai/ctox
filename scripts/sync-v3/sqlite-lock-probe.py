@@ -13,12 +13,14 @@ def probe(database, budget_ms=500):
                 db.execute('BEGIN IMMEDIATE'); acquired=True; db.execute('ROLLBACK'); break
             except sqlite3.OperationalError as exc:
                 code=getattr(exc,'sqlite_errorcode',None)
-                if code not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED): raise
+                # Python3.10 lacks exception codes; accept only exact SQLite lock messages.
+                if code is None: code={'database is locked':5,'database table is locked':6}.get(str(exc))
+                if code not in (5,6): raise
                 busy+=1
                 if (time.monotonic()-start)*1000>=budget_ms: error=code; break
                 time.sleep(.01)
     return dict(elapsedMs=(time.monotonic()-start)*1000,busyRetries=busy,acquired=acquired,errorCode=error,
-        definition='BEGIN IMMEDIATE then immediate ROLLBACK; actual SQLITE_BUSY/LOCKED retry count, 10ms retry sleep, 500ms budget; no data changed. Not native internal busy-handler telemetry.')
+        definition='BEGIN IMMEDIATE then immediate ROLLBACK; SQLITE_BUSY/LOCKED retries, 10ms retry sleep, 500ms budget; Python>=3.11 exception code, Python3.10 exact SQLite lock-message classification; no data changed. Not native internal busy-handler telemetry.')
 
 def selftest():
     with tempfile.TemporaryDirectory() as d:
