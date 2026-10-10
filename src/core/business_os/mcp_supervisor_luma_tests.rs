@@ -188,7 +188,7 @@ fn current_account_owner_revision_holder_and_model_policy_are_required() -> anyh
 #[test]
 fn replaced_native_lease_or_project_owner_cannot_capture_a_selection() -> anyhow::Result<()> {
     let (root, token) = fixture(true)?;
-    Connection::open(crate::paths::core_db(root))?.execute(
+    Connection::open(crate::paths::core_db(root.path()))?.execute(
         "UPDATE communication_routing_state SET lease_worker_id='replacement' WHERE route_status='leased'", [])?;
     assert!(require_executor(root.path(), Some(&token)).is_err());
     assert_eq!(routes(root.path())?, 0);
