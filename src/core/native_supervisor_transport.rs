@@ -271,16 +271,19 @@ impl Source {
             "consumer":self.association["consumer"]})
     }
     fn publish_facts(&self, value: &Value) -> Result<()> {
-        self.session
+        let snapshot = self
+            .session
             .pool()
             .connection_handler
             .with_current_connection(&self.peer, || {
-                self.enrollment.current(|| {
-                    println!("{}", value);
-                    Ok(())
-                })
+                self.enrollment
+                    .current(|| serde_json::to_string(value).map_err(Into::into))
             })
-            .ok_or_else(unavailable)?
+            .ok_or_else(unavailable)??;
+        // These public facts are a snapshot, never an execution permit. Do not
+        // retain native lifecycle/secret locks across a potentially slow stdout.
+        println!("{}", snapshot);
+        Ok(())
     }
     async fn exchange_method(&self, method: &str, params: Vec<Value>) -> Result<Value> {
         self.live()?;
@@ -552,7 +555,12 @@ async fn resolve(root: &Path, expected: &ExpectedSource, directory: &Path) -> Re
             }
             selected = Some(source);
         } else {
-            source.shutdown().await?;
+            if let Err(error) = source.shutdown().await {
+                if let Some(previous) = selected {
+                    let _ = previous.shutdown().await;
+                }
+                return Err(error);
+            }
         }
     }
     let source = selected.context("native Source computer is not associated")?;
