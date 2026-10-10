@@ -439,7 +439,6 @@ fn refresh_module_catalog_after_schema_change(
 }
 
 fn write_module_catalog_projection_once(root: &Path) -> anyhow::Result<()> {
-
     let mut document = module_catalog_for_rxdb(root)?;
     let now = now_ms();
     let revision = format!("{now}-ctox-module-catalog");
@@ -573,7 +572,11 @@ mod tests {
         let mut statement = std::ptr::null_mut();
         let prepared = unsafe {
             rusqlite::ffi::sqlite3_prepare(
-                reader.handle(), sql.as_ptr(), -1, &mut statement, std::ptr::null_mut(),
+                reader.handle(),
+                sql.as_ptr(),
+                -1,
+                &mut statement,
+                std::ptr::null_mut(),
             )
         };
         assert_eq!(prepared, rusqlite::ffi::SQLITE_OK);
@@ -588,14 +591,20 @@ mod tests {
         assert_eq!(stepped, rusqlite::ffi::SQLITE_ERROR);
         assert_eq!(reset, rusqlite::ffi::SQLITE_SCHEMA);
         let mut invalidated = Some(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(reset), None,
+            rusqlite::ffi::Error::new(reset),
+            None,
         ));
 
         let module_dir = root.join("src/apps/business-os/modules/ctox");
         fs::create_dir_all(&module_dir)?;
-        fs::write(root.join("src/apps/business-os/index.html"), "<!doctype html>")?;
-        fs::write(module_dir.join("module.json"),
-            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#)?;
+        fs::write(
+            root.join("src/apps/business-os/index.html"),
+            "<!doctype html>",
+        )?;
+        fs::write(
+            module_dir.join("module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
         let mut attempts = 0;
         refresh_module_catalog_after_schema_change(|| {
             attempts += 1;
@@ -605,37 +614,55 @@ mod tests {
             write_module_catalog_projection_once(root)
         })?;
         assert_eq!(attempts, 2);
-        let catalog = load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
-            .context("recovered catalog must be persisted")?;
-        assert!(catalog["modules"].as_array().unwrap().iter().any(|module| module["id"] == "ctox"));
+        let catalog =
+            load_rxdb_collection_record(root, "business_module_catalog", "module-catalog")?
+                .context("recovered catalog must be persisted")?;
+        assert!(catalog["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|module| module["id"] == "ctox"));
         Ok(())
     }
 
     #[test]
     fn module_catalog_schema_recovery_is_bounded_and_preserves_other_errors() {
-        for (code, expected_attempts) in [(rusqlite::ffi::SQLITE_SCHEMA, 3), (rusqlite::ffi::SQLITE_BUSY, 1)] {
+        for (code, expected_attempts) in [
+            (rusqlite::ffi::SQLITE_SCHEMA, 3),
+            (rusqlite::ffi::SQLITE_BUSY, 1),
+        ] {
             let mut attempts = 0;
             let err = refresh_module_catalog_after_schema_change(|| {
                 attempts += 1;
                 Err(anyhow::Error::new(rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(code), None,
-                )).context("retained catalog failure"))
-            }).unwrap_err();
+                    rusqlite::ffi::Error::new(code),
+                    None,
+                ))
+                .context("retained catalog failure"))
+            })
+            .unwrap_err();
             assert_eq!(attempts, expected_attempts);
-            assert_eq!(err.downcast_ref::<rusqlite::Error>().unwrap().sqlite_error().unwrap().extended_code, code);
+            assert_eq!(
+                err.downcast_ref::<rusqlite::Error>()
+                    .unwrap()
+                    .sqlite_error()
+                    .unwrap()
+                    .extended_code,
+                code
+            );
             assert!(err.to_string().contains("retained catalog failure"));
         }
         let mut attempts = 0;
         assert!(refresh_module_catalog_after_schema_change(|| {
             attempts += 1;
             anyhow::bail!("database schema has changed")
-        }).is_err());
+        })
+        .is_err());
         assert_eq!(attempts, 1, "error text alone must never authorize retry");
     }
 
     #[test]
     fn direct_module_catalog_projection_includes_installed_modules() -> anyhow::Result<()> {
-
         let temp = tempdir()?;
         let root = temp.path();
         let app_root = root.join("src/apps/business-os");

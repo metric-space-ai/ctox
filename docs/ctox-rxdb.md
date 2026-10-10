@@ -24,6 +24,13 @@ Command/queue peer probes request a direct bridge and share the existing
 startup deadline across acquisition and peer readiness. Readiness rejection,
 timeout, missing state and a closed or absent native peer remain failures.
 
+The native module-catalog projection can overlap peer collection registration
+at serve startup. A typed SQLite schema invalidation rebuilds the complete
+idempotent projection with fresh connections and statements, at most twice
+with 50 ms between attempts. Exhausted schema errors and unrelated failures
+remain errors; browser fixtures and their deadlines are unchanged.
+
+
 The right-click fixture respects the native admin-only `business_users` policy:
 its ordinary requester sees only its own option, while the independently
 authenticated admin reviewer must see the real reviewer/requester directory
