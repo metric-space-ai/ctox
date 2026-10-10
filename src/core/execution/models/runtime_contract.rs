@@ -173,7 +173,28 @@ pub(crate) fn load_persisted_runtime_ownership_state(root: &Path) -> Result<Runt
 pub fn load_runtime_ownership_state(root: &Path) -> Result<RuntimeOwnershipState> {
     let legacy_path = legacy_backend_gpu_lease_ledger_path(root);
     let legacy_exists = legacy_path.exists();
-    let mut state = load_persisted_runtime_ownership_state(root)?;
+    // A canonical row, including an empty one after release, takes precedence.
+    // Import the legacy leases before persisting; persistence removes the file.
+    let persisted: Option<RuntimeOwnershipState> =
+        persistence::load_json_payload(root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY)?;
+    let mut state = match persisted {
+        Some(state) => state,
+        None if legacy_exists => {
+            let ledger: BackendGpuLeaseLedger =
+                serde_json::from_slice(&std::fs::read(&legacy_path)?)?;
+            RuntimeOwnershipState {
+                workloads: ledger
+                    .leases
+                    .into_iter()
+                    .map(|lease| {
+                        BackendRuntimeResidency::from_lease(lease, RuntimeResidencyPhase::Active)
+                    })
+                    .collect(),
+                ..RuntimeOwnershipState::default()
+            }
+        }
+        None => RuntimeOwnershipState::default(),
+    };
     let original = state.clone();
     prune_dead_runtime_residency(root, &mut state);
     if legacy_exists || state != original {
@@ -372,6 +393,42 @@ mod tests {
                 .copied(),
             Some(1024)
         );
+    }
+
+    #[test]
+    fn canonical_empty_ownership_does_not_resurrect_legacy_leases() {
+        let root = make_temp_root();
+        write_pid_file(&root, BackendRole::Embedding.pid_file_name());
+        persist_runtime_ownership_state(&root, &RuntimeOwnershipState::default()).unwrap();
+        let legacy_path = legacy_backend_gpu_lease_ledger_path(&root);
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_vec(&BackendGpuLeaseLedger {
+                leases: vec![BackendGpuLease {
+                    role: BackendRole::Embedding,
+                    model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+                    pid: Some(std::process::id()),
+                    visible_devices: vec![2],
+                    reserved_mb_by_gpu: BTreeMap::from([(2, 1024)]),
+                }],
+            }).unwrap(),
+        ).unwrap();
+        assert!(load_runtime_ownership_state(&root).unwrap().workloads.is_empty());
+        assert!(!legacy_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_legacy_lease_ledger_is_retained_for_recovery() {
+        let root = make_temp_root();
+        let legacy_path = legacy_backend_gpu_lease_ledger_path(&root);
+        std::fs::write(&legacy_path, b"invalid json").unwrap();
+        assert!(load_runtime_ownership_state(&root).is_err());
+        assert_eq!(std::fs::read(&legacy_path).unwrap(), b"invalid json");
+        assert!(persistence::load_json_payload::<RuntimeOwnershipState>(
+            &root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
+        ).unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

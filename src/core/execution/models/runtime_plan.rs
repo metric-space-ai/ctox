@@ -6649,7 +6649,10 @@ mod tests {
         );
         assert_eq!(reserves.get(&0).copied(), Some(1_100));
         assert_eq!(reserves.get(&1).copied(), Some(4_200));
-        assert_eq!(reserves.get(&2).copied(), Some(1_400));
+        let tts = engine::auxiliary_model_selection(engine::AuxiliaryRole::Tts, None);
+        let manifest = auxiliary_manifest(None, tts.request_model).unwrap();
+        assert_eq!(reserves.get(&2).copied(), Some(manifest.gpu_reserve_mb));
+        assert_eq!(reserves.len(), 3);
     }
 
     #[test]

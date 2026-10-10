@@ -1,3 +1,26 @@
+
+#[cfg(test)]
+mod output_budget_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn output_budget_uses_only_the_matching_active_runtime() {
+        let root = std::env::temp_dir().join(format!("ctox-gpt-oss-budget-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut state = runtime_state::derive_runtime_state_from_env_map(&root, &BTreeMap::new()).unwrap();
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", None), 131_072);
+        // A different active model's 256k plan must not enlarge GPT-OSS's budget.
+        state.realized_context_tokens = Some(262_144);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
+        state.active_model = Some("openai/gpt-oss-120b".to_string());
+        state.realized_context_tokens = Some(65_536);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 65_536);
+        state.realized_context_tokens = Some(0);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
 use crate::inference::engine;
 use crate::inference::runtime_state;
 use crate::inference::turn_contract;
@@ -500,7 +523,20 @@ pub(crate) fn default_output_budget(model_id: &str) -> usize {
     if !is_model_id(model_id) {
         return DEFAULT_HARMONY_MIN_OUTPUT_TOKENS;
     }
-    current_runtime_state()
+    output_budget_for_runtime_state(model_id, current_runtime_state().as_ref())
+}
+
+fn output_budget_for_runtime_state(
+    model_id: &str,
+    state: Option<&runtime_state::InferenceRuntimeState>,
+) -> usize {
+    // Realized context belongs to the active model, not every adapter request.
+    state
+        .filter(|state| {
+            state.active_model.as_deref().is_some_and(|active| {
+                active.eq_ignore_ascii_case(model_id)
+            })
+        })
         .and_then(|state| state.realized_context_tokens.map(|value| value as usize))
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_RUNTIME_OUTPUT_BUDGET)
