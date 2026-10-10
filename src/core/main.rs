@@ -206,6 +206,8 @@ RUN / EXEC
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime speech-status
+  ctox runtime grok-login        authorize Grok Build on this instance; no model switch
+  ctox runtime grok-models       list this subscription's authenticated live models
   ctox runtime speech-route-check
   ctox runtime speech-warmup
   ctox runtime speech-configure <speech-config.json>
@@ -611,6 +613,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("runtime") => match args.get(1).map(String::as_str) {
+            Some("grok-login") if args.len() == 2 => {
+                execution::cliproxyapi_xai::handle_operator_login(root)
+            }
+            Some("grok-models") if args.len() == 2 => {
+                execution::cliproxyapi_xai::handle_operator_models(root)
+            }
             Some("embedding-doctor") => {
                 println!(
                     "{}",

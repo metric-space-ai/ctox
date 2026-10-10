@@ -92,6 +92,95 @@ async fn removal_invalidates_binding_and_cancels_pending() {
     assert!(credential_binding(root.path()).unwrap().is_none());
 }
 struct StalledLogin;
+#[tokio::test]
+async fn operator_login_shutdown_cancels_without_storing_a_credential() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let signal = stop.clone();
+    let phase = operator_login(
+        &controller,
+        |_| {
+            stop.notify_one();
+            Ok(())
+        },
+        async move {
+            signal.notified().await;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(phase, XaiLoginProgress::Cancelled);
+    assert!(!subscription_installed(root.path()));
+}
+
+#[tokio::test]
+async fn device_commit_does_not_overwrite_a_concurrently_installed_account() {
+    let root = tempfile::tempdir().unwrap();
+    let controller = CtoxXaiLogin::with_auth(
+        root.path(),
+        Arc::new(XaiAuth::new(
+            Arc::new(FixtureLogin),
+            Arc::new(SystemXaiClock),
+            Arc::new(XaiRefreshCoordinator::default()),
+        )),
+    );
+    let phase = tokio::time::timeout(
+        Duration::from_secs(10),
+        operator_login(
+            &controller,
+            |_| {
+                crate::secrets::write_secret_record(
+                    root.path(),
+                    SCOPE,
+                    NAME,
+                    "concurrent-account-fixture",
+                    None,
+                    serde_json::json!({}),
+                )
+            },
+            futures_util::future::pending(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(phase, XaiLoginProgress::Failed);
+    assert_eq!(
+        crate::secrets::read_secret_value(root.path(), SCOPE, NAME).unwrap(),
+        "concurrent-account-fixture"
+    );
+}
+
+#[test]
+fn device_install_keeps_the_original_account_and_other_secrets() {
+    let root = tempfile::tempdir().unwrap();
+    crate::secrets::write_secret_record(
+        root.path(),
+        "operator-fixture",
+        "untouched",
+        "retained-fixture",
+        None,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    install_bundle(root.path(), &bundle()).unwrap();
+    let before = credential_binding(root.path()).unwrap();
+    assert!(install_bundle(root.path(), &bundle()).is_err());
+    assert_eq!(credential_binding(root.path()).unwrap(), before);
+    assert_eq!(
+        crate::secrets::read_secret_value(root.path(), "operator-fixture", "untouched").unwrap(),
+        "retained-fixture"
+    );
+}
 impl XaiHttpTransport for StalledLogin {
     fn execute<'a>(
         &'a self,
