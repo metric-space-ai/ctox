@@ -91,7 +91,14 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       const collectionReadyAt = performance.now();
       const bridges = await Promise.all(names.map(async name => {
         leases.push(await state.sync.leaseCollection(name, 'sync-v3-s0-measurement', { forceDirect: true }));
-        return state.sync.startCollection(name, { pin: false, forceDirect: true, requireOwner: true });
+        let bridge = await state.sync.startCollection(name, { pin: false, forceDirect: true, requireOwner: true });
+        if (!bridge?.state && bridge?.ready) bridge = await withDeadline(bridge.ready, 60000, 'Scale bridge setup timeout');
+        if (typeof bridge?.state?.awaitInitialReplication !== 'function') throw Error('Scale initial replication seam missing');
+        // startCollection can resolve before onPeerReady attaches the demand loader.
+        // Await the production readiness contract, not an empty local query or a retry.
+        await withDeadline(bridge.state.awaitInitialReplication(), 60000, 'Scale collection readiness timeout');
+        if (!bridge.state.demandLoaderActive || bridge.state.cancelled) throw Error('Scale demand loader not ready');
+        return bridge;
       }));
       const leadName = names[0];
       const queryStarted = performance.now();
