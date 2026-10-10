@@ -11,6 +11,10 @@ const RANGE_BYTES: u64 = 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerReadFailure {
     Authorization,
+    SourceNotReady,
+    Identity,
+    Grant,
+    FilePermission,
     Timeout,
     Busy,
     SequenceGap,
@@ -25,6 +29,10 @@ impl PeerReadFailure {
     pub fn code(self) -> &'static str {
         match self {
             Self::Authorization => "PEER_AUTHORIZATION_FAILED",
+            Self::SourceNotReady => "PEER_SOURCE_NOT_READY",
+            Self::Identity => "PEER_IDENTITY_UNVERIFIED",
+            Self::Grant => "PEER_GRANT_AUTHORIZATION_UNAVAILABLE",
+            Self::FilePermission => "PEER_FILE_PERMISSION_UNAVAILABLE",
             Self::Timeout => "PEER_FILE_TIMEOUT",
             Self::Busy => "PEER_FILE_BUSY",
             Self::SequenceGap => "PEER_FILE_SEQUENCE_GAP",
@@ -172,7 +180,15 @@ impl Worker {
             }
             tokio::select! {
                 result = &mut check => {
-                    result.map_err(|_| anyhow::Error::from(PeerReadFailure::Authorization))?;
+                    result.map_err(|error| {
+                        // Preserve only our typed, parameter-free categories.
+                        // Unknown provider text remains a closed authorization failure.
+                        let failure = error
+                            .downcast_ref::<PeerReadFailure>()
+                            .copied()
+                            .unwrap_or(PeerReadFailure::Authorization);
+                        anyhow::Error::from(failure)
+                    })?;
                     return Ok(true);
                 }
                 _ = ticker.tick() => {}
