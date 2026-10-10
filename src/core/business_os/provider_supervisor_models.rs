@@ -29,6 +29,26 @@ impl SupervisorModelEligibility {
         self.catalog_checked_at_ms
     }
 
+    /// The real admitted consumer must resolve the exact native selection
+    /// already sealed by Crew. Neither DTO facts nor matching labels suffice.
+    pub(crate) fn assert_consumer_binding(&self, current: &ConsumableModel) -> Result<()> {
+        ensure!(
+            self.owner == current.consumer.owner_user_id
+                && self.account.account_id == current.account.account_id
+                && self.account.holder_instance_id == current.account.holder_instance_id
+                && self.account.provider == current.account.provider
+                && self.account.private_local_account_id == current.account.private_local_account_id
+                && self.account.account_revision == current.account.account_revision
+                && self.account.policy_revision == current.account.policy_revision
+                && self.model == current.model
+                && self.catalog_checked_at_ms == current.catalog_checked_at_ms
+                && self.private_binding == current.private_configuration_binding
+                && self.catalog_fingerprint == current.catalog_fingerprint,
+            "Supervisor model and admitted consumer binding differ"
+        );
+        Ok(())
+    }
+
     /// Re-enter Crew's real lease/project fence before this check and before
     /// dispatch/publication. No network or secret API re-entry under the DB
     /// fence. The private holding adapter separately verifies its current
@@ -157,6 +177,39 @@ mod tests {
     use super::super::super::tests::{account, account_id, Fixture};
     use super::super::tests::{observe, select_models, CURRENT, OTHER};
     use super::*;
+
+
+    #[test]
+    fn supervisor_and_admitted_model_require_the_same_private_account_and_catalog_pins() -> Result<()> {
+        let f = Fixture::new()?;
+        f.enroll("source")?;
+        let state = f.adopt(&[account("native")])?;
+        let id = account_id(&state);
+        observe(&f, id, 1, &[CURRENT, OTHER], 100)?;
+        select_models(&f, &[CURRENT, OTHER], 101)?;
+        let sealed = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
+        let current = consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
+        sealed.assert_consumer_binding(&current)?;
+        for change in ["owner", "account", "holder", "provider", "local", "revision", "policy", "model", "catalog_time", "private_binding", "catalog"] {
+            let mut changed = consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
+            match change {
+                "owner" => changed.consumer.owner_user_id = "foreign".into(),
+                "account" => changed.account.account_id = "another-native-account".into(),
+                "holder" => changed.account.holder_instance_id = "another-holder".into(),
+                "provider" => changed.account.provider = "claude".into(),
+                "local" => changed.account.private_local_account_id = "another-local-selector".into(),
+                "revision" => changed.account.account_revision += 1,
+                "policy" => changed.account.policy_revision += 1,
+                "model" => changed.model = OTHER.into(),
+                "catalog_time" => changed.catalog_checked_at_ms += 1,
+                "private_binding" => changed.private_configuration_binding = Some("different-private-binding".into()),
+                "catalog" => changed.catalog_fingerprint[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert!(sealed.assert_consumer_binding(&changed).is_err(), "{change}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn supervisor_uses_only_current_owned_selected_account_models_without_browser_facts(

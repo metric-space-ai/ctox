@@ -52,6 +52,12 @@ pub(crate) struct AdmittedConsumerAuthority {
 }
 
 impl AdmittedConsumerAuthority {
+    /// Native-only store location captured from the admitted host, never a
+    /// path supplied by an account/configuration request.
+    pub(crate) fn native_host_root(&self) -> &Path {
+        &self.root
+    }
+
     /// Call from a guarded auxiliary handler, which supplies the accepted
     /// connection by value after the native nonce/possession admission round.
     /// An anonymous/unbound capability is never a computer identity.

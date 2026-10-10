@@ -22,12 +22,12 @@ const MAX_MODELS: usize = 1024;
 
 // No Debug/Serialize: credentials and local selectors remain holder-private.
 #[derive(PartialEq, Eq)]
-struct Captured {
-    account: ClaudeSubscriptionAccountConfig,
-    credentials: ClaudeStoredCredentials,
+pub(super) struct Captured {
+    pub(super) account: ClaudeSubscriptionAccountConfig,
+    pub(super) credentials: ClaudeStoredCredentials,
 }
 
-fn capture(root: &Path, id: &str) -> anyhow::Result<Option<Captured>> {
+pub(super) fn capture(root: &Path, id: &str) -> anyhow::Result<Option<Captured>> {
     let Some(config) = load_instance_proxy_config(root)? else {
         return Ok(None);
     };
@@ -52,7 +52,7 @@ fn capture(root: &Path, id: &str) -> anyhow::Result<Option<Captured>> {
     }))
 }
 
-fn fingerprint(value: &Captured) -> anyhow::Result<String> {
+pub(super) fn fingerprint(value: &Captured) -> anyhow::Result<String> {
     let mut digest = Sha256::new();
     digest.update(b"ctox/native-claude-catalog-binding/v1");
     let config = serde_json::to_vec(&value.account)?;
