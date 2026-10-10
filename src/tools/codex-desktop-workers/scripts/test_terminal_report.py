@@ -51,7 +51,24 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(group["score"]["mean"], 7.65)
         self.assertEqual(row["harness"], "claude-desktop")
         self.assertEqual(r.harness_label("unknown-native-client"), "unknown-native-client")
+    def test_claude_code_alias_combines_pr_means_without_rewriting_evidence(self):
+        first = dict(pr_url="one", role="parent", actor_id="a", schema=r.RUBRIC,
+                     model="claude-opus-5-5", harness="Claude Code",
+                     parent_completion={"weighted_total":4}, rework_iterations=2,
+                     iteration_scope="pr")
+        second = copy.deepcopy(first)
+        second.update(pr_url="two", actor_id="b", harness="claude",
+                      parent_completion={"weighted_total":8}, rework_iterations=0)
+        original = copy.deepcopy([first, second])
+        groups = r.leaderboard_data([first, second, copy.deepcopy(first)])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual((groups[0]["harness"], groups[0]["prs"]), ("claude", 2))
+        self.assertEqual(groups[0]["score"]["mean"], 6)
+        self.assertEqual(groups[0]["rework"]["mean"], 1)
+        self.assertEqual([first, second], original)
+
     def merge_fixture(self):
+
         pr = dict(url="pr", state="MERGED", headRefOid="a"*40,
                   mergedAt="2026-09-13T05:13:49Z", baseRefName="main")
         target = dict(branch="codex/devops-unification", head="a"*40,
