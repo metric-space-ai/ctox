@@ -95,6 +95,11 @@ fn history_reopen_idempotence_and_foreign_owner_denial() -> anyhow::Result<()> {
         "owner-1",
     )?;
     assert_eq!(list["exit_models"]["project-1"], reopened["assessment"]);
+    let conn = reader(root)?;
+    let projected = outbound_load_record(&conn, "workjet_projects", "project-1")?
+        .context("project projection missing")?;
+    assert!(projected.get("exit_model").is_none());
+    assert!(serde_json::to_vec(&projected)?.len() <= 8192);
     Ok(())
 }
 #[test]

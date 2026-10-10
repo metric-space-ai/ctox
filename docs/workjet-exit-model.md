@@ -91,8 +91,13 @@ snake_case and echoes `{action,commandId,projectId,assessment}` only after a
 correlated terminal receipt and unchanged session. `project.list` with
 `includeConfiguration:true` returns additive `exitModel` metadata for every
 confirmed project, including projects with no local chat/worktree. Native
-`project.list` returns its owner-scoped `exit_models` map. Metadata updates
-preserve valuation state.
+`project.list` returns its owner-scoped `exit_models` map through the existing
+control receipt. Immutable sources, inputs and history stay in the core SQLite
+table and are read on demand; they are not copied into the replicated
+`workjet_projects` document. Unrelated metadata updates preserve that core state.
+No new RxDB collection, browser write authority or projection chain is introduced.
+The three central command routes require the Sync-v3 owner to assign their RFC
+stage (requested S2 for this hot/cold data split) before merge.
 
 ## Inputs and adapters
 

@@ -225,7 +225,6 @@ fn persist(
     let mut project = outbound_load_record(conn, "workjet_projects", &request.project_id)?
         .context("project disappeared")?;
     let now = store::now_ms() as i64;
-    project["exit_model"] = state.clone();
     project["updated_at_ms"] = json!(now);
     upsert_business_record(conn, "workjet_projects", &request.project_id, now, project)?;
     Ok(AppliedDomainEffect {
@@ -536,11 +535,9 @@ pub(super) fn complete_research(
         .unwrap_or_else(|| json!(["valid_source_backed_research_inputs"]));
     value["findings"] = json!([{"code":"research_did_not_supply_valid_inputs","message":"The bounded research turn did not supply admissible, source-backed inputs. No numeric valuation was created."}]);
     tx.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json) VALUES(?1,?2,?3,?4)",params![next,project,owner,serde_json::to_string(&value)?])?;
-    let state = read_state(&tx, project, &owner)?;
     let mut record = outbound_load_record(&tx, "workjet_projects", project)?
         .context("research project disappeared")?;
     let now = store::now_ms() as i64;
-    record["exit_model"] = state;
     record["updated_at_ms"] = json!(now);
     upsert_business_record(&tx, "workjet_projects", project, now, record)?;
     tx.commit()?;

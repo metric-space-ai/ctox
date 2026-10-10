@@ -15146,7 +15146,6 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false, incl
   if (Number.isFinite(createdAtMs) && createdAtMs >= 0) {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
-  if (value.exit_model?.contract === "ctox.workjet.exit_model.v1" && value.exit_model.project_id === result.id) result.exitModel = value.exit_model;
   if (!includeConfiguration && !includeSupervisorLuma) return Object.freeze(result);
   const metadata = boundedWorkjetProjectMetadata({
     ...(includeConfiguration && Object.hasOwn(value, 'description') ? { description: value.description } : {}),

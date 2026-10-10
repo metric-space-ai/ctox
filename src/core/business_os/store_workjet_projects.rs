@@ -326,13 +326,7 @@ pub(super) fn handle_workjet_project_upsert_command(
             "updated_at_ms": now,
             "is_deleted": false,
         });
-        // Native valuation state is preserved by unrelated partial metadata edits.
-        if let Some(value) = existing
-            .as_ref()
-            .and_then(|record| record.get("exit_model"))
-        {
-            project["exit_model"] = value.clone();
-        }
+        // Exit assessment history remains in its owner-scoped core table, outside this projection.
         for (field, patch) in [
             ("description", description),
             ("repo_url", repo_url),
