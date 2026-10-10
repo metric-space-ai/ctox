@@ -2,6 +2,39 @@
 export const SUPERVISOR_ROUTE_DISPLAY_SCHEMA = "ctox.workjet.supervisor.route-display.v1";
 export const SUPERVISOR_ROUTE_DISPLAY_VERSION = 1;
 export const SUPERVISOR_ROUTE_DISPLAY_TYPES = deepFreeze({
+  "RouteCapabilitiesSchema": {
+    "enum": [
+      "ctox.workjet.supervisor.route-capabilities.v1"
+    ]
+  },
+  "RouteReadCommand": {
+    "enum": [
+      "ctox.workjet.project.supervisor.route.read.v1"
+    ]
+  },
+  "SupervisorRouteCapabilities": {
+    "fields": {
+      "schema": {
+        "type": "RouteCapabilitiesSchema"
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "supervisor_thread_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "read_schema": {
+        "type": "RouteDisplaySchema"
+      },
+      "read_command": {
+        "type": "RouteReadCommand"
+      }
+    }
+  },
   "RouteDisplaySchema": {
     "enum": [
       "ctox.workjet.supervisor.route-display.v1"
@@ -150,6 +183,9 @@ export const SUPERVISOR_ROUTE_DISPLAY_TYPES = deepFreeze({
   }
 });
 export const SUPERVISOR_ROUTE_DISPLAY_COMMANDS = deepFreeze({
+  "ctox.workjet.project.supervisor.route.capabilities.v1": {
+    "scope": "Native Owner project and bound Supervisor; DataRead; separate from strict v1 turn capabilities"
+  },
   "ctox.workjet.project.supervisor.route.read.v1": {
     "scope": "Native Owner project and bound Supervisor; DataRead",
     "actual": "Currently always null. Requested route source is not a producer receipt."

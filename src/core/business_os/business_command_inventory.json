@@ -104,6 +104,7 @@
     "ctox.workjet.project.kpis.read",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.supervisor.route.capabilities.v1",
     "ctox.workjet.project.supervisor.route.read.v1",
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.supervisor.turn.capabilities",

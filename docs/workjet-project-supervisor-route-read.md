@@ -1,27 +1,22 @@
-# Configured Supervisor route read
+# Configured project Supervisor route display
 
-The additive Owner command `ctox.workjet.project.supervisor.route.read.v1` accepts only
-`{project_id, thread_id, inbound_channel?}`. It returns the separately versioned
-`ctox.workjet.supervisor.route-display.v1` fixture; existing turn/capabilities/history
-responses stay byte-shape compatible. Use the Business OS command/RxDB path, never an HTTP data bridge.
+Native Owner-only commands:
+- `ctox.workjet.project.supervisor.route.capabilities.v1`
+- `ctox.workjet.project.supervisor.route.read.v1`
 
-`configured` is null for the original instance-default behavior. A selected Luma is resolved
-against the current native instance configuration, Owner/computer binding and authoritative live account
-catalog. Only Luma/configuration revision, harness, route ID, model, computer ID and catalog observation
-time are public. No account ID, holder ID, local provider selector, credentials or full configuration is exported.
+Both accept only `project_id`, `thread_id` and the existing optional native `inbound_channel`. Current native project ownership, exact Supervisor binding and DataRead policy apply. The old strict v1 turn capabilities are unchanged.
 
-`source` is null unless the most recent persisted requested route for this exact Owner/project/UUID
-matches the current selection, native account revision and catalog snapshot. Its execution key and SHA256
-request revision identify an immutable request, with persisted error code/time. This does not authorize execution.
-`actual` is always null in this implementation; neither a configured model nor an unverified `actual_json`
-column is a producer receipt. The fixture reserves a strict future actual-producer object requiring run, turn
-and receipt identities; no such object is emitted until a genuine holding executor can prove it.
+Shell entry: `globalThis.workjetProjectControl`.
+Use `project.supervisor.route.capabilities.v1` first, then `project.supervisor.route.read.v1`. Both requests contain `action, commandId, projectId, threadId`. The authenticated guest supplies actor/instance authority; callers cannot supply a model, account or actor. The native command receipt must match the exact operation, payload, project and thread after revalidating the guest throughout collection readiness and the response wait.
 
-Policy requires DataRead plus native project Owner and the exact retained Supervisor thread. Foreign users,
-projects and threads are denied. Reads use deferred snapshots and read-only Core connection flags; they never
-create the attempts table or take an issuer/writer fence. A selection change suppresses the old request source.
+Shell responses contain `action, commandId, projectId, threadId, contract` plus:
+- `capabilities`: schema `ctox.workjet.supervisor.route-capabilities.v1`, `project_id`, `supervisor_thread_id`, `read_schema`, `read_command`.
+- `route`: schema `ctox.workjet.supervisor.route-display.v1`, `project_id`, `supervisor_thread_id`, `configured`, `source`, `actual`.
 
-The native/browser types are regenerated together from
-`src/core/rxdb/tests/fixtures/workjet-supervisor-route-display-v1.json` using
-`node src/core/rxdb/tools/build_workjet_jour_fixe_contract.mjs`.
-This slice does not execute a configured Luma, change the no-selection Monday path or establish installed acceptance.
+Both DTOs come from fixture `src/core/rxdb/tests/fixtures/workjet-supervisor-route-display-v1.json`; regenerate native/browser with `node src/core/rxdb/tools/build_workjet_jour_fixe_contract.mjs`. These read controls use the existing authenticated RxDB business command path; there is no HTTP data path or local-thread model fallback.
+
+`configured` contains the current Luma/configuration/computer/harness/route/model/catalog observation. It is not an actual producer witness. `source` is the matching immutable request fingerprint or null. Public errors retain a typed code but never an account/private diagnostic. Account IDs, holder-local selectors and credentials stay private. Deferred reads never create the attempts schema or reserve a Core writer.
+
+`actual` is explicitly null in the current native reader and is required to remain null at the Shell boundary. The reserved future producer type cannot itself prove execution; the private attempts column is deliberately never queried. A positive producer requires its actual admitted native controller, turn and holder receipts.
+
+No selected Luma preserves Monday's instance-default path; this read never starts a model or worker. An unavailable selected route is reported honestly, and must not be displayed as a successful instance-default execution.

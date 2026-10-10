@@ -52,6 +52,79 @@ impl<T: WireValidate> WireValidate for Vec<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum RouteCapabilitiesSchema {
+    #[serde(rename = "ctox.workjet.supervisor.route-capabilities.v1")]
+    CtoxWorkjetSupervisorRouteCapabilitiesV1,
+}
+impl WireValidate for RouteCapabilitiesSchema {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum RouteReadCommand {
+    #[serde(rename = "ctox.workjet.project.supervisor.route.read.v1")]
+    CtoxWorkjetProjectSupervisorRouteReadV1,
+}
+impl WireValidate for RouteReadCommand {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SupervisorRouteCapabilities {
+    pub(crate) schema: RouteCapabilitiesSchema,
+    pub(crate) project_id: String,
+    pub(crate) supervisor_thread_id: String,
+    pub(crate) read_schema: RouteDisplaySchema,
+    pub(crate) read_command: RouteReadCommand,
+}
+impl WireValidate for SupervisorRouteCapabilities {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.schema;
+            value.validate()?;
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SupervisorRouteCapabilities.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SupervisorRouteCapabilities.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.supervisor_thread_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err(
+                    "SupervisorRouteCapabilities.supervisor_thread_id violates min_chars".into(),
+                );
+            }
+            if value.chars().count() > 256 {
+                return Err(
+                    "SupervisorRouteCapabilities.supervisor_thread_id violates max_chars".into(),
+                );
+            }
+        }
+        {
+            let value = &self.read_schema;
+            value.validate()?;
+        }
+        {
+            let value = &self.read_command;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum RouteDisplaySchema {
     #[serde(rename = "ctox.workjet.supervisor.route-display.v1")]
     CtoxWorkjetSupervisorRouteDisplayV1,
@@ -375,6 +448,17 @@ impl WireValidate for SupervisorRouteDisplay {
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
+        "RouteCapabilitiesSchema" => serde_json::from_value::<RouteCapabilitiesSchema>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "RouteReadCommand" => serde_json::from_value::<RouteReadCommand>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SupervisorRouteCapabilities" => {
+            serde_json::from_value::<SupervisorRouteCapabilities>(value)
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
         "RouteDisplaySchema" => serde_json::from_value::<RouteDisplaySchema>(value)
             .map_err(|e| e.to_string())?
             .validate(),

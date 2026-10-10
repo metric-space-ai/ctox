@@ -269,6 +269,35 @@ fn owner_route_read(
 }
 
 #[test]
+fn configured_route_capabilities_are_separate_and_owner_bound() -> anyhow::Result<()> {
+    let (root, _) = fixture(false)?;
+    for (actor, project, thread, status) in [
+        ("owner", "project", THREAD, "completed"),
+        ("owner", "foreign", THREAD, "failed"),
+        ("foreign", "project", THREAD, "failed"),
+        ("owner", "project", "another-thread", "failed"),
+    ] {
+        let response = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":format!("route-cap-{actor}-{project}-{thread}"),"module":"ctox",
+            "command_type":"ctox.workjet.project.supervisor.route.capabilities.v1",
+            "payload":{"project_id":project,"thread_id":thread},
+            "client_context":{"actor":{"id":actor,"role":"chef"}}}),
+        )?;
+        assert_eq!(response["status"], status, "{response}");
+        if status == "completed" {
+            assert_eq!(
+                response["result"]["read_command"],
+                "ctox.workjet.project.supervisor.route.read.v1"
+            );
+            assert_eq!(response["result"].as_object().unwrap().len(), 5);
+        }
+    }
+    assert_eq!(routes(root.path())?, 0);
+    Ok(())
+}
+
+#[test]
 fn configured_route_read_preserves_default_and_legacy_capabilities_without_creating_attempts(
 ) -> anyhow::Result<()> {
     let (root, _) = fixture(false)?;

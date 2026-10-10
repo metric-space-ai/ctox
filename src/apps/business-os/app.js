@@ -1,26 +1,27 @@
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-native-provider-models';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-native-provider-models';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-native-provider-models';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-native-provider-models';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-native-provider-models';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-native-provider-models';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-native-provider-models';
-import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-native-provider-models';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-native-provider-models';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-native-provider-models';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-native-provider-models';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-native-provider-models';
-import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-native-provider-models';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-supervisor-route-display';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-supervisor-route-display';
+import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-supervisor-route-display';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-supervisor-route-display';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-supervisor-route-display';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-supervisor-route-display';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-supervisor-route-display';
+import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/app-lifecycle.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -29,20 +30,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/permissions.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261010-shell-v2-native-provider-models';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/branding.js?v=20261010-shell-v2-supervisor-route-display';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/presentation.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -53,9 +54,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-native-provider-models';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-native-provider-models';
-import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-supervisor-route-display';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-supervisor-route-display';
+import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -63,27 +64,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/maintenance-state.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/workspace-session.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/taskbar-pins.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261010-shell-v2-native-provider-models';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-native-provider-models';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-native-provider-models';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-native-provider-models';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-native-provider-models';
+} from './shared/workjet-theme.js?v=20261010-shell-v2-supervisor-route-display';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-supervisor-route-display';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-supervisor-route-display';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-supervisor-route-display';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-supervisor-route-display';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -91,14 +92,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261010-shell-v2-native-provider-models';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-native-provider-models';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-native-provider-models';
+} from './shared/startup-deadlines.js?v=20261010-shell-v2-supervisor-route-display';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-supervisor-route-display';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-supervisor-route-display';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-native-provider-models';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-native-provider-models';
+} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -119,7 +120,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261010-shell-v2-native-provider-models';
+const APP_BUILD = '20261010-shell-v2-supervisor-route-display';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13822,6 +13823,10 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
+  const routeAuthority = action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1'
+    ? { sync: state.sync, instance: boundedWorkjetProjectText(
+      state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
+    ) } : null;
   if (action.startsWith('speech.settings.')) {
     const sync = state.sync;
     if (typeof sync?.requestNative !== 'function') throw new Error('Speech settings require a connected CTOX instance.');
@@ -13942,7 +13947,7 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
+  const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
@@ -13954,6 +13959,21 @@ async function workjetProjectControl(request = {}) {
   const { projectBridge, workingCopyBridge } = listDeadline
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
+
+  if (action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1') {
+    const requestSync = routeAuthority.sync;
+    const instance = routeAuthority.instance;
+    return requestSupervisorRoute(
+      (command, options) => state.commandBus.dispatch(command, options),
+      request, actorContext(requestSession), () => {
+        if (state.session !== requestSession || state.db !== requestDb || state.sync !== requestSync
+          || actorContext(state.session).id !== ownerUserId
+          || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+          throw new Error('Supervisor route instance or authority changed.');
+        }
+      },
+    );
+  }
 
   const meetingMutationTypes = {
     'project.jour_fixe.meeting.start': 'MeetingTransitionRequest',
