@@ -27,7 +27,10 @@ length followed by JSON {version:1,requestId,params:[operation]}; the operation
 must be one object and is validated by the receiving native handler. Neither
 target, computer identity nor admission credentials are selectable in this
 envelope. Responses are correlated by requestId, with result.kind=reply and
-result.reply, or a fixed rejected code. Requests are at most 256 KiB, responses
+result.reply, or kind=unavailable with a fixed transport code. Unavailability
+is not an operation rejection or cancellation receipt; an already-dispatched
+operation may have an unknown outcome. The managed consumer must resolve the
+original operation/lease state rather than infer that no remote action occurred. Requests are at most 256 KiB, responses
 at most 1 MiB; two local clients and ten-second RPC/publication deadlines bound
 work. IPC uses the existing private Unix host with same-UID checks, private
 rights, directory lock and inode-preserving cleanup; no HTTP/TCP bridge exists.

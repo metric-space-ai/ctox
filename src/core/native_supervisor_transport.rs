@@ -408,7 +408,7 @@ impl IpcService for SourceIpc {
                 let result = match self.source.exchange(request.params).await {
                     Ok(reply) => json!({"kind":"reply", "reply":reply}),
                     Err(_) => {
-                        json!({"kind":"rejected", "code":"native_supervisor_source_unavailable"})
+                        json!({"kind":"unavailable", "code":"native_supervisor_source_unavailable"})
                     }
                 };
                 let reply = serde_json::to_vec(&SourceResponse {
