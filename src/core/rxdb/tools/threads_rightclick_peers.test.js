@@ -7,6 +7,131 @@ const path = require('path');
 const vm = require('vm');
 const { runThreadsRightClickPeers, runRequesterInBrowser, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
 
+function paintDriver() {
+  const source = runRequesterInBrowser.toString();
+  const start = source.indexOf('function measureContextPrompt(');
+  const end = source.indexOf('\n  const submitContextMode', start);
+  assert.ok(start >= 0 && end > start);
+  let now = 0;
+  let shown = false;
+  let menuOpen = false;
+  let frames = new Map();
+  let nextFrame = 0;
+  let deadline;
+  let mutation;
+  let taskObserver;
+  let mutationsDisconnected = false;
+  let tasksDisconnected = false;
+  const element = {
+    textContent: 'fixture prompt',
+    getBoundingClientRect: () => ({ width: shown ? 500 : 0, height: 400, top: 0, bottom: 400, left: 0, right: 500 }),
+  };
+  const measure = vm.runInNewContext('(' + source.slice(start, end) + ')', {
+    performance: { now: () => now }, innerHeight: 800, innerWidth: 1000,
+    document: {
+      documentElement: {}, querySelectorAll: () => [element],
+      querySelector: () => menuOpen ? {} : null,
+    },
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    MutationObserver: class {
+      constructor(callback) { mutation = callback; }
+      observe() {}
+      disconnect() { mutationsDisconnected = true; }
+    },
+    PerformanceObserver: class {
+      static supportedEntryTypes = ['longtask'];
+      constructor(callback) { taskObserver = callback; }
+      observe() {}
+      takeRecords() { return []; }
+      disconnect() { tasksDisconnected = true; }
+    },
+    requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame(id) { frames.delete(id); },
+    setTimeout(callback) { deadline = callback; return 1; },
+    clearTimeout() { deadline = null; },
+  });
+  return {
+    measure: submit => measure(submit, 'fixture prompt'),
+    show(time, openMenu = false) { now = time; shown = true; menuOpen = openMenu; mutation(); },
+    hide(time) { now = time; shown = false; mutation(); },
+    frame(time, timestamp = time) {
+      now = time;
+      const pending = [...frames.values()]; frames.clear();
+      for (const callback of pending) callback(timestamp);
+    },
+    task(startTime, duration) { taskObserver({ getEntries: () => [{ startTime, duration }] }); },
+    expire() { deadline(); },
+    assertClean() {
+      assert.equal(frames.size, 0); assert.equal(deadline, null);
+      assert.equal(mutationsDisconnected, true); assert.equal(tasksDisconnected, true);
+    },
+  };
+}
+
+test('synchronous prompt still requires two visible render frames and releases observers', async () => {
+  const driver = paintDriver();
+  const result = driver.measure(() => driver.show(0));
+  let settled = false;
+  result.then(() => { settled = true; });
+  driver.frame(10, -2);
+  await Promise.resolve();
+  assert.equal(settled, false, 'first rAF precedes its paint opportunity');
+  driver.frame(20);
+  const timing = await result;
+  assert.equal(timing.domVisibleMs, 0);
+  assert.equal(timing.firstRenderFrameMs, 10);
+  assert.equal(timing.firstRenderFrameTimestamp, -2);
+  assert.equal(timing.firstPaintMs, 20);
+  driver.assertClean();
+});
+
+test('asynchronous visibility is measured between samples and includes overlapping long tasks', async () => {
+  const driver = paintDriver();
+  const result = driver.measure(() => {});
+  driver.show(5);
+  driver.task(-10, 80);
+  driver.frame(80);
+  driver.frame(96);
+  const timing = await result;
+  assert.equal(timing.domVisibleMs, 5);
+  assert.equal(timing.firstRenderFrameMs, 80);
+  assert.equal(timing.firstPaintMs, 96);
+  assert.equal(timing.longTasksSupported, true);
+  assert.equal(timing.longTasks.length, 1);
+  assert.equal(timing.longTasks[0].startMs, -10);
+  assert.equal(timing.longTasks[0].durationMs, 80);
+  driver.assertClean();
+});
+
+test('open menu and transient visibility cannot satisfy the two-frame paint confirmation', async () => {
+  const driver = paintDriver();
+  const result = driver.measure(() => driver.show(0, true));
+  driver.frame(16);
+  driver.show(20);
+  driver.frame(32);
+  driver.hide(40);
+  driver.frame(48);
+  driver.show(160);
+  driver.frame(170);
+  driver.frame(186);
+  const timing = await result;
+  assert.equal(timing.domVisibleMs, 20);
+  assert.equal(timing.firstRenderFrameMs, 170);
+  assert.equal(timing.firstPaintMs, 186, 'real slow rendering must remain above the unchanged 150-ms gate');
+  driver.assertClean();
+});
+
+test('missing prompt and submit exceptions release frame, timer and performance observers', async () => {
+  const driver = paintDriver();
+  const result = driver.measure(() => {});
+  driver.expire();
+  await assert.rejects(result, /visible before native receipt timed out/);
+  driver.assertClean();
+  const failed = paintDriver();
+  await assert.rejects(failed.measure(() => { throw new Error('submit failed'); }), /submit failed/);
+  failed.assertClean();
+});
+
 test('direct denial polling retains admission evidence without serializing command credentials', async () => {
   // Execute the actual browser predicate, including its returned timeout state.
   const source = runRequesterInBrowser.toString();
