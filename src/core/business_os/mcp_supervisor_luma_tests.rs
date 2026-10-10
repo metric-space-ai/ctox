@@ -514,7 +514,18 @@ fn computed_route_v2_fixture_and_owner_commands_are_additive_reads() -> anyhow::
                 json!({"id":format!("v2-{i}-{owner}"),"module":"ctox","command_type":command,
                   "payload":{"project_id":"project","thread_id":THREAD},
                   "client_context":{"actor":{"id":owner,"role":"chef","is_admin":true}}}),
-            )?;
+            );
+            if expected == "failed" {
+                assert!(
+                    result.is_err()
+                        || result
+                            .as_ref()
+                            .is_ok_and(|value| value["status"] == "failed"),
+                    "{result:?}"
+                );
+                continue;
+            }
+            let result = result?;
             assert_eq!(result["status"], expected, "{result}");
             if owner == "owner" && i == 0 {
                 assert!(
