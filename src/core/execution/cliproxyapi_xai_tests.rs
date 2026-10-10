@@ -1,6 +1,38 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[test]
+fn operator_catalog_missing_subscription_names_local_device_login() {
+    let root = tempfile::tempdir().unwrap();
+    let error = handle_operator_models(root.path()).unwrap_err().to_string();
+    assert!(error.starts_with("missing_native_subscription:"));
+    assert!(error.contains("ctox runtime grok-login"));
+    assert!(error.contains("this CTOX instance"));
+    assert!(!error.contains("Credentials rejected"));
+    assert!(!subscription_installed(root.path()));
+}
+
+#[test]
+fn operator_catalog_metadata_failure_does_not_expose_private_path() {
+    let root = tempfile::tempdir().unwrap();
+    let invalid_root = root.path().join("private-operator-path");
+    std::fs::write(&invalid_root, "not a directory").unwrap();
+    let error = handle_operator_models(&invalid_root).unwrap_err().to_string();
+    assert!(error.starts_with("native_subscription_store_unavailable:"));
+    assert!(error.contains("no catalog request was made"));
+    assert!(!error.contains(invalid_root.to_str().unwrap()));
+}
+
+#[test]
+fn operator_catalog_preflight_does_not_rotate_an_installed_subscription() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let before = credential_binding(root.path()).unwrap();
+    assert!(before.is_some());
+    operator_catalog_subscription_preflight(root.path()).unwrap();
+    assert_eq!(credential_binding(root.path()).unwrap(), before);
+}
+
 #[tokio::test]
 async fn retired_creator_cancels_without_poll_and_never_commits() {
     use std::sync::atomic::{AtomicBool, Ordering};

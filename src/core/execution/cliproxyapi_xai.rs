@@ -344,7 +344,21 @@ async fn operator_login(
     }
 }
 
+fn operator_catalog_subscription_preflight(root: &Path) -> anyhow::Result<()> {
+    let installed = crate::secrets::secret_exists(root, SCOPE, NAME).map_err(|_| {
+        anyhow::anyhow!(
+            "native_subscription_store_unavailable: Grok subscription metadata could not be read; no catalog request was made"
+        )
+    })?;
+    anyhow::ensure!(
+        installed,
+        "missing_native_subscription: No native Grok Build subscription is installed on this CTOX instance. Run `ctox runtime grok-login` here, then retry `ctox runtime grok-models`."
+    );
+    Ok(())
+}
+
 pub fn handle_operator_models(root: &Path) -> anyhow::Result<()> {
+    operator_catalog_subscription_preflight(root)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
