@@ -1,26 +1,3 @@
-
-#[cfg(test)]
-mod output_budget_tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn output_budget_uses_only_the_matching_active_runtime() {
-        let root = std::env::temp_dir().join(format!("ctox-gpt-oss-budget-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut state = runtime_state::derive_runtime_state_from_env_map(&root, &BTreeMap::new()).unwrap();
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", None), 131_072);
-        // A different active model's 256k plan must not enlarge GPT-OSS's budget.
-        state.realized_context_tokens = Some(262_144);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
-        state.active_model = Some("openai/gpt-oss-120b".to_string());
-        state.realized_context_tokens = Some(65_536);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 65_536);
-        state.realized_context_tokens = Some(0);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
 use crate::inference::engine;
 use crate::inference::runtime_state;
 use crate::inference::turn_contract;
@@ -1739,5 +1716,26 @@ fn turn_output_item_from_harmony_item(item: HarmonyResponseItem) -> turn_contrac
         HarmonyResponseItem::FunctionCall(call) => {
             turn_contract::TurnOutputItem::function_call(call.call_id, call.name, call.arguments)
         }
+    }
+}
+
+#[cfg(test)]
+mod output_budget_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn output_budget_uses_only_the_matching_active_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = runtime_state::derive_runtime_state_from_env_map(root.path(), &BTreeMap::new()).unwrap();
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", None), 131_072);
+        // A different active model's 256k plan must not enlarge GPT-OSS's budget.
+        state.realized_context_tokens = Some(262_144);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
+        state.active_model = Some("openai/gpt-oss-120b".to_string());
+        state.realized_context_tokens = Some(65_536);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 65_536);
+        state.realized_context_tokens = Some(0);
+        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
     }
 }
