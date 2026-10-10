@@ -37,7 +37,8 @@ struct NativeAccountReference {
 
 /// Requested selection only. No private selector, credential, or claimed
 /// actual producer/model is serializable from this value.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RequestedRoute {
     project_id: String,
     supervisor_thread_id: String,
@@ -223,6 +224,96 @@ fn resolve(
         native_account: reference,
         catalog_checked_at_ms: eligibility.catalog_checked_at_ms(),
     }))
+}
+
+/// Dedicated Owner read contract. This is configured/requested information,
+/// never evidence that a producer has run. The old v1 turn receipts are unchanged.
+pub(in crate::business_os) fn read_configured_route(
+    root: &Path,
+    owner: &str,
+    project_id: &str,
+    thread_id: &str,
+) -> anyhow::Result<Value> {
+    use super::super::workjet_supervisor_route_display_contract::{
+        SupervisorRouteDisplay, WireValidate,
+    };
+    use sha2::Digest as _;
+    let mut policy = store::open_store(root)?;
+    let policy = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let binding = super::super::project_chats::supervisor_turns::binding_from_connection(
+        &policy, owner, project_id, thread_id, false,
+    )?;
+    let route =
+        resolve(&policy, owner, &binding.project_id, &binding.thread_id).map_err(|error| {
+            let code = error
+                .downcast_ref::<SupervisorLumaUnavailable>()
+                .map_or("invalid_supervisor_luma_configuration", |error| error.code);
+            unavailable(code, "configured project Supervisor route is unavailable")
+        })?;
+    let mut result = json!({
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": binding.project_id,
+        "supervisor_thread_id": binding.thread_id,
+        "configured": null, "source": null, "actual": null
+    });
+    if let Some(route) = route {
+        result["configured"] = json!({
+            "luma_id": route.luma_id, "configuration_revision": route.configuration_revision,
+            "computer_id": route.computer_id, "harness": route.harness,
+            "route_id": route.route_id, "model": route.model,
+            "catalog_checked_at_ms": route.catalog_checked_at_ms
+        });
+        // No schema creation, issuer fence or writer reservation on this read.
+        let mut core = Connection::open_with_flags(
+            crate::paths::core_db(root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+        let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let exists: bool = core.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table'
+             AND name='workjet_supervisor_route_attempts')",
+            [],
+            |row| row.get(0),
+        )?;
+        if exists {
+            let prior: Option<(String, String, String, i64)> = core
+                .query_row(
+                    "SELECT execution_key,requested_json,error_code,created_at_ms
+                 FROM workjet_supervisor_route_attempts
+                 WHERE owner_user_id=?1
+                   AND json_extract(requested_json,'$.project_id')=?2
+                   AND json_extract(requested_json,'$.supervisor_thread_id')=?3
+                 ORDER BY created_at_ms DESC,lease_hash DESC LIMIT 1",
+                    params![owner, binding.project_id, binding.thread_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?;
+            if let Some((execution_key, requested_json, error_code, created_at_ms)) = prior {
+                anyhow::ensure!(
+                    requested_json.len() <= 16_384,
+                    "oversized native requested route"
+                );
+                let prior: RequestedRoute = serde_json::from_str(&requested_json)?;
+                // An earlier selection cannot be presented as a request for the
+                // current configuration, model catalog or account revision.
+                if prior == route {
+                    result["source"] = json!({
+                        "execution_key": execution_key,
+                        "request_revision": format!("{:x}",sha2::Sha256::digest(requested_json.as_bytes())),
+                        "error_code": error_code, "created_at_ms": created_at_ms
+                    });
+                }
+            }
+        }
+        core.commit()?;
+    }
+    policy.commit()?;
+    let typed: SupervisorRouteDisplay = serde_json::from_value(result.clone())?;
+    typed.validate().map_err(anyhow::Error::msg)?;
+    // actual_json is deliberately never queried. A future producer must prove
+    // a current controller/turn receipt before this contract can expose it.
+    Ok(result)
 }
 
 fn lease_record(trusted: &Value) -> anyhow::Result<(String, String, String)> {

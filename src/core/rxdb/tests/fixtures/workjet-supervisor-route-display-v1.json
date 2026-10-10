@@ -1,0 +1,324 @@
+{
+  "schema": "ctox.workjet.supervisor.route-display.v1",
+  "contract_version": 1,
+  "types": {
+    "RouteCapabilitiesSchema": { "enum": ["ctox.workjet.supervisor.route-capabilities.v1"] },
+    "RouteReadCommand": { "enum": ["ctox.workjet.project.supervisor.route.read.v1"] },
+    "SupervisorRouteCapabilities": {
+      "fields": {
+        "schema": { "type": "RouteCapabilitiesSchema" },
+        "project_id": { "type": "String", "min_chars": 1, "max_chars": 256 },
+        "supervisor_thread_id": { "type": "String", "min_chars": 1, "max_chars": 256 },
+        "read_schema": { "type": "RouteDisplaySchema" },
+        "read_command": { "type": "RouteReadCommand" }
+      }
+    },
+    "RouteDisplaySchema": {
+      "enum": [
+        "ctox.workjet.supervisor.route-display.v1"
+      ]
+    },
+    "ConfiguredSupervisorRoute": {
+      "fields": {
+        "luma_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "configuration_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "computer_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "harness": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 32
+        },
+        "route_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "catalog_checked_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        }
+      }
+    },
+    "RequestedRouteSource": {
+      "fields": {
+        "execution_key": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "request_revision": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "error_code": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 96
+        },
+        "created_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        }
+      }
+    },
+    "ActualSupervisorProducer": {
+      "fields": {
+        "run_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "turn_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "receipt_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "luma_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "configuration_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "computer_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "harness": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 32
+        },
+        "route_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "catalog_checked_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        }
+      }
+    },
+    "SupervisorRouteDisplay": {
+      "fields": {
+        "schema": {
+          "type": "RouteDisplaySchema"
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 36
+        },
+        "configured": {
+          "type": "ConfiguredSupervisorRoute",
+          "optional": true
+        },
+        "source": {
+          "type": "RequestedRouteSource",
+          "optional": true
+        },
+        "actual": {
+          "type": "ActualSupervisorProducer",
+          "optional": true
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.project.supervisor.route.capabilities.v1": {
+      "scope": "Native Owner project and bound Supervisor; DataRead; separate from strict v1 turn capabilities"
+    },
+    "ctox.workjet.project.supervisor.route.read.v1": {
+      "scope": "Native Owner project and bound Supervisor; DataRead",
+      "actual": "Currently always null. Requested route source is not a producer receipt."
+    }
+  },
+  "valid_cases": [
+    {"type":"SupervisorRouteCapabilities","value":{"schema":"ctox.workjet.supervisor.route-capabilities.v1","project_id":"project","supervisor_thread_id":"cc6cfe73-2824-4360-9daf-3b3efb079931","read_schema":"ctox.workjet.supervisor.route-display.v1","read_command":"ctox.workjet.project.supervisor.route.read.v1"}},
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000
+        },
+        "source": null,
+        "actual": null
+      }
+    },
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": null,
+        "source": null,
+        "actual": null
+      }
+    },
+    {
+      "type": "RequestedRouteSource",
+      "value": {
+        "execution_key": "command:admitted",
+        "request_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "error_code": "claude_code_holding_executor_unavailable",
+        "created_at_ms": 1791580000000
+      }
+    }
+  ],
+  "invalid_cases": [
+    {"type":"SupervisorRouteCapabilities","value":{"schema":"ctox.workjet.supervisor.route-capabilities.v1","project_id":"project","supervisor_thread_id":"cc6cfe73-2824-4360-9daf-3b3efb079931","read_schema":"ctox.workjet.supervisor.route-display.v1","read_command":"ctox.workjet.project.supervisor.route.read.v1","actual":null}},
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor_turn.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000
+        },
+        "source": null,
+        "actual": null
+      }
+    },
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000,
+          "native_account": {
+            "accountId": "private"
+          }
+        },
+        "source": null,
+        "actual": null
+      }
+    },
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000
+        },
+        "source": null,
+        "actual": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000
+        }
+      }
+    },
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 0,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000
+        },
+        "source": null,
+        "actual": null
+      }
+    },
+    {
+      "type": "SupervisorRouteDisplay",
+      "value": {
+        "schema": "ctox.workjet.supervisor.route-display.v1",
+        "project_id": "project",
+        "supervisor_thread_id": "cc6cfe73-2824-4360-9daf-3b3efb079931",
+        "configured": {
+          "luma_id": "luma-physics",
+          "configuration_revision": 1,
+          "computer_id": "network-computer",
+          "harness": "claude-code",
+          "route_id": "project-route",
+          "model": "claude-opus-5-5",
+          "catalog_checked_at_ms": 1791580000000,
+          "account_id": "private"
+        },
+        "source": null,
+        "actual": null
+      }
+    }
+  ]
+}
