@@ -323,6 +323,48 @@ pub(in crate::business_os) fn read_configured_route(
     Ok(result)
 }
 
+/// Additive Owner-only v2 read: requested route and verified published
+/// computation are distinct. This read acquires no execution/writer authority.
+pub(in crate::business_os) fn read_computed_route(
+    root: &Path,
+    owner: &str,
+    project_id: &str,
+    thread_id: &str,
+) -> anyhow::Result<Value> {
+    use super::super::workjet_supervisor_route_computation_contract::{
+        SupervisorRouteDisplay, WireValidate,
+    };
+    let mut policy = store::open_store(root)?;
+    let policy = policy.transaction_with_behavior(TransactionBehavior::Deferred)?;
+    let binding = super::super::project_chats::supervisor_turns::binding_from_connection(
+        &policy, owner, project_id, thread_id, false,
+    )?;
+    let mut result = json!({"schema":"ctox.workjet.supervisor.route-display.v2",
+        "project_id":binding.project_id,"supervisor_thread_id":binding.thread_id,
+        "configured":null,"actual":null});
+    if let Some(route) = resolve(&policy, owner, &binding.project_id, &binding.thread_id)? {
+        result["configured"] = json!({"luma_id":route.luma_id,
+            "configuration_revision":route.configuration_revision,"computer_id":route.computer_id,
+            "harness":route.harness,"route_id":route.route_id,"model":route.model,
+            "catalog_checked_at_ms":route.catalog_checked_at_ms});
+        let mut core = Connection::open_with_flags(
+            crate::paths::core_db(root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+        let core = core.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        if let Some(computation) = holding::read_owned_computation(&core, owner, &route)? {
+            result["actual"] = computation;
+        }
+        core.commit()?;
+    }
+    policy.commit()?;
+    serde_json::from_value::<SupervisorRouteDisplay>(result.clone())?
+        .validate()
+        .map_err(anyhow::Error::msg)?;
+    Ok(result)
+}
+
 fn lease_record(trusted: &Value) -> anyhow::Result<(String, String, String)> {
     let execution_key = workjet_jour_fixe::execution_key(trusted)?;
     let lease = json!({"command":trusted["workjet_supervisor_lease"],"plan":trusted["workjet_confirmed_plan"],

@@ -7,6 +7,13 @@ import { execFileSync } from 'node:child_process';
 
 const CONTRACTS = [
   {
+    fixture: 'workjet-supervisor-route-computation-v2.json',
+    rust: '../../business_os/workjet_supervisor_route_computation_contract.generated.rs',
+    js: '../../../apps/business-os/shared/workjet-supervisor-route-computation-contract.generated.mjs',
+    prefix: 'SUPERVISOR_ROUTE_COMPUTATION',
+    validator: 'validateSupervisorRouteComputationValue',
+  },
+  {
     fixture: 'workjet-supervisor-source-v1.json',
     rust: '../../business_os/workjet_supervisor_source_contract.generated.rs',
     js: '../../../apps/business-os/shared/workjet-supervisor-source-contract.generated.mjs',
