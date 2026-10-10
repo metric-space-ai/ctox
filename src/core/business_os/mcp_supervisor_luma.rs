@@ -6,6 +6,7 @@
 use super::super::{provider_federation, worker_profile_bindings};
 use super::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use serde_json::json;
 
 #[derive(Debug)]
 pub(crate) struct SupervisorLumaUnavailable {
