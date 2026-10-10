@@ -202,3 +202,20 @@ jobs:
     host.exec(&prepared.script.cmd, &env, &prepared.working_directory).unwrap();
     assert_eq!(fs::read_to_string(root.path().join("result.txt")).unwrap(), env["VALUE"]);
 }
+
+#[test]
+fn native_preparation_rejects_broken_or_unbound_expressions() {
+    for body in ["echo ${{ ( }}", "echo ${{ hashFiles('Cargo.lock') }}"] {
+        let yaml = format!("jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - id: check\n        shell: bash\n        run: {body}\n");
+        let parsed = HostWorkflow::parse("expression.yml", &yaml).unwrap();
+        let run = parsed.run("build").unwrap();
+        let mut step = run.job().unwrap().steps[0].clone();
+        let mut rc = RunContext { run: Some(run), ..Default::default() };
+        let root = tempfile::tempdir().unwrap();
+        let host = HostEnvironment::new(root.path().into(), root.path().into(),
+            root.path().into(), root.path().to_str().unwrap());
+        let result = prepare_run_step(&mut rc, &git(), &DefaultStatus, &mut step, &BTreeMap::new(), &host);
+        assert!(result.is_err(), "{body}: expression errors must not become successful empty scripts");
+        assert!(!host.act_path.join("workflow/check.sh").exists());
+    }
+}

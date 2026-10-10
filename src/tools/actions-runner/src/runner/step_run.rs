@@ -434,7 +434,7 @@ pub fn setup_shell_command(
         crate::expr::EvaluationContext::Job,
         &step.run,
     )
-    .unwrap_or_default();
+    .map_err(|error| format!("run expression: {error}"))?;
 
     let sc_cmd = step.shell_command();
     let (suffix, script) = assemble_script(&step.shell, &script);
@@ -944,12 +944,12 @@ mod tests {
             let job_defaults = if job_wd.is_empty() {
                 String::new()
             } else {
-                format!("    defaults:\n      run:\n{job_wd}\n")
+                format!("defaults:\n  run:\n    {}\n", job_wd.trim_start())
             };
             let workflow_defaults = if workflow_wd.is_empty() {
                 String::new()
             } else {
-                format!("defaults:\n  run:\n{workflow_wd}\n")
+                format!("defaults:\n  run:\n    {}\n", workflow_wd.trim_start())
             };
             let step_yaml = if step_wd.is_empty() {
                 "steps:\n  - run: echo hi".to_string()
@@ -1014,9 +1014,9 @@ mod tests {
         assert_eq!(assembled.script, "\necho hello\n");
         assert_eq!(
             assembled.cmdline,
-            "bash -e /var/run/act/workflow/s1.sh"
+            "bash --noprofile --norc -e -o pipefail /var/run/act/workflow/s1.sh"
         );
-        assert_eq!(assembled.cmd, vec!["bash", "-e", "/var/run/act/workflow/s1.sh"]);
+        assert_eq!(assembled.cmd, vec!["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "/var/run/act/workflow/s1.sh"]);
         assert_eq!(working_directory, "");
     }
 
@@ -1063,7 +1063,8 @@ mod tests {
                 &mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None,
             ).expect("filesystem names are not shell syntax");
             assert_eq!(assembled.cmd.last().unwrap(), &format!("{path}/workflow/s1.sh"));
-            assert_eq!(assembled.cmd.len(), 3);
+            assert_eq!(assembled.cmd[..6], ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail"]);
+            assert_eq!(assembled.cmd.len(), 7);
         }
     }
 

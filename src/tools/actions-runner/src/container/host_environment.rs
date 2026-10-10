@@ -577,7 +577,7 @@ impl crate::container::ExecutionsEnvironment for HostEnvironment {
     }
 
     fn join_path_variable(&self, paths: &[&str]) -> String {
-        paths.join(std::path::MAIN_SEPARATOR_STR)
+        paths.join(if cfg!(windows) { ";" } else { ":" })
     }
 
     fn runner_context(&self, _ctx: &RunContext) -> BTreeMap<String, String> {
