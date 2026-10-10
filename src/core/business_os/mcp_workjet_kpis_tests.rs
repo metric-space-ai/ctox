@@ -151,6 +151,67 @@ fn missing_github_and_empty_denominator_never_become_invented_zero() -> anyhow::
     Ok(())
 }
 #[test]
+fn hourly_kpi_refresh_survives_a_busy_or_backlogged_router_without_a_model_turn(
+) -> anyhow::Result<()> {
+    for busy in [true, false] {
+        let (root, trusted) = fixture()?;
+        call(
+            root.path(),
+            &trusted,
+            args("project_tasks_completed", "bind", 1),
+        )?;
+        let now = store::now_ms() as i64;
+        resolver::refresh_test_at(root.path(), None, true, now - 3 * 3600000)?;
+        let stale = read(root.path(), &trusted)?;
+        assert_eq!(stale["kpis"]["items"][0]["result"]["status"], "stale");
+        add(
+            root.path(),
+            &trusted,
+            "completed-after-old-snapshot",
+            "terminal",
+            "completed",
+            "owner",
+            "project",
+            THREAD,
+            now.saturating_sub(10),
+        )?;
+        let definition: String = store::open_store(root.path())?.query_row(
+            "SELECT request_json FROM workjet_project_kpi_definitions WHERE project_id='project' AND kpi_id='k'",
+            [], |row| row.get(0),
+        )?;
+        crate::service::exercise_busy_or_backlogged_kpi_router_for_test(root.path(), busy)?;
+        let fresh = read(root.path(), &trusted)?;
+        let result = &fresh["kpis"]["items"][0]["result"];
+        assert_eq!(result["status"], "ready");
+        assert_eq!(result["snapshot"]["value"], 1);
+        assert!(
+            result["snapshot"]["freshness"]["calculated_at_ms"]
+                .as_i64()
+                .unwrap()
+                >= now
+        );
+        assert!(
+            result["snapshot"]["freshness"]["refresh_at_ms"]
+                .as_i64()
+                .unwrap()
+                > now
+        );
+        assert_eq!(
+            store::open_store(root.path())?.query_row(
+                "SELECT request_json FROM workjet_project_kpi_definitions WHERE project_id='project' AND kpi_id='k'",
+                [], |row| row.get::<_, String>(0),
+            )?,
+            definition,
+        );
+        let revision = fresh["kpis"]["revision"].clone();
+        // An ordinary following tick is read-only until the existing hourly due time.
+        crate::service::exercise_busy_or_backlogged_kpi_router_for_test(root.path(), true)?;
+        assert_eq!(read(root.path(), &trusted)?["kpis"]["revision"], revision);
+    }
+    Ok(())
+}
+
+#[test]
 fn refresh_is_hourly_and_preparation_can_force_a_fresh_real_snapshot() -> anyhow::Result<()> {
     let (root, trusted) = fixture()?;
     let first = call(

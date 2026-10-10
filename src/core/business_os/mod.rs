@@ -60,6 +60,16 @@ pub mod policy;
 mod populated_store_recovery;
 mod project_chats;
 pub(crate) use project_chats::{emit_project_report, reconcile_project_reports};
+
+/// Native recipe maintenance does not emit a scheduled model turn. Run it even
+/// while the serial router is busy or contains ordinary queued work.
+pub(crate) fn refresh_due_workjet_project_kpis(root: &std::path::Path) -> anyhow::Result<()> {
+    if !store::business_os_store_path(root).exists() {
+        return Ok(());
+    }
+    workjet_project_kpis::resolver::refresh_due(root)
+}
+
 mod project_crew;
 mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;
