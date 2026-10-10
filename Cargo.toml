@@ -153,6 +153,7 @@ exclude = [
     "src/core/transfers/aria2-rust",
     "src/core/transfers/vendor/smb",
     "src/tools/appsec-pentest",
+    "src/tools/actions-runner",
     "src/tools/doc-stack",
     "src/tools/google-fetch",
     "src/tools/pdf-parse",

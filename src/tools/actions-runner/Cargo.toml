@@ -1,0 +1,56 @@
+[package]
+name = "ctox-actions-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "GitHub Actions workflow execution engine for CTOX (Rust port of nektos/act)"
+
+[dependencies]
+# The executor algebra, the JWT signing and the error plumbing all speak
+# `anyhow`, which is already a dependency of CTOX itself.
+anyhow = "1"
+# The Docker client. act talks to the daemon through
+# `github.com/moby/moby/client`; `bollard` is the maintained Rust client for
+# the same Engine API over the same unix socket / npipe, and is the one Rust
+# ecosystem project the Docker back-end is built on.
+bollard = "0.21"
+# bollard's request bodies are `bytes::Bytes` and its responses are
+# `Stream`s, so both crates are named here directly rather than reached through
+# bollard. They are already in the tree as its dependencies, so this adds no
+# download and no second copy.
+bytes = "1"
+futures = "0.3"
+# The artifact server's signed URLs and the authorization token: HMAC-SHA256
+# plus the Go timestamp layout they embed. Already CTOX dependencies. Base64 is
+# not one, because act needs Go's *padded* URL-safe encoding in one place and
+# RFC 7515's *raw* one in another, which is four lines and not a version
+# negotiation.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+hmac = "0.12"
+# `sha256` is not a default gix feature, but a repository may record
+# `extensions.objectFormat = sha256`, and the index decoder needs to know the
+# object hash width to size the entries. See `git_index::GitIndex::read`.
+gix = { version = "0.88.0", features = ["sha256"] }
+# Enumerating the host's interface addresses, so the cache server can advertise
+# a reachable address on a machine without a default route. Cross-platform,
+# which matters because Windows build computers are a target.
+if-addrs = "0.13"
+regex = "1"
+# Both of these are already dependencies of CTOX itself. The artifact cache
+# server replaces act's bbolt/bolthold index with SQLite (its queries are
+# relational: ordered prefix lookups plus a `GROUP BY Key, Version`) and its
+# net/http + httprouter server with a blocking HTTP server, which matches the
+# handler's fully synchronous style. See `artifactcache`.
+rusqlite = { version = "0.32", features = ["bundled"] }
+saphyr = "0.1.0"
+saphyr-parser = "0.1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4.46"
+tempfile = "3.27.0"
+# bollard exposes an async API and leaves its `tokio` dependency optional, so
+# the executor that drives it is named here rather than pulled in implicitly.
+# Only `rt` is needed: the Docker client is called from the same blocking
+# executors the rest of the crate uses, via `block_on`.
+tokio = { version = "1", features = ["rt"] }
