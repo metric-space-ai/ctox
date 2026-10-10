@@ -4811,45 +4811,68 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn port_cleanup_preserves_an_unmanaged_listener_in_the_same_root() {
-        struct BoundedChild(Child);
-        impl Drop for BoundedChild {
-            fn drop(&mut self) {
-                // EOF ends the test server; timeout bounds every failure path.
-                self.0.stdin.take();
-                let _ = self.0.wait();
-            }
+    struct BoundedListener {
+        child: Child,
+        port: u16,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for BoundedListener {
+        fn drop(&mut self) {
+            // EOF ends the fixture; timeout bounds every failure path.
+            self.child.stdin.take();
+            let _ = self.child.wait();
         }
-        let root = tempfile::tempdir().unwrap();
-        let mut child = BoundedChild(
-            Command::new("timeout")
-                .args([
-                    "15s",
-                    "python3",
-                    "-u",
-                    "-c",
-                    "import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.read()",
-                ])
-                .current_dir(root.path())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap(),
-        );
-        let mut output = std::io::BufReader::new(child.0.stdout.take().unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn listener_fixture(root: &Path, marker: &str) -> BoundedListener {
+        let child = Command::new("timeout")
+            .args([
+                "15s",
+                "python3",
+                "-u",
+                "-c",
+                "import socket,sys; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); sys.stdin.read()",
+            ])
+            // The positive fixture uses the existing legacy command marker;
+            // neither fixture loads an inference model.
+            .arg(marker)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut listener = BoundedListener { child, port: 0 };
+        let mut output = std::io::BufReader::new(listener.child.stdout.take().unwrap());
         let mut line = String::new();
         std::io::BufRead::read_line(&mut output, &mut line).unwrap();
-        let port: u16 = line.trim().parse().unwrap();
-        assert!(!listening_pids_for_port(root.path(), port)
-            .unwrap()
-            .is_empty());
-        assert!(managed_listener_pids_for_port(root.path(), port)
-            .unwrap()
-            .is_empty());
-        stop_processes_on_port(root.path(), port).unwrap();
-        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
-        assert!(child.0.try_wait().unwrap().is_none());
+        listener.port = line.trim().parse().unwrap();
+        listener
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_cleanup_preserves_an_unmanaged_listener_in_the_same_root() -> Result<()> {
+        let root = tempfile::tempdir().unwrap();
+        let mut listener = listener_fixture(root.path(), "unmanaged-test-listener");
+        assert!(!listening_pids_for_port(root.path(), listener.port)?.is_empty());
+        assert!(managed_listener_pids_for_port(root.path(), listener.port)?.is_empty());
+        stop_processes_on_port(root.path(), listener.port)?;
+        assert!(std::net::TcpStream::connect(("127.0.0.1", listener.port)).is_ok());
+        assert!(listener.child.try_wait()?.is_none());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn port_cleanup_stops_a_root_owned_legacy_launcher() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let listener = listener_fixture(root.path(), MANAGED_ENGINE_FROM_CONFIG_COMMAND);
+        assert!(!managed_listener_pids_for_port(root.path(), listener.port)?.is_empty());
+        stop_processes_on_port(root.path(), listener.port)?;
+        assert!(std::net::TcpStream::connect(("127.0.0.1", listener.port)).is_err());
+        Ok(())
     }
 
     #[cfg(unix)]
