@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-audience-denial-fallback';
+=======
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-native-provider-model-check';
+>>>>>>> 66ba74d16 (Keep the complete shell import chain on one generation)
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

@@ -1,5 +1,9 @@
 /* One module graph per page: all database and sync consumers share this promise. */
+<<<<<<< HEAD
 export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20261010-shell-v2-audience-denial-fallback";
+=======
+export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20261010-shell-v2-native-provider-model-check";
+>>>>>>> 66ba74d16 (Keep the complete shell import chain on one generation)
 let runtimePromise;
 export function loadRxdbRuntime() {
   return runtimePromise ??= import(RXDB_BUNDLE_URL).catch((error) => {
