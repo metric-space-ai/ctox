@@ -223,7 +223,9 @@ async fn bounded_probe(
 
 /// A native controller must capture authority from its admitted connection.
 /// This function does not persist a result or manufacture transport authority.
-/// It changes no default, account cooldown, affinity, credential or model list.
+/// It changes no default, account enablement, affinity or model list. Normal
+/// gateway authentication refresh and upstream-outcome processing remain active.
+
 pub(crate) async fn check_claude_model(
     authority: &AdmittedConsumerAuthority,
     account_id: &str,
