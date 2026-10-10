@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_checks (
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id) ON DELETE CASCADE
 );";
 
-
 #[path = "provider_account_controls.rs"]
 pub(in crate::business_os) mod account_controls;
 
@@ -765,7 +764,6 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
         entry["modelChecks"] = checks;
-
     }
     account_controls::project(conn, &mut rows)?;
     let providers = models::project(conn, owner, &mut rows)?;

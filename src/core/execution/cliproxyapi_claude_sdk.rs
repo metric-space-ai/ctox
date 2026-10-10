@@ -157,8 +157,7 @@ impl NativeClaudeSdkAccountReservation {
         let selected = capture_consumable_model(authority, account_id, account_revision, model)?;
         ensure!(
             selected.account().provider == "claude"
-                && selected.account().holder_instance_id
-                    == authority.native_host_instance_id()?,
+                && selected.account().holder_instance_id == authority.native_host_instance_id()?,
             "model check requires a Claude account held on this native instance"
         );
         Self::prepare_selected(authority, selected)

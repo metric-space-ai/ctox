@@ -64,7 +64,6 @@ impl AdmittedConsumerAuthority {
         store::existing_instance_id(&self.root)
     }
 
-
     /// Call from a guarded auxiliary handler, which supplies the accepted
     /// connection by value after the native nonce/possession admission round.
     /// An anonymous/unbound capability is never a computer identity.

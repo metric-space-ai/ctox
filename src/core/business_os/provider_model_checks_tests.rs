@@ -12,7 +12,16 @@ fn request_rejects_caller_authority_secrets_and_unbounded_payloads() {
     assert!(parse(vec![request()]).is_ok());
     assert!(parse(vec![]).is_err());
     assert!(parse(vec![request(), request()]).is_err());
-    for field in ["root", "token", "ownerUserId", "consumer", "endpoint", "credential", "projectId", "meetingId"] {
+    for field in [
+        "root",
+        "token",
+        "ownerUserId",
+        "consumer",
+        "endpoint",
+        "credential",
+        "projectId",
+        "meetingId",
+    ] {
         let mut supplied = request();
         supplied[field] = json!("untrusted-private-value");
         assert!(parse(vec![supplied]).is_err());
@@ -22,13 +31,22 @@ fn request_rejects_caller_authority_secrets_and_unbounded_payloads() {
         supplied["accountRevision"] = value;
         assert!(parse(vec![supplied]).is_err());
     }
-    for (field, value) in [("commandId", "x".repeat(129)), ("accountId", "x".repeat(257)),
-        ("modelId", "x".repeat(257)), ("commandId", " ".into()), ("accountId", "a\nb".into())] {
+    for (field, value) in [
+        ("commandId", "x".repeat(129)),
+        ("accountId", "x".repeat(257)),
+        ("modelId", "x".repeat(257)),
+        ("commandId", " ".into()),
+        ("accountId", "a\nb".into()),
+    ] {
         let mut supplied = request();
         supplied[field] = json!(value);
         assert!(parse(vec![supplied]).is_err());
     }
-    for (field, value) in [("version", json!(2)), ("op", json!("invoke")), ("op", json!("read"))] {
+    for (field, value) in [
+        ("version", json!(2)),
+        ("op", json!("invoke")),
+        ("op", json!("read")),
+    ] {
         let mut supplied = request();
         supplied[field] = value;
         assert!(parse(vec![supplied]).is_err());
@@ -43,10 +61,26 @@ fn policy() -> Result<Connection> {
 }
 fn probe(checked: i64, status: ProbeStatus) -> NativeModelProbe {
     NativeModelProbe {
-        model_id: MODEL.into(), checked_at_ms: checked, elapsed_ms: 12,
-        source: if status == ProbeStatus::Unavailable { ProbeSource::Gateway } else { ProbeSource::Upstream },
-        status, failure: if status == ProbeStatus::Ok { None } else { Some(ProbeFailure::Timeout) },
-        http_status: if status == ProbeStatus::Ok { Some(200) } else { None }, retry_at_ms: None,
+        model_id: MODEL.into(),
+        checked_at_ms: checked,
+        elapsed_ms: 12,
+        source: if status == ProbeStatus::Unavailable {
+            ProbeSource::Gateway
+        } else {
+            ProbeSource::Upstream
+        },
+        status,
+        failure: if status == ProbeStatus::Ok {
+            None
+        } else {
+            Some(ProbeFailure::Timeout)
+        },
+        http_status: if status == ProbeStatus::Ok {
+            Some(200)
+        } else {
+            None
+        },
+        retry_at_ms: None,
     }
 }
 #[test]
@@ -57,23 +91,44 @@ fn retained_observations_are_revision_scoped_redacted_and_do_not_change_accounts
     assert_eq!(public[0]["modelId"], MODEL);
     assert_eq!(public[0]["status"], "ok");
     assert_eq!(public[0]["elapsedMs"], 12);
-    assert!(public.to_string().find("private-selector").is_none());
+    assert!(!public.to_string().contains("private-selector"));
     assert_eq!(project(&conn, "logical-account", 2)?, json!([]));
     assert_eq!(project(&conn, "foreign-account", 1)?, json!([]));
-    assert_eq!(conn.query_row("SELECT enabled,revision FROM business_provider_federation_accounts", [],
-        |r| Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?)))?, (true, 1));
+    assert_eq!(
+        conn.query_row(
+            "SELECT enabled,revision FROM business_provider_federation_accounts",
+            [],
+            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, i64>(1)?))
+        )?,
+        (true, 1)
+    );
     Ok(())
 }
 #[test]
 fn delayed_old_result_does_not_replace_a_newer_probe_and_rows_stay_bounded() -> Result<()> {
     let conn = policy()?;
-    retain(&conn, "logical-account", 1, &probe(200, ProbeStatus::Unavailable))?;
+    retain(
+        &conn,
+        "logical-account",
+        1,
+        &probe(200, ProbeStatus::Unavailable),
+    )?;
     retain(&conn, "logical-account", 1, &probe(100, ProbeStatus::Ok))?;
-    assert_eq!(project(&conn, "logical-account", 1)?[0]["status"], "unavailable");
+    assert_eq!(
+        project(&conn, "logical-account", 1)?[0]["status"],
+        "unavailable"
+    );
     retain(&conn, "logical-account", 2, &probe(300, ProbeStatus::Ok))?;
     assert_eq!(project(&conn, "logical-account", 1)?, json!([]));
     assert_eq!(project(&conn, "logical-account", 2)?[0]["status"], "ok");
-    assert_eq!(conn.query_row("SELECT count(*) FROM business_provider_federation_model_checks", [], |r| r.get::<_, i64>(0))?, 1);
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM business_provider_federation_model_checks",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
     Ok(())
 }
 #[test]
@@ -82,9 +137,15 @@ fn account_deletion_removes_its_observations_and_raw_db_json_is_never_disclosed(
     retain(&conn, "logical-account", 1, &probe(100, ProbeStatus::Ok))?;
     let mut corrupt = serde_json::to_value(probe(100, ProbeStatus::Ok))?;
     corrupt["credential"] = json!("untrusted-private-value");
-    conn.execute("UPDATE business_provider_federation_model_checks SET result_json=?1", [corrupt.to_string()])?;
+    conn.execute(
+        "UPDATE business_provider_federation_model_checks SET result_json=?1",
+        [corrupt.to_string()],
+    )?;
     assert!(project(&conn, "logical-account", 1).is_err());
-    conn.execute("DELETE FROM business_provider_federation_accounts WHERE account_id='logical-account'", [])?;
+    conn.execute(
+        "DELETE FROM business_provider_federation_accounts WHERE account_id='logical-account'",
+        [],
+    )?;
     assert_eq!(project(&conn, "logical-account", 1)?, json!([]));
     Ok(())
 }
@@ -92,7 +153,10 @@ fn account_deletion_removes_its_observations_and_raw_db_json_is_never_disclosed(
 fn corrupt_observation_identity_cannot_claim_another_model_or_time() -> Result<()> {
     let conn = policy()?;
     retain(&conn, "logical-account", 1, &probe(100, ProbeStatus::Ok))?;
-    conn.execute("UPDATE business_provider_federation_model_checks SET checked_at_ms=101", [])?;
+    conn.execute(
+        "UPDATE business_provider_federation_model_checks SET checked_at_ms=101",
+        [],
+    )?;
     assert!(project(&conn, "logical-account", 1).is_err());
     Ok(())
 }
