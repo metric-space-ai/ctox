@@ -8,6 +8,105 @@ use std::sync::{
     Mutex,
 };
 
+#[tokio::test]
+async fn range_retry_rechecks_original_account_before_more_traffic() {
+    let (host, request) = fixture();
+    let reads = AtomicUsize::new(0);
+    let error = fetch_authorized_range(
+        || async { current_account(&host, &request).await.map(|_| ()) },
+        || async {
+            reads.fetch_add(1, Ordering::SeqCst);
+            host.saved.lock().unwrap().as_mut().unwrap().account_epoch += 1;
+            Err(rxdb::rx_error::new_rx_error(
+                "RC_WEBRTC_FILE",
+                Some(serde_json::json!({"reason": "file_timeout"})),
+            ))
+        },
+        Duration::ZERO,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        error.downcast_ref::<PeerReadFailure>(),
+        Some(&PeerReadFailure::Authorization)
+    );
+}
+
+#[tokio::test]
+async fn range_retry_is_bounded_and_recovers_a_discarded_response() {
+    let reads = AtomicUsize::new(0);
+    let checks = AtomicUsize::new(0);
+    let bytes = fetch_authorized_range(
+        || async {
+            checks.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+        || async {
+            if reads.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err(rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_FILE",
+                    Some(serde_json::json!({"reason": "chunk_sequence_gap"})),
+                ))
+            } else {
+                Ok(FileRangeBytes {
+                    offset: 17,
+                    bytes: vec![1, 2],
+                })
+            }
+        },
+        Duration::ZERO,
+    )
+    .await
+    .unwrap();
+    assert_eq!(bytes.offset, 17);
+    assert_eq!(bytes.bytes, vec![1, 2]);
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    assert_eq!(checks.load(Ordering::SeqCst), 3);
+    let attempts = AtomicUsize::new(0);
+    let error = fetch_authorized_range(
+        || async { Ok(()) },
+        || async {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(rxdb::rx_error::new_rx_error(
+                "RC_WEBRTC_FILE",
+                Some(serde_json::json!({"reason": "file_timeout"})),
+            ))
+        },
+        Duration::ZERO,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(error.to_string(), "PEER_FILE_TIMEOUT");
+}
+
+#[tokio::test]
+async fn range_rejection_and_unknown_reasons_never_retry_or_expose_remote_material() {
+    for (reason, expected) in [
+        ("file_not_accepted", PeerReadFailure::Rejected),
+        ("secret-url-token", PeerReadFailure::Unavailable),
+    ] {
+        let attempts = AtomicUsize::new(0);
+        let error = fetch_authorized_range(
+            || async { Ok(()) },
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_FILE",
+                    Some(serde_json::json!({"reason": reason, "url": "secret-url-token"})),
+                ))
+            },
+            Duration::ZERO,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(error.to_string(), expected.code());
+        assert!(!format!("{error:?}").contains("secret-url-token"));
+    }
+}
+
 struct Host {
     saved: Mutex<Option<SavedBusinessDataTarget>>,
     principal: Mutex<Option<NativeBusinessDataPrincipal>>,

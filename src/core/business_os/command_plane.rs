@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 131] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 132] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -397,6 +397,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 131] = [
     "ctox.workjet.presentation.canvas.save",
     "ctox.workjet.presentation.edits.apply",
     "ctox.workjet.project.supervisor.turn.cancel",
+    "ctox.workjet.project.supervisor.turn.input",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
@@ -1840,6 +1841,7 @@ fn dispatch_business_command(
         "ctox.workjet.project.supervisor.turn.submit"
         | "ctox.workjet.project.supervisor.turn.watch"
         | "ctox.workjet.project.supervisor.turn.cancel"
+        | "ctox.workjet.project.supervisor.turn.input"
         | "ctox.workjet.project.supervisor.turn.capabilities"
         | "ctox.workjet.project.supervisor.turn.history"
         | "ctox.workjet.project.supervisor.route.read.v1"

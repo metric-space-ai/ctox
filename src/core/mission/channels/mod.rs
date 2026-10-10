@@ -132,6 +132,7 @@ pub use outbound_review::{
 mod auth_assist;
 pub(crate) use auth_assist::recover_auth_assist_requests;
 mod command_saga;
+pub(crate) mod supervisor_owner_input;
 use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{

@@ -6,6 +6,7 @@ import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-
 import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-supervisor-route-display';
 import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-supervisor-route-display';
 import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-supervisor-route-display';
@@ -13947,8 +13948,13 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
+<<<<<<< HEAD
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history',
+=======
+  const supervisorActions = ['project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
+    'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
+>>>>>>> codex/project-supervisor-luma-control
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
@@ -14313,14 +14319,17 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (['project.supervisor.turn.capabilities', 'project.supervisor.turn.submit', 'project.supervisor.turn.watch',
-    'project.supervisor.turn.cancel'].includes(action)) {
+    'project.supervisor.turn.cancel', 'project.supervisor.turn.input'].includes(action)) {
     const submitting = action === 'project.supervisor.turn.submit';
     const cancelling = action === 'project.supervisor.turn.cancel';
+    const inputting = action === 'project.supervisor.turn.input';
     const capabilities = action === 'project.supervisor.turn.capabilities';
     const allowedKeys = new Set(['action', 'commandId', 'projectId', 'threadId']);
     if (submitting) { allowedKeys.add('goal'); allowedKeys.add('turnKind'); }
     else if (!capabilities) allowedKeys.add('targetCommandId');
     if (cancelling) allowedKeys.add('reason');
+    if (inputting) allowedKeys.add('body');
+    if (capabilities) allowedKeys.add('includeInput');
     const observing = action === 'project.supervisor.turn.watch' && request.executionPage !== undefined;
     if (action === 'project.supervisor.turn.watch') allowedKeys.add('executionPage');
     assertWorkjetProjectPayloadKeys(request, allowedKeys);
@@ -14332,6 +14341,10 @@ async function workjetProjectControl(request = {}) {
       throw new TypeError('Workjet supervisor threadId must be its existing lowercase CodeThread UUID.');
     }
     const payload = { project_id: projectId, thread_id: threadId };
+    if (capabilities && Object.hasOwn(request, 'includeInput')) {
+      if (typeof request.includeInput !== 'boolean') throw new TypeError('includeInput must be boolean.');
+      payload.include_input = request.includeInput;
+    }
     if (submitting) {
       payload.goal = boundedWorkjetProjectText(request.goal, 'goal', 4096);
       if (Object.hasOwn(request, 'turnKind')) {
@@ -14344,6 +14357,7 @@ async function workjetProjectControl(request = {}) {
       payload.target_command_id = boundedWorkjetProjectText(request.targetCommandId, 'targetCommandId', 256);
     }
     if (cancelling) payload.reason = boundedWorkjetProjectText(request.reason, 'reason', 512);
+    if (inputting) payload.body = boundedWorkjetProjectText(request.body, 'body', 4096);
     if (observing) payload.execution_page = boundedWorkjetExecutionRequest(request.executionPage);
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -14359,11 +14373,12 @@ async function workjetProjectControl(request = {}) {
         'project.supervisor.turn.submit': 'ctox.workjet.project.supervisor.turn.submit',
         'project.supervisor.turn.watch': 'ctox.workjet.project.supervisor.turn.watch',
         'project.supervisor.turn.cancel': 'ctox.workjet.project.supervisor.turn.cancel',
+        'project.supervisor.turn.input': 'ctox.workjet.project.supervisor.turn.input',
       }[action], payload,
       client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
     }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
     assertCurrentIdentity();
-    const contract = 'ctox.workjet.supervisor_turn.v1';
+    const contract = inputting ? 'ctox.workjet.supervisor_input.v1' : 'ctox.workjet.supervisor_turn.v1';
     const binding = receipt?.result?.binding;
     const turn = receipt?.result?.turn;
     const threadKey = `business-os/threads/${threadId}`;
@@ -14379,12 +14394,22 @@ async function workjetProjectControl(request = {}) {
         || kinds[0] !== 'work' || kinds[1] !== 'conversation' || receipt.result.default_turn_kind !== 'work') {
         throw new Error('Workjet supervisor capabilities returned an invalid or unmatched confirmation.');
       }
-      return {
+      const result = {
         action, commandId, projectId, contract: capabilityContract,
         binding: { contract: 'ctox.workjet.supervisor_binding.v1', projectId,
           threadId, threadKey },
         turnKinds: kinds, defaultTurnKind: receipt.result.default_turn_kind,
       };
+      if (request.includeInput === true) {
+        if (receipt.result.input_contract !== 'ctox.workjet.supervisor_input.v1'
+          || receipt.result.input_delivery !== 'next_slice' || receipt.result.max_input_chars !== 4096) {
+          throw new Error('The connected instance does not support same-task Supervisor input.');
+        }
+        result.inputContract = receipt.result.input_contract;
+        result.inputDelivery = 'next_slice';
+        result.maxInputChars = 4096;
+      }
+      return result;
     }
     if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
       || receipt.target_record_id !== projectId || receipt.result?.ok !== true
@@ -14443,6 +14468,21 @@ async function workjetProjectControl(request = {}) {
       result.executionContract = SUPERVISOR_EXECUTION_SCHEMA;
       result.executionPage = JSON.parse(JSON.stringify(page));
     }
+    if (inputting) {
+      const input = receipt.result.input;
+      if (receipt.result.delivery !== 'next_slice' || receipt.result.worker_interrupted !== false
+        || !Number.isSafeInteger(input?.sequence) || input.sequence < 1
+        || input.body !== payload.body || typeof input.created_at !== 'string'
+        || !Number.isFinite(Date.parse(input.created_at))) {
+        throw new Error('Workjet supervisor follow-up has no matching durable input receipt.');
+      }
+      result.input = {
+        inputId: boundedWorkjetProjectText(input.input_id, 'native inputId', 256),
+        sequence: input.sequence, body: input.body, createdAt: input.created_at,
+      };
+      result.delivery = 'next_slice';
+      result.workerInterrupted = false;
+    }
     if (submitting) result.messageId = boundedWorkjetProjectText(receipt.result.message_id, 'native messageId', 256);
     if (cancelling) {
       const cancellation = receipt.result.cancellation;
@@ -14496,11 +14536,14 @@ async function workjetProjectControl(request = {}) {
   }
 
   if (action === 'project.list') {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration']));
-    if (Object.hasOwn(request, 'includeConfiguration') && typeof request.includeConfiguration !== 'boolean') {
-      throw new Error('Invalid Workjet project includeConfiguration.');
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'includeConfiguration', 'includeSupervisorLuma']));
+    for (const flag of ['includeConfiguration', 'includeSupervisorLuma']) {
+      if (Object.hasOwn(request, flag) && typeof request[flag] !== 'boolean') {
+        throw new Error(`Invalid Workjet project ${flag}.`);
+      }
     }
     const includeConfiguration = request.includeConfiguration === true;
+    const includeSupervisorLuma = request.includeSupervisorLuma === true;
     const commandId = `cmd_workjet_project_list_${newId()}`;
     const assertCurrentIdentity = () => {
       if (state.session !== requestSession || state.db !== requestDb
@@ -14585,7 +14628,7 @@ async function workjetProjectControl(request = {}) {
       const workingCopies = await listProjectedWorkjetWorkingCopies(projectOwnerUserId, copyDocs);
       let projects = await listProjectedWorkjetProjects(
         projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
-        { includeConfiguration },
+        { includeConfiguration, includeSupervisorLuma },
       );
       assertCurrentIdentity();
       if (confirmedProjectIds) {
@@ -14602,7 +14645,7 @@ async function workjetProjectControl(request = {}) {
           projectDocs = projectDocs.concat(missingDocs);
           projects = await listProjectedWorkjetProjects(
             projectOwnerUserId, WORKJET_PROJECT_CONTROL_MAX_RESULTS, workingCopies, projectDocs,
-            { includeConfiguration },
+            { includeConfiguration, includeSupervisorLuma },
           );
         }
       }
@@ -14622,7 +14665,7 @@ async function workjetProjectControl(request = {}) {
   if (action === 'project.configure') {
     assertWorkjetProjectPayloadKeys(request, new Set([
       'action', 'commandId', 'projectId', 'title',
-      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe',
+      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'supervisorLumaId',
     ]));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -14664,8 +14707,17 @@ async function workjetProjectControl(request = {}) {
       || nativeProject?.owner_user_id !== projectOwnerUserId) {
       throw new Error('Workjet project configuration returned an uncorrelated or unsuccessful receipt.');
     }
-    const project = boundedWorkjetProjectResult(nativeProject, { includeConfiguration: true });
+    const project = boundedWorkjetProjectResult(nativeProject, {
+      includeConfiguration: true, includeSupervisorLuma: Object.hasOwn(payload, 'supervisor_luma_id'),
+    });
     if (!project) throw new Error('Workjet project configuration returned no project.');
+    if (Object.hasOwn(payload, 'supervisor_luma_id')) {
+      const selected = project.supervisorLumaId ?? null;
+      if (selected !== payload.supervisor_luma_id) {
+        throw new Error('Workjet project configuration returned an unmatched supervisor Luma.');
+      }
+      return { action, commandId, project: Object.freeze({ ...project, supervisorLumaId: selected }) };
+    }
     return { action, commandId, project };
   }
 
@@ -14843,7 +14895,7 @@ async function readWorkjetProjectListRows(bridge, query, requireRevision, deadli
   return rows;
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false } = {}) {
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null, { includeConfiguration = false, includeSupervisorLuma = false } = {}) {
   const collection = state.db?.collection?.('workjet_projects');
   const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId }, status: { $eq: 'active' } },
@@ -14853,7 +14905,7 @@ async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = 
     .map((doc) => {
       const value = doc?.toJSON?.() || doc;
       if (value?.owner_user_id !== ownerUserId) return null;
-      const project = boundedWorkjetProjectResult(value, { includeConfiguration });
+      const project = boundedWorkjetProjectResult(value, { includeConfiguration, includeSupervisorLuma });
       if (!project) return null;
       return Object.freeze({
         ...project,
@@ -15005,7 +15057,7 @@ async function workjetProjectChildCommandId(parentCommandId, kind) {
   return `cmd_workjet_${kind.replaceAll('-', '_')}_${hex}`;
 }
 
-function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {}) {
+function boundedWorkjetProjectResult(value, { includeConfiguration = false, includeSupervisorLuma = false } = {}) {
   if (!value || typeof value !== 'object' || value._deleted === true || value.is_deleted === true
     || value.status !== 'active') {
     return null;
@@ -15018,17 +15070,19 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
   if (Number.isFinite(createdAtMs) && createdAtMs >= 0) {
     result.createdAt = new Date(createdAtMs).toISOString();
   }
-  if (!includeConfiguration) return Object.freeze(result);
+  if (!includeConfiguration && !includeSupervisorLuma) return Object.freeze(result);
   const metadata = boundedWorkjetProjectMetadata({
-    ...(Object.hasOwn(value, 'description') ? { description: value.description } : {}),
-    ...(Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
-    ...(Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
-    ...(Object.hasOwn(value, 'info') ? { info: value.info } : {}),
-    ...(Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'description') ? { description: value.description } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'repo_url') ? { repoUrl: value.repo_url } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'info') ? { info: value.info } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(includeSupervisorLuma && Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
   });
   for (const [nativeKey, key] of [
     ['description', 'description'], ['repo_url', 'repoUrl'], ['public_url', 'publicUrl'],
     ['info', 'info'], ['jour_fixe', 'jourFixe'],
+    ['supervisor_luma_id', 'supervisorLumaId'],
   ]) {
     if (Object.hasOwn(metadata, nativeKey)) result[key] = metadata[nativeKey];
   }
@@ -15037,6 +15091,15 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false } = {
 
 function boundedWorkjetProjectMetadata(request) {
   const result = {};
+  if (Object.hasOwn(request, 'supervisorLumaId')) {
+    const value = request.supervisorLumaId;
+    const valid = validateSupervisorLumaValue('ProjectSupervisorLuma', { supervisor_luma_id: value });
+    if (!valid.ok || value === undefined || (typeof value === 'string'
+      && (!value.trim() || /[\u0000-\u001f\u007f]/u.test(value)))) {
+      throw new Error('Invalid Workjet project supervisorLumaId.');
+    }
+    result.supervisor_luma_id = value === null ? null : value.trim();
+  }
   for (const [key, nativeKey] of [
     ['description', 'description'], ['repoUrl', 'repo_url'], ['publicUrl', 'public_url'],
     ['info', 'info'], ['jourFixe', 'jour_fixe'],

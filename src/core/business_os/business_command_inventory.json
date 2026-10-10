@@ -109,6 +109,7 @@
     "ctox.workjet.project.supervisor.turn.cancel",
     "ctox.workjet.project.supervisor.turn.capabilities",
     "ctox.workjet.project.supervisor.turn.history",
+    "ctox.workjet.project.supervisor.turn.input",
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
     "ctox.workjet.project.upsert",

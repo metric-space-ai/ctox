@@ -59,5 +59,43 @@
     "tests/room_share.rs": "95efffa8342a486b34e0b42f9f1b937b182a2d4c0922cd2485ae1b47c267fb70",
     "tests/rpc.rs": "e0766fb86cae070414ae8f1897a6fc2a774701eeecb61ec11d0535b3d1bd07e1",
     "tests/sftp_download.rs": "fba27faa8310027e1b683745a471f5ad887d6906674405a6f9cf2dfefb65f9a9"
+  },
+  "ctox_overlays": {
+    "Cargo.lock": {
+      "upstream_sha256": "5ff8de54d96e58daf887f85ba94a8e292b8c5c92721392e983fafea3810aa069",
+      "installed_sha256": "61d8e2dbe4d147fae0f1070937566fcdcb49936cfddc5e115ea2362b16cd8b73",
+      "source_commit": "505771b49fe0f0754bb5d9fd7f082817da34481f",
+      "reason": "RUSTSEC-2026-0285: rustls 0.23.44 → 0.23.45; version and registry checksum only"
+    },
+    "README.md": {
+      "upstream_sha256": "3868a6705e920bc7f336d8325322f495eb9e7382201602b7a4332a180265c17b",
+      "installed_sha256": "be53696cefab75f3d5a0a3a94bf294a22e9bb64f14aa1cb7e7e2dc728f3f030e",
+      "source_commit": "6934b48b2098d847e6155e64697db47c0fd86a2f",
+      "reason": "CTOX #486: Windows cfg boundaries and portable file/socket I/O; original license notices retained"
+    },
+    "src/checksum.rs": {
+      "upstream_sha256": "9f095d9b56aba1b976d85890c413706102a64f440e20b92a1a9b3c5126e7d511",
+      "installed_sha256": "9f12e78f0d8f1527652613818225f1bebb110490744aa07adee4255ccdbffa43",
+      "source_commit": "6934b48b2098d847e6155e64697db47c0fd86a2f",
+      "reason": "CTOX #486: Windows cfg boundaries and portable file/socket I/O; original license notices retained"
+    },
+    "src/rlimit.rs": {
+      "upstream_sha256": "d4edd26c6a542d06a17315e98d4f44c2d35a76a438d9c1c6672b5b8733a2128d",
+      "installed_sha256": "8bcf0dfa1d7d0f58ab51f0b2eb489b5cd67ebb5205711a3241326d605d5ec2c0",
+      "source_commit": "6934b48b2098d847e6155e64697db47c0fd86a2f",
+      "reason": "CTOX #486: Windows cfg boundaries and portable file/socket I/O; original license notices retained"
+    },
+    "src/sockopt.rs": {
+      "upstream_sha256": "bfa176e8ee7a45aa5acb219298e507cbd7204fde00c72772d92f7f43ffaf3bdf",
+      "installed_sha256": "dc2dc4a14600ef474c11ab8af5f7fcec09b8fb62f98962b2efd009477117fabe",
+      "source_commit": "6934b48b2098d847e6155e64697db47c0fd86a2f",
+      "reason": "CTOX #486: Windows cfg boundaries and portable file/socket I/O; original license notices retained"
+    },
+    "src/storage.rs": {
+      "upstream_sha256": "2f48d450f77dbc3784758d78d7f8e758c8a771dacf1fdd1e4fb8c54d48242aae",
+      "installed_sha256": "0805685357d0c94d65f33da9470692314226770966a4f256b5d38e07f6430c3b",
+      "source_commit": "e819db713dbd5c2652f3bee4ef9093b8f4d5a8c6",
+      "reason": "CTOX #486: Windows cfg boundaries and portable file/socket I/O; original license notices retained"
+    }
   }
 }
