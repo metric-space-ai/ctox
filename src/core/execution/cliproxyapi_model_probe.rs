@@ -11,6 +11,7 @@ use super::{
 };
 use crate::business_os::consumer_authority::AdmittedConsumerAuthority;
 use ctox_cliproxyapi::internal::auth::xai::native_http;
+use futures_util::StreamExt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -276,14 +277,13 @@ pub(crate) async fn check_claude_model(
         reservation
             .with_current_configuration(authority, |_| Ok(()))
             .map_err(|_| IoFailure::Authority)?;
-        let mut response = client
+        let response = client
             .post(format!("{}/responses", instance_codex_proxy_base_url()))
             .header("X-CTOX-Account", &account)
             .header("X-CTOX-Provider", "claude")
             .header("X-CTOX-Purpose", "model-check")
             .header("Content-Type", "application/json")
             .body(body.to_string())
-
             .send()
             .await
             .map_err(|_| IoFailure::Transport)?;
@@ -305,7 +305,9 @@ pub(crate) async fn check_claude_model(
             .and_then(|value| value.parse::<u16>().ok())
             .filter(|value| (100..600).contains(value));
         let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| IoFailure::Transport)? {
+        let mut chunks = response.bytes_stream();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(|_| IoFailure::Transport)?;
             if body.len().saturating_add(chunk.len()) > MAX_BODY {
                 return Err(IoFailure::ResponseTooLarge);
             }
