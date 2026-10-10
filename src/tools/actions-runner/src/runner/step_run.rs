@@ -220,7 +220,10 @@ pub fn get_script_name(rc: &RunContext, step: &StepModel) -> String {
     let mut script_name = step.id.clone();
     let mut parent = rc.caller.as_deref();
     while let Some(caller) = parent {
-        script_name = format!("{}-composite-{}", caller.run_context.current_step, script_name);
+        script_name = format!(
+            "{}-composite-{}",
+            caller.run_context.current_step, script_name
+        );
         parent = caller.run_context.caller.as_deref();
     }
     format!("workflow/{script_name}")
@@ -277,8 +280,7 @@ pub fn setup_shell(
 ) -> Result<(), String> {
     let run_env = rc.get_env();
     let github = rc.get_github_context(git).unwrap_or_default();
-    let environment =
-        super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
+    let environment = super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
     let interpolate = |value: &str| {
         super::expression::interpolate(
             &environment,
@@ -358,8 +360,7 @@ pub fn setup_working_directory(
 ) -> String {
     let run_env = rc.get_env();
     let github = rc.get_github_context(git).unwrap_or_default();
-    let environment =
-        super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
+    let environment = super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
 
     let working_directory = if step.working_directory.is_empty() {
         rc.run
@@ -426,8 +427,7 @@ pub fn setup_shell_command(
 
     let run_env = rc.get_env();
     let github = rc.get_github_context(git).unwrap_or_default();
-    let environment =
-        super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
+    let environment = super::expression::new_expression_evaluator_with_env(rc, &run_env, &github);
     let script = super::expression::interpolate(
         &environment,
         status,
@@ -455,9 +455,8 @@ pub fn setup_shell_command(
     // Split the shell template before inserting a filesystem path. Otherwise
     // spaces or quotes in a native build root become extra argv elements.
     let mut replaced = false;
-    let mut cmd = crate::container::shell_quote::split(&sc_cmd).map_err(|error| {
-        format!("{error}")
-    })?;
+    let mut cmd =
+        crate::container::shell_quote::split(&sc_cmd).map_err(|error| format!("{error}"))?;
     for arg in &mut cmd {
         if !replaced && arg.contains("{0}") {
             *arg = substitute_script_path(arg, &script_path);
@@ -479,9 +478,8 @@ pub fn setup_shell_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_script, get_script_name, host_shell_candidates, script_parts,
-        setup_shell, setup_shell_command, setup_working_directory, substitute_script_path,
-        LocalEnv,
+        assemble_script, get_script_name, host_shell_candidates, script_parts, setup_shell,
+        setup_shell_command, setup_working_directory, substitute_script_path, LocalEnv,
     };
     use crate::expr::DefaultStatus;
     use crate::lookpath::Env as _;
@@ -511,12 +509,16 @@ mod tests {
     /// A run context over one workflow, with `workflow_extra` inlined at the
     /// top level and `job_extra` under the single job.
     fn fixture(workflow_extra: &str, job_extra: &str) -> RunContext {
-        let margin = job_extra.lines().filter(|line| !line.trim().is_empty())
+        let margin = job_extra
+            .lines()
+            .filter(|line| !line.trim().is_empty())
             .map(|line| line.bytes().take_while(|byte| *byte == b' ').count())
-            .min().unwrap_or(0);
+            .min()
+            .unwrap_or(0);
         let source = format!(
             "{workflow_extra}jobs:\n  one:\n    runs-on: ubuntu-latest\n{job_extra}",
-            job_extra = job_extra.lines()
+            job_extra = job_extra
+                .lines()
                 .map(|line| format!("    {}\n", &line[margin.min(line.len())..]))
                 .collect::<String>()
         );
@@ -712,9 +714,14 @@ mod tests {
                 caller,
                 ..RunContext::default()
             });
-            caller = Some(Box::new(Caller { run_context: context }));
+            caller = Some(Box::new(Caller {
+                run_context: context,
+            }));
         }
-        RunContext { caller, ..RunContext::default() }
+        RunContext {
+            caller,
+            ..RunContext::default()
+        }
     }
 
     // ---------------------------------------------------------- {0} path --
@@ -730,7 +737,11 @@ mod tests {
                 "bash -e /var/run/act/workflow/1.sh",
             ),
             ("bash -e {0} {0}", "/p", "bash -e /p {0}"),
-            ("cmd /D /C \"CALL \"{0}\"\"", "/p/1.cmd", "cmd /D /C \"CALL \"/p/1.cmd\"\""),
+            (
+                "cmd /D /C \"CALL \"{0}\"\"",
+                "/p/1.cmd",
+                "cmd /D /C \"CALL \"/p/1.cmd\"\"",
+            ),
             ("node", "/p", "node"),
             ("{0}", "{0}", "{0}"),
         ] {
@@ -750,8 +761,15 @@ mod tests {
     fn the_steps_own_shell_wins_and_is_copied_into_both_fields() {
         let rc = fixture("", "steps:\n  - run: echo hi\n    shell: pwsh");
         let mut step = step_model(&rc);
-        setup_shell(&mut rc.clone(), &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-            .expect("setup");
+        setup_shell(
+            &mut rc.clone(),
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("setup");
         assert_eq!(step.shell, "pwsh");
         assert_eq!(step.workflow_shell, "pwsh");
     }
@@ -761,22 +779,42 @@ mod tests {
     #[test]
     fn the_shell_falls_through_step_then_job_then_workflow() {
         for (job_defaults, workflow_defaults, want_shell, want_workflow_shell) in [
-            ("    defaults:\n      run:\n        shell: sh", "", "sh", "sh"),
+            (
+                "    defaults:\n      run:\n        shell: sh",
+                "",
+                "sh",
+                "sh",
+            ),
             (
                 "",
                 "defaults:\n  run:\n    shell: python\n",
                 "python",
                 "python",
             ),
-            ("    shell: bash\n    defaults:\n      run:\n        shell: sh", "", "sh", "sh"),
+            (
+                "    shell: bash\n    defaults:\n      run:\n        shell: sh",
+                "",
+                "sh",
+                "sh",
+            ),
         ] {
             let rc = fixture(workflow_defaults, job_defaults);
             let mut step = step_model(&rc);
             let mut rc = rc;
-            setup_shell(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-                .expect("setup");
+            setup_shell(
+                &mut rc,
+                &no_git(),
+                &DefaultStatus,
+                &mut step,
+                &map(&[]),
+                None,
+            )
+            .expect("setup");
             assert_eq!(step.shell, want_shell, "job {job_defaults:?}");
-            assert_eq!(step.workflow_shell, want_workflow_shell, "job {job_defaults:?}");
+            assert_eq!(
+                step.workflow_shell, want_workflow_shell,
+                "job {job_defaults:?}"
+            );
         }
     }
 
@@ -795,21 +833,35 @@ mod tests {
         );
         let mut step = step_model(&rc);
         let mut rc = rc;
-        setup_shell(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-            .expect("setup");
-        assert_eq!(step.workflow_shell, "run-value", "the job level is resolved");
+        setup_shell(
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("setup");
+        assert_eq!(
+            step.workflow_shell, "run-value",
+            "the job level is resolved"
+        );
         assert_eq!(step.shell, "run-value");
 
         // Same workflow, no job-level default: now the un-interpolated
         // workflow-level value is the one that survives.
-        let rc = fixture(
-            "defaults:\n  run:\n    shell: ${{ env.FROM_RUN }}\n",
-            "",
-        );
+        let rc = fixture("defaults:\n  run:\n    shell: ${{ env.FROM_RUN }}\n", "");
         let mut step = step_model(&rc);
         let mut rc = rc;
-        setup_shell(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-            .expect("setup");
+        setup_shell(
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("setup");
         assert_eq!(
             step.workflow_shell, "${{ env.FROM_RUN }}",
             "the workflow level is read after the interpolation, so it is not"
@@ -824,8 +876,15 @@ mod tests {
         let rc = fixture("", "container: node:18");
         let mut step = step_model(&rc);
         let mut rc = rc;
-        setup_shell(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-            .expect("setup");
+        setup_shell(
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("setup");
         assert_eq!(step.shell, "sh");
         assert_eq!(
             step.workflow_shell, "",
@@ -843,8 +902,15 @@ mod tests {
         let mut rc = rc;
         rc.run.as_mut().expect("a run").workflow.jobs.clear();
         let mut step = crate::model::Step::default();
-        setup_shell(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-            .expect("setup");
+        setup_shell(
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("setup");
         assert_eq!(step.shell, "");
         assert_eq!(step.workflow_shell, "");
     }
@@ -936,8 +1002,18 @@ mod tests {
     #[test]
     fn the_working_directory_falls_through_step_then_job_then_workflow() {
         for (step_wd, job_wd, workflow_wd, want) in [
-            ("working-directory: ./a", "        working-directory: ./b", "  working-directory: ./c", "./a"),
-            ("", "        working-directory: ./b", "  working-directory: ./c", "./b"),
+            (
+                "working-directory: ./a",
+                "        working-directory: ./b",
+                "  working-directory: ./c",
+                "./a",
+            ),
+            (
+                "",
+                "        working-directory: ./b",
+                "  working-directory: ./c",
+                "./b",
+            ),
             ("", "", "  working-directory: ./c", "./c"),
             ("", "", "", ""),
         ] {
@@ -1000,23 +1076,43 @@ mod tests {
     /// end to end, for the default shell.
     #[test]
     fn the_assembled_script_names_the_file_and_builds_the_argv() {
-        let rc = fixture("", "steps:\n  - id: s1\n    run: echo hello\n    shell: bash");
+        let rc = fixture(
+            "",
+            "steps:\n  - id: s1\n    run: echo hello\n    shell: bash",
+        );
         let mut step = step_model(&rc);
         let mut rc = rc;
         rc.job_container = Some(ContainerPaths {
             act_path: "/var/run/act".to_string(),
             ..ContainerPaths::default()
         });
-        let (assembled, working_directory) =
-            setup_shell_command(&mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None)
-                .expect("assembles");
+        let (assembled, working_directory) = setup_shell_command(
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .expect("assembles");
         assert_eq!(assembled.name, "workflow/s1.sh");
         assert_eq!(assembled.script, "\necho hello\n");
         assert_eq!(
             assembled.cmdline,
             "bash --noprofile --norc -e -o pipefail /var/run/act/workflow/s1.sh"
         );
-        assert_eq!(assembled.cmd, vec!["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "/var/run/act/workflow/s1.sh"]);
+        assert_eq!(
+            assembled.cmd,
+            vec![
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-e",
+                "-o",
+                "pipefail",
+                "/var/run/act/workflow/s1.sh"
+            ]
+        );
         assert_eq!(working_directory, "");
     }
 
@@ -1060,10 +1156,22 @@ mod tests {
                 ..ContainerPaths::default()
             });
             let (assembled, _) = setup_shell_command(
-                &mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None,
-            ).expect("filesystem names are not shell syntax");
-            assert_eq!(assembled.cmd.last().unwrap(), &format!("{path}/workflow/s1.sh"));
-            assert_eq!(assembled.cmd[..6], ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail"]);
+                &mut rc,
+                &no_git(),
+                &DefaultStatus,
+                &mut step,
+                &map(&[]),
+                None,
+            )
+            .expect("filesystem names are not shell syntax");
+            assert_eq!(
+                assembled.cmd.last().unwrap(),
+                &format!("{path}/workflow/s1.sh")
+            );
+            assert_eq!(
+                assembled.cmd[..6],
+                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail"]
+            );
             assert_eq!(assembled.cmd.len(), 7);
         }
     }
@@ -1071,11 +1179,20 @@ mod tests {
     /// Invalid shell syntax still fails; paths are never used to hide it.
     #[test]
     fn an_unbalanced_quote_in_the_shell_template_remains_an_error() {
-        let mut rc = fixture("", "steps:\n  - id: s1\n    run: echo hi\n    shell: 'bash -e \"{0}'");
+        let mut rc = fixture(
+            "",
+            "steps:\n  - id: s1\n    run: echo hi\n    shell: 'bash -e \"{0}'",
+        );
         let mut step = step_model(&rc);
         assert!(setup_shell_command(
-            &mut rc, &no_git(), &DefaultStatus, &mut step, &map(&[]), None,
-        ).is_err());
+            &mut rc,
+            &no_git(),
+            &DefaultStatus,
+            &mut step,
+            &map(&[]),
+            None,
+        )
+        .is_err());
     }
 
     // ---------------------------------------------------------- localEnv --

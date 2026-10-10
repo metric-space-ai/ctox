@@ -387,17 +387,18 @@ fn real_workflow_expressions_evaluate_or_report_the_unbound_workspace() {
             for expression in expressions_in(&text) {
                 let mut source = expression.clone();
                 source.push_str("}}");
-                let value = match interpreter.evaluate(&source, DefaultStatusCheck::None) {
-                    Ok(value) => value,
-                    Err(error) if expression.trim_start().starts_with("hashFiles(") => {
-                        assert_eq!(error.to_string(),
+                let value =
+                    match interpreter.evaluate(&source, DefaultStatusCheck::None) {
+                        Ok(value) => value,
+                        Err(error) if expression.trim_start().starts_with("hashFiles(") => {
+                            assert_eq!(error.to_string(),
                             "TODO: 'hashFiles' requires a workspace and is not yet wired",
                             "{name}: only the declared unbound workspace API is allowed to fail");
-                        workspace_required += 1;
-                        continue;
-                    }
-                    Err(error) => panic!("{name}: {expression} must evaluate: {error}"),
-                };
+                            workspace_required += 1;
+                            continue;
+                        }
+                        Err(error) => panic!("{name}: {expression} must evaluate: {error}"),
+                    };
                 // Anything may be produced, but the value must be well formed
                 // and renderable, which is what the runner depends on.
                 let _ = format!("{value:?}");
@@ -405,7 +406,10 @@ fn real_workflow_expressions_evaluate_or_report_the_unbound_workspace() {
             }
         }
     }
-    assert!(workspace_required > 0, "real project corpus must prove the unbound hashFiles gap");
+    assert!(
+        workspace_required > 0,
+        "real project corpus must prove the unbound hashFiles gap"
+    );
     assert!(
         evaluated >= 20,
         "expected a real corpus, only saw {evaluated}"

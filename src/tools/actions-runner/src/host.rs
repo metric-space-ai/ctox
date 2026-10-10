@@ -48,49 +48,99 @@ impl HostWorkflow {
         let root = document.root().ok_or_else(|| anyhow!("empty workflow"))?;
         if document.map_get(root, "concurrency").is_some() {
             gaps.push(HostGap {
-                job: None, step: None, kind: HostGapKind::Concurrency,
+                job: None,
+                step: None,
+                kind: HostGapKind::Concurrency,
                 reason: "concurrency requires the Workjet scheduler".into(),
             });
         }
         let jobs = document.map_get(root, "jobs");
         for (id, job) in &workflow.jobs {
-            let mut gap = |kind, step, reason: &str| gaps.push(HostGap {
-                job: Some(id.clone()), step, kind, reason: reason.into(),
-            });
+            let mut gap = |kind, step, reason: &str| {
+                gaps.push(HostGap {
+                    job: Some(id.clone()),
+                    step,
+                    kind,
+                    reason: reason.into(),
+                })
+            };
             if job.raw_container.is_some() {
-                gap(HostGapKind::Container, None, "container: is prohibited; use native toolchains");
+                gap(
+                    HostGapKind::Container,
+                    None,
+                    "container: is prohibited; use native toolchains",
+                );
             }
             let node = jobs.and_then(|jobs| document.map_get(jobs, id));
-            if node.and_then(|node| document.map_get(node, "services")).is_some() {
-                gap(HostGapKind::Services, None, "services: is prohibited; no container fallback");
+            if node
+                .and_then(|node| document.map_get(node, "services"))
+                .is_some()
+            {
+                gap(
+                    HostGapKind::Services,
+                    None,
+                    "services: is prohibited; no container fallback",
+                );
             }
-            if node.and_then(|node| document.map_get(node, "concurrency")).is_some() {
-                gap(HostGapKind::Concurrency, None, "job concurrency requires the Workjet scheduler");
+            if node
+                .and_then(|node| document.map_get(node, "concurrency"))
+                .is_some()
+            {
+                gap(
+                    HostGapKind::Concurrency,
+                    None,
+                    "job concurrency requires the Workjet scheduler",
+                );
             }
             if !job.uses.is_empty() {
-                gap(HostGapKind::ReusableWorkflow, None, "reusable workflow execution is not implemented");
+                gap(
+                    HostGapKind::ReusableWorkflow,
+                    None,
+                    "reusable workflow execution is not implemented",
+                );
             }
             for (index, step) in job.steps.iter().enumerate() {
                 if step.uses.starts_with("docker://") {
-                    gap(HostGapKind::DockerAction, Some(index), "Docker actions are prohibited");
+                    gap(
+                        HostGapKind::DockerAction,
+                        Some(index),
+                        "Docker actions are prohibited",
+                    );
                 } else if !step.uses.is_empty() {
-                    gap(HostGapKind::ActionLoader, Some(index), "JavaScript/composite action loading is not implemented");
+                    gap(
+                        HostGapKind::ActionLoader,
+                        Some(index),
+                        "JavaScript/composite action loading is not implemented",
+                    );
                 }
             }
         }
-        Ok(Self { workflow, document: Rc::new(document), gaps })
+        Ok(Self {
+            workflow,
+            document: Rc::new(document),
+            gaps,
+        })
     }
 
     pub fn require_no_gaps(&self) -> Result<()> {
-        if self.gaps.is_empty() { return Ok(()); }
-        Err(anyhow!("unsupported host workflow features: {}", serde_json::to_string(&self.gaps)?))
+        if self.gaps.is_empty() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "unsupported host workflow features: {}",
+            serde_json::to_string(&self.gaps)?
+        ))
     }
 
     pub fn run(&self, job: &str) -> Result<Run> {
         if !self.workflow.jobs.contains_key(job) {
             return Err(anyhow!("unknown workflow job: {job}"));
         }
-        Ok(Run::new(self.workflow.clone(), Rc::clone(&self.document), job))
+        Ok(Run::new(
+            self.workflow.clone(),
+            Rc::clone(&self.document),
+            job,
+        ))
     }
 }
 
@@ -110,19 +160,26 @@ pub fn prepare_run_step(
     host: &HostEnvironment,
 ) -> Result<PreparedHostStep> {
     if !step.uses.is_empty() || step.run.is_empty() {
-        return Err(anyhow!("expected a run: step; uses: requires an action loader"));
+        return Err(anyhow!(
+            "expected a run: step; uses: requires an action loader"
+        ));
     }
     if step.id.is_empty() || step.id.contains(['/', '\\']) || step.id == ".." {
         return Err(anyhow!("step id must be a nonempty path component"));
     }
     if let Some(run) = &rc.run {
         let job = run.job().ok_or_else(|| anyhow!("unknown workflow job"))?;
-        let has_services = run.document().root()
+        let has_services = run
+            .document()
+            .root()
             .and_then(|root| run.document().map_get(root, "jobs"))
             .and_then(|jobs| run.document().map_get(jobs, &run.job_id))
-            .and_then(|job| run.document().map_get(job, "services")).is_some();
+            .and_then(|job| run.document().map_get(job, "services"))
+            .is_some();
         if job.raw_container.is_some() || has_services || !job.uses.is_empty() {
-            return Err(anyhow!("native step cannot bypass prohibited containers/services or a reusable workflow"));
+            return Err(anyhow!(
+                "native step cannot bypass prohibited containers/services or a reusable workflow"
+            ));
         }
     }
     rc.job_container = Some(crate::runner::run_context::ContainerPaths {
@@ -133,5 +190,8 @@ pub fn prepare_run_step(
     let (script, working_directory) =
         step_run::setup_shell_command(rc, git, status, step, env, Some(host))
             .map_err(|error| anyhow!("{error}"))?;
-    Ok(PreparedHostStep { script, working_directory })
+    Ok(PreparedHostStep {
+        script,
+        working_directory,
+    })
 }

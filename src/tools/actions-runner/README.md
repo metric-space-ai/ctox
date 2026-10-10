@@ -74,7 +74,7 @@ task for reruns:
 ```sh
 greppy bash-smart -- ~/.codex/bin/gpu-build-run.sh \
   --owner <thread-id> --task ctox-workjet-actions-s2-host --src "$PWD" -- \
-  bash -c 'ctox-prep.sh && cargo test -p ctox-actions-runner -j 2 -- --test-threads=2'
+  bash -c 'ctox-prep.sh && cargo test --locked -p ctox-actions-runner --no-fail-fast -j 2 -- --test-threads=2'
 ```
 
 The workspace lockfile must be updated with the member; validation then uses
