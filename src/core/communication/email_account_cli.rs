@@ -116,10 +116,12 @@ fn auth_results(root: &Path, message_key: &str) -> Result<Value> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .context("no inbound mail with this message key")?;
-    let results = serde_json::from_str::<Value>(&metadata_json)
-        .ok()
-        .and_then(|metadata| metadata.get("authenticationResults").cloned())
+    let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
+    let results = metadata
+        .get("authenticationResults")
+        .cloned()
         .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok());
+    let trust_headers = metadata.get("trustHeaders").cloned().unwrap_or(Value::Null);
     let trusted = trusted_authserv_ids(
         &crate::inference::runtime_env::env_or_config(root, TRUSTED_AUTHSERV_IDS_KEY)
             .unwrap_or_default(),
@@ -134,6 +136,7 @@ fn auth_results(root: &Path, message_key: &str) -> Result<Value> {
         "authentication_results": results.unwrap_or_default(),
         "trusted_authserv_ids": trusted,
         "authenticated": authenticated,
+        "trust_headers": trust_headers,
     }))
 }
 

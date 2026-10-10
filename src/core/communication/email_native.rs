@@ -966,6 +966,20 @@ fn store_provider_message(
         // Mails stored before intake kept the Authentication-Results get them
         // on the next poll; a stored value is never replaced.
         if matches!(options.provider.as_str(), "ews" | "owa") {
+            if let Some(trust) = item
+                .metadata
+                .get("trustHeaders")
+                .filter(|value| value["present"] == true)
+            {
+                conn.execute(
+                    r#"UPDATE communication_messages
+                       SET metadata_json = json_set(metadata_json, '$.trustHeaders', json(?1))
+                       WHERE message_key = ?2 AND channel = 'email' AND account_key = ?3
+                         AND remote_id = ?4 AND json_valid(metadata_json)
+                         AND json_type(metadata_json, '$.trustHeaders') IS NULL"#,
+                    rusqlite::params![trust.to_string(), message_key, account_key, item.remote_id],
+                )?;
+            }
             if let Some(results) = item
                 .metadata
                 .get("authenticationResults")
@@ -3698,6 +3712,7 @@ fn normalize_ews_mail_item(
             "references": descendant_text(node, "References").unwrap_or_default(),
             "attachments": ews_file_attachment_metadata(node),
             "authenticationResults": ews_authentication_results(node),
+            "trustHeaders": ews_trust_headers(node),
         }),
     })
 }
@@ -3723,6 +3738,62 @@ fn ews_authentication_results(node: roxmltree::Node<'_, '_>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Headers a receiving system may use to vouch for a sender, kept to decide
+/// which trust anchor an instance's mail path offers: every header name, and
+/// the values of the few authentication headers. Bodies of other headers are
+/// not kept.
+const EWS_TRUST_HEADER_VALUES: [&str; 6] = [
+    "ARC-Authentication-Results",
+    "Received-SPF",
+    "X-MS-Exchange-Organization-AuthAs",
+    "X-MS-Exchange-Organization-AuthSource",
+    "X-MS-Exchange-Organization-SCL",
+    "X-Forefront-Antispam-Report",
+];
+
+fn ews_trust_headers(node: roxmltree::Node<'_, '_>) -> Value {
+    let Some(headers) = node
+        .children()
+        .find(|child| child.is_element() && child.tag_name().name() == "InternetMessageHeaders")
+    else {
+        return json!({"present": false});
+    };
+    let mut names = BTreeSet::new();
+    let mut values = serde_json::Map::new();
+    for header in headers
+        .children()
+        .filter(|header| header.is_element() && header.tag_name().name() == "InternetMessageHeader")
+    {
+        let Some(name) = header.attribute("HeaderName") else {
+            continue;
+        };
+        names.insert(name.to_ascii_lowercase());
+        if let Some(wanted) = EWS_TRUST_HEADER_VALUES
+            .iter()
+            .find(|wanted| wanted.eq_ignore_ascii_case(name))
+        {
+            let value = header
+                .text()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if let Some(list) = values
+                .entry(wanted.to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+            {
+                list.push(json!(value));
+            }
+        }
+    }
+    json!({
+        "present": true,
+        "names": names.into_iter().collect::<Vec<_>>(),
+        "values": values,
+    })
 }
 
 /// File attachments listed by GetItem (`item:Attachments`). Inline images of
@@ -6132,6 +6203,17 @@ mod tests {
             r#"<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"/>"#,
         )?;
         assert!(super::ews_authentication_results(without.root_element()).is_empty());
+        let trust = super::ews_trust_headers(document.root_element());
+        assert_eq!(
+            trust["names"],
+            serde_json::json!(["authentication-results", "received"])
+        );
+        assert_eq!(trust["present"], true);
+        assert!(trust["values"].get("Received").is_none());
+        assert_eq!(
+            super::ews_trust_headers(without.root_element())["present"],
+            false
+        );
         Ok(())
     }
 
