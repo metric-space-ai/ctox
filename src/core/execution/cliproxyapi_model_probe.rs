@@ -281,7 +281,9 @@ pub(crate) async fn check_claude_model(
             .header("X-CTOX-Account", &account)
             .header("X-CTOX-Provider", "claude")
             .header("X-CTOX-Purpose", "model-check")
-            .json(&body)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+
             .send()
             .await
             .map_err(|_| IoFailure::Transport)?;
