@@ -54,6 +54,15 @@ fn queue_job_has_independent_business_session(job: &QueuedPrompt) -> bool {
         && business_os_app_module_target_from_metadata(&job.queue_task_metadata).is_none()
 }
 
+/// The serial slot owns external communication. A business chat task that an
+/// isolated session can run stays with that pool whenever the pool exists:
+/// taken here, it held the serial slot for its whole research turn while an
+/// owner mail waited behind it (thesen 10.10.2026, over an hour).
+fn serial_slot_leaves_task_to_business_pool(root: &Path, task: &channels::QueueTaskView) -> bool {
+    QueueWorkerCapacity::load(root).is_ok_and(|capacity| capacity.max_workers > 1)
+        && queue_job_has_independent_business_session(&queued_prompt_from_queue_task(task.clone()))
+}
+
 /// Reserve every admitted slot before spawning, so asynchronous worker startup
 /// cannot overbook the pool. The normal serial router retains ownership of
 /// external communication, app authoring and jobs without isolated sessions.
@@ -212,6 +221,63 @@ mod queue_capacity_tests {
         assert!(shared.pending_prompts.is_empty());
         assert!(shared.serial_prompt_starting);
         assert!(serial_prompt_admission_is_busy(&shared));
+        Ok(())
+    }
+
+    #[test]
+    fn serial_slot_leaves_business_chats_to_the_pool() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let chat = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Neurecherche".into(),
+                prompt: "Research one lead".into(),
+                thread_key: "research/one".into(),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(
+                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                ),
+            },
+        )?;
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        // With a pool the serial slot stays free for communication.
+        runtime_env::set_runtime_env_value(root.path(), "queue.worker_capacity", "2")?;
+        assert!(
+            maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root.path(), &state)?.is_none()
+        );
+        let pooled = lease_business_queue_capacity(root.path(), &state)?;
+        assert_eq!(pooled.len(), 1);
+        assert_eq!(
+            pooled[0].leased_message_keys,
+            vec![chat.message_key.clone()]
+        );
+        // Without a pool the serial slot is the only worker and takes it.
+        let single = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Neurecherche".into(),
+                prompt: "Research another lead".into(),
+                thread_key: "research/two".into(),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(
+                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                ),
+            },
+        )?;
+        runtime_env::set_runtime_env_value(root.path(), "queue.worker_capacity", "1")?;
+        let mut shared = lock_shared_state(&state);
+        shared.durable_queue_lease_in_progress = false;
+        shared.parallel_queue_jobs.clear();
+        drop(shared);
+        let serial = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root.path(), &state)?
+            .expect("a single worker runs the chat itself");
+        assert_eq!(serial.leased_message_keys, vec![single.message_key]);
         Ok(())
     }
 
