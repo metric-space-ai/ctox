@@ -204,7 +204,7 @@ impl NativeTransferAccountHost {
         apply: impl FnOnce(&str) -> Result<T>,
     ) -> Result<T> {
         #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct CredentialBinding {
             version: u8,
             account: NativeTransferAccount,

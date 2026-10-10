@@ -38,7 +38,7 @@ fn store(
     );
     let authority = serde_json::to_string(authority).unwrap();
     let credential =
-        json!({"version":1,"account":credential_account,"capability_token":token}).to_string();
+        json!({"version":1,"account":credential_account,"capabilityToken":token}).to_string();
     crate::secrets::write_secret_records(
         root,
         &[
