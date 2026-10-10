@@ -9,7 +9,7 @@ Both Responses and Messages, buffered and streaming, use the same pin. A failed
 pinned account cannot rotate to another account; unpinned scheduling is unchanged.
 Kimi routes also enforce exact configured account/model matching.
 
-Kimi reauthentication retains the account's enablement, configured models,
+Kimi reauthentication retains the latest saved account's enablement, configured models,
 priority, weight and endpoint profile. It replaces only the encrypted credential
 tuple and its private references; a disabled account remains unavailable and
 the existing account keeps its position in the stack; other accounts retain their policy.
