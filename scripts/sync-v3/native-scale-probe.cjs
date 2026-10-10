@@ -138,19 +138,28 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
             const selected = args[1] === 'masterWrite' && args[4] === leadName
               && JSON.stringify(args[2]).includes(marker);
             const connection = selected ? peer.connections?.get?.(args[0]) : null;
+            let recordProof;
             if (selected) {
-              const observedAt = performance.now();
-              const job = Promise.resolve(connection?.peer?.getStats?.()).then(stats => {
-                requestProofs.push({ sample: index, method: args[1], peerId: args[0], observedAt,
-                  channelState: connection?.channel?.readyState || null,
-                  pairs: stats ? trace.pairsFor(stats) : [] });
-              });
-              job.catch(() => {}); proofJobs.push(job);
+              const proof = { sample: index, method: args[1], peerId: args[0], observedAt: performance.now(),
+                channelState: connection?.channel?.readyState || null, pairs: [], snapshots: [] };
+              requestProofs.push(proof);
+              recordProof = boundary => {
+                const job = Promise.resolve(connection?.peer?.getStats?.()).then(stats => {
+                  const pairs = stats ? trace.pairsFor(stats) : [];
+                  proof.snapshots.push({ boundary, capturedAt: performance.now(), pairs,
+                    candidateStates: stats ? [...stats.values()].filter(item => item.type === 'candidate-pair')
+                      .map(item => ({ id: item.id, state: item.state, nominated: item.nominated })) : [] });
+                  proof.pairs.push(...pairs);
+                });
+                job.catch(() => {}); proofJobs.push(job);
+              };
+              recordProof('before-request');
             }
             try {
               const requestStartedAt = performance.now();
               const response = await original.apply(this, args);
               if (selected) {
+                recordProof('after-response');
                 if (!connection || peer.connections?.get?.(args[0]) !== connection) rejectAck(Error('Accepted write changed its actual request connection'));
                 attempts.push({ startAt: requestStartedAt, endAt: performance.now(), conflicts: Array.isArray(response) ? response.length : null });
                 if (!Array.isArray(response)) rejectAck(Error('Native write did not return the canonical ACK/conflict result'));
