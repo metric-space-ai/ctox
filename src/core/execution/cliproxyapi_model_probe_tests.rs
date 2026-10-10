@@ -124,15 +124,14 @@ fn local_state_and_cooldown_failures_override_any_prior_upstream_witness() {
             ProbeFailure::AccountUnavailable,
         ),
     ] {
-        let mut reply = response(503, Some("auth"), Some(401),
-            json!({"error":{"source":"gateway","code":code,"retry_at_ms":deadline}}));
-        reply.selected_account = None;
-        let result = classify(
-            MODEL,
-            ACCOUNT,
-            reply,
-            Instant::now(),
+        let mut reply = response(
+            503,
+            Some("auth"),
+            Some(401),
+            json!({"error":{"source":"gateway","code":code,"retry_at_ms":deadline}}),
         );
+        reply.selected_account = None;
+        let result = classify(MODEL, ACCOUNT, reply, Instant::now());
         assert_eq!(result.status, ProbeStatus::Unavailable);
         assert_eq!(result.source, ProbeSource::Gateway);
         assert_eq!(result.failure, Some(expected));
