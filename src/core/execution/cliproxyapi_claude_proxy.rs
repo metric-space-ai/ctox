@@ -366,10 +366,20 @@ impl NativeClaudeLeaseModelReply {
         publish: impl FnOnce(&[u8], &NativeClaudeModelExchange) -> Result<T>,
     ) -> Result<Option<T>> {
         ensure!(self.slot.is_some(), "native model stream already finished");
-        let mut body = self
+        let mut body = match self
             .proxy
             .while_current(self.deadline, self.body.lock())
-            .await?;
+            .await
+        {
+            Ok(body) => body,
+            Err(error) => {
+                if let Ok(mut body) = self.body.try_lock() {
+                    *body = NativeClaudeBody::Retired;
+                }
+                self.slot.take();
+                return Err(error);
+            }
+        };
         let NativeClaudeBody::Stream(ref mut response) = *body else {
             self.slot.take();
             anyhow::bail!("native model reply is not streaming or is retired");
