@@ -57,8 +57,73 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<Value> {
             let address = address.context("email-account sync requires --address")?;
             super::email_native::sync_registered_account(root, address, limit)
         }
-        _ => bail!("usage: ctox channel email-account list | upsert --stdin | sync --address <address> [--limit <1..100>]"),
+        Some("trusted-authserv") => trusted_authserv(root, &args[1..]),
+        Some("auth-results") if args.len() == 3 && args[1] == "--message-key" => {
+            auth_results(root, &args[2])
+        }
+        _ => bail!("usage: ctox channel email-account list | upsert --stdin | sync --address <address> [--limit <1..100>] | trusted-authserv [--set <id,id> | --clear] | auth-results --message-key <key>"),
     }
+}
+
+/// Receiving servers whose `Authentication-Results` decide whether a mail's
+/// From domain is authenticated (`sender_authentication`).
+fn trusted_authserv(root: &Path, args: &[String]) -> Result<Value> {
+    use super::sender_authentication::{trusted_authserv_ids, TRUSTED_AUTHSERV_IDS_KEY};
+    use crate::inference::runtime_env;
+    match args {
+        [] => {}
+        [flag, ids] if flag == "--set" => {
+            let ids = trusted_authserv_ids(ids);
+            if ids.is_empty() {
+                bail!("trusted-authserv --set needs at least one authserv-id");
+            }
+            runtime_env::set_runtime_env_value(root, TRUSTED_AUTHSERV_IDS_KEY, &ids.join(","))?;
+        }
+        [flag] if flag == "--clear" => {
+            runtime_env::clear_runtime_env_value(root, TRUSTED_AUTHSERV_IDS_KEY)?;
+        }
+        _ => bail!("usage: ctox channel email-account trusted-authserv [--set <id,id> | --clear]"),
+    }
+    let ids = trusted_authserv_ids(
+        &runtime_env::env_or_config(root, TRUSTED_AUTHSERV_IDS_KEY).unwrap_or_default(),
+    );
+    Ok(json!({"ok": true, "trusted_authserv_ids": ids}))
+}
+
+/// The stored `Authentication-Results` of one inbound mail and whether they
+/// authenticate its From domain under the current trusted servers.
+fn auth_results(root: &Path, message_key: &str) -> Result<Value> {
+    use super::sender_authentication::{
+        sender_domain_authenticated, trusted_authserv_ids, TRUSTED_AUTHSERV_IDS_KEY,
+    };
+    let conn = crate::communication_store::open_channel_db(&crate::paths::core_db(root))?;
+    let (sender, metadata_json): (String, String) = conn
+        .query_row(
+            "SELECT sender_address, metadata_json FROM communication_messages
+             WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound'",
+            [message_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("no inbound mail with this message key")?;
+    let results = serde_json::from_str::<Value>(&metadata_json)
+        .ok()
+        .and_then(|metadata| metadata.get("authenticationResults").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok());
+    let trusted = trusted_authserv_ids(
+        &crate::inference::runtime_env::env_or_config(root, TRUSTED_AUTHSERV_IDS_KEY)
+            .unwrap_or_default(),
+    );
+    let authenticated = results
+        .as_deref()
+        .is_some_and(|results| sender_domain_authenticated(results, &trusted, &sender));
+    Ok(json!({
+        "ok": true,
+        "sender": sender,
+        "headers_captured": results.is_some(),
+        "authentication_results": results.unwrap_or_default(),
+        "trusted_authserv_ids": trusted,
+        "authenticated": authenticated,
+    }))
 }
 
 #[cfg(test)]
@@ -87,6 +152,34 @@ mod tests {
         assert!(!error.contains("private-fixture"));
         let args = ["sync", "--address", "missing@example.test"].map(str::to_owned);
         assert!(run(dir.path(), &args).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_authserv_ids_are_set_normalized_and_cleared() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+        let set = run(
+            root,
+            &args(&[
+                "trusted-authserv",
+                "--set",
+                " MX.Example.test, ,b.example.test",
+            ]),
+        )?;
+        assert_eq!(
+            set["trusted_authserv_ids"],
+            json!(["mx.example.test", "b.example.test"])
+        );
+        assert!(run(root, &args(&["trusted-authserv", "--set", " , "])).is_err());
+        let cleared = run(root, &args(&["trusted-authserv", "--clear"]))?;
+        assert_eq!(cleared["trusted_authserv_ids"], json!([]));
         Ok(())
     }
 }
