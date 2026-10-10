@@ -17,7 +17,8 @@ fn account(access: &str, refresh: &str) -> Captured {
             "models":[MODEL],
             "access_token_secret":{"scope":"provider-subscriptions","name":"sdk-access"},
             "refresh_token_secret":{"scope":"provider-subscriptions","name":"sdk-refresh"}
-        })).unwrap(),
+        }))
+        .unwrap(),
         credentials: ClaudeStoredCredentials::new(
             SecretString::new(access).unwrap(),
             SecretString::new(refresh).unwrap(),
@@ -38,7 +39,8 @@ fn persist(root: &std::path::Path, value: &Captured) -> Result<()> {
 }
 
 #[test]
-fn holder_reads_exact_encrypted_account_and_exposes_no_refresh_in_sdk_configuration() -> Result<()> {
+fn holder_reads_exact_encrypted_account_and_exposes_no_refresh_in_sdk_configuration() -> Result<()>
+{
     let root = tempfile::tempdir()?;
     let expected = account("access-private", "refresh-private");
     persist(root.path(), &expected)?;
@@ -56,24 +58,35 @@ fn holder_reads_exact_encrypted_account_and_exposes_no_refresh_in_sdk_configurat
         };
         assert_eq!(configuration.model(), MODEL);
         assert_eq!(configuration.upstream(), "https://api.anthropic.com");
-        assert_eq!(configuration.access_token().expose_secret(), "access-private");
+        assert_eq!(
+            configuration.access_token().expose_secret(),
+            "access-private"
+        );
         assert_eq!(configuration.private_binding(), binding);
-        assert_eq!(format!("{:?}", configuration.access_token()), "SecretString([REDACTED])");
+        assert_eq!(
+            format!("{:?}", configuration.access_token()),
+            "SecretString([REDACTED])"
+        );
         Ok(())
     })?;
     Ok(())
 }
 
 #[test]
-fn account_access_refresh_and_configuration_changes_permanently_retire_a_reservation() -> Result<()> {
+fn account_access_refresh_and_configuration_changes_permanently_retire_a_reservation() -> Result<()>
+{
     for change in ["access", "refresh", "configuration"] {
         let previous = account("access-private", "refresh-private");
         let binding = fingerprint(&previous)?;
         let state = Mutex::new(Some(previous));
         let mut current = account("access-private", "refresh-private");
         match change {
-            "access" => current.credentials = account("replacement-access", "refresh-private").credentials,
-            "refresh" => current.credentials = account("access-private", "replacement-refresh").credentials,
+            "access" => {
+                current.credentials = account("replacement-access", "refresh-private").credentials
+            }
+            "refresh" => {
+                current.credentials = account("access-private", "replacement-refresh").credentials
+            }
             "configuration" => current.account.priority += 1,
             _ => unreachable!(),
         }
@@ -81,13 +94,18 @@ fn account_access_refresh_and_configuration_changes_permanently_retire_a_reserva
         assert!(with_captured_current(&state, &current, &binding, |_| {
             invoked = true;
             Ok(())
-        }).is_err());
+        })
+        .is_err());
         assert!(!invoked);
         assert!(state.lock().unwrap().is_none());
         // Even restoring the old credential cannot resurrect this reservation.
-        assert!(with_captured_current(&state, &account("access-private", "refresh-private"), &binding, |_| {
-            panic!("retired snapshot cannot dispatch")
-        }).is_err());
+        assert!(with_captured_current(
+            &state,
+            &account("access-private", "refresh-private"),
+            &binding,
+            |_| { panic!("retired snapshot cannot dispatch") }
+        )
+        .is_err());
     }
     Ok(())
 }
@@ -100,14 +118,13 @@ fn relogin_in_real_secret_store_never_reuses_the_old_sdk_account() -> Result<()>
     let binding = fingerprint(&old)?;
     let state = Mutex::new(Some(stable_capture(root.path(), "native-claude")?));
     let new = account("new-private-access", "new-private-refresh");
-    CtoxClaudeSecretStore::new(root.path()).store_credentials(
-        &new.account.credential_handles().unwrap(),
-        &new.credentials,
-    )?;
+    CtoxClaudeSecretStore::new(root.path())
+        .store_credentials(&new.account.credential_handles().unwrap(), &new.credentials)?;
     let current = stable_capture(root.path(), "native-claude")?;
     assert!(with_captured_current(&state, &current, &binding, |_| {
         panic!("old reservation cannot export a re-login credential")
-    }).is_err());
+    })
+    .is_err());
     assert!(state.lock().unwrap().is_none());
     assert!(validate(&current, &fingerprint(&current)?).is_ok());
     Ok(())
@@ -115,18 +132,32 @@ fn relogin_in_real_secret_store_never_reuses_the_old_sdk_account() -> Result<()>
 
 #[test]
 fn disabled_redirected_proxied_or_malformed_credentials_cannot_prepare_sdk_auth() -> Result<()> {
-    for mode in ["disabled", "http", "authority", "proxy", "whitespace", "control"] {
+    for mode in [
+        "disabled",
+        "http",
+        "authority",
+        "proxy",
+        "whitespace",
+        "control",
+    ] {
         let mut selected = account("access-private", "refresh-private");
         match mode {
             "disabled" => selected.account.disabled = true,
             "http" => selected.account.upstream_scheme = "http".into(),
             "authority" => selected.account.upstream_authority = "elsewhere.invalid".into(),
-            "proxy" => selected.account.proxy_url_secret = Some(selected.account.access_token_secret.clone()),
+            "proxy" => {
+                selected.account.proxy_url_secret =
+                    Some(selected.account.access_token_secret.clone())
+            }
             "whitespace" => selected.credentials = account(" ", "refresh-private").credentials,
-            "control" => selected.credentials = account("bad\ncredential", "refresh-private").credentials,
+            "control" => {
+                selected.credentials = account("bad\ncredential", "refresh-private").credentials
+            }
             _ => unreachable!(),
         }
-        let error = validate(&selected, &fingerprint(&selected)?).unwrap_err().to_string();
+        let error = validate(&selected, &fingerprint(&selected)?)
+            .unwrap_err()
+            .to_string();
         assert!(!error.contains("access-private"));
         assert!(!error.contains("refresh-private"));
         assert!(!error.contains("bad\ncredential"));
@@ -144,9 +175,13 @@ fn release_is_idempotent_and_cannot_be_recovered_by_a_retained_callback() -> Res
     release_captured(&state);
     release_captured(&state);
     assert!(state.lock().unwrap().is_none());
-    assert!(with_captured_current(&state, &account("access-private", "refresh-private"), &binding, |_| {
-        panic!("released SDK account cannot dispatch")
-    }).is_err());
+    assert!(with_captured_current(
+        &state,
+        &account("access-private", "refresh-private"),
+        &binding,
+        |_| { panic!("released SDK account cannot dispatch") }
+    )
+    .is_err());
     Ok(())
 }
 
@@ -156,9 +191,12 @@ fn failed_callback_still_allows_credential_retirement() -> Result<()> {
     let binding = fingerprint(&selected)?;
     let state = Mutex::new(Some(selected));
     let panic = std::panic::catch_unwind(|| {
-        let _: Result<()> = with_captured_current(&state, &account("access-private", "refresh-private"), &binding, |_| {
-            panic!("controlled SDK callback failure")
-        });
+        let _: Result<()> = with_captured_current(
+            &state,
+            &account("access-private", "refresh-private"),
+            &binding,
+            |_| panic!("controlled SDK callback failure"),
+        );
     });
     assert!(panic.is_err());
     release_captured(&state);

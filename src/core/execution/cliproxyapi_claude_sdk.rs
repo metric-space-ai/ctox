@@ -7,9 +7,7 @@
 use super::cliproxyapi_claude_catalog::{capture, fingerprint, Captured};
 use crate::business_os::{
     consumer_authority::AdmittedConsumerAuthority,
-    provider_federation::{
-        capture_consumable_model, ConsumableModel, SupervisorModelEligibility,
-    },
+    provider_federation::{capture_consumable_model, ConsumableModel, SupervisorModelEligibility},
 };
 use anyhow::{ensure, Context, Result};
 use ctox_cliproxyapi::internal::auth::claude::SecretString;
@@ -56,7 +54,10 @@ pub(crate) struct NativeClaudeSdkAccountReservation {
 }
 
 fn validate(captured: &Captured, expected_binding: &str) -> Result<()> {
-    ensure!(!captured.account.disabled, "native Claude account is disabled");
+    ensure!(
+        !captured.account.disabled,
+        "native Claude account is disabled"
+    );
     ensure!(
         captured.account.upstream_scheme == "https"
             && captured.account.upstream_authority == "api.anthropic.com"
@@ -65,9 +66,7 @@ fn validate(captured: &Captured, expected_binding: &str) -> Result<()> {
     );
     let access = captured.credentials.access_token().expose_secret();
     ensure!(
-        !access.trim().is_empty()
-            && access.len() <= 8192
-            && !access.chars().any(char::is_control),
+        !access.trim().is_empty() && access.len() <= 8192 && !access.chars().any(char::is_control),
         "native Claude SDK credential is unavailable"
     );
     ensure!(
@@ -91,7 +90,6 @@ fn stable_capture(root: &std::path::Path, id: &str) -> Result<Captured> {
     Ok(first)
 }
 
-
 fn with_captured_current<T>(
     state: &Mutex<Option<Captured>>,
     current: &Captured,
@@ -101,7 +99,9 @@ fn with_captured_current<T>(
     let mut captured = state
         .try_lock()
         .map_err(|_| anyhow::anyhow!("native Claude account reservation unavailable"))?;
-    let prior = captured.as_ref().context("native Claude account reservation released")?;
+    let prior = captured
+        .as_ref()
+        .context("native Claude account reservation released")?;
     if current != prior {
         captured.take();
         anyhow::bail!("native Claude account/configuration changed");
@@ -115,7 +115,10 @@ fn with_captured_current<T>(
 
 fn release_captured(state: &Mutex<Option<Captured>>) {
     // A failed native callback must never prevent credential retirement.
-    state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
 }
 
 impl NativeClaudeSdkAccountReservation {
@@ -179,10 +182,14 @@ impl NativeClaudeSdkAccountReservation {
         }
         // Do not reload credentials for an already retired reservation.
         {
-            let captured = self.captured.try_lock().map_err(|_| {
-                anyhow::anyhow!("native Claude account reservation unavailable")
-            })?;
-            ensure!(captured.is_some(), "native Claude account reservation released");
+            let captured = self
+                .captured
+                .try_lock()
+                .map_err(|_| anyhow::anyhow!("native Claude account reservation unavailable"))?;
+            ensure!(
+                captured.is_some(),
+                "native Claude account reservation released"
+            );
         }
         let current = match stable_capture(
             &self.root,
@@ -194,15 +201,16 @@ impl NativeClaudeSdkAccountReservation {
                 return Err(error);
             }
         };
-        let result = with_captured_current(&self.captured, &current, &self.private_binding, |prior| {
-            self.selected.with_current(authority, |_, selected| {
-                apply(NativeClaudeSdkConfiguration {
-                    model: selected.model(),
-                    access_token: prior.credentials.access_token(),
-                    private_binding: &self.private_binding,
+        let result =
+            with_captured_current(&self.captured, &current, &self.private_binding, |prior| {
+                self.selected.with_current(authority, |_, selected| {
+                    apply(NativeClaudeSdkConfiguration {
+                        model: selected.model(),
+                        access_token: prior.credentials.access_token(),
+                        private_binding: &self.private_binding,
+                    })
                 })
-            })
-        });
+            });
         if result.is_err() {
             self.release();
         }
