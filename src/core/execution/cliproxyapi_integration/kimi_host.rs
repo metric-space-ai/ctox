@@ -280,17 +280,24 @@ pub fn install_kimi_subscription(
         .refresh_token()
         .map(|_| secret_ref(account_id, "refresh-token"));
     let state = secret_ref(account_id, "state");
-    let config = KimiSubscriptionAccountConfig {
-        id: account_id.to_owned(),
-        disabled: false,
-        priority: 100,
-        weight: 1,
-        models: vec![DEFAULT_KIMI_SUBSCRIPTION_MODEL.to_owned()],
-        access_token_secret: access.clone(),
-        refresh_token_secret: refresh.clone(),
-        state_secret: state.clone(),
-        endpoint_profile: Default::default(),
-    };
+    // Reauthentication replaces credentials, not the user's account policy.
+    // In particular, a disabled account must not re-enter the inference pool.
+    let mut config = previous
+        .clone()
+        .unwrap_or_else(|| KimiSubscriptionAccountConfig {
+            id: account_id.to_owned(),
+            disabled: false,
+            priority: 100,
+            weight: 1,
+            models: vec![DEFAULT_KIMI_SUBSCRIPTION_MODEL.to_owned()],
+            access_token_secret: access.clone(),
+            refresh_token_secret: refresh.clone(),
+            state_secret: state.clone(),
+            endpoint_profile: Default::default(),
+        });
+    config.access_token_secret = access.clone();
+    config.refresh_token_secret = refresh.clone();
+    config.state_secret = state.clone();
     config
         .validate()
         .map_err(|_| anyhow::anyhow!("Kimi account config is invalid"))?;
@@ -324,10 +331,18 @@ pub fn install_kimi_subscription(
     }
     crate::secrets::write_secret_records(root, &writes)?;
     let revision = mutate_provider_integration_config(root, |runtime| {
-        runtime
+        if let Some(account) = runtime
             .kimi_subscription_accounts
-            .retain(|account| account.id != account_id);
-        runtime.kimi_subscription_accounts.push(config.clone());
+            .iter_mut()
+            .find(|account| account.id == account_id)
+        {
+            // Apply only credentials to the latest saved account policy.
+            account.access_token_secret = config.access_token_secret.clone();
+            account.refresh_token_secret = config.refresh_token_secret.clone();
+            account.state_secret = config.state_secret.clone();
+        } else {
+            runtime.kimi_subscription_accounts.push(config.clone());
+        }
     })?;
     if let Some(previous) = previous {
         let current_refs = [
@@ -1121,6 +1136,71 @@ data: [DONE]
         let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(expired, "device"));
         install_kimi_subscription(root.path(), "expired", &storage).unwrap();
         assert!(build_kimi_subscription_route(root.path(), "expired").is_err());
+    }
+
+    #[test]
+    fn relogin_preserves_account_policy_while_replacing_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        install_kimi_subscription(root.path(), "kimi-policy", &token_storage()).unwrap();
+        install_kimi_subscription(root.path(), "kimi-sibling", &token_storage()).unwrap();
+        mutate_provider_integration_config(root.path(), |runtime| {
+            let account = runtime
+                .kimi_subscription_accounts
+                .iter_mut()
+                .find(|account| account.id == "kimi-policy")
+                .unwrap();
+            account.disabled = true;
+            account.priority = -10;
+            account.weight = 3;
+            // Observed in the live Kimi catalog, not a synthesized model ID.
+            account.models = vec!["k3".to_owned()];
+        })
+        .unwrap();
+        let before = load_provider_integration_config(root.path()).unwrap();
+        let mut expected = before.config.clone();
+        let account = expected
+            .kimi_subscription_accounts
+            .iter_mut()
+            .find(|account| account.id == "kimi-policy")
+            .unwrap();
+        // The new tuple deliberately has no refresh token. Only that private
+        // reference changes; both accounts' routing policy must stay intact.
+        account.refresh_token_secret = None;
+        let old_version = crate::secrets::secret_record_content_version(
+            root.path(),
+            PROVIDER_SECRET_SCOPE,
+            "kimi-policy-access-token",
+        )
+        .unwrap();
+        let rotated = KimiTokenData::new(
+            SecretString::new("rotated-access-kimi-do-not-leak").unwrap(),
+            None,
+            "Bearer",
+            Some(SystemTime::now() + Duration::from_secs(3600)),
+            "kimi-code",
+        );
+        let storage =
+            KimiTokenStorage::from_bundle(&KimiAuthBundle::new(rotated, "rotated-device"));
+        install_kimi_subscription(root.path(), "kimi-policy", &storage).unwrap();
+        let after = load_provider_integration_config(root.path()).unwrap();
+        assert_eq!(after.revision, before.revision + 1);
+        assert_eq!(after.config, expected);
+        assert_ne!(
+            crate::secrets::secret_record_content_version(
+                root.path(),
+                PROVIDER_SECRET_SCOPE,
+                "kimi-policy-access-token",
+            )
+            .unwrap(),
+            old_version
+        );
+        assert!(!crate::secrets::secret_exists(
+            root.path(),
+            PROVIDER_SECRET_SCOPE,
+            "kimi-policy-refresh-token",
+        )
+        .unwrap());
+        assert!(build_kimi_subscription_route(root.path(), "kimi-policy").is_err());
     }
 
     #[test]
