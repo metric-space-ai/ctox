@@ -140,6 +140,8 @@ pub(crate) mod workjet_project_kpis_contract;
 pub(crate) mod workjet_supervisor_execution_contract;
 #[path = "workjet_supervisor_luma_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_luma_contract;
+#[path = "workjet_supervisor_route_computation_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_route_computation_contract;
 #[path = "workjet_supervisor_route_display_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_route_display_contract;
 #[path = "workjet_supervisor_source_contract.generated.rs"]

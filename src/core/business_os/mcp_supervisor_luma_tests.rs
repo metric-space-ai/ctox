@@ -1,7 +1,7 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
-const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
+pub(super) const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 // This is a real model ID from the authenticated Claude GET /models receipt
 // g3-claude-live-models-20261009.json. The following DB observations are fixtures,
 // never evidence of a real holder execution.
@@ -484,6 +484,56 @@ fn configured_route_display_native_fixture_corpus_rejects_private_and_unbound_cl
                 expected,
                 "{case}"
             );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn computed_route_v2_fixture_and_owner_commands_are_additive_reads() -> anyhow::Result<()> {
+    let spec: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-supervisor-route-computation-v2.json"
+    ))?;
+    for (key, expected) in [("valid_cases", true), ("invalid_cases", false)] {
+        for sample in spec[key].as_array().unwrap() {
+            assert_eq!(super::super::super::workjet_supervisor_route_computation_contract::validate_fixture(
+                sample["type"].as_str().unwrap(),sample["value"].clone()).is_ok(),expected,"{sample}");
+        }
+    }
+    let (root, _) = fixture(true)?;
+    for (i, command) in [
+        "ctox.workjet.project.supervisor.route.read.v2",
+        "ctox.workjet.project.supervisor.route.capabilities.v2",
+    ]
+    .iter()
+    .enumerate()
+    {
+        for (owner, expected) in [("owner", "completed"), ("foreign", "failed")] {
+            let result = crate::business_os::command_plane::accept_rxdb_business_command(
+                root.path(),
+                json!({"id":format!("v2-{i}-{owner}"),"module":"ctox","command_type":command,
+                  "payload":{"project_id":"project","thread_id":THREAD},
+                  "client_context":{"actor":{"id":owner,"role":"chef","is_admin":true}}}),
+            );
+            if expected == "failed" {
+                assert!(
+                    result.is_err()
+                        || result
+                            .as_ref()
+                            .is_ok_and(|value| value["status"] == "failed"),
+                    "{result:?}"
+                );
+                continue;
+            }
+            let result = result?;
+            assert_eq!(result["status"], expected, "{result}");
+            if owner == "owner" && i == 0 {
+                assert!(
+                    result["result"]["actual"].is_null(),
+                    "selection is not computation"
+                );
+                assert_eq!(result["result"]["configured"]["luma_id"], "project-luma");
+            }
         }
     }
     Ok(())
