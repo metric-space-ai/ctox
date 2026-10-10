@@ -5,6 +5,7 @@
 //! This queue never creates a harness, worktree or worker itself.
 use super::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub(super) const TOOL: &str = "business_os.workjet_worker_dispatch";
