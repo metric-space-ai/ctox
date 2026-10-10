@@ -10,7 +10,7 @@ use ctox_cliproxyapi::internal::{
 // Verified account GET/models: g3-claude-live-models-20261009.json.
 const MODEL: &str = "claude-opus-5-5";
 
-fn account(access: &str, refresh: &str) -> Captured {
+pub(super) fn account(access: &str, refresh: &str) -> Captured {
     Captured {
         account: serde_json::from_value(serde_json::json!({
             "id":"native-claude",
@@ -26,7 +26,7 @@ fn account(access: &str, refresh: &str) -> Captured {
     }
 }
 
-fn persist(root: &std::path::Path, value: &Captured) -> Result<()> {
+pub(super) fn persist(root: &std::path::Path, value: &Captured) -> Result<()> {
     let runtime: CliproxyRuntimeConfig = serde_json::from_value(serde_json::json!({
         "claude_accounts":[value.account],
     }))?;

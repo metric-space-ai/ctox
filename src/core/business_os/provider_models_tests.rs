@@ -361,3 +361,33 @@ fn captured_binding_rejects_policy_catalog_identity_and_private_configuration_ch
     assert!(assert_same_binding(&captured, &current).is_err());
     Ok(())
 }
+
+#[test]
+fn held_policy_recheck_keeps_exact_identity_and_revision_pins() -> Result<()> {
+    let f = Fixture::new()?;
+    let state = f.adopt(&[account("native")])?;
+    let id = account_id(&state).to_owned();
+    let now = store::now_ms() as i64;
+    observe(&f, &id, 1, &[CURRENT], now)?;
+    select_models(&f, &[CURRENT], now)?;
+    let facts = f.facts("consumer");
+    let captured = consumable_model(&f.conn, &facts, &id, 1, CURRENT, now)?;
+
+    // The existing controller supplies this held policy connection. The
+    // account check must not open another store or enter its transport again.
+    let tx = f.conn.unchecked_transaction()?;
+    captured.assert_current_in_policy(&facts, &tx)?;
+    let mut other = facts.clone();
+    other.device_id = "different-device".into();
+    assert!(captured.assert_current_in_policy(&other, &tx).is_err());
+    tx.rollback()?;
+
+    select_models(&f, &[], now)?;
+    select_models(&f, &[CURRENT], now)?;
+    assert!(captured.assert_current_in_policy(&facts, &f.conn).is_err());
+    let fresh = consumable_model(&f.conn, &facts, &id, 1, CURRENT, now)?;
+    fresh.assert_current_in_policy(&facts, &f.conn)?;
+    set_native_binding(&f.conn, &id, Some(&"b".repeat(64)))?;
+    assert!(fresh.assert_current_in_policy(&facts, &f.conn).is_err());
+    Ok(())
+}
