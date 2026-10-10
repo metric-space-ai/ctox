@@ -207,7 +207,10 @@ pub fn compile_query_sql(
 ) -> Option<CompiledSqliteQuery> {
     let (where_sql, mut params) = compile_selector_sql(primary_path, &query.selector)?;
     let order_sql = compile_order_sql(primary_path, query)?;
-    let mut sql = format!("SELECT data FROM {}", quote_identifier(table));
+    let mut sql = format!(
+        "SELECT data, revision, deleted, lastWriteTime FROM {}",
+        quote_identifier(table)
+    );
     if !where_sql.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&where_sql);
@@ -343,7 +346,7 @@ pub fn compile_query_plan_candidate_sql(
         .collect::<Vec<_>>()
         .join(", ");
     let mut sql = format!(
-        "SELECT data FROM {} WHERE {}",
+        "SELECT data, revision, deleted, lastWriteTime FROM {} WHERE {}",
         quote_identifier(table),
         clauses.join(" AND ")
     );
@@ -366,7 +369,7 @@ fn decode_document_json(data: &str) -> RxResult<Value> {
     })
 }
 
-fn decode_document_row(
+pub(super) fn decode_document_row(
     revision: Option<String>,
     deleted: bool,
     last_write_time: f64,
@@ -424,12 +427,17 @@ where
     let mut statement = conn.prepare(&compiled.sql).map_err(sqlite_error)?;
     let rows = statement
         .query_map(params_from_iter(compiled.params.iter()), |row| {
-            row.get::<_, String>(0)
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
         })
         .map_err(sqlite_error)?;
     for row in rows {
-        let data = row.map_err(sqlite_error)?;
-        let doc = decode_document_json(&data)?;
+        let (data, revision, deleted, lwt) = row.map_err(sqlite_error)?;
+        let doc = decode_document_row(revision, deleted != 0, lwt, &data)?;
         if !visit(doc)? {
             break;
         }
@@ -675,12 +683,20 @@ where
 {
     let _statement_timer = timed_sqlite_statement();
     let mut stmt = conn
-        .prepare(&format!("SELECT data FROM {}", quote_identifier(table)))
+        .prepare(&format!(
+            "SELECT data, revision, deleted, lastWriteTime FROM {}",
+            quote_identifier(table)
+        ))
         .map_err(sqlite_error)?;
     let mut rows = stmt.query([]).map_err(sqlite_error)?;
     while let Some(row) = rows.next().map_err(sqlite_error)? {
         let data: String = row.get(0).map_err(sqlite_error)?;
-        let doc = decode_document_json(&data)?;
+        let doc = decode_document_row(
+            row.get(1).map_err(sqlite_error)?,
+            row.get::<_, i64>(2).map_err(sqlite_error)? != 0,
+            row.get(3).map_err(sqlite_error)?,
+            &data,
+        )?;
         if !visit(doc)? {
             break;
         }
