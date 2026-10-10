@@ -104,10 +104,12 @@ The response distinguishes `machineRestored:true` from `coreResumed:false` and
 `resumed:false`. It does not start a Core/provider or permit guest inputs from a
 new worker. Quorum reads before and after machine awaits must match the full accepted BeginEffect state. These reads do not prove a distributed atomic revocation fence during the QMP call; the local account/policy/controller guards cover that call, and this limitation remains an installed acceptance requirement. The machine retains its own runtime through child creation, migration, activation and reaping, including cancellation from the host's CurrentThread runtime. Authoritative source Core/tool effects and the original Core/provider
 factory/admission remain required for goals 15/18. This source connection is not
-installed acceptance evidence; the current source unknown-effect marker still
-prevents a successful production import/restore. Mac transport builds, including
-9228ec92437c with the nonce correction, cannot supply the current Linux-only
-machine witness. Real machine acceptance starts with an enrolled Linux source.
+installed acceptance evidence. Unresolved source effects still prevent import;
+only the actual quiesced Core effects capsule can clear the source marker. Mac
+transport builds such as 9228ec92437c cannot supply a Linux machine witness or
+the newer Core-only identity. VM acceptance starts with an enrolled Linux source;
+Core-only acceptance requires both endpoints to include the Core-only source and
+target connection described above.
 
 ## Fresh native source guest boot
 

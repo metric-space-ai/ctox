@@ -6,7 +6,7 @@ use super::core_resume::NativeGuestCoreOwner;
 use super::target_enrollment::ProtectedEnrollment;
 use super::*;
 use crate::channels::{NativeProviderAdmission, NativeProviderCommand};
-use ctox_sync::authority::{auth::SigningIdentity, Job};
+use ctox_sync::authority::{Job, auth::SigningIdentity};
 use std::{future::Future, pin::Pin};
 
 pub(super) struct TargetAdmission {
@@ -457,7 +457,24 @@ mod tests {
             stopped: false,
         };
         core_resume::validate_original_job(&entry, &protected, &job).unwrap();
+        // Core-only continuation still needs the retained original import/job;
+        // omitting a VM must not admit a fresh session or partial child attempt.
+        let mut core_only = protected.clone();
+        core_only.service_session = None;
+        assert!(core_resume::require_core_only(&entry, &core_only).is_err());
+        entry.restoration = Some(core_only.clone());
+        core_resume::require_core_only(&entry, &core_only).unwrap();
+        core_resume::validate_original_job(&entry, &core_only, &job).unwrap();
+        assert!(core_resume::require_core_only(&entry, &protected).is_err());
+        let mut unknown = job.clone();
+        unknown.pending_effects.insert("unknown-external".into());
+        assert!(core_resume::validate_original_job(&entry, &core_only, &unknown).is_err());
+        let mut foreign = job.clone();
+        foreign.spec.session_id = uuid::Uuid::new_v4().to_string();
+        assert!(core_resume::validate_original_job(&entry, &core_only, &foreign).is_err());
         entry.process_effect = Some("actual-child".into());
+        assert!(core_resume::require_core_only(&entry, &core_only).is_err());
+        assert!(core_resume::validate_original_job(&entry, &core_only, &job).is_err());
         entry.registered_process = Some(GuestProcessEffect {
             effect_id: "actual-child".into(),
             job_id: spec.job_id.clone(),
