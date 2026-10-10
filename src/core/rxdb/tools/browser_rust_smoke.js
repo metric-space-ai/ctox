@@ -4170,6 +4170,21 @@ async function stopChild(child) {
   });
 }
 
+function startReadyCtoxSymbolProfile(child) {
+  if (!nativeSymbolPerf) return;
+  // --no-inherit samples only threads present at attachment. Native peer
+  // readiness must precede this call so its worker pools are included.
+  child.__ctoxNativeCpuProfile?.sample?.();
+  child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
+    outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
+    perfExecutable: nativeSymbolPerf,
+    delayMs: 0,
+  }, {
+    spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
+    signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
+  });
+}
+
 function startCtoxServer() {
   setSmokeStartupPhase('ctox-start');
   const env = {
@@ -4196,18 +4211,6 @@ function startCtoxServer() {
     child.__ctoxNativeCpuProfile = startNativeCpuProfile(child, {
       outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
       phase: () => smokeProcessLifecycle.startupPhase,
-    });
-  }
-  if (nativeSymbolPerf) {
-    child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
-      outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
-      perfExecutable: nativeSymbolPerf,
-      // The isolated UI fixture can finish before the default 30 s delay.
-      // Start its diagnostic recording immediately, outside acceptance runs.
-      delayMs: 0,
-    }, {
-      spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
-      signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
   }
   let resolveListening;
@@ -4464,6 +4467,7 @@ function ensureCtoxSmokeBinary() {
     if (!config.native_rxdb_peer_available) {
       throw new Error(`native peer unavailable: ${JSON.stringify(config)}`);
     }
+    startReadyCtoxSymbolProfile(ctox);
     if (smokeMode === 'business-os-sellify-scale-ui') {
       outerPhaseTimings.sellifyScaleSeedMs = sellifyScaleSeedMs;
     }
