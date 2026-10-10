@@ -32,6 +32,14 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "minimum": 1,
         "maximum": 50,
         "optional": true
+      },
+      "include_public_text": {
+        "type": "bool",
+        "optional": true
+      },
+      "include_native_message_text": {
+        "type": "bool",
+        "optional": true
       }
     }
   },
@@ -67,6 +75,40 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "type": "i64",
         "minimum": 0,
         "optional": true
+      }
+    }
+  },
+  "PublicAssistantText": {
+    "fields": {
+      "turn_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "item_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "phase": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 32
+      },
+      "offset": {
+        "type": "u64",
+        "minimum": 0,
+        "maximum": 65536
+      },
+      "text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "completed": {
+        "type": "bool"
+      },
+      "truncated": {
+        "type": "bool"
       }
     }
   },
@@ -109,6 +151,14 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       "success": {
         "type": "bool",
         "optional": true
+      },
+      "public_text": {
+        "type": "PublicAssistantText",
+        "optional": true
+      },
+      "native_message_text": {
+        "type": "NativeMessageText",
+        "optional": true
       }
     }
   },
@@ -138,6 +188,136 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       },
       "has_more": {
         "type": "bool"
+      },
+      "public_text_supported": {
+        "type": "bool",
+        "optional": true
+      },
+      "native_message_text_supported": {
+        "type": "bool",
+        "optional": true
+      }
+    }
+  },
+  "TurnHistoryCursor": {
+    "fields": {
+      "before_created_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "before_command_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      }
+    }
+  },
+  "TurnHistoryRequest": {
+    "fields": {
+      "cursor": {
+        "type": "TurnHistoryCursor",
+        "optional": true
+      },
+      "limit": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 20,
+        "optional": true
+      }
+    }
+  },
+  "TurnHistoryEntry": {
+    "fields": {
+      "command_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "task_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "created_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "user_text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "user_text_truncated": {
+        "type": "bool"
+      }
+    }
+  },
+  "TurnHistoryPage": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "thread_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 36
+      },
+      "thread_key": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "turns": {
+        "type": "Vec<TurnHistoryEntry>",
+        "max_items": 20
+      },
+      "next_cursor": {
+        "type": "TurnHistoryCursor",
+        "optional": true
+      },
+      "has_more": {
+        "type": "bool"
+      }
+    }
+  },
+  "NativeMessageText": {
+    "fields": {
+      "execution_key": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "model_operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "native_message_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "model": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "upstream_request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "offset": {
+        "type": "u64",
+        "maximum": 65536
+      },
+      "text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "completed": {
+        "type": "bool"
       }
     }
   }
@@ -149,6 +329,14 @@ export const SUPERVISOR_EXECUTION_COMMANDS = deepFreeze({
     "response_field": "execution_page",
     "response_type": "ExecutionPage",
     "response_contract_field": "execution_contract",
+    "authorization": "current_native_project_owner"
+  },
+  "ctox.workjet.project.supervisor.turn.history": {
+    "request_field": "history_page",
+    "request_type": "TurnHistoryRequest",
+    "response_field": "history_page",
+    "response_type": "TurnHistoryPage",
+    "response_contract_field": "history_contract",
     "authorization": "current_native_project_owner"
   }
 });

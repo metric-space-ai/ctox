@@ -59,6 +59,8 @@ pub(crate) use native_guest_admission::{
 };
 #[cfg(unix)]
 pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
+#[cfg(all(unix, test))]
+pub(crate) use queue_provider_binding::tests::public_text_provider_fixture;
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
     lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
@@ -130,6 +132,7 @@ pub use outbound_review::{
 mod auth_assist;
 pub(crate) use auth_assist::recover_auth_assist_requests;
 mod command_saga;
+pub(crate) mod supervisor_owner_input;
 use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
@@ -2322,6 +2325,12 @@ pub fn peek_leasable_inbound_messages(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
@@ -2621,7 +2630,7 @@ pub fn ack_leased_messages_for_attempt(
     // (07.10.2026) every reviewed lead-research ack failed so: the attempt
     // stayed `finalizing`, the lease expired, and each re-lease re-ran the
     // review of the same reply (one task 28 times) without ever terminalizing.
-    let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.ack_attempt")?;
     let already_applied: Option<Option<String>> = tx
         .query_row(
             "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
@@ -2896,6 +2905,14 @@ pub fn ack_leased_messages_with_failure_reason(
 /// pending→leased→pending loop. External waits become dormant `blocked` rows;
 /// technical/evidence/artifact holds consume the existing five-attempt review
 /// budget with exponential backoff and terminalize when exhausted.
+/// Hold policy for a worker turn that failed because the model provider is
+/// out of capacity (token-plan window, rate limit). It does not consume the
+/// technical failure budget; the task waits and is offered again.
+pub const PROVIDER_CAPACITY_HOLD_POLICY: &str = "worker-provider-capacity";
+const PROVIDER_CAPACITY_RETRY_SECS: i64 = 600;
+const PROVIDER_CAPACITY_RETRY_MAX_SECS: i64 = 3_600;
+const PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX: &str = "provider_capacity:";
+
 pub fn hold_leased_messages(
     root: &Path,
     message_keys: &[String],
@@ -3001,20 +3018,55 @@ fn hold_leased_messages_impl(
             HoldReason::Technical { .. }
             | HoldReason::MissingReviewEvidence
             | HoldReason::MissingArtifact => {
-                let previous_attempts: i64 = tx
+                let (previous_attempts, previous_class): (i64, Option<String>) = tx
                     .query_row(
-                        "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+                        "SELECT failure_attempt_count, failure_class FROM communication_routing_state WHERE message_key=?1",
                         params![message_key],
-                        |row| row.get(0),
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .optional()?
-                    .unwrap_or(0);
-                let attempts = previous_attempts.saturating_add(1);
-                let exhausted = attempts >= 5;
+                    .unwrap_or((0, None));
+                // A provider that is out of capacity (token-plan window used
+                // up, rate limit) says nothing about the task. Counted as a
+                // technical failure it ended 49 research tasks on thesen
+                // (08.10.2026) once the 5h window stayed empty longer than
+                // the 75 minutes the five-step backoff spans. Such a hold
+                // waits for capacity and keeps the failure budget intact.
+                let capacity_wait = matches!(
+                    reason,
+                    HoldReason::Technical { policy_id } if policy_id == PROVIDER_CAPACITY_HOLD_POLICY
+                );
+                let attempts = if capacity_wait {
+                    previous_attempts
+                } else {
+                    previous_attempts.saturating_add(1)
+                };
+                let exhausted = !capacity_wait && attempts >= 5;
+                // Consecutive capacity holds back off (10, 20, 40, then 60 min).
+                // With the weekly plan used up for days, 85 waiting research
+                // tasks came back every 10 minutes, rebuilt their context,
+                // met the same 429 and held the core database write lock 39 %
+                // of the time (thesen 09.10.2026). A single burst limit still
+                // waits only the first step. The step lives in failure_class,
+                // which a lease keeps and a success clears.
+                let capacity_step = if capacity_wait {
+                    previous_class
+                        .as_deref()
+                        .and_then(|class| {
+                            class.strip_prefix(PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX)
+                        })
+                        .and_then(|step| step.parse::<u32>().ok())
+                        .map_or(0, |step| step.saturating_add(1).min(16))
+                } else {
+                    0
+                };
                 let failure_class = match reason {
-                    HoldReason::Technical { .. } => "technical",
-                    HoldReason::MissingReviewEvidence => "missing_review_evidence",
-                    HoldReason::MissingArtifact => "missing_artifact",
+                    HoldReason::Technical { .. } if capacity_wait => {
+                        format!("{PROVIDER_CAPACITY_FAILURE_CLASS_PREFIX}{capacity_step}")
+                    }
+                    HoldReason::Technical { .. } => "technical".to_string(),
+                    HoldReason::MissingReviewEvidence => "missing_review_evidence".to_string(),
+                    HoldReason::MissingArtifact => "missing_artifact".to_string(),
                     HoldReason::WaitingExternal(_) => unreachable!(),
                 };
                 let hold_reason = match reason {
@@ -3032,9 +3084,15 @@ fn hold_leased_messages_impl(
                     let exponent = u32::try_from(attempts.saturating_sub(1))
                         .unwrap_or(16)
                         .min(16);
-                    let seconds = 300_i64
-                        .saturating_mul(2_i64.saturating_pow(exponent))
-                        .min(3_600);
+                    let seconds = if capacity_wait {
+                        PROVIDER_CAPACITY_RETRY_SECS
+                            .saturating_mul(2_i64.saturating_pow(capacity_step))
+                            .min(PROVIDER_CAPACITY_RETRY_MAX_SECS)
+                    } else {
+                        300_i64
+                            .saturating_mul(2_i64.saturating_pow(exponent))
+                            .min(3_600)
+                    };
                     (Utc::now() + Duration::seconds(seconds)).to_rfc3339()
                 });
                 let command_transitioned = transition_business_command_for_task_in_transaction(
@@ -4116,8 +4174,7 @@ fn lease_queue_task_with_filter(
     // a separate connection cannot overwrite our lease_owner (lost-update).
     attach_queue_projection_store(root, &conn)?;
     let leased = {
-        let tx =
-            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.lease_task")?;
         if let Some(eligible) = eligible {
             let candidate =
                 load_queue_task_from_conn(&tx, message_key)?.context("queue task not found")?;
@@ -5917,6 +5974,47 @@ fn take_messages(
     take_messages_with_projection(None, conn, channel, limit, lease_owner)
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_BATCH_LEASE_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
+fn revalidate_pending_message(
+    conn: &Connection,
+    candidate: &ChannelMessageView,
+) -> Result<Option<ChannelMessageView>> {
+    conn.query_row(
+        r#"SELECT m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                  m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                  m.subject, m.preview, m.body_text, m.status, m.seen,
+                  m.external_created_at, m.observed_at, m.metadata_json,
+                  r.route_status, r.lease_owner, r.leased_at, r.acked_at,
+                  r.last_error, r.updated_at
+           FROM communication_messages m
+           JOIN communication_routing_state r ON r.message_key=m.message_key
+           WHERE m.message_key=?1 AND m.channel=?2 AND m.account_key=?3
+             AND m.thread_key=?4 AND m.remote_id=?5 AND m.direction='inbound'
+             AND r.route_status='pending'
+             AND (r.retry_not_before IS NULL
+                  OR datetime(r.retry_not_before)<=datetime('now'))
+             AND (json_extract(m.metadata_json,'$.not_before') IS NULL
+                  OR json_extract(m.metadata_json,'$.not_before')=''
+                  OR json_extract(m.metadata_json,'$.not_before')
+                     <=strftime('%Y-%m-%dT%H:%M:%SZ','now'))"#,
+        params![
+            candidate.message_key,
+            candidate.channel,
+            candidate.account_key,
+            candidate.thread_key,
+            candidate.remote_id
+        ],
+        map_channel_message_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 fn take_messages_with_projection(
     projection_root: Option<&Path>,
     conn: &mut Connection,
@@ -6005,6 +6103,12 @@ fn take_messages_with_projection(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
@@ -6097,6 +6201,12 @@ fn take_messages_with_projection(
         FROM eligible
         WHERE thread_rank = 1
         ORDER BY
+            -- People first: the operator terminal, then every communication
+            -- channel, then background queue work. Ordering only by age left
+            -- an admin e-mail on thesen (09.10.2026) behind 27 older research
+            -- tasks for hours; the dispatch rank in the router only sorts what
+            -- was already leased, so the class has to decide here.
+            CASE WHEN channel = 'tui' THEN 0 WHEN channel = 'queue' THEN 2 ELSE 1 END ASC,
             CASE
                 WHEN channel = 'tui' THEN datetime(thread_pending_since, '-24 hours')
                 WHEN channel = 'queue' THEN datetime(thread_pending_since, '+1 hour')
@@ -6111,19 +6221,14 @@ fn take_messages_with_projection(
         "#
     };
 
-    // Hold a write lock for the whole check-then-act window so a concurrent
-    // leaser on a different connection cannot steal a lease between our
-    // eligibility SELECT and our UPDATE (lost-update). The lease UPDATE is a
-    // check-and-set: its WHERE mirrors the eligibility predicate above, so a
-    // losing racer flips 0 rows and we record neither the row nor a
-    // core-transition proof for it.
     if let Some(root) = projection_root {
         attach_queue_projection_store(root, conn)?;
     }
-    let tx =
-        rusqlite::Transaction::new_unchecked(&*conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Rank candidates without reserving the writer. Release the statement/read
+    // snapshot before acquiring IMMEDIATE; eligibility and message identity are
+    // then rechecked by primary key under the writer before any lease or proof.
     let rows = {
-        let mut statement = tx.prepare(sql)?;
+        let mut statement = conn.prepare(sql)?;
         let mapped = if let Some(channel) = channel {
             statement.query_map(
                 params![channel, lease_owner, limit as i64],
@@ -6134,10 +6239,21 @@ fn take_messages_with_projection(
         };
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    #[cfg(test)]
+    if let Some(mut callback) = AFTER_BATCH_LEASE_READS.with(|slot| slot.borrow_mut().take()) {
+        callback();
+    }
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.lease_batch")?;
     let leased_at = now_iso_string();
     let lease_expires_at = (chrono::Utc::now() + chrono::Duration::minutes(15)).to_rfc3339();
     let mut taken = Vec::new();
-    for mut item in rows {
+    for candidate in rows {
+        let Some(mut item) = revalidate_pending_message(&tx, &candidate)? else {
+            continue;
+        };
         let updated = tx.execute(
             r#"INSERT INTO communication_routing_state (message_key, route_status, lease_owner, leased_at, first_pending_at, lease_expires_at, lease_worker_id, acked_at, last_error, updated_at, attempt)
                VALUES (?1, ?5, ?2, ?3, ?3, ?4, NULL, NULL, NULL, ?3, 1)
@@ -6239,7 +6355,7 @@ fn ack_messages(
     // Acknowledgement reads before updating Core and its attached projection
     // store. Reserve both writers first so a concurrent WAL commit cannot
     // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.ack_messages")?;
     let updated = ack_messages_in_transaction(
         &tx,
         message_keys,

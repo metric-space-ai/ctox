@@ -97,7 +97,7 @@ pub(super) fn execute(
         Request::Read(query) => {
             query.validate().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(query.project_id == project, "KPI read project differs");
-            json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"kpis":kpis::read_state(&tx,&project,&owner)?,"recipes":resolver::catalogue()})
+            json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"kpis":kpis::read_state_with_schedule(&tx,&project,&owner,query.include_refresh_schedule.unwrap_or(false))?,"recipes":resolver::catalogue()})
         }
         Request::Resolve(query) => resolver::resolve(
             &core_tx,

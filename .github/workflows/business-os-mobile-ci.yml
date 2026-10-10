@@ -2,6 +2,7 @@ name: Business OS Mobile CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/apps/business-os-mobile/**"
       - "src/scripts/android-framework-diagnostics.py"
@@ -33,6 +34,7 @@ env:
 
 jobs:
   framework-diagnostics-tests:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -57,6 +59,7 @@ jobs:
           retention-days: 7
 
   portable:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +93,7 @@ jobs:
           subject-path: ${{ runner.temp }}/mobile-contract-artifacts/*
 
   ios:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +157,7 @@ jobs:
           subject-path: ${{ runner.temp }}/CTOXBusinessOSMobile-ios-simulator.zip
 
   android:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

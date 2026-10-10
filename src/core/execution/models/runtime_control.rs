@@ -27,6 +27,31 @@ const LOCAL_RUNTIME_READY_STABILITY_POLL_MILLIS: u64 = 200;
 const RUNTIME_SWITCH_LEASE_POLL_MILLIS: u64 = 250;
 const RUNTIME_SWITCH_LEASE_WAIT_SECS: u64 = 30;
 
+/// Public routing metadata only. Credentials stay in the native secret store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeApiRoute {
+    provider: String,
+    upstream_base_url: String,
+    subscription_provider: Option<String>,
+}
+
+impl RuntimeApiRoute {
+    fn project(&self, env_map: &mut BTreeMap<String, String>) {
+        env_map.insert("CTOX_API_PROVIDER".into(), self.provider.clone());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".into(),
+            self.upstream_base_url.clone(),
+        );
+        env_map.remove(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV);
+        if let Some(provider) = &self.subscription_provider {
+            env_map.insert(
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                provider.clone(),
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeSwitchPhase {
@@ -66,6 +91,8 @@ pub struct RuntimeSwitchTransaction {
     pub previous_preset: Option<String>,
     #[serde(default)]
     pub previous_plan: Option<runtime_plan::ChatRuntimePlan>,
+    #[serde(default)]
+    pub previous_api_route: Option<RuntimeApiRoute>,
     pub next_active_model: Option<String>,
     pub started_at_epoch_secs: u64,
     pub updated_at_epoch_secs: u64,
@@ -132,12 +159,22 @@ pub fn apply_runtime_selection_with_context(
     context: Option<&str>,
 ) -> Result<RuntimeSelectionChange> {
     let previous_plan = runtime_plan::load_persisted_chat_runtime_plan(root)?;
+    let previous_state = runtime_state::load_or_resolve_runtime_state(root)?;
+    let previous_env = runtime_env::effective_operator_env_map(root)?;
+    let previous_api_route =
+        (previous_state.source == runtime_state::InferenceSource::Api).then(|| RuntimeApiRoute {
+            provider: runtime_state::api_provider_for_runtime_state(&previous_state).into(),
+            upstream_base_url: previous_state.upstream_base_url.clone(),
+            subscription_provider: previous_env
+                .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+                .cloned(),
+        });
     let change = persist_runtime_selection(root, model, preset, context)?;
     let now = runtime_contract::current_epoch_secs();
     persist_runtime_switch_transaction(
         root,
         &RuntimeSwitchTransaction {
-            version: 3,
+            version: 4,
             phase: RuntimeSwitchPhase::Requested,
             requested_model: model.trim().to_string(),
             requested_source: change.next_state.source,
@@ -153,6 +190,7 @@ pub fn apply_runtime_selection_with_context(
             previous_active_model: change.previous_state.active_model.clone(),
             previous_preset: change.previous_state.local_preset.clone(),
             previous_plan,
+            previous_api_route,
             next_active_model: change.next_state.active_model.clone(),
             started_at_epoch_secs: now,
             updated_at_epoch_secs: now,
@@ -423,6 +461,7 @@ pub fn rollback_runtime_switch(root: &Path) -> Result<Option<RuntimeSelectionCha
         previous_model,
         transaction.previous_preset.as_deref(),
         transaction.previous_plan.as_ref(),
+        transaction.previous_api_route.as_ref(),
     )?;
     Ok(Some(change))
 }
@@ -974,6 +1013,7 @@ fn persist_runtime_selection(
     let previous_state = runtime_state::load_or_resolve_runtime_state(root)?;
     let mut env_map = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     overlay_process_runtime_selection_env(&mut env_map);
+    prepare_grok_subscription_selection(root, requested_model, &mut env_map)?;
     if let Some(context) = context.map(str::trim).filter(|value| !value.is_empty()) {
         let normalized = runtime_plan::parse_chat_context_tokens(context)
             .with_context(|| format!("unsupported chat context selection: {context}"))?;
@@ -1026,6 +1066,7 @@ fn restore_runtime_selection(
     model: &str,
     preset: Option<&str>,
     previous_plan: Option<&runtime_plan::ChatRuntimePlan>,
+    previous_api_route: Option<&RuntimeApiRoute>,
 ) -> Result<RuntimeSelectionChange> {
     let requested_model = model.trim();
     if requested_model.is_empty() {
@@ -1043,6 +1084,9 @@ fn restore_runtime_selection(
         });
     let mut env_map = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     overlay_process_runtime_selection_env(&mut env_map);
+    if let Some(route) = previous_api_route {
+        route.project(&mut env_map);
+    }
     let configured_context = runtime_plan::configured_chat_context_tokens(&env_map);
     sanitize_runtime_selection_env(&mut env_map);
     let mut next_state = build_selected_runtime_state(
@@ -1059,6 +1103,84 @@ fn restore_runtime_selection(
         previous_state,
         next_state,
     })
+}
+
+fn select_grok_subscription_route(
+    model: &str,
+    installed: bool,
+    discover: impl FnOnce() -> Result<Vec<String>>,
+) -> Result<Option<RuntimeApiRoute>> {
+    if !model.starts_with("grok-") {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        installed,
+        "Add xAI / Grok Build in Workjet Settings -> Models on this CTOX instance before switching."
+    );
+    let models = discover()?;
+    anyhow::ensure!(
+        models.iter().any(|available| available == model),
+        "The Grok Build subscription does not offer this model. Choose a model from its live account catalog."
+    );
+    Ok(Some(RuntimeApiRoute {
+        provider: runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION.into(),
+        upstream_base_url: runtime_state::default_api_upstream_base_url_for_provider(
+            runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION,
+        )
+        .into(),
+        subscription_provider: Some("xai".into()),
+    }))
+}
+
+fn prepare_grok_subscription_selection(
+    root: &Path,
+    model: &str,
+    env_map: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let root = root.to_path_buf();
+    let route = select_grok_subscription_route(
+        model,
+        crate::execution::cliproxyapi_xai::subscription_installed(&root),
+        || {
+            // Runtime selection has synchronous CLI and service callers, some
+            // already inside Tokio. An owned bounded runtime avoids nesting it.
+            thread::Builder::new().name("grok-model-selection".into()).spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                runtime.block_on(async {
+                    tokio::time::timeout(
+                        Duration::from_secs(8),
+                        crate::execution::cliproxyapi_xai::discover_models(&root),
+                    ).await
+                        .map_err(|_| anyhow::anyhow!("Grok model discovery timed out; the current runtime was not changed."))?
+                        .map_err(|_| anyhow::anyhow!("Grok model discovery failed; check this instance's Grok Build account in Workjet."))
+                })
+            }).context("could not start Grok model discovery")?
+                .join().map_err(|_| anyhow::anyhow!("Grok model discovery stopped unexpectedly"))?
+        },
+    )?;
+    if let Some(route) = route {
+        route.project(env_map);
+    } else if env_map
+        .get("CTOX_API_PROVIDER")
+        .is_some_and(|provider| provider == runtime_state::API_PROVIDER_CTOX_SUBSCRIPTION)
+        && env_map
+            .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+            .is_some_and(|provider| provider == "xai")
+    {
+        // A later model-family switch must not inherit the Grok-only route.
+        let provider = if engine::is_api_chat_model(model) {
+            engine::default_api_provider_for_model(model)
+        } else {
+            runtime_state::API_PROVIDER_LOCAL
+        };
+        env_map.insert("CTOX_API_PROVIDER".into(), provider.into());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".into(),
+            runtime_state::default_api_upstream_base_url_for_provider(provider).into(),
+        );
+        env_map.remove(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV);
+    }
+    Ok(())
 }
 
 fn sanitize_runtime_selection_env(env_map: &mut BTreeMap<String, String>) {
@@ -1434,13 +1556,21 @@ pub fn reconcile_runtime_switch_transaction(
             );
         }
     }
+    // Capture failure metadata before the capacity reader prunes dead PIDs.
+    // Only current live ownership below may authorize readiness/commit.
+    let persisted_ownership =
+        runtime_contract::load_persisted_runtime_ownership_state(root).unwrap_or_default();
     let ownership = runtime_contract::load_runtime_ownership_state(root).unwrap_or_default();
     let primary_workload = ownership
         .workloads
         .iter()
         .find(|entry| entry.role == runtime_contract::BackendRole::Chat);
+    let persisted_primary = persisted_ownership
+        .workloads
+        .iter()
+        .find(|entry| entry.role == runtime_contract::BackendRole::Chat);
     let requested_workload_lost = current_state.as_ref().is_some_and(|state| {
-        primary_workload.is_some_and(|workload| {
+        persisted_primary.is_some_and(|workload| {
             workload
                 .model
                 .trim()
@@ -1642,6 +1772,151 @@ mod tests {
     }
 
     #[test]
+    fn grok_selection_requires_an_installed_account_and_live_model_membership() {
+        assert!(select_grok_subscription_route("grok-4.7", false, || panic!(
+            "no account, no discovery"
+        ))
+        .is_err());
+        assert!(select_grok_subscription_route("grok-4.7", true, || Ok(Vec::new())).is_err());
+        assert!(
+            select_grok_subscription_route("grok-4.7", true, || anyhow::bail!(
+                "bounded discovery failed"
+            ))
+            .is_err()
+        );
+        assert!(
+            select_grok_subscription_route("glm-5.3-flash", true, || panic!("unrelated provider"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn live_grok_selection_replaces_the_cloud_proxy_route() {
+        let root = make_temp_root();
+        let route =
+            select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()]))
+                .unwrap()
+                .unwrap();
+        let mut previous = test_runtime_state(runtime_state::InferenceSource::Api);
+        previous.upstream_base_url = "https://llm.ctox.dev/v1".into();
+        let mut next = build_selected_runtime_state(
+            &previous,
+            runtime_state::InferenceSource::Api,
+            None,
+            "grok-4.7",
+            None,
+            131_072,
+        );
+        let mut env_map = BTreeMap::from([
+            ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                previous.upstream_base_url.clone(),
+            ),
+        ]);
+        route.project(&mut env_map);
+        apply_selection_runtime_projection(&root, &mut env_map, &mut next, None).unwrap();
+        assert_eq!(
+            next.upstream_base_url,
+            runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription")
+        );
+        assert_eq!(
+            env_map.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_subscription")
+        );
+        assert_eq!(
+            env_map
+                .get(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV)
+                .map(String::as_str),
+            Some("xai")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn switching_away_does_not_retain_the_grok_only_provider() {
+        let root = make_temp_root();
+        let mut env_map = BTreeMap::from([
+            ("CTOX_API_PROVIDER".into(), "ctox_subscription".into()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                runtime_state::default_api_upstream_base_url_for_provider("ctox_subscription")
+                    .into(),
+            ),
+            (
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                "xai".into(),
+            ),
+        ]);
+        prepare_grok_subscription_selection(&root, "glm-5.3-flash", &mut env_map).unwrap();
+        assert_eq!(
+            env_map.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_proxy")
+        );
+        assert_eq!(
+            env_map.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
+            Some(runtime_state::default_api_upstream_base_url_for_provider(
+                "ctox_proxy"
+            ))
+        );
+        assert!(!env_map.contains_key(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rollback_restores_the_previous_cloud_proxy_not_the_new_subscription_route() {
+        let root = make_temp_root();
+        let mut state = test_runtime_state(runtime_state::InferenceSource::Api);
+        state.active_model = Some("glm-5.3-flash".into());
+        state.requested_model = state.active_model.clone();
+        state.base_model = state.active_model.clone();
+        state.upstream_base_url = "https://llm.ctox.dev/v1".into();
+        let mut env_map = BTreeMap::from([
+            ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                state.upstream_base_url.clone(),
+            ),
+        ]);
+        runtime_state::apply_runtime_state_to_env_map(&mut env_map, &state);
+        runtime_env::save_runtime_state_projection(&root, &state, &env_map).unwrap();
+        apply_runtime_selection(&root, "glm-5.3-flash", None).unwrap();
+        let transaction = load_runtime_switch_transaction(&root).unwrap().unwrap();
+        assert_eq!(
+            transaction.previous_api_route.as_ref().unwrap().provider,
+            "ctox_proxy"
+        );
+        let grok_route =
+            select_grok_subscription_route("grok-4.7", true, || Ok(vec!["grok-4.7".into()]))
+                .unwrap()
+                .unwrap();
+        grok_route.project(&mut env_map);
+        let mut next = build_selected_runtime_state(
+            &state,
+            runtime_state::InferenceSource::Api,
+            None,
+            "grok-4.7",
+            None,
+            131_072,
+        );
+        apply_selection_runtime_projection(&root, &mut env_map, &mut next, None).unwrap();
+        let rollback = rollback_runtime_switch(&root).unwrap().unwrap();
+        assert_eq!(
+            rollback.next_state.upstream_base_url,
+            state.upstream_base_url
+        );
+        assert_eq!(rollback.next_state.active_model, state.active_model);
+        let restored = runtime_env::load_runtime_env_map(&root).unwrap();
+        assert_eq!(
+            restored.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("ctox_proxy")
+        );
+        assert!(!restored.contains_key(runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn api_runtime_selection_persists_requested_switch_transaction() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -1682,23 +1957,29 @@ mod tests {
     #[test]
     fn reconciliation_marks_local_switch_as_warming_when_backend_is_starting() {
         let root = make_temp_root();
-        runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
+        let mut state = test_runtime_state(runtime_state::InferenceSource::Local);
+        state.active_model = Some("Qwen/Qwen3.6-35B-A3B".into());
+        state.requested_model = state.active_model.clone();
+        state.engine_model = state.active_model.clone();
+        state.engine_port = Some(1234);
+        runtime_env::save_runtime_state_projection(&root, &state, &BTreeMap::new()).unwrap();
         persist_runtime_switch_transaction(
             &root,
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::Requested,
-                requested_model: "openai/gpt-oss-120b".to_string(),
+                requested_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Quality".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("Qwen/Qwen3.5-4B".to_string()),
-                previous_active_model: Some("Qwen/Qwen3.5-4B".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-27B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
-                next_active_model: Some("openai/gpt-oss-120b".to_string()),
+                previous_api_route: None,
+                next_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -1716,7 +1997,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Starting,
-                model: "openai/gpt-oss-120b".to_string(),
+                model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 pid: Some(std::process::id()),
                 port: Some(1234),
                 health_path: Some("/health".to_string()),
@@ -1770,6 +2051,7 @@ mod tests {
                 previous_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("Qwen/Qwen3.5-9B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -1903,6 +2185,7 @@ mod tests {
                 previous_active_model: Some("Qwen/Qwen3.5-4B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("openai/gpt-oss-120b".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -1989,6 +2272,7 @@ mod tests {
                 previous_active_model: Some("Qwen/Qwen3.5-4B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("openai/gpt-oss-120b".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -2031,6 +2315,7 @@ mod tests {
             previous_active_model: Some("openai/gpt-oss-120b".to_string()),
             previous_preset: Some("Quality".to_string()),
             previous_plan: None,
+            previous_api_route: None,
             next_active_model: Some("gpt-5.4".to_string()),
             started_at_epoch_secs: runtime_contract::current_epoch_secs(),
             updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -2071,6 +2356,7 @@ mod tests {
                 previous_active_model: Some("Qwen/Qwen3.5-9B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -2116,6 +2402,7 @@ mod tests {
                 previous_active_model: Some("Qwen/Qwen3.5-9B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("google/gemma-4-E2B-it".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -2161,9 +2448,9 @@ mod tests {
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
         let mut state = runtime_state::load_or_resolve_runtime_state(&root).unwrap();
         state.source = runtime_state::InferenceSource::Local;
-        state.active_model = Some("zai-org/GLM-4.7-Flash".to_string());
-        state.requested_model = Some("zai-org/GLM-4.7-Flash".to_string());
-        state.engine_model = Some("zai-org/GLM-4.7-Flash".to_string());
+        state.active_model = Some("Qwen/Qwen3.6-27B".to_string());
+        state.requested_model = Some("Qwen/Qwen3.6-27B".to_string());
+        state.engine_model = Some("Qwen/Qwen3.6-27B".to_string());
         state.engine_port = Some(1236);
         state.upstream_base_url = runtime_state::local_upstream_base_url(1236);
         runtime_env::save_runtime_state_projection(&root, &state, &BTreeMap::new()).unwrap();
@@ -2172,17 +2459,18 @@ mod tests {
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::Warming,
-                requested_model: "zai-org/GLM-4.7-Flash".to_string(),
+                requested_model: "Qwen/Qwen3.6-27B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Quality".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-                previous_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
-                next_active_model: Some("zai-org/GLM-4.7-Flash".to_string()),
+                previous_api_route: None,
+                next_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -2194,7 +2482,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Starting,
-                model: "zai-org/GLM-4.7-Flash".to_string(),
+                model: "Qwen/Qwen3.6-27B".to_string(),
                 pid: Some(999_999),
                 port: Some(1236),
                 health_path: Some("/health".to_string()),
@@ -2323,6 +2611,7 @@ mod tests {
                 previous_active_model: Some("openai/gpt-oss-120b".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
+                previous_api_route: None,
                 next_active_model: Some("zai-org/GLM-4.7-Flash".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
@@ -2369,7 +2658,7 @@ mod tests {
     fn local_runtime_selection_does_not_reuse_stale_persisted_plan_for_new_model() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
-            model: "Qwen/Qwen3.5-4B".to_string(),
+            model: "Qwen/Qwen3.6-27B".to_string(),
             preset: runtime_plan::ChatPreset::Quality,
             quantization: "Q6K".to_string(),
             runtime_isq: Some("Q6K".to_string()),
@@ -2433,29 +2722,30 @@ mod tests {
         runtime_plan::store_persisted_chat_runtime_plan(&root, Some(&previous_plan)).unwrap();
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let change = apply_runtime_selection(&root, "Qwen/Qwen3.5-9B", Some("quality")).unwrap();
+        let change =
+            apply_runtime_selection(&root, "Qwen/Qwen3.6-35B-A3B", Some("quality")).unwrap();
 
         assert_eq!(
             change.next_state.active_model.as_deref(),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         let persisted_state = runtime_state::load_runtime_state(&root)
             .unwrap()
             .expect("persisted state");
         assert_eq!(
             persisted_state.active_model.as_deref(),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         let persisted_plan = runtime_plan::load_persisted_chat_runtime_plan(&root)
             .unwrap()
             .expect("persisted plan");
-        assert_eq!(persisted_plan.model, "Qwen/Qwen3.5-9B");
+        assert_eq!(persisted_plan.model, "Qwen/Qwen3.6-35B-A3B");
         let fleet_plan = runtime_plan::load_persisted_runtime_fleet_plan(&root)
             .unwrap()
             .expect("persisted fleet plan");
         assert_eq!(
             fleet_plan.chat.as_ref().map(|plan| plan.model.as_str()),
-            Some("Qwen/Qwen3.5-9B")
+            Some("Qwen/Qwen3.6-35B-A3B")
         );
         assert_eq!(
             change.next_state.embedding.configured_model.as_deref(),
@@ -2470,7 +2760,7 @@ mod tests {
     fn rollback_runtime_switch_restores_previous_runtime_selection() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
-            model: "openai/gpt-oss-120b".to_string(),
+            model: "Qwen/Qwen3.6-27B".to_string(),
             preset: runtime_plan::ChatPreset::Quality,
             quantization: "mq4".to_string(),
             runtime_isq: None,
@@ -2560,7 +2850,7 @@ mod tests {
             .expect("rollback change");
         assert_eq!(
             rollback.next_state.active_model.as_deref(),
-            Some("openai/gpt-oss-120b")
+            Some("Qwen/Qwen3.6-27B")
         );
         assert_eq!(rollback.next_state.local_preset.as_deref(), Some("Quality"));
         assert_eq!(
@@ -2570,7 +2860,7 @@ mod tests {
         let restored_plan = runtime_plan::load_persisted_chat_runtime_plan(&root)
             .unwrap()
             .expect("restored plan");
-        assert_eq!(restored_plan.model, "openai/gpt-oss-120b");
+        assert_eq!(restored_plan.model, "Qwen/Qwen3.6-27B");
     }
 
     #[test]
@@ -2930,6 +3220,12 @@ mod tests {
     #[test]
     fn cutover_ready_local_switch_commits_immediately_when_backend_is_ready() {
         let root = make_temp_root();
+        fs::write(
+            root.join("runtime")
+                .join(runtime_contract::BackendRole::Chat.pid_file_name()),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
         let ipc_path = runtime_kernel::managed_runtime_ipc_path(
             &root,
             runtime_kernel::InferenceWorkloadRole::PrimaryGeneration,
@@ -2942,17 +3238,18 @@ mod tests {
             &RuntimeSwitchTransaction {
                 version: 3,
                 phase: RuntimeSwitchPhase::CutoverReady,
-                requested_model: "Qwen/Qwen3.5-35B-A3B".to_string(),
+                requested_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 requested_source: runtime_state::InferenceSource::Local,
                 requested_local_runtime: runtime_state::LocalRuntimeKind::Candle,
                 requested_preset: Some("Performance".to_string()),
                 previous_source: Some(runtime_state::InferenceSource::Local),
                 previous_local_runtime: Some(runtime_state::LocalRuntimeKind::Candle),
-                previous_requested_model: Some("openai/gpt-oss-120b".to_string()),
-                previous_active_model: Some("openai/gpt-oss-120b".to_string()),
+                previous_requested_model: Some("Qwen/Qwen3.6-27B".to_string()),
+                previous_active_model: Some("Qwen/Qwen3.6-27B".to_string()),
                 previous_preset: Some("Quality".to_string()),
                 previous_plan: None,
-                next_active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+                previous_api_route: None,
+                next_active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
                 started_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 updated_at_epoch_secs: runtime_contract::current_epoch_secs(),
                 error: None,
@@ -2965,7 +3262,7 @@ mod tests {
             runtime_contract::BackendRuntimeResidency {
                 role: runtime_contract::BackendRole::Chat,
                 phase: runtime_contract::RuntimeResidencyPhase::Active,
-                model: "Qwen/Qwen3.5-35B-A3B".to_string(),
+                model: "Qwen/Qwen3.6-35B-A3B".to_string(),
                 pid: Some(std::process::id()),
                 port: Some(1234),
                 health_path: Some("/health".to_string()),
@@ -2982,10 +3279,10 @@ mod tests {
             version: 5,
             source: runtime_state::InferenceSource::Local,
             local_runtime: runtime_state::LocalRuntimeKind::Candle,
-            base_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            requested_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            active_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
-            engine_model: Some("Qwen/Qwen3.5-35B-A3B".to_string()),
+            base_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+            engine_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
             engine_port: Some(1234),
             configured_context_tokens: Some(65_536),
             realized_context_tokens: Some(65_536),

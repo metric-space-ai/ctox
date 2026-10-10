@@ -553,6 +553,37 @@ pub fn write_secret_record(
     put_secret(root, scope, name, value, description, metadata)
 }
 
+/// Delete only the exact encrypted generation captured by a holder mutation.
+/// Absence is idempotent after a crash; a replacement is never deleted.
+pub(crate) fn delete_secret_records_if_versions(
+    root: &Path,
+    keys: &[(String, String, String)],
+) -> Result<()> {
+    let mut conn = open_secret_db(root)?;
+    ensure_secret_schema(&conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for (scope, name, expected) in keys {
+        let record: Option<(String,String)> = tx.query_row(
+            "SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope,name], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        if let Some((nonce, ciphertext)) = record {
+            anyhow::ensure!(
+                stable_digest(&format!("{nonce}:{ciphertext}")) == *expected,
+                "provider credential generation changed; reconciliation required"
+            );
+        }
+    }
+    for (scope, name, _) in keys {
+        tx.execute(
+            "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope, name],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Read a protected record's content version without decrypting it or repairing
 /// the store. File length and modification time alone can miss a committed
 /// credential change. This private digest is not an authorization receipt.
@@ -1331,7 +1362,8 @@ fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_db_path(root: &Path) -> PathBuf {
+/// Canonical native-only encrypted-store path; opening it does not confer authority.
+pub(crate) fn resolve_db_path(root: &Path) -> PathBuf {
     root.join("runtime").join(SECRET_STORE_FILE)
 }
 

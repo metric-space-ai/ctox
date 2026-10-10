@@ -1791,6 +1791,11 @@
           ],
           "type": "string"
         },
+        "supervisor_luma_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
         "updated_at_ms": {
           "type": "number"
         }
@@ -1804,7 +1809,240 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 2
+      "version": 3
+    },
+    "workjet_provider_registry": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "accounts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "credentialReady": {
+                "type": "boolean"
+              },
+              "effectiveModels": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "excludedModels": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "holder": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "ctox_instance"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "inferenceVerified": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              },
+              "modelCatalog": {
+                "additionalProperties": false,
+                "properties": {
+                  "lastAttempt": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "checkedAtMs": {
+                        "type": "number"
+                      },
+                      "elapsedMs": {
+                        "type": "number"
+                      },
+                      "failure": {
+                        "maxLength": 128,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "httpStatus": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "retryAfterSeconds": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "checkedAtMs",
+                      "httpStatus",
+                      "elapsedMs",
+                      "retryAfterSeconds",
+                      "failure",
+                      "success"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "lastSuccessAtMs": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "models": {
+                    "items": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "observed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "observed",
+                  "models",
+                  "lastSuccessAtMs",
+                  "lastAttempt"
+                ],
+                "type": "object"
+              },
+              "modelCatalogObserved": {
+                "type": "boolean"
+              },
+              "observedAtMs": {
+                "type": "number"
+              },
+              "provider": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "revision": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "holder",
+              "provider",
+              "enabled",
+              "credentialReady",
+              "revision",
+              "observedAtMs",
+              "modelCatalogObserved",
+              "inferenceVerified",
+              "modelCatalog",
+              "excludedModels",
+              "effectiveModels"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "catalog_freshness_ms": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "providers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "selection": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "selection"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "owner_user_id",
+        "policy_revision",
+        "catalog_freshness_ms",
+        "updated_at_ms",
+        "is_deleted",
+        "accounts",
+        "providers"
+      ],
+      "type": "object",
+      "version": 0
     },
     "workjet_session_transfers": {
       "additionalProperties": false,

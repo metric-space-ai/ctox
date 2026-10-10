@@ -184,10 +184,22 @@ mod queue_capacity_tests {
         assert_eq!(shared.pending_prompts.len(), 1);
 
         shared.worker_active_count = 0;
+        // An isolated chat, reserved or running, has its own slot and session;
+        // it does not hold the serial loop (thesen 09.10.2026: no mail started
+        // during a research campaign). A serial worker still does.
         shared
             .parallel_queue_jobs
             .insert("unstarted-chat".into(), job);
-        assert!(maybe_start_next_queued_prompt_locked(root.path(), &mut shared).is_none());
+        assert!(!serial_prompt_admission_is_busy(&shared));
+        shared.worker_active_count = 1;
+        shared
+            .active_worker_lease_keys
+            .insert("unstarted-chat".into());
+        assert!(!serial_prompt_admission_is_busy(&shared));
+        shared.worker_active_count = 2;
+        assert!(serial_prompt_admission_is_busy(&shared));
+        shared.worker_active_count = 0;
+        shared.active_worker_lease_keys.clear();
         shared.parallel_queue_jobs.clear();
         shared.serial_prompt_starting = true;
         assert!(maybe_start_next_queued_prompt_locked(root.path(), &mut shared).is_none());

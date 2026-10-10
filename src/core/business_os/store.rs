@@ -13091,6 +13091,28 @@ impl RxdbProjectionWriterCache {
         Ok(false)
     }
 
+    fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if !matches!(self.writers.get(collection), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, collection)?;
+            self.writers.insert(collection.to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut(collection) {
+            let result = writer.upsert_source_projection_batch(records);
+            if result.is_err() {
+                self.writers.remove(collection);
+            }
+            result?;
+        }
+        Ok(())
+    }
+
     fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -13202,6 +13224,31 @@ impl BusinessProjectionWriter {
             .is_some_and(|mirrored| same_projection_payload(&mirrored, payload)))
     }
 
+    pub(crate) const MAX_BATCH_RECORDS: usize = 64;
+
+    /// Commit at most 64 prepared records per source/mirror transaction.
+    /// Source delivery remains durable before independently retryable RxDB
+    /// delivery; no reservation spans both stores or a complete replay.
+    pub(crate) fn upsert_source_projection_batch(
+        &mut self,
+        collection: &str,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        for chunk in records.chunks(Self::MAX_BATCH_RECORDS) {
+            let tx = crate::persistence::SqliteWriteTransaction::begin(
+                &self.conn,
+                "projection.source_batch",
+            )?;
+            for (id, updated, payload) in chunk {
+                upsert_business_record(&tx, collection, id, *updated, payload.clone())?;
+            }
+            tx.commit()?;
+            self.rxdb_writers
+                .upsert_source_projection_batch(collection, chunk)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -13209,13 +13256,20 @@ impl BusinessProjectionWriter {
         source_updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
-        upsert_business_record(
+        // Reserve only this record's source write, never the projection pass
+        // or the subsequent RxDB delivery. Diagnostics separate wait from hold.
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.source_upsert",
+        )?;
+        upsert_business_record(
+            &tx,
             collection,
             record_id,
             source_updated_at_ms,
             payload.clone(),
         )?;
+        tx.commit()?;
         self.rxdb_writers.upsert_source_projection(
             collection,
             record_id,
@@ -13230,7 +13284,12 @@ impl BusinessProjectionWriter {
         record_id: &str,
         source_updated_at_ms: i64,
     ) -> anyhow::Result<()> {
-        upsert_business_record_tombstone(&self.conn, collection, record_id, source_updated_at_ms)?;
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
+            &self.conn,
+            "projection.source_tombstone",
+        )?;
+        upsert_business_record_tombstone(&tx, collection, record_id, source_updated_at_ms)?;
+        tx.commit()?;
         self.rxdb_writers
             .tombstone_source_projection(collection, record_id, source_updated_at_ms)
     }
@@ -13448,17 +13507,60 @@ impl RxdbCollectionWriter {
         Ok(serde_json::from_str::<Value>(&raw).ok())
     }
 
+    fn upsert_source_projection_batch(
+        &mut self,
+        records: &[(String, i64, Value)],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            records.len() <= BusinessProjectionWriter::MAX_BATCH_RECORDS,
+            "projection batch exceeds {} records",
+            BusinessProjectionWriter::MAX_BATCH_RECORDS
+        );
+        if records.is_empty() {
+            return Ok(());
+        }
+        let tx =
+            crate::persistence::SqliteWriteTransaction::begin(&self.conn, "projection.rxdb_batch")?;
+        let mut replication_lwt = self.replication_clock_floor(&tx)?;
+        for (id, updated, payload) in records {
+            let now = now_ms().min(i64::MAX as u128) as i64;
+            replication_lwt = now.max(replication_lwt.saturating_add(1));
+            upsert_rxdb_collection_record_with_writer(
+                &tx,
+                &self.table,
+                &self.columns,
+                id,
+                *updated,
+                replication_lwt,
+                payload.clone(),
+                self.demand_file_storage,
+                false,
+                true,
+            )?;
+        }
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
+        // One wake observes the complete committed batch; a failed batch
+        // rolls back without publishing any of its rows.
+        self.notify_committed_change();
+        Ok(())
+    }
+
     fn upsert_source_projection(
         &mut self,
         record_id: &str,
         source_updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
-        let replication_now = now_ms().min(i64::MAX as u128) as i64;
-        let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
-        self.last_replication_lwt = replication_lwt;
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_upsert",
+        )?;
+        let replication_now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt =
+            replication_now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
@@ -13469,6 +13571,8 @@ impl RxdbCollectionWriter {
             false,
             true,
         )?;
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
     }
@@ -13478,11 +13582,15 @@ impl RxdbCollectionWriter {
         record_id: &str,
         source_updated_at_ms: i64,
     ) -> anyhow::Result<()> {
-        let replication_now = now_ms().min(i64::MAX as u128) as i64;
-        let replication_lwt = replication_now.max(self.last_replication_lwt.saturating_add(1));
-        self.last_replication_lwt = replication_lwt;
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_tombstone",
+        )?;
+        let replication_now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt =
+            replication_now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
@@ -13497,6 +13605,8 @@ impl RxdbCollectionWriter {
             true,
             true,
         )?;
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
     }
@@ -13508,22 +13618,43 @@ impl RxdbCollectionWriter {
         payload: Value,
         deleted: bool,
     ) -> anyhow::Result<()> {
-        let now = now_ms().min(i64::MAX as u128) as i64;
-        self.last_replication_lwt = now.max(self.last_replication_lwt.saturating_add(1));
-        upsert_rxdb_collection_record_with_writer(
+        let tx = crate::persistence::SqliteWriteTransaction::begin(
             &self.conn,
+            "projection.rxdb_replace",
+        )?;
+        let now = now_ms().min(i64::MAX as u128) as i64;
+        let replication_lwt = now.max(self.replication_clock_floor(&tx)?.saturating_add(1));
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
             &self.table,
             &self.columns,
             record_id,
             updated_at_ms,
-            self.last_replication_lwt,
+            replication_lwt,
             payload,
             self.demand_file_storage,
             deleted,
             false,
         )?;
+        tx.commit()?;
+        self.last_replication_lwt = replication_lwt;
         self.notify_committed_change();
         Ok(())
+    }
+
+    // Call only after reserving IMMEDIATE: a retained connection's cached
+    // clock can precede a different publisher's already-visible feed cursor.
+    fn replication_clock_floor(
+        &self,
+        writer: &crate::persistence::SqliteWriteTransaction<'_>,
+    ) -> anyhow::Result<i64> {
+        let persisted_lwt = writer
+            .prepare_cached(&format!(
+                "SELECT COALESCE(MAX(lastWriteTime), 0) FROM {}",
+                self.table
+            ))?
+            .query_row([], |row| row.get::<_, f64>(0))? as i64;
+        Ok(self.last_replication_lwt.max(persisted_lwt))
     }
 
     fn notify_committed_change(&self) {
@@ -13624,11 +13755,8 @@ fn upsert_rxdb_collection_record_with_writer(
     let explicit_deletion_aliases =
         ["deleted", "is_deleted"].map(|alias| payload.get(alias).is_some());
     if let Some(existing_json) = conn
-        .query_row(
-            &format!("SELECT data FROM {table} WHERE id = ?1"),
-            [record_id],
-            |row| row.get::<_, String>(0),
-        )
+        .prepare_cached(&format!("SELECT data FROM {table} WHERE id = ?1"))?
+        .query_row([record_id], |row| row.get::<_, String>(0))
         .optional()?
     {
         existing_row = true;
@@ -13747,18 +13875,16 @@ fn upsert_rxdb_collection_record_with_writer(
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>()
         .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO {table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
-            columns = columns.join(", "),
-            updates = updates.join(", "),
-            guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
-                .map(|guard| format!(" WHERE {guard}"))
-                .unwrap_or_default(),
-        ),
-        params_from_iter(values),
-    )?;
+    conn.prepare_cached(&format!(
+        "INSERT INTO {table} ({columns}) VALUES ({placeholders})
+         ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
+        columns = columns.join(", "),
+        updates = updates.join(", "),
+        guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
+            .map(|guard| format!(" WHERE {guard}"))
+            .unwrap_or_default(),
+    ))?
+    .execute(params_from_iter(values))?;
     Ok(())
 }
 
@@ -13819,6 +13945,71 @@ pub fn upsert_projection_record(
 /// External app-record permission does not issue native research receipts.
 /// Guard the effective patch under the same IMMEDIATE transaction as its RxDB
 /// write. Native projections and typed writebacks keep their trusted path.
+/// One live document of an RxDB collection, or `None` when it is missing or
+/// deleted.
+pub(super) fn read_rxdb_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(None);
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = reader
+        .conn
+        .query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = ?1 AND {deleted_expression} = 0",
+                reader.table
+            ),
+            [record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(raw
+        .map(|raw| serde_json::from_str::<Value>(&raw))
+        .transpose()?
+        .filter(|value| !is_rxdb_deleted_document(value)))
+}
+
+/// Payload of the newest Outbound lead research task the app started (not a
+/// gap-closing continuation). The native import action reuses its research
+/// policy for imported leads; see outbound_lead_import.rs.
+pub(super) fn latest_outbound_lead_research_payload(root: &Path) -> anyhow::Result<Option<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, "business_commands")? else {
+        return Ok(None);
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let mut statement = reader.conn.prepare(&format!(
+        "SELECT data FROM {} WHERE {deleted_expression} = 0 \
+           AND json_extract(data, '$.command_type') = 'business_os.chat.task' \
+           AND json_extract(data, '$.module') = 'outbound-lead-generation' \
+           AND json_extract(data, '$.payload.writeback_contract.command_type') = 'outbound.lead.research_writeback' \
+           AND json_extract(data, '$.payload.lead_id') IS NOT NULL \
+         ORDER BY json_extract(data, '$.created_at_ms') DESC LIMIT 25",
+        reader.table
+    ))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for raw in rows {
+        let Ok(document) = serde_json::from_str::<Value>(&raw?) else {
+            continue;
+        };
+        let payload = &document["payload"];
+        let prompt = payload["prompt"].as_str().unwrap_or_default();
+        if prompt.starts_with("Starte eine Outbound") && payload["source_policy"].is_object() {
+            return Ok(Some(payload.clone()));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn upsert_external_projection_record(
     root: &Path,
     collection: &str,
@@ -15089,7 +15280,7 @@ pub(crate) fn install_replicated_secret_sanitizer() {
         detach_secret_from_replicated_document,
     ));
     rxdb::replication_protocol::index_mod::set_master_write_validator(Arc::new(
-        super::outbound_field_review::peer_preserves_native_field_status,
+        super::outbound_field_review::peer_lead_write_allowed,
     ));
 }
 
@@ -27353,6 +27544,7 @@ fn drop_counting_projection_clock_triggers(conn: &Connection) -> anyhow::Result<
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(super::domain_effect::SCHEMA)?;
+    conn.execute_batch(super::provider_federation::SCHEMA)?;
     drop_counting_projection_clock_triggers(conn)?;
     let schema = "
         CREATE TABLE IF NOT EXISTS business_records (
@@ -45340,6 +45532,132 @@ pub(super) mod tests {
         assert!(second_lwt > first_lwt);
         assert_eq!(first_source_version, 42);
         assert_eq!(second_source_version, 43);
+        Ok(())
+    }
+
+    #[test]
+    fn retained_single_projection_writers_publish_after_every_current_feed_cursor(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__clock_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE {table}(id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+                 lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);
+             CREATE INDEX clock_probe_lwt_id_idx ON {table}(lastWriteTime,id);"
+        ))?;
+        let mut left = RxdbCollectionWriter::open(root, "clock_probe")?.context("left writer")?;
+        let mut right = RxdbCollectionWriter::open(root, "clock_probe")?.context("right writer")?;
+        left.upsert_source_projection("cursor", 1, serde_json::json!({"old_field":"preserved"}))?;
+        right.upsert_source_projection(
+            "target",
+            2,
+            serde_json::json!({"old_field":"remove on replacement"}),
+        )?;
+        for operation in 0..4 {
+            // A different connection commits after both writer caches opened.
+            // Skew the persisted clock to make this deterministic, without sleeps.
+            let cursor = (now_ms().min(i64::MAX as u128) as i64) + 60_000 + operation * 10_000;
+            conn.execute(&format!(
+                "UPDATE {table} SET lastWriteTime=?1,data=json_set(data,'$._meta.lwt',?1) WHERE id='cursor'"
+            ), [cursor])?;
+            match operation {
+                0 => {
+                    left.upsert_source_projection("target", 42, serde_json::json!({"name":"left"}))?
+                }
+                1 => right.upsert_source_projection(
+                    "target",
+                    43,
+                    serde_json::json!({"name":"right"}),
+                )?,
+                2 => left.tombstone_source_projection("target", 44)?,
+                _ => right.replace_source(
+                    "target",
+                    45,
+                    serde_json::json!({"name":"replacement"}),
+                    false,
+                )?,
+            }
+            let (lwt, deleted, raw): (f64, i64, String) = conn.query_row(&format!(
+                "SELECT lastWriteTime,deleted,data FROM {table} WHERE id='target' AND lastWriteTime>?1"
+            ), [cursor], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
+            let document: Value = serde_json::from_str(&raw)?;
+            assert_eq!(
+                document.pointer("/_meta/lwt").and_then(Value::as_f64),
+                Some(lwt)
+            );
+            assert_eq!(document["updated_at_ms"], 42 + operation);
+            assert_eq!(deleted, i64::from(operation == 2));
+            assert_eq!(document["_deleted"], operation == 2);
+            if operation == 3 {
+                assert!(
+                    document.get("old_field").is_none(),
+                    "replacement must not merge removed fields"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_single_projection_clock_reservation_does_not_advance_the_writer_cache(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__clock_rollback__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(&format!(
+            "CREATE TABLE {table}(id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);"
+        ))?;
+        conn.execute(
+            &format!("INSERT INTO {table}(id,data) VALUES('cursor',?1)"),
+            [serde_json::json!({"id":"cursor"}).to_string()],
+        )?;
+        let mut writer = RxdbCollectionWriter::open(root, "clock_rollback")?.context("writer")?;
+        let before = writer.last_replication_lwt;
+        let cursor = (now_ms().min(i64::MAX as u128) as i64) + 60_000;
+        conn.execute(
+            &format!("UPDATE {table} SET lastWriteTime=?1 WHERE id='cursor'"),
+            [cursor],
+        )?;
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER reject_clock BEFORE INSERT ON {table} WHEN new.id='target'
+             BEGIN SELECT RAISE(ABORT,'fixture publication failure'); END;"
+        ))?;
+        for operation in 0..3 {
+            let result = match operation {
+                0 => writer.upsert_source_projection(
+                    "target",
+                    42,
+                    serde_json::json!({"name":"retry"}),
+                ),
+                1 => writer.tombstone_source_projection("target", 42),
+                _ => {
+                    writer.replace_source("target", 42, serde_json::json!({"name":"retry"}), false)
+                }
+            };
+            assert!(result.is_err());
+            assert_eq!(
+                writer.last_replication_lwt, before,
+                "failed commit cannot claim its clock"
+            );
+            assert_eq!(
+                conn.query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id='target'"),
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                0
+            );
+        }
+        conn.execute_batch("DROP TRIGGER reject_clock")?;
+        writer.upsert_source_projection("target", 42, serde_json::json!({"name":"retry"}))?;
+        assert!(writer.last_replication_lwt > cursor);
         Ok(())
     }
 

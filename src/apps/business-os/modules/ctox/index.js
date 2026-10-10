@@ -1,11 +1,11 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261008-jour-fixe-speech-ingress';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261010-shell-v2-project-exit-assessment';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
-import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261008-jour-fixe-speech-ingress';
+import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261010-shell-v2-project-exit-assessment';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -31,7 +31,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20261008-jour-fixe-speech-ingress';
+const CTOX_STYLE_BUILD = '20261010-shell-v2-project-exit-assessment';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -795,6 +795,7 @@ export async function mount(ctx) {
     runtimeStatus: 'Loading status',
     dataLoaded: false,
     dataError: '',
+    taskSourceUnavailable: new Map(),
     focusTask: launchFocusTask || readFocusTask(),
     requestedSourceFocus: ctx.args?.return_thread_id && launchFocusTask
       ? { recordId: launchFocusTask.taskId || launchFocusTask.commandId,
@@ -936,8 +937,8 @@ async function hydrateFromLocal(state) {
   // idle harness (showDataError keeps the last good model). Secondary sources
   // degrade quietly.
   const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, channelAccounts] = await Promise.all([
-    loadLocalCommands(state.ctx),
-    loadLocalQueueTasks(state.ctx),
+    loadTaskSource(state, 'business_commands', loadLocalCommands),
+    loadTaskSource(state, 'ctox_queue_tasks', loadLocalQueueTasks),
     loadLocalBugReports(state.ctx).catch(() => []),
     loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
@@ -1017,15 +1018,33 @@ function wireLocalRealtime(state) {
   };
   const subscriptions = collectionsToWatch
     .map((collectionName) => {
+      if (state.taskSourceUnavailable?.has(collectionName)) return null;
       const collection = ctoxCollection(state.ctx, collectionName);
       if (!collection?.$?.subscribe) return null;
-      return collection.$.subscribe((change) => {
+      const sub = collection.$.subscribe((change) => {
         if (selectedTaskOnly.has(collectionName) && !changeConcernsSelectedTask(state, change)) return;
         if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state, true);
         scheduleRender();
-      }, {emitPendingChanges: collectionName === "ctox_harness_status"}) || null;
+      }, {
+        emitPendingChanges: collectionName === 'ctox_harness_status',
+        // Other collections only invalidate the bounded reads above. A full
+        // observable snapshot would perform an unhandled second native read.
+        invalidateOnly: collectionName !== 'ctox_harness_status',
+      });
+      if (!sub) return null;
+      let released = false;
+      const cleanup = () => {
+        if (released) return;
+        released = true;
+        if (state.localCollectionCleanups?.get(collectionName) === cleanup) state.localCollectionCleanups.delete(collectionName);
+        sub.unsubscribe?.();
+      };
+      state.localCollectionCleanups ||= new Map();
+      state.localCollectionCleanups.set(collectionName, cleanup);
+      return cleanup;
     })
     .filter(Boolean);
+  state.taskHistoryUnavailable = new Set();
   const nativeHistoryCleanup = subscribeTaskHistoryChanges({
     sync: state.ctx.sync,
     getSelection: () => {
@@ -1037,8 +1056,15 @@ function wireLocalRealtime(state) {
       state.taskHistoryRevision = { key, revision };
       scheduleRender();
     },
+    onUnavailable: ({ collection }) => {
+      if (state.disposed) return;
+      state.taskHistoryUnavailable.add(collection);
+      scheduleRender();
+    },
     onError: (error) => {
-      if (!state.disposed) console.warn('[ctox] task history native observer failed', error);
+      if (state.disposed) return;
+      console.warn('[ctox] task history native observer failed', error);
+      showDataError(state, error);
     },
   });
   state.realtimeCollectionCount = subscriptions.length;
@@ -1047,12 +1073,15 @@ function wireLocalRealtime(state) {
     if (renderTimer) window.clearTimeout(renderTimer);
     renderTimer = null;
     for (const sub of subscriptions) {
-      try { sub.unsubscribe?.(); } catch {}
+      try { sub(); } catch {}
     }
   };
 }
 
 function dataState(state) {
+  if (!state.dataError && state.taskSourceUnavailable?.size) {
+    return { kind: 'restricted', reason: [...state.taskSourceUnavailable.keys()].join(', ') };
+  }
   let available = false;
   let error = state.dataError;
   try {
@@ -1078,7 +1107,9 @@ function dataState(state) {
 function dataStatusMarkup(state) {
   const status = dataState(state);
   if (status.kind === 'ready') return '';
-  const message = labels[state.lang]['dataState_' + status.kind] || labels[state.lang].loadingRuntime;
+  const message = status.kind === 'restricted'
+    ? `${labels[state.lang].tasks}: ${labels[state.lang].notPermittedForRole}`
+    : labels[state.lang]['dataState_' + status.kind] || labels[state.lang].loadingRuntime;
   const retry = status.kind === 'error'
     ? ` <button type="button" class="ctox-button is-small" data-ctox-retry-load>${escapeHtml(labels[state.lang].retryLoad)}</button>`
     : '';
@@ -1681,6 +1712,7 @@ function taskListInner(tasks, state, options = {}) {
     // Filter-empty (rows exist, the current filter hides them) stays a plain
     // empty; only the data-driven empty (replicated sources have no rows at
     // all) is gated on the collections' initial-sync readiness.
+    if (!tasks.length && state.taskSourceUnavailable?.size) return `<div class="ctox-empty">${dataStatusMarkup(state)}</div>`;
     if (tasks.length) return `<div class="ctox-empty"><span>${escapeHtml(t.noWorkHere)}</span></div>`;
     return renderListOrState([], taskSourceReadiness(state), {
       empty: t.noWorkHere,
@@ -1698,6 +1730,7 @@ function taskSourceReadiness(state) {
   if (typeof read !== 'function') return null;
   const snapshots = [];
   for (const name of TASK_SOURCE_COLLECTIONS) {
+    if (state.taskSourceUnavailable?.has(name)) continue;
     try {
       const snapshot = read.call(state.ctx.sync, name);
       if (snapshot) snapshots.push(snapshot);
@@ -1726,7 +1759,7 @@ function wireTaskSourceReadiness(state) {
   for (const name of [...TASK_SOURCE_COLLECTIONS, 'ctox_crew_members', 'ctox_harness_status']) {
     try {
       const unsubscribe = subscribe.call(state.ctx.sync, name, () => {
-        if (state.disposed) return;
+        if (state.disposed || state.taskSourceUnavailable?.has(name)) return;
         try {
           // Collections that were missing at mount now exist: subscribe again
           // (no poll loop backs this up any more) and hydrate once.
@@ -1739,7 +1772,18 @@ function wireTaskSourceReadiness(state) {
           if (!state.disposed) console.warn('[ctox] readiness re-render failed', error);
         }
       });
-      if (typeof unsubscribe === 'function') unsubscribes.push(unsubscribe);
+      if (typeof unsubscribe === 'function') {
+        let active = true;
+        const cleanup = () => {
+          if (!active) return;
+          active = false;
+          if (state.readinessCollectionCleanups?.get(name) === cleanup) state.readinessCollectionCleanups.delete(name);
+          unsubscribe();
+        };
+        state.readinessCollectionCleanups ||= new Map();
+        state.readinessCollectionCleanups.set(name, cleanup);
+        unsubscribes.push(cleanup);
+      }
     } catch (error) {
       if (!state.disposed) {
         console.warn(`[ctox] readiness subscription failed for ${name}`, error);
@@ -2418,6 +2462,12 @@ function taskStatusSteps(task, state) {
   return steps.map((step) => ({ ...step, timelineIndex: findIndex(step.id), detail: clip(cleanUiCopy(step.detail), 180) }));
 }
 
+function taskHistoryPermissionNotice(state) {
+  if (!state.taskHistoryUnavailable?.size) return '';
+  const t = labels[state.lang];
+  return `<span class="ctox-history-connection" data-task-history-unavailable role="status" title="${escapeAttr(`COLLECTION_READ_FORBIDDEN: ${[...state.taskHistoryUnavailable].join(', ')}`)}">${escapeHtml(`${t.timeline}: ${t.notPermittedForRole}`)}</span>`;
+}
+
 function renderMain(state) {
   const t = labels[state.lang];
   const model = state.model;
@@ -2503,10 +2553,10 @@ function renderMain(state) {
       </div>
     </div>`}
     <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
-      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}</summary>
+      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}${taskHistoryPermissionNotice(state)}</summary>
       <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
     </details>
-    ${!hasHistory && dataNotice ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}</footer>` : ''}
+    ${!hasHistory && (dataNotice || state.taskHistoryUnavailable?.size) ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}${taskHistoryPermissionNotice(state)}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
@@ -4981,6 +5031,34 @@ function routeStatusNodeId(status) {
   return '';
 }
 
+function isTaskSourceReadDenied(error, collectionName) {
+  const details = error?.details || {};
+  if (details.collection && details.collection !== collectionName) return false;
+  if (error?.code === 'COLLECTION_READ_FORBIDDEN') return true;
+  if (error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED') return details.permission === 'data.read';
+  const message = String(error?.message || error || '');
+  const match = /^(?:UNAUTHORIZED:\s*)?peer is not authorized for collection ([\w.-]+)\.?$/.exec(message);
+  return match?.[1] === collectionName && (error?.code === 'UNAUTHORIZED'
+    || error?.name === 'UNAUTHORIZED' || message.startsWith('UNAUTHORIZED:'));
+}
+
+async function loadTaskSource(state, collectionName, load) {
+  if (state.disposed || state.taskSourceUnavailable?.has(collectionName)) return [];
+  try {
+    return await load(state.ctx);
+  } catch (error) {
+    if (state.disposed) return [];
+    if (!isTaskSourceReadDenied(error, collectionName)) throw error;
+    // A denial remains unavailable for this mount/session. A new authorized
+    // mount gets fresh reads; readiness ticks never retry this refused source.
+    state.taskSourceUnavailable ||= new Map();
+    state.taskSourceUnavailable.set(collectionName, error);
+    state.localCollectionCleanups?.get(collectionName)?.();
+    state.readinessCollectionCleanups?.get(collectionName)?.();
+    return [];
+  }
+}
+
 async function loadLocalCommands(ctx) {
   return (await loadLocalCollection(ctx, 'business_commands')).filter((doc) => !isInternalSmokeDoc(doc));
 }
@@ -5122,7 +5200,8 @@ async function loadLocalCollection(ctx, collectionName) {
       sort: [{ updated_at_ms: 'desc' }],
       limit: LOCAL_COLLECTION_LIMIT,
     }).exec();
-  } catch {
+  } catch (error) {
+    if (isTaskSourceReadDenied(error, collectionName)) throw error;
     const fallback = await collection.find().limit(LOCAL_COLLECTION_LIMIT).exec();
     localDocs = fallback.sort((left, right) => (right.updated_at_ms || 0) - (left.updated_at_ms || 0));
   }

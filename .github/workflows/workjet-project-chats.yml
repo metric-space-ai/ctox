@@ -4,6 +4,7 @@ on:
   push:
     branches: [codex/workjet-project-chats, codex/worker-guest-adapter]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main, codex/native-transport-parity, codex/workjet-project-chats]
     paths:
       - '.github/workflows/workjet-project-chats.yml'
@@ -22,6 +23,7 @@ concurrency:
 
 jobs:
   schemas:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -59,6 +61,7 @@ jobs:
         run: git diff --exit-code -- src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
 
   native:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:

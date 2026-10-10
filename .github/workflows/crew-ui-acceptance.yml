@@ -1,6 +1,7 @@
 name: Crew UI acceptance
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/apps/business-os/modules/ctox/**'
       - 'src/apps/business-os/shared/business-chat*'
@@ -13,6 +14,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   crew-ui:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

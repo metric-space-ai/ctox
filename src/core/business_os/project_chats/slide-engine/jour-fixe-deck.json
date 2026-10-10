@@ -1,0 +1,401 @@
+{
+  "schemaVersion": "learnordie.slide.v1",
+  "id": "jour-fixe-2026-kw41",
+  "title": "Jour fixe Workjet · KW 41",
+  "language": "de",
+  "aspect": "16:9",
+  "theme": "learnordie-north",
+  "deckSettings": {
+    "defaultTransition": "fade",
+    "showSlideNumbers": true,
+    "allowFragments": false,
+    "mobileMode": "hybrid"
+  },
+  "slides": [
+    {
+      "id": "titel",
+      "title": "Jour fixe Workjet · KW 41",
+      "layout": "title_statement",
+      "intent": "title",
+      "blocks": [
+        {
+          "id": "titel-untertitel",
+          "type": "paragraph",
+          "text": "Regeltermin am 8. Oktober 2026 · Stand seit dem 24. September"
+        }
+      ],
+      "speakerNotes": [
+        {
+          "id": "titel-note",
+          "kind": "talkingPoint",
+          "text": "Willkommen zum Jour fixe. Heute: Kennzahlen, Exitwert, offene Punkte und eine Entscheidung zur Preisstufe."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "src-protokoll",
+          "sourceType": "manual",
+          "label": "Protokoll Jour fixe KW 39"
+        }
+      ]
+    },
+    {
+      "id": "kennzahlen",
+      "title": "Kennzahlen seit dem letzten Regeltermin",
+      "layout": "technical_figure_right",
+      "intent": "summary",
+      "blocks": [
+        {
+          "id": "kennzahlen-text",
+          "type": "paragraph",
+          "text": "Umsatz und Durchsatz steigen, die Zahl offener Bugs sinkt. Die aktiven Nutzer gehen leicht zurück."
+        },
+        {
+          "id": "kennzahlen-szene",
+          "type": "scene3d",
+          "sceneId": "business.kpi-bars",
+          "altText": "Balken je Kennzahl: aktueller Wert gegen den Wert beim letzten Regeltermin.",
+          "caption": "Kennzahlen gegen KW 39",
+          "data": {
+            "items": [
+              {
+                "label": "Umsatz MRR",
+                "value": 18400,
+                "previous": 16900,
+                "unit": "€"
+              },
+              {
+                "label": "Aktive Nutzer",
+                "value": 1240,
+                "previous": 1310
+              },
+              {
+                "label": "Gemergte PRs",
+                "value": 23,
+                "previous": 17
+              },
+              {
+                "label": "Offene Bugs",
+                "value": 9,
+                "previous": 14,
+                "better": "lower"
+              }
+            ]
+          }
+        }
+      ],
+      "speakerNotes": [
+        {
+          "id": "kennzahlen-note",
+          "kind": "talkingPoint",
+          "text": "Der wiederkehrende Umsatz wächst um knapp neun Prozent. Der Rückgang bei den aktiven Nutzern kommt aus dem Ende eines Pilotkunden-Tests."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "src-kpi",
+          "sourceType": "import",
+          "label": "KPI-Export Business OS, 8. Oktober 2026"
+        }
+      ]
+    },
+    {
+      "id": "exitwert",
+      "title": "Exitwert E5 je Regeltermin",
+      "layout": "technical_figure_left",
+      "intent": "explanation",
+      "blocks": [
+        {
+          "id": "exitwert-szene",
+          "type": "scene3d",
+          "sceneId": "business.trend",
+          "altText": "Verlauf des Exitwerts E5 über sechs Regeltermine mit Zielwert 12 Mio €.",
+          "caption": "Exitwert E5 in Mio €",
+          "data": {
+            "label": "Exitwert E5",
+            "unit": "Mio €",
+            "target": 12,
+            "points": [
+              {
+                "label": "KW 31",
+                "value": 8.2
+              },
+              {
+                "label": "KW 33",
+                "value": 8.9
+              },
+              {
+                "label": "KW 35",
+                "value": 9.4
+              },
+              {
+                "label": "KW 37",
+                "value": 10.1
+              },
+              {
+                "label": "KW 39",
+                "value": 11
+              },
+              {
+                "label": "KW 41",
+                "value": 11.6
+              }
+            ]
+          }
+        },
+        {
+          "id": "exitwert-treiber",
+          "type": "bulletList",
+          "items": ["Ziel: 12 Mio € bis Jahresende", "Treiber: wiederkehrender Umsatz und Marge"]
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "src-bewertung",
+          "sourceType": "manual",
+          "label": "Bewertungsmodell E5, Version 7"
+        }
+      ],
+      "speakerNotes": [
+        {
+          "id": "exitwert-sprechtext",
+          "kind": "talkingPoint",
+          "text": "Der Exitwert ist seit Kalenderwoche 31 von 8,2 auf 11,6 Millionen Euro gestiegen. Bis zum Ziel von 12 Millionen Euro fehlen noch 0,4 Millionen; wiederkehrender Umsatz und Marge sollen sie bis Jahresende bringen."
+        }
+      ]
+    },
+    {
+      "id": "offene-punkte",
+      "title": "Offene Punkte",
+      "layout": "technical_one_column",
+      "intent": "summary",
+      "blocks": [
+        {
+          "id": "offene-punkte-liste",
+          "type": "bulletList",
+          "items": [
+            "Release 0.4 an zwei Pilotkunden ausrollen",
+            "Preisseite überarbeiten",
+            "Onboarding-Mail für neue Teams testen"
+          ]
+        },
+        {
+          "id": "offene-punkte-risiko",
+          "type": "callout",
+          "tone": "warning",
+          "title": "Risiko",
+          "text": "Der Zahlungsanbieter stellt seine API zum 1. Dezember um."
+        }
+      ],
+      "speakerNotes": [
+        {
+          "id": "offene-punkte-note-1",
+          "kind": "talkingPoint",
+          "text": "Release 0.4 ist fertig getestet; es fehlt nur das Go für die Pilotkunden."
+        },
+        {
+          "id": "offene-punkte-note-2",
+          "kind": "talkingPoint",
+          "text": "Für die API-Umstellung plane ich zwei Tage im November ein."
+        },
+        {
+          "id": "offene-punkte-note-3",
+          "kind": "timing",
+          "text": "Etwa drei Minuten."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "src-board",
+          "sourceType": "manual",
+          "label": "Projektboard Workjet"
+        }
+      ]
+    },
+    {
+      "id": "entscheidung",
+      "title": "Entscheidung: Preisstufe Team",
+      "layout": "technical_two_column",
+      "intent": "comparison",
+      "blocks": [
+        {
+          "id": "entscheidung-text",
+          "type": "paragraph",
+          "text": "Vorschlag: Team-Stufe für 49 € je Platz und Monat ab November."
+        },
+        {
+          "id": "entscheidung-optionen",
+          "type": "bulletList",
+          "items": ["A: 49 € je Platz", "B: 39 € je Platz mit Mindestabnahme"]
+        }
+      ],
+      "canvas": {
+        "version": "learnordie.excalidraw.v1",
+        "width": 1600,
+        "height": 900,
+        "backgroundColor": "#fffef8",
+        "elements": [
+          {
+            "id": "entscheidung:title",
+            "type": "text",
+            "x": 88,
+            "y": 80,
+            "width": 1424,
+            "height": 70,
+            "text": "Entscheidung: Preisstufe Team",
+            "originalText": "Entscheidung: Preisstufe Team",
+            "fontSize": 54,
+            "fontFamily": 1,
+            "lineHeight": 1.3,
+            "strokeColor": "#243a40",
+            "customData": {
+              "sourceBlockId": "entscheidung-heading"
+            }
+          },
+          {
+            "id": "entscheidung-text:text",
+            "type": "text",
+            "x": 88,
+            "y": 230,
+            "width": 1100,
+            "height": 39,
+            "text": "Vorschlag: Team-Stufe für 49 € je Platz und Monat ab November.",
+            "originalText": "Vorschlag: Team-Stufe für 49 € je Platz und Monat ab November.",
+            "fontSize": 30,
+            "fontFamily": 1,
+            "lineHeight": 1.3,
+            "strokeColor": "#243a40",
+            "customData": {
+              "sourceBlockId": "entscheidung-text"
+            }
+          },
+          {
+            "id": "entscheidung-optionen:a",
+            "type": "text",
+            "x": 88,
+            "y": 300,
+            "width": 660,
+            "height": 39,
+            "text": "• A: 49 € je Platz",
+            "originalText": "• A: 49 € je Platz",
+            "fontSize": 30,
+            "fontFamily": 1,
+            "lineHeight": 1.3,
+            "strokeColor": "#243a40",
+            "customData": {
+              "sourceBlockId": "entscheidung-optionen"
+            }
+          },
+          {
+            "id": "entscheidung-optionen:b",
+            "type": "text",
+            "x": 88,
+            "y": 345,
+            "width": 660,
+            "height": 39,
+            "text": "• B: 39 € je Platz mit Mindestabnahme",
+            "originalText": "• B: 39 € je Platz mit Mindestabnahme",
+            "fontSize": 30,
+            "fontFamily": 1,
+            "lineHeight": 1.3,
+            "strokeColor": "#243a40",
+            "customData": {
+              "sourceBlockId": "entscheidung-optionen"
+            }
+          },
+          {
+            "id": "notiz-rahmen",
+            "type": "rectangle",
+            "x": 80,
+            "y": 470,
+            "width": 680,
+            "height": 150,
+            "strokeColor": "#197c70",
+            "backgroundColor": "#fff3bf",
+            "fillStyle": "solid",
+            "roughness": 1,
+            "strokeWidth": 2
+          },
+          {
+            "id": "notiz-text",
+            "type": "text",
+            "x": 104,
+            "y": 494,
+            "width": 632,
+            "height": 36,
+            "text": "Handnotiz: bevorzugt A, wenn der Pilot bis KW 44 zahlt.",
+            "originalText": "Handnotiz: bevorzugt A, wenn der Pilot bis KW 44 zahlt.",
+            "fontSize": 24,
+            "fontFamily": 5,
+            "lineHeight": 1.3,
+            "strokeColor": "#243a40"
+          },
+          {
+            "id": "notiz-pfeil",
+            "type": "arrow",
+            "x": 760,
+            "y": 545,
+            "width": 80,
+            "height": 0,
+            "points": [
+              [0, 0],
+              [80, 0]
+            ],
+            "strokeColor": "#197c70",
+            "endArrowhead": "arrow"
+          },
+          {
+            "id": "entscheidung-kpi",
+            "type": "embeddable",
+            "x": 850,
+            "y": 400,
+            "width": 660,
+            "height": 330,
+            "link": "https://learnordie.invalid/embed/entscheidung-kpi",
+            "customData": {
+              "learnordie": {
+                "type": "scene3d",
+                "sceneId": "business.kpi-bars",
+                "caption": "Erwarteter Monatsumsatz je Option",
+                "data": {
+                  "unit": "€",
+                  "items": [
+                    {
+                      "label": "Option A",
+                      "value": 14700
+                    },
+                    {
+                      "label": "Option B",
+                      "value": 13260
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "files": {}
+      },
+      "speakerNotes": [
+        {
+          "id": "entscheidung-note",
+          "kind": "talkingPoint",
+          "text": "Ich bitte um eine Entscheidung zwischen A und B bis Freitag."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "src-preise",
+          "sourceType": "manual",
+          "label": "Preismodell Team-Stufe, Entwurf 2"
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "createdBy": {
+    "mode": "agent",
+    "model": "ctox-jour-fixe-agent",
+    "promptVersion": "jour-fixe-deck.v1"
+  }
+}

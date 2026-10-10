@@ -38,9 +38,25 @@ pub(crate) fn public_reply_text(reply: &str) -> String {
                 .to_string();
         }
     }
+    // Some providers use a reserved plain header before their metadata JSON.
+    // Keep that tail in the durable attempt, but not in a public answer.
+    let mut offset = 0;
+    let mut fenced = false;
+    let mut plain_tail = None;
+    for line in reply.split_inclusive('\n') {
+        if !fenced && line.trim_start().starts_with("ctox-crew metadata:") {
+            plain_tail = Some(offset);
+            break;
+        }
+        if line.matches("```").count() % 2 == 1 {
+            fenced = !fenced;
+        }
+        offset += line.len();
+    }
+    let reply = &reply[..plain_tail.unwrap_or(reply.len())];
     let mut result = String::new();
     let mut cursor = 0;
-    let mut removed_metadata = false;
+    let mut removed_metadata = plain_tail.is_some();
     while let Some(offset) = reply[cursor..].find("```") {
         let start = cursor + offset;
         result.push_str(&reply[cursor..start]);
@@ -94,9 +110,25 @@ pub(crate) fn finalize_attempt(
         chrono::DateTime::parse_from_rfc3339(finished)?.to_rfc3339()
     };
     let finished = finished.as_str();
-    // Claim the writer before reading finalized_at. A deferred transaction can
-    // otherwise lose its WAL snapshot to another writer and fail on promotion.
-    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    // Parse and validate up to 1 MiB of reply metadata before reserving the
+    // writer. Only the finalized_at guard and durable accounting need its lock.
+    let succeeded = status == "succeeded";
+    let parsed = parse_retrospective(reply);
+    let had_retrospective = parsed.is_some();
+    let retrospective = parsed.and_then(|mut r| {
+        r.normalize();
+        r.validate(succeeded && review_passed == Some(true), owner_feedback)
+            .ok()
+            .map(|()| r)
+    });
+    let learning_json = retrospective
+        .as_ref()
+        .map(|r| serde_json::to_string(&r.learnings))
+        .transpose()?
+        .unwrap_or_else(|| "[]".to_string());
+    // Claim before reading finalized_at: a deferred WAL read cannot safely
+    // promote after a concurrent commit, regardless of busy_timeout.
+    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "crew.finalize_attempt")?;
 
     let member: Option<String> = tx
         .query_row(
@@ -108,27 +140,6 @@ pub(crate) fn finalize_attempt(
     let Some(member) = member else {
         return Ok(());
     };
-    let succeeded = status == "succeeded";
-    let retrospective = parse_retrospective(reply).and_then(|mut r| {
-        r.normalize();
-        match r.validate(succeeded && review_passed == Some(true), owner_feedback) {
-            Ok(()) => Some(r),
-            Err(_) => {
-                // The transaction's finalized_at guard makes this once per attempt.
-                // Neither the rejected text nor credentials are logged.
-                eprintln!("[ctox crew] rejected retrospective for attempt {attempt}: invalid prose or unsupported evidence");
-                None
-            }
-        }
-    });
-    // Learnings no longer get their own store. They wait as typed JSON on the
-    // attempt until the learner (maintenance loop) writes them into the
-    // member's anchors document and refreshes its memory in the LCM.
-    let learning_json = retrospective
-        .as_ref()
-        .map(|r| serde_json::to_string(&r.learnings))
-        .transpose()?
-        .unwrap_or_else(|| "[]".to_string());
     tx.execute(
         "UPDATE crew_attempts SET finalized_at=?2,succeeded=?3,review_passed=?4,
         elapsed_ms=?5,retrospective=?6,learning_json=?7,learning_due=1
@@ -171,6 +182,9 @@ pub(crate) fn finalize_attempt(
     )?;
     retain_learnings(&tx, &member)?;
     tx.commit()?;
+    if had_retrospective && retrospective.is_none() {
+        eprintln!("[ctox crew] rejected retrospective for attempt {attempt}: invalid prose or unsupported evidence");
+    }
     Ok(())
 }
 
@@ -205,6 +219,19 @@ mod tests {
         let reply = format!("Fertig.\n\n```ctox-crew\n{metadata}\n```");
         assert!(parse_retrospective(&reply).is_some());
         assert_eq!(public_reply_text(&reply), "Fertig.");
+        let plain = format!("Fertig.\n\nctox-crew metadata:\n```json\n{metadata}\n```");
+        assert!(parse_retrospective(&plain).is_some());
+        assert_eq!(public_reply_text(&plain), "Fertig.");
+        assert_eq!(
+            public_reply_text("Antwort\nctox-crew metadata:\n{broken secret}"),
+            "Antwort"
+        );
+        let literal = "```text\nctox-crew metadata:\nordinary code\n```";
+        assert_eq!(public_reply_text(literal), literal);
+        assert_eq!(
+            public_reply_text("Quote ctox-crew metadata: literally."),
+            "Quote ctox-crew metadata: literally."
+        );
         let code = "Beispiel:\n```json\n{\"user_data\":1}\n```";
         assert_eq!(public_reply_text(code), code);
         assert_eq!(

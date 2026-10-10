@@ -1,0 +1,132 @@
+{
+  "schemaVersion": "learnordie.slide.v1",
+  "id": "isolated-authoring-example",
+  "title": "Isoliertes Autorenbeispiel – keine Projektdaten",
+  "language": "de",
+  "aspect": "16:9",
+  "theme": "learnordie-north",
+  "deckSettings": {
+    "defaultTransition": "fade",
+    "showSlideNumbers": true,
+    "allowFragments": false,
+    "mobileMode": "scaled"
+  },
+  "slides": [
+    {
+      "id": "s-canvas",
+      "title": "Eine Frage pro Folie",
+      "layout": "title_statement",
+      "intent": "title",
+      "blocks": [
+        {
+          "id": "title-block",
+          "type": "heading",
+          "level": 1,
+          "text": "Was soll der nächste Schritt erreichen?"
+        }
+      ],
+      "canvas": {
+        "version": "learnordie.excalidraw.v1",
+        "width": 1600,
+        "height": 900,
+        "backgroundColor": "#fffef8",
+        "elements": [
+          {
+            "id": "canvas-heading",
+            "type": "text",
+            "x": 120,
+            "y": 140,
+            "width": 1050,
+            "height": 80,
+            "text": "Was soll der nächste Schritt erreichen?",
+            "originalText": "Was soll der nächste Schritt erreichen?",
+            "fontSize": 44,
+            "fontFamily": 1
+          },
+          {
+            "id": "canvas-box",
+            "type": "rectangle",
+            "x": 920,
+            "y": 370,
+            "width": 330,
+            "height": 180
+          }
+        ],
+        "files": {}
+      },
+      "speakerNotes": [
+        {
+          "id": "title-note",
+          "kind": "talkingPoint",
+          "text": "Dies ist ein isoliertes Autorenbeispiel. Die Frage und das Rechteck können im Canvas verändert werden."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "fixture-source",
+          "sourceType": "manual",
+          "label": "Isolierte Autorenfixture; keine produktiven Projektdaten",
+          "locator": "presentation-slides/references/isolated-example.json"
+        }
+      ]
+    },
+    {
+      "id": "s-kpis",
+      "title": "Testdaten sichtbar machen",
+      "layout": "technical_figure_right",
+      "intent": "comparison",
+      "blocks": [
+        {
+          "id": "kpi-heading",
+          "type": "heading",
+          "level": 2,
+          "text": "Isolierte Testläufe"
+        },
+        {
+          "id": "kpi-data",
+          "type": "scene3d",
+          "sceneId": "business.kpi-bars",
+          "altText": "Isolierte Testfixture mit drei bestandenen und einem offenen Testlauf; kein historischer Vergleich.",
+          "data": {
+            "unit": "Läufe",
+            "items": [
+              {
+                "label": "Bestanden",
+                "value": 3
+              },
+              {
+                "label": "Offen",
+                "value": 1,
+                "better": "lower"
+              }
+            ]
+          }
+        },
+        {
+          "id": "missing-baseline",
+          "type": "paragraph",
+          "text": "Kein gespeicherter vorletzter Termin: Vergleich nicht verfügbar."
+        }
+      ],
+      "speakerNotes": [
+        {
+          "id": "kpi-note",
+          "kind": "talkingPoint",
+          "text": "Diese Zahlen stammen nur aus der isolierten Testquelle. Ein historischer Vergleich ist nicht verfügbar."
+        }
+      ],
+      "sourceRefs": [
+        {
+          "id": "fixture-source",
+          "sourceType": "manual",
+          "label": "Isolierte Autorenfixture: bestanden 3, offen 1",
+          "locator": "presentation-slides/references/isolated-example.json"
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "createdBy": {
+    "mode": "manual"
+  }
+}

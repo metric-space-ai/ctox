@@ -6,12 +6,31 @@ import vm from 'node:vm';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './workjet-supervisor-execution-contract.generated.mjs';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './workjet-project-kpis-contract.generated.mjs';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './workjet-jour-fixe-contract.generated.mjs';
+import { readWorkjetCalendar } from './workjet-calendar-native.mjs';
+import { validateSupervisorLumaValue } from './workjet-supervisor-luma-contract.generated.mjs';
+
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
 const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
 
+test('calendar reads use the authenticated guest without loading project or command windows', async () => {
+  const state = {
+    session: { id: 'owner-1' }, db: {}, syncConfig: { instance_id: 'instance-1' },
+    sync: { requestNative: async () => ({ schema: 'ctox.workjet.calendar.v1', request_id: 'read-1', action: 'accounts', data: { ok: true, accounts: [], truncated: false } }) },
+  };
+  const context = vm.createContext({ state, readWorkjetCalendar, actorContext: session => session });
+  vm.runInContext(controlSource + '\nglobalThis.control = workjetProjectControl;', context);
+  assert.deepEqual(JSON.parse(JSON.stringify(await context.control({ action: 'project.calendar.accounts.read', commandId: 'read-1' }))), {
+    action: 'project.calendar.accounts.read', commandId: 'read-1', calendar: { ok: true, accounts: [], truncated: false },
+  });
+  state.sync.requestNative = async () => {
+    state.session = { id: 'owner-2' };
+    return { schema: 'ctox.workjet.calendar.v1', request_id: 'read-1', action: 'accounts', data: { ok: true, accounts: [], truncated: false } };
+  };
+  await assert.rejects(context.control({ action: 'project.calendar.accounts.read', commandId: 'read-1' }), /scope changed/);
+});
 test('Workjet project control is installed and uses the RxDB command plane', () => {
   assert.match(appSource, /globalThis\.workjetProjectControl = workjetProjectControl/);
   assert.ok(controlStart >= 0 && controlEnd > controlStart, 'project control implementation exists');
@@ -233,7 +252,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
           id: command.payload.project_id, name: command.payload.name,
           owner_user_id: 'owner-1', status: 'active', created_at_ms: 1_700_000_000_000,
         };
-        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe']) {
+        for (const field of ['description', 'repo_url', 'public_url', 'info', 'jour_fixe', 'supervisor_luma_id']) {
           if (Object.hasOwn(command.payload, field) && command.payload[field] !== null) {
             project[field] = command.payload[field];
           }
@@ -248,7 +267,7 @@ function projectConfigurationFixture(changeReceipt = () => {}, actor = 'owner-1'
       },
     },
   };
-  const context = { state, actorContext: (session) => ({ id: session.id }), URL };
+  const context = { state, actorContext: (session) => ({ id: session.id }), URL, validateSupervisorLumaValue };
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return {
     commands,
@@ -581,6 +600,74 @@ function projectConfigurationRequest(extra = {}) {
     projectId: 'project-1', title: 'CTOX', ...extra,
   };
 }
+
+test('Supervisor selection uses the generated native corpus without selecting a producer', async () => {
+  const corpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-supervisor-luma-v1.json', import.meta.url), 'utf8'));
+  for (const { value } of corpus.valid_cases) {
+    const fixture = projectConfigurationFixture();
+    const extra = Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {};
+    const result = await fixture.invoke(projectConfigurationRequest(extra));
+    assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), Object.hasOwn(value, 'supervisor_luma_id'));
+    if (Object.hasOwn(value, 'supervisor_luma_id')) {
+      assert.equal(fixture.commands[0].payload.supervisor_luma_id, value.supervisor_luma_id);
+      assert.equal(result.project.supervisorLumaId, value.supervisor_luma_id);
+    } else {
+      assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+    }
+    assert.equal(Object.hasOwn(result.project, 'route'), false);
+    assert.equal(Object.hasOwn(result.project, 'model'), false);
+  }
+});
+
+test('Supervisor selection is bounded, typed and refuses execution or account payloads', async () => {
+  for (const value of ['', ' '.repeat(8), 'x'.repeat(161), 7, {}, undefined, 'luma\nother']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: value })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const key of ['route', 'model', 'nativeAccountReference', 'ownerUserId']) {
+    const fixture = projectConfigurationFixture();
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: 'luma-physics', [key]: 'foreign' })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  const fixture = projectConfigurationFixture();
+  const id = '🦊'.repeat(160);
+  assert.equal((await fixture.invoke(projectConfigurationRequest({ supervisorLumaId: id }))).project.supervisorLumaId, id);
+});
+
+test('Supervisor configuration rejects an unconfirmed selection or unsuccessful clear', async () => {
+  for (const [requested, returned] of [['luma-physics', undefined], ['luma-physics', 'luma-other'], [null, 'luma-old']]) {
+    const fixture = projectConfigurationFixture(receipt => {
+      if (returned === undefined) delete receipt.result.project.supervisor_luma_id;
+      else receipt.result.project.supervisor_luma_id = returned;
+    });
+    await assert.rejects(fixture.invoke(projectConfigurationRequest({ supervisorLumaId: requested })), /unmatched supervisor Luma/);
+  }
+});
+
+test('Project list exposes configured Supervisor selection only on a dedicated opt-in', async () => {
+  const fixture = nativeProjectListFixture();
+  fixture.context.validateSupervisorLumaValue = validateSupervisorLumaValue;
+  fixture.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
+  assert.equal(Object.hasOwn((await fixture.invoke()).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeConfiguration: true, includeSupervisorLuma: false })).projects[0], 'supervisorLumaId'), false);
+  const selected = (await fixture.invoke({ includeSupervisorLuma: true })).projects[0];
+  assert.equal(selected.supervisorLumaId, 'luma-physics');
+  assert.equal(Object.hasOwn(selected, 'model'), false);
+  delete fixture.rows.workjet_projects[0].supervisor_luma_id;
+  assert.equal(Object.hasOwn((await fixture.invoke({ includeSupervisorLuma: true })).projects[0], 'supervisorLumaId'), false);
+  for (const value of ['true', null, 1, {}]) {
+    await assert.rejects(fixture.invoke({ includeSupervisorLuma: value }), /includeSupervisorLuma/);
+  }
+});
+
+test('Old configure callers do not receive a stored Luma selection without sending that field', async () => {
+  const fixture = projectConfigurationFixture(receipt => { receipt.result.project.supervisor_luma_id = 'luma-physics'; });
+  const result = await fixture.invoke(projectConfigurationRequest());
+  assert.equal(Object.hasOwn(result.project, 'supervisorLumaId'), false);
+  assert.equal(Object.hasOwn(fixture.commands[0].payload, 'supervisor_luma_id'), false);
+});
 
 test('project configuration forwards bounded metadata and returns native fields to Workjet', async () => {
   const fixture = projectConfigurationFixture();
@@ -1361,6 +1448,65 @@ function supervisorTurnFixture(change = () => {}) {
   vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
   return { commands, invoke: async request => JSON.parse(JSON.stringify(await context.invoke(request))) };
 }
+function supervisorHistoryFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result = {
+      ok: true, contract: 'ctox.workjet.supervisor_history.v1',
+      history_contract: 'ctox.workjet.supervisor_history.v1',
+      binding: receipt.result.binding,
+      history_page: {
+        project_id: 'project-1', thread_id: supervisorThread,
+        thread_key: `business-os/threads/${supervisorThread}`,
+        turns: [{ command_id: nativeTurnId, task_id: 'queue:system::supervisor-turn',
+          created_at_ms: 12, user_text: 'Earlier Owner question', user_text_truncated: false }],
+        has_more: false,
+      },
+    };
+    change(receipt, state);
+  });
+}
+const historyRequest = extra => ({
+  action: 'project.supervisor.turn.history', commandId: 'history-1',
+  projectId: 'project-1', threadId: supervisorThread, ...extra,
+});
+test('Supervisor history enumerates earlier native identities without submitting prompts', async () => {
+  const fixture = supervisorHistoryFixture();
+  const result = await fixture.invoke(historyRequest({ historyPage: {
+    limit: 2, cursor: { before_created_at_ms: 20, before_command_id: 'previous-native-command' },
+  } }));
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.history');
+  assert.deepEqual(JSON.parse(JSON.stringify(command.payload.history_page)), {
+    cursor: { before_created_at_ms: 20, before_command_id: 'previous-native-command' }, limit: 2,
+  });
+  assert.equal(command.payload.target_command_id, undefined);
+  assert.equal(command.payload.goal, undefined);
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(result.historyPage.turns[0].command_id, nativeTurnId);
+  assert.equal(result.historyPage.turns[0].user_text, 'Earlier Owner question');
+});
+test('Supervisor history rejects foreign receipts and stale session identity', async () => {
+  for (const change of [
+    receipt => { receipt.result.binding.thread_id = 'foreign'; },
+    receipt => { receipt.result.history_page.project_id = 'foreign'; },
+    receipt => { receipt.result.history_contract = 'foreign'; },
+    receipt => { receipt.payload.history_page = { limit: 20 }; },
+    receipt => { receipt.result.history_page.turns[0].created_at_ms = -1; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorHistoryFixture(change).invoke(historyRequest({})));
+});
+test('Supervisor history rejects malformed pagination before dispatch', async () => {
+  for (const historyPage of [
+    { limit: 0 }, { limit: 21 }, { owner_user_id: 'foreign' },
+    { cursor: { before_created_at_ms: -1, before_command_id: 'command' } },
+  ]) {
+    const fixture = supervisorHistoryFixture();
+    await assert.rejects(fixture.invoke(historyRequest({ historyPage })));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
+
 function supervisorTurnRequest(action, extra = {}) {
   return {
     action: `project.supervisor.turn.${action}`, commandId: `${action}-1`, projectId: 'project-1', threadId: supervisorThread,
@@ -1368,6 +1514,74 @@ function supervisorTurnRequest(action, extra = {}) {
     ...(action === 'cancel' ? { reason: 'Cancelled in Workjet' } : {}), ...extra,
   };
 }
+
+test('explicit supervisor kinds survive the shell bridge and legacy submits omit them', async () => {
+  for (const kind of [undefined, 'work', 'conversation']) {
+    const fixture = supervisorTurnFixture();
+    await fixture.invoke(supervisorTurnRequest('submit', kind === undefined ? {} : { turnKind: kind }));
+    assert.equal(fixture.commands.length, 1);
+    assert.equal(fixture.commands[0].command.payload.turn_kind, kind);
+    assert.equal(Object.hasOwn(fixture.commands[0].command.payload, 'turn_kind'), kind !== undefined);
+  }
+  for (const turnKind of [null, 'chat', {}, true]) {
+    const fixture = supervisorTurnFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('submit', { turnKind })));
+    assert.equal(fixture.commands.length, 0);
+  }
+  await assert.rejects(supervisorTurnFixture(receipt => {
+    receipt.payload = { ...receipt.payload, turn_kind: 'work' };
+  }).invoke(supervisorTurnRequest('submit', { turnKind: 'conversation' })));
+});
+
+function supervisorCapabilitiesFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result = {
+      ok: true, contract: 'ctox.workjet.supervisor_turn_capabilities.v1',
+      binding: receipt.result.binding,
+      turn_kinds: ['work', 'conversation'], default_turn_kind: 'work',
+    };
+    change(receipt, state);
+  });
+}
+const supervisorCapabilitiesRequest = {
+  action: 'project.supervisor.turn.capabilities', commandId: 'capabilities-1',
+  projectId: 'project-1', threadId: supervisorThread,
+};
+
+test('supervisor capabilities are a scoped native control without creating a turn', async () => {
+  const fixture = supervisorCapabilitiesFixture();
+  const result = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.deepEqual(result.turnKinds, ['work', 'conversation']);
+  assert.equal(result.defaultTurnKind, 'work');
+  assert.equal(result.binding.threadId, supervisorThread);
+  assert.equal(result.contract, 'ctox.workjet.supervisor_turn_capabilities.v1');
+  assert.equal(Object.hasOwn(result, 'turn'), false);
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.capabilities');
+  assert.deepEqual(JSON.parse(JSON.stringify(command.payload)), { project_id: 'project-1', thread_id: supervisorThread });
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(options.until, 'terminal');
+});
+
+test('supervisor capabilities refuse foreign malformed stale and unsupported confirmations', async () => {
+  for (const change of [
+    receipt => { receipt.command_id = 'foreign'; },
+    receipt => { receipt.target_record_id = 'foreign'; },
+    receipt => { receipt.payload = { ...receipt.payload, thread_id: 'foreign' }; },
+    receipt => { receipt.result.binding.thread_key = 'foreign'; },
+    receipt => { receipt.result.contract = 'ctox.workjet.supervisor_turn.v1'; },
+    receipt => { receipt.result.turn_kinds = ['conversation', 'work']; },
+    receipt => { receipt.result.turn_kinds.push('invented'); },
+    receipt => { receipt.result.default_turn_kind = 'conversation'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorCapabilitiesFixture(change).invoke(supervisorCapabilitiesRequest));
+  for (const extra of [{ goal: 'Do work' }, { targetCommandId: nativeTurnId }, { turnKind: 'conversation' }]) {
+    const fixture = supervisorCapabilitiesFixture();
+    await assert.rejects(fixture.invoke({ ...supervisorCapabilitiesRequest, ...extra }));
+    assert.equal(fixture.commands.length, 0);
+  }
+});
 
 test('supervisor submit watch cancel use the native control plane on the same CodeThread', async () => {
   for (const action of ['submit', 'watch', 'cancel']) {
@@ -1463,6 +1677,64 @@ test('opted-in supervisor watch forwards the bounded fixture contract and actual
   assert.equal(result.executionPage.attempt.attempt_index, 47);
   assert.equal(result.executionPage.attempt.run_id, undefined);
   assert.equal(result.executionPage.events[0].sequence, 12);
+});
+
+test('public assistant text opt-in survives the Shell bridge and preserves native chunks', async () => {
+  const publicText = { turn_id: 'provider-turn', item_id: 'provider-item', phase: 'final_answer',
+    offset: 0, text: 'Public reply 🦊', completed: false, truncated: false };
+  for (const include of [true, false]) {
+    const fixture = executionFixture(receipt => {
+      if (include) {
+        receipt.result.execution_page.public_text_supported = true;
+        receipt.result.execution_page.events[0] = { id: 'public-event', sequence: 12,
+          kind: 'worker.assistant_text', title: 'Assistant response',
+          created_at_ms: 1791410400000, public_text: publicText };
+        receipt.result.execution_page.next_cursor.after_event_id = 'public-event';
+      }
+    });
+    const result = await fixture.invoke(supervisorTurnRequest('watch', {
+      executionPage: { include_public_text: include, attempt_id: 'native-attempt', limit: 1 },
+    }));
+    assert.equal(fixture.commands[0].command.payload.execution_page.include_public_text, include);
+    if (include) {
+      assert.equal(result.executionPage.public_text_supported, true);
+      assert.deepEqual(JSON.parse(JSON.stringify(result.executionPage.events[0].public_text)), publicText);
+    } else {
+      assert.equal(result.executionPage.public_text_supported, undefined);
+      assert.equal(result.executionPage.events[0].public_text, undefined);
+    }
+  }
+  const invalid = executionFixture();
+  await assert.rejects(invalid.invoke(supervisorTurnRequest('watch', {
+    executionPage: { include_public_text: 'true' },
+  })));
+  assert.equal(invalid.commands.length, 0);
+});
+
+test('native Messages opt-in preserves upstream identity without inventing a provider turn', async () => {
+  const nativeText={ execution_key:'execution', model_operation_id:'model-op',
+    native_message_id:'msg_native', model:'claude-opus-5-5', upstream_request_id:'request_native',
+    offset:0, text:'Native response 🦊', completed:false };
+  const fixture=executionFixture(receipt => {
+    receipt.result.execution_page.native_message_text_supported=true;
+    receipt.result.execution_page.events[0]={ id:'native-text-event', sequence:12,
+      kind:'worker.native_message_text',title:'Assistant response',created_at_ms:1791410400000,
+      native_message_text:nativeText };
+    receipt.result.execution_page.next_cursor.after_event_id='native-text-event';
+  });
+  const result=await fixture.invoke(supervisorTurnRequest('watch', {
+    executionPage:{include_native_message_text:true,attempt_id:'native-attempt',limit:1},
+  }));
+  assert.equal(fixture.commands[0].command.payload.execution_page.include_native_message_text,true);
+  assert.equal(result.executionPage.native_message_text_supported,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.executionPage.events[0].native_message_text)),nativeText);
+  assert.equal(result.executionPage.events[0].public_text,undefined);
+  assert.equal(result.executionPage.events[0].native_message_text.turn_id,undefined);
+  const bad=executionFixture();
+  await assert.rejects(bad.invoke(supervisorTurnRequest('watch',{
+    executionPage:{include_native_message_text:'true'},
+  })));
+  assert.equal(bad.commands.length,0);
 });
 
 test('an opted-in queued supervisor turn preserves the absence of an actual attempt', async () => {
@@ -1592,4 +1864,76 @@ test('Owner confirmation rejects stale or substituted native goal and meeting re
     await assert.rejects(fixture.invoke(meetingOwnerRequest('project.jour_fixe.todos.confirm')));
     assert.equal(fixture.commands.length, 1);
   }
+});
+
+function supervisorInputFixture(change = () => {}) {
+  return supervisorTurnFixture((receipt, state) => {
+    receipt.result.contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input = {
+      input_id: 'native-owner-input-1', sequence: 1,
+      body: receipt.payload.body, created_at: '2026-10-09T17:00:00Z',
+    };
+    receipt.result.delivery = 'next_slice';
+    receipt.result.worker_interrupted = false;
+    change(receipt, state);
+  });
+}
+test('Owner follow-up targets the existing native task without submitting another task', async () => {
+  const fixture = supervisorInputFixture();
+  const result = await fixture.invoke(supervisorTurnRequest('input', { body: 'The PR source is attached to the existing task.' }));
+  assert.equal(fixture.commands.length, 1);
+  const { command, options } = fixture.commands[0];
+  assert.equal(command.command_type, 'ctox.workjet.project.supervisor.turn.input');
+  assert.equal(command.payload.target_command_id, nativeTurnId);
+  assert.equal(command.payload.goal, undefined);
+  assert.equal(command.payload.turn_kind, undefined);
+  assert.equal(options.sync_queue_tasks, false);
+  assert.equal(result.turn.commandId, nativeTurnId);
+  assert.equal(result.turn.taskId, 'queue:system::supervisor-turn');
+  assert.equal(result.turn.attempt, 0);
+  assert.equal(result.input.body, command.payload.body);
+  assert.equal(result.delivery, 'next_slice');
+  assert.equal(result.workerInterrupted, false);
+});
+test('Owner follow-up rejects forged approvals routes oversize text and mismatched receipts', async () => {
+  for (const extra of [
+    { body: '' }, { body: 'x'.repeat(4097) }, { body: 'new facts', turnKind: 'conversation' },
+    { body: 'new facts', approved: true }, { body: 'new facts', ownerUserId: 'foreign' },
+  ]) {
+    const fixture = supervisorInputFixture();
+    await assert.rejects(fixture.invoke(supervisorTurnRequest('input', extra)));
+    assert.equal(fixture.commands.length, 0);
+  }
+  for (const change of [
+    receipt => { receipt.result.turn.command_id = 'different-task'; },
+    receipt => { receipt.result.input.body = 'different intent'; },
+    receipt => { receipt.result.input.sequence = 0; },
+    receipt => { receipt.result.worker_interrupted = true; },
+    receipt => { receipt.result.delivery = 'applied'; },
+    receipt => { receipt.result.input.created_at = 'not a date'; },
+    (receipt, state) => { state.session = { id: 'foreign' }; },
+  ]) await assert.rejects(supervisorInputFixture(change).invoke(
+    supervisorTurnRequest('input', { body: 'Keep the same task and its approvals.' }),
+  ));
+});
+
+test('same-task input capability is opt-in and comes from the actual scoped native receipt', async () => {
+  const fixture = supervisorCapabilitiesFixture(receipt => {
+    receipt.result.input_contract = 'ctox.workjet.supervisor_input.v1';
+    receipt.result.input_delivery = 'next_slice';
+    receipt.result.max_input_chars = 4096;
+  });
+  const result = await fixture.invoke({ ...supervisorCapabilitiesRequest, includeInput: true });
+  assert.equal(fixture.commands[0].command.payload.include_input, true);
+  assert.equal(result.inputContract, 'ctox.workjet.supervisor_input.v1');
+  assert.equal(result.inputDelivery, 'next_slice');
+  assert.equal(result.maxInputChars, 4096);
+  const legacy = await fixture.invoke(supervisorCapabilitiesRequest);
+  assert.equal(Object.hasOwn(legacy, 'inputContract'), false);
+  await assert.rejects(supervisorCapabilitiesFixture().invoke({
+    ...supervisorCapabilitiesRequest, includeInput: true,
+  }), /does not support same-task/);
+  const invalid = supervisorCapabilitiesFixture();
+  await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
+  assert.equal(invalid.commands.length, 0);
 });

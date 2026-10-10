@@ -1,5 +1,184 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native peer lock and private subscription ordering
+
+The native peer and offline recovery writers retain a `NativePeerProcessLock`.
+Its destructor explicitly unlocks before closing the file: a concurrent child
+spawn may temporarily inherit the same open file description, so close alone
+cannot establish that the retired owner released its flock. Status probes that
+successfully acquire the lock use the same explicit release. Recovery retains
+its peer guard even after releasing the SQLite transaction.
+
+Private BusinessData pumps subscribe to the exact connection before the remote
+request and release events only after the complete local ACK. An event received
+while that release races the receive joins the same FIFO as the pre-ACK snapshot;
+it cannot overtake SnapshotStart or earlier pages. Exact peer, session and
+accepted subscription checks, bounded pre-ACK buffering and current publication
+authority remain required.
+
+The production browser smoke must resolve the bounded `startCollection()`
+pending handle through its `ready` promise before retaining a replication state.
+A pending stub keeps `state: null` even after its underlying bridge opens;
+polling that captured null cannot diagnose native transport availability.
+Command/queue peer probes request a direct bridge and share the existing
+startup deadline across acquisition and peer readiness. Readiness rejection,
+timeout, missing state and a closed or absent native peer remain failures.
+
+The right-click fixture respects the native admin-only `business_users` policy:
+its ordinary requester sees only its own option, while the independently
+authenticated admin reviewer must see the real reviewer/requester directory
+options after its native snapshot completes. Known reviewer IDs can be submitted
+for approval without granting the requester administrative collection access.
+
+### Unavailable app and task collections
+
+A typed app data-read denial opens the existing permission surface inside the
+same window, with an action to inspect app rights. It is not a failed mount or
+an automatic retry; unexpected mount errors keep their recovery diagnostics.
+Crew observes ordinary collections through invalidation-only subscriptions,
+then executes its bounded reads. A native collection-specific read denial
+retires that task source and its exact local/readiness listeners for the current
+mount. Authorized command rows can still render, but the unavailable source is
+marked as restricted instead of empty, idle or syncing. Denials never trigger a
+sort fallback, read retry, local data fallback, permission grant or write. A new
+mount under new authority starts fresh; unrelated errors remain visible.
+Global context resolves known target-card module metadata before its owning
+window and the desktop route. Unknown DOM IDs never become a module identity.
+A hidden app route preserves its visibility denial and shows a visible reason;
+it neither creates a window nor changes native access.
+
+### Provider registry projection
+
+The native provider-federation policy publishes `workjet_provider_registry`
+through existing BusinessData/RxDB/WebRTC, one snapshot per canonical Owner.
+Adoption, catalog observations, shared selection, exclusions and withdrawals
+persist public metadata atomically with their domain effect. Receipts retain
+only its reference; normal projection repair reads the latest native record.
+The existing business-record loop backfills adopted accounts at startup.
+
+Only logical account/holder identities, configured enablement, actual observed
+IDs/timestamps and selected/effective/excluded models are serialized. No
+credential, private selector, fingerprint or secret reference leaves the holder.
+Configured credentials/catalog success do not prove inference; this adapter's
+`inferenceVerified` remains false. Freshness expires from attempt/success
+timestamps and `catalog_freshness_ms`. Disabled accounts keep their rows.
+
+Readers validate current active Owner/Admin identity and verified canonical
+alias before generic administrative access. Held and ordinary readers require
+current native owner/record/account associations. Foreign administrators,
+forged envelopes and revoked users fail closed; peers cannot
+write this collection. Older metadata snapshots remain readable across normal
+configuration changes; execution uses separate current authority and bindings.
+Startup backfill is bounded at 256 owners and snapshots
+at 1 MiB. This is metadata, not execution authority or holder dispatch.
+Computer-held adoption, routed inference and unified Settings remain open.
+
+On first native main-route discovery, a previously unset provider selection
+inherits only the existing configured model if the authenticated live list
+confirms it. An explicit provider selection, including an empty one, is never
+overwritten. Missing, rejected, stale or disabled discovery does not create a
+default; the catalog is not automatically selected in full. The adoption hint
+stays local to the holder and does not prove successful inference or quota.
+
+
+### Selected task history and role changes
+
+The Crew native history observer uses the existing live `sync.mayReadCollection`
+predicate before leasing `ctox_runs` and `ctox_harness_events`, after acquisition,
+and before accepting a native hint or replacement bridge. A role retirement
+releases its exact lease and subscriptions and exposes unavailable history in the
+Crew UI. A typed `COLLECTION_READ_FORBIDDEN` race follows the same retirement;
+uncoded denials and unexpected failures still reach the error handler. No local
+fallback, projection write or permission grant follows a denial. A new authorized
+observation can acquire fresh leases; a retired one never retries on its own.
+
+### Native Jour fixe narration retries
+
+The native narration reservation is unique per meeting, deck revision and
+slide. A `failed` or `failed_prerequisite` reservation without an audio receipt
+can be retried with either the same operation ID or a new one after readiness
+is restored. A new ID reuses the existing slot atomically and retains its
+three-attempt budget. Current Supervisor, lease, owner, deck and file-policy
+checks still run before synthesis and before audio publication.
+Running, uncertain and completed reservations cannot start another synthesis;
+conflicts identify the existing operation ID and status. Replaying the committed
+operation returns its retained receipt and projects the same stored WAV bytes.
+A failed attempt is not a narrated slide: only committed audio can make the
+meeting ready.
+
+Local HTTP MCP dispatches tools on ordinary OS threads. Narration drives the
+configured speech adapter on a current-thread Tokio runtime only when no
+runtime is present; managed gateway workers retain their existing runtime.
+Executor setup failure is `execution_unavailable`, never a speech-configuration
+failure. Preparation retrospectives use the retained meeting state and actual
+stored audio references; worker claims and speculative provider learnings do
+not replace that evidence.
+
+
+
+### Durable Supervisor model eligibility
+
+Crew's current admitted command/plan lease and project Owner/binding fence can
+call `provider_federation::resolve_supervisor_model` with its held Policy
+connection, verified canonical Owner, canonical account ID/revision and exact
+model. The sealed native result has no JSON/credential representation. It checks
+current Owner identity, owned enabled/configured account, current revision,
+fresh successful live discovery, shared provider selection and account
+exclusions. Its `revalidate` method rejects changed Owner, holder, private
+selector/binding, policy revision or catalog before dispatch/publication.
+
+This is instance Supervisor eligibility, not an enrolled computer consumer or
+execution authorization. No browser `ConsumerFacts` is synthesized. Crew must
+retain/re-enter its real durable lease and project fence; the holding adapter
+must verify current local credentials and the exact account pin, or obtain
+authenticated remote holder execution authority. No callback may await or
+re-enter secret/network APIs under the Policy transaction. This seam does not
+change an unconfigured project's default route or prove installed inference.
+
+### Native federation consumer authority
+
+`ctox.workjet.consumer.v1` is a read-only, guarded auxiliary request on the
+existing authenticated WebRTC pool: exactly one `{version:1}` parameter,
+maximum 1 KiB serialized parameters. It resolves the accepted connection and
+captured capability to its possession-bound pairing, retained inviter, and an
+explicitly associated assigned Workjet computer. The reply is
+`{version:1,consumer:{ownerUserId,ownerEpoch,actorUserId,actorEpoch,computerId,
+computerRevision,pairingId,deviceId,proofKeyThumbprint,pairingRevision}}`.
+These public facts are not a forwarded authorization token. Unknown identity
+fields are rejected; ambiguous, revoked, unassigned and legacy unowned pairings
+fail closed. No credential or model ID enters this surface.
+
+An owner associates an existing, proven pairing using the existing
+`ctox.workjet.computer.assign` command's optional `device_binding_id`. Omission
+preserves the association; an empty string removes it. The pairing must have
+been created by that verified owner through the native device-control channel.
+Existing operator/legacy invites without retained inviter identity are not
+silently attributed to an owner. Native association details stay out of the
+computer projection. Computer IDs remain opaque; device IDs and hostnames are
+never substituted for them. This is computer enrollment, not an account opt-in.
+All enrolled computers remain eligible for all federation accounts by default;
+only the account-routing owner's explicit per-computer withdrawal restricts use.
+
+Native adapters use `consumer_authority::AdmittedConsumerAuthority::capture`
+with the exact accepted connection and captured token from a guarded auxiliary
+handler, then `with_current` after awaits and around bounded dispatch work.
+The sealed context holds the origin connection, issuer, actor/device and
+membership revision fences. Response publication rechecks the same revisions
+at physical IO through the existing guarded transport. No await, network wait
+or transport/secret API reentry is allowed inside the current-authority callback.
+This local origin authority does not prove a distributed holder/account fence;
+Models owns account registry, withdrawals, signed forwarding and holder dispatch.
+Installed account routing and session-continuation acceptance remain separate.
+
+Registered account-calendar reads use `ctox.workjet.calendar.read.v1` as a typed,
+read-only auxiliary request on the `communication_accounts` WebRTC lane. The
+native peer derives actor/role from the browser capability, enforces collection
+read access and canonical mailbox ownership or explicit sharing, and rechecks
+both after provider I/O. The shell exposes `project.calendar.accounts.read` and
+`project.calendar.events.read` to the existing Workjet guest; no second external
+MCP grant, caller identity or HTTP browser data bridge is required. Calendar
+request/page validators are generated from `workjet-calendar-v1.json` by
+`src/core/rxdb/tools/build_workjet_jour_fixe_contract.mjs`.
 Native checkpoint handoff uses the existing admitted control-only WebRTC pool
 for signed 8KiB blocks, with current source disclosure and target receive checks.
 The same-UID `ctox sync handoff-copy` control socket carries only identifiers and
@@ -1043,6 +1222,26 @@ the live lease set; resource counts are derived from that set. Late completion
 or rejection of a replaced promise cannot publish over the current bridge.
 Restart and suspend retain leases; explicit collection stop and runtime shutdown
 revoke them. Releasing an old revoked lease cannot decrement a new lease.
+
+Stopping a bridge records `active:false` even when no cached promise remains,
+so heartbeat repair cannot treat a closed module's old active diagnostic as
+live demand. Single and batch repairs recheck the current lease/pin ownership
+at repair entry, after stopping and before queued startup. Explicit retirement
+also fences an already captured repair generation, including legacy direct
+bridges with no window lease or pin. A repair whose last owner closed
+does not reopen the collection. Late startup is cancelled by its exact bridge
+generation; its callbacks cannot publish readiness or schedule another repair
+over a stopped or replacement bridge. Cancellation is idempotent.
+Expected local stop diagnostics coalesce with the existing collection burst;
+native faults retain their immediate diagnostic path. Unleased demand-only
+collections keep their explicit skipped/demand-only contract.
+
+Tickets uses invalidation-only collection subscriptions to schedule its bounded
+refreshes. Subscribing no longer starts an unused full queue/crew snapshot;
+explicit reads retain native policy errors and existing bounded handling.
+`sync-native-read.test.mjs` covers close-during-repair, remaining ownership and
+late startup, and `tickets.test.mjs` exercises actual RxDB invalidation and
+denied explicit reads. These are component checks, not installed acceptance.
 
 A lease exposes the authoritative `bridge` and `subscribeBridge(listener)`, whose
 subscription is released on lease release/revocation. Command readiness follows

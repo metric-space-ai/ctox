@@ -81,6 +81,79 @@ impl CodexThread {
         crate::native_mcp_dispatch::register_native_mcp_dispatch(&self.codex.session, dispatcher)
     }
 
+    /// Original initialize result from this loaded Session's managed connections.
+    /// This is descriptive evidence only: a later ping, tool success or copied
+    /// snapshot cannot reconcile startup, and this method changes no effect ledger.
+    pub async fn native_original_mcp_startup(
+        &self,
+    ) -> std::io::Result<crate::native_mcp_startup::NativeMcpStartupSnapshot> {
+        let manager = self
+            .codex
+            .session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await;
+        let servers = manager
+            .native_original_startup(false)
+            .await
+            .map_err(std::io::Error::other)?;
+        Ok(crate::native_mcp_startup::NativeMcpStartupSnapshot::new(
+            self.codex.session.conversation_id,
+            servers,
+        ))
+    }
+
+    /// Trusted native factory verification of the original bounded handshake.
+    /// The verifier runs after releasing the manager lock. Refresh/submission
+    /// fences are checked synchronously afterwards; imported metadata has no path here.
+    pub async fn reconcile_native_mcp_startup<F>(&self, verify: F) -> std::io::Result<()>
+    where
+        F: FnOnce(&crate::native_mcp_startup::NativeMcpStartupSnapshot) -> std::io::Result<()>,
+    {
+        let generation = self.codex.session.native_effects.mcp_generation()?;
+        let servers = {
+            let manager = self
+                .codex
+                .session
+                .services
+                .mcp_connection_manager
+                .read()
+                .await;
+            manager
+                .native_original_startup(true)
+                .await
+                .map_err(std::io::Error::other)?
+        };
+        let snapshot = crate::native_mcp_startup::NativeMcpStartupSnapshot::new(
+            self.codex.session.conversation_id,
+            servers,
+        );
+        verify(&snapshot)?;
+        self.codex
+            .session
+            .native_effects
+            .reconcile_mcp_startup(generation)
+    }
+
+    /// Verify this actual native restore input under the protected receiver's
+    /// current fences. Clears only previous history, never MCP or new effects.
+    pub fn reconcile_native_previous_session<F>(&self, verify: F) -> std::io::Result<()>
+    where
+        F: FnOnce(&crate::NativePreviousSessionSnapshot) -> std::io::Result<()>,
+    {
+        let snapshot = self
+            .codex
+            .session
+            .native_effects
+            .previous_snapshot(self.codex.session.conversation_id)?;
+        verify(&snapshot)?;
+        self.codex
+            .session
+            .native_effects
+            .reconcile_previous(&snapshot)
+    }
+
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
     }

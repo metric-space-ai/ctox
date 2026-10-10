@@ -2,6 +2,9 @@
 export const JOUR_FIXE_SCHEMA = "ctox.workjet.jour_fixe.v1";
 export const JOUR_FIXE_VERSION = 1;
 export const JOUR_FIXE_TYPES = deepFreeze({
+  "ReadConfirmedGoalRequest": {
+    "fields": {}
+  },
   "MeetingState": {
     "enum": [
       "planned",
@@ -1072,6 +1075,9 @@ export function validateJourFixeValue(typeName, value) {
         if ((['minimum','min_chars','min_items'].includes(constraint) && metric < bound)
             || (['maximum','max_chars','max_items'].includes(constraint) && metric > bound)) throw new Error(at + ': ' + constraint);
       }
+    }
+    for (const order of shape.ordered_fields ?? []) {
+      if (value[order.after] <= value[order.before]) throw new Error(field + '.' + order.after + ': must follow ' + order.before);
     }
   }
   try { validate(typeName, value, typeName); return {ok:true}; }

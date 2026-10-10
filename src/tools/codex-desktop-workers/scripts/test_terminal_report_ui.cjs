@@ -176,6 +176,11 @@ for(const lane of ['pair','parent','worker']){
  const coords=[...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="[^"]+" data-kind="([^"]+)"[^>]* cx="([^"]+)" cy="([^"]+)"/g)].filter(m=>m[1]===lane).map(m=>[Number(m[2]),Number(m[3])]);
  for(let i=0;i<coords.length;i++)for(let j=i+1;j<coords.length;j++)assert.ok(Math.hypot(coords[i][0]-coords[j][0],coords[i][1]-coords[j][1])>=(lane==='parent'?3.99:6.99),'Identical scores must not hide each other');
 }
+// Every terminal result remains inside the actual SVG extent at full report density.
+const extent=Number(document.getElementById('scatter').attrs.viewBox.split(' ')[3]);
+for(const point of document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint"[^>]* cx="([^"]+)" cy="([^"]+)" r="([^"]+)"/g)){
+ const [x,y,r]=point.slice(1).map(Number);assert.ok(x-r>=0&&x+r<=930&&y-r>=0&&y+r<=extent,'A retained PR marker must not be cropped outside the SVG');
+}
 const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
 const options=[...selector.innerHTML.matchAll(/<option value="[^"]*">([^<]+)<\/option>/g)].map(m=>m[1]);
 assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');

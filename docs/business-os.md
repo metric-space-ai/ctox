@@ -113,8 +113,35 @@ For an identified root, use `ctox coding-agent models --root <root>` and
 `ctox coding-agent turn --module <id> --prompt <text> --preset <id> --root <root>`.
 The global root is selected by main. Coding handlers accept its one validated
 argument pair without reselecting the root; missing or duplicate pairs and
-unknown options fail. Only valid catalogue inspection skips the CLI ledger;
+unknown options fail. Valid catalogue and route inspection skip the CLI ledger;
 turns retain their existing lifecycle and policy checks.
+
+### Inspect the actual inherited upstream model list
+
+`ctox coding-agent route --probe --root <root>` makes one authenticated
+GET to the currently configured inherited route's `/models` endpoint.
+The native owner uses the same provider, endpoint and credential selector as
+a real Pi turn. This differs from subscription presets advertised by the
+separate loopback subscription gateway. It does not copy a computer's
+accounts to the instance or select another route.
+
+The public `ctox.coding.main-route-models.v1` result contains the origin,
+selected model, live IDs, HTTP status, elapsed milliseconds and a typed failure.
+It never returns a credential, secret reference, URL path/query, upstream error
+body or raw transport error. HTTP rejection classes require a real response;
+a transport failure has no HTTP status. Redirects are refused and bodies are
+limited to64KiB, with at most1024 bounded model IDs. Incomplete paginated lists
+are rejected. An eight-second request/connection timeout includes body reads;
+system DNS resolution can exceed it, as documented by
+[ureq2.12](https://github.com/algesten/ureq/blob/2.12.1/src/agent.rs#L444-L447).
+
+A changed provider/model/endpoint or rotated credential discards the observation.
+Azure deployment discovery is reported as unsupported rather than guessed.
+A successful list and `selected_model_listed:true` do **not** certify quota or
+successful inference: `capacity_verified` remains false. Neither this probe
+nor plain route inspection initializes the CLI database, writes a turn ledger,
+changes runtime configuration, retries a task or resets a cooldown. Installed
+route and product acceptance still follow delivery through the existing writer.
 
 ## Queue instruction boundary
 

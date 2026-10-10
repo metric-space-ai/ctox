@@ -115,6 +115,14 @@ pub struct PeerWithResponse<P: Clone> {
 /// Guards are released on Pending and reacquired before the next physical poll.
 pub trait WebRTCPublicationGuard: Send + Sync {
     fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()>;
+
+    /// Notification after the guarded transport has completed successfully.
+    /// Pending polls, capacity probes and failed sends never call this method.
+    /// Implementations must revalidate their retained original native authority;
+    /// this notification is not a permission grant or a remote acknowledgement.
+    fn after_send(&self) -> RxResult<()> {
+        Ok(())
+    }
 }
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-types.ts:32-40

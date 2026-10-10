@@ -399,7 +399,8 @@ impl GuestReadinessOwner for MachineOwner<'_> {
                 verify()?;
                 let endpoint = machine.probe()?;
                 ensure!(
-                    endpoint.guest_session_id == self.protected.protected.service_session
+                    endpoint.guest_session_id
+                        == self.protected.protected.machine_service_session()?
                         && endpoint.process_instance_id == process.process_instance_id,
                     "restored guest service/process differs from protected source"
                 );
@@ -430,6 +431,10 @@ impl NativeGuestRegistry {
             .restoration
             .clone()
             .context("machine restore requires protected target enrollment")?;
+        ensure!(
+            protected.service_session.is_some(),
+            "Core-only checkpoint has no machine to restore"
+        );
         ensure!(
             protected.binding_digest == binding && protected.checkpoint_digest == digest,
             "machine restore differs from enrolled binding/checkpoint"
@@ -495,7 +500,11 @@ impl NativeGuestRegistry {
         };
         let m = machine.clone();
         let d = digest.to_owned();
-        let service = owner.protected.protected.service_session.clone();
+        let service = owner
+            .protected
+            .protected
+            .machine_service_session()?
+            .to_owned();
         tokio::task::spawn_blocking(move || m.prepare(&store, &d, &config, &assignment, &service))
             .await??;
         let effect = format!("guest-process:{}", uuid::Uuid::new_v4());
@@ -583,7 +592,7 @@ impl NativeGuestRegistry {
                 });
                 let endpoint = machine.activate()?;
                 ensure!(
-                    endpoint.guest_session_id == owner.protected.service_session,
+                    endpoint.guest_session_id == owner.protected.machine_service_session()?,
                     "original guest service did not survive restore"
                 );
                 verify()?;
@@ -630,7 +639,7 @@ impl NativeGuestRegistry {
                     entry.imported.as_ref() == Some(&ready.import)
                         && entry.registered_process.as_ref() == Some(&ready.process_effect)
                         && ready.endpoint.guest_session_id
-                            == owner.protected.protected.service_session
+                            == owner.protected.protected.machine_service_session()?
                         && entry
                             .target_machine
                             .as_ref()

@@ -810,9 +810,12 @@ mod tests {
     #[test]
     fn auxiliary_selection_falls_back_to_cpu_when_no_visible_gpus_exist() {
         let root = make_temp_root();
+        // Exercise an explicitly GPU-free host on GPU and Metal test runners too.
+        runtime_env::set_runtime_env_value(&root, "CTOX_TEST_GPU_TOTALS_MB", "none").unwrap();
         let selection =
             preferred_auxiliary_selection_for_host(&root, engine::AuxiliaryRole::Embedding, None);
         assert_eq!(selection.request_model, "Qwen/Qwen3-Embedding-0.6B");
         assert_eq!(selection.compute_target, engine::ComputeTarget::Cpu);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

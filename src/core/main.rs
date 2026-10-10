@@ -33,6 +33,8 @@ mod iot;
 mod knowledge;
 mod mission;
 mod native_data_device;
+#[cfg(unix)]
+mod native_supervisor_transport;
 mod native_transfer_accounts;
 mod native_transfer_routing;
 mod paths;
@@ -192,8 +194,8 @@ INSTALL / UPGRADE
                                  reconcile durable CTOX queue state into Business OS projections
   ctox coding-agent status|providers|install|auth|workspace|session
                                  control desktop coding agents through a unified CLI
-  ctox workjet-transfer pack|apply
-                                 pack or apply network-free Git transfer artifacts
+  ctox workjet-transfer pack|apply|workspace-export|workspace-start|workspace-status|workspace-pause|workspace-resume|workspace-cancel|workspace-finish
+                                 transport and verify thread workspaces through native CTOX peers
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints
@@ -204,6 +206,8 @@ RUN / EXEC
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime speech-status
+  ctox runtime grok-login        authorize Grok Build on this instance; no model switch
+  ctox runtime grok-models       list this subscription's authenticated live models
   ctox runtime speech-route-check
   ctox runtime speech-warmup
   ctox runtime speech-configure <speech-config.json>
@@ -429,10 +433,12 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
     if matches!(
         args.first().map(String::as_str),
         Some("coding-agent" | "coding-agents")
-    ) && coding_agents::coding_models_cli_args_are_valid(&args[1..])
+    ) && (coding_agents::coding_models_cli_args_are_valid(&args[1..])
+        || coding_agents::coding_route_cli_options(&args[1..]).is_some())
     {
-        // Metadata uses the existing private daemon control socket and must
-        // not wait on a second SQLite ledger write in the short-lived CLI.
+        // Presets use the private daemon socket. Route inspection reads native
+        // runtime configuration and may probe its existing upstream model list.
+        // Neither observation may initialize/migrate the DB or write a turn ledger.
         return true;
     }
     if service::sandboxed_cli_command_allowed(args) {
@@ -607,6 +613,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("runtime") => match args.get(1).map(String::as_str) {
+            Some("grok-login") if args.len() == 2 => {
+                execution::cliproxyapi_xai::handle_operator_login(root)
+            }
+            Some("grok-models") if args.len() == 2 => {
+                execution::cliproxyapi_xai::handle_operator_models(root)
+            }
             Some("embedding-doctor") => {
                 println!(
                     "{}",
@@ -959,7 +971,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("transfer") => transfers_cli::handle(root, &args[1..]),
         Some("build-job") => business_os::build_jobs::handle_cli(root, &args[1..]),
         Some("workjet-transfer") => {
-            let outcome = business_os::execute_workjet_transfer_git_cli(&args[1..])?;
+            let outcome = business_os::execute_workjet_transfer_git_cli(root, &args[1..])?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
             Ok(())
         }
@@ -4702,7 +4714,20 @@ fn execute_continuity_update(
         }
         other => anyhow::bail!("unknown continuity-update mode: {other}"),
     };
-    serde_json::to_string_pretty(&result).context("failed to serialize continuity-update result")
+    // The refresh model calls this once per edit inside one turn, and every
+    // tool result is resent with the next model call. Echoing the whole
+    // document (12 kB on thesen) grew a ten-edit refresh to ~150 kB per call
+    // and ran it into the 45 s refresh timeout 971 times on 08.10.2026. The
+    // document is already in the prompt; the receipt only confirms the commit.
+    let receipt = serde_json::json!({
+        "ok": true,
+        "conversation_id": result.conversation_id,
+        "kind": result.kind,
+        "head_commit_id": result.head_commit_id,
+        "content_chars": result.content.chars().count(),
+        "updated_at": result.updated_at,
+    });
+    serde_json::to_string(&receipt).context("failed to serialize continuity-update result")
 }
 
 fn resolve_workspace_root() -> anyhow::Result<PathBuf> {
@@ -5386,6 +5411,25 @@ mod tests {
             rooted_models.extend(["--root".to_owned(), "/explicit-root".to_owned()]);
             assert!(super::skips_cli_startup_db(&rooted_models));
             assert!(super::skips_cli_turn_ledger(&rooted_models));
+            for suffix in [
+                vec!["route"],
+                vec!["route", "--probe"],
+                vec!["route", "--root", "/explicit-root", "--probe"],
+            ] {
+                let route = std::iter::once(command)
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(super::skips_cli_startup_db(&route));
+                assert!(super::skips_cli_turn_ledger(&route));
+            }
+            let duplicate_probe = vec![
+                command.to_owned(),
+                "route".to_owned(),
+                "--probe".to_owned(),
+                "--probe".to_owned(),
+            ];
+            assert!(!super::skips_cli_startup_db(&duplicate_probe));
             let turn = vec![command.to_owned(), "turn".to_owned()];
             assert!(!super::skips_cli_turn_ledger(&turn));
             let mut rooted_turn = turn;
@@ -5508,6 +5552,47 @@ mod tests {
             assert!(super::skips_cli_turn_ledger(&args));
             assert!(super::skips_cli_startup_db(&args));
         }
+    }
+
+    #[test]
+    fn continuity_update_answers_with_a_receipt_not_the_document() {
+        let root = unique_test_dir("continuity-update-receipt");
+        std::fs::create_dir_all(&root).expect("create test dir");
+        let db = root.join("ctox.sqlite3");
+        let body = format!(
+            "## Anchors\n{}",
+            "- fact: a durable fact line\n".repeat(600)
+        );
+        let args = [
+            "--db",
+            db.to_str().expect("utf-8 db path"),
+            "--conversation-id",
+            "7",
+            "--kind",
+            "anchors",
+            "--mode",
+            "full",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let output = super::handle_continuity_update_with_stdin(&args, Some(&body))
+            .expect("full replace succeeds");
+        assert!(
+            output.get("content").is_none(),
+            "receipt echoed the document"
+        );
+        assert_eq!(output["kind"], "anchors");
+        assert_eq!(output["conversation_id"], 7);
+        assert!(output["content_chars"].as_u64().unwrap_or(0) > 10_000);
+        assert!(!output["head_commit_id"].as_str().unwrap_or("").is_empty());
+        assert!(serde_json::to_string(&output).unwrap().len() < 400);
+        let stored = crate::context::lcm::run_continuity_show(&db, 7, Some("anchors"))
+            .expect("show stored document");
+        assert!(serde_json::to_string(&stored)
+            .unwrap()
+            .contains("a durable fact line"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

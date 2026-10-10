@@ -51,6 +51,15 @@ impl<T: WireValidate> WireValidate for Vec<T> {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadConfirmedGoalRequest {}
+impl WireValidate for ReadConfirmedGoalRequest {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) enum MeetingState {
     #[serde(rename = "planned")]
@@ -936,7 +945,7 @@ impl WireValidate for PublishDeckRequest {
         {
             let value = &self.slides;
             value.validate()?;
-            if value.len() < 1 {
+            if value.is_empty() {
                 return Err("PublishDeckRequest.slides violates min_items".into());
             }
             if value.len() > 100 {
@@ -2132,6 +2141,9 @@ impl WireValidate for LocalTranscriptCandidateReceipt {
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
+        "ReadConfirmedGoalRequest" => serde_json::from_value::<ReadConfirmedGoalRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
         "MeetingState" => serde_json::from_value::<MeetingState>(value)
             .map_err(|e| e.to_string())?
             .validate(),

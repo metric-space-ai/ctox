@@ -195,7 +195,7 @@ impl NativeGuestExecution {
                     capture.entries()?;
                     Arc::clone(capture)
                 } else {
-                    observed.verify_controller(entry)?;
+                    observed.verify_controller(entry, &self.registry)?;
                     let desktop = entry
                         .desktop
                         .take()
@@ -242,7 +242,7 @@ impl NativeGuestExecution {
                         && private_directory(&store_root)? == store_identity,
                     "native source machine/store changed during export"
                 );
-                current.verify_controller(entry)?;
+                current.verify_controller(entry, &self.registry)?;
                 Ok(())
             })
         })
@@ -260,7 +260,9 @@ mod tests {
     #[test]
     fn failed_machine_capture_retains_exact_child_and_retirement_never_waits_for_io() -> Result<()>
     {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
         let program = root.path().join("owned-child");
         std::fs::write(&program, "#!/bin/sh\nexec /bin/sleep 30\n")?;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))?;

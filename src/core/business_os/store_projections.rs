@@ -1434,16 +1434,13 @@ pub(super) fn upsert_business_record(
             payload_json = excluded.payload_json"
             .to_string(),
     };
-    conn.execute(
-        &sql,
-        params![
-            collection,
-            record_id,
-            rev,
-            updated_at_ms,
-            serde_json::to_string(&payload)?
-        ],
-    )?;
+    conn.prepare_cached(&sql)?.execute(params![
+        collection,
+        record_id,
+        rev,
+        updated_at_ms,
+        serde_json::to_string(&payload)?
+    ])?;
     Ok(())
 }
 

@@ -1,0 +1,12 @@
+# CTOX Sync v3 (docs/rfcs/ctox-sync-v3.md): contract, protocol and native
+# peer change only inside an RFC stage. PRs touching these paths need a
+# `sync-v3:S<n>` label (enforced by .github/workflows/sync-scope-guard.yml).
+/src/apps/business-os/rxdb/                 @mkh-welsch
+/src/core/rxdb/                             @mkh-welsch
+/src/core/business_os/rxdb_peer*.rs         @mkh-welsch
+/src/apps/business-os/shared/sync.js        @mkh-welsch
+/src/apps/business-os/shared/db.js          @mkh-welsch
+/src/apps/business-os/shared/rxdb-runtime.js @mkh-welsch
+/src/core/business_os/command_plane.rs      @mkh-welsch
+/docs/ctox-rxdb.md                          @mkh-welsch
+/docs/rfcs/ctox-sync-v3.md                  @mkh-welsch

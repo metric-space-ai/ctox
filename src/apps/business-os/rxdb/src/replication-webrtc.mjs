@@ -1351,6 +1351,7 @@ class CtoxWebRtcReplicationState {
     const budgetMs = Math.max(250, Number(timeoutMs) || 15_000);
     const subscriptions = [];
     let timer = null;
+    let lastError = null;
     try {
       return await new Promise((resolve, reject) => {
         let settled = false;
@@ -1377,9 +1378,11 @@ class CtoxWebRtcReplicationState {
         };
         subscriptions.push(this.queryReady$?.subscribe?.(inspect));
         subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        subscriptions.push(this.error$?.subscribe?.((error) => { lastError = error; }));
         inspect();
         timer = setTimeout(() => {
-          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+          const cause = lastError?.message ? `; last error: ${lastError.message}` : "";
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms${cause}`));
         }, budgetMs);
       });
     } finally {
@@ -1964,86 +1967,95 @@ class CtoxWebRtcReplicationState {
         await this.persistCheckpointsForPeer(peerId);
         break;
       }
-      let rows = documents.map((doc) => ({
-        newDocumentState: doc,
-        assumedMasterState: null,
-      }));
-      let terminalRejection = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (this.cancelled) return;
-        const masterWriteResult = await this.peer.request(
-          peerId,
-          'masterWrite',
-          [rows],
-          this.requestTimeoutMsFor('masterWrite'),
-          this.collection.name,
-        );
-        if (this.cancelled) return;
-        // SYNC-40: a TERMINAL authz/schema rejection arrives as a
-        // replication-scope `ctoxError` VALUE (not a thrown transport error and
-        // not a conflict array). Retrying it forever leaves a permanently
-        // divergent local mirror; reconcile it instead. A transient transport
-        // error still throws out of `request` and keeps the existing retry.
-        terminalRejection = terminalPushRejection(masterWriteResult);
-        if (terminalRejection) {
-          rows = [];
-          break;
-        }
-        if (replicationErrorResult(masterWriteResult)) {
-          if (attempt < 2) {
-            await delay(100);
-            continue;
+      // One masterWrite per byte-bounded slice, like the direct push path.
+      // Researched leads average 73 KiB; ten of them plus the backlog of a
+      // campaign start made a single write of several MB that failed on every
+      // retry (RC_PUSH), so 157 lead writes never left one browser and its
+      // initial replication never completed (thesen 09.10.2026).
+      const rejectedIds = new Set();
+      for (const slice of boundedDirectPushBatches(documents)) {
+        let rows = slice.map((doc) => ({
+          newDocumentState: doc,
+          assumedMasterState: null,
+        }));
+        let terminalRejection = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (this.cancelled) return;
+          const masterWriteResult = await this.peer.request(
+            peerId,
+            'masterWrite',
+            [rows],
+            this.requestTimeoutMsFor('masterWrite'),
+            this.collection.name,
+          );
+          if (this.cancelled) return;
+          // SYNC-40: a TERMINAL authz/schema rejection arrives as a
+          // replication-scope `ctoxError` VALUE (not a thrown transport error and
+          // not a conflict array). Retrying it forever leaves a permanently
+          // divergent local mirror; reconcile it instead. A transient transport
+          // error still throws out of `request` and keeps the existing retry.
+          terminalRejection = terminalPushRejection(masterWriteResult);
+          if (terminalRejection) {
+            rows = [];
+            break;
           }
-          throw replicationErrorResultError(masterWriteResult, this.collection.name);
-        }
-        const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
-        if (!conflictMap.size) {
-          rows = [];
-          break;
-        }
-        rows = rows
-          .map((row) => {
-            const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
-            const assumedMasterState = conflictMap.get(id);
-            return assumedMasterState ? { ...row, assumedMasterState } : null;
-          })
-          .filter(Boolean);
-        if (!rows.length) break;
-        if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
-          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+          if (replicationErrorResult(masterWriteResult)) {
+            if (attempt < 2) {
+              await delay(100);
+              continue;
+            }
+            throw replicationErrorResultError(masterWriteResult, this.collection.name);
+          }
+          const conflicts = masterWriteResult;
+          const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
+          if (!conflictMap.size) {
+            rows = [];
+            break;
+          }
+          rows = rows
+            .map((row) => {
+              const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+              const assumedMasterState = conflictMap.get(id);
+              return assumedMasterState ? { ...row, assumedMasterState } : null;
+            })
+            .filter(Boolean);
           if (!rows.length) break;
+          if (this.collection.storageCollection?.conflictStrategy !== 'field-merge') {
+            rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+            if (!rows.length) break;
+          }
+          // Field-merge collections: absorb the master's concurrent state into
+          // the retry rows instead of force-overwriting it whole-doc (the
+          // default LWW retry keeps its local-wins semantics unchanged).
+          rows = await this.absorbMasterStateIntoConflictRows(rows);
         }
-        // Field-merge collections: absorb the master's concurrent state into
-        // the retry rows instead of force-overwriting it whole-doc (the
-        // default LWW retry keeps its local-wins semantics unchanged).
-        rows = await this.absorbMasterStateIntoConflictRows(rows);
-      }
-      if (this.cancelled) return;
-      if (terminalRejection) {
-        // Reconcile the denied batch: roll each still-pending local write back
-        // to master + journal it as a conflict, then advance past the batch so
-        // it is never re-pushed. The reconciled docs are now origin-stamped
-        // (non-pushable), so re-reading from the same checkpoint will not
-        // surface them again.
-        await this.reconcileTerminalPushRejection(documents, peerId, terminalRejection);
         if (this.cancelled) return;
-        checkpoint = result?.checkpoint || checkpoint;
-        this.pushCheckpointsByPeer.set(peerId, checkpoint);
-        await this.persistCheckpointsForPeer(peerId);
-        if (documents.length < batchSize) break;
-        continue;
-      }
-      if (rows.length) {
-        rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
-      }
-      if (this.cancelled) return;
-      if (rows.length) {
-        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        if (terminalRejection) {
+          // Reconcile the denied slice: roll each still-pending local write
+          // back to master and journal it as a conflict. The reconciled docs
+          // are origin-stamped (non-pushable), so re-reading from the same
+          // checkpoint will not surface them again.
+          await this.reconcileTerminalPushRejection(slice, peerId, terminalRejection);
+          if (this.cancelled) return;
+          for (const document of slice) {
+            const id = primaryValue(document, this.collection.schema.primaryPath);
+            if (id) rejectedIds.add(id);
+          }
+          continue;
+        }
+        if (rows.length) {
+          rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+        }
+        if (this.cancelled) return;
+        if (rows.length) {
+          throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        }
       }
       for (const document of documents) {
         const id = primaryValue(document, this.collection.schema.primaryPath);
-        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        if (id && !rejectedIds.has(id)) {
+          await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        }
         if (this.cancelled) return;
       }
       checkpoint = result?.checkpoint || checkpoint;
@@ -3128,10 +3140,24 @@ function boundedDirectPushBatches(documents = []) {
 function terminalPushRejection(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   if (result.type !== 'ctoxError' || result.scope !== 'replication') return null;
-  const message = String(result.message || '');
+  // The native validator nests its reason: a bulk masterWrite rejection
+  // arrives as { code: 'RC_PUSH', errors: [{ parameters: { message } }] }
+  // with no top-level message. Read the nested reasons too; otherwise
+  // "peer cannot change native-owned document fields" looked transient and
+  // the denied lead writes were retried forever, blocking the collection
+  // (157 writes in one browser on thesen, 09.10.2026).
+  const nested = Array.isArray(result.errors)
+    ? result.errors.flatMap((entry) => [entry?.parameters?.message, entry?.message])
+    : [];
+  const message = [result.message, ...nested]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .find((value) => !/^\s*RxDB Error-Code:/.test(value) && !/^\n/.test(value))
+    || String(result.message || '');
   const code = String(result.code || '');
   const status = String(result.status ?? '');
-  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code);
+  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code)
+    || /cannot change native-owned/i.test(message);
   const isSchema = /schema/i.test(message) || /schema/i.test(code)
     || status === '422' || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
@@ -3139,7 +3165,9 @@ function terminalPushRejection(result) {
     kind: isAuthz ? 'authz' : 'schema',
     code: code || 'RC_WEBRTC_PEER',
     direction: String(result.direction || 'push'),
-    collection: String(result.collection || ''),
+    collection: String(result.collection
+      || (Array.isArray(result.errors) ? result.errors.find((entry) => entry?.parameters?.collection)?.parameters?.collection : '')
+      || ''),
     message: message || code || 'terminal replication rejection',
   };
 }

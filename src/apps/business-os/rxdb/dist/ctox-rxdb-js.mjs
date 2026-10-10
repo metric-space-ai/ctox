@@ -263,7 +263,8 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   workjet_computers: "367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595",
   workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
   workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
-  workjet_projects: "bfdc3ca9484656744772752c6b03d5efdb95f9f7ce4f08d8d6e7e17a1553f7fa",
+  workjet_projects: "45cdfdb3e14234ff7d624baf5475bd865eda2aaf6d7f7f0c6c8becd1b9071a8a",
+  workjet_provider_registry: "e919810d8c7b6b8251acf7eb413f2b1d3b1869f73c17f581e47dca1d2f9ad177",
   workjet_session_transfers: "99c3f1805537d732b36d2fa50827a8766efd41872b16c030ef44184342850712",
   workjet_sessions: "82ad8222bb8453b67e6b512f1e114ced576fcff972ef56b67a42a668ddf59088",
   workjet_worker_profile_bindings: "c59012d23dbe90dea21a33086dad073c837e8395d0f2973daed56453ef0733e4",
@@ -11652,6 +11653,7 @@ var CtoxWebRtcReplicationState = class {
     const budgetMs = Math.max(250, Number(timeoutMs) || 15e3);
     const subscriptions = [];
     let timer = null;
+    let lastError = null;
     try {
       return await new Promise((resolve, reject) => {
         let settled = false;
@@ -11676,9 +11678,13 @@ var CtoxWebRtcReplicationState = class {
         };
         subscriptions.push(this.queryReady$?.subscribe?.(inspect));
         subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        subscriptions.push(this.error$?.subscribe?.((error) => {
+          lastError = error;
+        }));
         inspect();
         timer = setTimeout(() => {
-          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+          const cause = lastError?.message ? `; last error: ${lastError.message}` : "";
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms${cause}`));
         }, budgetMs);
       });
     } finally {
@@ -12147,71 +12153,76 @@ var CtoxWebRtcReplicationState = class {
         await this.persistCheckpointsForPeer(peerId);
         break;
       }
-      let rows = documents.map((doc) => ({
-        newDocumentState: doc,
-        assumedMasterState: null
-      }));
-      let terminalRejection = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (this.cancelled) return;
-        const masterWriteResult = await this.peer.request(
-          peerId,
-          "masterWrite",
-          [rows],
-          this.requestTimeoutMsFor("masterWrite"),
-          this.collection.name
-        );
-        if (this.cancelled) return;
-        terminalRejection = terminalPushRejection(masterWriteResult);
-        if (terminalRejection) {
-          rows = [];
-          break;
-        }
-        if (replicationErrorResult(masterWriteResult)) {
-          if (attempt < 2) {
-            await delay2(100);
-            continue;
+      const rejectedIds = /* @__PURE__ */ new Set();
+      for (const slice of boundedDirectPushBatches(documents)) {
+        let rows = slice.map((doc) => ({
+          newDocumentState: doc,
+          assumedMasterState: null
+        }));
+        let terminalRejection = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (this.cancelled) return;
+          const masterWriteResult = await this.peer.request(
+            peerId,
+            "masterWrite",
+            [rows],
+            this.requestTimeoutMsFor("masterWrite"),
+            this.collection.name
+          );
+          if (this.cancelled) return;
+          terminalRejection = terminalPushRejection(masterWriteResult);
+          if (terminalRejection) {
+            rows = [];
+            break;
           }
-          throw replicationErrorResultError(masterWriteResult, this.collection.name);
-        }
-        const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
-        if (!conflictMap.size) {
-          rows = [];
-          break;
-        }
-        rows = rows.map((row) => {
-          const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
-          const assumedMasterState = conflictMap.get(id);
-          return assumedMasterState ? { ...row, assumedMasterState } : null;
-        }).filter(Boolean);
-        if (!rows.length) break;
-        if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
-          rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+          if (replicationErrorResult(masterWriteResult)) {
+            if (attempt < 2) {
+              await delay2(100);
+              continue;
+            }
+            throw replicationErrorResultError(masterWriteResult, this.collection.name);
+          }
+          const conflicts = masterWriteResult;
+          const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
+          if (!conflictMap.size) {
+            rows = [];
+            break;
+          }
+          rows = rows.map((row) => {
+            const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+            const assumedMasterState = conflictMap.get(id);
+            return assumedMasterState ? { ...row, assumedMasterState } : null;
+          }).filter(Boolean);
           if (!rows.length) break;
+          if (this.collection.storageCollection?.conflictStrategy !== "field-merge") {
+            rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
+            if (!rows.length) break;
+          }
+          rows = await this.absorbMasterStateIntoConflictRows(rows);
         }
-        rows = await this.absorbMasterStateIntoConflictRows(rows);
-      }
-      if (this.cancelled) return;
-      if (terminalRejection) {
-        await this.reconcileTerminalPushRejection(documents, peerId, terminalRejection);
         if (this.cancelled) return;
-        checkpoint = result?.checkpoint || checkpoint;
-        this.pushCheckpointsByPeer.set(peerId, checkpoint);
-        await this.persistCheckpointsForPeer(peerId);
-        if (documents.length < batchSize) break;
-        continue;
-      }
-      if (rows.length) {
-        rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
-      }
-      if (this.cancelled) return;
-      if (rows.length) {
-        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        if (terminalRejection) {
+          await this.reconcileTerminalPushRejection(slice, peerId, terminalRejection);
+          if (this.cancelled) return;
+          for (const document2 of slice) {
+            const id = primaryValue(document2, this.collection.schema.primaryPath);
+            if (id) rejectedIds.add(id);
+          }
+          continue;
+        }
+        if (rows.length) {
+          rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
+        }
+        if (this.cancelled) return;
+        if (rows.length) {
+          throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+        }
       }
       for (const document2 of documents) {
         const id = primaryValue(document2, this.collection.schema.primaryPath);
-        if (id) await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        if (id && !rejectedIds.has(id)) {
+          await this.demandSidecar?.markDirty?.(this.collection.name, id, false);
+        }
         if (this.cancelled) return;
       }
       checkpoint = result?.checkpoint || checkpoint;
@@ -13144,17 +13155,18 @@ function boundedDirectPushBatches(documents = []) {
 function terminalPushRejection(result) {
   if (!result || typeof result !== "object" || Array.isArray(result)) return null;
   if (result.type !== "ctoxError" || result.scope !== "replication") return null;
-  const message = String(result.message || "");
+  const nested = Array.isArray(result.errors) ? result.errors.flatMap((entry) => [entry?.parameters?.message, entry?.message]) : [];
+  const message = [result.message, ...nested].map((value) => String(value || "").trim()).filter(Boolean).find((value) => !/^\s*RxDB Error-Code:/.test(value) && !/^\n/.test(value)) || String(result.message || "");
   const code = String(result.code || "");
   const status = String(result.status ?? "");
-  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code);
+  const isAuthz = /not authorized/i.test(message) || /authz/i.test(code) || /cannot change native-owned/i.test(message);
   const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
   return {
     kind: isAuthz ? "authz" : "schema",
     code: code || "RC_WEBRTC_PEER",
     direction: String(result.direction || "push"),
-    collection: String(result.collection || ""),
+    collection: String(result.collection || (Array.isArray(result.errors) ? result.errors.find((entry) => entry?.parameters?.collection)?.parameters?.collection : "") || ""),
     message: message || code || "terminal replication rejection"
   };
 }

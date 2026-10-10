@@ -194,6 +194,60 @@ impl NativeTransferAccountHost {
         Ok(routing)
     }
 
+    /// A bounded publication fence for the exact original native enrollment and
+    /// credential generation. The fingerprint is private and never a wire permit.
+    /// No awaits, secret API reentry, or transport reentry inside apply.
+    pub(crate) fn with_current_enrollment<T>(
+        &self,
+        expected: &NativeTransferAccount,
+        fingerprint: Option<&str>,
+        apply: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct CredentialBinding<'a> {
+            version: u8,
+            account: NativeTransferAccount,
+            // Borrow the bearer without materializing an additional plaintext copy.
+            #[serde(borrow)]
+            capability_token: &'a str,
+        }
+        expected.validate()?;
+        ensure!(expected.active, "native enrollment retired");
+        let authority = authority_name(&expected.target_id);
+        let credentials = expected.credential_name()?;
+        crate::secrets::with_current_secret_values_and_fingerprint(
+            &self.root,
+            &[
+                (AUTHORITY_SCOPE, &authority),
+                (CREDENTIAL_SCOPE, &credentials),
+            ],
+            |values, current_fingerprint| {
+                ensure!(
+                    values.iter().all(|value| value.len() <= MAX_RECORD_BYTES),
+                    "native enrollment record budget exceeded"
+                );
+                let current: NativeTransferAccount = serde_json::from_slice(values[0])?;
+                let credential: CredentialBinding = serde_json::from_slice(values[1])?;
+                ensure!(
+                    !credential.capability_token.is_empty(),
+                    "native credential missing"
+                );
+                ensure!(
+                    current == *expected
+                        && credential.version == 1
+                        && credential.account == *expected,
+                    "native enrollment changed"
+                );
+                ensure!(
+                    fingerprint.is_none_or(|expected| expected == current_fingerprint),
+                    "native credential generation changed"
+                );
+                apply(current_fingerprint)
+            },
+        )
+    }
+
     /// Native service refresh deadline and current ICE snapshot. Callers must
     /// renew through the live source and recreate the session before expiry;
     /// an expired snapshot never falls back to local daemon configuration.
@@ -749,6 +803,47 @@ impl NativeTransferAccountHost {
             .await
             .map_err(|_| host_error())?
             .map_err(|_| host_error())
+    }
+
+    /// Bounded metadata lookup in the original encrypted account store. This
+    /// never provisions, refreshes routing, or loads a credential for the caller.
+    pub(crate) async fn source_candidates(
+        &self,
+        instance_id: &str,
+    ) -> io::Result<Vec<NativeTransferAccount>> {
+        let host = self.clone();
+        let instance_id = instance_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let records = crate::secrets::list_secret_records(&host.root, Some(AUTHORITY_SCOPE))?;
+            ensure!(
+                records.len() <= 128,
+                "native source lookup record budget exceeded"
+            );
+            let mut accounts = Vec::new();
+            for record in records {
+                let value = host
+                    .read_record(AUTHORITY_SCOPE, &record.secret_name)?
+                    .ok_or_else(unavailable)?;
+                let account: NativeTransferAccount = serde_json::from_str(&value)?;
+                account.validate()?;
+                ensure!(
+                    record.secret_name == authority_name(&account.target_id),
+                    "native account authority unavailable"
+                );
+                if account.active && account.instance_id == instance_id {
+                    accounts.push(account);
+                    ensure!(
+                        accounts.len() <= 4,
+                        "native source lookup candidate budget exceeded"
+                    );
+                }
+            }
+            accounts.sort_by(|a, b| a.target_id.cmp(&b.target_id));
+            Ok::<_, anyhow::Error>(accounts)
+        })
+        .await
+        .map_err(|_| host_error())?
+        .map_err(|_| host_error())
     }
 
     /// Enumeration restores ID callbacks after daemon restart, without loading

@@ -38,6 +38,7 @@ enum Read {
     ReadMeeting(wire::ReadMeetingRequest),
     ReadComments(wire::ReadMeetingRequest),
     ReadTranscript(wire::ReadMeetingRequest),
+    ReadConfirmedGoal(wire::ReadConfirmedGoalRequest),
 }
 
 pub(super) fn allows(tool: &str, args: &Value) -> bool {
@@ -45,7 +46,7 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
         (tool, args["action"].as_str()),
         (
             READ_TOOL,
-            Some("read_meeting" | "read_comments" | "read_transcript")
+            Some("read_meeting" | "read_comments" | "read_transcript" | "read_confirmed_goal")
         ) | (
             WRITE_TOOL,
             Some("prepare_deck" | "propose_todos" | "narrate")
@@ -118,8 +119,8 @@ fn descriptor_schema(actions: &[(&str, &str)]) -> Value {
 }
 pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
     read_tool(READ_TOOL,
-        "Read this registered Supervisor's current meeting plus bounded project configuration, or retained comments/final transcript only. Requires its signed, current native execution session and an explicit meeting_id. Returns stored evidence, never inferred speech or cross-project data.",
-        descriptor_schema(&[("read_meeting","ReadMeetingRequest"),("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest")]))
+        "Read this registered Supervisor's current meeting plus bounded project configuration, or retained comments/final transcript only. Requires its signed, current native execution session and an explicit meeting_id for meeting sections; read_confirmed_goal takes an empty request and returns the actual current confirmed plan/progress or null. Returns stored evidence, never inferred speech or cross-project data.",
+        descriptor_schema(&[("read_meeting","ReadMeetingRequest"),("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest"),("read_confirmed_goal","ReadConfirmedGoalRequest")]))
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(WRITE_TOOL,
@@ -246,6 +247,41 @@ pub(super) fn current_meeting(
     Ok(meeting)
 }
 
+pub(super) fn read_confirmed_goal_in_native_scope(
+    core: &Connection,
+    policy: &Connection,
+    context: &McpChannelRequestContext,
+    trusted: &Value,
+) -> anyhow::Result<Value> {
+    let (project, thread, thread_key) = bound_project(core, policy, context, trusted)?;
+    let role = context
+        .trusted_role
+        .as_deref()
+        .context("native role missing")?;
+    anyhow::ensure!(
+        super::super::store_policy::trusted_actor_policy_decision_with_conn(
+            policy,
+            &context.actor,
+            role,
+            BusinessOsPermission::DataRead,
+            BusinessOsScopeType::Record,
+            Some(&project)
+        )?
+        .allowed,
+        "native project goal data policy denied"
+    );
+    let goal = super::super::project_chats::jour_fixe_confirmed_goal::current_goal_for_supervisor(
+        core,
+        &context.actor,
+        &project,
+        &thread_key,
+    )?;
+    Ok(
+        json!({"contract":wire::CONTRACT_SCHEMA,"project_id":project,
+        "supervisor_thread_id":thread,"confirmed_goal":goal}),
+    )
+}
+
 pub(super) fn execute(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -296,6 +332,10 @@ pub(super) fn execute(
             Read::ReadMeeting(v) => (v, "meeting"),
             Read::ReadComments(v) => (v, "comments"),
             Read::ReadTranscript(v) => (v, "transcript"),
+            Read::ReadConfirmedGoal(v) => {
+                v.validate().map_err(anyhow::Error::msg)?;
+                return read_confirmed_goal_in_native_scope(&core_tx, &policy_tx, context, trusted);
+            }
         };
         request.validate().map_err(anyhow::Error::msg)?;
         let id = request
@@ -327,7 +367,8 @@ pub(super) fn execute(
             return Ok(
                 json!({"contract":wire::CONTRACT_SCHEMA,"meeting":meeting,"project":project,
                 "previous_goal_definition":previous_goal_definition,
-                "narration_inputs":workjet_narration::inputs(&meeting)}),
+                "narration_inputs":workjet_narration::inputs(&meeting),
+                "worker_outcomes":workjet_worker_dispatch::outcomes_for_deck(&core_tx,&meeting)?}),
             );
         }
         return Ok(if section == "comments" {

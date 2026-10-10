@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261008-jour-fixe-speech-ingress';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261008-jour-fixe-speech-ingress';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261008-jour-fixe-speech-ingress';
+} from './sync-contract.js?v=20261010-shell-v2-project-exit-assessment';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261010-shell-v2-project-exit-assessment';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261010-shell-v2-project-exit-assessment';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261008-jour-fixe-speech-ingress';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261010-shell-v2-project-exit-assessment';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -169,6 +169,17 @@ export function createSyncRuntime({
   // it. App windows use reference-counted leases instead, so closing the last
   // window can return the sync runtime to its pre-launch resource baseline.
   const pinnedCollections = new Set();
+  const retirementGenerations = new Map();
+  const hasRepairIntent = (collection) => activeCollections.has(collection)
+    || pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0
+    || diagnostics.collections[collection]?.active === true;
+  const hasRepairOwner = (collection, required, retirement = null) => (
+    retirement === null || (retirementGenerations.get(collection) || 0) === retirement
+  ) && (!required || pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0);
+  const retiredBridge = (collection) => ({
+    mode: 'stopped', collection, state: null,
+    reason: 'collection-lease-ended', stop: async () => {},
+  });
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let unregisteredSweepTimer = null;
@@ -281,7 +292,7 @@ export function createSyncRuntime({
       `Direct multi-tab failover for ${collection} did not reach the native WebRTC peer before the deadline.`
     ));
   };
-  const recordCollection = (collection, update) => {
+  const recordCollection = (collection, update, options = {}) => {
     const current = diagnostics.collections[collection] || {};
     const updatedAt = new Date().toISOString();
     const declaredSyncProfile = declaredCollectionSyncProfile(collection);
@@ -324,7 +335,7 @@ export function createSyncRuntime({
       ...next,
     };
     emitDiagnostic({ phase: 'collection-sync' }, {
-      immediate: isUrgentCollectionDiagnostic(update, nextStatus),
+      immediate: options.immediate ?? isUrgentCollectionDiagnostic(update, nextStatus),
     });
   };
   const stopAllBridges = async () => {
@@ -738,7 +749,9 @@ export function createSyncRuntime({
       });
       publishResourceBudget();
       try {
-        await this.startCollection(normalized, { pin: false, forceDirect: options.forceDirect === true });
+        await this.startCollection(normalized, {
+          pin: false, forceDirect: options.forceDirect === true, requireOwner: true,
+        });
         return lease;
       } catch (error) {
         await lease.release();
@@ -761,6 +774,9 @@ export function createSyncRuntime({
         throw collectionReadForbiddenError(collection);
       }
       const coordinator = await ensureMultiTabCoordinator();
+      const requiresOwner = options.requireOwner === true;
+      const repairRetirement = options.repairRetirement ?? null;
+      if (!hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
       if (isModuleDemandOnlyCollection(collection) && !bridges.leaseCount(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
         error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
@@ -808,6 +824,8 @@ export function createSyncRuntime({
         // command. The background repair loop owns reconnect/restart policy.
         // Only a replication state that is actually cancelled is replaced.
         const currentBridge = await withTimeout(currentBridgePromise, 3000);
+        if (bridges.get(collection) !== currentBridgePromise
+          || !hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
         if (!currentBridge) {
           // Keep repeated acquisitions bounded while the authoritative bridge
           // is still opening. The ready promise remains available to callers,
@@ -867,20 +885,23 @@ export function createSyncRuntime({
       collectionStartLaneCursor += 1;
       const startBridge = () => {
         if (stopped) throw new Error('Business OS sync runtime has been stopped');
+        const ownsBridge = () => bridges.get(collection) === bridgePromise
+          && hasRepairOwner(collection, requiresOwner, repairRetirement);
+        if (!ownsBridge()) return retiredBridge(collection);
         return startWebRtcReplication({
           db,
           config,
           collection,
-          recordCollection,
+          recordCollection: (name, patch) => { if (ownsBridge()) recordCollection(name, patch); },
           capabilityTokenProvider,
-          onNativeQueryReady,
-          onFatalPeerError: (error) => scheduleGlobalRestart(collection, error),
+          onNativeQueryReady: (name, info) => { if (ownsBridge()) onNativeQueryReady?.(name, info); },
+          onFatalPeerError: (error) => { if (ownsBridge()) scheduleGlobalRestart(collection, error); },
           // Passed down explicitly: startWebRtcReplication is a module-level
           // function, so it cannot see this closure. The previous direct call
           // threw a ReferenceError that the metric-subscription wrapper
           // swallowed — the primary "peer dropped → schedule repair" trigger
           // never ran.
-          scheduleRestart: scheduleRestartOfUnhealthyCollections,
+          scheduleRestart: (...args) => { if (ownsBridge()) scheduleRestartOfUnhealthyCollections(...args); },
         });
       };
       const bridgePromise = collectionStartLanes[startLane].then(startBridge);
@@ -889,9 +910,19 @@ export function createSyncRuntime({
       // wedged-peer recycle threshold while preserving deterministic order.
       collectionStartLanes[startLane] = boundedCollectionStartQueueStep(bridgePromise);
       bridges.set(collection, bridgePromise);
+      // Startup can outlive stopCollection's bounded wait. Retire that exact
+      // old state when it arrives; its cancellation cannot unregister a newer
+      // collection generation.
+      bridgePromise.then((bridge) => {
+        if (bridges.get(collection) !== bridgePromise) return bridge?.stop?.();
+      }, () => {}).catch((error) => {
+        console.error(`[business-os] retired bridge cleanup failed for ${collection}`, error);
+      });
       publishResourceBudget();
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
+        if (bridges.get(collection) !== bridgePromise
+          || !hasRepairOwner(collection, requiresOwner, repairRetirement)) return retiredBridge(collection);
         if (!bridge) {
           const pendingBridge = createPendingCollectionBridge(collection, bridgePromise);
           recordCollection(collection, {
@@ -915,29 +946,36 @@ export function createSyncRuntime({
         });
         return bridge;
       } catch (error) {
-        if (bridges.get(collection) === bridgePromise) bridges.delete(collection);
+        const isCurrent = bridges.get(collection) === bridgePromise;
+        if (isCurrent) bridges.delete(collection);
         publishResourceBudget();
         const serialized = serializeError(error);
-        recordCollection(collection, { status: 'failed', lastError: serialized });
-        emitDiagnostic({ phase: 'failed', lastError: serialized });
+        if (isCurrent) {
+          recordCollection(collection, { status: 'failed', lastError: serialized });
+          emitDiagnostic({ phase: 'failed', lastError: serialized });
+        }
         throw error;
       }
     },
     async stopCollection(collection, options = {}) {
       collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
-      if (!options?.preserveLeases) bridges.revokeLeases(collection);
+      if (!options?.preserveLeases) {
+        retirementGenerations.set(collection, (retirementGenerations.get(collection) || 0) + 1);
+        bridges.revokeLeases(collection);
+      }
       if (!options?.preservePin) pinnedCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
       publishResourceBudget();
-      if (!bridgePromise) return false;
       recordCollection(collection, {
-        status: 'restarting',
-        connectionStatus: 'reconnecting',
+        status: options.preserveLeases ? 'restarting' : 'stopped',
+        connectionStatus: options.preserveLeases ? 'reconnecting' : 'stopped',
+        active: false,
         lastError: null,
-        reconnectingSince: new Date().toISOString(),
-      });
+        reconnectingSince: options.preserveLeases ? new Date().toISOString() : null,
+      }, { immediate: false });
+      if (!bridgePromise) return false;
       try {
         const bridge = await withTimeout(bridgePromise, 3000);
         await withTimeout(bridge?.stop?.(), 3000);
@@ -962,10 +1000,16 @@ export function createSyncRuntime({
         });
         throw collectionReadForbiddenError(collection);
       }
+      if (!hasRepairIntent(collection)) return retiredBridge(collection);
+      const repairRetirement = retirementGenerations.get(collection) || 0;
       const wasPinned = pinnedCollections.has(collection);
+      const hadOwner = wasPinned || bridges.leaseCount(collection) > 0;
       activeCollections.add(collection);
       await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
-      return this.startCollection(collection, { pin: wasPinned });
+      if (!hasRepairOwner(collection, hadOwner, repairRetirement)) return retiredBridge(collection);
+      return this.startCollection(collection, {
+        pin: wasPinned && pinnedCollections.has(collection), requireOwner: hadOwner, repairRetirement,
+      });
     },
     async restartCollections(collections) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
@@ -988,21 +1032,34 @@ export function createSyncRuntime({
       }
       const restartable = requested.filter((collection) => (
         mayReadCollection(collection)
+        && hasRepairIntent(collection)
         && (!isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0)
       ));
       for (const collection of requested) {
         if (restartable.includes(collection) || !mayReadCollection(collection)) continue;
+        const demandOnly = isModuleDemandOnlyCollection(collection);
         activeCollections.delete(collection);
         recordCollection(collection, {
-          status: 'skipped',
-          connectionStatus: 'demand-only',
-          reason: 'demand-only-requires-lease',
+          status: demandOnly ? 'skipped' : 'stopped',
+          connectionStatus: demandOnly ? 'demand-only' : 'stopped',
+          reason: demandOnly ? 'demand-only-requires-lease' : 'collection-lease-ended',
+          active: false,
           lastError: null,
           reconnectingSince: null,
         });
       }
       const pinnedBeforeRestart = new Map(
         restartable.map((collection) => [collection, pinnedCollections.has(collection)]),
+      );
+      const ownedBeforeRestart = new Map(
+        restartable.map((collection) => [collection,
+          pinnedCollections.has(collection) || bridges.leaseCount(collection) > 0]),
+      );
+      const retirementBeforeRestart = new Map(
+        restartable.map((collection) => [collection, retirementGenerations.get(collection) || 0]),
+      );
+      const stillOwned = (collection) => hasRepairOwner(
+        collection, ownedBeforeRestart.get(collection), retirementBeforeRestart.get(collection),
       );
       for (const collection of requested) suspendedCollections.delete(collection);
       if (!suspendedCollections.size) suspensionReason = '';
@@ -1016,15 +1073,18 @@ export function createSyncRuntime({
         collectionStartLaneCursor = 0;
         const starts = [];
         for (const collection of batchCollections) {
+          if (!stillOwned(collection)) continue;
           starts.push(this.startCollection(collection, {
-            pin: pinnedBeforeRestart.get(collection) === true,
+            pin: pinnedBeforeRestart.get(collection) === true && pinnedCollections.has(collection),
+            requireOwner: ownedBeforeRestart.get(collection) === true,
+            repairRetirement: retirementBeforeRestart.get(collection),
           }).then(
             (bridge) => ({ collection, bridge }),
             (error) => ({ collection, error }),
           ));
           await delay(COLLECTION_RESTART_GAP_MS);
         }
-        return Promise.all(starts);
+        return (await Promise.all(starts)).filter(({ collection }) => stillOwned(collection));
       };
       const restarted = await repairRestartBatch(await startBatch(restartable), {
         waitForStable: async ({ collection, bridge, error }) => {
@@ -1046,6 +1106,7 @@ export function createSyncRuntime({
           return readyBridge;
         },
         stopFailed: async ({ collection, error }) => {
+          if (!stillOwned(collection)) return;
           const lifecycleEvent = serializeError(error);
           recordCollection(collection, {
             status: 'reconnecting',
@@ -1059,6 +1120,7 @@ export function createSyncRuntime({
         restartFailed: (failed) => startBatch(failed.map(({ collection }) => collection)),
       });
       for (const { collection, bridge } of restarted.stable) {
+        if (!stillOwned(collection)) continue;
         recordCollection(collection, {
           status: 'connected',
           connectionStatus: 'connected',
@@ -1068,6 +1130,7 @@ export function createSyncRuntime({
         });
       }
       for (const { collection, error } of restarted.failed) {
+        if (!stillOwned(collection)) continue;
         recordCollection(collection, {
           status: 'reconnecting',
           connectionStatus: 'reconnecting',
@@ -1076,16 +1139,18 @@ export function createSyncRuntime({
           reconnectingSince: new Date().toISOString(),
         });
       }
-      if (!restarted.stable.length && restarted.failed.length) {
+      const stable = restarted.stable.filter(({ collection }) => stillOwned(collection));
+      const failed = restarted.failed.filter(({ collection }) => stillOwned(collection));
+      if (!stable.length && failed.length) {
         const retryError = new AggregateError(
-          restarted.failed.map(({ error }) => error),
-          `Native peer did not open for any restarted collection after individual retry: ${restarted.failed.map(({ error }) => formatLifecycleError(error)).join('; ')}`,
+          failed.map(({ error }) => error),
+          `Native peer did not open for any restarted collection after individual retry: ${failed.map(({ error }) => formatLifecycleError(error)).join('; ')}`,
         );
         retryError.code = 'peer_connect_timeout';
         retryError.retryable = true;
         throw retryError;
       }
-      return restarted.stable.map(({ bridge }) => bridge);
+      return stable.map(({ bridge }) => bridge);
     },
     async suspendCollections(collections, reason = 'sync-suspended') {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
@@ -2068,6 +2133,7 @@ async function startWebRtcReplication({
     pullNow: async () => {},
     flush: async () => {},
     async stop() {
+      if (stopped) return;
       stopped = true;
       if (nativePeerOpenWatchdog) clearTimeout(nativePeerOpenWatchdog);
       nativePeerOpenWatchdog = null;

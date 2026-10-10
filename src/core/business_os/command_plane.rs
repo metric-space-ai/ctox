@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 139] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -357,10 +357,19 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
     "ctox.subscription_auth.start",
     "ctox.task.delete",
     "ctox.task.update",
+    "ctox.workjet.providers.list",
+    "ctox.workjet.providers.adopt_native",
+    "ctox.workjet.providers.observe_native",
+    "ctox.workjet.providers.models.select",
+    "ctox.workjet.providers.models.exclude",
+    "ctox.workjet.providers.withdraw",
+    "ctox.workjet.providers.account.enable",
+    "ctox.workjet.providers.account.remove",
     "ctox.workjet.computer.assign",
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.endpoint.disable",
     "ctox.workjet.computer.endpoint.list",
+    "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
@@ -373,6 +382,12 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
+    "ctox.workjet.project.supervisor.turn.capabilities",
+    "ctox.workjet.project.supervisor.route.read.v1",
+    "ctox.workjet.project.supervisor.route.read.v2",
+    "ctox.workjet.project.supervisor.route.capabilities.v1",
+    "ctox.workjet.project.supervisor.route.capabilities.v2",
+    "ctox.workjet.project.supervisor.turn.history",
     "ctox.workjet.jour_fixe.prepare",
     "ctox.workjet.jour_fixe.deck.publish",
     "ctox.workjet.jour_fixe.comment.add",
@@ -385,7 +400,11 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 120] = [
     "ctox.workjet.jour_fixe.narration.local_publish",
     "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.jour_fixe.todos.revise",
+    "ctox.workjet.presentation.read",
+    "ctox.workjet.presentation.canvas.save",
+    "ctox.workjet.presentation.edits.apply",
     "ctox.workjet.project.supervisor.turn.cancel",
+    "ctox.workjet.project.supervisor.turn.input",
     "ctox.workjet.project.chat.create",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
@@ -1210,7 +1229,22 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if super::store_workjet_computers::requires_capability_management(command) {
+        let fixed = if command_type == "ctox.workjet.computer.ssh_key.ensure" {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::SecretsManage,
+            ))
+        } else if matches!(
+            command_type,
+            "ctox.workjet.providers.list"
+                | "ctox.workjet.providers.adopt_native"
+                | "ctox.workjet.providers.observe_native"
+                | "ctox.workjet.providers.models.select"
+                | "ctox.workjet.providers.models.exclude"
+                | "ctox.workjet.providers.withdraw"
+                | "ctox.workjet.providers.account.enable"
+                | "ctox.workjet.providers.account.remove"
+        ) || super::store_workjet_computers::requires_capability_management(command)
+        {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::IntegrationsManage,
             ))
@@ -1290,7 +1324,14 @@ impl CentralCommandPolicyRequirement {
             ))
         } else if matches!(
             command_type,
-            "ctox.workjet.project.supervisor.turn.watch" | "ctox.workjet.jour_fixe.meeting.read"
+            "ctox.workjet.project.supervisor.turn.watch"
+                | "ctox.workjet.project.supervisor.turn.history"
+                | "ctox.workjet.project.supervisor.route.read.v1"
+                | "ctox.workjet.project.supervisor.route.read.v2"
+                | "ctox.workjet.project.supervisor.route.capabilities.v1"
+                | "ctox.workjet.project.supervisor.route.capabilities.v2"
+                | "ctox.workjet.jour_fixe.meeting.read"
+                | "ctox.workjet.presentation.read"
         ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::DataRead,
@@ -1764,6 +1805,40 @@ fn dispatch_business_command(
                 )),
             }
         }
+        "ctox.workjet.presentation.canvas.save" | "ctox.workjet.presentation.edits.apply" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session)
+                .context("presentation edit requires authenticated user")?;
+            match super::project_chats::presentation::handle(
+                root,
+                command,
+                actor,
+                prepared
+                    .domain_effect_admission
+                    .as_ref()
+                    .context("presentation edit requires domain admission")?,
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.presentation.read" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let owner = session_user_id(session)
+                .context("presentation read requires authenticated user")?;
+            match super::project_chats::presentation::read(root, command, owner) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
         "ctox.workjet.jour_fixe.meeting.read" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let owner =
@@ -1779,7 +1854,14 @@ fn dispatch_business_command(
         }
         "ctox.workjet.project.supervisor.turn.submit"
         | "ctox.workjet.project.supervisor.turn.watch"
-        | "ctox.workjet.project.supervisor.turn.cancel" => {
+        | "ctox.workjet.project.supervisor.turn.cancel"
+        | "ctox.workjet.project.supervisor.turn.input"
+        | "ctox.workjet.project.supervisor.turn.capabilities"
+        | "ctox.workjet.project.supervisor.turn.history"
+        | "ctox.workjet.project.supervisor.route.read.v1"
+        | "ctox.workjet.project.supervisor.route.read.v2"
+        | "ctox.workjet.project.supervisor.route.capabilities.v1"
+        | "ctox.workjet.project.supervisor.route.capabilities.v2" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let mut project_session = session.clone();
             let user = project_session
@@ -1890,6 +1972,7 @@ fn dispatch_business_command(
         | "ctox.workjet.computer.endpoint.upsert"
         | "ctox.workjet.computer.endpoint.disable"
         | "ctox.workjet.computer.endpoint.list"
+        | "ctox.workjet.computer.ssh_key.ensure"
         | "ctox.workjet.computer.list"
         | "ctox.workjet.computer.unassign" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
@@ -1947,6 +2030,31 @@ fn dispatch_business_command(
                         "ok": false,
                         "error": error.to_string(),
                     }),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.providers.list"
+        | "ctox.workjet.providers.adopt_native"
+        | "ctox.workjet.providers.observe_native"
+        | "ctox.workjet.providers.models.select"
+        | "ctox.workjet.providers.models.exclude"
+        | "ctox.workjet.providers.withdraw"
+        | "ctox.workjet.providers.account.enable"
+        | "ctox.workjet.providers.account.remove" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor = session_user_id(session)
+                .context("provider command requires an authenticated actor")?;
+            match super::provider_federation::handle_command(
+                root,
+                command,
+                actor,
+                prepared.domain_effect_admission.as_ref(),
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
                     error,
                 )),
             }

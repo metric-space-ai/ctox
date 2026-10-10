@@ -1,4 +1,79 @@
 #[test]
+fn jour_fixe_retrospective_uses_persisted_audio_not_worker_claims() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute_batch(
+        "ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT;
+        ALTER TABLE worker_attempt_finalizations ADD COLUMN reply_text TEXT NOT NULL DEFAULT '';",
+    )?;
+    crate::crew::ensure_schema(&conn)?;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/workjet-jour-fixe-v1.json"
+    ))?;
+    let mut meeting = fixture["valid_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["type"] == "Meeting")
+        .unwrap()["value"]
+        .clone();
+    meeting["state"] = json!("preparing");
+    let total = meeting["slides"].as_array().unwrap().len();
+    assert!(total > 0);
+    for slide in meeting["slides"].as_array_mut().unwrap() {
+        slide["audio"] = Value::Null;
+    }
+    let policy = store::open_store(root.path())?;
+    policy.execute_batch("CREATE TABLE workjet_jour_fixe_meetings (meeting_id TEXT PRIMARY KEY, preparation_task_id TEXT, metadata_json TEXT NOT NULL)")?;
+    policy.execute(
+        "INSERT INTO workjet_jour_fixe_meetings VALUES('meeting','task',?1)",
+        [meeting.to_string()],
+    )?;
+    conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at,crew_member_id) VALUES('task','leased','2026-09-05T12:00:00Z','crew-nori')", [])?;
+    conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES('attempt','task','crew-nori','2026-09-05T12:00:00Z')", [])?;
+    let reply = json!({"crew_retrospective":{"retrospective":"Folien 1-4 vertont, 5-8 blockiert durch Gateway-Ausfall.",
+        "learnings":[{"text":"ConfigurationUnavailable ist deterministisch: nicht erneut hammern.","kind":"pitfall","scope":{}}]}}).to_string();
+    conn.execute("INSERT INTO worker_attempt_finalizations VALUES('attempt','work','succeeded','success','1788609600000','1788609660000','1788609660000',NULL,0,?1)", [&reply])?;
+    conn.execute("INSERT INTO ctox_harness_flow_events VALUES('event','worker.phase','Review','','task',NULL,1,?1,'2026-09-05T12:01:00Z')", [json!({"attempt_id":"attempt","review":{"disposition":"approved"}}).to_string()])?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    project_runs(root.path(), &conn, &mut writer)?;
+    let (retrospective, learnings): (String, String) = conn.query_row(
+        "SELECT retrospective,learning_json FROM crew_attempts WHERE attempt_id='attempt'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(retrospective, format!("Jour fixe: 0/{total} Folien mit gespeicherter Audio-Referenz; Meeting-Status preparing."));
+    assert_eq!(learnings, "[]");
+    // A later successful publication changes the persisted count, regardless
+    // of the same old worker prose. Other tasks still retain their metadata.
+    let ready = fixture["valid_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["type"] == "Meeting")
+        .unwrap()["value"]
+        .clone();
+    policy.execute(
+        "UPDATE workjet_jour_fixe_meetings SET metadata_json=?1",
+        [ready.to_string()],
+    )?;
+    let derived = preparation_reply_from_persisted_meeting(&policy, Some("task"), &reply)?;
+    let parsed = crate::crew::parse_retrospective(&derived).unwrap();
+    assert_eq!(parsed.retrospective,
+        format!("Jour fixe: {total}/{total} Folien mit gespeicherter Audio-Referenz; Meeting-Status review."));
+    assert!(parsed.learnings.is_empty());
+    assert_eq!(
+        record(root.path(), "ctox_runs", "attempt")?["retrospective"],
+        retrospective
+    );
+    // Non-preparation tasks retain their ordinary metadata byte-for-byte.
+    assert_eq!(
+        preparation_reply_from_persisted_meeting(&policy, Some("other-task"), &reply)?,
+        reply
+    );
+    Ok(())
+}
+
+#[test]
 fn crew_maintenance_failure_and_missing_outbox_preserve_status_and_events() -> Result<()> {
     let (root, conn) = setup()?;
     conn.execute_batch("ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT;")?;
@@ -392,6 +467,137 @@ fn setup() -> Result<(TempDir, Connection)> {
         rxdb.execute_batch(&format!("CREATE TABLE ctox_business_os__{name}__v{version}(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL);"))?;
     }
     Ok((root, conn))
+}
+
+// Isolated native-path load test. This is not customer or installed-shell
+// acceptance: the caller must retain the source, binary and measured scope.
+fn measure_eight_writer_projection(duration: Duration, require_fast_warmup: bool) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (root, conn) = setup()?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT")?;
+    crate::crew::ensure_schema(&conn)?;
+    Connection::open(store::rxdb_store_path(root.path()))?
+        .execute_batch("PRAGMA journal_mode=WAL")?;
+    for worker in 0..8 {
+        conn.execute("INSERT INTO communication_routing_state(message_key,route_status,updated_at) VALUES(?1,'leased',?2)",
+            params![format!("load-{worker}"), Utc::now().to_rfc3339()])?;
+    }
+    // Populated durable history, without model calls, external effects or
+    // production identities. Every row is an explicitly isolated fixture.
+    {
+        let tx = conn.unchecked_transaction()?;
+        for n in 0..1600 {
+            tx.execute("INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','',?2,NULL,1,'{}',?3)",
+                params![format!("load-event-{n:06}"), format!("load-{}", n % 8), Utc::now().to_rfc3339()])?;
+        }
+        tx.commit()?;
+    }
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    let warm_started = Instant::now();
+    refresh_selected(
+        root.path(),
+        &WorkerSnapshot::default(),
+        &mut writer,
+        ALL | MAINTENANCE,
+    )?;
+    let warm = warm_started.elapsed();
+    anyhow::ensure!(
+        !writer.crew_maintenance_warned,
+        "fixture warm-up deferred Crew maintenance"
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut workers = Vec::new();
+    for id in 0..8 {
+        let path = root.path().to_path_buf();
+        let stop = stop.clone();
+        workers.push(std::thread::spawn(move || -> Result<u64> {
+            let conn = Connection::open(crate::paths::core_db(&path))?;
+            conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+            let mut mirror = NativeProjectionWriter::open(&path)?;
+            let task = format!("load-{id}");
+            let mut commits = 0;
+            while !stop.load(Ordering::Relaxed) {
+                let now = Utc::now().timestamp_millis();
+                let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "fixture.queue_worker")?;
+                tx.execute("UPDATE communication_routing_state SET updated_at=?2 WHERE message_key=?1",
+                    params![task, Utc::now().to_rfc3339()])?;
+                tx.commit()?;
+                mirror.upsert_source_projection("ctox_queue_tasks", &task, now,
+                    json!({"id":task,"route_status":"leased","updated_at_ms":now,"fixture_sequence":commits}))?;
+                commits += 1;
+                // Work/think time lies outside the writer reservation.
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(commits)
+        }));
+    }
+    let started = Instant::now();
+    let mut passes = 0;
+    let mut max_pass = Duration::ZERO;
+    let mut failures = Vec::new();
+    while started.elapsed() < duration {
+        if workers.iter().any(std::thread::JoinHandle::is_finished) {
+            failures.push("fixture writer ended before the load interval".to_string());
+            break;
+        }
+        let pass_started = Instant::now();
+        if let Err(error) = refresh_selected(
+            root.path(),
+            &WorkerSnapshot::default(),
+            &mut writer,
+            ALL | MAINTENANCE,
+        ) {
+            failures.push(format!("{error:#}"));
+            break;
+        }
+        if writer.crew_maintenance_warned {
+            failures.push("fixture projection deferred Crew maintenance".to_string());
+            break;
+        }
+        max_pass = max_pass.max(pass_started.elapsed());
+        passes += 1;
+        std::thread::sleep(Duration::from_secs(3).min(duration.saturating_sub(started.elapsed())));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let mut counts = Vec::new();
+    for worker in workers {
+        match worker.join() {
+            Ok(Ok(count)) => counts.push(count),
+            Ok(Err(error)) => failures.push(format!("{error:#}")),
+            Err(_) => failures.push("fixture writer panicked".to_string()),
+        }
+    }
+    eprintln!(
+        "CTOX_SQLITE_LOAD {}",
+        json!({
+            "scope":"isolated-native-fixture","duration_ms":started.elapsed().as_millis(),
+            "workers":8,"commits_per_worker":counts,"projection_passes":passes,
+            "warm_projection_us":warm.as_micros(),"max_projection_us":max_pass.as_micros(),
+            "failures":failures
+        })
+    );
+    if require_fast_warmup {
+        assert!(warm < Duration::from_secs(1), "cold projection {warm:?}");
+    }
+    assert_eq!(counts.len(), 8);
+    assert!(counts.iter().all(|count| *count > 0));
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(
+        max_pass < Duration::from_secs(1),
+        "max projection {max_pass:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn cockpit_projection_survives_eight_concurrent_native_writers() -> Result<()> {
+    measure_eight_writer_projection(Duration::from_secs(10), false)
+}
+
+#[test]
+#[ignore = "explicit one-hour isolated acceptance load; run via the gpu lane"]
+fn cockpit_projection_one_hour_eight_native_writers() -> Result<()> {
+    measure_eight_writer_projection(Duration::from_secs(3600), true)
 }
 
 fn record(root: &Path, collection: &str, id: &str) -> Result<Value> {
@@ -910,6 +1116,192 @@ fn runs_join_real_turn_ids_and_refresh_late_costs_without_double_counting() -> R
 }
 
 #[test]
+fn failed_event_batch_retries_unpublished_rows_without_advancing_cursor() -> Result<()> {
+    let (root, conn) = setup()?;
+    conn.execute(
+        "INSERT INTO communication_routing_state VALUES('batch-task','leased',?1)",
+        [Utc::now().to_rfc3339()],
+    )?;
+    for n in 0..129 {
+        conn.execute("INSERT INTO ctox_harness_flow_events VALUES(?1,'worker.phase','Working','','batch-task',NULL,1,'{}','2026-01-01T00:00:00Z')",
+            [format!("cursor-event-{n:03}")])?;
+    }
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch(
+        "CREATE TRIGGER fixture_cursor_failure
+        BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
+        WHEN new.id='cursor-event-025'
+        BEGIN SELECT RAISE(ABORT,'injected replay failure'); END;",
+    )?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(project_events_since(root.path(), &conn, &mut writer, true).is_err());
+    assert_eq!(writer.event_cursor, None);
+    assert_eq!(writer.last_event_replay, None);
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        64
+    );
+    let before: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
+        [], |r|r.get(0))?;
+    rxdb.execute_batch("DROP TRIGGER fixture_cursor_failure")?;
+    // Exercise the ordinary incremental invocation, not a forced replay:
+    // only restoring the unclaimed cursor keeps the failed rows eligible.
+    project_events_since(root.path(), &conn, &mut writer, false)?;
+    assert_eq!(writer.event_cursor, Some(129));
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        129
+    );
+    let after: String = rxdb.query_row("SELECT revision FROM ctox_business_os__ctox_harness_events__v0 WHERE id='cursor-event-128'",
+        [], |r|r.get(0))?;
+    assert_eq!(before, after);
+    Ok(())
+}
+
+#[test]
+fn retained_projection_writers_publish_batches_beyond_the_persisted_feed_cursor() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    let rows = |prefix: &str, count: usize| {
+        (0..count).map(|n| {
+            let id = format!("{prefix}-{n}");
+            (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"clock-fixture","created_at_ms":1,"updated_at_ms":1}))
+        }).collect::<Vec<_>>()
+    };
+    let mut left = BusinessProjectionWriter::open(root.path())?;
+    let mut right = BusinessProjectionWriter::open(root.path())?;
+    // Both retain a mirror writer before another publisher advances its clock.
+    left.upsert_source_projection_batch("ctox_harness_events", rows("prime-left", 1))?;
+    right.upsert_source_projection_batch("ctox_harness_events", rows("prime-right", 1))?;
+    let future = Utc::now().timestamp_millis() + 60_000;
+    rxdb.execute(
+        "UPDATE ctox_business_os__ctox_harness_events__v0
+         SET lastWriteTime=?1,data=json_set(data,'$._meta.lwt',?1)
+         WHERE id='prime-right-0'",
+        [future],
+    )?;
+    // Future/skewed persisted clocks make this regression independent of
+    // scheduler speed. Source timestamps remain ordinary projection facts.
+    left.upsert_source_projection_batch("ctox_harness_events", rows("clock-left", 2))?;
+    let watermark: f64 = rxdb.query_row(
+        "SELECT MAX(lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(watermark > future as f64);
+    right.upsert_source_projection_batch("ctox_harness_events", rows("clock-right", 2))?;
+    let visible: i64 = rxdb.query_row(
+        "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0
+         WHERE id IN ('clock-right-0','clock-right-1') AND lastWriteTime>?1
+           AND json_extract(data,'$._meta.lwt')=lastWriteTime",
+        [watermark],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        visible, 2,
+        "retained writer rows must remain eligible after the earlier cursor"
+    );
+    Ok(())
+}
+
+#[test]
+fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch(
+        "CREATE TRIGGER fixture_batch_failure
+        BEFORE INSERT ON ctox_business_os__ctox_harness_events__v0
+        WHEN new.id='batch-event-080'
+        BEGIN SELECT RAISE(ABORT,'injected batch mirror failure'); END;",
+    )?;
+    let records = (0..129).map(|n| {
+        let id = format!("batch-event-{n:03}");
+        (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1}))
+    }).collect::<Vec<_>>();
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    assert!(writer
+        .upsert_source_projection_batch("ctox_harness_events", records.clone())
+        .is_err());
+    assert_eq!(writer.payloads.len(), 64);
+    let count_source = || -> Result<i64> {
+        Ok(writer.inner.source_connection().query_row(
+            "SELECT COUNT(*) FROM business_records WHERE collection='ctox_harness_events'",
+            [],
+            |r| r.get(0),
+        )?)
+    };
+    assert_eq!(count_source()?, 128, "only two source chunks committed");
+    assert_eq!(
+        rxdb.query_row(
+            "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        64,
+        "the failed second mirror chunk rolled back completely"
+    );
+    let first = || -> Result<(String, f64)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-event-000'",
+            [], |r|Ok((r.get(0)?,r.get(1)?)))?)
+    };
+    let before = first()?;
+    rxdb.execute_batch("DROP TRIGGER fixture_batch_failure")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", records)?;
+    assert_eq!(writer.payloads.len(), 129);
+    assert_eq!(
+        first()?,
+        before,
+        "successful chunks are not rewritten during retry"
+    );
+    assert_eq!(rxdb.query_row(
+        "SELECT COUNT(*),COUNT(DISTINCT lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
+        [], |r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))
+    )?, (129,129));
+    Ok(())
+}
+
+#[test]
+fn projection_batches_recover_late_collection_and_dedupe_after_restart() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    rxdb.execute_batch("DROP TABLE ctox_business_os__ctox_harness_events__v0")?;
+    let payload = json!({"id":"batch-late","kind":"phase","task_id":"fixture","created_at_ms":1,"updated_at_ms":1});
+    let rows = vec![("batch-late".to_string(), 1, payload)];
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert!(
+        writer.payloads.is_empty(),
+        "missing mirror is not acknowledged"
+    );
+    rxdb.execute_batch("CREATE TABLE ctox_business_os__ctox_harness_events__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL)")?;
+    writer.upsert_source_projection_batch("ctox_harness_events", rows.clone())?;
+    assert_eq!(writer.payloads.len(), 1);
+    let row = || -> Result<(String, f64, String)> {
+        Ok(rxdb.query_row("SELECT revision,lastWriteTime,data FROM ctox_business_os__ctox_harness_events__v0 WHERE id='batch-late'",
+            [], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?)
+    };
+    let before = row()?;
+    drop(writer);
+    let mut restarted = BusinessProjectionWriter::open(root.path())?;
+    restarted.upsert_source_projection_batch("ctox_harness_events", rows)?;
+    assert_eq!(
+        row()?,
+        before,
+        "replay after restart preserves the committed envelope"
+    );
+    assert_eq!(restarted.payloads.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn projection_delivery_recovers_when_rxdb_collection_appears_after_writer_open() -> Result<()> {
     let (root, _) = setup()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -1290,6 +1682,16 @@ fn changed_event_query_and_task_retention_use_bounded_indexes() -> Result<()> {
         "{plan}"
     );
     assert!(!plan.contains("SCAN e"), "{plan}");
+    let plan = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {EVENT_PLAN_AT_EMISSION_SQL}"))?
+        .query_map(
+            params!["task", "2026-01-01", Option::<String>::None],
+            |row| row.get::<_, String>(3),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .join("\n");
+    assert!(plan.contains("idx_cockpit_flow_plan_time"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     let plan = writer
         .inner
         .source_connection()
@@ -1480,6 +1882,63 @@ fn fresh_writer_replay_keeps_unchanged_records_untouched() -> Result<()> {
     assert_eq!(
         record(root.path(), "ctox_harness_events", "event-1")?["title"],
         "Changed"
+    );
+    Ok(())
+}
+
+#[test]
+fn only_lock_errors_keep_the_deferred_pass_flags() -> Result<()> {
+    let dir = TempDir::new()?;
+    let path = dir.path().join("lock.sqlite3");
+    let holder = Connection::open(&path)?;
+    holder.execute_batch("CREATE TABLE t(v); BEGIN IMMEDIATE; INSERT INTO t VALUES(1);")?;
+    let waiter = Connection::open(&path)?;
+    waiter.busy_timeout(Duration::from_millis(0))?;
+    let locked = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map_err(anyhow::Error::from)
+        .map_err(|error| error.context("projection pass"))
+        .unwrap_err();
+    assert!(is_sqlite_busy(&locked));
+    let missing = waiter
+        .execute("INSERT INTO missing VALUES(1)", [])
+        .map_err(anyhow::Error::from)
+        .unwrap_err();
+    assert!(!is_sqlite_busy(&missing));
+
+    let root = dir.path().to_path_buf();
+    let now = Instant::now();
+    let mut pending = schedule::Schedule::default();
+    pending.mark(root.clone(), STATUS | QUEUE);
+    let (_, flags) = pending.take_ready(now).pop().unwrap();
+    complete_projection_pass(&mut pending, root.clone(), flags, now, &Err(locked));
+    assert!(
+        pending.take_ready(now).is_empty(),
+        "lock retry must respect cooldown"
+    );
+    let due = now + schedule::MIN_REFRESH_INTERVAL;
+    assert_eq!(
+        pending.take_ready(due),
+        vec![(root.clone(), STATUS | QUEUE)]
+    );
+
+    // Releasing the real writer lock permits delivery; success consumes the work.
+    holder.execute_batch("ROLLBACK;")?;
+    let result = waiter
+        .execute("INSERT INTO t VALUES(2)", [])
+        .map(|_| ())
+        .map_err(anyhow::Error::from);
+    assert!(result.is_ok());
+    complete_projection_pass(&mut pending, root.clone(), flags, due, &result);
+    assert!(pending
+        .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+        .is_empty());
+    complete_projection_pass(&mut pending, root, flags, due, &Err(missing));
+    assert!(
+        pending
+            .take_ready(due + schedule::MIN_REFRESH_INTERVAL)
+            .is_empty(),
+        "permanent SQL errors must not create a retry loop"
     );
     Ok(())
 }

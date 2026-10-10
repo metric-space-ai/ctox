@@ -82,6 +82,8 @@ scraper = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+# Already locked via the SSH transport; private keys remain in native SecretStore.
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519"] }
 tiny_http = "0.12"
 # `tls` ist ureqs rustls-Rueckwand; `native-tls` wuerde OpenSSL hereinziehen.
 ureq = { version = "2.12", features = ["tls"] }
@@ -166,6 +168,9 @@ ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.2
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 rtc-ice = { path = "src/core/rxdb/patches/rtc-ice" }
+# Polars 0.53 pins object_store 0.13; this fork moves it to quick-xml 0.41.
+# See src/tools/object-store-patched/CTOX-PATCH.md.
+object_store = { path = "src/tools/object-store-patched" }
 # rama 0.3.0-alpha.4 still pins vulnerable hickory 0.25. Keep the alpha API
 # while using the fixed hickory 0.26 resolver until the pinned Rust toolchain
 # can consume rama 0.4.

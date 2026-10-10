@@ -1119,6 +1119,9 @@ const MODULE_SCOPED_TOOLS = new Set([
 ]);
 
 const READ_TOOLS = new Set([
+  "business_os.luma_configuration_read",
+  "business_os.calendar_accounts",
+  "business_os.calendar_events",
   "business_os.status",
   "business_os.list_modules",
   "business_os.get_module",
@@ -1144,6 +1147,7 @@ const READ_TOOLS = new Set([
 ]);
 
 const WRITE_TOOLS = new Set([
+  "business_os.luma_configuration_update",
   "business_os.remote_worker_admission",
   "business_os.workjet_worker_dispatch",
   "business_os.propose_action",

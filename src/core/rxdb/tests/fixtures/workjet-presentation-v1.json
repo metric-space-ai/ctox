@@ -1,0 +1,640 @@
+{
+  "schema": "ctox.workjet.presentation.v1",
+  "contract_version": 1,
+  "types": {
+    "PresentationSource": {
+      "enum": [
+        "agent",
+        "owner"
+      ]
+    },
+    "PresentationManifest": {
+      "fields": {
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "meeting_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "owner_user_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "title": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 180
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "document_schema": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 64
+        },
+        "document_file_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "document_generation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "document_sha256": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "document_bytes": {
+          "type": "u64",
+          "minimum": 2,
+          "maximum": 8388608
+        },
+        "slide_ids": {
+          "type": "Vec<String>",
+          "min_items": 1,
+          "max_items": 160
+        },
+        "source": {
+          "type": "PresentationSource"
+        },
+        "updated_by": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "updated_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        }
+      }
+    },
+    "ReadPresentationRequest": {
+      "fields": {
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "meeting_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
+    },
+    "ReadPresentationResponse": {
+      "fields": {
+        "contract": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 64
+        },
+        "presentation": {
+          "type": "PresentationManifest",
+          "optional": true
+        }
+      }
+    },
+    "ReadPresentationContentRequest": {
+      "fields": {
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "meeting_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "offset": {
+          "type": "u64",
+          "maximum": 8388608
+        },
+        "length": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 131072
+        }
+      }
+    },
+    "PresentationContentRange": {
+      "fields": {
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "offset": {
+          "type": "u64",
+          "maximum": 8388608
+        },
+        "length": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 131072
+        },
+        "total_bytes": {
+          "type": "u64",
+          "minimum": 2,
+          "maximum": 8388608
+        },
+        "document_sha256": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "data_base64": {
+          "type": "String",
+          "min_chars": 4,
+          "max_chars": 174764
+        }
+      }
+    },
+    "SavePresentationCanvasRequest": {
+      "fields": {
+        "operation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "expected_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "slide_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 120
+        },
+        "scene_json": {
+          "type": "String",
+          "min_chars": 2,
+          "max_chars": 4194304
+        }
+      }
+    },
+    "ApplyPresentationEditsRequest": {
+      "fields": {
+        "operation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "expected_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "operations_json": {
+          "type": "String",
+          "min_chars": 2,
+          "max_chars": 1048576
+        }
+      }
+    },
+    "PresentationMutationReceipt": {
+      "fields": {
+        "operation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "presentation_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "meeting_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "document_sha256": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "document_bytes": {
+          "type": "u64",
+          "minimum": 2,
+          "maximum": 8388608
+        },
+        "slide_ids": {
+          "type": "Vec<String>",
+          "min_items": 1,
+          "max_items": 160
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.presentation.read": {
+      "request_type": "ReadPresentationRequest",
+      "authorization": "owner"
+    },
+    "ctox.workjet.presentation.canvas.save": {
+      "request_type": "SavePresentationCanvasRequest",
+      "authorization": "owner"
+    },
+    "ctox.workjet.presentation.edits.apply": {
+      "request_type": "ApplyPresentationEditsRequest",
+      "authorization": "owner"
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48211,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      }
+    },
+    {
+      "type": "ReadPresentationRequest",
+      "value": {
+        "project_id": "project-1",
+        "meeting_id": "meeting-1"
+      }
+    },
+    {
+      "type": "ReadPresentationResponse",
+      "value": {
+        "contract": "ctox.workjet.presentation.v1",
+        "presentation": {
+          "presentation_id": "workjet_presentation_1",
+          "project_id": "project-1",
+          "meeting_id": "meeting-1",
+          "owner_user_id": "owner-1",
+          "title": "Regeltermin greppy.xyz",
+          "revision": 2,
+          "document_schema": "learnordie.slide.v1",
+          "document_file_id": "workjet_presentation_file_1",
+          "document_generation_id": "presentation_generation_1",
+          "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "document_bytes": 48211,
+          "slide_ids": [
+            "s-title",
+            "s-kpis",
+            "s-trend"
+          ],
+          "source": "owner",
+          "updated_by": "owner-1",
+          "updated_at_ms": 1791450000000
+        }
+      }
+    },
+    {
+      "type": "ReadPresentationResponse",
+      "value": {
+        "contract": "ctox.workjet.presentation.v1"
+      }
+    },
+    {
+      "type": "ReadPresentationContentRequest",
+      "value": {
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "presentation_id": "workjet_presentation_1",
+        "revision": 2,
+        "offset": 0,
+        "length": 131072
+      }
+    },
+    {
+      "type": "PresentationContentRange",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "revision": 2,
+        "offset": 0,
+        "length": 3,
+        "total_bytes": 48211,
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "data_base64": "eyJz"
+      }
+    },
+    {
+      "type": "SavePresentationCanvasRequest",
+      "value": {
+        "operation_id": "op-canvas-1",
+        "presentation_id": "workjet_presentation_1",
+        "expected_revision": 2,
+        "slide_id": "s-kpis",
+        "scene_json": "{\"version\": \"learnordie.excalidraw.v1\", \"width\": 1600, \"height\": 900, \"backgroundColor\": \"#fffef8\", \"elements\": [], \"files\": {}}"
+      }
+    },
+    {
+      "type": "ApplyPresentationEditsRequest",
+      "value": {
+        "operation_id": "op-edits-1",
+        "presentation_id": "workjet_presentation_1",
+        "expected_revision": 2,
+        "operations_json": "[{\"kind\":\"deleteSlide\",\"slideId\":\"s-trend\"}]"
+      }
+    },
+    {
+      "type": "PresentationMutationReceipt",
+      "value": {
+        "operation_id": "op-canvas-1",
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "revision": 3,
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48399,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ]
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 0,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48211,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      },
+      "reason": "A stored presentation starts at revision 1"
+    },
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "abc",
+        "document_bytes": 48211,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      },
+      "reason": "Document hash is a full sha256 hex digest"
+    },
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48211,
+        "slide_ids": [],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      },
+      "reason": "A deck has at least one slide"
+    },
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48211,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "import",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      },
+      "reason": "Only agent and owner revisions exist"
+    },
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 8388609,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000
+      },
+      "reason": "Stored decks are bounded to 8 MiB"
+    },
+    {
+      "type": "PresentationManifest",
+      "value": {
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "owner_user_id": "owner-1",
+        "title": "Regeltermin greppy.xyz",
+        "revision": 2,
+        "document_schema": "learnordie.slide.v1",
+        "document_file_id": "workjet_presentation_file_1",
+        "document_generation_id": "presentation_generation_1",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48211,
+        "slide_ids": [
+          "s-title",
+          "s-kpis",
+          "s-trend"
+        ],
+        "source": "owner",
+        "updated_by": "owner-1",
+        "updated_at_ms": 1791450000000,
+        "document_json": "{}"
+      },
+      "reason": "The manifest never carries the document body"
+    },
+    {
+      "type": "ReadPresentationRequest",
+      "value": {
+        "project_id": "project-1"
+      },
+      "reason": "Presentation reads are bound to an explicit meeting"
+    },
+    {
+      "type": "ReadPresentationContentRequest",
+      "value": {
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "presentation_id": "workjet_presentation_1",
+        "revision": 2,
+        "offset": 0,
+        "length": 131073
+      },
+      "reason": "Content ranges stay below the Workjet response budget"
+    },
+    {
+      "type": "ReadPresentationContentRequest",
+      "value": {
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "presentation_id": "workjet_presentation_1",
+        "revision": 0,
+        "offset": 0,
+        "length": 10
+      },
+      "reason": "Content reads name a stored revision"
+    },
+    {
+      "type": "SavePresentationCanvasRequest",
+      "value": {
+        "operation_id": "op-canvas-1",
+        "presentation_id": "workjet_presentation_1",
+        "slide_id": "s-kpis",
+        "scene_json": "{\"version\": \"learnordie.excalidraw.v1\", \"width\": 1600, \"height\": 900, \"backgroundColor\": \"#fffef8\", \"elements\": [], \"files\": {}}"
+      },
+      "reason": "Canvas saves require the revision they were edited against"
+    },
+    {
+      "type": "SavePresentationCanvasRequest",
+      "value": {
+        "operation_id": "op-canvas-1",
+        "presentation_id": "workjet_presentation_1",
+        "expected_revision": 2,
+        "slide_id": "s-kpis",
+        "scene": {}
+      },
+      "reason": "The scene travels as bounded JSON text, not as an open object"
+    },
+    {
+      "type": "ApplyPresentationEditsRequest",
+      "value": {
+        "operation_id": "op-edits-1",
+        "presentation_id": "workjet_presentation_1",
+        "expected_revision": 2,
+        "operations_json": "x"
+      },
+      "reason": "Edit batches are JSON text of at least two characters"
+    },
+    {
+      "type": "PresentationMutationReceipt",
+      "value": {
+        "operation_id": "op-canvas-1",
+        "presentation_id": "workjet_presentation_1",
+        "project_id": "project-1",
+        "meeting_id": "meeting-1",
+        "revision": 3,
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 48399
+      },
+      "reason": "Receipts name the resulting slide identities"
+    }
+  ]
+}

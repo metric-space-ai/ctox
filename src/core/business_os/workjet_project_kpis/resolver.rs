@@ -49,9 +49,35 @@ pub(super) fn snapshot_binding_is_current(
     }
 }
 
+/// Data-only lookup after the current binding check, inside the same read
+/// snapshot. Foreign Owners and superseded prompt revisions expose no schedule.
+pub(super) fn read_next_refresh_ms(
+    conn: &Connection,
+    project: &str,
+    owner: &str,
+    prompt: &KpiPrompt,
+) -> anyhow::Result<Option<i64>> {
+    if !has(conn, "workjet_project_kpi_definitions")? {
+        return Ok(None);
+    }
+    let next: Option<i64> = conn
+        .query_row(
+            "SELECT next_refresh_ms FROM workjet_project_kpi_definitions
+         WHERE project_id=?1 AND kpi_id=?2 AND owner_user_id=?3 AND prompt_revision=?4",
+            params![project, prompt.kpi_id, owner, prompt.revision],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(
+        next.is_none_or(|next| next >= 0),
+        "invalid native KPI refresh timestamp"
+    );
+    Ok(next)
+}
+
 pub(in crate::business_os) fn catalogue() -> Value {
     json!([
-      {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor commands admitted to this project, created within the rolling window."},
+      {"recipe":"project_tasks_total","label":"Tasks","meaning":"Native queued Supervisor work requests admitted to this project within the rolling window; explicit conversation replies are excluded."},
       {"recipe":"project_tasks_completed","label":"Erledigt","meaning":"Those commands with a terminal completed receipt, not model claims or lease completion."},
       {"recipe":"project_tasks_failed","label":"Fehlversuche","meaning":"Those commands with a terminal failed receipt."},
       {"recipe":"project_tasks_open","label":"Offene Tasks","meaning":"Those commands whose native execution phase is not terminal."},
@@ -79,12 +105,14 @@ fn missing(code: &str, message: &str) -> KpiResult {
     KpiResult {
         status: KpiState::MissingSource,
         snapshot: None,
+        next_refresh_ms: None,
         reason_code: Some(code.into()),
         message: Some(message.into()),
     }
 }
 fn calculate(
     core: &Connection,
+    policy: &Connection,
     owner: &str,
     thread: &str,
     request: &BindKpiRequest,
@@ -102,19 +130,62 @@ fn calculate(
     let start = now
         .saturating_sub(request.window_days as i64 * 24 * HOUR)
         .max(0);
-    // Canonical native Supervisor turns retain the current project, owner and
-    // registered thread in their admitted envelope. Neither a same-name thread
-    // nor a foreign actor's command can add to this source.
-    let (total,completed,failed,open,watermark):(u64,u64,u64,u64,i64) = core.query_row(
-      "SELECT count(*), coalesce(sum(execution_phase='terminal' AND terminal_status='completed'),0),
-       coalesce(sum(execution_phase='terminal' AND terminal_status='failed'),0),
-       coalesce(sum(execution_phase!='terminal'),0), coalesce(max(updated_at_ms),0)
-       FROM business_command_aggregates WHERE module='ctox' AND command_type='business_os.chat.task'
-       AND execution_mode='queue' AND record_id=?1 AND created_at_ms>=?2 AND created_at_ms<=?3
-       AND json_extract(intent_json,'$.payload.thread_id')=?4
-       AND json_extract(intent_json,'$.payload.risk_class')='internal'
-       AND json_extract(intent_json,'$.client_context.actor.id')=?5",
-       params![request.project_id,start,now,thread,owner], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+    if !has(policy, "business_commands")? {
+        return Ok(missing(
+            "native_task_admission_unavailable",
+            "The native admitted project command envelopes are unavailable.",
+        ));
+    }
+    // Core audit intent deliberately redacts client_context.actor. As in
+    // Supervisor turn.watch, ownership comes from the private admitted native
+    // envelope; the immutable Core payload must agree before its state counts.
+    // Stream indexed command lookups rather than copying every prompt into a
+    // JSON whitelist or attaching a second database outside these snapshots.
+    let mut admitted = policy.prepare(
+        "SELECT command_id, payload_json FROM business_commands
+         WHERE module='ctox' AND command_type='business_os.chat.task' AND record_id=?1
+         AND json_extract(payload_json,'$.thread_id')=?2
+         AND json_extract(payload_json,'$.risk_class')='internal'
+         AND json_extract(client_context_json,'$.actor.id')=?3
+         AND coalesce(json_extract(payload_json,'$.supervisor_turn.kind'),'work')!='conversation'",
+    )?;
+    let mut canonical = core.prepare(
+        "SELECT execution_phase, terminal_status, updated_at_ms,
+                json_extract(intent_json,'$.payload')
+         FROM business_command_aggregates
+         WHERE command_id=?1 AND module='ctox' AND command_type='business_os.chat.task'
+         AND execution_mode='queue' AND record_id=?2 AND created_at_ms>=?3 AND created_at_ms<=?4",
+    )?;
+    let (mut total, mut completed, mut failed, mut open, mut watermark) =
+        (0_u64, 0_u64, 0_u64, 0_u64, 0_i64);
+    let mut rows = admitted.query(params![request.project_id, thread, owner])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let payload: String = row.get(1)?;
+        let observed: Option<(String, Option<String>, i64, String)> = canonical
+            .query_row(params![id, request.project_id, start, now], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .optional()?;
+        let Some((phase, status, updated, core_payload)) = observed else {
+            continue;
+        };
+        if serde_json::from_str::<Value>(&payload)? != serde_json::from_str::<Value>(&core_payload)?
+        {
+            continue;
+        }
+        total = total.checked_add(1).context("native task count overflow")?;
+        if phase == "terminal" {
+            match status.as_deref() {
+                Some("completed") => completed += 1,
+                Some("failed") => failed += 1,
+                _ => {}
+            }
+        } else {
+            open += 1;
+        }
+        watermark = watermark.max(updated);
+    }
     let (label, unit, metric, value, values, operation) = match request.recipe {
         NativeMetricRecipe::ProjectTasksTotal => (
             "Tasks",
@@ -186,7 +257,7 @@ fn calculate(
         .enumerate()
         .map(|(i, v)| SourceEvidence {
             source_key: keys[i].clone(),
-            kind: SourceKind::NativeMetric,
+            kind: SourceKind::Native,
             connection_id: "native-core-command-ledger".into(),
             metric_key: if operation == Calculation::Percentage {
                 if i == 0 {
@@ -236,6 +307,7 @@ fn calculate(
     Ok(KpiResult {
         status: KpiState::Ready,
         snapshot: Some(snapshot),
+        next_refresh_ms: None,
         reason_code: None,
         message: None,
     })
@@ -287,7 +359,7 @@ pub(in crate::business_os) fn resolve(
         state.revision == request.expected_revision,
         "KPI revision conflict"
     );
-    let result = calculate(core, &owner, thread, request, now)?;
+    let result = calculate(core, policy, &owner, thread, request, now)?;
     state
         .items
         .iter_mut()
@@ -420,7 +492,7 @@ fn refresh_at(root: &Path, project: Option<&str>, force: bool, now: i64) -> anyh
             }) else {
                 continue;
             };
-            item.result = calculate(&core_tx, &owner, &thread, &request, now)?;
+            item.result = calculate(&core_tx, &tx, &owner, &thread, &request, now)?;
             state.revision = state
                 .revision
                 .checked_add(1)
@@ -441,4 +513,154 @@ pub(in crate::business_os) fn refresh_test_at(
     now: i64,
 ) -> anyhow::Result<()> {
     refresh_at(root, project, force, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_task_metrics_use_admitted_owner_and_exclude_unmatched_core_intents(
+    ) -> anyhow::Result<()> {
+        let core = Connection::open_in_memory()?;
+        let policy = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE business_command_aggregates (
+                command_id TEXT PRIMARY KEY, module TEXT, command_type TEXT,
+                execution_mode TEXT, record_id TEXT, created_at_ms INTEGER,
+                updated_at_ms INTEGER, intent_json TEXT, execution_phase TEXT,
+                terminal_status TEXT
+            )",
+        )?;
+        policy.execute_batch(
+            "CREATE TABLE business_commands (
+                command_id TEXT PRIMARY KEY, module TEXT, command_type TEXT,
+                record_id TEXT, payload_json TEXT, client_context_json TEXT
+            )",
+        )?;
+        let now = 100 * HOUR;
+        for (i, (kind, phase, status, owner, thread, project)) in [
+            (None, "terminal", "completed", "owner", "thread", "project"),
+            (Some("work"), "running", "", "owner", "thread", "project"),
+            (
+                Some("work"),
+                "terminal",
+                "failed",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("conversation"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("conversation"),
+                "running",
+                "",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "foreign",
+                "thread",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "foreign",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "foreign",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "project",
+            ),
+            (
+                Some("work"),
+                "terminal",
+                "completed",
+                "owner",
+                "thread",
+                "project",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("task-{i}");
+            let mut payload = json!({"thread_id":thread,"risk_class":"internal"});
+            if let Some(kind) = kind {
+                payload["supervisor_turn"] = json!({"kind":kind,"submit_command_id":"submit"});
+            }
+            // A caller actor echoed in the Core audit cannot substitute for
+            // native admission. In production the actor is redacted entirely.
+            let intent = if i == 5 {
+                json!({"payload":payload,"client_context":{"actor":{"id":"owner"}}})
+            } else {
+                json!({"payload":payload,"client_context":{"source":"threads"}})
+            };
+            core.execute(
+                "INSERT INTO business_command_aggregates VALUES (?1,'ctox','business_os.chat.task','queue',?2,?3,?3,?4,?5,?6)",
+                params![id,project,now-HOUR,serde_json::to_string(&intent)?,phase,status],
+            )?;
+            if i == 8 {
+                continue; // Core-only row: no native admitted envelope.
+            }
+            if i == 9 {
+                payload["instruction"] = json!("An unrelated private command");
+            }
+            policy.execute(
+                "INSERT INTO business_commands VALUES (?1,'ctox','business_os.chat.task',?2,?3,?4)",
+                params![
+                    id,
+                    project,
+                    serde_json::to_string(&payload)?,
+                    serde_json::to_string(&json!({"actor":{"id":owner}}))?
+                ],
+            )?;
+        }
+        for (recipe, expected) in [
+            (NativeMetricRecipe::ProjectTasksTotal, 3.0),
+            (NativeMetricRecipe::ProjectTasksCompleted, 1.0),
+            (NativeMetricRecipe::ProjectTasksFailed, 1.0),
+            (NativeMetricRecipe::ProjectTasksOpen, 1.0),
+        ] {
+            let request = BindKpiRequest {
+                operation_id: "metric".into(),
+                project_id: "project".into(),
+                kpi_id: "tasks".into(),
+                prompt_revision: 1,
+                expected_revision: 0,
+                recipe,
+                window_days: 7,
+            };
+            let result = calculate(&core, &policy, "owner", "thread", &request, now)?;
+            assert_eq!(result.status, KpiState::Ready);
+            assert_eq!(result.snapshot.context("snapshot")?.value, expected);
+        }
+        Ok(())
+    }
 }

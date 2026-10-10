@@ -571,6 +571,11 @@ struct ResearchWritebackResult {
     /// `person_email` overwrote the first (Codex review 27.09.2026).
     #[serde(default, deserialize_with = "lenient_object")]
     person_field_status: Value,
+    /// Fields the operator defined in the app (`custom_<name>`). They are not
+    /// part of the native field vocabulary, so they travel apart from
+    /// `field_status`: `{key: {value, sources: [{url, quote}], reason}}`.
+    #[serde(default, deserialize_with = "lenient_object")]
+    custom_fields: Value,
 }
 
 /// Live workers send `evidence`/`person_records` as `""` or as one object;
@@ -1828,6 +1833,12 @@ pub(super) fn handle_research_writeback(
         serde_json::to_value(&request.field_status)?,
     );
     lead["field_status"] = merged_field_status;
+    rejections.extend(apply_custom_field_results(
+        &mut lead,
+        &request.result.custom_fields,
+        &research_payload,
+        now,
+    ));
     let terminal_check = gap_task
         .as_ref()
         .map(|(task, contract)| {
@@ -2068,6 +2079,133 @@ fn load_gap_task_by_idempotency_key(
 
 /// The payload of the research command a writeback answers (`Null` when the
 /// command is unknown or unreadable).
+/// Operator-defined research fields (owner 09.10.2026: "die zu
+/// recherchierenden Infos anlegen, ändern, löschen"). The app sends their
+/// definitions as `custom_fields: [{key, label, ...}]` on the research
+/// command; only those keys are accepted. A value counts as verified only
+/// with a source that has a URL and a quote, the same rule as every other
+/// field; without one it stays open. Results land in
+/// `payload.custom_field_status` and their sources in `evidence`, so the app
+/// shows them like the built-in fields. A bad entry is rejected on its own,
+/// never the whole writeback.
+fn apply_custom_field_results(
+    lead: &mut Value,
+    results: &Value,
+    research_payload: &Value,
+    now_ms: i64,
+) -> Vec<String> {
+    let mut rejections = Vec::new();
+    let Some(results) = results.as_object().filter(|map| !map.is_empty()) else {
+        return rejections;
+    };
+    let defined = research_payload
+        .get("custom_fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|field| field.get("key").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if !lead.get("payload").is_some_and(Value::is_object) {
+        lead["payload"] = serde_json::json!({});
+    }
+    if !lead["payload"]
+        .get("custom_field_status")
+        .is_some_and(Value::is_object)
+    {
+        lead["payload"]["custom_field_status"] = serde_json::json!({});
+    }
+    let mut evidence = Vec::new();
+    for (key, entry) in results {
+        if !defined.contains(key) {
+            rejections.push(format!("result.custom_fields.{key}: kein angelegtes Feld"));
+            continue;
+        }
+        let Some(entry) = entry.as_object() else {
+            rejections.push(format!(
+                "result.custom_fields.{key}: kein strukturiertes Objekt"
+            ));
+            continue;
+        };
+        let value = entry
+            .get("value")
+            .filter(|value| research_value_is_populated(value))
+            .cloned();
+        let sources = entry
+            .get("sources")
+            .and_then(Value::as_array)
+            .map(|sources| {
+                sources
+                    .iter()
+                    .filter(|source| {
+                        let text = |name: &str| {
+                            source
+                                .get(name)
+                                .and_then(Value::as_str)
+                                .is_some_and(|text| !text.trim().is_empty())
+                        };
+                        (text("url") || text("source_url")) && text("quote")
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let reason = entry
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let status = match (&value, sources.is_empty()) {
+            (Some(_), false) => "verified",
+            (Some(_), true) => "action_required",
+            (None, _) if !reason.is_empty() => "no_match",
+            (None, _) => "action_required",
+        };
+        for source in &sources {
+            evidence.push(serde_json::json!({
+                "field_key": key,
+                "value": value.clone().unwrap_or(Value::Null),
+                "source_id": source.get("source_id").cloned().unwrap_or(Value::Null),
+                "source_url": source.get("url").or_else(|| source.get("source_url")).cloned(),
+                "quote": source.get("quote").cloned(),
+                "via": "custom_field",
+            }));
+        }
+        lead["payload"]["custom_field_status"][key] = serde_json::json!({
+            "status": status,
+            "value": value.unwrap_or(Value::Null),
+            "sources": sources,
+            "reason": reason,
+            "updated_at_ms": now_ms,
+        });
+    }
+    if !evidence.is_empty() {
+        if !lead.get("evidence").is_some_and(Value::is_array) {
+            lead["evidence"] = Value::Array(Vec::new());
+        }
+        if let Some(stored) = lead.get_mut("evidence").and_then(Value::as_array_mut) {
+            let keys = evidence
+                .iter()
+                .filter_map(|entry| entry.get("field_key").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            stored.retain(|entry| {
+                entry.get("via").and_then(Value::as_str) != Some("custom_field")
+                    || !entry
+                        .get("field_key")
+                        .and_then(Value::as_str)
+                        .is_some_and(|key| keys.contains(key))
+            });
+            stored.extend(evidence);
+        }
+    }
+    rejections
+}
+
 fn research_command_payload(root: &Path, research_command_id: &str) -> anyhow::Result<Value> {
     let conn = store::open_store(root)?;
     let payload_json: Option<String> = conn
@@ -2754,6 +2892,11 @@ pub(super) fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
 /// and title punctuation do not distinguish the same observed name.
 fn person_name_quote_backs(field: &str, value: &str, quote: &str) -> bool {
     if !matches!(field, "person_vorname" | "person_nachname" | "person_titel") {
+        return true;
+    }
+    // Without an academic title the title is the salutation, derived from the
+    // first name (owner 09.10.2026); it is derived, not quoted.
+    if field == "person_titel" && matches!(value.trim().to_lowercase().as_str(), "herr" | "frau") {
         return true;
     }
     let words = |text: &str| {
@@ -4379,6 +4522,7 @@ mod tests {
                 person_records: Vec::new(),
                 person_field_status: Default::default(),
                 evidence: Vec::new(),
+                custom_fields: Default::default(),
             },
         }
     }
@@ -6540,7 +6684,54 @@ mod tests {
         ));
         // The same absent name must not verify Robert either.
         assert!(!quote_backs_value("person_vorname", "Robert", bnt));
+        assert!(quote_backs_value("person_titel", "Herr", bnt));
+        assert!(quote_backs_value("person_titel", "Frau", bnt));
+        assert!(!quote_backs_value("person_titel", "Prof.", bnt));
         assert!(quote_backs_value("person_vorname", "Norman", bnt));
+    }
+
+    #[test]
+    fn custom_fields_need_a_definition_and_a_quoted_source() {
+        let payload = serde_json::json!({"custom_fields": [
+            {"key": "custom_zertifikate", "label": "Zertifikate"},
+            {"key": "custom_standorte", "label": "Standorte"},
+            {"key": "custom_kunden", "label": "Kunden"}
+        ]});
+        let mut lead =
+            serde_json::json!({"id": "lead-a", "payload": {"imported_row": {}}, "evidence": []});
+        let results = serde_json::json!({
+            "custom_zertifikate": {"value": "ISO 9001", "sources": [
+                {"url": "https://a.example/q", "quote": "zertifiziert nach ISO 9001", "source_id": "a.example"},
+                {"url": "https://b.example/q"}
+            ]},
+            "custom_standorte": {"value": "Köln", "sources": []},
+            "custom_kunden": {"value": null, "reason": "keine Referenzliste veröffentlicht"},
+            "custom_erfunden": {"value": "x", "sources": [{"url": "https://c.example", "quote": "x"}]}
+        });
+        let rejections = apply_custom_field_results(&mut lead, &results, &payload, 7);
+        assert_eq!(
+            rejections,
+            vec!["result.custom_fields.custom_erfunden: kein angelegtes Feld"]
+        );
+        let status = &lead["payload"]["custom_field_status"];
+        assert_eq!(status["custom_zertifikate"]["status"], "verified");
+        assert_eq!(
+            status["custom_zertifikate"]["sources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(status["custom_standorte"]["status"], "action_required");
+        assert_eq!(status["custom_kunden"]["status"], "no_match");
+        assert!(status.get("custom_erfunden").is_none());
+        assert_eq!(lead["payload"]["imported_row"], serde_json::json!({}));
+        let evidence = lead["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0]["field_key"], "custom_zertifikate");
+        // A second writeback replaces the field's custom evidence instead of piling it up.
+        apply_custom_field_results(&mut lead, &results, &payload, 8);
+        assert_eq!(lead["evidence"].as_array().unwrap().len(), 1);
     }
 
     #[test]

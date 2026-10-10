@@ -875,7 +875,10 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-checkpoint-generation-v2",
     "ctox-app-runtime-v1",
     "ctox-workjet-device-control-v1",
+    super::rxdb_peer_speech_settings::CAPABILITY,
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
+    super::rxdb_peer_dictation::CAPABILITY,
+    super::rxdb_peer_grok::CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 /// Standby reconciliation is a safety net, not the normal data path. Runtime
@@ -1372,7 +1375,7 @@ pub(super) struct NativePeer {
     pub(super) database: Arc<RxDatabase>,
     peer_session_id: String,
     shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    _process_lock: File,
+    _process_lock: NativePeerProcessLock,
     _pools: Vec<ctox_sync::native::NativeSyncSession>,
     business_data_sources: Vec<Arc<ctox_sync::business_data_remote::BusinessDataSource>>,
     _command_consumer: tokio::task::JoinHandle<()>,
@@ -3151,6 +3154,26 @@ async fn run_native_peer(
                 let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
                 super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
+                super::rxdb_peer_dictation::register(pool, &root)?;
+                super::rxdb_peer_grok::register(pool, &root)?;
+                let calendar_read_root = root.clone();
+                pool.register_auxiliary_request_handler(
+                    super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = calendar_read_root.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::mcp_channel::read_workjet_calendar_webrtc(
+                                    &root,
+                                    &capability_token,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "CALENDAR_READ_UNAVAILABLE".to_string())?
+                        })
+                    }),
+                )?;
                 let business_data_root = root.clone();
 
                 let business_data_database = Arc::clone(&database);
@@ -3204,6 +3227,31 @@ async fn run_native_peer(
                         Box::pin(async move {
                             handle_workjet_device_webrtc_request(&root, &capability_token, params)
                                 .await
+                        })
+                    }),
+                )?;
+                super::mcp_channel::NativeSupervisorSourceHost::register(&pool, &root)?;
+                let consumer_root = root.clone();
+                super::rxdb_peer_speech_settings::register(&pool, &root)?;
+                let consumer_transport = pool.connection_handler.clone();
+                pool.register_guarded_auxiliary_request_handler(
+                    super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
+                    Arc::new(move |peer, admitted_token, params| {
+                        let root = consumer_root.clone();
+                        let transport = consumer_transport.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::consumer_authority::resolve_response(
+                                    &root,
+                                    transport,
+                                    peer,
+                                    &admitted_token,
+                                    params,
+                                )
+                                .map_err(|_| "consumer authority unavailable".to_string())
+                            })
+                            .await
+                            .map_err(|_| "consumer authority task failed".to_string())?
                         })
                     }),
                 )?;
@@ -4153,10 +4201,27 @@ fn open_native_peer_lock_file(root: &Path) -> anyhow::Result<File> {
         })
 }
 
-pub(super) fn acquire_native_peer_process_lock(root: &Path) -> anyhow::Result<Option<File>> {
+/// Owns the peer flock and releases it on every duplicated descriptor before close.
+pub(super) struct NativePeerProcessLock {
+    file: File,
+}
+
+impl Drop for NativePeerProcessLock {
+    fn drop(&mut self) {
+        // A concurrent spawn may retain the open file description until exec.
+        // Closing our descriptor alone would leave its duplicate holding flock.
+        if let Err(error) = self.file.unlock() {
+            eprintln!("[business-os] failed to unlock native RxDB peer process lock: {error}");
+        }
+    }
+}
+
+pub(super) fn acquire_native_peer_process_lock(
+    root: &Path,
+) -> anyhow::Result<Option<NativePeerProcessLock>> {
     let lock_file = open_native_peer_lock_file(root)?;
     match lock_file.try_lock() {
-        Ok(()) => Ok(Some(lock_file)),
+        Ok(()) => Ok(Some(NativePeerProcessLock { file: lock_file })),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(err)) => {
             Err(err).context("failed to acquire native RxDB peer process lock")
@@ -4169,7 +4234,10 @@ fn native_peer_process_lock_is_held(root: &Path) -> bool {
         return false;
     };
     match lock_file.try_lock() {
-        Ok(()) => false,
+        Ok(()) => {
+            drop(NativePeerProcessLock { file: lock_file });
+            false
+        }
         Err(std::fs::TryLockError::WouldBlock) => true,
         Err(std::fs::TryLockError::Error(_)) => false,
     }
@@ -5376,6 +5444,14 @@ async fn sync_business_record_projections_with_database_if_changed(
     chat_tracking_repair_stamp: &mut Option<ChatTrackingRepairProjectionStamp>,
     last_source_stamp: &mut Option<BusinessRecordProjectionSourceStamp>,
 ) -> anyhow::Result<usize> {
+    if last_source_stamp.is_none() {
+        let projection_root = root.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            super::provider_federation::repair_projections(&projection_root)
+        })
+        .await
+        .context("join provider registry projection backfill")??;
+    }
     let source_stamp = business_record_projection_source_stamp(root).await?;
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);
@@ -10250,6 +10326,41 @@ pub(in crate::business_os) mod tests {
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(unix)]
+    #[test]
+    fn native_peer_lock_drop_releases_inherited_description_before_close() -> anyhow::Result<()> {
+        for unwind in [false, true] {
+            let root = tempfile::tempdir()?;
+            let guard = acquire_native_peer_process_lock(root.path())?.expect("first owner");
+            // dup shares the open file description, exactly as fork does before
+            // the child reaches exec. Keep it alive beyond the owner teardown.
+            let inherited = guard.file.try_clone()?;
+            assert!(acquire_native_peer_process_lock(root.path())?.is_none());
+            assert!(native_peer_process_lock_is_held(root.path()));
+            if unwind {
+                assert!(std::panic::catch_unwind(move || {
+                    let _owner = guard;
+                    panic!("peer teardown fixture");
+                })
+                .is_err());
+            } else {
+                drop(guard);
+            }
+            assert!(!native_peer_process_lock_is_held(root.path()));
+            let replacement = acquire_native_peer_process_lock(root.path())?
+                .expect("duplicate must not retain the retired owner lock");
+            assert!(acquire_native_peer_process_lock(root.path())?.is_none());
+            drop(inherited);
+            assert!(
+                native_peer_process_lock_is_held(root.path()),
+                "closing the old duplicate must not unlock the replacement"
+            );
+            drop(replacement);
+            assert!(acquire_native_peer_process_lock(root.path())?.is_some());
+        }
+        Ok(())
+    }
+
     #[test]
     fn initialize_rxdb_registers_empty_canonical_schemas_idempotently() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -12178,18 +12289,18 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
-    fn workjet_project_schema_migration_preserves_populated_v0_identity_and_history(
+    fn workjet_project_schema_migration_preserves_populated_v0_v1_v2_identity_and_history(
     ) -> anyhow::Result<()> {
-        for source_version in [0, 1] {
+        for source_version in [0, 1, 2] {
             let root = tempfile::tempdir()?;
             std::fs::create_dir_all(root.path().join("runtime"))?;
             let collection = "workjet_projects";
-            assert_eq!(expected_rxdb_collection_version(collection), 2);
-            for version in [0, 1, 2] {
+            assert_eq!(expected_rxdb_collection_version(collection), 3);
+            for version in [0, 1, 2, 3] {
                 create_runtime_migration_source_table(root.path(), collection, version)?;
             }
             let source = rxdb_collection_version_table_name(collection, source_version);
-            let target = rxdb_collection_version_table_name(collection, 2);
+            let target = rxdb_collection_version_table_name(collection, 3);
             let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
                 let conn = Connection::open(store::rxdb_store_path(root.path()))?;
                 let mut statement = conn.prepare(&format!(
@@ -12217,7 +12328,15 @@ pub(in crate::business_os) mod tests {
                 let revision = format!("{}-retained", n + 1);
                 let deleted = i64::from(n == 15);
                 let lwt = 100.0 + f64::from(n);
-                let document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
+                let mut document = json!({"id":id,"name":format!("Existing project {n}"),"status":if n<12 {"active"} else {"archived"},"owner_user_id":"196a89ba-ee86-4413-885c-04ca60e6f291","created_at_ms":50,"updated_at_ms":100+n,"is_deleted":n==15,"_rev":revision,"_deleted":n==15,"_meta":{"lwt":lwt}});
+                if source_version > 0 {
+                    document["repo_url"] = json!("https://github.com/metric-space-ai/ctox");
+                    document["public_url"] = json!("https://ctox.dev");
+                    document["info"] = json!({"summary":"Existing summary","goal":"Existing goal","phase":"development"});
+                    document["jour_fixe"] =
+                        json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
+                }
+                assert!(document.get("supervisor_luma_id").is_none());
                 conn.execute(
                     &format!("INSERT INTO {source} VALUES (?1,?2,?3,?4,?5)"),
                     params![id, revision, deleted, lwt, document.to_string()],
@@ -12234,6 +12353,7 @@ pub(in crate::business_os) mod tests {
             newer["public_url"] = json!("https://ctox.dev");
             newer["info"] = json!({"goal":"Retained current goal"});
             newer["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});
+            newer["supervisor_luma_id"] = json!("luma-retained-owner-selection");
             newer["updated_at_ms"] = json!(300);
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
             conn.execute(&format!("UPDATE {target} SET revision='20-newer',lastWriteTime=300,data=?1 WHERE id='project-00'"),params![newer.to_string()])?;

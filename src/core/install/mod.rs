@@ -386,6 +386,16 @@ impl MaintenanceState {
     }
 }
 
+/// Whether browsers must hold writes. While an update downloads, backs up
+/// (`VACUUM INTO` snapshots, consistent while the service writes) and copies
+/// the new release, the old release keeps running and serving normally; only
+/// switching and what follows needs the write hold. Before, the hold covered
+/// the whole ~5.5 min update and the app was unusable for it (thesen
+/// 09.10.2026: 4.5 min of that was the state backup).
+fn maintenance_blocks_clients(state: &MaintenanceState) -> bool {
+    !state.is_terminal() && !matches!(state.phase.as_str(), "preparing" | "building")
+}
+
 #[derive(Debug)]
 struct MaintenanceHeartbeat {
     stop: Arc<AtomicBool>,
@@ -1123,7 +1133,7 @@ pub fn business_os_maintenance_status(root: &Path) -> Result<serde_json::Value> 
     // ein terminal gescheitertes Upgrade hielt den Wartungs-Schreibschutz zwoelf
     // Tage aufrecht; Desktop-Mounts scheiterten, der Sync wirkte tot. Der Banner
     // zeigt den Fehlzustand weiterhin (retryable), aber active ist er nicht.
-    let active = state.as_ref().is_some_and(|state| !state.is_terminal());
+    let active = state.as_ref().is_some_and(maintenance_blocks_clients);
     Ok(json!({
         "ok": true,
         "scope": "instance",
@@ -4970,6 +4980,11 @@ mod tests {
             .status()
             .expect("watchdog probe");
         assert_eq!(blocked.code(), Some(42));
+        // Unlock explicitly before closing: a test thread that spawns a child
+        // at the same moment briefly holds a duplicate of this descriptor
+        // between fork and exec, and close alone would leave the shared flock
+        // in place (CI with --test-threads=2 saw 42 instead of 99).
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
         drop(lock);
         let released = Command::new("/usr/bin/flock")
             .args(["-n", "-E", "42"])
@@ -5204,6 +5219,41 @@ mod tests {
     // hielt die Instanz zwoelf Tage schreibgeschuetzt, weil der Status-
     // Endpunkt nur completed/rolled_back als inaktiv zaehlte. failed ist
     // terminal — der Banner bleibt (retryable), der Schreibschutz nicht.
+    #[test]
+    fn update_holds_browser_writes_only_from_the_switch_on() {
+        let temp = tempdir().unwrap();
+        let layout = InstallLayout::resolve(temp.path()).unwrap();
+        let started = begin_maintenance(&layout, "native-main-test").unwrap();
+        assert_eq!(started.phase, "preparing");
+        assert_eq!(
+            business_os_maintenance_status(temp.path()).unwrap()["active"],
+            false
+        );
+        set_maintenance_phase(
+            &layout.state_root,
+            &started.lease_id,
+            "building",
+            55,
+            "build",
+        )
+        .unwrap();
+        assert_eq!(
+            business_os_maintenance_status(temp.path()).unwrap()["active"],
+            false
+        );
+        set_maintenance_phase(
+            &layout.state_root,
+            &started.lease_id,
+            "switching",
+            75,
+            "switch",
+        )
+        .unwrap();
+        let payload = business_os_maintenance_status(temp.path()).unwrap();
+        assert_eq!(payload["active"], true);
+        assert_eq!(payload["state"]["phase"], "switching");
+    }
+
     #[test]
     fn failed_maintenance_does_not_keep_the_instance_write_protected() {
         let temp = tempdir().unwrap();

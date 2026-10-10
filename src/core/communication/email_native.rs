@@ -31,6 +31,10 @@ use crate::communication_store::{
     UpsertMessage,
 };
 
+#[path = "email_calendar.rs"]
+mod calendar;
+pub(crate) use calendar::read_registered_calendar;
+
 const DEFAULT_IMAP_HOST: &str = "imap.one.com";
 const DEFAULT_IMAP_PORT: u16 = 993;
 const DEFAULT_SMTP_HOST: &str = "send.one.com";
@@ -43,6 +47,11 @@ const DEFAULT_EWS_VERSION: &str = "Exchange2013";
 const DEFAULT_EWS_AUTH_TYPE: &str = "basic";
 const EWS_GET_ITEM_BATCH_SIZE: usize = 20;
 const EWS_MAX_FOLDER_ITEMS: usize = 100;
+// Inbound file attachments are stored next to the raw mail payloads so the
+// worker can open them (owner 09.10.2026: an Excel sent to the CTOX mailbox
+// must be importable without extra programming). Bounded per mail.
+const INBOUND_ATTACHMENT_MAX_FILES: usize = 10;
+const INBOUND_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const DEFAULT_ACTIVE_SYNC_PATH: &str = "Microsoft-Server-ActiveSync";
 const DEFAULT_ACTIVE_SYNC_DEVICE_TYPE: &str = "CodexCLI";
 const DEFAULT_ACTIVE_SYNC_PROTOCOL_VERSION: &str = "14.1";
@@ -822,7 +831,27 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                     None,
                 )?;
                 fetched_count = items.len() as i64;
-                for item in items {
+                for mut item in items {
+                    let message_key =
+                        message_key_from_remote(&account_key, &item.folder_hint, &item.remote_id);
+                    if item.has_attachments {
+                        if !known_communication_message(&conn, &message_key)? {
+                            store_inbound_attachments(
+                                &options.raw_dir,
+                                &message_key,
+                                &mut item.metadata,
+                                |id| client.file_attachment_content(id),
+                            );
+                        } else {
+                            backfill_inbound_attachments(
+                                &conn,
+                                &options.raw_dir,
+                                &message_key,
+                                &item,
+                                |id| client.file_attachment_content(id),
+                            )?;
+                        }
+                    }
                     if store_provider_message(&mut conn, options, &account_key, item)? {
                         stored_count += 1;
                     }
@@ -1136,8 +1165,9 @@ fn provider_attachment_refs(metadata: &Value) -> Vec<String> {
         .flatten()
         .filter_map(|attachment| {
             attachment
-                .get("contentUrl")
+                .get("path")
                 .and_then(Value::as_str)
+                .or_else(|| attachment.get("contentUrl").and_then(Value::as_str))
                 .or_else(|| attachment.get("name").and_then(Value::as_str))
                 .map(str::to_string)
         })
@@ -3268,6 +3298,12 @@ impl EwsClient {
         })
     }
 
+    fn file_attachment_content(&self, attachment_id: &str) -> Result<Vec<u8>> {
+        ews_file_attachment_content(attachment_id, |operation, attributes, body| {
+            self.request(operation, attributes, body)
+        })
+    }
+
     fn send_mail(
         &self,
         subject: &str,
@@ -3394,6 +3430,7 @@ fn list_ews_folder(
 <t:FieldURI FieldURI="item:DateTimeSent"/>
 <t:FieldURI FieldURI="message:IsRead"/>
 <t:FieldURI FieldURI="item:HasAttachments"/>
+<t:FieldURI FieldURI="item:Attachments"/>
 <t:FieldURI FieldURI="item:ConversationId"/>
 <t:FieldURI FieldURI="message:InternetMessageId"/>
 <t:FieldURI FieldURI="item:InReplyTo"/>
@@ -3437,6 +3474,28 @@ fn list_ews_folder(
         messages.extend(hydrated);
     }
     Ok(messages)
+}
+
+fn ews_file_attachment_content(
+    attachment_id: &str,
+    mut request: impl FnMut(&str, &str, &str) -> Result<String>,
+) -> Result<Vec<u8>> {
+    let body = format!(
+        r#"<m:AttachmentIds><t:AttachmentId Id="{}"/></m:AttachmentIds>"#,
+        xml_escape(attachment_id)
+    );
+    let xml = request("GetAttachment", "", &body)?;
+    let document = Document::parse(&xml).context("failed to parse EWS GetAttachment response")?;
+    let responses = ews_response_messages(&document, "GetAttachmentResponseMessage", 1)?;
+    let content = responses[0]
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "Content")
+        .and_then(|node| node.text())
+        .context("EWS GetAttachment returned no file content")?;
+    let compact = content.split_whitespace().collect::<String>();
+    BASE64_STANDARD
+        .decode(compact.as_bytes())
+        .context("EWS attachment content is not valid base64")
 }
 
 fn ews_response_messages<'a, 'input>(
@@ -3613,8 +3672,190 @@ fn normalize_ews_mail_item(
             "messageId": internet_message_id,
             "inReplyTo": descendant_text(node, "InReplyTo").unwrap_or_default(),
             "references": descendant_text(node, "References").unwrap_or_default(),
+            "attachments": ews_file_attachment_metadata(node),
         }),
     })
+}
+
+/// File attachments listed by GetItem (`item:Attachments`). Inline images of
+/// signatures are kept as metadata but never downloaded.
+fn ews_file_attachment_metadata(node: roxmltree::Node<'_, '_>) -> Vec<Value> {
+    let Some(list) = node
+        .children()
+        .find(|child| child.is_element() && child.tag_name().name() == "Attachments")
+    else {
+        return Vec::new();
+    };
+    list.children()
+        .filter(|child| child.is_element() && child.tag_name().name() == "FileAttachment")
+        .filter_map(|attachment| {
+            let id = attachment
+                .children()
+                .find(|child| child.is_element() && child.tag_name().name() == "AttachmentId")
+                .and_then(|child| child.attribute("Id"))
+                .filter(|id| !id.trim().is_empty())?;
+            let name =
+                descendant_text(attachment, "Name").unwrap_or_else(|| "attachment".to_string());
+            Some(json!({
+                "name": name,
+                "contentType": descendant_text(attachment, "ContentType").unwrap_or_default(),
+                "sizeBytes": descendant_text(attachment, "Size")
+                    .and_then(|size| size.parse::<u64>().ok())
+                    .unwrap_or(0),
+                "isInline": descendant_text(attachment, "IsInline")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                "attachmentId": id,
+                "source": "ews",
+            }))
+        })
+        .collect()
+}
+
+/// Store the file attachments of a new inbound mail under
+/// `<raw_dir>/attachments/<mail>/` and record each file's `path` (or the reason
+/// it was not stored) in the attachment metadata. A failed download never
+/// fails the mail sync; the worker is told which files are missing.
+fn store_inbound_attachments(
+    raw_dir: &Path,
+    message_key: &str,
+    metadata: &mut Value,
+    mut fetch: impl FnMut(&str) -> Result<Vec<u8>>,
+) {
+    let Some(attachments) = metadata
+        .get_mut("attachments")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    let dir = raw_dir
+        .join("attachments")
+        .join(safe_file_component(message_key, 96));
+    let mut stored = 0usize;
+    let mut used_names = BTreeSet::new();
+    for attachment in attachments.iter_mut() {
+        if attachment.get("isInline").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(id) = attachment
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if stored >= INBOUND_ATTACHMENT_MAX_FILES {
+            attachment["error"] = json!("nicht gespeichert: mehr als 10 Anhänge");
+            continue;
+        }
+        let size = attachment
+            .get("sizeBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if size > INBOUND_ATTACHMENT_MAX_BYTES {
+            attachment["error"] = json!("nicht gespeichert: größer als 25 MB");
+            continue;
+        }
+        let result = fetch(&id).and_then(|bytes| {
+            anyhow::ensure!(
+                bytes.len() as u64 <= INBOUND_ATTACHMENT_MAX_BYTES,
+                "größer als 25 MB"
+            );
+            std::fs::create_dir_all(&dir)
+                .with_context(|| format!("failed to create {}", dir.display()))?;
+            let base = safe_file_component(
+                attachment
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("attachment"),
+                120,
+            );
+            let mut name = base.clone();
+            let mut counter = 2;
+            while !used_names.insert(name.clone()) {
+                name = format!("{counter}-{base}");
+                counter += 1;
+            }
+            let path = dir.join(&name);
+            std::fs::write(&path, &bytes)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+            Ok((path, bytes.len()))
+        });
+        match result {
+            Ok((path, len)) => {
+                attachment["path"] = json!(path.display().to_string());
+                attachment["sizeBytes"] = json!(len);
+                stored += 1;
+            }
+            Err(error) => {
+                attachment["error"] = json!(format!("nicht gespeichert: {error:#}"));
+            }
+        }
+    }
+}
+
+/// Mails stored before attachments were fetched carry no attachment list.
+/// Fetch their files once and record them; a row that already has a list
+/// (stored files or the reason they are missing) is never fetched again.
+fn backfill_inbound_attachments(
+    conn: &Connection,
+    raw_dir: &Path,
+    message_key: &str,
+    item: &MailboxMessage,
+    fetch: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<()> {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 AND direction = 'inbound'",
+            [message_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(());
+    };
+    let mut metadata: Value = serde_json::from_str(&stored).unwrap_or_else(|_| json!({}));
+    if !metadata.is_object() || metadata.get("attachments").is_some() {
+        return Ok(());
+    }
+    let listed = item
+        .metadata
+        .get("attachments")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    if !listed.as_array().is_some_and(|list| !list.is_empty()) {
+        return Ok(());
+    }
+    metadata["attachments"] = listed;
+    store_inbound_attachments(raw_dir, message_key, &mut metadata, fetch);
+    conn.execute(
+        "UPDATE communication_messages SET metadata_json = ?1, raw_payload_ref = ?2 WHERE message_key = ?3",
+        rusqlite::params![
+            serde_json::to_string(&metadata)?,
+            provider_attachment_refs(&metadata).join("\n"),
+            message_key
+        ],
+    )?;
+    Ok(())
+}
+
+fn safe_file_component(value: &str, max_len: usize) -> String {
+    let cleaned = value
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || matches!(ch, '_' | '.' | '-' | ' ') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let trimmed = cleaned.trim().trim_start_matches('.').to_string();
+    let limited = trimmed.chars().take(max_len).collect::<String>();
+    if limited.is_empty() {
+        "attachment".to_string()
+    } else {
+        limited
+    }
 }
 
 fn ews_html_body_text(input: &str) -> String {
@@ -5331,6 +5572,101 @@ mod tests {
             </t:Message></m:Items></m:GetItemResponseMessage>"#,
             super::xml_escape(id)
         )
+    }
+
+    #[test]
+    fn ews_inbound_file_attachments_are_listed_stored_and_bounded() -> anyhow::Result<()> {
+        let attachments = r#"<t:Attachments>
+            <t:FileAttachment><t:AttachmentId Id="att-1"/><t:Name>Recherche-Test.xlsx</t:Name>
+            <t:ContentType>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</t:ContentType>
+            <t:Size>4</t:Size><t:IsInline>false</t:IsInline></t:FileAttachment>
+            <t:FileAttachment><t:AttachmentId Id="att-2"/><t:Name>logo.png</t:Name>
+            <t:Size>10</t:Size><t:IsInline>true</t:IsInline></t:FileAttachment>
+            <t:FileAttachment><t:AttachmentId Id="att-3"/><t:Name>../evil.pdf</t:Name>
+            <t:Size>3</t:Size><t:IsInline>false</t:IsInline></t:FileAttachment>
+            <t:FileAttachment><t:AttachmentId Id="att-4"/><t:Name>kaputt.csv</t:Name>
+            <t:Size>3</t:Size><t:IsInline>false</t:IsInline></t:FileAttachment>
+            </t:Attachments>"#;
+        let body = format!(r#"<t:Body BodyType="Text">Bitte importieren</t:Body>{attachments}"#);
+        let mut asked_for_attachments = false;
+        let mut messages = super::list_ews_folder("inbox", 1, None, |op, _, request| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["item-1"])
+            } else {
+                asked_for_attachments = request.contains(r#"FieldURI="item:Attachments""#);
+                ews_envelope("GetItem", &ews_get_fixture_item("item-1", &body))
+            })
+        })?;
+        assert!(
+            asked_for_attachments,
+            "GetItem must request the attachment list"
+        );
+        let mut message = messages.remove(0);
+        let listed = message.metadata["attachments"].as_array().unwrap().clone();
+        assert_eq!(listed.len(), 4);
+        assert_eq!(listed[0]["name"], "Recherche-Test.xlsx");
+        assert_eq!(listed[0]["attachmentId"], "att-1");
+        assert_eq!(listed[1]["isInline"], true);
+
+        let dir = tempfile::tempdir()?;
+        let mut fetched = Vec::new();
+        super::store_inbound_attachments(
+            dir.path(),
+            "email:a::inbox::item-1",
+            &mut message.metadata,
+            |id| {
+                fetched.push(id.to_string());
+                match id {
+                    "att-1" => Ok(b"xlsx".to_vec()),
+                    "att-3" => Ok(b"pdf".to_vec()),
+                    _ => anyhow::bail!("server refused"),
+                }
+            },
+        );
+        assert_eq!(
+            fetched,
+            vec!["att-1", "att-3", "att-4"],
+            "inline images are never fetched"
+        );
+        let stored = message.metadata["attachments"].as_array().unwrap();
+        let excel = stored[0]["path"].as_str().expect("excel stored");
+        assert_eq!(std::fs::read(excel)?, b"xlsx");
+        assert!(excel.ends_with("Recherche-Test.xlsx"));
+        assert!(stored[1].get("path").is_none() && stored[1].get("error").is_none());
+        let evil = std::path::Path::new(stored[2]["path"].as_str().expect("pdf stored"));
+        assert_eq!(
+            evil.parent(),
+            std::path::Path::new(excel).parent(),
+            "a name cannot leave the mail directory"
+        );
+        assert!(stored[3].get("path").is_none());
+        assert!(stored[3]["error"]
+            .as_str()
+            .unwrap()
+            .contains("server refused"));
+        assert_eq!(
+            super::provider_attachment_refs(&message.metadata)[0],
+            excel,
+            "the stored file is the attachment reference"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ews_get_attachment_decodes_file_content() -> anyhow::Result<()> {
+        let content = super::ews_file_attachment_content("att-1", |op, _, request| {
+            assert_eq!(op, "GetAttachment");
+            assert!(request.contains(r#"<t:AttachmentId Id="att-1"/>"#));
+            Ok(ews_envelope(
+                "GetAttachment",
+                r#"<m:GetAttachmentResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode>
+                <m:Attachments><t:FileAttachment><t:AttachmentId Id="att-1"/><t:Name>a.xlsx</t:Name>
+                <t:Content>eGxz
+                eA==</t:Content></t:FileAttachment></m:Attachments></m:GetAttachmentResponseMessage>"#,
+            ))
+        })?;
+        assert_eq!(content, b"xlsx");
+        Ok(())
     }
 
     fn ews_recovery_message(body: &str) -> anyhow::Result<super::MailboxMessage> {

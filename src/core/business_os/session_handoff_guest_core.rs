@@ -43,6 +43,10 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestCoreOwner for Rece
         // here; do not rehash multi-GiB VM RAM/disk under publication locks.
         let manifest = store.load_manifest(&t.request.checkpoint_digest)?;
         reconstruction::verify_manifest(&manifest, &t.request)?;
+        anyhow::ensure!(
+            manifest.pending_effects.is_empty(),
+            "original Core source has unresolved checkpoint effects"
+        );
         let states: Vec<_> = manifest
             .provider_state
             .iter()

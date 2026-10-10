@@ -2,6 +2,7 @@ name: AppSec Toolchain Proof
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/appsec-toolchain-proof.yml"
       - "Cargo.toml"
@@ -59,6 +60,7 @@ concurrency:
 
 jobs:
   proof:
+    if: ${{ !github.event.pull_request.draft }}
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180

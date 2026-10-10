@@ -5,8 +5,11 @@ import vm from 'node:vm';
 
 const appSource = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const controlStart = appSource.indexOf('const WORKJET_COMPUTER_CONTROL_MAX_RESULTS');
-const controlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlStart);
+// Computer control ends where project control begins; project control has its own guard below.
+const controlEnd = appSource.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS', controlStart);
 const controlSource = appSource.slice(controlStart, controlEnd);
+const projectControlEnd = appSource.indexOf('async function waitForSyncBridgeReady', controlEnd);
+const projectControlSource = appSource.slice(controlEnd, projectControlEnd);
 test('computer list opts into bounded operational details without changing legacy replies or owner filtering', async () => {
   const gpu = { kind: 'gpu', model: 'A4500', vram_gib: 20 };
   const own = { id: 'gpu3', display_name: 'gpu3', hosting_mode: 'workstation',
@@ -64,6 +67,13 @@ test('Workjet guest computer control is installed and WebRTC/RxDB-only', () => {
   assert.match(controlSource, /startCollection\?\.\('workjet_computers'\)/);
   assert.doesNotMatch(controlSource, /fetch\s*\(|XMLHttpRequest|\/api\/|https?:\/\//);
   assert.doesNotMatch(controlSource, /hostname|presentation|environment/i);
+});
+
+test('Workjet guest project control stays WebRTC/RxDB-only without host details', () => {
+  assert.ok(projectControlEnd > controlEnd, 'project control implementation exists');
+  assert.match(projectControlSource, /async function workjetProjectControl/);
+  assert.doesNotMatch(projectControlSource, /fetch\s*\(|XMLHttpRequest|\/api\/|https?:\/\//);
+  assert.doesNotMatch(projectControlSource, /hostname|environment/i);
 });
 
 test('Workjet guest computer control rejects managed hosts and gates co-location', async () => {
@@ -175,6 +185,14 @@ function capabilityControlFixture(receiptTransform = (receipt) => receipt) {
         async dispatch(command) {
           commands.push(JSON.parse(JSON.stringify(command)));
           const payload = command.payload;
+          if (command.command_type === 'ctox.workjet.computer.ssh_key.ensure') {
+            return receiptTransform({ ok: true, status: 'completed', command_id: command.command_id,
+              result: { ok: true, contract: 'ctox.workjet.computer-ssh-key.v1',
+                computer_id: payload.computer_id,
+                private_key: { scope: 'computer-access', name: `workjet-ssh-${'a'.repeat(64)}` },
+                public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRlc3Q=',
+                public_key_sha256: `SHA256:${'A'.repeat(43)}` } });
+          }
           const computer = {
             id: payload.computer_id, owner_user_id: 'owner-1', display_name: payload.display_name,
             hosting_mode: payload.hosting_mode, status: 'assigned', self_hosted_colocation: false,
@@ -293,4 +311,37 @@ test('build/GPU descriptors and SMB references retain their typed native shape',
     password: { scope: 'computer-access', name: 'nas-password' } } });
   assert.deepEqual(commands[1].payload.connection.password,
     { scope: 'computer-access', name: 'nas-password' });
+});
+
+
+test('native SSH key setup dispatches a correlated Owner command and returns public material and a reference', async () => {
+  const { commands, invoke } = capabilityControlFixture();
+  const request = { action: 'computer.ssh_key.ensure', commandId: 'ensure-key', computerId: 'gpu3' };
+  const result = await invoke(request);
+  assert.deepEqual(result, { action: request.action, contract: 'ctox.workjet.computer-ssh-key.v1',
+    computerId: 'gpu3', privateKey: { scope: 'computer-access', name: `workjet-ssh-${'a'.repeat(64)}` },
+    publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRlc3Q=', publicKeySha256: `SHA256:${'A'.repeat(43)}` });
+  assert.deepEqual(commands[0].payload, { computer_id: 'gpu3' });
+  assert.equal(commands[0].command_type, 'ctox.workjet.computer.ssh_key.ensure');
+  assert.equal(commands[0].client_context.actor.id, 'owner-1');
+  for (const extra of [{ ownerUserId: 'foreign' }, { privateKey: 'secret' }, { publicKey: 'injected' }]) {
+    await assert.rejects(invoke({ ...request, ...extra }), /Unsupported Workjet computer payload field/);
+  }
+  assert.equal(commands.length, 1);
+});
+
+test('native SSH key setup rejects wrong identity, unsupported material, and inline secrets', async () => {
+  const request = { action: 'computer.ssh_key.ensure', commandId: 'ensure-key', computerId: 'gpu3' };
+  const transforms = [
+    (receipt) => ({ ...receipt, command_id: 'other-command' }),
+    (receipt) => ({ ...receipt, status: 'failed' }),
+    (receipt) => { receipt.result.contract = 'unknown'; return receipt; },
+    (receipt) => { receipt.result.computer_id = 'other-computer'; return receipt; },
+    (receipt) => { receipt.result.private_key.value = 'secret'; return receipt; },
+    (receipt) => { receipt.result.private_key.scope = 'other-scope'; return receipt; },
+    (receipt) => { receipt.result.public_key = 'private-key-bytes'; return receipt; },
+    (receipt) => { receipt.result.public_key_sha256 = 'unknown'; return receipt; },
+    (receipt) => { receipt.result.private_key_bytes = 'secret'; return receipt; },
+  ];
+  for (const transform of transforms) await assert.rejects(capabilityControlFixture(transform).invoke(request));
 });

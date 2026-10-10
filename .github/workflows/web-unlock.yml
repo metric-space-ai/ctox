@@ -25,6 +25,7 @@ on:
       - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-unlock.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
     paths:
       - 'src/tools/web-stack/**'
@@ -63,7 +64,7 @@ jobs:
   e2e-stage1:
     runs-on: ubuntu-22.04
     name: Stage 1 — synthetic regression lifecycle
-    if: github.event_name != 'workflow_dispatch' || github.event.inputs.stage != 'stage2'
+    if: ${{ !github.event.pull_request.draft && (github.event_name != 'workflow_dispatch' || github.event.inputs.stage != 'stage2') }}
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -100,7 +101,7 @@ jobs:
   e2e-stage2:
     runs-on: ubuntu-22.04
     name: Stage 2 — real stealth regression
-    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.stage == 'stage2' || github.event.inputs.stage == 'full')
+    if: ${{ !github.event.pull_request.draft && (github.event_name == 'workflow_dispatch' && (github.event.inputs.stage == 'stage2' || github.event.inputs.stage == 'full')) }}
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10

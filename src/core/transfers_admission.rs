@@ -234,6 +234,27 @@ async fn prepare(
 /// CLI work is bounded to authentication/grant admission. It cannot run payload
 /// downloads or open the daemon's database. The daemon revalidates after enqueue.
 pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -> Result<Transfer> {
+    enqueue_peer_inner(root, store, download, None)
+}
+
+/// Workspace retries retain their original account epoch and grant. They may
+/// never rebind cached bytes to a newly enrolled source with the same alias.
+pub(crate) fn enqueue_workspace_peer(
+    root: &Path,
+    store: &Store,
+    download: PeerDownload,
+    instance: &str,
+    identity: &str,
+) -> Result<Transfer> {
+    enqueue_peer_inner(root, store, download, Some((instance, identity)))
+}
+
+fn enqueue_peer_inner(
+    root: &Path,
+    store: &Store,
+    download: PeerDownload,
+    source: Option<(&str, &str)>,
+) -> Result<Transfer> {
     let directory = crate::paths::runtime_dir(root).join("transfers/admission");
     std::fs::create_dir_all(&directory)?;
     let temporary = tempfile::Builder::new()
@@ -246,6 +267,48 @@ pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -
         .enable_all()
         .build()?;
     runtime.block_on(async {
+        if let Some((instance, identity)) = source {
+            let account = host
+                .account(&download.target_id)
+                .await?
+                .context("target has no enrolled native account")?;
+            ensure!(
+                account.instance_id == instance && account.public_identity == identity,
+                "workspace source differs from enrolled account"
+            );
+            match store.get(&download.id) {
+                Ok(saved) => {
+                    let peer = saved
+                        .request
+                        .peer_source
+                        .as_ref()
+                        .context("workspace retry requires native peer")?;
+                    let binding = peer
+                        .account_binding
+                        .as_ref()
+                        .context("workspace retry requires original account")?;
+                    ensure!(
+                        saved.request.sha256 == download.sha256
+                            && saved.request.size == download.size
+                            && saved.request.sources.is_empty()
+                            && saved.request.storage.is_none()
+                            && peer.file_id == download.file_id
+                            && peer.collection == "desktop_files"
+                            && peer.instance_id == instance
+                            && peer.public_key == identity
+                            && binding.target_id == download.target_id,
+                        "workspace retry differs from original transfer"
+                    );
+                    current_account(host.as_ref(), &saved.request).await?;
+                    database.close().await?;
+                    return Ok(saved);
+                }
+                Err(error)
+                    if error.downcast_ref::<rusqlite::Error>()
+                        == Some(&rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(error) => return Err(error),
+            }
+        }
         let mut session = AdmissionSession::default();
         let result = tokio::time::timeout(
             Duration::from_secs(60),

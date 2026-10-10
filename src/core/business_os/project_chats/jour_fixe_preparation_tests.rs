@@ -110,6 +110,30 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
     assert!(queue
         .prompt
         .contains("Never invent numeric metrics or completed work."));
+    // The real scheduled admission must retain the whole engine instruction,
+    // including its style and evidence rules, within the bounded turn goal.
+    let instruction =
+        include_str!("../../../skills/system/mission_orchestration/jour-fix/SKILL.md")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+    assert!(
+        instruction.chars().count() <= 3840,
+        "reserve 256 characters for native meeting scope"
+    );
+    assert!(queue.prompt.contains(&instruction));
+    for required in [
+        "learnordie.slide-agent.v1",
+        "learnordie.excalidraw.v1, 1600x900, handwriting font family 1",
+        "data-backed three.js scenes",
+        "penultimate Jour fixe",
+        "never substitute title/text slides or a prepare_deck fallback",
+    ] {
+        assert!(
+            queue.prompt.contains(required),
+            "missing engine rule: {required}"
+        );
+    }
     assert!(
         crate::skill_store::load_skill_deliverable_contract(root.path(), "jour-fix")?.is_some()
     );

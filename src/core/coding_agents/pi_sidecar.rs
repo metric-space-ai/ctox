@@ -661,6 +661,7 @@ fn prepare_coding_turn_model(
     })
 }
 
+#[derive(PartialEq, Eq)]
 struct InheritedCodingRoute {
     provider: String,
     model_id: String,
@@ -670,11 +671,37 @@ struct InheritedCodingRoute {
 }
 
 fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCodingRoute> {
+    resolve_inherited_route(root, InheritedRoutePurpose::Inference)
+}
+
+fn resolve_inherited_catalog_route(root: &Path) -> anyhow::Result<InheritedCodingRoute> {
+    resolve_inherited_route(root, InheritedRoutePurpose::ModelCatalog)
+}
+
+enum InheritedRoutePurpose {
+    Inference,
+    ModelCatalog,
+}
+
+fn resolve_inherited_route(
+    root: &Path,
+    purpose: InheritedRoutePurpose,
+) -> anyhow::Result<InheritedCodingRoute> {
     use crate::execution::models::{runtime_env, runtime_kernel, runtime_state};
 
-    let runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)?;
+    // Discovery must fence the current private endpoint against the current
+    // credential. The inference kernel cache can retain an old endpoint after
+    // a configuration change; combining it with a fresh key discloses that key
+    // to the retired endpoint before the post-request check can reject it.
+    let runtime = matches!(purpose, InheritedRoutePurpose::Inference)
+        .then(|| runtime_kernel::InferenceRuntimeKernel::resolve(root))
+        .transpose()?;
+    let state = match runtime.as_ref() {
+        Some(runtime) => runtime.state.clone(),
+        None => runtime_state::load_or_resolve_runtime_state(root)?,
+    };
     let mut settings = runtime_env::load_persisted_runtime_env_map_cached(root)?;
-    runtime_state::apply_runtime_state_to_env_map(&mut settings, &runtime.state);
+    runtime_state::apply_runtime_state_to_env_map(&mut settings, &state);
     let provider = runtime_state::infer_api_provider_from_env_map(&settings);
     // The main spec owns provider/model, endpoint and credential selection.
     // Pi's existing wire adapters handle the actual provider edge: direct
@@ -686,8 +713,7 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
         ),
         "inherited Pi route does not support main provider {provider}; select a supported coding preset"
     );
-    let model_id = runtime
-        .state
+    let model_id = state
         .active_or_selected_model()
         .filter(|model| !model.trim().is_empty())
         .context("CTOX main route has no selected model")?
@@ -695,10 +721,24 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
     let spec = crate::execution::agent::turn_loop::resolve_api_model_provider_spec(
         &model_id,
         &settings,
-        Some(&runtime),
+        runtime.as_ref(),
     );
     let (base_url, credential_key) = if provider == "openai" {
-        (runtime.internal_responses_base_url(), "OPENAI_API_KEY")
+        let base = match purpose {
+            InheritedRoutePurpose::Inference => runtime
+                .as_ref()
+                .context("inherited inference runtime is unavailable")?
+                .internal_responses_base_url(),
+            InheritedRoutePurpose::ModelCatalog => {
+                let upstream = state.upstream_base_url.trim_end_matches('/');
+                if upstream.ends_with("/v1") {
+                    upstream.to_owned()
+                } else {
+                    format!("{upstream}/v1")
+                }
+            }
+        };
+        (base, "OPENAI_API_KEY")
     } else {
         let spec = spec.context("CTOX main provider/model route is not available to Pi")?;
         anyhow::ensure!(
@@ -727,6 +767,27 @@ fn resolve_inherited_coding_route(root: &Path) -> anyhow::Result<InheritedCoding
         credential_key,
         api,
     })
+}
+
+#[path = "route_catalog.rs"]
+mod route_catalog;
+
+pub(crate) use route_catalog::{NativeInheritedAccountMetadata, NativeModelCatalogObservation};
+
+pub(crate) fn inherited_coding_model_catalog(
+    root: &Path,
+) -> anyhow::Result<NativeModelCatalogObservation> {
+    route_catalog::observe(root)
+}
+
+pub(crate) fn inherited_coding_account_metadata(
+    root: &Path,
+) -> anyhow::Result<Option<NativeInheritedAccountMetadata>> {
+    route_catalog::account_metadata(root)
+}
+
+pub fn inherited_coding_route_models_probe(root: &Path) -> anyhow::Result<Value> {
+    route_catalog::inspect(root)
 }
 
 /// Operator-only nonsecret route evidence. No sidecar/listener/network call or
@@ -2349,6 +2410,20 @@ mod tests {
         let prepared = prepare_coding_turn_model(root, None, None, false)?;
         assert_eq!(prepared.provider, "ctox_proxy");
         assert_eq!(prepared.model_id, "MiniMax-M3");
+        let inference = resolve_inherited_coding_route(root)?;
+        let catalog = resolve_inherited_catalog_route(root)?;
+        assert_eq!(
+            url::Url::parse(&catalog.base_url)?
+                .origin()
+                .ascii_serialization(),
+            "https://llm.ctox.dev"
+        );
+        // A proxy may serve both protocols at the same upstream origin.
+        // Their resolution purposes must not require different endpoint strings.
+        assert_eq!(inference.base_url, "https://llm.ctox.dev/v1");
+        assert_eq!(catalog.provider, inference.provider);
+        assert_eq!(catalog.model_id, inference.model_id);
+        assert_eq!(catalog.credential_key, inference.credential_key);
         assert!(prepared.coding_plan_bridge.is_some());
         let public = prepared.model.to_string();
         assert!(!public.contains("selected-proxy-secret"));

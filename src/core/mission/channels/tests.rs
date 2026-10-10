@@ -4171,6 +4171,91 @@ fn founder_inbound_cannot_be_handled_without_reviewed_send() {
 }
 
 #[test]
+fn take_messages_revalidates_candidates_after_unlocked_ranking() {
+    let db_path = unique_test_db_path("ctox-channel-batch-lease-revalidation");
+    let mut conn = open_channel_db(&db_path).expect("open fixture");
+    conn.execute_batch("PRAGMA journal_mode=WAL").unwrap();
+    for key in ["owned", "retry", "scheduled", "moved", "current"] {
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: key,
+                channel: "email",
+                account_key: "email:fixture@example.com",
+                thread_key: key,
+                remote_id: key,
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Fixture",
+                sender_address: "fixture@example.com",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Lease fixture",
+                preview: "Before candidate scan",
+                body_text: "Before candidate scan",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-01-01T00:00:00Z",
+                observed_at: "2026-01-01T00:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .unwrap();
+    }
+    ensure_routing_rows_for_inbound(&conn).unwrap();
+    let path = db_path.clone();
+    let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_ran = ran.clone();
+    AFTER_BATCH_LEASE_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            other.busy_timeout(std::time::Duration::ZERO).unwrap();
+            // Acquiring and committing the competing writer proves ranking
+            // released both its statement and read snapshot before leasing.
+            let tx = rusqlite::Transaction::new_unchecked(
+                &other, rusqlite::TransactionBehavior::Immediate,
+            ).unwrap();
+            tx.execute("UPDATE communication_routing_state SET route_status='leased',lease_owner='other' WHERE message_key='owned'", []).unwrap();
+            tx.execute("UPDATE communication_routing_state SET retry_not_before='2099-01-01T00:00:00Z' WHERE message_key='retry'", []).unwrap();
+            tx.execute(r#"UPDATE communication_messages SET metadata_json='{"not_before":"2099-01-01T00:00:00Z"}' WHERE message_key='scheduled'"#, []).unwrap();
+            tx.execute("UPDATE communication_messages SET thread_key='another-thread' WHERE message_key='moved'", []).unwrap();
+            tx.execute("UPDATE communication_messages SET body_text='Current payload' WHERE message_key='current'", []).unwrap();
+            tx.commit().unwrap();
+            callback_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    });
+    let taken = take_messages(&mut conn, Some("email"), 10, "batch-owner").unwrap();
+    assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(conn.is_autocommit());
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].message_key, "current");
+    assert_eq!(taken[0].body_text, "Current payload");
+    assert_eq!(taken[0].routing.lease_owner.as_deref(), Some("batch-owner"));
+    for key in ["retry", "scheduled", "moved"] {
+        let state: (String, Option<String>, i64) = conn.query_row(
+            "SELECT route_status,lease_owner,attempt FROM communication_routing_state WHERE message_key=?1",
+            [key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(state, ("pending".into(), None, 0));
+    }
+    let owner: String = conn
+        .query_row(
+            "SELECT lease_owner FROM communication_routing_state WHERE message_key='owned'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, "other");
+    drop(conn);
+    let _ = fs::remove_file(&db_path);
+}
+
+#[test]
 fn take_messages_allows_pending_rows_with_stale_lease_owner() {
     let db_path = unique_test_db_path("ctox-channel-take-pending-stale-owner");
     let mut conn = open_channel_db(&db_path).expect("failed to open db");
@@ -4636,6 +4721,58 @@ fn take_messages_ages_threads_while_using_latest_message_within_thread() {
         .expect("take messages should succeed");
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].message_key, "old-thread-latest");
+
+    let _ = fs::remove_file(&db_path);
+}
+
+#[test]
+fn take_messages_serves_communication_before_older_queue_work() {
+    let db_path = unique_test_db_path("ctox-channel-communication-first");
+    let mut conn = open_channel_db(&db_path).expect("failed to open db");
+    for (message_key, channel, thread_key, external_created_at) in [
+        ("queue-old", "queue", "queue:system", "2026-04-22T08:00:00Z"),
+        ("mail-new", "email", "thread-mail", "2026-04-24T11:00:00Z"),
+        ("tui-new", "tui", "tui:local", "2026-04-24T12:00:00Z"),
+    ] {
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key,
+                channel,
+                account_key: "account",
+                thread_key,
+                remote_id: message_key,
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Sender",
+                sender_address: "customer@example.com",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Priority",
+                preview: message_key,
+                body_text: message_key,
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at,
+                observed_at: external_created_at,
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+    }
+    ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+
+    let order = take_messages(&mut conn, None, 3, "ctox-service")
+        .expect("take messages should succeed")
+        .into_iter()
+        .map(|message| message.message_key)
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["tui-new", "mail-new", "queue-old"]);
 
     let _ = fs::remove_file(&db_path);
 }
@@ -8268,4 +8405,116 @@ fn queue_task_update_keeps_its_place_unless_priority_changes() {
         "an explicit priority change re-sorts the task"
     );
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
+    let root = business_command_test_root("ctox-provider-capacity-hold");
+    let claimed = claim_business_command_with_queue(
+        &root,
+        business_command_claim("command-capacity-hold", "sha256:capacity-hold"),
+        QueueTaskCreateRequest {
+            title: "Research one lead".to_string(),
+            prompt: "Research the lead.".to_string(),
+            thread_key: "business-os/tests/capacity-hold".to_string(),
+            workspace_root: Some(root.display().to_string()),
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"idempotency_key": "command-capacity-hold"})),
+        },
+    )
+    .expect("claim command");
+    let task_id = claimed.task.message_key;
+    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+    let hold_once = |policy_id: &str, error: &str| {
+        conn.execute(
+            "UPDATE communication_routing_state SET retry_not_before=NULL WHERE message_key=?1",
+            params![task_id],
+        )
+        .expect("clear retry gate");
+        lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+        for status in ["leased", "running"] {
+            transition_business_command_for_task(&root, &task_id, status, None, None, None, status)
+                .expect("advance command");
+        }
+        hold_leased_messages(
+            &root,
+            std::slice::from_ref(&task_id),
+            &HoldReason::Technical {
+                policy_id: policy_id.to_string(),
+            },
+            error,
+        )
+        .expect("hold leased task");
+    };
+    let quota = "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)";
+    let wait_seconds = || -> i64 {
+        let retry_not_before: Option<String> = conn
+            .query_row(
+                "SELECT retry_not_before FROM communication_routing_state WHERE message_key=?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .expect("load retry gate");
+        chrono::DateTime::parse_from_rfc3339(retry_not_before.as_deref().expect("retry gate set"))
+            .expect("retry timestamp")
+            .signed_duration_since(Utc::now())
+            .num_seconds()
+    };
+    // Longer than the five-step technical budget: a provider window that
+    // stays empty for hours must not end the task, and consecutive capacity
+    // holds back off (10, 20, 40, then 60 minutes).
+    let mut waits = Vec::new();
+    for _ in 0..7 {
+        hold_once(PROVIDER_CAPACITY_HOLD_POLICY, quota);
+        waits.push(wait_seconds());
+    }
+    for (wait, expected) in waits.iter().zip([600, 1200, 2400, 3600, 3600, 3600, 3600]) {
+        assert!(
+            (expected - 100..=expected).contains(wait),
+            "capacity waits {waits:?} do not follow 600/1200/2400/3600"
+        );
+    }
+    let task = load_queue_task(&root, &task_id)
+        .expect("load held queue task")
+        .expect("queue task exists");
+    assert_eq!(task.route_status, "pending");
+    let (attempts, failure_class, hold_reason): (i64, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT failure_attempt_count, failure_class, hold_reason FROM communication_routing_state WHERE message_key=?1",
+            params![task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("load durable hold metadata");
+    assert_eq!(attempts, 0);
+    assert_eq!(failure_class.as_deref(), Some("provider_capacity:6"));
+    assert_eq!(
+        hold_reason.as_deref(),
+        Some("technical:worker-provider-capacity")
+    );
+    let projection = business_command_projection(&root, "command-capacity-hold")
+        .expect("load held command projection");
+    assert_eq!(projection["terminal_status"], "none");
+
+    // A real technical failure still spends the budget it always did.
+    hold_once(
+        "worker-runtime-api-failure",
+        "stream disconnected before completion",
+    );
+    let attempts: i64 = conn
+        .query_row(
+            "SELECT failure_attempt_count FROM communication_routing_state WHERE message_key=?1",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .expect("load attempts");
+    assert_eq!(attempts, 1);
+    // After a different failure the next capacity hold starts at 10 minutes.
+    hold_once(PROVIDER_CAPACITY_HOLD_POLICY, quota);
+    assert!(
+        (500..=600).contains(&wait_seconds()),
+        "capacity backoff restarts after a technical hold"
+    );
+    let _ = fs::remove_dir_all(root);
 }

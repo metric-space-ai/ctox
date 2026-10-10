@@ -8,7 +8,7 @@ use super::*;
 use crate::mission::plan::confirmed_goal;
 use rusqlite::{params, OpenFlags, OptionalExtension, TransactionBehavior};
 use wire::WireValidate;
-const MAX_METADATA_BYTES: usize = 1024 * 1024;
+pub(in crate::business_os) const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS workjet_jour_fixe_confirmations (
  meeting_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
@@ -193,11 +193,14 @@ pub(in crate::business_os) fn goal_for_deck(
         |r| r.get(0),
     )?;
     let mut statement = core.prepare(
-        "SELECT step_id,title,status,substr(last_result_excerpt,1,420)
+        "SELECT step_id,title,status,substr(last_result_excerpt,1,420),
+        attempt_count,last_message_key,updated_at,completed_at
         FROM planned_steps WHERE goal_id=?1 ORDER BY step_order LIMIT 101",
     )?;
     let steps=statement.query_map([&reference.goal_id],|r|Ok(json!({"id":r.get::<_,String>(0)?,
-        "title":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"result_excerpt":r.get::<_,Option<String>>(3)?})))?
+        "title":r.get::<_,String>(1)?,"status":r.get::<_,String>(2)?,"result_excerpt":r.get::<_,Option<String>>(3)?,
+        "dispatch":{"emission_attempts":r.get::<_,i64>(4)?,"message_key":r.get::<_,Option<String>>(5)?,
+        "updated_at":r.get::<_,String>(6)?,"completed_at":r.get::<_,Option<String>>(7)?}})))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(
         steps.len() == todos.items.len(),
@@ -210,6 +213,36 @@ pub(in crate::business_os) fn goal_for_deck(
     );
     Ok(result)
 }
+
+pub(in crate::business_os) fn current_goal_for_supervisor(
+    core: &Connection,
+    owner: &str,
+    project: &str,
+    thread_key: &str,
+) -> anyhow::Result<Value> {
+    let Some(reference) = current_goal(core, owner, project, thread_key)? else {
+        return Ok(Value::Null);
+    };
+    let raw: String = core.query_row(
+        "SELECT metadata_json FROM workjet_jour_fixe_confirmations WHERE goal_id=?1",
+        [&reference.goal_id],
+        |r| r.get(0),
+    )?;
+    ensure!(
+        raw.len() <= MAX_METADATA_BYTES,
+        "confirmed goal exceeds native read budget"
+    );
+    let mut meeting: wire::Meeting = serde_json::from_str(&raw)?;
+    meeting.validate().map_err(anyhow::Error::msg)?;
+    ensure!(
+        meeting.owner_user_id == owner && meeting.project_id == project,
+        "confirmed goal belongs to another project owner"
+    );
+    meeting.previous_goal = Some(reference);
+    // Use the same persisted definition/step results as the next deck.
+    goal_for_deck(core, &meeting)
+}
+
 pub(in crate::business_os) fn previous_goal_for_deck(
     root: &Path,
     meeting: &wire::Meeting,

@@ -20,6 +20,14 @@ fn table(conn: &Connection, name: &str) -> anyhow::Result<bool> {
 fn millis(value: &str) -> anyhow::Result<i64> {
     Ok(chrono::DateTime::parse_from_rfc3339(value)?.timestamp_millis())
 }
+fn terminal_millis(value: &str) -> anyhow::Result<i64> {
+    // The finalization ledger writes Unix milliseconds as TEXT. Keep reading
+    // historical RFC3339 rows too; flow event timestamps remain RFC3339.
+    if let Ok(value) = value.parse::<i64>() {
+        return Ok(value);
+    }
+    millis(value)
+}
 fn ordinal(value: Option<i64>) -> anyhow::Result<Option<u64>> {
     value
         .map(|value| u64::try_from(value).context("negative native attempt ordinal"))
@@ -34,6 +42,15 @@ pub(super) fn page(
     request: &wire::ExecutionPageRequest,
 ) -> anyhow::Result<wire::ExecutionPage> {
     request.validate().map_err(anyhow::Error::msg)?;
+    let include_public_text = request.include_public_text == Some(true) && cfg!(unix);
+    let include_native_text = request.include_native_message_text == Some(true) && cfg!(unix);
+    let mut event_kinds = EVENT_KINDS.to_owned();
+    if include_public_text {
+        event_kinds.push_str(",'worker.assistant_text'");
+    }
+    if include_native_text {
+        event_kinds.push_str(",'worker.native_message_text'");
+    }
     let command_id = owned_turn["command_id"]
         .as_str()
         .context("authorized native command missing")?;
@@ -47,6 +64,9 @@ pub(super) fn page(
         events: vec![],
         next_cursor: None,
         has_more: false,
+        public_text_supported: (request.include_public_text == Some(true)).then_some(cfg!(unix)),
+        native_message_text_supported: (request.include_native_message_text == Some(true))
+            .then_some(cfg!(unix)),
     };
     let mut conn = Connection::open_with_flags(
         crate::paths::core_db(root),
@@ -66,7 +86,7 @@ pub(super) fn page(
         "SELECT json_extract(metadata_json,'$.attempt_id'),
         COALESCE(attempt_index,json_extract(metadata_json,'$.attempt'))
         FROM ctox_harness_flow_events WHERE message_key=?1
-          AND event_kind IN ({EVENT_KINDS})
+          AND event_kind IN ({event_kinds})
           AND length(trim(COALESCE(json_extract(metadata_json,'$.attempt_id'),'')))>0
           AND (?2 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?2)
         ORDER BY rowid DESC LIMIT 1"
@@ -141,7 +161,7 @@ pub(super) fn page(
         finished_at_ms: run
             .as_ref()
             .and_then(|r| r.1.as_deref())
-            .map(millis)
+            .map(terminal_millis)
             .transpose()?,
     });
     let after = if let Some(cursor) = &request.cursor {
@@ -166,16 +186,29 @@ pub(super) fn page(
     let sql = format!(
         "SELECT rowid,event_id,event_kind,substr(title,1,256),created_at,
           json_extract(metadata_json,'$.tool.name'),json_extract(metadata_json,'$.tool.call_id'),
-          json_extract(metadata_json,'$.tool.success')
+          json_extract(metadata_json,'$.tool.success'),
+          CASE WHEN ?5=1 AND event_kind='worker.assistant_text'
+            THEN json_extract(metadata_json,'$.public_text') ELSE NULL END,
+          CASE WHEN ?6=1 AND event_kind='worker.native_message_text'
+            THEN json_extract(metadata_json,'$.native_message_text') ELSE NULL END
         FROM ctox_harness_flow_events WHERE message_key=?1
           AND json_extract(metadata_json,'$.attempt_id')=?2 AND rowid>?3
-          AND COALESCE(json_extract(metadata_json,'$.cockpit_eligible'),1)=1
-          AND event_kind IN ({EVENT_KINDS}) ORDER BY rowid LIMIT ?4"
+          AND (COALESCE(json_extract(metadata_json,'$.cockpit_eligible'),1)=1
+            OR (?5=1 AND event_kind='worker.assistant_text')
+            OR (?6=1 AND event_kind='worker.native_message_text'))
+          AND event_kind IN ({event_kinds}) ORDER BY rowid LIMIT ?4"
     );
     let mut statement = tx.prepare(&sql)?;
     let rows = statement
         .query_map(
-            rusqlite::params![task_id, attempt_id, after, limit + 1],
+            rusqlite::params![
+                task_id,
+                attempt_id,
+                after,
+                limit + 1,
+                include_public_text,
+                include_native_text
+            ],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
@@ -186,14 +219,47 @@ pub(super) fn page(
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, Option<String>>(6)?,
                     r.get::<_, Option<bool>>(7)?,
+                    r.get::<_, Option<String>>(8)?,
+                    r.get::<_, Option<String>>(9)?,
                 ))
             },
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     result.has_more = rows.len() > limit as usize;
-    for (sequence, id, kind, title, created, tool_name, call_id, success) in
-        rows.into_iter().take(limit as usize)
+    for (
+        sequence,
+        id,
+        kind,
+        title,
+        created,
+        tool_name,
+        call_id,
+        success,
+        public_text,
+        native_text,
+    ) in rows.into_iter().take(limit as usize)
     {
+        let public_text: Option<wire::PublicAssistantText> = public_text
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        if kind == "worker.assistant_text" {
+            let chunk = public_text
+                .as_ref()
+                .context("public assistant text chunk missing")?;
+            ensure!(
+                ["assistant", "commentary", "final_answer"].contains(&chunk.phase.as_str()),
+                "public assistant text has an unsupported phase"
+            );
+        }
+        let native_message_text: Option<wire::NativeMessageText> = native_text
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        ensure!(
+            kind != "worker.native_message_text" || native_message_text.is_some(),
+            "native public message chunk missing"
+        );
         result.events.push(wire::ExecutionEvent {
             id,
             sequence: u64::try_from(sequence)?,
@@ -203,6 +269,8 @@ pub(super) fn page(
             tool_name,
             call_id,
             success,
+            public_text,
+            native_message_text,
         });
     }
     result.next_cursor = result

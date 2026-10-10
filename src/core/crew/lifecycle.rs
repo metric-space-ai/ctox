@@ -1,5 +1,13 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static AFTER_RETENTION_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+    pub(super) static AFTER_FINISHED_RETENTION_READS: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Install in migration and when the independently initialized flow ledger appears.
 /// Old best-effort emissions could race before PR-2b introduced this constraint.
 pub(crate) fn ensure_selection_event_index(conn: &Connection) -> Result<()> {
@@ -71,18 +79,37 @@ pub(crate) fn retain_attempts(conn: &Connection, now: i64) -> Result<()> {
         [], |r| r.get(0),
     )?;
     if has_finalizations {
-        conn.execute(
-            "UPDATE crew_attempts SET started_at=selected_at WHERE attempt_id IN (
-                SELECT a.attempt_id FROM crew_attempts a
-                WHERE a.started_at IS NULL AND EXISTS (
-                    SELECT 1 FROM worker_attempt_finalizations f WHERE f.attempt_id=a.attempt_id
-                ) ORDER BY a.selected_at,a.attempt_id LIMIT 128
-            )",
-            [],
-        )?;
+        let ids = conn
+            .prepare(
+                "SELECT a.attempt_id FROM crew_attempts a
+                 WHERE a.started_at IS NULL AND EXISTS (
+                     SELECT 1 FROM worker_attempt_finalizations f WHERE f.attempt_id=a.attempt_id
+                 ) ORDER BY a.selected_at,a.attempt_id LIMIT 128",
+            )?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // A zero-row UPDATE still reserves SQLite's sole writer. Discover
+        // work read-only; reserve only for a current, revalidated candidate.
+        for id in ids {
+            let tx = crate::persistence::SqliteWriteTransaction::begin(
+                conn,
+                "crew.retention_start_evidence",
+            )?;
+            tx.execute(
+                "UPDATE crew_attempts SET started_at=selected_at
+                 WHERE attempt_id=?1 AND started_at IS NULL AND EXISTS (
+                     SELECT 1 FROM worker_attempt_finalizations f
+                     WHERE f.attempt_id=crew_attempts.attempt_id
+                 )",
+                [&id],
+            )?;
+            tx.commit()?;
+        }
     }
-    let tx = conn.unchecked_transaction()?;
-    let orphans = tx
+    // Candidate discovery is read-only and may be expensive on a populated
+    // ledger. Do it without a transaction; each deletion revalidates its
+    // authority under its own short IMMEDIATE writer reservation below.
+    let orphans = conn
         .prepare(
             "SELECT attempt_id,task_id,member_id,selected_at FROM crew_attempts
          WHERE started_at IS NULL AND finalized_at IS NULL AND selected_at<?1
@@ -99,12 +126,37 @@ pub(crate) fn retain_attempts(conn: &Connection, now: i64) -> Result<()> {
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let has_events: bool = tx.query_row(
+    let has_events: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ctox_harness_flow_events')", [], |r| r.get(0),
     )?;
+    #[cfg(test)]
+    AFTER_RETENTION_READS.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            callback();
+        }
+    });
     for (attempt, task, member, selected) in orphans {
+        let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "crew.retention_orphan")?;
+        // A task can start or be leased after candidate discovery. Neither its
+        // attempt nor selection event may be removed using the old snapshot.
+        let still_orphan: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM crew_attempts a WHERE attempt_id=?1
+             AND task_id=?2 AND member_id=?3 AND selected_at=?4
+             AND started_at IS NULL AND finalized_at IS NULL
+             AND NOT EXISTS(SELECT 1 FROM communication_routing_state r
+                 WHERE r.message_key=a.task_id AND r.route_status='leased'))",
+            params![attempt, task, member, selected],
+            |r| r.get(0),
+        )?;
+        if !still_orphan {
+            continue;
+        }
         // Do not discard finalizations outside this batch's migration window.
-        if has_finalizations
+        let current_finalizations = has_finalizations || tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_attempt_finalizations')",
+            [], |r|r.get::<_, bool>(0),
+        )?;
+        if current_finalizations
             && tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM worker_attempt_finalizations WHERE attempt_id=?1)",
                 [&attempt],
@@ -143,20 +195,41 @@ pub(crate) fn retain_attempts(conn: &Connection, now: i64) -> Result<()> {
             )",
             params![task, member],
         )?;
+        tx.commit()?;
     }
-    tx.execute(
-        "DELETE FROM crew_attempts WHERE attempt_id IN (
-            SELECT a.attempt_id FROM crew_attempts a
-            WHERE a.finalized_at IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM communication_routing_state r
-                  WHERE r.message_key=a.task_id AND r.route_status NOT IN ('handled','failed','cancelled'))
-              AND a.attempt_id NOT IN (
-                  SELECT attempt_id FROM crew_attempts WHERE finalized_at IS NOT NULL
-                  ORDER BY finalized_at DESC,attempt_id DESC LIMIT 500
-              )
-            ORDER BY a.finalized_at,a.attempt_id LIMIT 128
-        )", [],
-    )?;
-    tx.commit()?;
+    // Discover expired finished attempts without occupying the writer, even
+    // when there is no maintenance work. Recheck retention and route state
+    // under each short reservation: concurrent reopening must preserve work.
+    let finished = conn.prepare(
+        "SELECT a.attempt_id FROM crew_attempts a
+         WHERE a.finalized_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM communication_routing_state r
+               WHERE r.message_key=a.task_id AND r.route_status NOT IN ('handled','failed','cancelled'))
+           AND a.attempt_id NOT IN (
+               SELECT attempt_id FROM crew_attempts WHERE finalized_at IS NOT NULL
+               ORDER BY finalized_at DESC,attempt_id DESC LIMIT 500
+           ) ORDER BY a.finalized_at,a.attempt_id LIMIT 128",
+    )?.query_map([], |r| r.get::<_, String>(0))?
+      .collect::<rusqlite::Result<Vec<_>>>()?;
+    #[cfg(test)]
+    AFTER_FINISHED_RETENTION_READS.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            callback();
+        }
+    });
+    for id in finished {
+        let tx =
+            crate::persistence::SqliteWriteTransaction::begin(conn, "crew.retention_finished")?;
+        tx.execute(
+            "DELETE FROM crew_attempts WHERE attempt_id=?1 AND finalized_at IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM communication_routing_state r
+                 WHERE r.message_key=crew_attempts.task_id AND r.route_status NOT IN ('handled','failed','cancelled'))
+             AND attempt_id NOT IN (
+                 SELECT attempt_id FROM crew_attempts WHERE finalized_at IS NOT NULL
+                 ORDER BY finalized_at DESC,attempt_id DESC LIMIT 500
+             )", [&id],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }

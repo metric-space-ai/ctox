@@ -806,6 +806,24 @@ fn digest_subject(data: &DigestData) -> String {
 
 const FOOTER_TEXT: &str = "Automatisch erstellt aus der Outbound-App. Empfänger und Zeitplan ändern: Outbound-App › Recherche-Einstellungen › Update-Verteiler.";
 
+/// Blockers that concern every research (a broken source or access) rather
+/// than one lead. They lead the mail: at the end of the blocker list they fell
+/// behind "… und N weitere" or were cut off by the mail client (Owner,
+/// 09.10.2026).
+const GENERAL_BLOCKER_KIND: &str = "Quelle gestört";
+
+fn general_blockers(data: &DigestData) -> impl Iterator<Item = &AttentionRow> {
+    data.attention
+        .iter()
+        .filter(|row| row.kind == GENERAL_BLOCKER_KIND)
+}
+
+fn lead_blockers(data: &DigestData) -> impl Iterator<Item = &AttentionRow> {
+    data.attention
+        .iter()
+        .filter(|row| row.kind != GENERAL_BLOCKER_KIND)
+}
+
 fn stale_sources_text(data: &DigestData) -> Option<String> {
     (!data.stale_sources.is_empty()).then(|| {
         format!(
@@ -829,6 +847,18 @@ fn render_text(data: &DigestData) -> String {
         format!("Blocker: {}", data.attention.len()),
         String::new(),
     ];
+    let general = general_blockers(data).collect::<Vec<_>>();
+    let stale = stale_sources_text(data);
+    if !general.is_empty() || stale.is_some() {
+        out.push("ALLGEMEINE BLOCKER (betreffen alle Recherchen)".to_string());
+        for row in &general {
+            out.push(format!("- {}: {} – {}", row.kind, row.subject, row.detail));
+        }
+        if let Some(note) = &stale {
+            out.push(format!("Hinweis: {note}"));
+        }
+        out.push(String::new());
+    }
     if !data.campaigns.is_empty() {
         out.push("KAMPAGNEN (aktueller Stand)".to_string());
         for row in data.campaigns.iter().take(CAMPAIGN_LIST_LIMIT) {
@@ -877,21 +907,16 @@ fn render_text(data: &DigestData) -> String {
         }
     }
     out.push(String::new());
-    out.push("BLOCKER".to_string());
-    if data.attention.is_empty() {
+    let leads = lead_blockers(data).collect::<Vec<_>>();
+    out.push("BLOCKER BEI EINZELNEN LEADS".to_string());
+    if leads.is_empty() {
         out.push("Keine.".to_string());
     }
-    for row in data.attention.iter().take(LIST_LIMIT) {
+    for row in leads.iter().take(LIST_LIMIT) {
         out.push(format!("- {}: {} – {}", row.kind, row.subject, row.detail));
     }
-    if data.attention.len() > LIST_LIMIT {
-        out.push(format!(
-            "- … und {} weitere",
-            data.attention.len() - LIST_LIMIT
-        ));
-    }
-    if let Some(note) = stale_sources_text(data) {
-        out.push(format!("Hinweis: {note}"));
+    if leads.len() > LIST_LIMIT {
+        out.push(format!("- … und {} weitere", leads.len() - LIST_LIMIT));
     }
     if data.review_leads > 0 {
         out.push(String::new());
@@ -1010,6 +1035,17 @@ fn more_row(total: usize, shown: usize, columns: usize) -> Option<Vec<String>> {
     })
 }
 
+fn blocker_cells(row: &AttentionRow) -> Vec<String> {
+    vec![
+        format!(
+            r#"<strong>{}</strong><div style="font:12px/1.3 {FONT};color:{DANGER};padding-top:2px;">{}</div>"#,
+            esc(&row.subject),
+            esc(row.kind)
+        ),
+        esc(&row.detail),
+    ]
+}
+
 fn render_html(data: &DigestData) -> String {
     let kpi = |value: usize, label: &str, color: &str| {
         format!(
@@ -1037,6 +1073,27 @@ fn render_html(data: &DigestData) -> String {
                 .replace(&format!("border-right:1px solid {LINE};"), ""),
         ),
     ];
+
+    let general = general_blockers(data).collect::<Vec<_>>();
+    let stale = stale_sources_text(data);
+    if !general.is_empty() || stale.is_some() {
+        rows.push(html_section_title(
+            "Allgemeine Blocker",
+            "betreffen alle Recherchen – Quellen & Zugänge",
+        ));
+        if !general.is_empty() {
+            rows.push(html_table(
+                &[("Betrifft", "left"), ("Was ist los", "left")],
+                &general
+                    .iter()
+                    .map(|row| blocker_cells(row))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        if let Some(note) = &stale {
+            rows.push(html_paragraph(note, MUTED));
+        }
+    }
 
     if !data.campaigns.is_empty() {
         rows.push(html_section_title(
@@ -1132,40 +1189,28 @@ fn render_html(data: &DigestData) -> String {
         rows.push(html_table(&[("Firma", "left")], &table_rows));
     }
 
+    let leads = lead_blockers(data).collect::<Vec<_>>();
     rows.push(html_section_title(
-        "Blocker",
-        if data.attention.is_empty() {
+        "Blocker bei einzelnen Leads",
+        if leads.is_empty() {
             ""
         } else {
             "braucht eine Entscheidung oder einen Handgriff"
         },
     ));
-    if data.attention.is_empty() {
+    if leads.is_empty() {
         rows.push(html_paragraph("Keine Blocker.", OK));
     } else {
-        let mut table_rows = data
-            .attention
+        let mut table_rows = leads
             .iter()
             .take(LIST_LIMIT)
-            .map(|row| {
-                vec![
-                    format!(
-                        r#"<strong>{}</strong><div style="font:12px/1.3 {FONT};color:{DANGER};padding-top:2px;">{}</div>"#,
-                        esc(&row.subject),
-                        esc(row.kind)
-                    ),
-                    esc(&row.detail),
-                ]
-            })
+            .map(|row| blocker_cells(row))
             .collect::<Vec<_>>();
-        table_rows.extend(more_row(data.attention.len(), LIST_LIMIT, 2));
+        table_rows.extend(more_row(leads.len(), LIST_LIMIT, 2));
         rows.push(html_table(
             &[("Betrifft", "left"), ("Was ist los", "left")],
             &table_rows,
         ));
-    }
-    if let Some(note) = stale_sources_text(data) {
-        rows.push(html_paragraph(&note, MUTED));
     }
 
     if data.review_leads > 0 {
@@ -1981,6 +2026,50 @@ mod tests {
         );
         assert!(report.html.contains("A&amp;B &lt;script&gt;"));
         assert!(!report.html.contains("<script>"));
+    }
+
+    #[test]
+    fn general_blockers_lead_the_mail_and_are_never_cut_off() {
+        let mut data = DigestData {
+            date_label: "Fr 09.10.".into(),
+            period: "08.10. – 09.10.".into(),
+            stale_sources: vec!["Google".into()],
+            campaigns: vec![CampaignRow {
+                name: "Chemie WZ 20".into(),
+                leads: 494,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for index in 0..(LIST_LIMIT + 5) {
+            data.attention.push(AttentionRow {
+                kind: "Recherche fehlgeschlagen",
+                subject: format!("Lead {index}"),
+                detail: "Grund siehe App".into(),
+            });
+        }
+        data.attention.push(AttentionRow {
+            kind: GENERAL_BLOCKER_KIND,
+            subject: "E-Mail-Prüfung".into(),
+            detail: "Zugriff blockiert".into(),
+        });
+        let html = render_html(&data);
+        let source = html
+            .find("E-Mail-Prüfung")
+            .expect("general blocker in the mail");
+        assert!(
+            source < html.find("Kampagnen").unwrap(),
+            "general blockers lead the mail"
+        );
+        assert!(html.find("seit über drei Tagen").unwrap() < html.find("Kampagnen").unwrap());
+        assert!(html.contains("Blocker bei einzelnen Leads"));
+        assert!(html.contains("… und 5 weitere") || html.contains("und 5 weitere"));
+        let text = render_text(&data);
+        let general = text
+            .find("ALLGEMEINE BLOCKER")
+            .expect("general section in text");
+        assert!(general < text.find("KAMPAGNEN").unwrap());
+        assert!(text.find("E-Mail-Prüfung").unwrap() < text.find("KAMPAGNEN").unwrap());
     }
 
     #[test]

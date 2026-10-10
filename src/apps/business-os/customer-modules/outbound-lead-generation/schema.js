@@ -55,7 +55,12 @@ export const collections = {
   outbound_lead_generation_adapters: adapterSchema,
   outbound_lead_generation_imports: importSchema,
   outbound_lead_generation_research_policies: researchPolicySchema,
-  outbound_lead_generation_leads: leadSchema,
+  // The manifest declares the leads demand-only; the shell registers
+  // collections from this file, so the profile has to travel with the schema.
+  // Without it every browser pulled the whole collection (848 leads / 61 MB on
+  // thesen, 09.10.2026) and held the post-upgrade read-only window open.
+  // Lists and details already read through bounded demand queries.
+  outbound_lead_generation_leads: { schema: leadSchema, syncProfile: 'demand-only' },
 };
 
 

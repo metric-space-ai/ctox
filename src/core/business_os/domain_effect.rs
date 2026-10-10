@@ -42,7 +42,14 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
-pub(super) const COMMAND_TYPES: [&str; 19] = [
+pub(super) const COMMAND_TYPES: [&str; 28] = [
+    "ctox.workjet.providers.adopt_native",
+    "ctox.workjet.providers.observe_native",
+    "ctox.workjet.providers.models.select",
+    "ctox.workjet.providers.models.exclude",
+    "ctox.workjet.providers.withdraw",
+    "ctox.workjet.providers.account.enable",
+    "ctox.workjet.providers.account.remove",
     "ctox.workjet.jour_fixe.todos.confirm",
     "ctox.workjet.jour_fixe.meeting.start",
     "ctox.workjet.jour_fixe.meeting.end",
@@ -51,6 +58,8 @@ pub(super) const COMMAND_TYPES: [&str; 19] = [
     "ctox.workjet.jour_fixe.transcript.local_candidate",
     "ctox.workjet.jour_fixe.todos.revise",
     "ctox.workjet.jour_fixe.comment.add",
+    "ctox.workjet.presentation.canvas.save",
+    "ctox.workjet.presentation.edits.apply",
     "ctox.workjet.project.upsert",
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.exit_model.refresh",
@@ -69,6 +78,11 @@ pub(super) fn supports_command(command_type: &str) -> bool {
 }
 
 impl DomainEffectAdmission {
+    /// Private identity for a staged external effect, available only to a NEW claim.
+    pub(super) fn staged_identity(&self) -> (&str, &str, &str) {
+        (&self.command_id, &self.payload_hash, &self.actor_user_id)
+    }
+
     pub(super) fn newly_claimed(
         command_id: &str,
         payload_hash: &str,
@@ -182,7 +196,10 @@ pub(super) fn identity_at_root(
         local.is_none() || core.is_none(),
         "domain receipt exists in two authority stores"
     );
-    Ok(core.or(local))
+    if let Some(identity) = core.or(local) {
+        return Ok(Some(identity));
+    }
+    super::provider_federation::account_controls::identity(policy, command_id)
 }
 pub(super) fn contains_at_root(
     root: &std::path::Path,

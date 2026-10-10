@@ -44,19 +44,33 @@ mod crew_execution;
 mod crew_plan;
 #[path = "mcp_metadata_read.rs"]
 mod metadata_read;
+#[path = "mcp_native_startup.rs"]
+pub(crate) mod native_startup;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]
 mod remote_worker;
+#[path = "mcp_workjet_calendar.rs"]
+mod workjet_calendar;
+pub(super) use workjet_calendar::read_webrtc as read_workjet_calendar_webrtc;
+pub(super) use workjet_calendar::WEBRTC_METHOD as WORKJET_CALENDAR_READ_METHOD;
 #[path = "mcp_workjet_confirmed_plan.rs"]
 mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
+#[path = "mcp_supervisor_luma.rs"]
+mod supervisor_luma;
+pub(in crate::business_os) use supervisor_luma::read_computed_route as read_supervisor_computed_route;
+pub(in crate::business_os) use supervisor_luma::read_configured_route as read_supervisor_configured_route;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
+#[path = "mcp_workjet_luma_config.rs"]
+mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+#[path = "mcp_workjet_presentation.rs"]
+mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
 
@@ -70,12 +84,20 @@ pub(crate) fn workjet_confirmed_plan_service_test_fixture(
 ) -> anyhow::Result<(tempfile::TempDir, String)> {
     workjet_confirmed_plan::service_fixture()
 }
+pub(crate) use super::project_chats::supervisor_turns::reply_completion_allowed as workjet_supervisor_reply_completion_allowed;
 pub(crate) use command_writeback::supports_command_writeback;
 pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supervisor_command;
 #[path = "mcp_app_authority.rs"]
 mod app_authority;
 pub(super) use app_authority::AuthenticatedMcpAppCommand;
 pub(crate) use crew_execution::run as run_external_crew_turn;
+pub(crate) use supervisor_luma::capture_lease as capture_project_supervisor_lease;
+pub(crate) use supervisor_luma::require_executor as require_project_supervisor_executor;
+pub(crate) use supervisor_luma::{
+    NativeSupervisorCurrentPublication, NativeSupervisorExecutionLease,
+    NativeSupervisorHoldingController, NativeSupervisorPublicationCheck,
+};
+pub(crate) use supervisor_luma::{NativeSupervisorSourceHost, NativeSupervisorSourceOffer};
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -860,6 +882,8 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
             workjet_worker_dispatch::TOOL
                 | workjet_jour_fixe::READ_TOOL
                 | workjet_jour_fixe::WRITE_TOOL
+                | workjet_presentation::READ_TOOL
+                | workjet_presentation::WRITE_TOOL
                 | workjet_kpis::TOOL
         );
     }
@@ -1090,10 +1114,14 @@ pub fn serve_mcp_channel(root: &Path, options: BusinessOsMcpServeOptions) -> any
         "MCP endpoint: http://{}/mcp (requires Authorization: Bearer <secret business_os/mcp_inbound_auth_token>)",
         options.addr
     );
+    let listener = server
+        .server_addr()
+        .to_ip()
+        .context("native MCP listener is not TCP")?;
     for request in server.incoming_requests() {
         let root = root.to_path_buf();
         std::thread::spawn(move || {
-            if let Err(error) = handle_mcp_http_request(&root, request) {
+            if let Err(error) = handle_mcp_http_request(&root, listener, request) {
                 eprintln!("[business-os-mcp] request failed: {error:#}");
             }
         });
@@ -1472,7 +1500,13 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_worker_dispatch::descriptor(),
         workjet_jour_fixe::read_descriptor(),
         workjet_jour_fixe::write_descriptor(),
+        workjet_presentation::read_descriptor(),
+        workjet_presentation::write_descriptor(),
+        workjet_luma_config::read_descriptor(),
+        workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
+        workjet_calendar::descriptors().remove(0),
+        workjet_calendar::descriptors().remove(1),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -3241,6 +3275,15 @@ fn call_tool_inner(
         workjet_worker_dispatch::TOOL => {
             workjet_worker_dispatch::execute(root, &context, &arguments, trusted_gateway_context)?
         }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            workjet_luma_config::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
+        }
         workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => workjet_jour_fixe::execute(
             root,
             &context,
@@ -3248,6 +3291,24 @@ fn call_tool_inner(
             &arguments,
             trusted_gateway_context,
         )?,
+        workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
+            workjet_calendar::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
+        }
+        workjet_presentation::READ_TOOL | workjet_presentation::WRITE_TOOL => {
+            workjet_presentation::execute(
+                root,
+                &context,
+                tool_name,
+                &arguments,
+                trusted_gateway_context,
+            )?
+        }
         workjet_kpis::TOOL => {
             workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -3547,9 +3608,15 @@ fn call_tool_inner(
         "business_os.execute_action" => {
             let module_id = required_arg(&arguments, "module_id")?;
             let action_id = required_arg(&arguments, "action_id")?;
-            serde_json::to_value(execute_action(
-                root, &context, &module_id, &action_id, &arguments,
-            )?)?
+            if module_id == super::outbound_lead_import::MODULE_ID
+                && action_id == super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION
+            {
+                execute_outbound_lead_import(root, &context, &arguments)?
+            } else {
+                serde_json::to_value(execute_action(
+                    root, &context, &module_id, &action_id, &arguments,
+                )?)?
+            }
         }
         "business_os.get_command_status" => {
             let command_id = required_arg(&arguments, "command_id")?;
@@ -5186,7 +5253,10 @@ pub fn list_module_actions(
                 false,
             ),
         ],
-        "outbound-lead-generation" => vec![person_research_action_descriptor(&module.id)],
+        "outbound-lead-generation" => vec![
+            person_research_action_descriptor(&module.id),
+            outbound_lead_import_action_descriptor(&module.id),
+        ],
         _ => Vec::new(),
     });
     let has_external_sql = store::local_external_data_source_declarations(root)?
@@ -5808,7 +5878,11 @@ fn support_agent_action_payload(
     payload
 }
 
-fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<()> {
+fn handle_mcp_http_request(
+    root: &Path,
+    listener: std::net::SocketAddr,
+    mut request: Request,
+) -> anyhow::Result<()> {
     let method = request.method().clone();
     let path = request.url().split('?').next().unwrap_or("/").to_string();
     if method == Method::Options {
@@ -5839,7 +5913,13 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
                 )?;
                 return Ok(());
             }
-            let trusted_context = match request_internal_command_session_token(&request) {
+            let internal_token = request_internal_command_session_token(&request);
+            let native_nonce = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv(native_startup::HEADER))
+                .map(|header| header.value.as_str().to_owned());
+            let trusted_context = match internal_token.as_deref() {
                 Some(token) => match verify_internal_command_session_token(root, &token) {
                     Ok(context) => Some(context),
                     Err(error) => {
@@ -5862,8 +5942,17 @@ fn handle_mcp_http_request(root: &Path, mut request: Request) -> anyhow::Result<
                 respond_empty_status(request, 202)?;
                 return Ok(());
             }
-            let response =
+            let initializing = body["method"] == "initialize";
+            let mut response =
                 handle_json_rpc_with_gateway_context(root, body, trusted_context.as_ref());
+            if initializing {
+                if let Some(nonce) = native_nonce {
+                    let token = internal_token
+                        .as_deref()
+                        .context("native MCP initialization has no command session")?;
+                    native_startup::attest(root, listener, token, &nonce, &mut response["result"])?;
+                }
+            }
             respond_json_value(request, response)?;
         }
         _ => respond_json_status(
@@ -6916,6 +7005,7 @@ fn collection_requires_typed_mcp_tool(collection: &str) -> bool {
             | "business_consents"
             | "business_credentials"
             | "ctox_runtime_settings"
+            | "workjet_luma_configuration"
             | "ctox_task_approval_requests"
             | "kundenpipeline_entscheidungen"
             | "desktop_files"
@@ -7071,8 +7161,20 @@ fn enforce_argument_scope_policy(
             enforce_module_policy(root, "kundenpipeline")?;
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
-        workjet_kpis::TOOL | workjet_jour_fixe::READ_TOOL | workjet_jour_fixe::WRITE_TOOL => {
+        workjet_kpis::TOOL
+        | workjet_jour_fixe::READ_TOOL
+        | workjet_jour_fixe::WRITE_TOOL
+        | workjet_presentation::READ_TOOL
+        | workjet_presentation::WRITE_TOOL => {
             enforce_module_policy(root, "ctox")?;
+        }
+        workjet_luma_config::READ_TOOL | workjet_luma_config::WRITE_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "workjet_luma_configuration")?;
+        }
+        workjet_calendar::ACCOUNTS_TOOL | workjet_calendar::EVENTS_TOOL => {
+            enforce_module_policy(root, "ctox")?;
+            enforce_collection_policy(root, "communication_accounts")?;
         }
         "business_os.create_app" => {
             if let Ok(module_id) = app_module_id_from_arguments(
@@ -7236,7 +7338,9 @@ enum McpToolPolicyClass {
 }
 
 fn tool_policy_class_for_call(tool_name: &str, arguments: &Value) -> McpToolPolicyClass {
-    if tool_name == workjet_kpis::TOOL && arguments["action"] == "read" {
+    if (tool_name == workjet_kpis::TOOL && arguments["action"] == "read")
+        || (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "observe")
+    {
         McpToolPolicyClass::Read
     } else {
         tool_policy_class(tool_name)
@@ -7254,6 +7358,8 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | "business_os.remote_worker_admission"
         | "business_os.workjet_worker_dispatch"
         | "business_os.jour_fixe_update"
+        | workjet_presentation::WRITE_TOOL
+        | workjet_luma_config::WRITE_TOOL
         | workjet_kpis::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
@@ -7601,8 +7707,10 @@ fn enforce_internal_command_session_scope(
     }
     if context["workjet_supervisor_only"] == true {
         anyhow::ensure!(
-            (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "dispatch")
+            (tool_name == workjet_worker_dispatch::TOOL
+                && matches!(arguments["action"].as_str(), Some("dispatch" | "observe")))
                 || workjet_jour_fixe::allows(tool_name, arguments)
+                || workjet_presentation::allows(tool_name, arguments)
                 || workjet_kpis::allows(tool_name, arguments),
             "tool/action is outside the restricted native supervisor session"
         );
@@ -8480,6 +8588,90 @@ fn action_descriptor(
             "additionalProperties": true
         }),
     }
+}
+
+/// Leads from a list (e.g. a mail's spreadsheet) into a named Outbound
+/// campaign, and their research started like the app's "Recherchieren".
+/// Authorization: Outbound module data write for the resolved actor, the same
+/// decision every other Outbound execute_action takes.
+fn execute_outbound_lead_import(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    context.validate()?;
+    let module_id = super::outbound_lead_import::MODULE_ID;
+    enforce_module_policy(root, module_id)?;
+    let mut policy_arguments = arguments_with_module_id(arguments, module_id);
+    policy_arguments["action_id"] =
+        Value::String(super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION.to_string());
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        "business_os.execute_action",
+        &policy_arguments,
+    )?;
+    let request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
+        anyhow::Error::new(BusinessOsMcpError::validation("payload", error.to_string()))
+    })?;
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let client_context = serde_json::json!({
+        "channel": &context.channel,
+        "surface": &context.surface,
+        "actor": actor,
+        "mcp_actor": &context.actor,
+        "workspace": &context.workspace,
+        "request_id": &context.request_id,
+        "requires_confirmation": false,
+        "confirmation_state": confirmation_state_as_str(&context.confirmation_state),
+        "proposal_only": false,
+        "mcp_tool": &context.tool,
+        "source": "outbound-lead-generation-ctox-import",
+    });
+    super::outbound_lead_import::import_and_research(root, &request, &client_context)
+}
+
+fn outbound_lead_import_action_descriptor(module_id: &str) -> BusinessOsActionDescriptor {
+    let mut descriptor = action_descriptor(
+        super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+        module_id,
+        "Import companies as leads and start their research",
+        "Create leads for the given companies in a named Outbound campaign and start each lead's research exactly like the app's research button (same research policy, sources and writeback). Use it when someone sends a list or spreadsheet of companies to research. Repeating the call with the same campaign and names neither duplicates leads nor restarts running research. Report progress only from the returned lead ids and their records.",
+        "write",
+        false,
+        false,
+    );
+    descriptor.input_schema = serde_json::json!({
+        "type": "object",
+        "required": ["payload"],
+        "properties": {
+            "payload": {
+                "type": "object",
+                "required": ["campaign", "rows"],
+                "properties": {
+                    "campaign": { "type": "string", "minLength": 1 },
+                    "rows": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 200,
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string", "minLength": 1 },
+                                "website": { "type": "string" },
+                                "city": { "type": "string" },
+                                "country": { "type": "string", "enum": ["DE", "AT", "CH"] }
+                            }
+                        }
+                    },
+                    "start_research": { "type": "boolean", "default": true },
+                    "source_note": { "type": "string" }
+                }
+            }
+        }
+    });
+    descriptor
 }
 
 fn person_research_action_descriptor(module_id: &str) -> BusinessOsActionDescriptor {
@@ -14856,6 +15048,133 @@ mod tests {
         assert!(action_ids.contains(&"support.agent.writeback"));
         assert!(action_ids.contains(&"support.agent.apply_suggestion"));
         assert!(action_ids.contains(&"support.agent.reject_suggestion"));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_lead_import_creates_campaign_leads_once_and_needs_an_app_template_for_research(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &[
+                "outbound_lead_generation_leads",
+                "outbound_lead_generation_imports",
+            ],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        // The leads live in the RxDB store (native row layout).
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let rxdb = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        for table in [
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "ctox_business_os__outbound_lead_generation_imports__v0",
+            "ctox_business_os__business_commands__v2",
+        ] {
+            rxdb.execute_batch(&format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+                    deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL,
+                    data TEXT NOT NULL
+                )"
+            ))?;
+        }
+
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "outbound-lead-generation",
+        )?;
+        assert!(actions.items.iter().any(|action| action.action_id
+            == super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION));
+
+        let arguments = serde_json::json!({
+            "module_id": "outbound-lead-generation",
+            "action_id": super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+            "payload": {
+                "campaign": "Recherche aus Mail",
+                "rows": [
+                    { "name": "Hedinger GmbH & Co. KG", "website": "hedinger.de", "city": "Stuttgart" },
+                    { "name": "Carl Roth GmbH + Co. KG", "website": "carlroth.com", "city": "Karlsruhe" }
+                ],
+                "start_research": false
+            }
+        });
+        let context = test_context("business_os.execute_action");
+        let first = execute_outbound_lead_import(root, &context, &arguments)?;
+        assert_eq!(first["leads"].as_array().map(Vec::len), Some(2));
+        assert_eq!(first["leads"][0]["created"], true);
+        let lead_id = super::super::outbound_lead_import::lead_id_for(
+            "Recherche aus Mail",
+            "Hedinger GmbH & Co. KG",
+        );
+        let lead =
+            store::read_rxdb_collection_record(root, "outbound_lead_generation_leads", &lead_id)?
+                .context("imported lead")?;
+        assert_eq!(lead["campaign"], "Recherche aus Mail");
+        assert_eq!(lead["city"], "Stuttgart");
+        assert_eq!(lead["research_status"], "new");
+
+        // A retried turn neither duplicates the leads nor fails.
+        let second = execute_outbound_lead_import(root, &context, &arguments)?;
+        assert_eq!(second["leads"][0]["created"], false);
+
+        // Research needs the app's research policy; without a research task
+        // started in the app there is nothing to copy, and the action says so.
+        let mut with_research = arguments.clone();
+        with_research["payload"]["start_research"] = serde_json::json!(true);
+        let error = execute_outbound_lead_import(root, &context, &with_research)
+            .expect_err("research without an app template must fail loudly");
+        assert!(error.to_string().contains("Outbound app"));
+
+        // With a research task the app started, each new lead gets its own.
+        let template = serde_json::json!({
+            "id": "leadgen-lead-research-app",
+            "command_id": "leadgen-lead-research-app",
+            "module": "outbound-lead-generation",
+            "command_type": "business_os.chat.task",
+            "record_id": "lead_app",
+            "created_at_ms": 1,
+            "payload": {
+                "lead_id": "lead_app",
+                "company": "App GmbH",
+                "mode": "update_firm",
+                "fields": ["firma_name"],
+                "source_policy": { "skill": "outbound-lead-generation-research" },
+                "required_skills": ["outbound-lead-generation-research"],
+                "writeback_contract": {
+                    "collection": "outbound_lead_generation_leads",
+                    "command_type": "outbound.lead.research_writeback",
+                    "record_ids": ["lead_app"]
+                },
+                "prompt": "Starte eine Outbound Nachrecherche für App GmbH [lead_app] (Auftrag leadgen-lead-research-app)."
+            }
+        });
+        rxdb.execute(
+            "INSERT INTO ctox_business_os__business_commands__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, '1-a', 0, 1, ?2)",
+            rusqlite::params!["leadgen-lead-research-app", template.to_string()],
+        )?;
+        let started = execute_outbound_lead_import(root, &context, &with_research)?;
+        let command_id = started["leads"][0]["research"]["command_id"]
+            .as_str()
+            .context("research command id")?
+            .to_string();
+        let lead =
+            store::read_rxdb_collection_record(root, "outbound_lead_generation_leads", &lead_id)?
+                .context("lead after research start")?;
+        assert_eq!(lead["research_status"], "queued");
+        assert_eq!(lead["command_id"], serde_json::json!(command_id));
+        let projection = crate::mission::channels::business_command_projection(root, &command_id)?;
+        assert_eq!(projection["record_id"], serde_json::json!(lead_id));
+        // Starting again keeps the running research.
+        let again = execute_outbound_lead_import(root, &context, &with_research)?;
+        assert_eq!(again["leads"][0]["research"]["status"], "already_started");
         Ok(())
     }
 

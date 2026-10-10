@@ -53,6 +53,7 @@ pub mod office_cli;
 pub mod office_engine;
 pub(crate) mod office_staging_repair;
 pub(crate) mod outbound_field_review;
+mod outbound_lead_import;
 mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
@@ -60,6 +61,16 @@ pub mod policy;
 mod populated_store_recovery;
 mod project_chats;
 pub(crate) use project_chats::{emit_project_report, reconcile_project_reports};
+
+/// Native recipe maintenance does not emit a scheduled model turn. Run it even
+/// while the serial router is busy or contains ordinary queued work.
+pub(crate) fn refresh_due_workjet_project_kpis(root: &std::path::Path) -> anyhow::Result<()> {
+    if !store::business_os_store_path(root).exists() {
+        return Ok(());
+    }
+    workjet_project_kpis::resolver::refresh_due(root)
+}
+
 mod project_crew;
 mod workjet_exit_model;
 mod workjet_exit_model_engine;
@@ -69,6 +80,8 @@ pub mod build_delivery;
 pub mod build_source;
 pub mod computer_capabilities;
 pub mod computer_endpoints;
+pub(crate) mod consumer_authority;
+pub(crate) mod provider_federation;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
@@ -82,6 +95,7 @@ mod rxdb_peer_intake_reader;
 mod rxdb_peer_intake_state;
 mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;
+mod rxdb_peer_speech_settings;
 mod rxdb_peer_tombstones;
 mod rxdb_peer_transfer_accounts;
 mod rxdb_peer_transfer_grants;
@@ -90,6 +104,8 @@ mod rxdb_peer_transfer_publication;
 mod rxdb_peer_transfer_publication_tests;
 mod transfer_publish;
 pub(crate) use transfer_publish::publish_native_file;
+mod rxdb_peer_dictation;
+mod rxdb_peer_grok;
 mod rxdb_peer_jour_fixe_speech;
 mod rxdb_peer_workjet_devices;
 pub mod server;
@@ -118,12 +134,24 @@ mod threads;
 mod worker_profile_bindings;
 #[path = "workjet_jour_fixe_contract.generated.rs"]
 pub(crate) mod workjet_jour_fixe_contract;
+#[path = "workjet_presentation_contract.generated.rs"]
+pub(crate) mod workjet_presentation_contract;
 mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;
 #[path = "workjet_supervisor_execution_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_execution_contract;
+#[path = "workjet_supervisor_luma_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_luma_contract;
+#[path = "workjet_supervisor_route_computation_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_route_computation_contract;
+#[path = "workjet_supervisor_route_display_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_route_display_contract;
+#[path = "workjet_supervisor_source_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_source_contract;
 pub mod workjet_transfer_git;
+#[path = "workjet_worker_outcome_contract.generated.rs"]
+pub(crate) mod workjet_worker_outcome_contract;
 
 pub(crate) use app_runtime::inspect_module as inspect_app_runtime_module;
 pub use browser_control::browser_context_capture;
@@ -183,4 +211,5 @@ pub use session_handoff_gate::NativeSessionHandoffGate;
 pub(crate) use external_sql_sync::start_background_sync;
 pub(crate) use person_research_command::recover_once as recover_person_research_commands_once;
 pub use store_workjet_sessions::{run_workjet_session_transfer_recovery, RecoveryOutcome};
-pub(crate) use workjet_transfer_git::execute_cli as execute_workjet_transfer_git_cli;
+mod workjet_transfer_workspace;
+pub(crate) use workjet_transfer_workspace::execute_cli as execute_workjet_transfer_git_cli;

@@ -1,6 +1,87 @@
 import { collections as conversationCollections } from '../conversations/schema.js';
 
+const providerModelId = { type: 'string', maxLength: 256 };
+const providerModelIds = { type: 'array', items: providerModelId };
+const providerCatalog = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    observed: { type: 'boolean' },
+    models: providerModelIds,
+    lastSuccessAtMs: { type: ['number', 'null'] },
+    lastAttempt: {
+      type: ['object', 'null'], additionalProperties: false,
+      properties: {
+        checkedAtMs: { type: 'number' },
+        httpStatus: { type: ['number', 'null'] },
+        elapsedMs: { type: 'number' },
+        retryAfterSeconds: { type: ['number', 'null'] },
+        failure: { type: ['string', 'null'], maxLength: 128 },
+        success: { type: 'boolean' }
+      },
+      required: ['checkedAtMs', 'httpStatus', 'elapsedMs', 'retryAfterSeconds', 'failure', 'success']
+    }
+  },
+  required: ['observed', 'models', 'lastSuccessAtMs', 'lastAttempt']
+};
+
 export const collections = {
+  // One native-authored account/model snapshot per canonical owner. Credentials,
+  // private selectors and durable execution permits never belong in this record.
+  workjet_provider_registry: {
+    version: 0, primaryKey: 'id', type: 'object', additionalProperties: false,
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      owner_user_id: { type: 'string', maxLength: 256 },
+      policy_revision: { type: 'integer', minimum: 0 },
+      catalog_freshness_ms: { type: 'integer', minimum: 1 },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+      accounts: {
+        type: 'array', maxItems: 256,
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            id: { type: 'string', maxLength: 256 },
+            holder: {
+              type: 'object', additionalProperties: false,
+              properties: {
+                kind: { type: 'string', enum: ['ctox_instance'] },
+                id: { type: 'string', maxLength: 256 }
+              },
+              required: ['kind', 'id']
+            },
+            provider: { type: 'string', maxLength: 256 },
+            enabled: { type: 'boolean' },
+            credentialReady: { type: 'boolean' },
+            revision: { type: 'integer', minimum: 1 },
+            observedAtMs: { type: 'number' },
+            modelCatalogObserved: { type: 'boolean' },
+            inferenceVerified: { type: 'boolean', enum: [false] },
+            modelCatalog: providerCatalog,
+            excludedModels: providerModelIds,
+            effectiveModels: providerModelIds
+          },
+          required: ['id', 'holder', 'provider', 'enabled', 'credentialReady', 'revision',
+            'observedAtMs', 'modelCatalogObserved', 'inferenceVerified', 'modelCatalog',
+            'excludedModels', 'effectiveModels']
+        }
+      },
+      providers: {
+        type: 'array', maxItems: 256,
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            provider: { type: 'string', maxLength: 256 },
+            selection: { type: ['array', 'null'], items: providerModelId }
+          },
+          required: ['provider', 'selection']
+        }
+      }
+    },
+    required: ['id', 'owner_user_id', 'policy_revision', 'catalog_freshness_ms',
+      'updated_at_ms', 'is_deleted', 'accounts', 'providers'],
+    indexes: ['owner_user_id', 'updated_at_ms']
+  },
   // Reuse the canonical channel schema so Crew can load accounts before Mail or Conversations opens.
   communication_accounts: conversationCollections.communication_accounts,
   ctox_crew_members: {
@@ -567,7 +648,7 @@ export const collections = {
   },
   workjet_projects: {
 
-    version: 2,
+    version: 3,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -576,6 +657,7 @@ export const collections = {
       description: { type: 'string', maxLength: 4096 },
       repo_url: { type: 'string', maxLength: 2048 },
       public_url: { type: 'string', maxLength: 2048 },
+      supervisor_luma_id: { type: 'string', minLength: 1, maxLength: 160 },
       info: {
         type: 'object',
         properties: {
@@ -814,7 +896,8 @@ export const migrationStrategies = {
   // Optional configuration fields leave existing project identity and state intact.
   workjet_projects: {
     1: (oldDoc) => oldDoc,
-    2: (oldDoc) => oldDoc
+    2: (oldDoc) => oldDoc,
+    3: (oldDoc) => oldDoc
   },
   workjet_computers: {
     1: (oldDoc) => ({

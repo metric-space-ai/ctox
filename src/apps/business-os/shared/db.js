@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261008-jour-fixe-speech-ingress';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-project-exit-assessment';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

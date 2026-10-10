@@ -80,6 +80,30 @@ fn field_status_snapshot(lead: &Value) -> Option<BTreeMap<FieldStatusKey, Value>
     Some(protected)
 }
 
+/// Master-write guard for browser writes. Besides the native field status, a
+/// browser must not set a researched lead back to "failed": that only ever
+/// came from a stale in-memory copy. On thesen (09.10.2026) a browser set 151
+/// "needs_review" leads to "failed" against old failed commands. A browser may
+/// still re-queue such a lead; failure of that rerun keeps the stored result.
+pub(super) fn peer_lead_write_allowed(
+    collection: &str,
+    incoming: &Value,
+    master: Option<&Value>,
+) -> bool {
+    peer_preserves_native_field_status(collection, incoming, master)
+        && !peer_fails_researched_lead(collection, incoming, master)
+}
+
+fn peer_fails_researched_lead(collection: &str, incoming: &Value, master: Option<&Value>) -> bool {
+    if collection != COLLECTION {
+        return false;
+    }
+    let researched = master
+        .and_then(|master| master["research_status"].as_str())
+        .is_some_and(|status| matches!(status, "needs_review" | "completed"));
+    researched && incoming["research_status"].as_str() == Some("failed")
+}
+
 pub(super) fn peer_preserves_native_field_status(
     collection: &str,
     incoming: &Value,
@@ -786,6 +810,32 @@ pub(crate) fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_cannot_fail_a_researched_lead() {
+        let master = json!({"id": "lead-a", "research_status": "needs_review", "field_status": {}});
+        let mut failed = master.clone();
+        failed["research_status"] = json!("failed");
+        assert!(!peer_lead_write_allowed(COLLECTION, &failed, Some(&master)));
+        let completed = json!({"id": "lead-a", "research_status": "completed", "field_status": {}});
+        assert!(!peer_lead_write_allowed(
+            COLLECTION,
+            &failed,
+            Some(&completed)
+        ));
+        // Re-queueing a researched lead stays possible, and so does failing a running one.
+        let mut queued = master.clone();
+        queued["research_status"] = json!("queued");
+        assert!(peer_lead_write_allowed(COLLECTION, &queued, Some(&master)));
+        let running = json!({"id": "lead-a", "research_status": "running", "field_status": {}});
+        assert!(peer_lead_write_allowed(COLLECTION, &failed, Some(&running)));
+        // Other collections are not affected.
+        assert!(peer_lead_write_allowed(
+            "other_collection",
+            &failed,
+            Some(&master)
+        ));
+    }
 
     fn claim(person: Option<&str>) -> Refutation {
         Refutation {

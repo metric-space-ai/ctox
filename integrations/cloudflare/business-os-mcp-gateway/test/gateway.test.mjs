@@ -1,3 +1,17 @@
+test("calendar reads require read authority before any native or provider forwarding", async () => {
+  for (const tool of ["business_os.calendar_accounts", "business_os.calendar_events"]) {
+    let routed = 0;
+    globalThis.fetch = async () => Response.json(scopedManagedAuth({ allowReads: false, allowedTools: [tool] }));
+    const response = await handleRequest(scopedManagedRequest(tool, undefined, {
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: {} } }),
+    }), { ...scopedAuthEnv, BUSINESS_OS_MCP_SESSIONS: fakeSessionsBinding(async () => {
+      routed++; return Response.json({ jsonrpc: "2.0", id: 1, result: { ok: true } });
+    }) });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.data.field, "allowReads");
+    assert.equal(routed, 0);
+  }
+});
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
@@ -316,7 +330,7 @@ const scopedAuthEnv = {
 };
 
 test("managed native worker controls require an explicit write-capable tool grant", async () => {
-  for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch"]) {
+  for (const tool of ["business_os.remote_worker_admission", "business_os.workjet_worker_dispatch", "business_os.luma_configuration_update"]) {
     for (const [policy, expectedField] of [
       [{ allowWrites: false, allowedTools: [tool] }, "allowWrites"],
       [{ allowWrites: true, allowedTools: ["business_os.status"] }, "allowedTools"],

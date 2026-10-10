@@ -781,6 +781,17 @@ pub(super) mod tests {
         )
     }
 
+    pub(crate) fn public_text_provider_fixture() -> Result<(
+        tempfile::TempDir,
+        NativeProviderTurnOwner,
+        Arc<QueueWorkerLifetime>,
+    )> {
+        let (root, execution, lifetime) = admitted()?;
+        let owner = prepare(&execution)?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        Ok((root, owner, lifetime))
+    }
+
     #[test]
     fn native_provider_preparation_precedes_actual_turn_and_selects_verified_provenance(
     ) -> Result<()> {

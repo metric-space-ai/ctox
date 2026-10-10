@@ -1,3 +1,7 @@
+#[path = "persistence_write_transaction.rs"]
+mod write_transaction;
+pub(crate) use write_transaction::SqliteWriteTransaction;
+
 use anyhow::Context;
 use anyhow::Result;
 use rusqlite::params;
@@ -90,6 +94,40 @@ where
         }
     }
     Ok(())
+}
+
+/// Resolve a one-time legacy import under the canonical payload's writer fence.
+/// The initializer is never used when a canonical row (even empty) exists.
+pub(crate) fn load_or_insert_json_payload<T>(
+    root: &Path,
+    key: &str,
+    initialize: impl FnOnce() -> Result<T>,
+) -> Result<T>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let conn = open_sqlite(root)?;
+    let tx = SqliteWriteTransaction::begin(&conn, "payload.legacy_import")?;
+    let existing: Option<String> = tx
+        .query_row(
+            &format!("SELECT payload_json FROM {PAYLOAD_TABLE} WHERE payload_key = ?1"),
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let value = match existing {
+        Some(raw) => serde_json::from_str(&raw)?,
+        None => {
+            let value = initialize()?;
+            tx.execute(
+                &format!("INSERT INTO {PAYLOAD_TABLE} (payload_key, payload_json, updated_at) VALUES (?1, ?2, ?3)"),
+                params![key, serde_json::to_string_pretty(&value)?, now_epoch_secs()],
+            )?;
+            value
+        }
+    };
+    tx.commit()?;
+    Ok(value)
 }
 
 // Keep only a connection, never a value or a transaction. In particular the

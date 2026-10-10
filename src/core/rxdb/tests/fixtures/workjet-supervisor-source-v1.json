@@ -1,0 +1,551 @@
+{
+  "schema": "ctox.workjet.supervisor.source.v1",
+  "contract_version": 1,
+  "types": {
+    "SourceAction": {
+      "enum": [
+        "poll",
+        "claim",
+        "status",
+        "cancel",
+        "model_invoke",
+        "model_read",
+        "tool_call",
+        "sdk_observe"
+      ]
+    },
+    "SourceOfferState": {
+      "enum": [
+        "offered",
+        "claimed",
+        "closed"
+      ]
+    },
+    "SourceOperation": {
+      "fields": {
+        "version": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "action": {
+          "type": "SourceAction"
+        },
+        "offer_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        },
+        "controller_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        },
+        "operation_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        },
+        "model_operation": {
+          "type": "SourceModelOperation",
+          "optional": true
+        },
+        "body_json": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 98304,
+          "optional": true
+        },
+        "sdk_session_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "sequence": {
+          "type": "u64",
+          "maximum": 65535,
+          "optional": true
+        },
+        "native_tool": {
+          "type": "SourceNativeTool",
+          "optional": true
+        },
+        "tool_arguments_json": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 65536,
+          "optional": true
+        },
+        "sdk_observation": {
+          "type": "SourceSdkObservation",
+          "optional": true
+        },
+        "include_confirmed_goal_read": {
+          "type": "bool",
+          "optional": true
+        }
+      }
+    },
+    "SourceRequestedRoute": {
+      "fields": {
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "luma_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "configuration_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "computer_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "harness": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 32
+        },
+        "model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        }
+      }
+    },
+    "SourceOffer": {
+      "fields": {
+        "offer_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "execution_key": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 512
+        },
+        "route": {
+          "type": "SourceRequestedRoute"
+        },
+        "deadline_ms": {
+          "type": "i64",
+          "minimum": 1
+        },
+        "state": {
+          "type": "SourceOfferState"
+        }
+      }
+    },
+    "SourceModelOperation": {
+      "enum": [
+        "messages",
+        "count_tokens"
+      ]
+    },
+    "SourceNativeTool": {
+      "enum": [
+        "worker_dispatch",
+        "confirmed_goal_read"
+      ]
+    },
+    "SourceSdkObservationKind": {
+      "enum": [
+        "child-spawned",
+        "child-closed",
+        "sdk-init",
+        "turn-submitted",
+        "parent-assistant",
+        "sdk-result",
+        "sdk-stream-joined",
+        "sdk-query-close-returned"
+      ]
+    },
+    "SourceSdkObservation": {
+      "fields": {
+        "version": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "sequence": {
+          "type": "u64",
+          "maximum": 511
+        },
+        "kind": {
+          "type": "SourceSdkObservationKind"
+        },
+        "session_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "init_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "turn_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "message_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "message_model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "assistant_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "result_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "subtype": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "signal": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256,
+          "optional": true
+        },
+        "pid": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 4294967295,
+          "optional": true
+        },
+        "exit_code": {
+          "type": "i64",
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "optional": true
+        },
+        "is_error": {
+          "type": "bool",
+          "optional": true
+        }
+      }
+    },
+    "SourceGoalReadArguments": {
+      "fields": {
+        "cursor": {
+          "type": "String",
+          "optional": true,
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
+    },
+    "SourceGoalReadPageState": {
+      "enum": [
+        "page",
+        "snapshot_changed",
+        "snapshot_unavailable",
+        "capacity_unavailable"
+      ]
+    },
+    "SourceGoalReadPage": {
+      "fields": {
+        "schema": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "state": {
+          "type": "SourceGoalReadPageState"
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "snapshot_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "document_sha256": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "document_bytes": {
+          "type": "u64",
+          "maximum": 1052672
+        },
+        "byte_offset": {
+          "type": "u64",
+          "maximum": 1052672
+        },
+        "byte_length": {
+          "type": "u64",
+          "maximum": 24576
+        },
+        "json_fragment": {
+          "type": "String",
+          "max_chars": 24576
+        },
+        "captured_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        },
+        "document_complete": {
+          "type": "bool"
+        },
+        "next_cursor": {
+          "type": "String",
+          "optional": true,
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "poll"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "model_read",
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "controller_id": "22222222-2222-4222-8222-222222222222",
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "sequence": 0
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "tool_call",
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "controller_id": "22222222-2222-4222-8222-222222222222",
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "native_tool": "worker_dispatch",
+        "tool_arguments_json": "{\"task\":\"Make an owned change\"}"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "sdk_observe",
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "controller_id": "22222222-2222-4222-8222-222222222222",
+        "sdk_observation": {
+          "version": 1,
+          "sequence": 0,
+          "kind": "child-spawned",
+          "pid": 100
+        }
+      }
+    },
+    {
+      "type": "SourceNativeTool",
+      "value": "confirmed_goal_read"
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
+        "include_confirmed_goal_read": true
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {}
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "cursor": "11111111-1111-4111-8111-111111111111:24576"
+      }
+    },
+    {
+      "type": "SourceGoalReadPage",
+      "value": {
+        "schema": "ctox.workjet.confirmed-goal-page.v1",
+        "state": "page",
+        "project_id": "project",
+        "supervisor_thread_id": "thread",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 2,
+        "byte_offset": 0,
+        "byte_length": 2,
+        "json_fragment": "{}",
+        "captured_at_ms": 1,
+        "document_complete": true
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 2,
+        "action": "poll"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "poll",
+        "computer_id": "caller-not-authority"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "report",
+        "actual": true
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "short"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "model_invoke",
+        "model_operation": "arbitrary_upstream",
+        "actual": true
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "tool_call",
+        "native_tool": "arbitrary_tool"
+      }
+    },
+    {
+      "type": "SourceSdkObservation",
+      "value": {
+        "version": 1,
+        "sequence": 0,
+        "kind": "child-spawned",
+        "pid": 0
+      }
+    },
+    {
+      "type": "SourceSdkObservation",
+      "value": {
+        "version": 1,
+        "sequence": 0,
+        "kind": "sdk-result",
+        "actual": true
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
+        "include_confirmed_goal_read": "true"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "project_id": "caller"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "goal_id": "caller"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "cursor": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "type": "SourceGoalReadPage",
+      "value": {
+        "schema": "ctox.workjet.confirmed-goal-page.v1",
+        "state": "page",
+        "project_id": "project",
+        "supervisor_thread_id": "thread",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 2,
+        "byte_offset": 0,
+        "byte_length": 24577,
+        "json_fragment": "{}",
+        "captured_at_ms": 1,
+        "document_complete": true
+      }
+    }
+  ],
+  "commands": {
+    "ctox.workjet.project.supervisor.execution.v1": {
+      "request": "SourceOperation",
+      "transport": "guarded native auxiliary WebRTC; no HTTP data path",
+      "authority": "actual enrolled Source + original native lease; DTOs are not permits"
+    }
+  }
+}

@@ -161,16 +161,61 @@ pub fn clear_chat_capacity_contract(root: &Path) -> Result<()> {
     )
 }
 
+/// Historical residency metadata for failure diagnosis, never liveness or
+/// execution authority. Capacity/readiness readers must use the pruned API.
+pub(crate) fn load_persisted_runtime_ownership_state(root: &Path) -> Result<RuntimeOwnershipState> {
+    Ok(
+        persistence::load_json_payload(root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY)?
+            .unwrap_or_else(RuntimeOwnershipState::default),
+    )
+}
+
 pub fn load_runtime_ownership_state(root: &Path) -> Result<RuntimeOwnershipState> {
     let legacy_path = legacy_backend_gpu_lease_ledger_path(root);
     let legacy_exists = legacy_path.exists();
-    let mut state = persistence::load_json_payload(root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY)?
-        .unwrap_or_else(RuntimeOwnershipState::default);
+    if legacy_exists {
+        // Capture before the transaction, but defer errors until canonical
+        // precedence is checked: a concurrent release may remove this file.
+        let legacy = std::fs::read(&legacy_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| serde_json::from_slice(&bytes).map_err(anyhow::Error::from));
+        return import_legacy_runtime_ownership(root, legacy);
+    }
+    let mut state = load_persisted_runtime_ownership_state(root)?;
     let original = state.clone();
     prune_dead_runtime_residency(root, &mut state);
-    if legacy_exists || state != original {
+    if state != original {
         persist_runtime_ownership_state(root, &state)?;
     }
+    Ok(state)
+}
+
+fn import_legacy_runtime_ownership(
+    root: &Path,
+    legacy: Result<BackendGpuLeaseLedger>,
+) -> Result<RuntimeOwnershipState> {
+    let mut state = persistence::load_or_insert_json_payload(
+        root,
+        RUNTIME_OWNERSHIP_STATE_STORAGE_KEY,
+        || {
+            let mut state = RuntimeOwnershipState {
+                workloads: legacy?
+                    .leases
+                    .into_iter()
+                    .map(|lease| {
+                        BackendRuntimeResidency::from_lease(lease, RuntimeResidencyPhase::Active)
+                    })
+                    .collect(),
+                ..RuntimeOwnershipState::default()
+            };
+            prune_dead_runtime_residency(root, &mut state);
+            Ok(state)
+        },
+    )?;
+    // No UPSERT after releasing the migration fence: a canonical release or
+    // replacement committed by another connection must remain authoritative.
+    prune_dead_runtime_residency(root, &mut state);
+    let _ = std::fs::remove_file(legacy_backend_gpu_lease_ledger_path(root));
     Ok(state)
 }
 
@@ -364,6 +409,104 @@ mod tests {
                 .copied(),
             Some(1024)
         );
+    }
+
+    #[test]
+    fn canonical_empty_ownership_does_not_resurrect_legacy_leases() {
+        let root = make_temp_root();
+        write_pid_file(&root, BackendRole::Embedding.pid_file_name());
+        persist_runtime_ownership_state(&root, &RuntimeOwnershipState::default()).unwrap();
+        let legacy_path = legacy_backend_gpu_lease_ledger_path(&root);
+        std::fs::write(
+            &legacy_path,
+            serde_json::to_vec(&BackendGpuLeaseLedger {
+                leases: vec![BackendGpuLease {
+                    role: BackendRole::Embedding,
+                    model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+                    pid: Some(std::process::id()),
+                    visible_devices: vec![2],
+                    reserved_mb_by_gpu: BTreeMap::from([(2, 1024)]),
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(load_runtime_ownership_state(&root)
+            .unwrap()
+            .workloads
+            .is_empty());
+        assert!(!legacy_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn canonical_release_between_legacy_capture_and_import_wins() {
+        for replacement in [false, true] {
+            let root = make_temp_root();
+            write_pid_file(&root, BackendRole::Embedding.pid_file_name());
+            let ledger = BackendGpuLeaseLedger {
+                leases: vec![BackendGpuLease {
+                    role: BackendRole::Embedding,
+                    model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+                    pid: Some(std::process::id()),
+                    visible_devices: vec![2],
+                    reserved_mb_by_gpu: BTreeMap::from([(2, 1024)]),
+                }],
+            };
+            let legacy_path = legacy_backend_gpu_lease_ledger_path(&root);
+            std::fs::write(&legacy_path, serde_json::to_vec(&ledger).unwrap()).unwrap();
+            let captured = serde_json::from_slice(&std::fs::read(&legacy_path).unwrap()).unwrap();
+            // Initialize the store, then commit on an independent connection
+            // after legacy capture and before the migration's writer fence.
+            assert!(persistence::load_json_payload::<RuntimeOwnershipState>(
+                &root,
+                RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
+            )
+            .unwrap()
+            .is_none());
+            let mut canonical = RuntimeOwnershipState::default();
+            if replacement {
+                let mut workload = BackendRuntimeResidency::from_lease(
+                    ledger.leases[0].clone(),
+                    RuntimeResidencyPhase::Starting,
+                );
+                workload.port = Some(4321);
+                workload.reserved_mb_by_gpu = BTreeMap::from([(2, 2048)]);
+                canonical.workloads.push(workload);
+            }
+            let competing = rusqlite::Connection::open(persistence::sqlite_path(&root)).unwrap();
+            competing.execute(
+                "INSERT INTO ctox_payload_store (payload_key, payload_json, updated_at) VALUES (?1, ?2, 0)",
+                rusqlite::params![RUNTIME_OWNERSHIP_STATE_STORAGE_KEY, serde_json::to_string(&canonical).unwrap()],
+            ).unwrap();
+            assert_eq!(
+                import_legacy_runtime_ownership(&root, Ok(captured)).unwrap(),
+                canonical
+            );
+            assert_eq!(
+                load_persisted_runtime_ownership_state(&root).unwrap(),
+                canonical
+            );
+            assert!(!legacy_path.exists());
+            drop(competing);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn invalid_legacy_lease_ledger_is_retained_for_recovery() {
+        let root = make_temp_root();
+        let legacy_path = legacy_backend_gpu_lease_ledger_path(&root);
+        std::fs::write(&legacy_path, b"invalid json").unwrap();
+        assert!(load_runtime_ownership_state(&root).is_err());
+        assert_eq!(std::fs::read(&legacy_path).unwrap(), b"invalid json");
+        assert!(persistence::load_json_payload::<RuntimeOwnershipState>(
+            &root,
+            RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
+        )
+        .unwrap()
+        .is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

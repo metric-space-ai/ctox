@@ -130,6 +130,14 @@ pub type AuxiliaryRequestHandler =
 
 /// Native publication authority is retained separately from the wire payload.
 /// A JSON field can never create this guard or opt into a privileged responder.
+async fn finish_guarded_auxiliary_send(
+    sending: impl Future<Output = Result<(), RxError>>,
+    publication: &dyn super::webrtc_types::WebRTCPublicationGuard,
+) -> Result<(), RxError> {
+    sending.await?;
+    publication.after_send()
+}
+
 pub struct GuardedAuxiliaryResponse {
     pub result: Value,
     pub publication: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
@@ -602,9 +610,15 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                     native,
                 });
                 // Unsupported guarded transports reject; never retry as plain.
-                self.connection_handler
-                    .send_guarded(peer, frame, guard)
-                    .await
+                finish_guarded_auxiliary_send(
+                    self.connection_handler.send_guarded(
+                        peer,
+                        frame,
+                        Arc::clone(&guard) as Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
+                    ),
+                    guard.native.as_ref(),
+                )
+                .await
             }
             None => self.connection_handler.send(peer, frame).await,
         }
@@ -4481,6 +4495,72 @@ mod tests {
             }
             publish()
         }
+    }
+
+    #[tokio::test]
+    async fn auxiliary_completion_is_not_called_for_pending_or_failed_transport() {
+        use super::super::webrtc_types::WebRTCPublicationGuard;
+        struct Completion(std::sync::atomic::AtomicUsize);
+        impl WebRTCPublicationGuard for Completion {
+            fn with_current(
+                &self,
+                publish: &mut dyn FnMut() -> Result<(), RxError>,
+            ) -> Result<(), RxError> {
+                publish()
+            }
+            fn after_send(&self) -> Result<(), RxError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let completed = StdArc::new(Completion(std::sync::atomic::AtomicUsize::new(0)));
+        let pending = StdArc::clone(&completed);
+        let (release, waiting) = tokio::sync::oneshot::channel();
+        let job = tokio::spawn(async move {
+            finish_guarded_auxiliary_send(
+                async move {
+                    waiting
+                        .await
+                        .map_err(|_| new_rx_error("fixture_closed", None))?;
+                    Ok(())
+                },
+                pending.as_ref(),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(completed.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        release.send(()).unwrap();
+        job.await.unwrap().unwrap();
+        assert_eq!(completed.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(finish_guarded_auxiliary_send(
+            std::future::ready(Err(new_rx_error("fixture_send_failed", None))),
+            completed.as_ref()
+        )
+        .await
+        .is_err());
+        assert_eq!(completed.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn auxiliary_completion_revalidates_after_successful_send() {
+        use super::super::webrtc_types::WebRTCPublicationGuard;
+        struct Retired;
+        impl WebRTCPublicationGuard for Retired {
+            fn with_current(
+                &self,
+                publish: &mut dyn FnMut() -> Result<(), RxError>,
+            ) -> Result<(), RxError> {
+                publish()
+            }
+            fn after_send(&self) -> Result<(), RxError> {
+                Err(new_rx_error("fixture_retired", None))
+            }
+        }
+        let error = finish_guarded_auxiliary_send(std::future::ready(Ok(())), &Retired)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "fixture_retired");
     }
 
     #[tokio::test]

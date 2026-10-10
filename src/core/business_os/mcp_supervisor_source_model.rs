@@ -1,0 +1,1090 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+//! Private native model requests for the original enrolled Source.
+//! HTTP correlations are upstream observations, not SDK execution/stop proof.
+use super::*;
+use crate::execution::cliproxyapi_claude_proxy::{
+    NativeClaudeLeaseModelProxy, NativeClaudeModelExchange, NativeClaudeOperation,
+};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use sha2::Digest;
+use std::collections::{BTreeMap, VecDeque};
+
+const MAX_BODY: usize = 96 * 1024;
+const MAX_REPLY: usize = 8 * 1024 * 1024;
+const CHUNK: usize = 32 * 1024;
+const MAX_OPERATIONS: usize = 64;
+const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native_model_requests (
+ operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
+ controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
+ state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, response_text TEXT, response_stop_reason TEXT, response_complete INTEGER, upstream_request_id TEXT, http_status INTEGER,
+ created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
+
+pub(super) fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
+    core.execute_batch(MODEL_SCHEMA)?;
+    let columns = core
+        .prepare("PRAGMA table_info(workjet_supervisor_native_model_requests)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (column, kind) in [
+        ("response_message_id", "TEXT"),
+        ("operation_kind", "TEXT"),
+        ("response_text", "TEXT"),
+        ("response_stop_reason", "TEXT"),
+        ("response_complete", "INTEGER"),
+    ] {
+        if !columns.iter().any(|existing| existing == column) {
+            core.execute_batch(&format!(
+                "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN {column} {kind}"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+pub(super) struct ModelRegistry {
+    sessions: Mutex<HashMap<String, Arc<ModelSession>>>,
+}
+struct ModelSession {
+    controller: Arc<NativeSupervisorHoldingController>,
+    proxy: Arc<NativeClaudeLeaseModelProxy>,
+    jobs: Mutex<HashMap<String, Arc<ModelJob>>>,
+}
+struct ModelJob {
+    hash: String,
+    state: Mutex<ModelState>,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
+}
+#[derive(Default)]
+struct ModelState {
+    published_text: String,
+    public_completed: bool,
+    frames: VecDeque<Frame>,
+    next: u64,
+    acknowledged: u64,
+    total: usize,
+    finished: bool,
+    failed: bool,
+    witness: Option<UpstreamObservation>,
+    response_model: ResponseModelObservation,
+}
+#[derive(Default)]
+struct ResponseModelObservation {
+    pending: Vec<u8>,
+    skipping: bool,
+    model: Option<String>,
+    message_id: Option<String>,
+    conflicting: bool,
+    text_blocks: BTreeMap<u64, String>,
+    text_bytes: usize,
+    stop_reason: Option<String>,
+    complete: bool,
+}
+impl ResponseModelObservation {
+    fn value(&mut self, value: &Value) {
+        match value["type"].as_str() {
+            Some("content_block_start") if value["content_block"]["type"] == "text" => {
+                if let Some(index) = value["index"].as_u64().filter(|index| *index < 128) {
+                    if self.text_blocks.contains_key(&index) {
+                        self.conflicting = true;
+                        return;
+                    }
+                    self.text_blocks.insert(index, String::new());
+                    self.append_text(index, value["content_block"]["text"].as_str().unwrap_or(""));
+                } else {
+                    self.conflicting = true;
+                }
+                return;
+            }
+            Some("content_block_delta") if value["delta"]["type"] == "text_delta" => {
+                match (value["index"].as_u64(), value["delta"]["text"].as_str()) {
+                    (Some(index), Some(text)) => self.append_text(index, text),
+                    _ => self.conflicting = true,
+                }
+                return;
+            }
+            Some("message_delta") => {
+                if let Some(reason) = value["delta"]["stop_reason"].as_str() {
+                    if matches!(
+                        reason,
+                        "end_turn"
+                            | "stop_sequence"
+                            | "tool_use"
+                            | "max_tokens"
+                            | "pause_turn"
+                            | "refusal"
+                    ) {
+                        self.stop_reason = Some(reason.to_owned());
+                    } else {
+                        self.conflicting = true;
+                    }
+                }
+                return;
+            }
+            Some("message_stop") => {
+                self.complete = self.message_id.is_some();
+                return;
+            }
+            _ => {}
+        }
+        let message = if value["type"] == "message_start" {
+            &value["message"]
+        } else {
+            value
+        };
+        if message["type"] != "message" {
+            return;
+        }
+        let Some(model) = message["model"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        else {
+            return;
+        };
+        if self.model.as_deref().is_some_and(|old| old != model) {
+            self.conflicting = true;
+        } else {
+            self.model = Some(model.to_owned());
+        }
+        // This is the native upstream response's message identity. The SDK
+        // correlation, outgoing request ID and requested model are not witnesses.
+        if let Some(id) = message["id"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        {
+            if self.message_id.as_deref().is_some_and(|old| old != id) {
+                self.conflicting = true;
+            } else {
+                self.message_id = Some(id.to_owned());
+            }
+        }
+        if value["type"] == "message" {
+            if let Some(content) = value["content"]
+                .as_array()
+                .filter(|content| content.len() <= 128)
+            {
+                for (index, block) in content.iter().enumerate() {
+                    if block["type"] != "text" {
+                        continue;
+                    }
+                    if self.text_blocks.contains_key(&(index as u64)) {
+                        self.conflicting = true;
+                        break;
+                    }
+                    self.text_blocks.insert(index as u64, String::new());
+                    match block["text"].as_str() {
+                        Some(text) => self.append_text(index as u64, text),
+                        None => self.conflicting = true,
+                    }
+                }
+                self.stop_reason = value["stop_reason"].as_str().map(str::to_owned);
+                self.complete = self.message_id.is_some() && self.stop_reason.is_some();
+            }
+        }
+    }
+    fn append_text(&mut self, index: u64, text: &str) {
+        if self.complete
+            || self.message_id.is_none()
+            || self.text_bytes.saturating_add(text.len()) > 64 * 1024
+        {
+            self.conflicting = true;
+            return;
+        }
+        let Some(block) = self.text_blocks.get_mut(&index) else {
+            self.conflicting = true;
+            return;
+        };
+        block.push_str(text);
+        self.text_bytes += text.len();
+    }
+    fn completed_text(&self) -> Option<String> {
+        if !self.complete
+            || self.conflicting
+            || !matches!(
+                self.stop_reason.as_deref(),
+                Some("end_turn" | "stop_sequence")
+            )
+        {
+            return None;
+        }
+        let text = self.text_blocks.values().cloned().collect::<String>();
+        (!text.trim().is_empty()).then_some(text)
+    }
+    fn observe(&mut self, bytes: &[u8], streaming: bool, status: u16) {
+        if !(200..300).contains(&status) {
+            return;
+        }
+        if !streaming {
+            if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+                self.value(&value);
+            }
+            return;
+        }
+        // Bounded incremental SSE decoder. An oversized line makes the complete
+        // text unavailable; dropping a delta must never yield a partial reply.
+        for byte in bytes {
+            if *byte == b'\n' {
+                if !self.skipping {
+                    if let Some(data) = self.pending.strip_prefix(b"data: ") {
+                        if let Ok(value) = serde_json::from_slice::<Value>(data) {
+                            self.value(&value);
+                        } else {
+                            // Never silently discard a native answer delta.
+                            self.conflicting = true;
+                        }
+                    }
+                }
+                self.pending.clear();
+                self.skipping = false;
+            } else if !self.skipping {
+                if self.pending.len() == 64 * 1024 {
+                    self.conflicting = true;
+                    self.pending.clear();
+                    self.skipping = true;
+                } else {
+                    self.pending.push(*byte);
+                }
+            }
+        }
+    }
+    fn finish(&mut self) {
+        if self.skipping || !self.pending.is_empty() {
+            self.conflicting = true;
+        }
+    }
+}
+
+struct Frame {
+    sequence: u64,
+    bytes: Vec<u8>,
+    status: u16,
+    streaming: bool,
+}
+struct UpstreamObservation {
+    // Only constructed from Models' genuine non-deserializable HTTP exchange.
+    model: String,
+    request_id: String,
+    status: u16,
+}
+struct PreparedInvocation {
+    session: Arc<ModelSession>,
+    job: Arc<ModelJob>,
+    id: String,
+    body: Vec<u8>,
+    correlation: String,
+    operation: NativeClaudeOperation,
+    fresh: bool,
+}
+impl ModelRegistry {
+    fn session(
+        &self,
+        controller: Arc<NativeSupervisorHoldingController>,
+    ) -> anyhow::Result<Arc<ModelSession>> {
+        let mut sessions = self
+            .sessions
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("native model registry busy"))?;
+        controller.with_current(|_, core, _| {
+            result::ensure_not_computed(core, controller.controller_id())
+        })?;
+        if let Some(session) = sessions.get(controller.controller_id()) {
+            anyhow::ensure!(
+                Arc::ptr_eq(&session.controller, &controller),
+                "native model controller differs"
+            );
+            return Ok(Arc::clone(session));
+        }
+        anyhow::ensure!(sessions.len() < 32, "native model session capacity reached");
+        // Account/config/secret snapshots are resolved outside responder fences.
+        let proxy = NativeClaudeLeaseModelProxy::reserve_shared(Arc::clone(&controller))?;
+        let session = Arc::new(ModelSession {
+            controller,
+            proxy,
+            jobs: Mutex::new(HashMap::new()),
+        });
+        sessions.insert(
+            session.controller.controller_id().to_owned(),
+            Arc::clone(&session),
+        );
+        Ok(session)
+    }
+    pub(super) fn retire(&self, id: &str) {
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        if let Some(session) = session {
+            let _ = session.proxy.cancel();
+            for job in session
+                .jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .values()
+            {
+                if let Some(task) = job
+                    .task
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    task.abort();
+                }
+            }
+        }
+    }
+}
+impl Drop for ModelRegistry {
+    fn drop(&mut self) {
+        let ids = self
+            .sessions
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.retire(&id);
+        }
+    }
+}
+impl NativeSupervisorSourceHost {
+    pub(super) fn original_controller(
+        &self,
+        authority: &AdmittedConsumerAuthority,
+        operation: &wire::SourceOperation,
+    ) -> anyhow::Result<Arc<NativeSupervisorHoldingController>> {
+        let id = operation
+            .offer_id
+            .as_deref()
+            .context("native offer missing")?;
+        let controller = self
+            .controllers
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("native Source control busy"))?
+            .get(id)
+            .cloned()
+            .context("original native Source controller unavailable")?;
+        anyhow::ensure!(
+            operation.controller_id.as_deref() == Some(controller.controller_id()),
+            "foreign native model controller"
+        );
+        // Factory verifies exact incoming peer/credential/generation identity.
+        controller.publication_for(authority, Arc::new(ControllerOnly))?;
+        controller.with_current(|facts, core, _| {
+            let row = read_offer(core, id, facts)?;
+            anyhow::ensure!(
+                row.state == "claimed"
+                    && row.controller_id.as_deref() == Some(controller.controller_id())
+                    && row.deadline_ms > now_ms(),
+                "native model offer retired"
+            );
+            Ok(())
+        })?;
+        Ok(controller)
+    }
+    pub(super) async fn model_respond(
+        self: &Arc<Self>,
+        authority: AdmittedConsumerAuthority,
+        operation: wire::SourceOperation,
+    ) -> anyhow::Result<GuardedAuxiliaryResponse> {
+        let host = Arc::clone(self);
+        let (session, publication, prepared) =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                host.prune()?;
+                let controller = host.original_controller(&authority, &operation)?;
+                let session = host.models.session(controller)?;
+                let publication = session.proxy.publication_for(&authority)?;
+                let prepared = if operation.action == wire::SourceAction::ModelInvoke {
+                    Some(prepare_invocation(&session, &operation)?)
+                } else {
+                    None
+                };
+                Ok((session, publication, (operation, prepared)))
+            })
+            .await
+            .context("native model admission context unavailable")??;
+        let (operation, prepared) = prepared;
+        let id = operation
+            .operation_id
+            .as_deref()
+            .context("native operation missing")?;
+        if let Some(prepared) = prepared {
+            if prepared.fresh {
+                let job = Arc::clone(&prepared.job);
+                let task = tokio::spawn(async move {
+                    run_invocation(prepared).await;
+                });
+                *job.task
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task.abort_handle());
+            }
+            return Ok(GuardedAuxiliaryResponse {
+                result: json!({"version":1,"state":"model_pending","operation_id":id,"execution_ready":false}),
+                publication,
+            });
+        }
+        let job = session
+            .jobs
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("native model operation busy"))?
+            .get(id)
+            .cloned()
+            .context("original native model operation unavailable")?;
+        let result = job.read(
+            operation
+                .sequence
+                .context("native model sequence missing")?,
+        )?;
+        Ok(GuardedAuxiliaryResponse {
+            result,
+            publication,
+        })
+    }
+}
+fn prepare_invocation(
+    session: &Arc<ModelSession>,
+    operation: &wire::SourceOperation,
+) -> anyhow::Result<PreparedInvocation> {
+    let id = operation
+        .operation_id
+        .as_deref()
+        .context("native operation missing")?;
+    let body = operation
+        .body_json
+        .as_deref()
+        .context("native SDK request missing")?;
+    anyhow::ensure!(
+        !body.is_empty() && body.len() <= MAX_BODY,
+        "native SDK request exceeds budget"
+    );
+    let correlation = operation
+        .sdk_session_id
+        .as_deref()
+        .context("SDK correlation missing")?;
+    anyhow::ensure!(
+        !correlation.is_empty()
+            && correlation.len() <= 256
+            && !correlation.chars().any(char::is_control),
+        "invalid SDK correlation"
+    );
+    let op = operation
+        .model_operation
+        .context("native model operation missing")?;
+    let hash = format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&(body, correlation, op))?)
+    );
+    let mut jobs = session
+        .jobs
+        .try_lock()
+        .map_err(|_| anyhow::anyhow!("native model operation busy"))?;
+    session.controller.with_current(|_, core, _| {
+        result::ensure_not_computed(core, session.controller.controller_id())
+    })?;
+    if let Some(job) = jobs.get(id) {
+        anyhow::ensure!(job.hash == hash, "native model operation replay differs");
+        return Ok(PreparedInvocation {
+            session: Arc::clone(session),
+            job: Arc::clone(job),
+            id: id.to_owned(),
+            body: Vec::new(),
+            correlation: correlation.to_owned(),
+            operation: NativeClaudeOperation::Messages,
+            fresh: false,
+        });
+    }
+    anyhow::ensure!(
+        jobs.len() < MAX_OPERATIONS,
+        "native model operation capacity reached"
+    );
+    session.controller.with_current(|_,core,_| {
+        result::ensure_not_computed(core, session.controller.controller_id())?;
+        ensure_model_schema(core)?;
+        core.execute("INSERT INTO workjet_supervisor_native_model_requests
+            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms,operation_kind)
+            VALUES (?1,?2,?3,?4,?5,?6,'accepted',?7,?8)",
+            params![id,session.controller.execution_key(),session.controller.lease.lease_hash,
+                session.controller.controller_id(),correlation,hash,now_ms(),
+                match op {
+                    wire::SourceModelOperation::Messages => "messages",
+                    wire::SourceModelOperation::CountTokens => "count_tokens",
+                }])?;
+        Ok(())
+    })?;
+    let job = Arc::new(ModelJob {
+        hash,
+        state: Mutex::new(ModelState::default()),
+        task: Mutex::new(None),
+    });
+    jobs.insert(id.to_owned(), Arc::clone(&job));
+    Ok(PreparedInvocation {
+        session: Arc::clone(session),
+        job,
+        id: id.to_owned(),
+        body: body.as_bytes().to_vec(),
+        correlation: correlation.to_owned(),
+        operation: match op {
+            wire::SourceModelOperation::Messages => NativeClaudeOperation::Messages,
+            wire::SourceModelOperation::CountTokens => NativeClaudeOperation::CountTokens,
+        },
+        fresh: true,
+    })
+}
+#[cfg(unix)]
+#[path = "mcp_supervisor_source_progress.rs"]
+mod progress;
+
+#[cfg(unix)]
+fn drain_progress(prepared: &PreparedInvocation) -> anyhow::Result<()> {
+    let draft = {
+        let mut state = prepared
+            .job
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native progress receiver poisoned"))?;
+        if state.failed || state.response_model.conflicting {
+            return Ok(());
+        }
+        let response = &state.response_model;
+        let (Some(model), Some(message), Some(witness)) =
+            (&response.model, &response.message_id, &state.witness)
+        else {
+            return Ok(());
+        };
+        if !(200..300).contains(&witness.status) {
+            return Ok(());
+        }
+        let raw = response.text_blocks.values().cloned().collect::<String>();
+        let text = crate::execution::agent::direct_session::filter_native_message_text(
+            &raw,
+            response.complete,
+        );
+        anyhow::ensure!(
+            text.starts_with(&state.published_text),
+            "native public prefix changed"
+        );
+        let offset = state.published_text.chars().count();
+        if text == state.published_text && (!response.complete || state.public_completed) {
+            return Ok(());
+        }
+        let draft = progress::Draft {
+            model: model.clone(),
+            message: message.clone(),
+            request: witness.request_id.clone(),
+            text: text[state.published_text.len()..].to_owned(),
+            offset,
+            completed: response.complete,
+        };
+        state.published_text = text;
+        state.public_completed = draft.completed;
+        draft
+    };
+    prepared.session.controller.with_current(|_, core, _| {
+        progress::publish_in_current(core, &prepared.session.controller, &prepared.id, &draft)
+    })
+}
+async fn run_invocation(mut prepared: PreparedInvocation) {
+    let result = async {
+        // Scoped model credential never becomes a Source DTO, env or Core row.
+        let capability = prepared.session.proxy.with_scoped_capability(|_, token| {
+            Ok(Zeroizing::new(token.expose_secret().to_owned()))
+        })?;
+        let mut reply = prepared
+            .session
+            .proxy
+            .invoke(
+                &capability,
+                prepared.operation,
+                std::mem::take(&mut prepared.body),
+                &prepared.correlation,
+            )
+            .await?;
+        if reply.is_streaming() {
+            while reply
+                .publish_next(|bytes, witness| prepared.job.push(bytes, witness, true))
+                .await?
+                .is_some()
+            {
+                #[cfg(unix)]
+                drain_progress(&prepared)?;
+            }
+        } else {
+            reply.publish_buffered(|bytes, witness| prepared.job.push(bytes, witness, false))?;
+            #[cfg(unix)]
+            drain_progress(&prepared)?;
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let (
+        observation,
+        response_model,
+        response_message_id,
+        conflicting,
+        response_text,
+        response_stop_reason,
+        response_complete,
+    ) = {
+        let mut state = prepared
+            .job
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.response_model.finish();
+        (
+            state.witness.take(),
+            state.response_model.model.clone(),
+            state.response_model.message_id.clone(),
+            state.response_model.conflicting,
+            state.response_model.completed_text(),
+            state.response_model.stop_reason.clone(),
+            state.response_model.complete,
+        )
+    };
+    let upstream_ok = observation
+        .as_ref()
+        .is_some_and(|w| (200..300).contains(&w.status));
+    // No nested store access inside Models' bounded extraction callback.
+    let recorded = prepared.session.controller.with_current(|_, core, _| {
+        let (model, request, status) = match observation {
+            Some(w) => (Some(w.model), Some(w.request_id), Some(w.status)),
+            None => (None, None, None),
+        };
+        let changed = core.execute(
+            "UPDATE workjet_supervisor_native_model_requests SET
+            state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,
+            response_model=?8,response_message_id=?9,response_text=?10,response_stop_reason=?11,response_complete=?12
+            WHERE operation_id=?6 AND controller_id=?7",
+            params![
+                if result.is_ok() && !conflicting && upstream_ok {
+                    "observed"
+                } else {
+                    "failed"
+                },
+                model,
+                request,
+                status,
+                now_ms(),
+                prepared.id,
+                prepared.session.controller.controller_id(),
+                response_model,
+                response_message_id,
+                response_text,
+                response_stop_reason,
+                response_complete
+            ],
+        )?;
+        anyhow::ensure!(changed == 1, "native model observation row changed");
+        Ok(())
+    });
+    let mut state = prepared
+        .job
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.finished = true;
+    state.failed =
+        result.is_err() || recorded.is_err() || state.response_model.conflicting || !upstream_ok;
+}
+impl ModelJob {
+    fn push(
+        &self,
+        bytes: &[u8],
+        witness: &NativeClaudeModelExchange,
+        streaming: bool,
+    ) -> anyhow::Result<()> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native model receiver poisoned"))?;
+        anyhow::ensure!(
+            !state.finished && state.total.saturating_add(bytes.len()) <= MAX_REPLY,
+            "native model receiver budget reached"
+        );
+        state.total += bytes.len();
+        state
+            .response_model
+            .observe(bytes, streaming, witness.http_status);
+        state.witness = Some(UpstreamObservation {
+            model: witness.model.clone(),
+            request_id: witness.client_request_id.clone(),
+            status: witness.http_status,
+        });
+        for bytes in bytes.chunks(CHUNK) {
+            let sequence = state.next;
+            state.next += 1;
+            state.frames.push_back(Frame {
+                sequence,
+                bytes: bytes.to_vec(),
+                status: witness.http_status,
+                streaming,
+            });
+        }
+        Ok(())
+    }
+    fn read(&self, sequence: u64) -> anyhow::Result<Value> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native model receiver poisoned"))?;
+        if sequence > state.acknowledged {
+            anyhow::ensure!(
+                sequence == state.acknowledged + 1
+                    && state
+                        .frames
+                        .front()
+                        .is_some_and(|f| f.sequence == state.acknowledged),
+                "native model acknowledgement is not sequential"
+            );
+            state.frames.pop_front();
+            state.acknowledged = sequence;
+        }
+        anyhow::ensure!(
+            sequence == state.acknowledged,
+            "native model replay precedes its retained acknowledgement"
+        );
+        if let Some(frame) = state.frames.front() {
+            anyhow::ensure!(
+                frame.sequence == sequence,
+                "native model frame sequence differs"
+            );
+            return Ok(
+                json!({"version":1,"state":"model_chunk","sequence":sequence,
+                "http_status":frame.status,"streaming":frame.streaming,
+                "body_base64":STANDARD.encode(&frame.bytes),"done":false,"execution_ready":false}),
+            );
+        }
+        Ok(
+            json!({"version":1,"state":if state.failed {"model_failed"} else if state.finished {"model_done"} else {"model_pending"},
+            "sequence":sequence,"done":state.finished,"execution_ready":false}),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn job() -> ModelJob {
+        ModelJob {
+            hash: "request".into(),
+            state: Mutex::new(ModelState::default()),
+            task: Mutex::new(None),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_public_message_prefix_filters_fragmented_private_metadata_and_thinking() {
+        let mut seen = ResponseModelObservation::default();
+        seen.value(&json!({"type":"message_start","message":{"type":"message",
+            "id":"msg_native","model":"claude-opus-5-5"}}));
+        seen.value(&json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"thinking","thinking":"PRIVATE REASONING"}}));
+        seen.value(&json!({"type":"content_block_start","index":1,
+            "content_block":{"type":"text","text":""}}));
+        let mut published = String::new();
+        for text in [
+            "Answer 🦊\n",
+            "```cto",
+            "x-crew\n",
+            "{private: hidden}",
+            "\n```",
+            "\nDone",
+        ] {
+            let frame = format!(
+                "data: {}\n",
+                json!({"type":"content_block_delta","index":1,
+                "delta":{"type":"text_delta","text":text}})
+            );
+            for bytes in frame.as_bytes().chunks(2) {
+                seen.observe(bytes, true, 200);
+                let raw = seen.text_blocks.values().cloned().collect::<String>();
+                let filtered = crate::execution::agent::direct_session::filter_native_message_text(
+                    &raw, false,
+                );
+                assert!(filtered.starts_with(&published));
+                assert!(!filtered.contains("private") && !filtered.contains("PRIVATE"));
+                published = filtered;
+            }
+        }
+        assert_eq!(published, "Answer 🦊\n\nDone");
+        seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+        seen.value(&json!({"type":"message_stop"}));
+        let raw = seen.text_blocks.values().cloned().collect::<String>();
+        assert_eq!(
+            crate::execution::agent::direct_session::filter_native_message_text(&raw, true),
+            published
+        );
+        assert_eq!(seen.message_id.as_deref(), Some("msg_native"));
+        assert!(!seen.conflicting);
+    }
+
+    #[test]
+    fn native_reply_text_requires_a_complete_message_not_a_tool_or_truncated_turn() {
+        let header = json!({"type":"message","id":"msg_observed","model":"claude-opus-5-5",
+            "content":[{"type":"text","text":"Native answer"}],"stop_reason":"end_turn"});
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(&serde_json::to_vec(&header).unwrap(), false, 200);
+        assert_eq!(seen.completed_text().as_deref(), Some("Native answer"));
+        for reason in ["tool_use", "max_tokens", "pause_turn"] {
+            let mut message = header.clone();
+            message["stop_reason"] = json!(reason);
+            let mut partial = ResponseModelObservation::default();
+            partial.observe(&serde_json::to_vec(&message).unwrap(), false, 200);
+            assert!(partial.completed_text().is_none());
+        }
+        let mut denied = ResponseModelObservation::default();
+        denied.observe(&serde_json::to_vec(&header).unwrap(), false, 401);
+        assert!(denied.completed_text().is_none());
+    }
+    #[test]
+    fn fragmented_sse_text_is_bound_to_its_native_message_and_terminal_reason() {
+        let mut seen = ResponseModelObservation::default();
+        for value in [
+            json!({"type":"message_start","message":{"type":"message","id":"msg_observed","model":"claude-opus-5-5"}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Native "}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"answer"}}),
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+        ] {
+            let line = format!("data: {}\n", value);
+            for bytes in line.as_bytes().chunks(7) {
+                seen.observe(bytes, true, 200);
+            }
+        }
+        assert!(seen.completed_text().is_none());
+        seen.observe(b"data: {\"type\":\"message_stop\"}\n", true, 200);
+        assert_eq!(seen.completed_text().as_deref(), Some("Native answer"));
+        seen.observe(b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"late\"}}\n",true,200);
+        assert!(seen.completed_text().is_none());
+    }
+    #[test]
+    fn unanchored_or_oversized_native_text_cannot_become_a_reply() {
+        let mut missing = ResponseModelObservation::default();
+        missing.value(&json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"caller"}}));
+        assert!(missing.conflicting);
+        assert!(missing.completed_text().is_none());
+        let mut seen = ResponseModelObservation::default();
+        seen.value(
+            &json!({"type":"message","id":"msg_observed","model":"claude-opus-5-5",
+            "content":[{"type":"text","text":"x".repeat(65537)}],"stop_reason":"end_turn"}),
+        );
+        assert!(seen.conflicting);
+        assert!(seen.completed_text().is_none());
+        assert_eq!(seen.text_bytes, 0);
+    }
+
+    #[test]
+    fn skipped_or_unterminated_sse_delta_never_publishes_a_partial_reply() {
+        let mut seen = ResponseModelObservation::default();
+        seen.value(&json!({"type":"message_start","message":{"type":"message",
+            "id":"msg_observed","model":"claude-opus-5-5"}}));
+        seen.value(&json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"text","text":"Only a prefix"}}));
+        let oversized = format!(
+            "data: {}\n",
+            json!({"type":"content_block_delta","index":0,
+            "delta":{"type":"text_delta","text":"x".repeat(65537)}})
+        );
+        seen.observe(oversized.as_bytes(), true, 200);
+        seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+        seen.value(&json!({"type":"message_stop"}));
+        assert!(seen.conflicting);
+        assert!(seen.completed_text().is_none());
+    }
+
+    #[test]
+    fn malformed_or_unfinished_sse_line_cannot_hide_a_native_delta() {
+        for tail in [
+            "data: {not-json}\n",
+            "data: {\"type\":\"content_block_delta\"",
+        ] {
+            let mut seen = ResponseModelObservation::default();
+            seen.value(&json!({"type":"message_start","message":{"type":"message",
+                "id":"msg_observed","model":"claude-opus-5-5"}}));
+            seen.value(&json!({"type":"content_block_start","index":0,
+                "content_block":{"type":"text","text":"Only a prefix"}}));
+            seen.observe(tail.as_bytes(), true, 200);
+            seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+            seen.value(&json!({"type":"message_stop"}));
+            seen.finish();
+            assert!(seen.conflicting);
+            assert!(seen.completed_text().is_none());
+        }
+    }
+
+    #[test]
+    fn native_response_message_id_is_not_request_or_content_correlation() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_ob", true, 200);
+        assert!(seen.message_id.is_none());
+        seen.observe(b"served\"}}\n", true, 200);
+        assert_eq!(seen.message_id.as_deref(), Some("msg_observed"));
+        let mut missing = ResponseModelObservation::default();
+        missing.observe(
+            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"id\":\"msg_content\"}}\n",
+            true,
+            200,
+        );
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_denied\"}",
+            false,
+            401,
+        );
+        assert!(missing.message_id.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_buffered\"}",
+            false,
+            200,
+        );
+        assert_eq!(missing.message_id.as_deref(), Some("msg_buffered"));
+        assert!(!missing.conflicting);
+    }
+
+    #[test]
+    fn conflicting_native_response_message_ids_cannot_form_one_witness() {
+        let mut seen = ResponseModelObservation::default();
+        for id in ["msg_first", "msg_first", "msg_other"] {
+            let value = json!({"type":"message","model":"claude-opus-5-5","id":id});
+            seen.observe(&serde_json::to_vec(&value).unwrap(), false, 200);
+        }
+        assert!(seen.conflicting);
+        assert_eq!(seen.message_id.as_deref(), Some("msg_first"));
+    }
+
+    #[test]
+    fn model_message_id_migration_preserves_existing_requested_only_rows() -> anyhow::Result<()> {
+        let core = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE workjet_supervisor_native_model_requests (
+                operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
+                controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
+                state TEXT NOT NULL, requested_model TEXT, response_model TEXT,
+                upstream_request_id TEXT, http_status INTEGER, created_at_ms INTEGER NOT NULL,
+                finished_at_ms INTEGER);
+             INSERT INTO workjet_supervisor_native_model_requests
+                (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms)
+                VALUES ('existing','execution','lease','controller','requested-only','body','accepted',1);",
+        )?;
+        ensure_model_schema(&core)?;
+        ensure_model_schema(&core)?;
+        let row = core.query_row(
+            "SELECT sdk_correlation,response_message_id,operation_kind FROM workjet_supervisor_native_model_requests
+             WHERE operation_id='existing'",
+            [],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?
+            )),
+        )?;
+        assert_eq!(row, ("requested-only".into(), None, None));
+        Ok(())
+    }
+
+    #[test]
+    fn native_response_model_is_observed_from_header_not_requested_or_delta_text() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-", true, 200);
+        assert!(seen.model.is_none());
+        seen.observe(b"5-5\"}}\n", true, 200);
+        assert_eq!(seen.model.as_deref(), Some("claude-opus-5-5"));
+        let mut missing = ResponseModelObservation::default();
+        missing.observe(
+            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"model\"}}\n",
+            true,
+            200,
+        );
+        assert!(missing.model.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}",
+            false,
+            401,
+        );
+        assert!(missing.model.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}",
+            false,
+            200,
+        );
+        assert_eq!(missing.model.as_deref(), Some("claude-opus-5-5"));
+    }
+    #[test]
+    fn oversized_sse_line_does_not_reinterpret_its_tail_as_a_message_header() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(&vec![b'x'; 65537], true, 200);
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}}\n", true, 200);
+        assert!(seen.model.is_none());
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}}\n", true, 200);
+        assert_eq!(seen.model.as_deref(), Some("claude-opus-5-5"));
+    }
+
+    // Buffered queue fixtures only; genuine HTTP witnesses are not fabricated.
+    fn frame(job: &ModelJob, bytes: &[u8], status: u16) {
+        let mut state = job.state.lock().unwrap();
+        let sequence = state.next;
+        state.next += 1;
+        state.frames.push_back(Frame {
+            sequence,
+            bytes: bytes.to_vec(),
+            status,
+            streaming: true,
+        });
+    }
+    #[test]
+    fn model_frames_replay_exactly_once_until_sequential_acknowledgement() -> anyhow::Result<()> {
+        let job = job();
+        frame(&job, b"first", 200);
+        frame(&job, b"second", 200);
+        assert_eq!(job.read(0)?, job.read(0)?);
+        assert_eq!(job.read(0)?["body_base64"], STANDARD.encode(b"first"));
+        assert!(job.read(2).is_err());
+        assert_eq!(job.read(1)?["body_base64"], STANDARD.encode(b"second"));
+        assert!(job.read(0).is_err());
+        job.state.lock().unwrap().finished = true;
+        let terminal = job.read(2)?;
+        assert_eq!(terminal["state"], "model_done");
+        assert_eq!(terminal["execution_ready"], false);
+        assert_eq!(terminal, job.read(2)?);
+        Ok(())
+    }
+    #[test]
+    fn real_upstream_status_is_preserved_and_pending_is_not_execution() -> anyhow::Result<()> {
+        let job = job();
+        let pending = job.read(0)?;
+        assert_eq!(pending["state"], "model_pending");
+        assert_eq!(pending["done"], false);
+        frame(&job, b"account rejected", 401);
+        assert_eq!(job.read(0)?["http_status"], 401);
+        job.state.lock().unwrap().failed = true;
+        job.state.lock().unwrap().finished = true;
+        assert_eq!(job.read(1)?["state"], "model_failed");
+        Ok(())
+    }
+    #[test]
+    fn model_operations_cannot_claim_execution_or_modify_control_authority() -> anyhow::Result<()> {
+        let offer = uuid::Uuid::new_v4().to_string();
+        let controller = uuid::Uuid::new_v4().to_string();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let read = json!({"version":1,"action":"model_read","offer_id":offer,"controller_id":controller,
+            "operation_id":operation,"sequence":0});
+        parse_operation(vec![read.clone()])?;
+        for field in ["actual", "account", "credential", "owner", "url"] {
+            let mut bad = read.clone();
+            bad[field] = json!("caller");
+            assert!(parse_operation(vec![bad]).is_err());
+        }
+        assert!(parse_operation(vec![
+            json!({"version":1,"action":"poll","operation_id":operation})
+        ])
+        .is_err());
+        assert!(parse_operation(vec![
+            json!({"version":1,"action":"model_read","offer_id":offer,
+            "controller_id":controller,"operation_id":operation})
+        ])
+        .is_err());
+        Ok(())
+    }
+}

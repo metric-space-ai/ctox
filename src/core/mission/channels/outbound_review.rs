@@ -3904,6 +3904,29 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS supervisor_owner_inputs (
+            input_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            body_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(task_id, sequence)
+        );
+        CREATE TABLE IF NOT EXISTS supervisor_owner_input_snapshots (
+            task_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            command_attempt INTEGER NOT NULL,
+            lease_worker_id TEXT NOT NULL,
+            through_sequence INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            continued_at TEXT,
+            PRIMARY KEY(task_id, attempt_id),
+            UNIQUE(task_id, command_id, command_attempt)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_communication_routing_status_owner
             ON communication_routing_state(route_status, lease_owner, leased_at, updated_at);
 
@@ -4080,6 +4103,12 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_workjet_supervisor_turn_history
+            ON business_command_aggregates(record_id,
+                json_extract(intent_json,'$.payload.thread_id'),
+                json_extract(intent_json,'$.payload.thread_key'),
+                created_at_ms DESC, command_id DESC)
+            WHERE module='ctox' AND command_type='business_os.chat.task';
         CREATE INDEX IF NOT EXISTS idx_business_command_aggregates_state
             ON business_command_aggregates(execution_phase, updated_at_ms);
         CREATE INDEX IF NOT EXISTS idx_business_command_open_type_id

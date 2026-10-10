@@ -28,6 +28,7 @@ on:
       - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-search.yml'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
     paths:
       - 'src/tools/web-stack/src/web_search.rs'
@@ -65,6 +66,7 @@ concurrency:
 
 jobs:
   search-e2e:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-22.04
     name: ctox web search E2E (${{ github.event.inputs.mode || 'quick' }})
 

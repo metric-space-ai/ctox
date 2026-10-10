@@ -3861,10 +3861,11 @@ impl LcmEngine {
                 )
             })
             .collect::<Vec<_>>();
+        let document_view = continuity_document_prompt_view(&document.content);
         let prompt = build_continuity_prompt_text(
             conversation_id,
             kind,
-            &document.content,
+            &document_view,
             &recent_messages,
             &recent_summaries,
             &forgotten,
@@ -5481,6 +5482,36 @@ fn removed_lines_from_diff(diff_text: &str) -> Vec<String> {
         .map(collapse_whitespace)
         .filter(|line| !line.is_empty())
         .collect()
+}
+
+/// A continuity document grows with every entry. A Crew member's narrative
+/// reached 610 KB on thesen (08.10.2026), and each refresh sent it whole: about
+/// 150k tokens per call, several calls per research turn. The prompt shows the
+/// head and the newest part, and asks for a consolidated rewrite.
+const CONTINUITY_PROMPT_DOCUMENT_BUDGET_CHARS: usize = 16_000;
+const CONTINUITY_PROMPT_DOCUMENT_HEAD_CHARS: usize = 2_000;
+const CONTINUITY_CONSOLIDATED_TARGET_CHARS: usize = 12_000;
+
+fn continuity_document_prompt_view(document: &str) -> String {
+    let total = document.chars().count();
+    if total <= CONTINUITY_PROMPT_DOCUMENT_BUDGET_CHARS {
+        return document.to_string();
+    }
+    let tail_chars =
+        CONTINUITY_PROMPT_DOCUMENT_BUDGET_CHARS - CONTINUITY_PROMPT_DOCUMENT_HEAD_CHARS;
+    let head: String = document
+        .chars()
+        .take(CONTINUITY_PROMPT_DOCUMENT_HEAD_CHARS)
+        .collect();
+    let tail: String = document.chars().skip(total - tail_chars).collect();
+    let omitted = total - CONTINUITY_PROMPT_DOCUMENT_HEAD_CHARS - tail_chars;
+    format!(
+        "{head}\n[... {omitted} older characters not shown ...]\n{tail}\n\n\
+         SIZE RULE: this document has {total} characters, above the budget. Use MODE A and \
+         write one consolidated document of at most {CONTINUITY_CONSOLIDATED_TARGET_CHARS} \
+         characters: keep the section headers, keep durable facts and open retry conditions, \
+         and merge repeated per-task entries into short patterns."
+    )
 }
 
 fn build_continuity_prompt_text(

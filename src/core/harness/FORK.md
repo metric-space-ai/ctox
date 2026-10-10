@@ -14,6 +14,17 @@ Fork policy:
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
+## 2026-10 Protected previous-session effect receipt
+
+A one-use native restore manager binds the actual loaded original-session
+input digest to an opaque runtime snapshot. Only the protected receiver,
+under current account/quorum/native-owner and immutable input checks, may
+reconcile its previous-history marker before any submission. Source effect
+metadata remains descriptive and the protected manifest must be free of
+pending effects. Normal resume, unknown sources, foreign/late/repeated receipts
+stay unresolved; MCP and new effects are not cleared. Real Core restore and
+re-capture regressions remain source checks, not installed failover proof.
+
 ## 2026-10 Original-session checkpoint import
 
 `ThreadManager::resume_thread_from_native_checkpoint` restores the captured
@@ -194,6 +205,20 @@ effects, independently enrolled capture authority or a transferable provider
 checkpoint. Production capture/transfer and cross-host continuation remain
 unfinished work.
 
+## 2026-10 Public assistant streaming under event pressure
+
+Both in-process runtime and facade use the same required-delivery classifier
+for AgentMessage deltas, their AgentMessage item start/completion, and turn start.
+The shared legacy classifier also preserves the actual task/turn-start witness
+and AgentMessage final used by native reply selection. Previously
+these notifications were droppable under bounded backpressure, producing
+contiguous but incomplete public text. The existing nonblocking required-event
+buffer retains order and its runaway/session-failure bound; interrupt/control
+requests keep their independent processing path. Reasoning and tool progress
+remain droppable. Saturated runtime and facade regressions exercise exact
+Markdown/Unicode text and lifecycle order; existing event-pressure/interrupt
+tests remain required.
+
 ## 2026-10 Rollout writer acknowledgement and publication
 
 Recorder `persist` and `flush` replies carry the writer's actual I/O result.
@@ -212,6 +237,23 @@ concurrent readers, state visibility and file ownership. The actual in-process
 persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
 does not execute that nested package. Failure-only diagnostics use read-only
 SQLite handles with bounded lock waits and omit raw message contents.
+
+## 2026-10 Original MCP startup evidence
+
+The loaded Core Session exposes a non-deserializable snapshot of the original
+initialize results retained by its actual managed MCP connections, including the
+configured HTTP endpoint. The reader does not start pending connections, and
+limits retained metadata to 16 KiB per server and 32 servers per snapshot.
+The snapshot itself changes no effect ledger. The native factory separately
+waits for the actual bounded connection, verifies the native listener's signed
+original initialize result, fresh per-Core nonce, command-session hash, actual
+listener address and port, and short expiry under current command/account/execution guards.
+Only before the first submission may it retire that generation's mcp-startup
+uncertainty. Refresh fences the previous generation before its first await;
+failed/repeated/stale receipts and every other uncertainty remain unresolved.
+The protected original-session loader uses the same canonical MCP override as
+the fresh factory. This receipts readonly initialize/tools-list startup only;
+owned guest-effect receipts and installed acceptance still remain required.
 
 ## 2026-10 Native Core plan-effect ownership
 
@@ -383,6 +425,16 @@ without changing existing error Display strings or unrelated retry behavior:
   Display text while using the typed protocol projection.
 
 Ticket: I-074.
+
+## 2026-10 Bound In-process Configuration Home
+
+The in-process thread/start config reload uses the already bound codex_home.
+It previously rediscovered the ambient home and could send an isolated mock
+turn to the default provider instead. The standard process home is unchanged.
+The exact-turn interrupt regression asserts the mock provider and isolated cwd,
+then exercises real completed and interrupted turns with the original timeouts.
+No ambient environment override or credentials are required by the fixture.
+
 
 ## 2026-09 Named Persistent Thread Resume Test
 

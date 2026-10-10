@@ -7,6 +7,9 @@ mod auth_assist_recovery_tests;
 mod cv_print_recovery;
 #[path = "service_runtime_support.rs"]
 mod runtime_support;
+#[cfg(test)]
+#[path = "service_supervisor_reply_tests.rs"]
+mod supervisor_reply_tests;
 use chrono::DateTime;
 use chrono::Utc;
 use cv_print_recovery::*;
@@ -166,6 +169,10 @@ pub(crate) fn queue_pressure_threshold() -> usize {
     QUEUE_PRESSURE_GUARD_THRESHOLD
 }
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
+// During a research campaign 20+ queue tasks wait almost all the time. Every
+// finished guard turn (~10 min) was immediately followed by the next one, at
+// the front of the queue (10.10.2026: an owner mail waited behind it).
+const QUEUE_GUARD_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
@@ -966,6 +973,9 @@ impl Default for WorkerSessionSlot {
 
 #[derive(Debug)]
 struct SharedState {
+    /// When the queue pressure guard was last put into the queue; see
+    /// QUEUE_GUARD_MIN_INTERVAL.
+    queue_guard_last_inserted_at: Option<Instant>,
     busy: bool,
     worker_active_count: usize,
     serial_prompt_starting: bool,
@@ -996,6 +1006,7 @@ struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
+            queue_guard_last_inserted_at: None,
             busy: false,
             worker_active_count: 0,
             serial_prompt_starting: false,
@@ -1151,7 +1162,9 @@ fn accepted_queue_plan_failure(
 ) -> Result<Option<lcm::IncompleteTaskExecutionPlan>> {
     if !matches!(
         disposition,
-        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::None
+        CompletionReviewDisposition::Approved { .. }
+            | CompletionReviewDisposition::ReplyValidated
+            | CompletionReviewDisposition::None
     ) || !queue_supports_plan_failure(root, job)?
     {
         return Ok(None);
@@ -1307,6 +1320,9 @@ const PLATFORM_EXPERTISE_PASSES: [ExpertisePassSpec; 3] = [
 #[derive(Debug, Clone)]
 enum CompletionReviewDisposition {
     None,
+    /// A native, owner-bound Supervisor reply; this completes the dialogue
+    /// turn only, never a worker, coding task, or artifact deliverable.
+    ReplyValidated,
     Approved {
         review_audit_key: String,
     },
@@ -1439,6 +1455,12 @@ const CHANNEL_ROUTER_SERIAL_LEASE_LIMIT: usize = 1;
 // founder-priority fix never starves the durable queue with ordinary email/ticket
 // work. ROUTER_INBOUND_RANK_PROBE_LIMIT bounds the read-only rank probe per tick.
 const FOUNDER_INBOUND_DISPATCH_RANK: u8 = 4;
+// People before background work (owner 09.10.2026: communication is high
+// priority by itself). Every communication channel (email, jami, teams,
+// meeting = rank 3) takes the serial slot before durable queue work; tickets
+// (rank 2) do not. The queue cannot starve: each such message is routed and
+// handled when it takes the slot.
+const COMMUNICATION_INBOUND_DISPATCH_RANK: u8 = 3;
 const ROUTER_INBOUND_RANK_PROBE_LIMIT: usize = 32;
 const REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS: usize = 6_000;
 const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
@@ -1447,6 +1469,7 @@ const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
         CompletionReviewDisposition::None => "none",
+        CompletionReviewDisposition::ReplyValidated => "reply_validated",
         CompletionReviewDisposition::Approved { .. } => "approved",
         CompletionReviewDisposition::Hold { .. } => "hold",
         CompletionReviewDisposition::NoSend { .. } => "no-send",
@@ -6919,6 +6942,11 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
+                    let selected_supervisor_lease =
+                        crate::business_os::mcp_channel::capture_project_supervisor_lease(
+                            &root,
+                            session_options.business_os_mcp_command_session.as_deref(),
+                        )?;
                     // This branch executes admitted work. Finalization recovery above
                     // never allocates a replacement run or invokes the model again.
                     lcm::run_register_worker_run(
@@ -6931,6 +6959,23 @@ fn start_prompt_worker(
                             task_ids: &job.leased_message_keys,
                         },
                     )?;
+                    let execution_prompt = append_supervisor_owner_inputs(
+                        &root,
+                        &job,
+                        &attempt_id,
+                        worker_activity.lease_worker_id.as_deref(),
+                        execution_prompt,
+                    )?;
+                    if let Some(lease) = selected_supervisor_lease {
+                        // Keep this admitted worker, heartbeat, review and capacity.
+                        // The selected Source is never an instance-default fallback.
+                        let offer =
+                            crate::business_os::mcp_channel::NativeSupervisorSourceOffer::open(
+                                lease,
+                                &execution_prompt,
+                            )?;
+                        return offer.wait_for_native_result();
+                    }
                     if let Some(command_id) =
                         metadata_string(&job.queue_task_metadata, "business_os_command_id")
                     {
@@ -7581,6 +7626,7 @@ fn start_prompt_worker(
                             matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::Approved { .. }
+                                    | CompletionReviewDisposition::ReplyValidated
                             ) || (matches!(&review_disposition, CompletionReviewDisposition::None)
                                 && is_business_os_chat_queue_job(&root, &job));
                         let terminal_no_send = matches!(
@@ -7894,6 +7940,7 @@ fn start_prompt_worker(
                         let review_can_complete = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::Approved { .. }
+                                | CompletionReviewDisposition::ReplyValidated
                         );
                         if !expected_artifact_refs.is_empty() && outcome_witness_error.is_none() {
                             if let Some(proof_id) = reviewed_terminal_proof_ids.first() {
@@ -8039,6 +8086,7 @@ fn start_prompt_worker(
                         let completion_review_accepted = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::Approved { .. }
+                                | CompletionReviewDisposition::ReplyValidated
                                 | CompletionReviewDisposition::None
                                 | CompletionReviewDisposition::NoSend { .. }
                         );
@@ -8260,6 +8308,7 @@ fn start_prompt_worker(
                             let approved_completion_hold = matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::Approved { .. }
+                                    | CompletionReviewDisposition::ReplyValidated
                             )
                             .then(|| {
                                 let reason = if outcome_witness_error.is_some() {
@@ -8497,7 +8546,8 @@ fn start_prompt_worker(
                                         );
                                     }
                                 }
-                                CompletionReviewDisposition::None => {
+                                CompletionReviewDisposition::None
+                                | CompletionReviewDisposition::ReplyValidated => {
                                     push_event_locked(
                                         &mut shared,
                                         format!(
@@ -9651,6 +9701,27 @@ fn run_completion_review(
         }
         None => {}
     }
+    // A Supervisor dialogue is not a claim that its project's work is done.
+    // Its restricted native tools persist worker tasks and approvals separately;
+    // those tasks retain their own completion review and artifact guards.
+    match supervisor_conversation_reply_ready(root, job) {
+        Ok(true) => {
+            push_event(state, format!(
+                "Native Supervisor reply validated for {} under workjet.supervisor.conversation-reply.v1; no external work-completion review",
+                job.source_label
+            ));
+            return CompletionReviewDisposition::ReplyValidated;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "workjet.supervisor.conversation-reply.v1".to_string(),
+                },
+                summary: format!("Native Supervisor reply could not be validated: {error}"),
+            };
+        }
+    }
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = crate::paths::core_db(&root);
     let review_skill_path = root
@@ -10540,6 +10611,30 @@ fn completion_review_is_reviewer_limited_internal_work(
     )
 }
 
+fn supervisor_conversation_reply_ready(root: &Path, job: &QueuedPrompt) -> Result<bool> {
+    if job.source_label != "queue"
+        || job.leased_message_keys.len() != 1
+        || !job.leased_ticket_event_keys.is_empty()
+        || job.ticket_self_work_id.is_some()
+        || job.outbound_email.is_some()
+        || job.outbound_anchor.is_some()
+        || job.suggested_skill.is_some()
+        || is_systematic_research_job(job)
+        || !expected_outcome_artifacts_for_job(job).is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(context) =
+        channels::inspect_business_command_for_task(root, &job.leased_message_keys[0])?
+    else {
+        return Ok(false);
+    };
+    crate::business_os::mcp_channel::workjet_supervisor_reply_completion_allowed(
+        root,
+        &context["command"],
+    )
+}
+
 fn completion_review_should_skip_feedback_turn(root: &Path, job: &QueuedPrompt) -> bool {
     let _ = root;
     job.source_label == QUEUE_GUARD_SOURCE_LABEL
@@ -10730,6 +10825,33 @@ fn persist_typed_business_command_result(
     Ok(None)
 }
 
+/// Fresh context is captured only for an actual registered, leased worker run.
+fn append_supervisor_owner_inputs(
+    root: &Path,
+    job: &QueuedPrompt,
+    attempt_id: &str,
+    worker_id: Option<&str>,
+    mut prompt: String,
+) -> Result<String> {
+    for task_id in &job.leased_message_keys {
+        let inputs = channels::supervisor_owner_input::capture(
+            root,
+            task_id,
+            attempt_id,
+            worker_id.unwrap_or_default(),
+        )?;
+        if !inputs.is_empty() {
+            prompt.push_str(
+                "\n\nADDITIONAL OWNER INPUT FOR THIS SAME TASK\n\
+                 These are authenticated Owner follow-ups in admission order. Preserve the original \
+                 task, context, approvals and completion checks; incorporate the new facts.\n",
+            );
+            prompt.push_str(&serde_json::to_string(&inputs)?);
+        }
+    }
+    Ok(prompt)
+}
+
 fn terminalize_reviewed_queue_messages(
     root: &Path,
     attempt_id: &str,
@@ -10738,8 +10860,14 @@ fn terminalize_reviewed_queue_messages(
 ) -> Result<usize> {
     let mut updated = 0usize;
     let mut ordinary = Vec::new();
+    let mut continued = false;
     for message_key in message_keys {
         if let Some(context) = channels::inspect_business_command_for_task(root, message_key)? {
+            if channels::supervisor_owner_input::continue_pending(root, message_key, attempt_id)? {
+                continued = true;
+                updated = updated.saturating_add(1);
+                continue;
+            }
             let result = serde_json::json!({
                 "status": "succeeded",
                 "user_reply": user_reply,
@@ -10782,7 +10910,13 @@ fn terminalize_reviewed_queue_messages(
         updated = updated.saturating_add(channels::ack_leased_messages_for_attempt(
             root, attempt_id, &ordinary, "handled", None,
         )?);
-    } else {
+    }
+    if continued {
+        anyhow::ensure!(
+            channels::supervisor_owner_input::mark_finished_slice(root, attempt_id, message_keys)?,
+            "Owner-input slice has unapplied queue effects"
+        );
+    } else if ordinary.is_empty() {
         anyhow::ensure!(
             channels::mark_worker_attempt_queue_effects_applied_if_status(
                 root,
@@ -10807,6 +10941,7 @@ fn record_typed_business_command_review(
     let retryable_hold = completion_review_disposition_is_retryable_hold(disposition);
     let (review_status, validation_status) = match disposition {
         CompletionReviewDisposition::Approved { .. }
+        | CompletionReviewDisposition::ReplyValidated
         | CompletionReviewDisposition::NoSend { .. } => ("passed", "passed"),
         CompletionReviewDisposition::FeedbackRetry { .. }
         | CompletionReviewDisposition::RequeueInternalWork { .. } => ("failed", "pending"),
@@ -10820,6 +10955,8 @@ fn record_typed_business_command_review(
     };
     let evidence = serde_json::json!({
         "disposition": completion_review_disposition_label(disposition),
+        "policy_id": matches!(disposition, CompletionReviewDisposition::ReplyValidated)
+            .then_some("workjet.supervisor.conversation-reply.v1"),
         "app_validation": app_validation,
         "turn_id": turn_id,
         "thread_key": thread_key,
@@ -11834,6 +11971,7 @@ fn chat_turn_session_options_for_queue_job(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
         required_initial_tool: Some("update_plan".to_string()),
+        additional_readable_roots: inbound_attachment_readable_roots(&job.queue_task_metadata),
         ..turn_loop::ChatTurnSessionOptions::default()
     }
 }
@@ -12330,6 +12468,84 @@ struct SpreadsheetAttachmentEvidence {
     sheet_name: String,
     row_count: usize,
     headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+const REVIEW_ATTACHMENT_PREVIEW_ROWS: usize = 25;
+const REVIEW_ATTACHMENT_PREVIEW_CHARS: usize = 3000;
+
+/// The files of the mail a reply answers. Same-thread evidence shows only
+/// subject and preview, so a review approved a reply to an Excel request that
+/// named three unrelated companies (10.10.2026). Spreadsheets and text files
+/// are shown with their first rows so the review can compare.
+fn inbound_attachment_review_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    let Some(inbound_key) = inbound_email_reply_message_key(job)
+        .or_else(|| founder_communication_rework_inbound_key(job))
+        .map(str::to_owned)
+    else {
+        return Vec::new();
+    };
+    let Some(metadata) = load_inbound_email_metadata(root, &inbound_key) else {
+        return Vec::new();
+    };
+    let attachments = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    attachments
+        .iter()
+        .filter(|attachment| attachment.get("isInline").and_then(Value::as_bool) != Some(true))
+        .take(5)
+        .map(|attachment| {
+            let name = attachment.get("name").and_then(Value::as_str).unwrap_or("Anhang");
+            let size = attachment.get("sizeBytes").and_then(Value::as_u64).unwrap_or(0);
+            let origin = attachment
+                .get("fromEarlierMail")
+                .and_then(|earlier| earlier.get("subject"))
+                .and_then(Value::as_str)
+                .map(|subject| format!(" (from the earlier thread mail `{subject}`)"))
+                .unwrap_or_default();
+            let Some(path) = attachment.get("path").and_then(Value::as_str) else {
+                return format!(
+                    "Attachment of the answered mail{origin}: `{name}` was not stored. A reply must not claim its content."
+                );
+            };
+            let mut line = format!(
+                "Attachment of the answered mail{origin}: `{name}` ({size} bytes) at `{path}`. A reply to this mail must be based on this content."
+            );
+            let lower = path.to_ascii_lowercase();
+            let preview = if lower.ends_with(".xlsx") {
+                inspect_xlsx_attachment(path).ok().map(|evidence| {
+                    format!(
+                        "sheet `{}`, {} rows: {}",
+                        evidence.sheet_name,
+                        evidence.row_count,
+                        evidence
+                            .rows
+                            .iter()
+                            .take(REVIEW_ATTACHMENT_PREVIEW_ROWS)
+                            .map(|row| row.join(" | "))
+                            .collect::<Vec<_>>()
+                            .join(" ; ")
+                    )
+                })
+            } else if lower.ends_with(".csv") || lower.ends_with(".txt") || lower.ends_with(".tsv") {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .map(|text| text.lines().take(REVIEW_ATTACHMENT_PREVIEW_ROWS).collect::<Vec<_>>().join(" ; "))
+            } else {
+                None
+            };
+            if let Some(preview) = preview {
+                line.push_str(&format!(
+                    " Content preview: {}",
+                    clip_text(&preview, REVIEW_ATTACHMENT_PREVIEW_CHARS)
+                ));
+            }
+            line
+        })
+        .collect()
 }
 
 fn attachment_evidence_summaries(paths: &[String]) -> Vec<String> {
@@ -12441,6 +12657,7 @@ fn collect_review_evidence_summaries(
         }
     }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
+    evidence.extend(inbound_attachment_review_evidence(root, job));
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
     evidence.extend(review_external_work_backing_evidence_summaries(root, job));
@@ -13300,7 +13517,8 @@ fn inspect_xlsx_attachment(path: &str) -> Result<SpreadsheetAttachmentEvidence> 
         path: path.to_string(),
         sheet_name,
         row_count: rows.len(),
-        headers: rows.into_iter().next().unwrap_or_default(),
+        headers: rows.first().cloned().unwrap_or_default(),
+        rows,
     })
 }
 
@@ -16666,7 +16884,53 @@ fn clear_live_service_settings_cache_for_tests() {
 
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
-    shared.busy || shared.worker_active_count > 0
+    // Isolated Business OS chat sessions run in their own slots and do not use
+    // the serial loop the router arbitrates (same count as
+    // lease_business_queue_capacity). Counting them kept the router asleep
+    // for as long as a research campaign ran: no e-mail was routed on thesen
+    // between 09:16 and 11:30Z on 09.10.2026.
+    shared.busy || shared.serial_prompt_starting || serial_worker_count_locked(&shared) > 0
+}
+
+/// Workers on the serial loop: all active workers minus isolated Business OS
+/// chat sessions (the same count lease_business_queue_capacity uses).
+fn serial_worker_count_locked(shared: &SharedState) -> usize {
+    let active_chats = shared
+        .parallel_queue_jobs
+        .keys()
+        .filter(|key| shared.active_worker_lease_keys.contains(*key))
+        .count();
+    shared.worker_active_count.saturating_sub(active_chats)
+}
+
+/// A communication message (email, jami, teams, meeting) waits for the serial
+/// slot; durable queue work steps back until it is routed.
+fn communication_inbound_waiting(root: &Path) -> bool {
+    waiting_communication_rank(root, &live_service_settings(root))
+        >= COMMUNICATION_INBOUND_DISPATCH_RANK
+}
+
+/// Rank of the communication that waits for the serial slot. A founder or
+/// owner mail with an open rework task is answered by that queue task, and the
+/// router defers the mail itself; counting it here let the mail and its rework
+/// block each other (thesen 09.10.2026, 17:29Z).
+fn waiting_communication_rank(root: &Path, settings: &BTreeMap<String, String>) -> u8 {
+    channels::peek_leasable_inbound_messages(
+        root,
+        ROUTER_INBOUND_RANK_PROBE_LIMIT,
+        CHANNEL_ROUTER_LEASE_OWNER,
+    )
+    .ok()
+    .into_iter()
+    .flatten()
+    .filter(|message| {
+        message.channel == "queue"
+            || !open_founder_communication_rework_for_inbound(root, &message.message_key)
+                .unwrap_or(false)
+    })
+    .map(|message| source_label_dispatch_rank(&inbound_source_label(settings, &message)))
+    .max()
+    .unwrap_or(0)
 }
 
 fn should_skip_idle_harness_audit_tick(root: &Path) -> bool {
@@ -17026,6 +17290,14 @@ fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
+pub(crate) fn exercise_busy_or_backlogged_kpi_router_for_test(
+    root: &Path,
+    busy: bool,
+) -> Result<()> {
+    tests::kpi_router_tick_without_model(root, busy)
+}
+
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     route_external_messages_with_priority_dispatch(root, state, |prompt| {
         enqueue_prompt(
@@ -17042,6 +17314,20 @@ fn route_external_messages_with_priority_dispatch(
     state: &Arc<Mutex<SharedState>>,
     dispatch_priority: impl FnOnce(QueuedPrompt),
 ) -> Result<()> {
+    // Native recipe refresh reads admitted task receipts and writes bounded KPI
+    // metadata; it never leases work, invokes a model or changes a schedule.
+    // Keep it before every router early-return so an ongoing turn, a ready
+    // prompt, idle preflight or queue pressure cannot starve the hourly refresh.
+    // A maintenance failure must not suppress the existing communication path.
+    if let Err(error) = crate::business_os::refresh_due_workjet_project_kpis(root) {
+        push_event(
+            state,
+            format!(
+                "Project KPI refresh deferred: {}",
+                clip_text(&error.to_string(), 180)
+            ),
+        );
+    }
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
@@ -17099,7 +17385,10 @@ fn route_external_messages_with_priority_dispatch(
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    if queue_pressure_active(root, state) {
+    // Queue pressure contains background work, never communication: with more
+    // than QUEUE_PRESSURE_GUARD_THRESHOLD research tasks pending this skip
+    // stopped every e-mail on thesen (09.10.2026, 84 tasks pending).
+    if queue_pressure_active(root, state) && !communication_inbound_waiting(root) {
         match repair_stalled_founder_communications(root, state, &settings) {
             Ok(repaired) if repaired > 0 => push_event(
                 state,
@@ -17167,8 +17456,8 @@ fn route_external_messages_with_priority_dispatch(
     // remains — bounded to the top rank band so ordinary email/ticket work does not
     // starve the durable queue, and the governance event makes any starvation
     // observable.
-    let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
-    if top_inbound_rank >= FOUNDER_INBOUND_DISPATCH_RANK {
+    let top_inbound_rank = waiting_communication_rank(root, &settings);
+    if top_inbound_rank >= COMMUNICATION_INBOUND_DISPATCH_RANK {
         governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
@@ -17470,6 +17759,18 @@ fn route_external_messages_with_priority_dispatch(
         {
             continue;
         }
+        // A reply without a file of its own is about the file earlier in the
+        // thread: hand those attachments to the prompt and the readable roots.
+        let mut message = message;
+        if message.channel == "email" && !email_metadata_has_attachments(&message.metadata) {
+            if let Ok(conn) = channels::open_channel_db(&crate::paths::core_db(root)) {
+                add_thread_attachments_if_missing(
+                    &conn,
+                    &message.message_key,
+                    &mut message.metadata,
+                );
+            }
+        }
         let prompt = if let Some(inbound_key) = founder_rework_inbound_key.as_deref() {
             render_founder_communication_rework_execution_prompt(
                 root,
@@ -17485,8 +17786,20 @@ fn route_external_messages_with_priority_dispatch(
         } else {
             prompt_body.clone()
         };
+        let mut queue_task_metadata = message.metadata.clone();
+        // A founder rework answers the original mail: its stored attachments
+        // become readable for this turn as well.
+        if let Some(attachments) = founder_rework_inbound_key
+            .as_deref()
+            .and_then(|key| load_inbound_email_metadata(root, key))
+            .and_then(|metadata| metadata.get("attachments").cloned())
+        {
+            if let Some(object) = queue_task_metadata.as_object_mut() {
+                object.insert("attachments".to_string(), attachments);
+            }
+        }
         let job = QueuedPrompt {
-            queue_task_metadata: message.metadata.clone(),
+            queue_task_metadata,
             preview: preview_text(&prompt),
             source_label,
             goal,
@@ -17773,8 +18086,14 @@ fn durable_queue_dispatch_blocked_locked(
         return true;
     }
     match guard {
+        // Isolated research chats run in their own slots; only serial work
+        // holds the slot this dispatch hands out. Counting the chats meant no
+        // serial queue task (founder rework, app work) ever ran during a
+        // research campaign (thesen 09.10.2026).
         DurableQueueDispatchGuard::StrictIdle
-        | DurableQueueDispatchGuard::CurrentWorkerFinalizing => shared.worker_active_count > 0,
+        | DurableQueueDispatchGuard::CurrentWorkerFinalizing => {
+            serial_worker_count_locked(shared) > 0
+        }
     }
 }
 
@@ -17959,20 +18278,62 @@ include!("service_business_os_app_recovery.rs");
 include!("service_queue_capacity.rs");
 include!("service_command_writeback.rs");
 
+/// The original mail and its sender role for a founder communication rework
+/// queue task, read from the task's own metadata (same rules as the router's
+/// `founder_rework_inbound_message_key` / `founder_rework_origin_source_label`).
+fn founder_rework_job_binding(metadata: &Value) -> (Option<String>, Option<String>) {
+    let kind = metadata
+        .get("ticket_self_work_kind")
+        .and_then(Value::as_str);
+    if kind != Some(FOUNDER_COMMUNICATION_REWORK_KIND) {
+        return (None, None);
+    }
+    let inbound_key = metadata
+        .get("inbound_message_key")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("parent_message_key").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| value.starts_with("email:"))
+        .map(ToOwned::to_owned);
+    let source_label = metadata
+        .get("origin_source_label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| matches!(*value, "email:owner" | "email:founder" | "email:admin"))
+        .map(ToOwned::to_owned);
+    match inbound_key {
+        Some(key) => (Some(key), source_label),
+        None => (None, None),
+    }
+}
+
 fn queued_prompt_from_queue_task(task: channels::QueueTaskView) -> QueuedPrompt {
     let mut metadata = task.metadata.clone();
     if !metadata.is_object() {
         metadata = serde_json::json!({});
     }
     metadata["cockpit_lease_attempt"] = serde_json::json!(task.attempt);
+    // A founder communication rework answers its original mail. The router
+    // attaches that mail to the job; the durable and priority queue paths
+    // build jobs here and did not, so the review held the finished rework
+    // ("cannot use a different or missing leased inbound email") and the
+    // mail stayed unanswered (10.10.2026, after serial queue work started to
+    // run beside research chats).
+    let (rework_inbound_key, rework_source_label) = founder_rework_job_binding(&metadata);
+    let mut leased_message_keys = vec![task.message_key];
+    if let Some(inbound_key) = rework_inbound_key {
+        if !leased_message_keys.contains(&inbound_key) {
+            leased_message_keys.push(inbound_key);
+        }
+    }
     QueuedPrompt {
         queue_task_metadata: metadata,
         preview: preview_text(&task.prompt),
-        source_label: "queue".to_string(),
+        source_label: rework_source_label.unwrap_or_else(|| "queue".to_string()),
         goal: task.title.clone(),
         prompt: task.prompt.clone(),
         suggested_skill: task.suggested_skill.clone(),
-        leased_message_keys: vec![task.message_key],
+        leased_message_keys,
         leased_ticket_event_keys: Vec::new(),
         thread_key: Some(task.thread_key.clone()),
         workspace_root: task.workspace_root.clone(),
@@ -18524,8 +18885,11 @@ fn queued_prompt_dispatch_rank(prompt: &QueuedPrompt) -> u8 {
 
 fn source_label_dispatch_rank(source_label: &str) -> u8 {
     let lowered = source_label.trim().to_ascii_lowercase();
+    // The guard is internal maintenance: it ranks above ordinary queue work
+    // but never above waiting communication (it had rank 5 and kept an owner
+    // mail waiting behind back-to-back guard turns, 10.10.2026).
     if lowered == QUEUE_GUARD_SOURCE_LABEL {
-        return 5;
+        return 2;
     }
     if lowered == "tui"
         || lowered == "email:owner"
@@ -18569,16 +18933,9 @@ fn highest_leasable_inbound_rank(root: &Path, settings: &BTreeMap<String, String
 
 fn insert_pending_prompt_ordered(queue: &mut VecDeque<QueuedPrompt>, prompt: QueuedPrompt) {
     let new_rank = queued_prompt_dispatch_rank(&prompt);
-    let guard_offset = usize::from(
-        matches!(queue.front(), Some(front) if front.source_label == QUEUE_GUARD_SOURCE_LABEL),
-    );
-    let insert_at = queue
-        .iter()
-        .enumerate()
-        .skip(guard_offset)
-        .find_map(|(idx, existing)| {
-            (new_rank > queued_prompt_dispatch_rank(existing)).then_some(idx)
-        });
+    let insert_at = queue.iter().enumerate().find_map(|(idx, existing)| {
+        (new_rank > queued_prompt_dispatch_rank(existing)).then_some(idx)
+    });
     if let Some(idx) = insert_at {
         queue.insert(idx, prompt);
     } else {
@@ -18614,10 +18971,13 @@ fn decorate_service_event_with_skill(event: &str, suggested_skill: Option<&str>)
 }
 
 fn serial_prompt_admission_is_busy(shared: &SharedState) -> bool {
-    shared.busy
-        || shared.worker_active_count > 0
-        || shared.serial_prompt_starting
-        || !shared.parallel_queue_jobs.is_empty()
+    // Isolated Business OS chats run in their own sessions and slots and do
+    // not share the serial context (see lease_business_queue_capacity). Any
+    // registered chat used to veto serial admission, so during a research
+    // campaign no routed mail and no founder rework ever started (thesen
+    // 09.10.2026). A serial worker still blocks, also when a finishing chat
+    // cleared the busy flag: it is counted apart from the chats.
+    shared.busy || shared.serial_prompt_starting || serial_worker_count_locked(shared) > 0
 }
 
 fn maybe_start_next_queued_prompt_locked(
@@ -19081,12 +19441,46 @@ fn render_founder_communication_rework_execution_prompt(
     inbound_message_key: &str,
     raw_rework_body: &str,
 ) -> String {
+    render_founder_rework_prompt(root, &message.subject, inbound_message_key, raw_rework_body)
+}
+
+/// The queue paths that lease a rework without the router must hand the agent
+/// the same prompt: the original mail and its attachments. Without it a rework
+/// answered the owner's Excel mail with unrelated companies (10.10.2026).
+fn render_founder_rework_prompt_for_queue_job(root: &Path, job: &mut QueuedPrompt) {
+    let Some(inbound_key) = founder_communication_rework_inbound_key(job).map(str::to_owned) else {
+        return;
+    };
+    let prompt = render_founder_rework_prompt(root, &job.goal, &inbound_key, &job.prompt);
+    job.preview = preview_text(&prompt);
+    job.prompt = prompt;
+    // The turn may only read the attachment directories named in its metadata.
+    if let Some(attachments) = load_inbound_email_metadata(root, &inbound_key)
+        .and_then(|metadata| metadata.get("attachments").cloned())
+    {
+        if let Some(object) = job.queue_task_metadata.as_object_mut() {
+            object.insert("attachments".to_string(), attachments);
+        }
+    }
+}
+
+fn render_founder_rework_prompt(
+    root: &Path,
+    subject: &str,
+    inbound_message_key: &str,
+    raw_rework_body: &str,
+) -> String {
     let rework_body = clean_founder_rework_body_for_agent(raw_rework_body);
     let inbound_context = load_founder_inbound_context_for_rework(root, inbound_message_key)
         .unwrap_or_else(|| {
             "Die urspruengliche Founder-/Owner-Mail konnte nicht direkt geladen werden. Rekonstruiere den aktuellen Thread vor der Antwort aus der Kommunikationshistorie.".to_string()
         });
-    let title = message.subject.trim();
+    // The rework answers the original mail; its attachments are part of it
+    // (thesen 09.10.2026: the Excel of the mail never reached the rework).
+    let attachments = load_inbound_email_metadata(root, inbound_message_key)
+        .map(|metadata| render_inbound_attachments(&metadata))
+        .unwrap_or_default();
+    let title = subject.trim();
     let title_line = if title.is_empty() {
         String::new()
     } else {
@@ -19098,6 +19492,7 @@ Vor einer Antwort musst du den aktuellen Thread und die fachliche Lage pruefen. 
 Wenn ein Ergebnis fehlt, erledige die Nacharbeit zuerst; eine reine Umformulierung reicht nicht.\n\n\
 Aktuelle Founder-/Owner-Nachricht:\n\
 {inbound_context}\n\n\
+{attachments}\
 Konkrete Nacharbeit:\n\
 {rework_body}\n\n\
 Ausgabe-Regel:\n\
@@ -19138,6 +19533,108 @@ fn clean_founder_rework_body_for_agent(raw: &str) -> String {
     } else {
         cleaned
     }
+}
+
+/// Metadata of the original inbound mail behind a founder rework (its stored
+/// attachments live there).
+fn load_inbound_email_metadata(root: &Path, inbound_message_key: &str) -> Option<Value> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path).ok()?;
+    let raw: String = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let mut metadata: Value = serde_json::from_str(&raw).ok()?;
+    add_thread_attachments_if_missing(&conn, inbound_message_key, &mut metadata);
+    Some(metadata)
+}
+
+fn email_metadata_has_attachments(metadata: &Value) -> bool {
+    metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .is_some_and(|list| !list.is_empty())
+}
+
+/// A reply in a thread usually carries no file of its own; the file it is about
+/// sits on an earlier mail ("Die Firmen stimmen nicht, bitte die Excel
+/// nochmal", 10.10.2026). When the mail has no attachments, the stored
+/// attachments of earlier inbound mails in the same thread are handed over,
+/// newest mail first, each marked with the mail it came from.
+fn add_thread_attachments_if_missing(
+    conn: &rusqlite::Connection,
+    message_key: &str,
+    metadata: &mut Value,
+) {
+    if email_metadata_has_attachments(metadata) || !metadata.is_object() {
+        return;
+    }
+    let attachments = earlier_thread_attachments(conn, message_key);
+    if attachments.is_empty() {
+        return;
+    }
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("attachments".to_string(), Value::Array(attachments));
+    }
+}
+
+fn earlier_thread_attachments(conn: &rusqlite::Connection, message_key: &str) -> Vec<Value> {
+    let Ok(mut stmt) = conn.prepare(
+        r#"
+        SELECT earlier.subject, earlier.external_created_at, earlier.metadata_json
+        FROM communication_messages current
+        JOIN communication_messages earlier
+          ON earlier.account_key = current.account_key
+         AND earlier.thread_key = current.thread_key
+         AND earlier.message_key <> current.message_key
+        WHERE current.message_key = ?1
+          AND current.channel = 'email'
+          AND earlier.channel = 'email'
+          AND earlier.direction = 'inbound'
+          AND earlier.has_attachments = 1
+          AND TRIM(current.thread_key) <> ''
+          AND earlier.observed_at <= current.observed_at
+        ORDER BY earlier.observed_at DESC
+        LIMIT 5
+        "#,
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![message_key], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    });
+    let Ok(rows) = rows else {
+        return Vec::new();
+    };
+    let mut attachments = Vec::new();
+    for (subject, created_at, raw) in rows.flatten() {
+        let Ok(earlier) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        for attachment in earlier
+            .get("attachments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let mut attachment = attachment.clone();
+            if let Some(object) = attachment.as_object_mut() {
+                object.insert(
+                    "fromEarlierMail".to_string(),
+                    serde_json::json!({ "subject": subject, "receivedAt": created_at }),
+                );
+            }
+            attachments.push(attachment);
+        }
+    }
+    attachments
 }
 
 fn load_founder_inbound_context_for_rework(
@@ -20395,6 +20892,7 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("incomplete response returned")
         || normalized.contains("too many requests")
         || normalized.contains("token plan usage limit")
+        || normalized.contains("high demand")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
         || normalized.contains("http 429")
@@ -22854,6 +23352,84 @@ fn preview_text(value: &str) -> String {
         .collect()
 }
 
+/// Attachments of an inbound mail as the worker can use them: name, size and
+/// the local file it may open. A listed attachment without a file is named as
+/// missing so the worker reports it instead of assuming its content (thesen
+/// 09.10.2026: without the Excel the worker answered with two invented firms).
+fn render_inbound_attachments(metadata: &Value) -> String {
+    let Some(list) = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .filter(|list| !list.is_empty())
+    else {
+        return String::new();
+    };
+    let from_thread = list
+        .iter()
+        .any(|attachment| attachment.get("fromEarlierMail").is_some());
+    let mut lines = vec![if from_thread {
+        "Anhaenge aus diesem Mail-Verlauf (diese Mail selbst hat keinen Anhang):".to_string()
+    } else {
+        "Anhaenge dieser Mail:".to_string()
+    }];
+    for attachment in list {
+        if attachment.get("isInline").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let name = attachment
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Anhang");
+        let size = attachment
+            .get("sizeBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let origin = attachment
+            .get("fromEarlierMail")
+            .map(|earlier| {
+                let subject = earlier.get("subject").and_then(Value::as_str).unwrap_or("");
+                let received = earlier
+                    .get("receivedAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                format!(" aus der Mail \"{subject}\" vom {received}")
+            })
+            .unwrap_or_default();
+        match attachment.get("path").and_then(Value::as_str) {
+            Some(path) => lines.push(format!("- {name} ({size} Bytes{origin}): {path}")),
+            None => lines.push(format!(
+                "- {name}: {}",
+                attachment
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("nicht gespeichert")
+            )),
+        }
+    }
+    if lines.len() == 1 {
+        return String::new();
+    }
+    lines.push("Lies die gespeicherten Dateien selbst (Pfad oben, nur lesend). Ein Anhang ohne Pfad liegt dir nicht vor: nenne ihn als fehlend und nimm seinen Inhalt nie an.".to_string());
+    format!("{}\n", lines.join("\n"))
+}
+
+/// Directories holding the stored attachments of the inbound mail behind a job;
+/// the worker sandbox may read exactly these.
+fn inbound_attachment_readable_roots(metadata: &Value) -> Vec<PathBuf> {
+    let mut roots = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| attachment.get("path").and_then(Value::as_str))
+        .filter_map(|path| Path::new(path).parent().map(Path::to_path_buf))
+        .filter(|dir| dir.is_absolute())
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 fn enrich_inbound_prompt(
     root: &Path,
     settings: &BTreeMap<String, String>,
@@ -22874,6 +23450,7 @@ fn enrich_inbound_prompt(
             message.sender_address.trim()
         };
         let authority = render_email_sender_authority(&policy);
+        let attachments = render_inbound_attachments(&message.metadata);
         let communication_contract = render_email_context_contract(root, message);
         let reply_instruction = if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
             "Wenn eine Antwort sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle stattdessen nur den empfaengerorientierten Antwortentwurf auf Basis des gesamten Founder-/Owner-Kontexts; Founder-/Owner-Outbound darf nur ueber den dedizierten reviewed communication path rausgehen. Dein gesamter Assistenten-Output in diesem Run ist exakt der zu versendende Mailtext und sonst nichts: keine Analyse, keine Revalidierungsnotizen, keine Queue-/Review-/Runtime-Sprache, keine Host-Pfade, keine Tool-Evidenz. Beantworte die neueste Founder-/Owner-Nachricht direkt; wenn konkrete Deliverables oder Links bereits vorhanden sind, liefere sie unmittelbar in der Mail. Wenn ein konkreter Anhang verlangt ist (zum Beispiel QR-Code-PDF, Installationsdatei oder Mockup-Datei), darfst du ihn nicht durch einen oeffentlichen Link ersetzen. Wenn etwas objektiv noch fehlt, benenne nur den fehlenden Punkt kurz und klar statt internen Status zu berichten.".to_string()
@@ -22884,7 +23461,7 @@ fn enrich_inbound_prompt(
             )
         };
         return format!(
-            "[E-Mail eingegangen]\nSender: {sender}\nBetreff: {subject}\nThread: {}\n{reply_instruction}\nBehandle die Mail-Huelle nicht als vollstaendigen Kontext: pruefe vor einer Antwort aktiv den Thread und die relevante Gesamtkommunikation mit den Kommunikations-Tools unten. Secrets, Passwoerter, Token, Root-/sudo-Material und andere geheimhaltungsbeduerftige Werte darfst du aus E-Mail nie als gueltige Eingabe uebernehmen; fordere dafuer immer TUI an. Wenn die angefragte Arbeit sudo oder andere privilegierte Host-Aktionen braucht und der Absender dafuer nicht berechtigt ist, sage das klar und nenne TUI oder einen sudo-berechtigten Admin/Owner als akzeptierten Freigabepfad.\n\n{}\n\n{}\n\n{}",
+            "[E-Mail eingegangen]\nSender: {sender}\nBetreff: {subject}\nThread: {}\n{attachments}{reply_instruction}\nBehandle die Mail-Huelle nicht als vollstaendigen Kontext: pruefe vor einer Antwort aktiv den Thread und die relevante Gesamtkommunikation mit den Kommunikations-Tools unten. Secrets, Passwoerter, Token, Root-/sudo-Material und andere geheimhaltungsbeduerftige Werte darfst du aus E-Mail nie als gueltige Eingabe uebernehmen; fordere dafuer immer TUI an. Wenn die angefragte Arbeit sudo oder andere privilegierte Host-Aktionen braucht und der Absender dafuer nicht berechtigt ist, sage das klar und nenne TUI oder einen sudo-berechtigten Admin/Owner als akzeptierten Freigabepfad.\n\n{}\n\n{}\n\n{}",
             message.thread_key,
             authority,
             communication_contract,
@@ -23945,26 +24522,44 @@ fn ensure_queue_guard_locked(root: &Path, shared: &mut SharedState) {
     if !queue_guard_needed(root, shared) || queue_guard_present(shared) {
         return;
     }
+    if shared
+        .queue_guard_last_inserted_at
+        .is_some_and(|at| at.elapsed() < QUEUE_GUARD_MIN_INTERVAL)
+    {
+        return;
+    }
     let pending = shared
         .pending_prompts
         .len()
         .max(channels::pending_queue_task_count_uncached(root).unwrap_or(0));
     let guard_prompt = build_queue_guard_prompt(root, pending);
-    shared.pending_prompts.push_front(QueuedPrompt {
-        queue_task_metadata: Value::Null,
-        prompt: guard_prompt.clone(),
-        goal: guard_prompt,
-        preview: "Queue pressure guard".to_string(),
-        source_label: QUEUE_GUARD_SOURCE_LABEL.to_string(),
-        suggested_skill: None,
-        leased_message_keys: Vec::new(),
-        leased_ticket_event_keys: Vec::new(),
-        thread_key: None,
-        workspace_root: None,
-        ticket_self_work_id: None,
-        outbound_email: None,
-        outbound_anchor: None,
-    });
+    // Waiting communication (mail, chat, TUI) keeps its place before the guard.
+    let position = shared
+        .pending_prompts
+        .iter()
+        .rposition(|prompt| {
+            source_label_dispatch_rank(&prompt.source_label) >= COMMUNICATION_INBOUND_DISPATCH_RANK
+        })
+        .map_or(0, |index| index + 1);
+    shared.queue_guard_last_inserted_at = Some(Instant::now());
+    shared.pending_prompts.insert(
+        position,
+        QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: guard_prompt.clone(),
+            goal: guard_prompt,
+            preview: "Queue pressure guard".to_string(),
+            source_label: QUEUE_GUARD_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        },
+    );
     if let Err(err) = governance::record_event(
         root,
         governance::GovernanceEventRequest {
@@ -24416,6 +25011,23 @@ fn apply_review_feedback_to_queue(
     Ok(updated)
 }
 
+/// The provider refused the call for capacity (MiniMax token-plan window,
+/// HTTP 429 rate limit), not because of anything in the task.
+fn runtime_error_is_provider_capacity(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    // The hold sees the summarized error: a 429 arrives as "the model API is
+    // rate-limited", which "rate limit" does not match.
+    lower.contains("token plan usage limit")
+        || lower.contains("high demand")
+        || lower.contains("rate-limited")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains("status code 429")
+}
+
 fn runtime_retry_not_before_iso(error_text: &str) -> String {
     let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error_text)
         .unwrap_or(300)
@@ -24432,6 +25044,8 @@ fn release_retryable_worker_messages(
 ) -> Result<usize> {
     let policy_id = if reason.contains("timeout") {
         "worker-turn-timeout"
+    } else if runtime_error_is_provider_capacity(summary) {
+        channels::PROVIDER_CAPACITY_HOLD_POLICY
     } else {
         "worker-runtime-api-failure"
     };
@@ -29348,6 +29962,38 @@ Business OS command:
         .unwrap()
     }
 
+    pub(super) fn kpi_router_tick_without_model(root: &Path, busy: bool) -> Result<()> {
+        let mut shared = SharedState::default();
+        shared.busy = busy;
+        let state = Arc::new(Mutex::new(shared));
+        if busy {
+            assert!(active_agent_loop_in_progress(&state));
+        } else {
+            for index in 0..QUEUE_PRESSURE_GUARD_THRESHOLD + 1 {
+                priority_system_dispatch_test_task(
+                    root,
+                    &format!("kpi-background-normal-{index}"),
+                    "normal",
+                    None,
+                );
+            }
+            assert!(queue_pressure_active(root, &state));
+        }
+        route_external_messages_with_priority_dispatch(root, &state, |_| {
+            panic!("KPI maintenance must not start a priority model worker");
+        })?;
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.busy, busy);
+        assert_eq!(shared.worker_active_count, 0);
+        if !busy {
+            assert_eq!(
+                channels::count_queue_tasks(root, &["pending".to_owned()])?,
+                QUEUE_PRESSURE_GUARD_THRESHOLD + 1
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn priority_system_router_uses_one_free_slot_under_pressure_and_app_lease() -> anyhow::Result<()>
     {
@@ -30125,6 +30771,62 @@ Business OS command:
                 .map(|event| (&event.reason, &event.action_taken))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn queue_guard_waits_behind_owner_mail_and_does_not_repeat_at_once() {
+        let root = temp_root("queue-guard-behind-mail");
+        let job = |label: &str, index: usize| QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: format!("prompt-{index}"),
+            goal: format!("goal-{index}"),
+            preview: format!("preview-{index}"),
+            source_label: label.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut shared = SharedState::default();
+        shared.pending_prompts = (0..QUEUE_PRESSURE_GUARD_THRESHOLD)
+            .map(|index| job("queue", index))
+            .collect();
+        insert_pending_prompt_ordered(&mut shared.pending_prompts, job("email:founder", 99));
+
+        ensure_queue_guard_locked(&root, &mut shared);
+        let labels = shared
+            .pending_prompts
+            .iter()
+            .take(3)
+            .map(|item| item.source_label.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["email:founder", QUEUE_GUARD_SOURCE_LABEL, "queue"]
+        );
+
+        // A mail arriving while the guard waits still goes first.
+        insert_pending_prompt_ordered(&mut shared.pending_prompts, job("email", 100));
+        assert_eq!(shared.pending_prompts[1].source_label, "email");
+        assert_eq!(
+            shared.pending_prompts[2].source_label,
+            QUEUE_GUARD_SOURCE_LABEL
+        );
+
+        // Once the guard ran, the next one waits for the interval even though
+        // the queue is still above the threshold.
+        shared
+            .pending_prompts
+            .retain(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL);
+        ensure_queue_guard_locked(&root, &mut shared);
+        assert!(shared
+            .pending_prompts
+            .iter()
+            .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
     }
 
     #[test]
@@ -33239,6 +33941,18 @@ Business OS command:
         let options = chat_turn_session_options_for_queue_job(&job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
+    }
+
+    #[test]
+    fn supervisor_conversation_reply_keeps_unfinished_plan_guard() -> anyhow::Result<()> {
+        let (root, job, _) = incomplete_plan_queue_fixture("supervisor-reply-open-plan")?;
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            &CompletionReviewDisposition::ReplyValidated,
+        )?
+        .is_some());
+        Ok(())
     }
 
     #[test]
@@ -37485,6 +38199,110 @@ Business OS command:
     }
 
     #[test]
+    fn durable_dispatch_binds_a_founder_rework_to_its_original_mail() {
+        let root = temp_root("durable-dispatch-founder-rework-binding");
+        let inbound_key = "email:owner@example.test::inbox::original-mail";
+        let attachment_path = root.join("raw/attachments/original-mail/Recherche-Test.xlsx");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:owner@example.test', 'thread-original', 'original-mail',
+                'inbound', 'INBOX', 'Owner', 'owner@example.test', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal',
+                'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                inbound_key,
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": attachment_path.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert original mail");
+        drop(conn);
+        let rework_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "INTERNAL WORK ITEM - rework the reply".to_string(),
+                thread_key: "founder-rework/original-mail".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(inbound_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                    "inbound_message_key": inbound_key,
+                    "origin_source_label": "email:founder",
+                })),
+            },
+        )
+        .expect("failed to create rework queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("dispatcher should not fail")
+            .expect("expected a leased prompt");
+
+        // The reviewed reply needs the original mail on the job; without it the
+        // finished rework was held and the mail stayed unanswered.
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![rework_task.message_key.clone(), inbound_key.to_string()]
+        );
+        assert_eq!(leased.source_label, "email:founder");
+        assert_eq!(
+            founder_communication_rework_inbound_key(&leased),
+            Some(inbound_key)
+        );
+        assert_eq!(inbound_email_reply_message_key(&leased), Some(inbound_key));
+        // Same prompt as the router path: the original mail and its Excel
+        // (a rework answered with unrelated companies because it never saw
+        // the attachment).
+        assert!(leased
+            .prompt
+            .contains("Bitte die Firmen aus der Excel recherchieren."));
+        assert!(leased.prompt.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes): {}",
+            attachment_path.display()
+        )));
+        assert_eq!(
+            inbound_attachment_readable_roots(&leased.queue_task_metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn ordinary_queue_tasks_keep_their_single_queue_lease() {
+        let root = temp_root("ordinary-queue-task-single-lease");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Plain queue work".to_string(),
+                prompt: "Reconcile the fixture".to_string(),
+                thread_key: "plain/queue".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some("email:owner@example.test::inbox::other".to_string()),
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let key = task.message_key.clone();
+        let job = queued_prompt_from_queue_task(task);
+        assert_eq!(job.leased_message_keys, vec![key]);
+        assert_eq!(job.source_label, "queue");
+    }
+
+    #[test]
     fn green_business_os_app_validation_rework_completes_before_fresh_pending_app_tasks() {
         let root = temp_root("business-os-app-green-rework-completes-before-pending");
         let script_dir = root.join("src/apps/business-os/scripts");
@@ -41199,6 +42017,27 @@ Use shell tools to create or update these files."
         assert!(runtime_error_is_transient_api_failure(
             "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
         ));
+        assert!(runtime_error_is_provider_capacity(
+            "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
+        ));
+        assert!(runtime_error_is_provider_capacity(
+            "HTTP 429 Too Many Requests"
+        ));
+        assert!(!runtime_error_is_provider_capacity("database is locked"));
+        // Summarized 429 and MiniMax's exhausted-plan answer (thesen 09.10.2026).
+        let summarized_rate_limit = turn_loop::summarize_runtime_error(
+            "direct session error: exceeded retry limit, last status: 429 Too Many Requests",
+        );
+        assert!(runtime_error_is_provider_capacity(&summarized_rate_limit));
+        let high_demand = "direct session error: ErrorEvent { message: \"We're currently experiencing high demand, which may cause temporary errors.\", codex_error_info: Some(InternalServerError) }";
+        assert!(runtime_error_is_transient_api_failure(high_demand));
+        assert!(runtime_error_is_provider_capacity(high_demand));
+        assert!(runtime_error_is_provider_capacity(
+            &turn_loop::summarize_runtime_error(high_demand)
+        ));
+        assert!(!runtime_error_is_provider_capacity(
+            "stream disconnected before completion"
+        ));
         let mut shared = SharedState::default();
         shared.last_error = Some(
             "direct session error: unexpected status 402 Payment Required: The Token Plan usage limit has been reached. (2067)"
@@ -41382,6 +42221,18 @@ Use shell tools to create or update these files."
         assert!(prompt.contains("without producing the required final assistant message"));
         assert!(prompt.contains("continue after the tool phase"));
         assert!(prompt.contains("EXIT GATE"));
+    }
+
+    #[test]
+    fn missing_project_supervisor_holding_executor_is_not_a_transient_retry() {
+        for code in [
+            "claude_code_holding_executor_unavailable",
+            "project_supervisor_holding_executor_unavailable",
+            "missing_native_account_binding",
+        ] {
+            let error = format!("{code}: selected project Luma has no admitted holding producer; instance-default fallback was not invoked");
+            assert!(!runtime_error_is_transient_api_failure(&error));
+        }
     }
 
     #[test]
@@ -42589,6 +43440,361 @@ Use shell tools to create or update these files."
         assert_ne!(
             founder_status, "pending",
             "founder inbound should have been leased/handled this tick"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn inbound_mail_names_its_attachments_and_opens_only_their_directory() {
+        let metadata = serde_json::json!({"attachments": [
+            {"name": "Recherche-Test.xlsx", "sizeBytes": 1691, "path": "/state/communication/email/raw/attachments/m1/Recherche-Test.xlsx"},
+            {"name": "logo.png", "isInline": true},
+            {"name": "gross.zip", "error": "nicht gespeichert: größer als 25 MB"}
+        ]});
+        let text = render_inbound_attachments(&metadata);
+        assert!(text.contains("- Recherche-Test.xlsx (1691 Bytes): /state/communication/email/raw/attachments/m1/Recherche-Test.xlsx"));
+        assert!(text.contains("- gross.zip: nicht gespeichert: größer als 25 MB"));
+        assert!(!text.contains("logo.png"));
+        assert!(text.contains("nimm seinen Inhalt nie an"));
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![PathBuf::from(
+                "/state/communication/email/raw/attachments/m1"
+            )]
+        );
+        assert!(render_inbound_attachments(&serde_json::json!({})).is_empty());
+        assert!(inbound_attachment_readable_roots(
+            &serde_json::json!({"attachments": [{"path": "relative/x"}]})
+        )
+        .is_empty());
+    }
+
+    /// thesen 09.10.2026, 18:10Z: a founder rework (serial queue work) never ran
+    /// while research chats occupied their own slots.
+    #[test]
+    fn serial_queue_work_runs_beside_isolated_research_chats() {
+        let root = temp_root("ctox-serial-queue-beside-chats");
+        let chat = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Neurecherche 1".to_string(),
+                prompt: "Research one lead.".to_string(),
+                thread_key: "research-chat-1".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(
+                    serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                ),
+            },
+        )
+        .expect("seed research chat");
+        channels::lease_queue_task(&root, &chat.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease research chat");
+        let rework = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "Answer the owner's mail.".to_string(),
+                thread_key: "founder-rework".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("seed rework");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(&root, &chat.message_key)
+                    .expect("load chat")
+                    .expect("chat exists"),
+            );
+            shared
+                .parallel_queue_jobs
+                .insert(chat.message_key.clone(), job);
+            shared
+                .active_worker_lease_keys
+                .insert(chat.message_key.clone());
+            shared.worker_active_count = 1;
+        }
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("durable dispatch")
+            .expect("the rework must take the serial slot");
+        assert_eq!(leased.leased_message_keys, vec![rework.message_key.clone()]);
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.durable_queue_lease_in_progress = false;
+            // A real serial worker still blocks the slot.
+            shared.worker_active_count = 2;
+        }
+        assert!(
+            maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+                .expect("durable dispatch")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026, 17:29Z: the owner's mail waited for its rework task
+    /// while the rework (durable queue work) waited for the mail.
+    #[test]
+    fn owner_mail_with_open_rework_lets_the_rework_take_the_slot() {
+        let root = temp_root("ctox-router-owner-mail-rework-deadlock");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        let mail_key = "email:crew@thesen-ag.com::INBOX::owner-rework";
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<owner-rework@example.com>',
+                'remote-owner-rework-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Excel importieren.', '', '',
+                'normal', 'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params![mail_key],
+        )
+        .expect("failed to insert owner inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params![mail_key],
+        )
+        .expect("failed to insert owner routing state");
+        let rework = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: Recherche".to_string(),
+                prompt: "Founder communication rework for the owner's mail.".to_string(),
+                thread_key: "founder-rework-recherche".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(mail_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "parent_message_key": mail_key,
+                    "inbound_message_key": mail_key,
+                })),
+            },
+        )
+        .expect("failed to seed rework task");
+        assert!(open_founder_communication_rework_for_inbound(&root, mail_key).unwrap());
+        assert!(
+            waiting_communication_rank(&root, &live_service_settings(&root))
+                < COMMUNICATION_INBOUND_DISPATCH_RANK,
+            "a mail answered by its rework does not wait for the slot"
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            !pending
+                .iter()
+                .any(|task| task.message_key == rework.message_key),
+            "the rework must be leased instead of waiting for its own mail"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026: 40 research tasks older than the owner's mail filled the
+    /// whole rank probe and the age-ordered lease, so the mail waited for hours.
+    #[test]
+    fn owner_mail_is_leased_before_a_backlog_of_older_queue_work() {
+        let root = temp_root("ctox-router-owner-mail-before-backlog");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        for index in 0..40 {
+            let task = channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .expect("failed to seed durable queue task");
+            conn.execute(
+                "UPDATE communication_messages SET external_created_at='2020-01-01T00:00:00Z', observed_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue task");
+            conn.execute(
+                "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+                rusqlite::params![task.message_key],
+            )
+            .expect("age queue routing");
+        }
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<owner-mail-backlog@example.com>',
+                'remote-owner-backlog-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '',
+                'normal', 'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+        )
+        .expect("failed to insert owner routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let owner_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::owner-backlog"],
+                |row| row.get(0),
+            )
+            .expect("failed to read owner routing state");
+        assert_ne!(
+            owner_status, "pending",
+            "the owner's mail must be leased in the first router tick despite the backlog"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// thesen 09.10.2026: research chats ran in their own slots, yet the router
+    /// counted them as an active serial loop and slept; an ordinary mail waited
+    /// behind the queue as well. Both must hand the serial slot to the mail.
+    #[test]
+    fn ordinary_mail_is_routed_while_isolated_research_chats_run() {
+        let root = temp_root("ctox-router-mail-beside-research-chats");
+        let seed = |index: usize| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Neurecherche {index}"),
+                    prompt: "Research one lead.".to_string(),
+                    thread_key: format!("research-chat-{index}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(
+                        serde_json::json!({"business_os_command_type":"business_os.chat.task"}),
+                    ),
+                },
+            )
+            .expect("failed to seed research task")
+        };
+        let running = seed(0);
+        let waiting = seed(1);
+        channels::lease_queue_task(&root, &running.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease running research chat");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET first_pending_at='2020-01-01T00:00:00Z' WHERE message_key=?1",
+            rusqlite::params![waiting.message_key],
+        )
+        .expect("age waiting research task");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:crew@thesen-ag.com', '<customer-mail@example.com>',
+                'remote-customer-1', 'inbound', 'INBOX', 'Kunde', 'kunde@example.com',
+                '[]', '[]', '[]', 'Frage', 'Frage', 'Eine kurze Frage.', '', '',
+                'normal', 'received', 0, 0, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', '{}'
+            )"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-10-09T10:28:26Z')"#,
+            rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+        )
+        .expect("failed to insert customer routing state");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            let job = queued_prompt_from_queue_task(
+                channels::load_queue_task(&root, &running.message_key)
+                    .expect("load running task")
+                    .expect("running task exists"),
+            );
+            shared
+                .parallel_queue_jobs
+                .insert(running.message_key.clone(), job);
+            shared
+                .active_worker_lease_keys
+                .insert(running.message_key.clone());
+            shared.worker_active_count = 1;
+        }
+        assert!(!active_agent_loop_in_progress(&state));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        let mail_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:crew@thesen-ag.com::INBOX::customer"],
+                |row| row.get(0),
+            )
+            .expect("failed to read customer routing state");
+        assert_ne!(mail_status, "pending", "the mail must take the serial slot");
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            pending
+                .iter()
+                .any(|task| task.message_key == waiting.message_key),
+            "the older research task waits until the mail is routed"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -44927,6 +46133,134 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn founder_rework_prompt_and_turn_carry_the_original_mail_attachments() {
+        let root = temp_root("ctox-founder-rework-attachments");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open channel db");
+        let attachment_path = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:crew@thesen-ag.com', 'thread-m1', 'm1', 'inbound', 'INBOX',
+                'Michael Welsch', 'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Recherche',
+                'Recherche', 'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal',
+                'received', 0, 1, '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                "email:crew@thesen-ag.com::inbox::m1",
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": attachment_path.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert inbound mail");
+        let message = channels::RoutedInboundMessage {
+            message_key: "queue:system::rework".to_string(),
+            channel: "queue".to_string(),
+            account_key: "system".to_string(),
+            thread_key: "thread".to_string(),
+            sender_display: "system".to_string(),
+            sender_address: "system".to_string(),
+            subject: "Founder communication rework: Recherche".to_string(),
+            preview: String::new(),
+            body_text: String::new(),
+            external_created_at: String::new(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+        let prompt = render_founder_communication_rework_execution_prompt(
+            &root,
+            &message,
+            "email:crew@thesen-ag.com::inbox::m1",
+            "Review summary: Die Antwort nannte falsche Firmen.",
+        );
+        assert!(prompt.contains("Bitte die Firmen aus der Excel recherchieren."));
+        assert!(prompt.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes): {}",
+            attachment_path.display()
+        )));
+        let metadata = load_inbound_email_metadata(&root, "email:crew@thesen-ag.com::inbox::m1")
+            .expect("inbound metadata");
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_reply_without_a_file_gets_the_attachment_of_its_thread() {
+        let root = temp_root("ctox-thread-attachment-fallback");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        let attachment_path = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        let insert = |key: &str,
+                      subject: &str,
+                      body: &str,
+                      observed: &str,
+                      metadata: Value,
+                      has: i64| {
+            conn.execute(
+                r#"INSERT INTO communication_messages (
+                    message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                    sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                    bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                    trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                    metadata_json
+                ) VALUES (?1, 'email', 'email:crew@example.test', 'thread-m1', ?1, 'inbound', 'INBOX',
+                    'Owner', 'owner@example.test', '[]', '[]', '[]', ?2, ?2, ?3, '', '', 'normal',
+                    'received', 0, ?6, ?4, ?4, ?5)"#,
+                rusqlite::params![key, subject, body, observed, metadata.to_string(), has],
+            )
+            .expect("insert mail");
+        };
+        insert(
+            "email:crew@example.test::inbox::m1",
+            "Recherche",
+            "Bitte die Firmen aus der Excel recherchieren.",
+            "2026-10-09T10:28:26Z",
+            serde_json::json!({"attachments": [{
+                "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                "path": attachment_path.display().to_string()
+            }]}),
+            1,
+        );
+        insert(
+            "email:crew@example.test::inbox::m2",
+            "Re: Recherche",
+            "Die Firmen stimmen nicht, bitte die Excel nochmal.",
+            "2026-10-10T10:17:03Z",
+            serde_json::json!({}),
+            0,
+        );
+        drop(conn);
+
+        let metadata = load_inbound_email_metadata(&root, "email:crew@example.test::inbox::m2")
+            .expect("reply metadata");
+        let text = render_inbound_attachments(&metadata);
+        assert!(text.contains("Anhaenge aus diesem Mail-Verlauf"));
+        assert!(text.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes aus der Mail \"Recherche\" vom 2026-10-09T10:28:26Z): {}",
+            attachment_path.display()
+        )));
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
+        // A mail with its own file keeps exactly that file.
+        let own = load_inbound_email_metadata(&root, "email:crew@example.test::inbox::m1")
+            .expect("original metadata");
+        assert!(render_inbound_attachments(&own).starts_with("Anhaenge dieser Mail:"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn founder_rework_execution_prompt_strips_self_work_wrapper() {
         let root = temp_root("ctox-founder-rework-clean-prompt");
         let message = channels::RoutedInboundMessage {
@@ -45828,6 +47162,59 @@ Was jetzt zu tun ist:\n\
     }
 
     #[test]
+    fn review_sees_the_spreadsheet_of_the_answered_mail() {
+        let root = temp_root("review-inbound-attachment-evidence");
+        let xlsx = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        std::fs::create_dir_all(xlsx.parent().unwrap()).unwrap();
+        write_minimal_xlsx(&xlsx, &["Firmenname", "Ort"], 2);
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:crew@example.test', 'thread-m1', 'm1', 'inbound', 'INBOX',
+                'Owner', 'owner@example.test', '[]', '[]', '[]', 'Recherche', 'Recherche',
+                'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal', 'received', 0, 1,
+                '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                "email:crew@example.test::inbox::m1",
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": xlsx.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert inbound mail");
+        drop(conn);
+        let job = QueuedPrompt {
+            queue_task_metadata: serde_json::json!({}),
+            preview: String::new(),
+            source_label: "email:founder".to_string(),
+            goal: "Recherche".to_string(),
+            prompt: String::new(),
+            suggested_skill: None,
+            leased_message_keys: vec!["email:crew@example.test::inbox::m1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread-m1".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let evidence = inbound_attachment_review_evidence(&root, &job);
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].contains("`Recherche-Test.xlsx` (1691 bytes)"));
+        assert!(evidence[0].contains("must be based on this content"));
+        assert!(evidence[0].contains("Firmenname | Ort ; Company 0 | 12345 ; Company 1 | 12345"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn xlsx_attachment_inspection_counts_rows_and_headers() {
         let root = temp_root("xlsx-inspection");
         let path = root.join("fixture.xlsx");
@@ -46000,6 +47387,7 @@ Was jetzt zu tun ist:\n\
             sheet_name: "s".to_string(),
             row_count: rows,
             headers: headers.iter().map(|h| h.to_string()).collect(),
+            rows: Vec::new(),
         };
         // 19 data rows (< 200) -> row violation naming the threshold.
         assert!(

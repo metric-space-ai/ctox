@@ -5,6 +5,36 @@ use tokio::{
 };
 use tokio_tungstenite::accept_async;
 
+// Test-only, root-scoped transport override. Production has no configurable
+// Mistral endpoint; parallel HTTP regressions cannot redirect another root.
+static MISTRAL_TEST_ENDPOINTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+pub(crate) struct MistralTestEndpoint(PathBuf);
+
+impl MistralTestEndpoint {
+    pub(crate) fn new(root: &Path, endpoint: String) -> Self {
+        assert!(endpoint.starts_with("http://127.0.0.1:"));
+        assert!(MISTRAL_TEST_ENDPOINTS
+            .lock()
+            .unwrap()
+            .insert(root.to_owned(), endpoint)
+            .is_none());
+        Self(root.to_owned())
+    }
+}
+
+impl Drop for MistralTestEndpoint {
+    fn drop(&mut self) {
+        MISTRAL_TEST_ENDPOINTS.lock().unwrap().remove(&self.0);
+    }
+}
+
+pub(super) fn mistral_test_endpoint(root: &Path) -> Option<String> {
+    MISTRAL_TEST_ENDPOINTS.lock().unwrap().get(root).cloned()
+}
+
 #[test]
 fn pcm_contract_bounds_and_formats() {
     let f = PcmFormat::default();
@@ -43,12 +73,43 @@ fn provider_audio_is_decoded_not_returned_as_json() {
 }
 
 #[test]
+fn speech_rate_migrates_old_config_and_rejects_invalid_before_persistence() {
+    let root = tempfile::tempdir().unwrap();
+    let old: SpeechRuntimeConfig = serde_json::from_value(json!({
+        "synthesis":"mistral", "transcription":"mistral", "voice_id":"saved-voice"
+    }))
+    .unwrap();
+    assert_eq!(old.rate.value(), 1.15);
+    old.save(root.path()).unwrap();
+    for rate in [0.8, 1.0, 1.15, 1.5] {
+        let config: SpeechRuntimeConfig = serde_json::from_value(json!({
+            "synthesis":"mistral", "transcription":"mistral", "voice_id":"saved-voice", "rate":rate
+        }))
+        .unwrap();
+        config.save(root.path()).unwrap();
+        assert_eq!(
+            SpeechRuntimeConfig::load(root.path()).unwrap().rate.value(),
+            rate
+        );
+    }
+    let before = SpeechRuntimeConfig::load(root.path()).unwrap();
+    for rate in [json!(0.79), json!(1.51), json!("1.15"), Value::Null] {
+        assert!(serde_json::from_value::<SpeechRuntimeConfig>(json!({
+            "synthesis":"mistral", "transcription":"mistral", "voice_id":"saved-voice", "rate":rate
+        }))
+        .is_err());
+        assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), before);
+    }
+}
+
+#[test]
 fn typed_configuration_persists_and_rejects_unknown_fields() {
     let root = tempfile::tempdir().unwrap();
     let config = SpeechRuntimeConfig {
         synthesis: SpeechBackend::Mistral,
         transcription: SpeechBackend::Mistral,
         voice_id: Some("voice-test".into()),
+        rate: Default::default(),
     };
     config.save(root.path()).unwrap();
     assert_eq!(SpeechRuntimeConfig::load(root.path()).unwrap(), config);
@@ -71,6 +132,7 @@ fn configure_file_validates_before_replacing_existing_selection() {
         synthesis: SpeechBackend::Mistral,
         transcription: SpeechBackend::Mistral,
         voice_id: Some("approved-voice".into()),
+        rate: Default::default(),
     };
     std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
     let status = configure_from_file(root.path(), &path).unwrap();
@@ -101,6 +163,7 @@ fn missing_saved_voice_fails_before_provider_transport() {
             synthesis: SpeechBackend::Mistral,
             transcription: SpeechBackend::Mistral,
             voice_id: None,
+            rate: Default::default(),
         },
     };
     assert!(!gateway.status().mistral_voice_configured);
@@ -168,7 +231,7 @@ pub(crate) async fn fixture(mode: &'static str) -> (String, JoinHandle<()>) {
         let update = socket.next().await.unwrap().unwrap().into_text().unwrap();
         let update: Value = serde_json::from_str(&update).unwrap();
         assert_eq!(update["session"]["audio_format"]["encoding"], "pcm_s16le");
-        assert_eq!(update["session"]["target_streaming_delay_ms"], 240);
+        assert_eq!(update["session"]["target_streaming_delay_ms"], 480);
         socket
             .send(Message::Text(
                 json!({"type":"session.updated","session":{}})

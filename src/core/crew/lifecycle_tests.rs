@@ -1,6 +1,89 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn crew_idle_retention_does_not_compete_with_an_active_writer() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("retention.sqlite3");
+    let conn = Connection::open(&path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT);
+        CREATE TABLE worker_attempt_finalizations(attempt_id TEXT PRIMARY KEY)",
+    )?;
+    ensure_schema(&conn)?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    let other = Connection::open(&path)?;
+    let writer =
+        rusqlite::Transaction::new_unchecked(&other, rusqlite::TransactionBehavior::Immediate)?;
+    // A no-op SQL write is sufficient to reproduce the old failure while the
+    // real writer owns its reservation. No timing or simulated busy error.
+    let error = conn
+        .execute(
+            "UPDATE crew_attempts SET started_at=selected_at WHERE started_at IS NULL",
+            [],
+        )
+        .unwrap_err();
+    assert!(matches!(error, rusqlite::Error::SqliteFailure(ref code, _)
+        if code.code == rusqlite::ErrorCode::DatabaseBusy));
+    retain_attempts(&conn, chrono::Utc::now().timestamp_millis())?;
+    assert!(conn.is_autocommit());
+    writer.rollback()?;
+    Ok(())
+}
+
+#[test]
+fn crew_finished_retention_rechecks_reopened_routes_and_newest_window() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("retention.sqlite3");
+    let conn = Connection::open(&path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)",
+    )?;
+    ensure_schema(&conn)?;
+    conn.execute(
+        "INSERT INTO communication_routing_state(message_key,route_status) VALUES('reopened','handled')",
+        [],
+    )?;
+    for n in 0..503 {
+        conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at,started_at,finalized_at)
+            VALUES(?1,?2,'crew-milo','2020-01-01', '2020-01-01',?3)",
+            params![format!("a-{n:04}"), if n==0 {"reopened"} else {"closed"}, format!("{n:06}")])?;
+    }
+    super::lifecycle::AFTER_FINISHED_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            let tx = rusqlite::Transaction::new_unchecked(&other,rusqlite::TransactionBehavior::Immediate).unwrap();
+            tx.execute("UPDATE communication_routing_state SET route_status='pending' WHERE message_key='reopened'", []).unwrap();
+            tx.execute("UPDATE crew_attempts SET finalized_at='999999' WHERE attempt_id='a-0001'", []).unwrap();
+            tx.commit().unwrap();
+        }));
+    });
+    let result = retain_attempts(&conn, chrono::Utc::now().timestamp_millis());
+    super::lifecycle::AFTER_FINISHED_RETENTION_READS.with(|slot| *slot.borrow_mut() = None);
+    result?;
+    let retained: i64 = conn.query_row("SELECT COUNT(*) FROM crew_attempts", [], |r| r.get(0))?;
+    assert_eq!(retained, 502);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM crew_attempts WHERE attempt_id IN ('a-0000','a-0001')",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM crew_attempts WHERE attempt_id='a-0002'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    Ok(())
+}
+
 fn leased() -> Result<(tempfile::TempDir, Connection, String)> {
     let root = tempfile::tempdir()?;
     let task = crate::mission::channels::create_queue_task(
@@ -19,6 +102,108 @@ fn leased() -> Result<(tempfile::TempDir, Connection, String)> {
     let conn = Connection::open(crate::paths::core_db(root.path()))?;
     conn.execute("UPDATE communication_routing_state SET route_status='leased',lease_owner='fixture' WHERE message_key=?1", [&task.message_key])?;
     Ok((root, conn, task.message_key))
+}
+
+#[test]
+fn crew_retention_revalidates_start_and_lease_after_candidate_reads() -> Result<()> {
+    let (root, conn, started_task) = leased()?;
+    conn.execute(
+        "UPDATE communication_routing_state SET route_status='pending' WHERE message_key=?1",
+        [&started_task],
+    )?;
+    let leased_task = crate::mission::channels::create_queue_task(
+        root.path(),
+        crate::mission::channels::QueueTaskCreateRequest {
+            title: "Retention admission race".into(),
+            prompt: "Inspect fixture".into(),
+            thread_key: "retention-other".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?
+    .message_key;
+    conn.execute_batch("PRAGMA journal_mode=WAL")?;
+    for (attempt, task) in [
+        ("started", started_task.as_str()),
+        ("leased", leased_task.as_str()),
+        ("expired", "closed"),
+    ] {
+        conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES(?1,?2,'crew-milo','2020-01-01T00:00:00Z')",
+            params![attempt, task])?;
+    }
+    let path = crate::paths::core_db(root.path());
+    let callback_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = callback_ran.clone();
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            other.busy_timeout(std::time::Duration::ZERO).unwrap();
+            // This real commit invalidates an old deferred WAL read snapshot.
+            let tx = rusqlite::Transaction::new_unchecked(&other, rusqlite::TransactionBehavior::Immediate).unwrap();
+            tx.execute("UPDATE crew_attempts SET started_at='2026-10-09T12:00:00Z' WHERE attempt_id='started'", []).unwrap();
+            tx.execute("UPDATE communication_routing_state SET route_status='leased' WHERE message_key=?1", [&leased_task]).unwrap();
+            tx.commit().unwrap();
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+    });
+    let result = retain_attempts(&conn, chrono::Utc::now().timestamp_millis());
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    result?;
+    assert!(callback_ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(conn.is_autocommit());
+    let ids = conn
+        .prepare("SELECT attempt_id FROM crew_attempts ORDER BY attempt_id")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(ids, vec!["leased", "started"]);
+    // No writer reservation survives the maintenance call.
+    let other = Connection::open(crate::paths::core_db(root.path()))?;
+    other.busy_timeout(std::time::Duration::ZERO)?;
+    other.execute_batch("BEGIN IMMEDIATE; ROLLBACK")?;
+    Ok(())
+}
+
+#[test]
+fn crew_retention_preserves_first_finalization_committed_after_scan() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = root.path().join("retention.sqlite3");
+    let conn = Connection::open(&path)?;
+    conn.execute_batch("PRAGMA journal_mode=WAL;
+        CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)")?;
+    ensure_schema(&conn)?;
+    conn.execute("INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at) VALUES('first-finalization','closed','crew-milo','2020-01-01T00:00:00Z')", [])?;
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let other = Connection::open(&path).unwrap();
+            // The first worker can initialize its durable ledger after the
+            // cockpit's initial schema check. Revalidate that evidence too.
+            other
+                .execute_batch(
+                    "CREATE TABLE worker_attempt_finalizations(attempt_id TEXT PRIMARY KEY);
+                INSERT INTO worker_attempt_finalizations VALUES('first-finalization')",
+                )
+                .unwrap();
+        }));
+    });
+    let result = retain_attempts(&conn, chrono::Utc::now().timestamp_millis());
+    super::lifecycle::AFTER_RETENTION_READS.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
+    result?;
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM crew_attempts WHERE attempt_id='first-finalization'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
 }
 
 #[test]

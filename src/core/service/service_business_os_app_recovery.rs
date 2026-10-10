@@ -77,6 +77,12 @@ fn maybe_lease_next_durable_queue_prompt(
     if let Some(prompt) = lease_priority_system_queue_prompt(root, state, &lease_attempt)? {
         return Ok(Some(prompt));
     }
+    // Every path that hands the serial slot to durable queue work (router,
+    // working-hours tick, worker-idle kick) passes here, so communication
+    // that waits for the slot is checked once for all of them.
+    if communication_inbound_waiting(root) {
+        return Ok(None);
+    }
     let mut app_queue_lease_active = leased_business_os_app_queue_task_exists(root)?;
     if !lease_attempt.is_current() {
         return Ok(None);
@@ -176,7 +182,9 @@ fn maybe_lease_next_durable_queue_prompt(
         let leased =
             channels::lease_queue_task(root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
         clear_idle_durable_queue_empty_gate(root);
-        return Ok(Some(queued_prompt_from_queue_task(leased)));
+        let mut job = queued_prompt_from_queue_task(leased);
+        render_founder_rework_prompt_for_queue_job(root, &mut job);
+        return Ok(Some(job));
     }
     Ok(None)
 }
@@ -382,7 +390,9 @@ fn lease_priority_system_queue_prompt(
             priority_system_queue_task_is_eligible,
         )?;
         clear_idle_durable_queue_empty_gate(root);
-        return Ok(Some(queued_prompt_from_queue_task(leased)));
+        let mut job = queued_prompt_from_queue_task(leased);
+        render_founder_rework_prompt_for_queue_job(root, &mut job);
+        return Ok(Some(job));
     }
     Ok(None)
 }

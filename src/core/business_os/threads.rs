@@ -254,6 +254,7 @@ const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
     // Workjet project identity and local checkout bindings are native-authored
     // through exact business_commands; peers render their projections only.
     "workjet_computers",
+    super::provider_federation::REGISTRY_COLLECTION,
     "workjet_projects",
     "workjet_sessions",
     "workjet_session_transfers",
@@ -416,6 +417,18 @@ impl ReplicationPolicyReader for RootReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == super::provider_federation::REGISTRY_COLLECTION {
+            let decision = (|| -> anyhow::Result<bool> {
+                let conn = Connection::open_with_flags(
+                    store::business_os_store_path(self.root),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )?;
+                conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+                super::provider_federation::projection_visible(&conn, document, user)
+            })();
+            return Some(decision.unwrap_or(false));
+        }
         self.visibility.visible(collection, document, user)
     }
     fn browser_visible(&mut self, collection: &str, document: &Value, user: &str) -> bool {
@@ -454,6 +467,12 @@ impl ReplicationPolicyReader for HeldReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == super::provider_federation::REGISTRY_COLLECTION {
+            return Some(
+                super::provider_federation::projection_visible(self.store, document, user)
+                    .unwrap_or(false),
+            );
+        }
         super::project_chats::document_visible_from_connections(
             self.core, self.store, collection, document, user,
         )
@@ -2195,6 +2214,34 @@ fn create_ai_request(
     session: &BusinessOsSession,
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
+    create_ai_request_with_supervisor_turn(root, session, command, None)
+}
+
+pub(super) fn create_supervisor_ai_request(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    turn_kind: &str,
+    submit_command_id: &str,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        matches!(turn_kind, "conversation" | "work"),
+        "invalid Supervisor turn kind"
+    );
+    create_ai_request_with_supervisor_turn(
+        root,
+        session,
+        command,
+        Some(json!({"kind": turn_kind, "submit_command_id": submit_command_id})),
+    )
+}
+
+fn create_ai_request_with_supervisor_turn(
+    root: &Path,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    supervisor_turn: Option<Value>,
+) -> anyhow::Result<Value> {
     let goal = required_string(&command.payload, &["goal", "prompt", "instruction"])?;
     let mut delegated = command.clone();
     delegated.command_type = "threads.message.create".to_owned();
@@ -2213,7 +2260,7 @@ fn create_ai_request(
         .with_context(|| format!("thread {thread_id} not found"))?;
     let module = first_non_empty_owned([value_string(&thread, "source_module"), "ctox".to_owned()]);
     let ai_command_id = format!("cmd_{}", Uuid::new_v4());
-    let ai_command = json!({
+    let mut ai_command = json!({
         "id": ai_command_id,
         "command_id": ai_command_id,
         "module": module,
@@ -2239,6 +2286,11 @@ fn create_ai_request(
             "app_id": module,
         },
     });
+    // Only the authenticated native Supervisor adapter supplies this provenance.
+    // A generic Threads request cannot copy it from a caller-controlled payload.
+    if let Some(supervisor_turn) = supervisor_turn {
+        ai_command["payload"]["supervisor_turn"] = supervisor_turn;
+    }
     let accepted = store::accept_rxdb_business_command_with_origin(
         root,
         ai_command,

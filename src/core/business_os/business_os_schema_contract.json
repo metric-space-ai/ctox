@@ -12255,7 +12255,7 @@
     "additionalProperties": false
   },
   "workjet_projects": {
-    "version": 2,
+    "version": 3,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12278,6 +12278,11 @@
       "public_url": {
         "type": "string",
         "maxLength": 2048
+      },
+      "supervisor_luma_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
       },
       "info": {
         "type": "object",
@@ -12372,6 +12377,239 @@
       ]
     ],
     "additionalProperties": false
+  },
+  "workjet_provider_registry": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "owner_user_id": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "policy_revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "catalog_freshness_ms": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      },
+      "accounts": {
+        "type": "array",
+        "maxItems": 256,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "holder": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "ctox_instance"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ]
+            },
+            "provider": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "credentialReady": {
+              "type": "boolean"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observedAtMs": {
+              "type": "number"
+            },
+            "modelCatalogObserved": {
+              "type": "boolean"
+            },
+            "inferenceVerified": {
+              "type": "boolean",
+              "enum": [
+                false
+              ]
+            },
+            "modelCatalog": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "observed": {
+                  "type": "boolean"
+                },
+                "models": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "lastSuccessAtMs": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "lastAttempt": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "checkedAtMs": {
+                      "type": "number"
+                    },
+                    "httpStatus": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "elapsedMs": {
+                      "type": "number"
+                    },
+                    "retryAfterSeconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "failure": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 128
+                    },
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "checkedAtMs",
+                    "httpStatus",
+                    "elapsedMs",
+                    "retryAfterSeconds",
+                    "failure",
+                    "success"
+                  ]
+                }
+              },
+              "required": [
+                "observed",
+                "models",
+                "lastSuccessAtMs",
+                "lastAttempt"
+              ]
+            },
+            "excludedModels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              }
+            },
+            "effectiveModels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              }
+            }
+          },
+          "required": [
+            "id",
+            "holder",
+            "provider",
+            "enabled",
+            "credentialReady",
+            "revision",
+            "observedAtMs",
+            "modelCatalogObserved",
+            "inferenceVerified",
+            "modelCatalog",
+            "excludedModels",
+            "effectiveModels"
+          ]
+        }
+      },
+      "providers": {
+        "type": "array",
+        "maxItems": 256,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "selection": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string",
+                "maxLength": 256
+              }
+            }
+          },
+          "required": [
+            "provider",
+            "selection"
+          ]
+        }
+      }
+    },
+    "required": [
+      "id",
+      "owner_user_id",
+      "policy_revision",
+      "catalog_freshness_ms",
+      "updated_at_ms",
+      "is_deleted",
+      "accounts",
+      "providers"
+    ],
+    "indexes": [
+      "owner_user_id",
+      "updated_at_ms"
+    ]
   },
   "workjet_session_transfers": {
     "version": 0,

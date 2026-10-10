@@ -60,6 +60,14 @@ use super::session_continuity::{
 #[path = "direct_session_reply.rs"]
 mod reply_capture;
 use reply_capture::DirectSessionReplyCapture;
+#[cfg(unix)]
+#[path = "direct_session_public_text.rs"]
+mod public_text;
+
+#[cfg(unix)]
+pub(crate) fn filter_native_message_text(text: &str, completed: bool) -> String {
+    public_text::filter_native_message_text(text, completed)
+}
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
@@ -176,6 +184,14 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.execute_writeback",
     "business_os.get_command_status",
     "business_os.workjet_worker_dispatch",
+    // These tools still require the signed, currently leased registered
+    // Supervisor in the native MCP handler. The harness filter must not hide
+    // them from that execution when a scheduled meeting needs preparation.
+    "business_os.jour_fixe_read",
+    "business_os.jour_fixe_update",
+    "business_os.project_kpi",
+    "business_os.presentation_read",
+    "business_os.presentation_update",
     "business_os.list_runs",
     "business_os.get_run",
 ];
@@ -244,6 +260,71 @@ fn business_os_mcp_thread_config(
     // Connected ChatGPT Apps are unrelated to this internal command session.
     config.insert("features.apps".to_string(), JsonValue::Bool(false));
     Ok(config)
+}
+
+struct NativeMcpStartupExpectation {
+    nonce: String,
+    token: String,
+    endpoint: String,
+    context: JsonValue,
+}
+
+impl NativeMcpStartupExpectation {
+    fn prepare(root: &Path, config: &mut HashMap<String, JsonValue>) -> Result<Self> {
+        let servers = config
+            .get_mut("mcp_servers")
+            .and_then(JsonValue::as_object_mut)
+            .context("native Core has no managed MCP configuration")?;
+        anyhow::ensure!(
+            servers.len() == 1,
+            "native Core has foreign configured MCP servers"
+        );
+        let server = servers
+            .get_mut(BUSINESS_OS_MCP_SESSION_SERVER_NAME)
+            .context("native Core has no original Business OS MCP server")?;
+        let endpoint = server["url"]
+            .as_str()
+            .context("native MCP has no HTTP endpoint")?
+            .to_owned();
+        let url = url::Url::parse(&endpoint)?;
+        let ip = url
+            .host_str()
+            .context("native MCP endpoint has no host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()?;
+        anyhow::ensure!(
+            ip.is_loopback()
+                && url.scheme() == "http"
+                && url.path() == "/mcp"
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "native Core requires the numeric local MCP listener"
+        );
+        let headers = server["http_headers"]
+            .as_object_mut()
+            .context("native MCP has no command headers")?;
+        let token = headers
+            .get("X-CTOX-Business-Command-Session")
+            .and_then(JsonValue::as_str)
+            .context("native MCP has no command session")?
+            .to_owned();
+        let context =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, &token)?;
+        let nonce = uuid::Uuid::new_v4().to_string();
+        headers.insert(
+            crate::business_os::mcp_channel::native_startup::HEADER.into(),
+            JsonValue::String(nonce.clone()),
+        );
+        Ok(Self {
+            nonce,
+            token,
+            endpoint,
+            context,
+        })
+    }
 }
 
 fn configure_managed_linux_sandbox(cli_overrides: &mut Vec<(String, toml::Value)>) {
@@ -1836,6 +1917,14 @@ impl PersistentSession {
         Option<Arc<ctox_core::CodexThread>>,
     )> {
         let native_guest = native_guest_authorization.is_some();
+        // Fresh per actual Core construction; never reused from a previous session.
+        let mut native_thread_config =
+            native_guest.then(|| thread_config.cloned().unwrap_or_default());
+        let native_mcp_startup = native_thread_config
+            .as_mut()
+            .map(|config| NativeMcpStartupExpectation::prepare(root, config))
+            .transpose()?;
+        let thread_config = native_thread_config.as_ref().or(thread_config);
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let runtime_local_preset = resolved_runtime
             .as_ref()
@@ -2087,6 +2176,22 @@ impl PersistentSession {
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
         if native_guest {
             super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
+            // Both fresh thread/start and protected original-session load use
+            // these canonical overrides; the latter bypasses thread/start config.
+            let native_config = native_thread_config
+                .as_ref()
+                .context("native MCP configuration missing")?;
+            cli_overrides.retain(|(key, _)| key != "mcp_servers" && key != "features.apps");
+            cli_overrides.push((
+                "mcp_servers".into(),
+                serde_json::from_value::<toml::Value>(
+                    native_config
+                        .get("mcp_servers")
+                        .context("native MCP servers missing")?
+                        .clone(),
+                )?,
+            ));
+            cli_overrides.push(("features.apps".into(), toml::Value::Boolean(false)));
         }
         let config = ConfigBuilder::default()
             .cli_overrides(cli_overrides.clone())
@@ -2177,6 +2282,7 @@ impl PersistentSession {
             cwd: &canonical_cwd,
             base_instructions,
             disable_active_tools,
+            read_only_sandbox,
             disable_mcp_servers,
             thread_config,
             persistent_worker,
@@ -2222,6 +2328,38 @@ impl PersistentSession {
             // Actual object provenance before the first submission; no JSON or
             // renderer field registers this ledger, and it grants no execution.
             actual_thread.register_native_source_factory()?;
+            if let Some(startup) = &native_mcp_startup {
+                actual_thread
+                    .reconcile_native_mcp_startup(|snapshot| {
+                        let verified = (|| -> Result<()> {
+                            if let (Some(binding), Some(authorize)) =
+                                (&native_checkpoint_binding, native_guest_authorization)
+                            {
+                                binding.with_current_contract(|contract| {
+                                    authorize(&model, contract)
+                                })?;
+                            }
+                            crate::business_os::mcp_channel::native_startup::verify(
+                                root,
+                                &startup.nonce,
+                                &startup.token,
+                                &startup.endpoint,
+                                &startup.context,
+                                snapshot,
+                            )?;
+                            if let (Some(binding), Some(authorize)) =
+                                (&native_checkpoint_binding, native_guest_authorization)
+                            {
+                                binding.with_current_contract(|contract| {
+                                    authorize(&model, contract)
+                                })?;
+                            }
+                            Ok(())
+                        })();
+                        verified.map_err(|error| std::io::Error::other(error.to_string()))
+                    })
+                    .await?;
+            }
             if let (Some(binding), Some(authorize)) =
                 (&native_checkpoint_binding, native_guest_authorization)
             {
@@ -2423,6 +2561,7 @@ impl PersistentSession {
             cwd,
             base_instructions,
             disable_active_tools,
+            read_only_sandbox,
             disable_mcp_servers,
             thread_config,
             persistent_worker,
@@ -2645,6 +2784,18 @@ impl PersistentSession {
         }
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();
+        #[cfg(unix)]
+        let public_text_provider = provider_owner
+            .as_ref()
+            .filter(|_| {
+                native_command_context
+                    .and_then(|context| context.get("workjet_supervisor_only"))
+                    .and_then(JsonValue::as_bool)
+                    == Some(true)
+            })
+            .map(crate::channels::NativeProviderTurnOwner::binding);
+        #[cfg(unix)]
+        let mut public_text_capture = public_text::PublicTextCapture::default();
         let mut completion_message: Option<String> = None;
         // `AgentMessage` events carry no turn id, so an orphaned message from
         // a prior/interrupted turn still queued on this reused thread could
@@ -2774,6 +2925,32 @@ impl PersistentSession {
             match event {
                 InProcessServerEvent::ServerRequest(_) => {}
                 InProcessServerEvent::ServerNotification(notification) => {
+                    #[cfg(unix)]
+                    if let Some(provider) = public_text_provider.as_ref() {
+                        let publication = public_text_capture
+                            .observe(
+                                &notification,
+                                &thread_id,
+                                &turn_id,
+                                turn_started_at.elapsed(),
+                            )
+                            .and_then(|chunks| {
+                                for chunk in chunks {
+                                    public_text::publish(
+                                        root, provider, &thread_id, &turn_id, &chunk,
+                                    )?;
+                                }
+                                Ok(())
+                            });
+                        if let Err(error) = publication {
+                            let terminal =
+                                interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id)
+                                    .await;
+                            return Err(SessionPoisoned(format!(
+                                "public assistant text publication failed: {error}; terminal_observed={terminal}"
+                            )).into());
+                        }
+                    }
                     // V2 notifications carry their own thread/turn identity and
                     // must not depend on seeing a legacy TurnStarted first.
                     if let Some(plan) = current_turn_plan_event(&notification, &thread_id, &turn_id)
@@ -3439,6 +3616,30 @@ mod tests {
             config.get("features.apps").and_then(JsonValue::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn business_os_mcp_thread_config_exposes_scheduled_supervisor_tools() {
+        let config =
+            business_os_mcp_thread_config("127.0.0.1:8788", "test-secret", "command-session")
+                .expect("build scheduled Supervisor MCP config");
+        let tools = config["mcp_servers"][BUSINESS_OS_MCP_SESSION_SERVER_NAME]["enabled_tools"]
+            .as_array()
+            .expect("explicit enabled tools");
+        for name in [
+            "business_os.jour_fixe_read",
+            "business_os.jour_fixe_update",
+            "business_os.project_kpi",
+        ] {
+            assert_eq!(
+                tools
+                    .iter()
+                    .filter(|tool| tool.as_str() == Some(name))
+                    .count(),
+                1,
+                "the harness must expose the native preparation tool exactly once: {name}"
+            );
+        }
     }
 
     #[test]

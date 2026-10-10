@@ -68,6 +68,39 @@ pub struct SpeechRuntimeConfig {
     pub synthesis: SpeechBackend,
     pub transcription: SpeechBackend,
     pub voice_id: Option<String>,
+    /// Pitch-preserving playback rate applied after synthesis by the consumer.
+    #[serde(default)]
+    pub rate: SpeechRate,
+}
+
+/// A bounded scalar on the wire, stored without floating-point equality drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeechRate(u16);
+impl Default for SpeechRate {
+    fn default() -> Self {
+        Self(115)
+    }
+}
+impl SpeechRate {
+    pub fn value(self) -> f64 {
+        f64::from(self.0) / 100.0
+    }
+}
+impl Serialize for SpeechRate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_f64(self.value())
+    }
+}
+impl<'de> Deserialize<'de> for SpeechRate {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let rate = f64::deserialize(deserializer)?;
+        if !rate.is_finite() || !(0.8..=1.5).contains(&rate) {
+            return Err(serde::de::Error::custom(
+                "speech rate must be between 0.8 and 1.5",
+            ));
+        }
+        Ok(Self((rate * 100.0).round() as u16))
+    }
 }
 
 impl SpeechRuntimeConfig {
@@ -193,7 +226,7 @@ impl Default for PcmFormat {
 
 impl PcmFormat {
     fn validate(self) -> Result<(), SpeechError> {
-        if ![8_000, 16_000, 22_050, 44_100, 48_000].contains(&self.sample_rate_hz) {
+        if ![8_000, 16_000, 22_050, 24_000, 44_100, 48_000].contains(&self.sample_rate_hz) {
             return Err(SpeechError::InvalidRequest);
         }
         Ok(())
@@ -279,6 +312,8 @@ pub enum VerifiedTranscriptEvent {
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum SpeechError {
     ConfigurationUnavailable,
+    /// Executor setup failed before any provider request was started.
+    ExecutionUnavailable,
     MissingCredential,
     MissingVoice,
     UnsupportedBackend,
@@ -288,7 +323,9 @@ pub enum SpeechError {
     InvalidResponse,
     Backpressure,
     Closed,
-    ProviderRejected { http_status: Option<u16> },
+    ProviderRejected {
+        http_status: Option<u16>,
+    },
 }
 impl fmt::Display for SpeechError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -303,6 +340,37 @@ pub struct SpeechStatus {
     pub mistral_credential_present: bool,
     pub mistral_voice_configured: bool,
     pub streaming_stt_selected: bool,
+    /// Verified readiness, or unknown when only backend configuration is available.
+    pub stt: SpeechAvailability,
+    /// Verified readiness, or unknown when only backend configuration is available.
+    pub tts: SpeechAvailability,
+}
+
+/// Three-state answer for one speech role. `Unknown` means the check could not run,
+/// which is different from `Unavailable`, where the check ran and found nothing usable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechAvailability {
+    Unknown,
+    Available,
+    Unavailable,
+}
+
+/// Maps the outcome of a readiness check to a role availability.
+/// `Err` means the check itself could not run.
+pub fn availability_from_check(check: Result<bool, ()>) -> SpeechAvailability {
+    match check {
+        Ok(true) => SpeechAvailability::Available,
+        Ok(false) => SpeechAvailability::Unavailable,
+        Err(()) => SpeechAvailability::Unknown,
+    }
+}
+
+fn availability_from_configuration(configuration: Result<bool, ()>) -> SpeechAvailability {
+    match configuration {
+        Ok(false) => SpeechAvailability::Unavailable,
+        Ok(true) | Err(()) => SpeechAvailability::Unknown,
+    }
 }
 
 /// Local operator configuration through the existing runtime store. This is not
@@ -336,6 +404,14 @@ impl SpeechGateway {
 
     pub fn status(&self) -> SpeechStatus {
         SpeechStatus {
+            stt: self.role_availability(
+                self.config.transcription,
+                crate::inference::engine::AuxiliaryRole::Stt,
+            ),
+            tts: self.role_availability(
+                self.config.synthesis,
+                crate::inference::engine::AuxiliaryRole::Tts,
+            ),
             config: self.config.clone(),
             mistral_credential_present: mistral_key(&self.root).is_some(),
             mistral_voice_configured: self.config.voice_id.is_some(),
@@ -368,8 +444,54 @@ impl SpeechGateway {
         }
     }
 
+    /// Configuration can establish absence, but cannot prove a provider or
+    /// holding computer will answer. Present credentials and model bindings
+    /// remain unknown until an actual request verifies that speech role.
+    fn role_availability(
+        &self,
+        backend: SpeechBackend,
+        role: crate::inference::engine::AuxiliaryRole,
+    ) -> SpeechAvailability {
+        match backend {
+            SpeechBackend::Mistral => {
+                availability_from_configuration(Ok(mistral_key(&self.root).is_some()))
+            }
+            SpeechBackend::Computer => match role {
+                crate::inference::engine::AuxiliaryRole::Stt => {
+                    #[cfg(unix)]
+                    {
+                        availability_from_configuration(
+                            computer::SpeechComputerConfig::load(&self.root)
+                                .map(|c| c.transcription.is_some())
+                                .map_err(|_| ()),
+                        )
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        SpeechAvailability::Unavailable
+                    }
+                }
+                _ => SpeechAvailability::Unavailable,
+            },
+            SpeechBackend::Runtime => availability_from_configuration(
+                crate::inference::runtime_kernel::InferenceRuntimeKernel::resolve(&self.root)
+                    .map(|runtime| runtime.binding_for_auxiliary_role(role).is_some())
+                    .map_err(|_| ()),
+            ),
+        }
+    }
+
     /// Complete a slide narration or short spoken answer using the selected adapter.
     pub fn synthesize(&self, request: &SpeechRequest) -> Result<SpeechOutput, SpeechError> {
+        self.synthesize_with_timeout(request, Duration::from_secs(60))
+    }
+
+    /// A short settings probe has a shorter IO budget than a full slide.
+    pub(crate) fn synthesize_with_timeout(
+        &self,
+        request: &SpeechRequest,
+        timeout: Duration,
+    ) -> Result<SpeechOutput, SpeechError> {
         if request.text.trim().is_empty() || request.text.len() > MAX_TEXT_BYTES {
             return Err(SpeechError::InvalidRequest);
         }
@@ -406,10 +528,11 @@ impl SpeechGateway {
                     "voice_id": voice, "response_format": request.format.label(), "stream": false,
                 });
                 let agent = ureq::AgentBuilder::new()
-                    .timeout(Duration::from_secs(60))
+                    .timeout(timeout)
+                    .redirects(0)
                     .build();
                 let response = agent
-                    .post("https://api.mistral.ai/v1/audio/speech")
+                    .post(&mistral_speech_endpoint(&self.root))
                     .set("authorization", &format!("Bearer {key}"))
                     .set("content-type", "application/json")
                     .send_bytes(body.to_string().as_bytes())
@@ -508,7 +631,7 @@ impl SpeechGateway {
                     .ok_or(SpeechError::UnsupportedBackend)
             })
             .await
-            .map_err(|_| SpeechError::ConfigurationUnavailable)??;
+            .map_err(|_| SpeechError::Transport)??;
             return TranscriptionStream::open_runtime(
                 binding.transport,
                 binding.request_model,
@@ -525,13 +648,24 @@ impl SpeechGateway {
     }
 }
 
-fn mistral_key(root: &Path) -> Option<String> {
+pub(crate) fn mistral_key(root: &Path) -> Option<String> {
     // Existing encrypted credentials only. Never read a new ambient env switch.
     ["CTOX_MISTRAL_API_KEY", "MISTRAL_API_KEY"]
         .iter()
         .find_map(|k| crate::inference::runtime_env::env_or_config(root, k))
         .filter(|k| !k.trim().is_empty())
 }
+
+fn mistral_speech_endpoint(_root: &Path) -> String {
+    #[cfg(test)]
+    if let Some(endpoint) = tests::mistral_test_endpoint(_root) {
+        return endpoint;
+    }
+    "https://api.mistral.ai/v1/audio/speech".to_owned()
+}
+
+#[cfg(test)]
+pub(crate) use tests::MistralTestEndpoint;
 
 fn decode_mistral_speech(encoded: &[u8]) -> Result<Vec<u8>, SpeechError> {
     if encoded.len() > MAX_AUDIO_BYTES * 2 {
@@ -689,7 +823,8 @@ impl TranscriptionStream {
         send_json(&mut socket, json!({
             "type": "session.update", "session": {
                 "audio_format": { "encoding": "pcm_s16le", "sample_rate": format.sample_rate_hz },
-                "target_streaming_delay_ms": 240,
+                // Give live words more context while retaining headroom for the 1.5 s final target.
+                "target_streaming_delay_ms": 480,
             }
         })).await?;
         let updated = tokio::time::timeout(IO_TIMEOUT, receive_json(&mut socket))
@@ -1054,6 +1189,10 @@ async fn pump(
     }
 }
 
+#[path = "speech_probe.rs"]
+mod probe;
+pub use probe::SpeechTranscriptionProbe;
+
 /// Replay a supplied 16 kHz mono s16le PCM fixture at its actual capture cadence.
 /// This is an explicit operator smoke, never microphone capture or automatic production inference.
 pub async fn benchmark_pcm(root: &Path, pcm_path: &Path) -> anyhow::Result<Value> {
@@ -1113,3 +1252,67 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "speech_runtime_tests.rs"]
 mod runtime_tests;
+
+#[cfg(test)]
+mod speech_availability_tests {
+    use super::{
+        availability_from_check, availability_from_configuration, SpeechAvailability,
+        SpeechBackend, SpeechGateway, SpeechRuntimeConfig,
+    };
+
+    #[test]
+    fn status_never_promotes_credential_presence_to_verified_provider_readiness() {
+        let root = tempfile::tempdir().unwrap();
+        let gateway = SpeechGateway {
+            root: root.path().to_owned(),
+            config: SpeechRuntimeConfig {
+                transcription: SpeechBackend::Mistral,
+                synthesis: SpeechBackend::Mistral,
+                ..Default::default()
+            },
+        };
+        let status = gateway.status();
+        let expected = availability_from_configuration(Ok(status.mistral_credential_present));
+        assert_eq!(status.stt, expected);
+        assert_eq!(status.tts, expected);
+        assert_ne!(status.stt, SpeechAvailability::Available);
+        assert_ne!(status.tts, SpeechAvailability::Available);
+        assert_eq!(
+            availability_from_configuration(Ok(true)),
+            SpeechAvailability::Unknown,
+        );
+    }
+
+    #[test]
+    fn a_completed_check_maps_to_available_or_unavailable() {
+        assert_eq!(
+            availability_from_check(Ok(true)),
+            SpeechAvailability::Available
+        );
+        assert_eq!(
+            availability_from_check(Ok(false)),
+            SpeechAvailability::Unavailable
+        );
+    }
+
+    #[test]
+    fn a_check_that_could_not_run_is_unknown_not_unavailable() {
+        assert_eq!(
+            availability_from_check(Err(())),
+            SpeechAvailability::Unknown
+        );
+    }
+
+    #[test]
+    fn availability_serializes_to_the_contract_values() {
+        let values: Vec<String> = [
+            SpeechAvailability::Unknown,
+            SpeechAvailability::Available,
+            SpeechAvailability::Unavailable,
+        ]
+        .iter()
+        .map(|value| serde_json::to_string(value).unwrap())
+        .collect();
+        assert_eq!(values, ["\"unknown\"", "\"available\"", "\"unavailable\""]);
+    }
+}

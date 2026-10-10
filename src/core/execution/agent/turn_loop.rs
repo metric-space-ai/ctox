@@ -1379,30 +1379,22 @@ where
             trigger_reason,
             due_refreshes.iter().cloned().collect::<Vec<_>>().join(",")
         ));
-        match session.as_deref_mut() {
-            Some(refresh_session) => refresh_continuity_documents(
-                root,
-                &operator_settings,
-                db_path,
-                &engine,
-                conversation_id,
-                &due_refreshes,
-                refresh_session,
-                &mut emit,
-            )?,
-            None => refresh_continuity_documents(
-                root,
-                &operator_settings,
-                db_path,
-                &engine,
-                conversation_id,
-                &due_refreshes,
-                owned_session
-                    .as_mut()
-                    .expect("owned persistent session should exist for continuity refresh"),
-                &mut emit,
-            )?,
-        }
+        // The refresh runs in its own isolated session, never in the task's
+        // worker thread: refresh turns appended to the worker history
+        // changed the agent's chat outside compaction, and every refresh
+        // request carried the whole agent history (120-130 kB on thesen,
+        // 08.10.2026) into the 45 s refresh timeout.
+        let mut refresh_session = ContinuityRefreshSession::Isolated { slot: None };
+        refresh_continuity_documents(
+            root,
+            &operator_settings,
+            db_path,
+            &engine,
+            conversation_id,
+            &due_refreshes,
+            &mut refresh_session,
+            &mut emit,
+        )?
     } else {
         emit(if refresh_now && native_journal_persisted {
             "continuity-refresh-deferred-native-capture"
@@ -1665,7 +1657,7 @@ pub(crate) fn refresh_member_memory(
         engine,
         conversation_id,
         due_kinds,
-        session,
+        &mut ContinuityRefreshSession::Dedicated(session),
         emit,
     )?;
     Ok(heads_before
@@ -1688,6 +1680,51 @@ pub(crate) fn refresh_member_memory(
         .collect())
 }
 
+/// Where a continuity refresh runs its model turns.
+pub(crate) enum ContinuityRefreshSession<'a> {
+    /// A session that exists only for memory work (crew member memory).
+    Dedicated(&'a mut PersistentSession),
+    /// Started on the first model call and never the task's worker thread.
+    Isolated { slot: Option<PersistentSession> },
+}
+
+impl ContinuityRefreshSession<'_> {
+    fn session(
+        &mut self,
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+    ) -> Result<&mut PersistentSession> {
+        match self {
+            Self::Dedicated(session) => Ok(&mut **session),
+            Self::Isolated { slot } => {
+                if slot.is_none() {
+                    *slot = Some(PersistentSession::start_isolated(root, settings, None)?);
+                }
+                Ok(slot
+                    .as_mut()
+                    .expect("isolated refresh session was just started"))
+            }
+        }
+    }
+
+    /// Drops a poisoned isolated session so the next kind starts fresh.
+    /// Returns false for a dedicated session, which the caller must discard.
+    fn discard_isolated(&mut self) -> bool {
+        match self {
+            Self::Dedicated(_) => false,
+            Self::Isolated { slot } => {
+                *slot = None;
+                true
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn started(&self) -> bool {
+        matches!(self, Self::Isolated { slot: Some(_) }) || matches!(self, Self::Dedicated(_))
+    }
+}
+
 /// Tool-based continuity refresh. Sends the model a prompt describing the
 /// `ctox continuity-update` CLI (three modes: full / replace / diff) and
 /// expects the model to invoke it via its shell tool. We then detect
@@ -1704,7 +1741,7 @@ fn refresh_continuity_documents(
     engine: &lcm::LcmEngine,
     conversation_id: i64,
     due_kinds: &HashSet<String>,
-    session: &mut PersistentSession,
+    session: &mut ContinuityRefreshSession<'_>,
     emit: &mut impl FnMut(&str),
 ) -> Result<turn_engine::ContinuityRefreshStats> {
     let mut stats = turn_engine::ContinuityRefreshStats::default();
@@ -1818,7 +1855,21 @@ fn refresh_continuity_documents(
         }
 
         emit(&format!("continuity-{kind_label}-invoke"));
-        let reply = match session.run_turn(
+        let refresh_session = match session.session(root, settings) {
+            Ok(refresh_session) => refresh_session,
+            Err(err) => {
+                stats.skipped_invoke += 1;
+                let _ = mark_durable_refresh_failed(
+                    db_path,
+                    conversation_id,
+                    kind_label,
+                    &format!("refresh session unavailable: {err}"),
+                );
+                eprintln!("ctox continuity refresh skipped {kind_label} session start: {err}");
+                continue;
+            }
+        };
+        let reply = match refresh_session.run_turn(
             &payload.prompt,
             Some(Duration::from_secs(refresh_timeout_secs)),
             None,
@@ -1842,6 +1893,7 @@ fn refresh_continuity_documents(
                 if err
                     .downcast_ref::<super::direct_session::SessionPoisoned>()
                     .is_some()
+                    && !session.discard_isolated()
                 {
                     return Err(err.context(format!(
                         "continuity refresh {kind_label} poisoned the worker session"
@@ -2103,7 +2155,7 @@ pub(crate) fn resolve_api_model_provider_spec(
         .filter(|provider| {
             matches!(
                 provider.as_str(),
-                "codex" | "claude" | "antigravity" | "kimi"
+                "codex" | "claude" | "antigravity" | "kimi" | "xai"
             )
         });
     if normalized == "ctox_subscription" && subscription_provider.is_none() {
@@ -2202,6 +2254,13 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     // daemon restart sat dead until a manual release. It is a rate limit.
     if lower.contains("token plan usage limit") {
         return Some(120);
+    }
+    // MiniMax answers with "We're currently experiencing high demand"
+    // (InternalServerError) once the weekly token plan is used up (thesen
+    // 09.10.2026). Treated as terminal it ended ten research tasks on their
+    // first attempt. It is provider capacity, not a fault in the task.
+    if lower.contains("high demand") {
+        return Some(300);
     }
     if lower.contains("database is locked")
         || lower.contains("database is busy")
@@ -2423,6 +2482,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn continuity_refresh_never_starts_a_session_it_does_not_need() -> Result<()> {
+        // The task refresh owns an isolated session that starts only on the
+        // first model call; it never borrows the worker's thread.
+        let temp = tempfile::tempdir()?;
+        let db_path = temp.path().join("ctox.sqlite3");
+        let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+        let fault = temp.path().join("continuity-fault.json");
+        std::fs::write(
+            &fault,
+            serde_json::json!({
+                "anchors": ["## Entries\n+ - fact: refreshed outside the worker thread\n"]
+            })
+            .to_string(),
+        )?;
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            CONTINUITY_REFRESH_FAULT_FILE_ENV_KEY.to_string(),
+            fault.display().to_string(),
+        );
+        let due = HashSet::from(["anchors".to_string()]);
+        let mut session = ContinuityRefreshSession::Isolated { slot: None };
+        let stats = refresh_continuity_documents(
+            temp.path(),
+            &settings,
+            &db_path,
+            &engine,
+            42,
+            &due,
+            &mut session,
+            &mut |_| {},
+        )?;
+        assert_eq!(stats.attempted, 1);
+        assert!(
+            !session.started(),
+            "refresh started a session it never used"
+        );
+        let anchors = engine.continuity_show(42, lcm::ContinuityKind::Anchors)?;
+        assert!(anchors
+            .content
+            .contains("refreshed outside the worker thread"));
+        Ok(())
+    }
+
+    #[test]
     fn successful_turn_persists_one_attempt_and_typed_success_reply() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("ctox.sqlite3");
@@ -2550,6 +2653,38 @@ mod tests {
             Some(&TomlValue::Boolean(false))
         );
         assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
+    }
+
+    #[test]
+    fn grok_subscription_harness_uses_native_provider_header() {
+        let settings = BTreeMap::from([
+            ("CTOX_API_PROVIDER".into(), "ctox_subscription".into()),
+            (
+                runtime_state::CTOX_SUBSCRIPTION_PROVIDER_ENV.into(),
+                "xai".into(),
+            ),
+            (
+                "CTOX_UPSTREAM_BASE_URL".into(),
+                "https://llm.ctox.dev/v1".into(),
+            ),
+        ]);
+        let spec = resolve_api_model_provider_spec("grok-4.7", &settings, None).unwrap();
+        assert_eq!(
+            spec.base_url,
+            crate::execution::cliproxyapi_host::instance_codex_proxy_base_url()
+        );
+        assert_eq!(spec.subscription_provider.as_deref(), Some("xai"));
+        let overrides = spec
+            .ctox_core_cli_overrides()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            overrides
+                .get("model_providers.ctox_core_api.http_headers")
+                .and_then(TomlValue::as_table)
+                .and_then(|headers| headers.get("X-CTOX-Provider")),
+            Some(&TomlValue::String("xai".into()))
+        );
     }
 
     #[test]

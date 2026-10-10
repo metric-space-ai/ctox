@@ -18,12 +18,18 @@ mod jour_fixe_owner;
 mod jour_fixe_preparation;
 #[path = "jour_fixe_speech_tests.rs"]
 mod jour_fixe_speech;
+#[path = "presentation_tests.rs"]
+mod presentation;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]
 mod supervisor;
+#[path = "supervisor_history_tests.rs"]
+mod supervisor_history;
 #[path = "supervisor_observation_tests.rs"]
 mod supervisor_observation;
+#[path = "supervisor_owner_input_tests.rs"]
+mod supervisor_owner_input;
 #[path = "supervisor_turn_tests.rs"]
 mod supervisor_turns;
 #[path = "weekly_report_tests.rs"]

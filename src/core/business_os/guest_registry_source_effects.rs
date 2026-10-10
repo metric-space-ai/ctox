@@ -1,10 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 
-//! Exact observed quorum effects are protected capture input, never a clean-effect permit.
+//! Consume actual Core and guest-export witnesses under the source publication fences.
 use super::*;
 use ctox_sync::authority::Job;
 use ctox_sync::contracts::PendingEffect;
+
+#[cfg(test)]
+#[path = "guest_registry_source_effects_reconciliation_tests.rs"]
+mod reconciliation_tests;
 
 /// No wire decoder or renderer can construct an observed authority snapshot.
 pub(super) struct SourceEffects {
@@ -14,6 +18,7 @@ pub(super) struct SourceEffects {
     process_effect_reconciled: bool,
     machine_entries: Vec<ctox_sync::contracts::WorkspaceEntry>,
     core_effects: Option<ctox_core::NativeCoreEffectCapture>,
+    core_only: Option<checkpoint_identity::CoreRuntimeIdentity>,
 }
 
 impl SourceEffects {
@@ -64,13 +69,19 @@ impl SourceEffects {
             process_effect_reconciled: false,
             machine_entries: Vec::new(),
             core_effects: None,
+            core_only: None,
         })
     }
 
     /// Called under the actual source worker/account/policy/controller fences,
     /// after the authority read. It does not stop a guest or complete an effect.
-    pub(super) fn verify_controller(&mut self, entry: &Registration) -> Result<()> {
+    pub(super) fn verify_controller(
+        &mut self,
+        entry: &Registration,
+        registry: &NativeGuestRegistry,
+    ) -> Result<()> {
         self.process = None;
+        self.core_only = None;
         self.child_stop_observed = false;
         self.process_effect_reconciled = false;
         self.machine_entries.clear();
@@ -80,9 +91,28 @@ impl SourceEffects {
                 ensure!(
                     entry.desktop.is_none()
                         && entry.source_machine.is_none()
+                        && entry.source_boot.is_none()
+                        && entry.target_machine.is_none()
+                        && entry.desktop_io.is_none()
                         && entry.stopped_status.is_none(),
                     "native source child has no registered effect"
                 );
+                let machine_configured = registry
+                    .machine_configuration
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native machine configuration poisoned"))?
+                    .is_some();
+                let protected_core = entry
+                    .restoration
+                    .as_ref()
+                    .is_some_and(|protected| protected.service_session.is_none());
+                if protected_core || (!machine_configured && entry.restoration.is_none()) {
+                    self.core_only = Some(checkpoint_identity::CoreRuntimeIdentity {
+                        version: 1,
+                        guest_id: entry.assignment.destination.guest_id.clone(),
+                        session_id: self.job.spec.session_id.clone(),
+                    });
+                }
             }
             (Some(id), Some(process)) => {
                 let destination = &entry.assignment.destination;
@@ -147,6 +177,14 @@ impl SourceEffects {
         &self.machine_entries
     }
 
+    pub(super) fn core_runtime_bytes(&self) -> Result<Option<Vec<u8>>> {
+        self.core_only
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(Into::into)
+    }
+
     pub(super) fn same_quorum(&self, other: &Self) -> bool {
         self.job == other.job
     }
@@ -157,6 +195,7 @@ impl SourceEffects {
 
     pub(super) fn same_observation(&self, other: &Self) -> bool {
         self.job == other.job
+            && self.core_only == other.core_only
             && self.process == other.process
             && self.child_stop_observed == other.child_stop_observed
             && self.process_effect_reconciled == other.process_effect_reconciled
@@ -165,13 +204,37 @@ impl SourceEffects {
                 == other.core_effects.as_ref().map(|c| c.report())
     }
 
+    // These fields are populated only from current quorum ownership, the exact
+    // registered source machine export and checked shutdown of the actual Core.
+    // A wire report, empty effect list or stopped child supplies none of them.
+    fn reconciled(&self) -> bool {
+        self.job.pending_effects.is_empty()
+            && (self.core_only.as_ref().is_some_and(|identity| {
+                identity.session_id == self.job.spec.session_id
+                    && self.process.is_none()
+                    && self.machine_entries.is_empty()
+                    && !self.child_stop_observed
+                    && !self.process_effect_reconciled
+            }) || (self.child_stop_observed
+                && self.process_effect_reconciled
+                && !self.machine_entries.is_empty()
+                && self.process.as_ref().is_some_and(|process| {
+                    process.job_id == self.job.spec.job_id
+                        && process.ownership == self.job.ownership
+                        && self.job.completed_effects.contains(&process.effect_id)
+                })))
+            && self.core_effects.as_ref().is_some_and(|capture| {
+                capture.session_id().to_string() == self.job.spec.session_id
+                    && !capture.requires_reconciliation()
+            })
+    }
+
     pub(super) fn bytes(&self, spec: &ExecutionSpec, ownership: &Ownership) -> Result<Vec<u8>> {
         ensure!(
             self.job.spec == *spec && self.job.ownership == *ownership,
             "native source effect observation belongs to another capture"
         );
-        // Absence of quorum effects proves nothing about shell, MCP or guest
-        // external effects. This snapshot deliberately grants no reconciliation.
+        let reconciled = self.reconciled();
         let bytes = serde_json::to_vec(&serde_json::json!({
             "version": 1, "jobId": spec.job_id, "sessionId": spec.session_id,
             "ownership": ownership, "observedPendingEffects": self.job.pending_effects,
@@ -184,7 +247,8 @@ impl SourceEffects {
                 "processEffectReconciled": self.process_effect_reconciled
             })),
             "coreEffects": self.core_effects.as_ref().map(|capture| capture.report()),
-            "externalEffects": "unknown", "reconciled": false
+            "externalEffects": if reconciled { "reconciled" } else { "unknown" },
+            "reconciled": reconciled
         }))?;
         ensure!(
             bytes.len() <= 128 * 1024,
@@ -213,11 +277,13 @@ impl SourceEffects {
                 description: "Observed native quorum effect requires reconciliation".into(),
             })
             .collect();
-        pending.push(PendingEffect {
-            effect_id: unknown,
-            idempotency_key: None,
-            description: "Native turn external effects require reconciliation".into(),
-        });
+        if !self.reconciled() {
+            pending.push(PendingEffect {
+                effect_id: unknown,
+                idempotency_key: None,
+                description: "Native turn external effects require reconciliation".into(),
+            });
+        }
         Ok(pending)
     }
 

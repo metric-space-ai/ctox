@@ -19,7 +19,11 @@ rust += 'impl<T: WireValidate> WireValidate for Vec<T> { fn validate(&self) -> R
 for (const [name, type] of Object.entries(spec.types)) {
   rust += type.enum ? '\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n' : '\n#[derive(Debug, Clone, Deserialize, Serialize)]\n';
   if (type.enum) {
-    rust += `pub(crate) enum ${name} {\n` + type.enum.map(v => `#[serde(rename = ${JSON.stringify(v)})]\n${v.split(/[^A-Za-z0-9]+/).map(part => part[0].toUpperCase() + part.slice(1)).join('')},`).join('\n') + '\n}\n';
+    const variants = type.enum.map(wire => ({ wire, rust: spec.rust_enum_variants?.[name]?.[wire]
+      ?? wire.split(/[^A-Za-z0-9]+/).map(part => part[0].toUpperCase() + part.slice(1)).join('') }));
+    if (variants.some(v => !/^[A-Z][A-Za-z0-9]*$/.test(v.rust))
+        || new Set(variants.map(v => v.rust)).size !== variants.length) throw new Error(name + ': invalid Rust variants');
+    rust += `pub(crate) enum ${name} {\n` + variants.map(v => `#[serde(rename = ${JSON.stringify(v.wire)})]\n${v.rust},`).join('\n') + '\n}\n';
     rust += `impl WireValidate for ${name} { fn validate(&self) -> Result<(), String> { Ok(()) } }\n`;
     continue;
   }
@@ -37,7 +41,10 @@ for (const [name, type] of Object.entries(spec.types)) {
     for (const [key, op] of Object.entries({min_chars:'<',max_chars:'>',min_items:'<',max_items:'>',minimum:'<',maximum:'>'})) {
       if (f[key] === undefined || (f.type === 'u64' && key === 'minimum' && f[key] === 0)) continue;
       const bound = f.type === 'f64' && ['minimum','maximum'].includes(key) ? Number(f[key]).toFixed(1) : String(f[key]);
-      rust += `if ${expr[key]} ${op} ${bound} { return Err(${JSON.stringify(name+'.'+field+' violates '+key)}.into()); }\n`;
+      const condition = key === 'min_items' && f[key] === 1
+        ? 'value.is_empty()'
+        : `${expr[key]} ${op} ${bound}`;
+      rust += `if ${condition} { return Err(${JSON.stringify(name+'.'+field+' violates '+key)}.into()); }\n`;
     }
     rust += '}\n';
   }

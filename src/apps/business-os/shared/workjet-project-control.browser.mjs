@@ -8,6 +8,7 @@ const tests = readFileSync(new URL('./workjet-project-control.test.mjs', import.
 const executionSource = readFileSync(new URL('./workjet-supervisor-execution-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const kpiSource = readFileSync(new URL('./workjet-project-kpis-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const meetingSource = readFileSync(new URL('./workjet-jour-fixe-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
+const lumaSource = readFileSync(new URL('./workjet-supervisor-luma-contract.generated.mjs', import.meta.url), 'utf8').replace(/^export /gm, '');
 const meetingCorpus = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json', import.meta.url), 'utf8'));
 const meeting = meetingCorpus.valid_cases.find(item => item.type === 'Meeting').value;
 const start = app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS');
@@ -38,7 +39,8 @@ try {
     : route.abort());
   const page = await context.newPage();
   await page.goto('https://workjet-control.test/');
-  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, meeting }) => {
+  const results = await page.evaluate(async ({ controlSource, fixtureSource, detailsSource, ownerSource, configurationSource, executionSource, kpiSource, meetingSource, lumaSource, meeting }) => {
+    const validateSupervisorLumaValue = new Function(lumaSource + '\nreturn validateSupervisorLumaValue;')();
     const assert = {
       ok(value) { if (!value) throw new Error('Expected truthy'); },
       equal(left, right) { if (left !== right) throw new Error(`Expected ${right}, got ${left}`); },
@@ -51,9 +53,10 @@ try {
     const vm = { runInNewContext(code, scope) {
       scope.invoke = new Function('state', 'actorContext', 'newId', 'AbortController',
         'setTimeout', 'clearTimeout', 'PROJECT_KPIS_SCHEMA', 'validateProjectKpiValue',
-        'JOUR_FIXE_SCHEMA', 'validateJourFixeValue', `${controlSource}\nreturn workjetProjectControl;`)(
+        'JOUR_FIXE_SCHEMA', 'validateJourFixeValue', 'validateSupervisorLumaValue', `${controlSource}\nreturn workjetProjectControl;`)(
         scope.state, scope.actorContext, scope.newId, AbortController, setTimeout, clearTimeout,
         scope.PROJECT_KPIS_SCHEMA, scope.validateProjectKpiValue, scope.JOUR_FIXE_SCHEMA, scope.validateJourFixeValue,
+        scope.validateSupervisorLumaValue ?? validateSupervisorLumaValue,
       );
     } };
     const fixture = new Function('assert', 'vm', 'controlSource',
@@ -66,7 +69,10 @@ try {
     assert.equal(value.truncated, false);
     assert.equal(live.reads.length, 2);
     assert.ok(live.reads.every(({ query }) => query.signal.aborted));
-    results.push('current native projects and copies without historical pull');
+    live.rows.workjet_projects[0].supervisor_luma_id = 'luma-physics';
+    assert.equal(Object.hasOwn((await live.invoke({ includeConfiguration: true })).projects[0], 'supervisorLumaId'), false);
+    assert.equal((await live.invoke({ includeSupervisorLuma: true })).projects[0].supervisorLumaId, 'luma-physics');
+    results.push('current native projects and copies without historical pull; Luma metadata is separately opted in');
     live.rows.workjet_projects.length = 0;
     live.rows.workjet_working_copies.length = 0;
     const empty = await live.invoke();
@@ -120,8 +126,8 @@ try {
       results.push('shared deadline aborts both browser query streams');
     } finally { Date.now = originalNow; }
 
-    const configurationFixture = new Function('vm', 'controlSource',
-      `${configurationSource}\nreturn projectConfigurationFixture;`)(vm, controlSource);
+    const configurationFixture = new Function('vm', 'controlSource', 'validateSupervisorLumaValue',
+      `${configurationSource}\nreturn projectConfigurationFixture;`)(vm, controlSource, validateSupervisorLumaValue);
     const configurationRequest = { action: 'project.configure', commandId: 'alias-save',
       projectId: 'project-1', title: 'CTOX', info: { summary: 'Saved via verified alias' } };
     const aliasConfiguration = configurationFixture(() => {}, 'owner@example.org');
@@ -129,6 +135,19 @@ try {
     assert.equal(saved.project.info.summary, configurationRequest.info.summary);
     assert.equal(aliasConfiguration.commands[0].client_context.actor.id, 'owner@example.org');
     results.push('browser configuration accepts the native canonical Owner for a verified alias');
+    const lumaConfiguration = configurationFixture();
+    const lumaSaved = await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: 'luma-physics' });
+    assert.equal(lumaSaved.project.supervisorLumaId, 'luma-physics');
+    assert.equal(lumaConfiguration.commands[0].payload.supervisor_luma_id, 'luma-physics');
+    const lumaCleared = await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: null });
+    assert.equal(lumaCleared.project.supervisorLumaId, null);
+    assert.equal(lumaConfiguration.commands[1].payload.supervisor_luma_id, null);
+    let badLumaRejected = false;
+    try { await lumaConfiguration.invoke({ ...configurationRequest, supervisorLumaId: 7 }); }
+    catch { badLumaRejected = true; }
+    assert.ok(badLumaRejected);
+    assert.equal(lumaConfiguration.commands.length, 2);
+    results.push('browser selection/clear uses bounded native Luma metadata without a route or producer');
     for (const mutate of [
       receipt => { receipt.result.project.owner_user_id = 'foreign'; },
       receipt => { delete receipt.result.owner_user_id; },
@@ -143,10 +162,14 @@ try {
     const turnId = 'actual-native-command';
     const threadId = 'cc6cfe73-2824-4360-9daf-3b3efb079931';
     let corrupt = false;
+    const publicText = { turn_id: 'provider-turn', item_id: 'provider-item', phase: 'final_answer',
+      offset: 0, text: 'Public reply 🦊', completed: false, truncated: false };
+    let lastPayload;
     const state = {
       session: { id: 'owner' }, db: { collection: name => name === 'business_commands' ? {} : null },
       sync: { async startCollection() {} },
       commandBus: { async dispatch(command) {
+        lastPayload = command.payload;
         return { command_id: command.id, ok: true, status: 'completed', target_record_id: 'project', payload: command.payload,
           result: { ok: true, contract: 'ctox.workjet.supervisor_turn.v1',
             binding: { project_id: 'project', thread_id: threadId, thread_key: `business-os/threads/${threadId}` },
@@ -156,7 +179,9 @@ try {
             execution_contract: 'ctox.workjet.supervisor_execution.v1',
             execution_page: { command_id: turnId, task_id: corrupt ? 'foreign-task' : 'actual-native-task',
               attempt: { attempt_id: 'actual-native-attempt', attempt_index: 47 },
-              events: [{ id: 'actual-event', sequence: 22, kind: 'worker.phase', title: 'Recorded step', created_at_ms: 1791410400000 }],
+              events: [{ id: 'actual-event', sequence: 22, kind: 'worker.phase', title: 'Recorded step', created_at_ms: 1791410400000,
+                ...(command.payload.execution_page?.include_public_text ? { public_text: publicText, kind: 'worker.assistant_text' } : {}) }],
+              ...(command.payload.execution_page?.include_public_text ? { public_text_supported: true } : {}),
               next_cursor: { after_sequence: 22, after_event_id: 'actual-event' }, has_more: false },
           } };
       } },
@@ -172,6 +197,11 @@ try {
     assert.equal(observed.executionPage.attempt.attempt_index, 47);
     assert.equal(observed.executionPage.events[0].id, 'actual-event');
     results.push('opted-in browser watch returns actual native attempt and event');
+    const streamed = await invoke({ ...request, executionPage: { limit: 1, include_public_text: true } });
+    assert.equal(lastPayload.execution_page.include_public_text, true);
+    assert.equal(streamed.executionPage.public_text_supported, true);
+    assert.deepEqual(streamed.executionPage.events[0].public_text, publicText);
+    results.push('browser public-text opt-in reaches native and returns its exact chunk');
     corrupt = true;
     let foreignRejected = false;
     try { await invoke({ ...request, executionPage: {} }); } catch { foreignRejected = true; }
@@ -318,9 +348,9 @@ try {
     return results;
   }, { controlSource: app.slice(start, end), fixtureSource: tests.slice(fixtureStart, fixtureEnd),
     detailsSource: tests.slice(detailsStart, detailsEnd), ownerSource: tests.slice(ownerStart, ownerEnd),
-    configurationSource: tests.slice(configurationStart, configurationEnd),
+    configurationSource: tests.slice(configurationStart, configurationEnd), lumaSource,
     executionSource, kpiSource, meetingSource, meeting });
-  assert.equal(results.length, 29);
+  assert.equal(results.length, 31);
   const report = { passed: results.length, failed: 0, cases: results,
     evidenceScope: 'Actual source control in isolated Chromium with a controlled native contract fixture; not installed native or Workjet UI acceptance',
     browserVersion: browser.version() };

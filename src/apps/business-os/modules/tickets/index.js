@@ -552,7 +552,9 @@ function ticketCollection(name) {
 
 function wireRealtime() {
   const subscriptions = [...collectionNames, 'ctox_queue_tasks', 'ctox_crew_members']
-    .map((name) => ticketCollection(name)?.$?.subscribe?.(() => scheduleRefresh()))
+    .map((name) => ticketCollection(name)?.$?.subscribe?.(
+      () => scheduleRefresh(), { invalidateOnly: true },
+    ))
     .filter(Boolean);
   return () => subscriptions.forEach((sub) => {
     try { sub.unsubscribe?.(); } catch {}

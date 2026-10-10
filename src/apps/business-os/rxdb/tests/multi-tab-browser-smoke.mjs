@@ -113,7 +113,8 @@ try {
 }
 
 async function waitFor(page, predicate, label, timeoutMs = 5_000) {
-  await page.waitForFunction(predicate, null, { timeout: timeoutMs }).catch((error) => {
+  // Background tabs need timer-based observation: animation frames may be suspended.
+  await page.waitForFunction(predicate, null, { timeout: timeoutMs, polling: 50 }).catch((error) => {
     throw new Error(`Timed out waiting for ${label}`, { cause: error });
   });
 }

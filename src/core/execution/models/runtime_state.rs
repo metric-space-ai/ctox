@@ -34,14 +34,14 @@ const DEFAULT_AZURE_FOUNDRY_RESPONSES_BASE_URL: &str = "";
 // DEFAULT_OPENAI_RESPONSES_BASE_URL.
 const DEFAULT_MINIMAX_RESPONSES_BASE_URL: &str = "https://api.minimax.io";
 const DEFAULT_CTOX_PROXY_RESPONSES_BASE_URL: &str = "https://llm.ctox.dev";
-const API_PROVIDER_LOCAL: &str = "local";
+pub(crate) const API_PROVIDER_LOCAL: &str = "local";
 const LOCAL_RUNTIME_CANDLE: &str = "candle";
 const API_PROVIDER_OPENAI: &str = "openai";
 const API_PROVIDER_ANTHROPIC: &str = "anthropic";
 const API_PROVIDER_OPENROUTER: &str = "openrouter";
 const API_PROVIDER_MINIMAX: &str = "minimax";
 const API_PROVIDER_CTOX_PROXY: &str = "ctox_proxy";
-const API_PROVIDER_CTOX_SUBSCRIPTION: &str = "ctox_subscription";
+pub(crate) const API_PROVIDER_CTOX_SUBSCRIPTION: &str = "ctox_subscription";
 const API_PROVIDER_AZURE_FOUNDRY: &str = "azure_foundry";
 pub const CTOX_LLM_PROXY_API_KEY_ENV: &str = "CTOX_LLM_PROXY_API_KEY";
 pub const CTOX_LLM_PROXY_BASE_URL_ENV: &str = "CTOX_LLM_PROXY_BASE_URL";

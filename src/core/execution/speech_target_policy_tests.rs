@@ -29,11 +29,10 @@ fn hold_current_issuer(f: &Fixture, revoke: bool, hold_ms: u64) -> std::thread::
     let (ready, started) = std::sync::mpsc::sync_channel(0);
     let task = std::thread::spawn(move || {
         crate::sync_host::with_current_signing_identity(&root, |_| {
-            ready.send(()).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(hold_ms));
             if revoke {
-                // Same runtime-store mutation as Config::save, under its
-                // already-held issuer fence. Do not reenter secret APIs.
+                // Prepare the real revocation under the issuer fence before
+                // announcing the bounded contention interval. SQLite commit
+                // latency is not part of the requested 20 ms hold.
                 crate::persistence::store_json_payload(
                     &root,
                     CONFIG_KEY,
@@ -43,6 +42,8 @@ fn hold_current_issuer(f: &Fixture, revoke: bool, hold_ms: u64) -> std::thread::
                     }),
                 )?;
             }
+            ready.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(hold_ms));
             Ok(())
         })
         .unwrap();

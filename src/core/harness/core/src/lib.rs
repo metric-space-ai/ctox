@@ -78,10 +78,15 @@ mod mentions;
 mod message_history;
 mod model_provider_info;
 pub mod native_mcp_dispatch;
+pub mod native_mcp_startup;
 mod native_session_state;
 pub use native_session_state::NativeSessionState;
 mod native_core_effects;
-pub use native_core_effects::{NativeCoreEffectCapture, NativeCoreEffectReport};
+#[cfg(test)]
+mod native_previous_session_tests;
+pub use native_core_effects::{
+    NativeCoreEffectCapture, NativeCoreEffectReport, NativePreviousSessionSnapshot,
+};
 pub mod path_utils;
 pub mod personality_migration;
 pub mod plugins;

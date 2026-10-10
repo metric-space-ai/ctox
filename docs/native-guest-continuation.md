@@ -4,10 +4,12 @@ The production receiver, rather than a general Transfer job, owns the target
 checkpoint binding. Transfer metadata, copied bytes and reconstructed files
 cannot create execution authority.
 
-The private host's current signing identity, account, policy, controller and
-checkpoint receiver must remain live. The Sync execution group requires three
-distinct real voters and at least two executor/DATA voters. Each host provisions
-its own account credentials; credentials are never transferred with a checkpoint.
+The private host's current signing identity, native execution account, policy,
+controller and checkpoint receiver must remain live. The Sync execution group
+requires three distinct real voters and at least two executor/DATA voters.
+Each voter retains its host-local signing identity and current native execution
+account/policy guards. These are distinct from LLM provider accounts; a target
+must not receive provider secrets with a checkpoint.
 
 ## Operator and application path
 
@@ -38,6 +40,33 @@ callback. The original account/model/harness/session tuple must match; a changed
 tuple is rejected. The original target ownership, checkpoint digest and sequence,
 completed import effect and exact pending QEMU process effect are revalidated
 around quorum awaits. Unknown effects remain rejected.
+
+## Required provider routing
+
+Provider accounts may reside on the CTOX instance or on any enrolled computer;
+the CTOX instance is the default location for new accounts. Every enrolled
+computer must be able to use every account by default. Restrictions require an
+explicit authorized withdrawal for a consuming computer. The authenticated
+consumer identity must survive forwarding and target activation so a withdrawn
+computer cannot regain access through another node.
+
+Provider secrets stay at the holding node. Sync exposes account identity,
+provider, holder, models, limits, health and reachability; routing executes the
+request at that holder. A checkpoint carries no credential material. The
+continuing Core must retain the selected logical provider account and authorized
+route, alongside its original session and current execution ownership. Quorum
+ownership alone does not authorize provider use, and provider access does not
+create quorum ownership. An unreachable holder remains visible as unreachable;
+it must not trigger silent substitution of another account.
+
+The existing Workjet environment-bound provider bridge and a successful live
+model-list probe do not qualify native Core dispatch from a source to an
+independent target. That production provider route remains an open dependency
+of installed continuation: it needs a stable instance/account/holder binding and
+an authenticated consumer entry point. Guest import, machine restore and Core
+constructor tests cannot substitute for it. Installed acceptance must exercise
+the real selected account through that route without copying its secrets or
+requiring another login.
 
 ## Runtime ownership
 
@@ -71,11 +100,25 @@ original Core construction and original-job admission. A Darwin transport build
 does not supply the Linux machine witness.
 
 Import and machine-only CLI responses remain `resumed:false`. Successful
-constructor or source tests do not prove installed continuation. Native Core
-observations still preserve generic unknown effects; a successful turn, empty
-caller-provided list, completed import or stopped child cannot mint a clean
-effect receipt. Until that production clean-effects boundary is implemented
-and measured, goals 15/16/18 remain open.
+constructor or source tests do not prove installed continuation. A source
+checkpoint drops its generic unknown-effects marker only when checked
+shutdown of the exact original Core reports no unresolved effects, the actual
+registered QEMU child has been fully exported and its process effect completed,
+and current quorum ownership has no pending effects. Source publication checks
+worker, account, policy, controller and quorum observations again after artifact
+IO. Wire metadata, an empty list, completed import or stopped child cannot supply
+these retained witnesses. Unowned external actions and unprotected resumed-session
+effects remain unresolved; installed goals 15/16/18 remain open.
+
+Protected original-session restoration now binds the actual Core manager's
+loaded input digest to the same retained receiver, original UUID, immutable
+manifest and current account/quorum/owner fences. The source must report clean
+Core effects and its protected manifest must have no pending effects. Only
+that native owner may clear `previous-session-effects` before submission; an
+ordinary resumed history, decoded report, late callback or unknown source
+cannot do so. This reconciles historical input only: MCP startup and every new
+external effect retain their independent checks. It grants no execution or
+installed continuation proof.
 
 Installed acceptance must demonstrate the original session continuing on B,
 A rejected as stale after takeover, reconnect and abort, on isolated tenants.
