@@ -7,7 +7,7 @@ const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 // never evidence of a real holder execution.
 const MODEL: &str = "claude-opus-5-5";
 
-fn fixture(selected: bool) -> anyhow::Result<(tempfile::TempDir, String)> {
+pub(super) fn fixture(selected: bool) -> anyhow::Result<(tempfile::TempDir, String)> {
     let (root, trusted) = workjet_worker_dispatch::meeting_test_fixture()?;
     if selected {
         // The native binding command publishes its domain effect into the

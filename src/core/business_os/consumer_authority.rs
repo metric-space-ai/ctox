@@ -90,6 +90,36 @@ impl AdmittedConsumerAuthority {
         })
     }
 
+    /// Combined original-lease fence. Prepare secret snapshots before entry.
+    /// Order is transport -> issuer -> Core -> Policy, matching native
+    /// command/plan writers. A callback must not enter another transport,
+    /// secret store or transaction, wait for network work, or retain a handle.
+    /// Only a successful bounded callback commits its Core changes.
+    pub(crate) fn with_current_core<T>(
+        &self,
+        apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+    ) -> Result<T> {
+        let mut policy = store::open_store(&self.root)?;
+        policy.busy_timeout(std::time::Duration::ZERO)?;
+        let mut core = Connection::open_with_flags(
+            crate::paths::core_db(&self.root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        core.busy_timeout(std::time::Duration::ZERO)?;
+        self.transport
+            .with_current_peer_capability(&self.peer, &self.token, || {
+                with_current_policy_core(
+                    &self.root,
+                    &mut core,
+                    &mut policy,
+                    &self.token,
+                    &self.facts,
+                    apply,
+                )
+            })
+            .context("consumer connection or credential retired")?
+    }
+
     /// Re-enter after every await and immediately around a bounded dispatch or
     /// publication operation. Order: consumer transport -> issuer -> policy.
     /// No await, network wait, secret/transport API reentry or retained borrowed
@@ -130,6 +160,33 @@ fn with_current_policy<T>(
         let current = resolve(&tx, &claims)?;
         anyhow::ensure!(&current == expected, "consumer enrollment changed");
         apply(&current, &tx)
+    })
+}
+
+fn with_current_policy_core<T>(
+    root: &Path,
+    core: &mut Connection,
+    policy: &mut Connection,
+    token: &str,
+    expected: &ConsumerFacts,
+    apply: impl FnOnce(&ConsumerFacts, &Connection, &Connection) -> Result<T>,
+) -> Result<T> {
+    store::with_current_webrtc_capability_signer(root, |secret| {
+        let core = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let policy = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let claims = store::verified_webrtc_capability_claims_from_connection(
+            &policy,
+            token,
+            secret,
+            store::now_ms() as i64,
+        )
+        .context("consumer actor or device was revoked")?;
+        let current = resolve(&policy, &claims)?;
+        anyhow::ensure!(&current == expected, "consumer enrollment changed");
+        let result = apply(&current, &core, &policy)?;
+        policy.commit()?;
+        core.commit()?;
+        Ok(result)
     })
 }
 

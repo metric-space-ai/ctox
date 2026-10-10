@@ -7,6 +7,9 @@ use super::super::{provider_federation, worker_profile_bindings};
 use super::*;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::json;
+#[path = "mcp_supervisor_holding.rs"]
+mod holding;
+pub(crate) use holding::{NativeSupervisorExecutionLease, NativeSupervisorHoldingController};
 
 #[derive(Debug)]
 pub(crate) struct SupervisorLumaUnavailable {
@@ -366,11 +369,14 @@ fn require_unsealed_default(root: &Path, trusted: &Value, owner: &str) -> anyhow
 /// fall through to PersistentSession with the instance default. Until a genuine
 /// holding producer is connected, fail explicitly and retain requested facts
 /// under this exact native execution lease; actual execution remains NULL.
-pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Result<()> {
-    let Some(token) = token else { return Ok(()) };
+fn capture_lease(
+    root: &Path,
+    token: Option<&str>,
+) -> anyhow::Result<Option<NativeSupervisorExecutionLease>> {
+    let Some(token) = token else { return Ok(None) };
     let trusted = verify_internal_command_session_token(root, token)?;
     if trusted["workjet_supervisor_only"] != true {
-        return Ok(());
+        return Ok(None);
     }
     let context = context_from_arguments_with_trusted_gateway_context(
         workjet_worker_dispatch::TOOL,
@@ -398,7 +404,8 @@ pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Resu
         .get("supervisor_luma_id")
         .is_none_or(Value::is_null)
     {
-        return require_unsealed_default(root, &trusted, &context.actor);
+        require_unsealed_default(root, &trusted, &context.actor)?;
+        return Ok(None);
     }
     drop(policy_snapshot);
     let mut core = Connection::open(crate::paths::core_db(root))?;
@@ -453,8 +460,31 @@ pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Resu
             now_ms()
         ],
     )?;
+    let selection = provider_federation::resolve_supervisor_model(
+        &policy,
+        &context.actor,
+        &route.native_account.account_id,
+        route.native_account.account_revision,
+        &route.model,
+    )?;
     policy.commit()?;
     core.commit()?;
+    Ok(Some(holding::from_sealed(
+        root, token, trusted, route, selection,
+    )?))
+}
+
+/// Default behavior is unchanged. Selection capture is a real native lease
+/// verifier; it still cannot invoke the instance default or claim execution.
+pub(crate) fn require_executor(root: &Path, token: Option<&str>) -> anyhow::Result<()> {
+    let Some(lease) = capture_lease(root, token)? else {
+        return Ok(());
+    };
+    let code = if lease.harness() == "claude-code" {
+        "claude_code_holding_executor_unavailable"
+    } else {
+        "project_supervisor_holding_executor_unavailable"
+    };
     Err(unavailable(code, "selected project Luma has no admitted holding producer; instance-default fallback was not invoked"))
 }
 

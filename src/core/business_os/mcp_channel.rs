@@ -91,6 +91,9 @@ mod app_authority;
 pub(super) use app_authority::AuthenticatedMcpAppCommand;
 pub(crate) use crew_execution::run as run_external_crew_turn;
 pub(crate) use supervisor_luma::require_executor as require_project_supervisor_executor;
+pub(crate) use supervisor_luma::{
+    NativeSupervisorExecutionLease, NativeSupervisorHoldingController,
+};
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;

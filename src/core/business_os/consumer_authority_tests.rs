@@ -259,6 +259,79 @@ fn publication_fences_mutations_and_rejects_epoch_changes_without_relabeling() -
 }
 
 #[test]
+fn combined_source_core_policy_fence_blocks_both_writers_and_rolls_back_errors() -> Result<()> {
+    let f = Fixture::new(Some("owner"))?;
+    f.assign("owner", "opaque-computer", Some(&f.pairing))?;
+    let expected = f.resolve()?;
+    // Use the same persistence bootstrap as a real native service, before
+    // opening Core for the combined fence. No hand-authored KV schema.
+    crate::persistence::load_text_value(f.root.path(), "holding-fixture-bootstrap")?;
+    let mut core = Connection::open(crate::paths::core_db(f.root.path()))?;
+    core.execute_batch("CREATE TABLE holding_fixture (id INTEGER PRIMARY KEY)")?;
+    let mut policy = store::open_store(f.root.path())?;
+    let other_core = Connection::open(crate::paths::core_db(f.root.path()))?;
+    let other_policy = store::open_store(f.root.path())?;
+    other_core.busy_timeout(std::time::Duration::ZERO)?;
+    other_policy.busy_timeout(std::time::Duration::ZERO)?;
+    with_current_policy_core(
+        f.root.path(),
+        &mut core,
+        &mut policy,
+        &f.token,
+        &expected,
+        |_, core, _| {
+            assert!(other_core
+                .execute("INSERT INTO holding_fixture VALUES (2)", [])
+                .is_err());
+            assert!(other_policy
+                .execute(
+                    "UPDATE business_users SET active=0 WHERE user_id='owner'",
+                    []
+                )
+                .is_err());
+            core.execute("INSERT INTO holding_fixture VALUES (1)", [])?;
+            Ok(())
+        },
+    )?;
+    let result: Result<()> = with_current_policy_core(
+        f.root.path(),
+        &mut core,
+        &mut policy,
+        &f.token,
+        &expected,
+        |_, core, _| {
+            core.execute("INSERT INTO holding_fixture VALUES (3)", [])?;
+            anyhow::bail!("fixture failed before publication")
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        core.query_row("SELECT count(*) FROM holding_fixture", [], |r| r
+            .get::<_, i64>(0))?,
+        1
+    );
+    other_policy.execute(
+        "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id=?1",
+        [&expected.actor_user_id],
+    )?;
+    let mut called = false;
+    assert!(with_current_policy_core(
+        f.root.path(),
+        &mut core,
+        &mut policy,
+        &f.token,
+        &expected,
+        |_, _, _| {
+            called = true;
+            Ok(())
+        }
+    )
+    .is_err());
+    assert!(!called);
+    Ok(())
+}
+
+#[test]
 fn consumer_wire_request_cannot_supply_a_computer_or_forwarded_owner() {
     assert!(serde_json::from_value::<ConsumerRequest>(json!({"version":1})).is_ok());
     for field in [
