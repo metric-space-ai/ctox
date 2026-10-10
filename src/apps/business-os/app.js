@@ -6289,9 +6289,11 @@ async function openModule(moduleId, options = {}) {
     }
     // Fallback mounting and the lazy dialog can update the workspace status.
     // Keep the denied route's reason visible once that navigation completes.
+    state.moduleRouteDenialStatus = denialStatus;
     setStatus(denialStatus);
     return;
   }
+  state.moduleRouteDenialStatus = '';
   // Every Business OS app is hosted by the shared window manager. The former
   // direct-mount escape hatch allowed legacy/runtime/imported modules to bypass
   // the common drag region and window controls; keep the shell surface
@@ -16155,7 +16157,7 @@ function workspaceStatusText() {
 }
 
 function setWorkspaceStatus() {
-  setStatus(workspaceStatusText());
+  setStatus(state.moduleRouteDenialStatus || workspaceStatusText());
   renderShellInstanceStatus();
 }
 
