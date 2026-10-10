@@ -6934,6 +6934,10 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
+                    crate::business_os::mcp_channel::require_project_supervisor_executor(
+                        &root,
+                        session_options.business_os_mcp_command_session.as_deref(),
+                    )?;
                     // This branch executes admitted work. Finalization recovery above
                     // never allocates a replacement run or invokes the model again.
                     lcm::run_register_worker_run(
@@ -41702,6 +41706,18 @@ Use shell tools to create or update these files."
         assert!(prompt.contains("without producing the required final assistant message"));
         assert!(prompt.contains("continue after the tool phase"));
         assert!(prompt.contains("EXIT GATE"));
+    }
+
+    #[test]
+    fn missing_project_supervisor_holding_executor_is_not_a_transient_retry() {
+        for code in [
+            "claude_code_holding_executor_unavailable",
+            "project_supervisor_holding_executor_unavailable",
+            "missing_native_account_binding",
+        ] {
+            let error = format!("{code}: selected project Luma has no admitted holding producer; instance-default fallback was not invoked");
+            assert!(!runtime_error_is_transient_api_failure(&error));
+        }
     }
 
     #[test]

@@ -57,6 +57,8 @@ pub(super) use workjet_calendar::WEBRTC_METHOD as WORKJET_CALENDAR_READ_METHOD;
 #[path = "mcp_workjet_confirmed_plan.rs"]
 mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
+#[path = "mcp_supervisor_luma.rs"]
+mod supervisor_luma;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
@@ -87,6 +89,7 @@ pub(crate) use workjet_worker_dispatch::is_supervisor_command as is_workjet_supe
 mod app_authority;
 pub(super) use app_authority::AuthenticatedMcpAppCommand;
 pub(crate) use crew_execution::run as run_external_crew_turn;
+pub(crate) use supervisor_luma::require_executor as require_project_supervisor_executor;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
