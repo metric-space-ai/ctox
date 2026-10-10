@@ -40,9 +40,9 @@ fn goal_request(id: &str, raw: &str) -> anyhow::Result<Value> {
         !raw.is_empty() && raw.len() <= 1024,
         "goal read arguments exceed budget"
     );
-    let request: crate::business_os::workjet_jour_fixe_contract::ReadConfirmedGoalRequest =
-        serde_json::from_str(raw)?;
-    Ok(json!({"action":"read_confirmed_goal","request":request}))
+    let request: wire::SourceGoalReadArguments = serde_json::from_str(raw)?;
+    request.validate().map_err(anyhow::Error::msg)?;
+    Ok(json!({"action":"read_confirmed_goal","request":{}}))
 }
 
 pub(super) fn descriptors(include_confirmed_goal_read: bool) -> Value {
@@ -53,8 +53,8 @@ pub(super) fn descriptors(include_confirmed_goal_read: bool) -> Value {
                 "title":{"type":"string","maxLength":200},
                 "computer_id":{"type":"string","maxLength":256},
                 "worker_profile_id":{"type":"string","maxLength":256}}}},
-        {"name":"confirmed_goal_read","description":"Read this project’s actual Owner-confirmed goal, native step status and saved results. Null means no confirmed definition. Read-only; never confirms, replans or completes work.",
-        "inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}]);
+        {"name":"confirmed_goal_read","description":"Read a lossless JSON snapshot of this project’s confirmed goal and native progress in bounded pages. Start with empty arguments, then copy next_cursor as cursor. Join json_fragment bytes and verify document_sha256; document_complete only means snapshot EOF. Explicit changed/unavailable states require a fresh empty read, never Source retirement. Read-only.",
+        "inputSchema":{"type":"object","additionalProperties":false,"properties":{"cursor":{"type":"string","minLength":1,"maxLength":128}}}}]);
     if !include_confirmed_goal_read {
         tools
             .as_array_mut()
@@ -122,9 +122,21 @@ pub(super) fn respond(
                 )
             }
             wire::SourceNativeTool::ConfirmedGoalRead => {
-                workjet_jour_fixe::read_confirmed_goal_in_native_scope(
+                let current = workjet_jour_fixe::read_confirmed_goal_in_native_scope(
                     core, policy, &context, trusted,
-                )
+                )?;
+                let request: wire::SourceGoalReadArguments = serde_json::from_str(raw)?;
+                host.goal_reads
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native goal snapshot lock unavailable"))?
+                    .page(
+                        controller.controller_id(),
+                        id,
+                        request.cursor.as_deref(),
+                        current,
+                        row.deadline_ms,
+                        now_ms(),
+                    )
             }
         }
     })?;
@@ -287,6 +299,11 @@ mod tests {
             );
         }
         assert!(goal_request("not-an-operation", "{}").is_err());
+        assert!(goal_request(&id, &json!({"cursor":"x".repeat(129)}).to_string()).is_err());
+        assert_eq!(
+            goal_request(&id, &json!({"cursor":format!("{id}:24576")}).to_string())?,
+            json!({"action":"read_confirmed_goal","request":{}})
+        );
         assert!(goal_request(&id, &" ".repeat(1025)).is_err());
         let operation = json!({"version":1,"action":"tool_call","offer_id":uuid::Uuid::new_v4().to_string(),
             "controller_id":uuid::Uuid::new_v4().to_string(),"operation_id":id,

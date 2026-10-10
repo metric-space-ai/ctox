@@ -556,6 +556,170 @@ impl WireValidate for SourceSdkObservation {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceGoalReadArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cursor: Option<String>,
+}
+impl WireValidate for SourceGoalReadArguments {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(value) = &self.cursor {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceGoalReadArguments.cursor violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("SourceGoalReadArguments.cursor violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum SourceGoalReadPageState {
+    #[serde(rename = "page")]
+    Page,
+    #[serde(rename = "snapshot_changed")]
+    SnapshotChanged,
+    #[serde(rename = "snapshot_unavailable")]
+    SnapshotUnavailable,
+    #[serde(rename = "capacity_unavailable")]
+    CapacityUnavailable,
+}
+impl WireValidate for SourceGoalReadPageState {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceGoalReadPage {
+    pub(crate) schema: String,
+    pub(crate) state: SourceGoalReadPageState,
+    pub(crate) project_id: String,
+    pub(crate) supervisor_thread_id: String,
+    pub(crate) snapshot_id: String,
+    pub(crate) document_sha256: String,
+    pub(crate) document_bytes: u64,
+    pub(crate) byte_offset: u64,
+    pub(crate) byte_length: u64,
+    pub(crate) json_fragment: String,
+    pub(crate) captured_at_ms: i64,
+    pub(crate) document_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_cursor: Option<String>,
+}
+impl WireValidate for SourceGoalReadPage {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.schema;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceGoalReadPage.schema violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("SourceGoalReadPage.schema violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.state;
+            value.validate()?;
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceGoalReadPage.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceGoalReadPage.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.supervisor_thread_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceGoalReadPage.supervisor_thread_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceGoalReadPage.supervisor_thread_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.snapshot_id;
+            value.validate()?;
+            if value.chars().count() < 36 {
+                return Err("SourceGoalReadPage.snapshot_id violates min_chars".into());
+            }
+            if value.chars().count() > 36 {
+                return Err("SourceGoalReadPage.snapshot_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.document_sha256;
+            value.validate()?;
+            if value.chars().count() < 64 {
+                return Err("SourceGoalReadPage.document_sha256 violates min_chars".into());
+            }
+            if value.chars().count() > 64 {
+                return Err("SourceGoalReadPage.document_sha256 violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.document_bytes;
+            value.validate()?;
+            if *value > 1052672 {
+                return Err("SourceGoalReadPage.document_bytes violates maximum".into());
+            }
+        }
+        {
+            let value = &self.byte_offset;
+            value.validate()?;
+            if *value > 1052672 {
+                return Err("SourceGoalReadPage.byte_offset violates maximum".into());
+            }
+        }
+        {
+            let value = &self.byte_length;
+            value.validate()?;
+            if *value > 24576 {
+                return Err("SourceGoalReadPage.byte_length violates maximum".into());
+            }
+        }
+        {
+            let value = &self.json_fragment;
+            value.validate()?;
+            if value.chars().count() > 24576 {
+                return Err("SourceGoalReadPage.json_fragment violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.captured_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err("SourceGoalReadPage.captured_at_ms violates minimum".into());
+            }
+        }
+        {
+            let value = &self.document_complete;
+            value.validate()?;
+        }
+        if let Some(value) = &self.next_cursor {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceGoalReadPage.next_cursor violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("SourceGoalReadPage.next_cursor violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -584,6 +748,15 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "SourceSdkObservation" => serde_json::from_value::<SourceSdkObservation>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceGoalReadArguments" => serde_json::from_value::<SourceGoalReadArguments>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceGoalReadPageState" => serde_json::from_value::<SourceGoalReadPageState>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceGoalReadPage" => serde_json::from_value::<SourceGoalReadPage>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),

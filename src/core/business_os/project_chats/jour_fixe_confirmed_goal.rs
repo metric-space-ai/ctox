@@ -8,7 +8,7 @@ use super::*;
 use crate::mission::plan::confirmed_goal;
 use rusqlite::{params, OpenFlags, OptionalExtension, TransactionBehavior};
 use wire::WireValidate;
-const MAX_METADATA_BYTES: usize = 1024 * 1024;
+pub(in crate::business_os) const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS workjet_jour_fixe_confirmations (
  meeting_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,

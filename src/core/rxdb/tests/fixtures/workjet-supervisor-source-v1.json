@@ -261,6 +261,85 @@
           "optional": true
         }
       }
+    },
+    "SourceGoalReadArguments": {
+      "fields": {
+        "cursor": {
+          "type": "String",
+          "optional": true,
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
+    },
+    "SourceGoalReadPageState": {
+      "enum": [
+        "page",
+        "snapshot_changed",
+        "snapshot_unavailable",
+        "capacity_unavailable"
+      ]
+    },
+    "SourceGoalReadPage": {
+      "fields": {
+        "schema": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 128
+        },
+        "state": {
+          "type": "SourceGoalReadPageState"
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "snapshot_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "document_sha256": {
+          "type": "String",
+          "min_chars": 64,
+          "max_chars": 64
+        },
+        "document_bytes": {
+          "type": "u64",
+          "maximum": 1052672
+        },
+        "byte_offset": {
+          "type": "u64",
+          "maximum": 1052672
+        },
+        "byte_length": {
+          "type": "u64",
+          "maximum": 24576
+        },
+        "json_fragment": {
+          "type": "String",
+          "max_chars": 24576
+        },
+        "captured_at_ms": {
+          "type": "i64",
+          "minimum": 0
+        },
+        "document_complete": {
+          "type": "bool"
+        },
+        "next_cursor": {
+          "type": "String",
+          "optional": true,
+          "min_chars": 1,
+          "max_chars": 128
+        }
+      }
     }
   },
   "valid_cases": [
@@ -320,6 +399,33 @@
         "action": "claim",
         "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
         "include_confirmed_goal_read": true
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {}
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "cursor": "11111111-1111-4111-8111-111111111111:24576"
+      }
+    },
+    {
+      "type": "SourceGoalReadPage",
+      "value": {
+        "schema": "ctox.workjet.confirmed-goal-page.v1",
+        "state": "page",
+        "project_id": "project",
+        "supervisor_thread_id": "thread",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 2,
+        "byte_offset": 0,
+        "byte_length": 2,
+        "json_fragment": "{}",
+        "captured_at_ms": 1,
+        "document_complete": true
       }
     }
   ],
@@ -397,6 +503,41 @@
         "action": "claim",
         "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
         "include_confirmed_goal_read": "true"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "project_id": "caller"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "goal_id": "caller"
+      }
+    },
+    {
+      "type": "SourceGoalReadArguments",
+      "value": {
+        "cursor": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "type": "SourceGoalReadPage",
+      "value": {
+        "schema": "ctox.workjet.confirmed-goal-page.v1",
+        "state": "page",
+        "project_id": "project",
+        "supervisor_thread_id": "thread",
+        "snapshot_id": "11111111-1111-4111-8111-111111111111",
+        "document_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "document_bytes": 2,
+        "byte_offset": 0,
+        "byte_length": 24577,
+        "json_fragment": "{}",
+        "captured_at_ms": 1,
+        "document_complete": true
       }
     }
   ],

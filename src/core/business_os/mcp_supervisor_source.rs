@@ -22,6 +22,9 @@ use std::{
 };
 use wire::WireValidate;
 
+#[path = "mcp_supervisor_source_goal.rs"]
+mod goal_read;
+
 pub(crate) const METHOD: &str = "ctox.workjet.project.supervisor.execution.v1";
 const SECRET_SCOPE: &str = "supervisor_execution";
 const OFFER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_source_offers (
@@ -169,6 +172,7 @@ pub(crate) struct NativeSupervisorSourceHost {
     // Real non-deserializable controllers only; never reconstruct from rows.
     controllers: Mutex<HashMap<String, Arc<NativeSupervisorHoldingController>>>,
     models: Arc<model::ModelRegistry>,
+    goal_reads: Mutex<goal_read::Snapshots>,
 }
 impl NativeSupervisorSourceHost {
     pub(crate) fn new(root: &Path) -> Arc<Self> {
@@ -176,6 +180,7 @@ impl NativeSupervisorSourceHost {
             root: root.to_owned(),
             controllers: Mutex::new(HashMap::new()),
             models: Arc::new(model::ModelRegistry::default()),
+            goal_reads: Mutex::new(goal_read::Snapshots::default()),
         })
     }
     pub(crate) fn register(
