@@ -1,0 +1,782 @@
+hash,date,class,subpattern
+a80b5d231,2026-10-10,XF,
+c004381d5,2026-10-10,XF,
+464e5fce4,2026-10-10,XF,
+2636638e9,2026-10-10,XF,
+fe1091fb3,2026-10-10,XF,
+487c21c6c,2026-10-10,XF,
+6b41bf867,2026-10-10,XF,
+119ebfbe5,2026-10-10,XF,
+d6f982282,2026-10-10,XF,
+be48014e8,2026-10-10,XF,
+db19675f1,2026-10-10,XF,
+731d2b587,2026-10-10,XF,
+8a188d71c,2026-10-10,XF,
+4ee25997c,2026-10-10,XF,
+5d9f40042,2026-10-10,XT,
+721eb12e9,2026-10-10,XF,
+b11aa9dc3,2026-10-10,XF,
+531b40445,2026-10-10,XF,
+3a50e1c87,2026-10-10,XF,
+6be8be119,2026-10-10,U2,projection clock/replication cursor ordering
+e99d9e92d,2026-10-10,U2,projection clock/replication cursor ordering
+431d772a6,2026-10-10,XF,
+9d689e0f3,2026-10-10,XF,
+4eb1a7058,2026-10-10,XS,
+0d8eaeb24,2026-10-09,XF,
+04471803b,2026-10-10,XF,
+ed55f4d3a,2026-10-10,XF,
+b9044a498,2026-10-10,ASSET,shell generation stamp mismatch
+ad5317b51,2026-10-09,ASSET,shell generation stamp mismatch
+c5cba0a27,2026-10-09,XF,
+e81ff717f,2026-10-10,U2,projection clock/replication cursor ordering
+62ad747af,2026-10-09,XT,
+b955e69d2,2026-10-09,XDOM,
+ffebd9d64,2026-10-09,XT,
+deaf944db,2026-10-09,XDOM,
+bccc74691,2026-10-09,XDOM,
+04d06a33a,2026-10-09,XF,
+994817ad6,2026-10-09,U2,projection writer holds SQLite write lock
+f2d0b7b9c,2026-10-09,U2,projection writer holds SQLite write lock
+6d6ac8627,2026-10-09,XF,
+f4b86ec5b,2026-10-09,U2,projection writer holds SQLite write lock
+6876aa22a,2026-10-09,U2,projection writer holds SQLite write lock
+74d01cba9,2026-10-09,XD,
+1f73e34f5,2026-10-09,XF,
+b1e4bf097,2026-10-09,U1,demand-only status misreported
+e83b776d6,2026-10-09,LIFE,repair/bridge vs collection retirement race
+1a05257c3,2026-10-09,LIFE,repair/bridge vs collection retirement race
+e011490ae,2026-10-09,CMD,command class misrouted (read vs mutation control)
+8a8ea725e,2026-10-09,CMD,command class misrouted (read vs mutation control)
+b631177df,2026-10-09,GEN,wire types hand-written vs generated
+bfcbb091d,2026-10-09,XF,
+85c5805b8,2026-10-09,XT,
+644539519,2026-10-09,XT,
+d4b8a8cbd,2026-10-09,XF,
+a95975b0a,2026-10-09,XDOM,
+7c42e828d,2026-10-09,XT,
+60ef8ae78,2026-10-09,CMD,intent/context lost between layers
+1b2a1221d,2026-10-09,GEN,command inventory count drift
+6d801db25,2026-10-09,XF,
+12550b654,2026-10-09,AUTH,read denial surfaced as mount failure
+1265d5f08,2026-10-09,XT,
+f56e5f93c,2026-10-09,XT,
+cd9ccb78d,2026-10-09,XT,
+4f1b7c349,2026-10-09,XT,
+fb8c71cdd,2026-10-09,XT,
+41c56947b,2026-10-09,XT,
+f70999e03,2026-10-09,XT,
+9e6322bf8,2026-10-09,GEN,command inventory count drift
+7473e153c,2026-10-09,XT,
+dad34aa5f,2026-10-09,XF,
+7521b6c08,2026-10-09,XT,
+654f2580f,2026-10-09,XT,
+acbaace1d,2026-10-09,XF,
+a034af047,2026-10-09,XT,
+0f67df5ab,2026-10-09,XF,
+03cb7f526,2026-10-09,GEN,command inventory count drift
+7db5732f2,2026-10-09,XF,
+8e4f4c40b,2026-10-09,XT,
+42995434c,2026-10-09,AUTH,runtime role/permission change not propagated to observers
+f7f30f9e9,2026-10-09,XT,
+5c6ccab63,2026-10-09,XT,
+c315e1b6a,2026-10-09,XT,
+64ac2f83b,2026-10-09,U2,browser writes derived state from stale replica (no basis/CAS)
+4d6829b5f,2026-10-09,XDOM,
+644c2cab5,2026-10-09,LIFE,peer/process lock release
+552ac8a03,2026-10-09,XF,
+d9fc18290,2026-10-09,XF,
+99fb2bbd8,2026-10-09,XF,
+5b27cb739,2026-10-09,XF,
+085432402,2026-10-09,XT,
+d30615df1,2026-10-09,XT,
+6f10fe172,2026-10-09,XF,
+b5ac19b9b,2026-10-09,XD,
+a484d03df,2026-10-09,XF,
+2536dd8b6,2026-10-09,U2,native-owned fields rejected from browser writes (field ownership)
+f7ba3237f,2026-10-09,U3,batches sized by count not bytes
+3b068e76e,2026-10-09,U3,batches sized by count not bytes
+82aa16e6d,2026-10-09,ASSET,shell generation stamp mismatch
+a4b60cb88,2026-10-09,GEN,generator output fails lint
+6cb3453e4,2026-10-09,XF,
+27e9f1fdc,2026-10-08,XF,
+ae524d6ad,2026-10-09,OBS,timeout without cause
+15d6c6602,2026-10-09,GEN,generator output fails lint
+3e0c884e0,2026-10-09,GEN,generator output fails lint
+9b2222dc3,2026-10-08,ASSET,shell generation stamp mismatch
+2b22aa93b,2026-10-08,XF,
+0edc9c467,2026-10-08,XF,
+6c2beddad,2026-10-08,XDOM,
+91add6032,2026-10-08,XF,
+677127971,2026-10-08,XF,
+f0c1d271c,2026-10-08,GEN,dist bundle not regenerated
+3cecc9a31,2026-10-08,XD,
+2782521a8,2026-10-08,U2,deletion/tombstone semantics across projection layers
+687dfccd2,2026-10-08,U5,main broken by parallel change (compile/merge)
+03a0ef78f,2026-10-08,XF,
+f154a308b,2026-10-08,XF,
+7bca5bca2,2026-10-08,XF,
+34ab11866,2026-10-08,XF,
+be9005d8f,2026-10-08,XF,
+33344807d,2026-10-08,GEN,command inventory count drift
+9acc3a00d,2026-10-08,XF,
+2288dfa6d,2026-10-08,XF,
+db7f48f80,2026-10-08,GEN,command inventory count drift
+3d5557da0,2026-10-08,XF,
+4cb7a52ae,2026-10-08,XF,
+7d8814cd4,2026-10-08,XF,
+5180b5679,2026-10-08,XF,
+e3564b05d,2026-10-08,XF,
+2d3e7d4b6,2026-10-08,U4,file transfer buffering/chunk verification
+643e58d9c,2026-10-08,XF,
+24fe3ac80,2026-10-08,OBS,retain handshake/peer evidence
+38a03a913,2026-10-08,U2,projection writer holds SQLite write lock
+ed6ff94c8,2026-10-08,XS,
+6ab0ee17b,2026-10-08,XF,
+ca7f7f8e5,2026-10-08,U2,projection replay after restart rewrites everything
+e9df3f7ec,2026-10-08,XF,
+4facb96f9,2026-10-08,XT,
+5f5b76e69,2026-10-08,XF,
+2a2a75bf1,2026-10-08,U2,projection writer holds SQLite write lock
+3fc1e3e07,2026-10-08,XF,
+542c37e50,2026-10-08,XF,
+82de2ca26,2026-10-08,XF,
+552a7d398,2026-10-08,XF,
+acd0f2b0c,2026-10-08,ASSET,shell generation stamp mismatch
+70347f3e3,2026-10-08,OBS,authority fence metrics
+81e32be3c,2026-10-08,GEN,validation drift JS vs Rust
+79c18bb03,2026-10-08,XF,
+8375df80a,2026-10-08,XF,
+1fb866831,2026-10-07,XF,
+cbb1c3a08,2026-10-07,XF,
+437a2fb5f,2026-10-07,XF,
+cd1962502,2026-10-07,LIFE,stream slot/lease leak on cancel/drop
+ab58527d8,2026-10-07,OBS,recovery cause not explained
+64ffa426e,2026-10-07,GEN,command inventory count drift
+502c759a4,2026-10-07,GEN,command inventory count drift
+edc3dff09,2026-10-07,XF,
+a5ec5bee7,2026-10-07,XF,
+6c4e7d3a3,2026-10-07,QRY,invalidation-driven refetch storm
+0ace1ae57,2026-10-07,U1,stale sync confirmation shown as fresh
+d5e55c089,2026-10-07,QRY,invalidation-driven refetch storm
+45530f174,2026-10-07,AUTH,identity/owner alias resolution
+2aced0ffc,2026-10-07,XT,
+a452fb4bc,2026-10-07,XD,
+7f700b8c4,2026-10-07,AUTH,identity/owner alias resolution
+9d965be2d,2026-10-07,AUTH,identity/owner alias resolution
+0bef8110f,2026-10-07,XF,
+1004a0ea9,2026-10-07,QRY,invalidation-driven refetch storm
+2a045ad4d,2026-10-07,OBS,authority fence metrics
+31370e077,2026-10-07,OBS,authority fence metrics
+8ac606cb9,2026-10-07,QRY,invalidation hint content
+bc96a4b11,2026-10-07,SCHEMA,schema changed without version bump (hash drift)
+ef2d1f1dc,2026-10-07,QRY,invalidation hint content
+69ce1ff7b,2026-10-07,XD,
+3dec8b097,2026-10-07,XDOM,
+320bcd6dd,2026-10-07,SCHEMA,collection schema upgrade loses data/bindings
+9668bb407,2026-10-07,QRY,demand-only collections miss remote changes
+c5518fc5f,2026-10-07,XDOM,
+e2648b6a4,2026-10-07,XT,
+9f3d474d3,2026-10-07,U5,main broken by parallel change (compile/merge)
+70a1e6da3,2026-10-07,U4,head-of-line/no priority between app and background
+7be4d3a5c,2026-10-07,GEN,command inventory count drift
+49de23696,2026-10-07,XS,
+0fc6e7176,2026-10-07,U4,stream-limit/admission protocol inconsistency
+3b7f64e5e,2026-10-07,QRY,duplicate identical strict reads not coalesced
+2ca5aed98,2026-10-07,XF,
+86098f681,2026-10-07,U4,stream-limit/admission protocol inconsistency
+7cbc4618a,2026-10-07,GEN,command inventory count drift
+972b847f6,2026-10-07,XF,
+4832a310d,2026-10-07,LIFE,peer replacement/cancellation race
+c60a32016,2026-10-07,XF,
+c4a1f32d3,2026-10-07,XF,
+0c7857624,2026-10-07,GEN,value representation drift JS vs Rust
+f238fb487,2026-10-07,XF,
+1d973e99e,2026-10-07,XF,
+3ec411c97,2026-10-07,XDOM,
+a33883b21,2026-10-07,U1,list readiness unconfirmed/unrecoverable
+1a0402980,2026-10-07,LIFE,peer replacement/cancellation race
+37fd75779,2026-10-07,XF,
+a05e48ea1,2026-10-07,XF,
+e216a0f93,2026-10-07,XDOM,
+08f30479b,2026-10-07,XF,
+b7cf0bc31,2026-10-07,XF,
+3a997bd48,2026-10-07,XF,
+1a6810bc7,2026-10-07,XT,
+b7fb4447f,2026-10-07,XT,
+328d01a70,2026-10-07,ASSET,module/import cache invalidation
+ac9d1d7df,2026-10-07,AUTH,policy/capability epoch rollback
+8a7932635,2026-10-07,XT,
+2e7dbf997,2026-10-07,XF,
+b48f4b3a5,2026-10-07,XT,
+2bc94e981,2026-10-07,XT,
+269727f92,2026-10-07,XDOM,
+9dd9f00a5,2026-10-07,AUTH,policy rule wrong for role
+de65a5a7b,2026-10-07,AUTH,authority check contends on process-wide fence
+f693d0c92,2026-10-07,AUTH,authority check contends on process-wide fence
+b06649c63,2026-10-07,XF,
+495342bad,2026-10-07,AUTH,authority check contends on process-wide fence
+11d0b4d57,2026-10-07,U5,main broken by parallel change (compile/merge)
+4e8d395f1,2026-10-07,XT,
+dd276c309,2026-10-07,OBS,authority failure stage hidden
+27091fc4f,2026-10-07,ASSET,module/import cache invalidation
+7229015c8,2026-10-07,ASSET,shell generation stamp mismatch
+980a10ecd,2026-10-07,XF,
+ca85b3003,2026-10-07,XF,
+fa5fda131,2026-10-07,XT,
+5936ad44c,2026-10-07,XT,
+ab1883a2f,2026-10-07,XF,
+ceaeb37f0,2026-10-07,U3,command history growth (GC/scan cost)
+215bba754,2026-10-07,AUTH,authority lookup failure misclassified
+b0f574761,2026-10-07,XF,
+ae153aaaf,2026-10-07,CMD,command correlation/identity lost
+5a28a805f,2026-10-07,OBS,peer admission failure state
+b0cd9ab59,2026-10-07,XD,
+425b3d207,2026-10-07,XF,
+bc1804f38,2026-10-07,AUTH,authority lookup failure misclassified
+93b98382b,2026-10-07,XDOM,
+b2e59cb9c,2026-10-07,XF,
+433dd2dca,2026-10-07,OBS,failure code lost across layers
+eb1285adf,2026-10-07,XT,
+cc24e7ee7,2026-10-07,XD,
+04eaa9e73,2026-10-07,U1,unknown/timeout interpreted as absent or failed
+4f24a3ee3,2026-10-07,U3,command history growth (GC/scan cost)
+97ceeaac5,2026-10-07,XT,
+45b9592eb,2026-10-07,AUTH,authority lookup failure misclassified
+8451c0b61,2026-10-06,GEN,command inventory count drift
+3e1413027,2026-10-06,XF,
+a493f7351,2026-10-06,U1,list readiness unconfirmed/unrecoverable
+836947231,2026-10-06,XF,
+1b3c991de,2026-10-06,GEN,query/selector semantics JS vs Rust
+391442014,2026-10-06,U5,main broken by parallel change (compile/merge)
+3c5c1cd06,2026-10-06,GEN,query/selector semantics JS vs Rust
+3a86a43f4,2026-10-06,XT,
+023508999,2026-10-06,ASSET,asset delivery latency/caching
+bd699317c,2026-10-06,U4,transfer throughput (window/compression)
+816a6b5ad,2026-10-06,QRY,invalidation-only subscription semantics
+ee89c1dad,2026-10-06,XF,
+19283ee29,2026-10-06,XF,
+a6a5b7fbb,2026-10-06,OBS,transfer guard timeout phase
+0aed63dd7,2026-10-06,U5,merge/cherry-pick reconciliation
+eccf7f8a8,2026-10-06,U5,merge/cherry-pick reconciliation
+38bc64bf1,2026-10-06,XD,
+5c2fb9a3d,2026-10-06,U2,external SQLite writers bypass change feed
+18454a937,2026-10-06,CMD,admission vs execution completion semantics
+e3780654f,2026-10-06,CMD,replay/idempotency of control commands
+db4645c53,2026-10-06,XT,
+443b5c3b6,2026-10-06,XT,
+d6205bf62,2026-10-06,XT,
+15573365b,2026-10-06,XT,
+2e974f42f,2026-10-06,OBS,failure context lost
+716c1570a,2026-10-06,XD,
+c7b99c073,2026-10-06,XT,
+e5ec58d6a,2026-10-06,XT,
+59c9616f1,2026-10-06,U2,writer lock contention (ack/queue writers)
+0e7598327,2026-10-06,XD,
+b227f03d0,2026-10-06,XT,
+5c18825fb,2026-10-06,XF,
+dd459b436,2026-10-06,U3,page/answer size limits not enforced
+85fde90a1,2026-10-06,XT,
+328b21cea,2026-10-06,XT,
+1b3b15307,2026-10-06,XT,
+650792077,2026-10-06,XT,
+d76d5db84,2026-10-06,U5,main broken by parallel change (compile/merge)
+77465ff6c,2026-10-06,XT,
+c363cd375,2026-10-06,XT,
+25f770bbe,2026-10-06,XF,
+bbdf01609,2026-10-06,U5,main broken by parallel change (compile/merge)
+69284e720,2026-10-06,U5,guards/fixtures out of sync with main
+892681ba3,2026-10-06,IDB,browser query cache unbounded
+1e0550a96,2026-10-06,XF,
+7b45915a4,2026-10-06,U1,UI blocked on sync warmup/readiness
+ef5fcd76d,2026-10-06,AUTH,authority must hold until physical send
+9c172bc83,2026-10-06,CMD,command saga failure classification
+094c4a4a0,2026-10-06,CMD,admission idempotency/authority adoption
+8235c3a65,2026-10-06,U3,eager collection too large (moved to demand)
+ab3ea8b20,2026-10-06,AUTH,policy revalidation before persist
+23532e91f,2026-10-06,U4,transfer throughput (window/compression)
+7b6f86b5a,2026-10-06,AUTH,authority lost across retry/recovery
+e1c8d145d,2026-10-06,AUTH,authority must hold until physical send
+428326ba9,2026-10-06,XF,
+fe9ef70ef,2026-10-06,AUTH,authority must hold until physical send
+de10fbc07,2026-10-06,XF,
+531366b76,2026-10-06,XF,
+bcf6ed6b0,2026-10-06,U5,main broken by parallel change (compile/merge)
+51f54ace6,2026-10-06,U5,main broken by parallel change (compile/merge)
+c06a176ec,2026-10-06,U5,main broken by parallel change (compile/merge)
+f0b615aa2,2026-10-06,XF,
+82585feb0,2026-10-06,LIFE,send/request lifetime on cancellation
+ec14849d3,2026-10-06,XT,
+473966d9c,2026-10-06,U5,lint/clippy breakage after composition
+2a4bf3412,2026-10-06,U5,cross-branch port of a lifetime fix
+96ba62d09,2026-10-05,XT,
+782ea948b,2026-10-05,XT,
+43f709edc,2026-10-05,XF,
+8fbc576ec,2026-10-05,U5,lint/clippy breakage after composition
+63a514212,2026-10-05,CMD,admission vs execution completion semantics
+b1f9c4c5c,2026-10-05,XT,
+a5bfaa1cc,2026-10-05,XT,
+bad522cbb,2026-10-05,U2,projection mirror drops/alters canonical fields
+3869d8365,2026-10-05,XDOM,
+8c194d2f3,2026-10-05,XT,
+a89f7a6a1,2026-10-05,XT,
+84929abcb,2026-10-05,AUTH,credential/capability cache staleness
+0be07cfad,2026-10-05,XT,
+5968aefc4,2026-10-05,XT,
+308917be2,2026-10-05,XT,
+4c3aafd66,2026-10-05,XT,
+f758cdcb2,2026-10-05,XF,
+57f0887ce,2026-10-05,U2,shadow/public copy trusted as authority
+b3cc0719a,2026-10-05,U2,projection mirror drops/alters canonical fields
+b3268ae38,2026-10-05,U2,projection mirror drops/alters canonical fields
+0106a9712,2026-10-05,U2,projection mirror drops/alters canonical fields
+c66f2f930,2026-10-05,CMD,replay/idempotency of control commands
+a23ef7765,2026-10-05,U3,eager collection too large (moved to demand)
+3159af2b5,2026-10-05,XF,
+27b2a392e,2026-10-05,LIFE,send/request lifetime on cancellation
+d9a68952a,2026-10-05,LIFE,stream slot/lease leak on cancel/drop
+ff4f6fbc6,2026-10-05,XF,
+5bed7d6b7,2026-10-05,XF,
+3d34fb470,2026-10-04,IDB,recovery journal unbounded scans/payloads
+ad96c8a40,2026-10-04,IDB,recovery journal unbounded scans/payloads
+0147eebdb,2026-10-04,XS,
+160475679,2026-10-04,IDB,IndexedDB open/handle lifecycle
+323b4d709,2026-10-04,U5,lint/clippy breakage after composition
+0f833abf6,2026-10-04,U2,stale projection vs canonical state (queue leases)
+869cab69e,2026-10-04,AUTH,authority lost across retry/recovery
+b97f8b38c,2026-10-04,XF,
+21026deca,2026-10-04,U2,concurrent writers of the same field (field status)
+b54f6c4bc,2026-10-04,XF,
+3d569f1fc,2026-10-04,XF,
+266727c23,2026-10-04,U5,merge lost behavior (re-applied)
+51deb657b,2026-10-04,U2,concurrent writers of the same field (field status)
+2131d2426,2026-10-04,XF,
+848d996cb,2026-10-03,XF,
+d6cd2b1f3,2026-10-03,U2,concurrent writers of the same field (field status)
+85325084b,2026-10-03,U1,nested/derived readiness not awaited
+71284bd48,2026-10-03,XF,
+c4cd2d554,2026-10-03,XDOM,
+d8245a683,2026-10-03,U1,UI blocked on sync warmup/readiness
+5de59b4fa,2026-10-03,U1,UI blocked on sync warmup/readiness
+4cc4a133f,2026-10-03,XS,
+241306380,2026-10-03,ASSET,shell generation stamp mismatch
+90946e3d7,2026-10-03,XS,
+051e1c31f,2026-10-02,XF,
+4383933aa,2026-10-02,U1,UI blocked on sync warmup/readiness
+ce524fc3a,2026-10-02,QRY,live query window lost on pull delta
+4e88d7014,2026-10-02,U2,projection mirror drops/alters canonical fields
+a40c3c107,2026-10-02,XDOM,
+c20c6ca93,2026-10-02,XF,
+83c31b029,2026-10-02,XF,
+aa4f9d6c5,2026-10-02,QRY,live query re-materialization storm (single-flight)
+da1747e59,2026-10-02,XT,
+09aee36cb,2026-10-02,XF,
+b8a7d08b3,2026-10-02,ASSET,shell generation stamp mismatch
+1ea420bcd,2026-10-01,U2,shadow/public copy trusted as authority
+7a9d865e2,2026-10-01,XDOM,
+64f400577,2026-10-01,AUTH,query authority not bound to current principal
+e2f9f5b48,2026-10-01,U1,eager vs demand read-path interaction
+702385919,2026-10-01,XT,
+bce560b99,2026-10-01,XF,
+722e65844,2026-10-01,LIFE,native query cache keeps closed collection alive
+2d199c369,2026-10-01,XT,
+c3695eccd,2026-10-01,LIFE,native query cache keeps closed collection alive
+5ae3f4690,2026-10-01,LIFE,native query cache keeps closed collection alive
+383ca22bb,2026-10-01,REPL,checkpoint validity too strict (full re-pull per reload)
+8116aaf9d,2026-10-01,U2,projection scope/binding wrong
+3767c8871,2026-09-30,U1,eager vs demand read-path interaction
+bea5477e0,2026-09-30,U1,eager vs demand read-path interaction
+8a973dacf,2026-09-30,XF,
+ee2259f7d,2026-09-30,U1,eager vs demand read-path interaction
+0f557c531,2026-09-30,XF,
+a58c78f0d,2026-09-30,ASSET,shell generation stamp mismatch
+ac482633f,2026-09-30,REPL,checkpoint validity too strict (full re-pull per reload)
+13aa2df7a,2026-09-30,U3,payload size not bounded at ingress
+f211e54ec,2026-09-30,QRY,missed change hints
+a8883576c,2026-09-30,U1,stale sync confirmation shown as fresh
+7bb941774,2026-09-30,SQL,connection reuse/identity fencing
+40ef09a60,2026-09-30,SQL,connection reuse/identity fencing
+9445d257e,2026-09-30,SQL,connection reuse/identity fencing
+3b820f44e,2026-09-30,SQL,connection reuse/identity fencing
+16d7ebd1d,2026-09-30,SQL,per-request preparation cost
+84747832b,2026-09-30,LIFE,state lost across daemon restart/recovery
+7c3dedf21,2026-09-30,XF,
+b8616cae9,2026-09-30,XF,
+419191d1c,2026-09-30,XF,
+d08c89651,2026-09-30,OBS,authority renewal cost tracking
+72a9fb218,2026-09-30,LIFE,observer/subscription retirement
+2aa5a0015,2026-09-29,XT,
+b441bf36b,2026-09-29,XF,
+9258e3702,2026-09-29,AUTH,role-denied collections leased anyway
+ae157c673,2026-09-29,XT,
+4ce83669f,2026-09-29,AUTH,role-denied collections leased anyway
+5502d4691,2026-09-28,XT,
+303947063,2026-09-28,XDOM,
+d9e592b82,2026-09-28,XS,
+23a1a93e7,2026-09-28,IDB,recovery journal unbounded scans/payloads
+2848cf6af,2026-09-28,XDOM,
+7e52ccbd3,2026-09-28,REPL,false/malformed acknowledgements
+11bc5164f,2026-09-28,XF,
+53efbe0a5,2026-09-28,REPL,false/malformed acknowledgements
+7950396ea,2026-09-28,XS,
+9dd5cd632,2026-09-28,XD,
+bba741173,2026-09-28,U2,two state sources for one fact (queue vs command lifecycle)
+29ad30b29,2026-09-28,XDOM,
+c29cd4ede,2026-09-28,XF,
+39da2ca53,2026-09-28,U1,unknown/timeout interpreted as absent or failed
+eb6a22b33,2026-09-28,XF,
+d6e7889a4,2026-09-28,XS,
+ae8515b0e,2026-09-28,U1,UI blocked on sync warmup/readiness
+11afab683,2026-09-28,XDOM,
+0d4e9dc23,2026-09-28,XF,
+a158f62c6,2026-09-28,LIFE,stale callbacks/timers from retired connection
+a2aba15fc,2026-09-28,LIFE,stale callbacks/timers from retired connection
+81b0f166f,2026-09-28,XT,
+eee71c552,2026-09-28,REPL,HLC clock anchoring
+fb4ee473d,2026-09-28,REPL,HLC clock anchoring
+854c1d1d8,2026-09-28,XT,
+6b9867339,2026-09-28,REPL,HLC clock anchoring
+8a23c0e00,2026-09-27,U4,signaling configuration/routing
+3d1c93284,2026-09-28,U4,WebRTC responder/offer renegotiation races
+82dca7db2,2026-09-28,U4,WebRTC responder/offer renegotiation races
+e0b4c4481,2026-09-28,U4,WebRTC responder/offer renegotiation races
+cc648dbe9,2026-09-28,U4,WebRTC responder/offer renegotiation races
+626e9b29e,2026-09-28,U4,WebRTC responder/offer renegotiation races
+2f8c2966f,2026-09-28,U4,WebRTC responder/offer renegotiation races
+3f3dafcf7,2026-09-27,XS,
+1f66efef8,2026-09-27,AUTH,credential/capability cache staleness
+30ea0e5e1,2026-09-27,XD,
+ba667d435,2026-09-27,XT,
+77cff5135,2026-09-27,XF,
+c51e4bf5c,2026-09-27,GEN,dist bundle not regenerated
+af217dd41,2026-09-27,U2,projection mirror drops/alters canonical fields
+e0a7cb4dc,2026-09-27,XF,
+8fdf5f04e,2026-09-27,XT,
+f1550e46d,2026-09-27,XT,
+86567b015,2026-09-27,AUTH,credential/capability cache staleness
+980231c49,2026-09-27,XD,
+27b78df5c,2026-09-27,XT,
+ff5b23322,2026-09-27,XF,
+f776a7eed,2026-09-27,XT,
+7c0f881f0,2026-09-27,XT,
+9fd041c89,2026-09-27,XT,
+1952e1d1e,2026-09-27,XD,
+21d6a21ab,2026-09-27,XT,
+5f7ba5dcb,2026-09-27,U2,projection writer holds SQLite write lock
+6aaa37002,2026-09-27,XT,
+d8fe282d3,2026-09-27,XT,
+6cc1f260a,2026-09-27,U4,request retry coupled to peer recovery
+a2ade45a2,2026-09-27,ASSET,bundle provenance/loader stamp
+c891c532b,2026-09-27,AUTH,control-plane window permission race (#211 family)
+6835a475e,2026-09-27,XS,
+bf94a9f3a,2026-09-27,XS,
+2e89a09ab,2026-09-27,XF,
+a3b3ed341,2026-09-27,XS,
+2e4e36858,2026-09-27,XDOM,
+9da8daca2,2026-09-27,XS,
+40a6b4616,2026-09-27,XS,
+d7daeba38,2026-09-27,XT,
+60ed6b81b,2026-09-27,ASSET,shell generation stamp mismatch
+d5ebef86c,2026-09-27,ASSET,shell generation stamp mismatch
+cc99f2b4a,2026-09-27,U5,guards/fixtures out of sync with main
+9869e48c7,2026-09-27,ASSET,shell generation stamp mismatch
+b0b27811a,2026-09-27,ASSET,shell generation stamp mismatch
+c2a95a5df,2026-09-27,XD,
+912532b4a,2026-09-26,ASSET,shell generation stamp mismatch
+8a14db5f8,2026-09-26,ASSET,shell generation stamp mismatch
+0d41cf83e,2026-09-26,ASSET,shell generation stamp mismatch
+53934859b,2026-09-26,XDOM,
+0ae16b448,2026-09-26,SQL,deferred transaction upgrade -> SQLITE_BUSY
+4a5bf4001,2026-09-26,XS,
+cfc0003c7,2026-09-26,U3,unbounded per-request cost
+27baf575f,2026-09-25,XF,
+3fb6c5d92,2026-09-25,XT,
+17b12b15f,2026-09-25,SQL,deferred transaction upgrade -> SQLITE_BUSY
+bbfe5b00b,2026-09-25,XF,
+8ed7cfe63,2026-09-25,XF,
+78f3f779b,2026-09-25,XF,
+7713daefb,2026-09-25,XF,
+2bb3a0877,2026-09-25,XF,
+b1eb3d2b8,2026-09-24,AUTH,control-plane window permission race (#211 family)
+5e0180305,2026-09-24,AUTH,control-plane window permission race (#211 family)
+c8df361fb,2026-09-24,AUTH,control-plane window permission race (#211 family)
+5472655b0,2026-09-24,XF,
+71bce5518,2026-09-24,AUTH,cached window used with unknown permission identity
+4fc3ed8da,2026-09-24,MTAB,leader handover on pagehide/resume
+55025687c,2026-09-24,MTAB,leader handover on pagehide/resume
+3ca107275,2026-09-24,XF,
+20d2f9329,2026-09-24,U2,shadow/public copy trusted as authority
+05cee78a9,2026-09-24,U2,shadow/public copy trusted as authority
+81d07549a,2026-09-24,XT,
+6259bfac9,2026-09-24,U2,shadow/public copy trusted as authority
+cb58511cd,2026-09-23,ASSET,shell generation stamp mismatch
+138ec4fed,2026-09-23,XT,
+e4fefbf90,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+121ffac7a,2026-09-23,XT,
+3bce2f098,2026-09-23,XT,
+9a132f45c,2026-09-23,XD,
+78e41ab43,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+97569c137,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+eb7307b50,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+1f18e8add,2026-09-23,ASSET,shell generation stamp mismatch
+c20c4c74c,2026-09-23,AUTH,control-plane window permission race (#211 family)
+ba6fff756,2026-09-23,AUTH,control-plane window permission race (#211 family)
+393ae16d2,2026-09-23,AUTH,control-plane window permission race (#211 family)
+9b822fcaf,2026-09-23,AUTH,control-plane window permission race (#211 family)
+0104d8b95,2026-09-23,XT,
+83c54b5ea,2026-09-23,XF,
+948b8bcb1,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+f3eaa25b3,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+5306cffb3,2026-09-23,U2,projection writes invalid RxDB envelopes (repair chain)
+620344d01,2026-09-23,U1,freshness budget blocks reads (SWR missing)
+0abc3de29,2026-09-23,SQL,maintenance/GC loop holds write lock
+8f9ea7762,2026-09-23,XD,
+1060f98d2,2026-09-22,XF,
+1d489cb25,2026-09-22,AUTH,grants missing for shared/first-party collections
+654a7d344,2026-09-22,U2,projection change detection misses sources (clock)
+5d6f4dba0,2026-09-21,AUTH,grants missing for shared/first-party collections
+277a09247,2026-09-21,XT,
+3dfd42d3f,2026-09-21,AUTH,module/source authority binding
+6ef66dc65,2026-09-20,XT,
+1712bc17c,2026-09-20,AUTH,module/source authority binding
+086ec48c4,2026-09-19,XD,
+9a33be8e9,2026-09-20,U5,merge/cherry-pick reconciliation
+ffc5a8741,2026-09-20,XT,
+30ec06feb,2026-09-20,XT,
+c4503e87e,2026-09-20,XT,
+a546dce29,2026-09-20,CMD,canonical vs compatibility dual admission writes
+c509f5dfd,2026-09-20,ASSET,shell generation stamp mismatch
+e11ca5ce7,2026-09-20,XF,
+43ef0572f,2026-09-20,AUTH,authority must hold until physical send
+2cb16df3a,2026-09-20,ASSET,shell generation stamp mismatch
+cadeea2cf,2026-09-20,LIFE,stream slot/lease leak on cancel/drop
+9a41ffe0d,2026-09-20,ASSET,shell generation stamp mismatch
+f6c119cee,2026-09-20,MTAB,follower tab cannot read (no lease/fetch path)
+3f4b4f974,2026-09-20,XT,
+a3d995e1e,2026-09-20,XF,
+509fca387,2026-09-20,SCHEMA,store migration/backup/restore gaps
+6aa2fd9dd,2026-09-20,XF,
+a6c211f23,2026-09-18,U2,projection written before canonical record exists (ordering)
+2761e9597,2026-09-13,U2,consumer depends on projection availability
+c06da9a23,2026-09-13,OBS,sync diagnostics not reachable
+612e82b13,2026-09-13,XDOM,
+71395cf18,2026-09-13,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+8511684e0,2026-09-13,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+0ff17e139,2026-09-13,XT,
+ae6e0bcd7,2026-09-13,XT,
+a583692ff,2026-09-13,U4,reconnect/renewal breaks in-flight requests
+717a2d180,2026-09-13,XF,
+c74b88f4e,2026-09-13,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+cd5899630,2026-09-13,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+d7076b2f7,2026-09-13,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+7d0787d76,2026-09-13,ASSET,module/import cache invalidation
+91f60a718,2026-09-13,ASSET,shell generation stamp mismatch
+42d7c3b77,2026-09-13,ASSET,multi-tab epoch coupled to cache revision
+0846f3515,2026-09-13,ASSET,shell generation stamp mismatch
+19be8b5a2,2026-09-13,QRY,missed change hints
+9b05b54e7,2026-09-13,XDOM,
+a89ce235d,2026-09-12,LIFE,requests/timers not cancelled on replacement
+09272cbc9,2026-09-12,XF,
+a827a95b3,2026-09-12,CMD,terminal state derivation from late evidence
+e90b8224e,2026-09-12,XDOM,
+c2cbf390d,2026-09-12,GEN,command inventory count drift
+ea566a3f0,2026-09-12,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+718ce57f8,2026-09-11,U2,data copied into every store (secret leakage across projection chain)
+e23e12c87,2026-09-11,U2,data copied into every store (secret leakage across projection chain)
+d4ea3ae8e,2026-09-11,U2,process-wide projection hooks vs per-root stores
+55cdde7a8,2026-09-10,CMD,command class misrouted (native vs worker)
+4f53a82fe,2026-09-10,XDOM,
+5471f700b,2026-09-10,U2,two state sources for one fact (queue vs command lifecycle)
+864f50d4b,2026-09-10,XF,
+54e5640a8,2026-09-10,XF,
+c7d8b0579,2026-09-10,XF,
+7cfbe89ea,2026-09-10,ASSET,shell generation stamp mismatch
+72b83fecd,2026-09-10,U1,"desktop pin/layout: unknown vs empty, defaults overwrite server (pin chain)"
+cb606677a,2026-09-10,XD,
+72836727a,2026-09-09,OBS,misleading failure code (opened-then-dropped vs never-opened)
+1a4337bae,2026-09-09,XT,
+5ebd66198,2026-09-09,XF,
+9bb08abde,2026-09-09,XF,
+83aef0c27,2026-09-09,U5,main broken by parallel change (compile/merge)
+ae3481260,2026-09-09,XT,
+1dbd63a69,2026-09-09,U2,two state sources for one fact (queue vs command lifecycle)
+c2daa9caa,2026-09-09,XF,
+b9f87e148,2026-09-09,XF,
+cb5cd9171,2026-09-09,XF,
+16a36a0b5,2026-09-09,U2,browser optimistic write of server-owned state
+ee858d000,2026-09-09,XDOM,
+5b583c3c2,2026-09-09,XT,
+1c21f8bd9,2026-09-09,XF,
+3b8ff841a,2026-09-09,U5,CI red on main / guards out of sync
+18eaacb5b,2026-09-09,U2,two writers append the same data
+e7b0458b9,2026-09-09,U2,two state sources for one fact (queue vs command lifecycle)
+8ca657d33,2026-09-09,GEN,schema/module inventory declarations drift
+3023c3439,2026-09-09,XF,
+e7e8aaca8,2026-09-09,XF,
+369a20f1a,2026-09-09,XF,
+6da38cbfd,2026-09-09,XT,
+09d084b95,2026-09-09,XF,
+4f8f0f5ea,2026-09-09,LIFE,maintenance read-only lock after upgrade
+a387e3406,2026-09-09,XD,
+38dac9b6f,2026-09-09,XF,
+ef263bae0,2026-09-09,XF,
+19a790b90,2026-09-09,XF,
+e3717892a,2026-09-09,XDOM,
+43d4ef5d4,2026-09-09,XDOM,
+817a6d783,2026-09-09,U1,UI blocked on sync warmup/readiness
+4a48fb9c1,2026-09-09,XF,
+2cc1ad1bf,2026-09-09,ASSET,shell generation stamp mismatch
+a7fcc912a,2026-09-09,XT,
+73f17204c,2026-09-09,XF,
+e7c1affc4,2026-09-09,SCHEMA,collection schema upgrade loses data/bindings
+898979e96,2026-09-09,AUTH,unavailable policy must fail closed
+aed135018,2026-09-09,XF,
+5e871a298,2026-09-09,XF,
+eac8d50f5,2026-09-09,XF,
+8a09690d5,2026-09-09,XT,
+bafe3a47b,2026-09-09,GEN,command inventory count drift
+245f7cfee,2026-09-09,XD,
+37e97766e,2026-09-09,XF,
+3a8c497f8,2026-09-09,CMD,intake ordering/bounding
+7a8a4ae23,2026-09-09,XF,
+a0e56ea8c,2026-09-09,XDOM,
+e9c01e2c6,2026-09-09,CMD,effect applied but command claim lost (crash/delivery window)
+e24715dde,2026-09-09,CMD,effect applied but command claim lost (crash/delivery window)
+e80c66e2e,2026-09-09,CMD,effect applied but command claim lost (crash/delivery window)
+0aa147c68,2026-09-09,GEN,schema version routing JS vs native
+e5973c8c3,2026-09-09,SQL,reader/connection per collection
+cbabdb48d,2026-09-09,SCHEMA,legacy rows lost during schema cleanup
+67de21dc9,2026-09-09,XT,
+0640cbf20,2026-09-09,XF,
+0785246e1,2026-09-09,REPL,conflict resolution with equal clocks
+464e5bbdb,2026-09-09,XT,
+c64f4ce46,2026-09-09,XT,
+bff5d518b,2026-09-09,XF,
+669d8766f,2026-09-09,XT,
+ff419e3d7,2026-09-09,XDOM,
+e00ecbeb1,2026-09-09,XT,
+943dab6b0,2026-09-09,XF,
+f30bfa87d,2026-09-09,XT,
+70e031508,2026-09-08,U4,head-of-line: RPC execution blocks frame ingress
+ddffd50e2,2026-09-08,XT,
+51ecc7bf9,2026-09-08,U4,query slot admission starvation (handshakes hold slots)
+76b1c7053,2026-09-08,XT,
+4a842025f,2026-09-08,LIFE,lease/bridge ownership across runtime replacement
+da52666b5,2026-09-08,XF,
+0e8040da9,2026-09-08,XT,
+f8e3ff462,2026-09-08,U4,head-of-line: handshake starved by data backpressure
+6e4685ffb,2026-09-08,LIFE,request task ownership
+ee477f343,2026-09-08,LIFE,stream slot/lease leak on cancel/drop
+2944f13cd,2026-09-08,LIFE,lock held across callbacks
+0f8cead69,2026-09-08,XT,
+d2e719205,2026-09-08,U1,legacy readiness source fakes readiness (HTTP bridge)
+ee372693e,2026-09-08,XT,
+484b21ef5,2026-09-08,XT,
+e1f5d4c5a,2026-09-08,U1,UI blocked on sync warmup/readiness
+19bb59b52,2026-09-08,LIFE,observer/subscription retirement
+a6fd70c06,2026-09-08,U1,UI blocked on sync warmup/readiness
+bd52960b9,2026-09-08,U4,ack timers throttled in background tabs
+d24ad3a10,2026-09-08,U1,UI blocked on command acceptance
+3f518d7c7,2026-09-08,XT,
+a3643d3b9,2026-09-08,XT,
+e49d92e0b,2026-09-08,XDOM,
+79ee5a2a4,2026-09-08,U2,projection writer holds SQLite write lock
+d7eea14a2,2026-09-08,OBS,latency attribution missing
+475ee7a88,2026-09-08,CMD,receipts/command state lost across reconnect
+5eeffaa40,2026-09-08,OBS,latency attribution missing
+d66f7eb7e,2026-09-08,U4,WebRTC responder/offer renegotiation races
+88a939aea,2026-09-08,LIFE,state lost across daemon restart/recovery
+0f0236913,2026-09-08,XT,
+f45802909,2026-09-08,XF,
+f1bf5096f,2026-09-08,U4,reconnect leaves stale connections
+cff65c121,2026-09-08,XDOM,
+9d3bbe83a,2026-09-08,U5,conflicting parallel fixes (revert)
+dd39699dd,2026-09-08,XF,
+7b87b51fa,2026-09-08,XDOM,
+9bd75b2f0,2026-09-08,XF,
+16781693b,2026-09-08,XF,
+b33746d0d,2026-09-08,AUTH,policy rule wrong for role
+4308df4e1,2026-09-08,U4,data-channel event consumer replaced
+6aa538a92,2026-09-08,XF,
+13f24f795,2026-09-08,U2,projection writer holds SQLite write lock
+a0e8e59d8,2026-09-08,XT,
+0979b039a,2026-09-07,XDOM,
+05816d890,2026-09-07,XDOM,
+f487d045c,2026-09-07,XDOM,
+0c5147d56,2026-09-07,GEN,schema/module inventory declarations drift
+90c00c695,2026-09-07,GEN,schema/module inventory declarations drift
+fea79303a,2026-09-07,XS,
+8de040615,2026-09-07,SCHEMA,optional collection registration fails (DB6)
+1a58665ca,2026-09-07,U4,frame interleaving/receipts corrupt framed transfers
+931a11820,2026-09-07,XF,
+fcce19763,2026-09-07,U3,oversized documents stall/lose replication
+88950c714,2026-09-07,XF,
+ad93f4d21,2026-09-07,U3,oversized documents stall/lose replication
+20199fe28,2026-09-07,U2,deletion/tombstone semantics across projection layers
+7a54790c0,2026-09-07,U2,deletion/tombstone semantics across projection layers
+5e81f8e65,2026-09-07,UNCLEAR,corrupted Office staging uploads repair
+d714d887a,2026-09-07,ASSET,stale cache-buster breaks module import (boot failure)
+490f1ab80,2026-09-06,XDOM,
+7f1209e37,2026-09-06,XF,
+576ea58a0,2026-09-06,IDB,IndexedDB open/handle lifecycle
+88b4af3f8,2026-09-06,U2,projection maintenance destroys adjacent storage
+15f33c4b9,2026-09-06,ASSET,stale cache-buster breaks module import (boot failure)
+40873f0d6,2026-09-06,LIFE,retired transfers continue after cancellation
+87abdd514,2026-09-06,LIFE,lease/bridge ownership across runtime replacement
+151501174,2026-09-06,GEN,schema representation drift (type unions) JS vs Rust
+3fffd9f0a,2026-09-06,GEN,schema representation drift (type unions) JS vs Rust
+01fe390c7,2026-09-06,GEN,schema representation drift (type unions) JS vs Rust
+926a3a2cb,2026-09-06,LIFE,repair/bridge vs collection retirement race
+6fe93432b,2026-09-06,XF,
+88b352229,2026-09-06,XDOM,
+1fa1f1e8f,2026-09-06,XF,
+e3b5a32c0,2026-09-06,U1,unknown/timeout interpreted as absent or failed
+ae7f9e871,2026-09-06,XF,
+174a1bd24,2026-09-06,XF,
+ccd777151,2026-09-06,XF,
+7298b59ca,2026-09-06,XF,
+f972b3ed6,2026-09-06,XF,
+b0e24d470,2026-09-06,XF,
+b2068c0e4,2026-09-05,XF,
+edc101047,2026-09-05,XF,
+4f4443270,2026-09-05,XF,
+3e05b7a66,2026-09-05,ASSET,module/import cache invalidation
+fde5d0702,2026-09-05,XT,
+124090850,2026-09-05,XF,
+46e3b6d3a,2026-09-05,XF,
+33161b27c,2026-09-05,XF,
+9b3f44e09,2026-09-05,U2,stale projection vs canonical state (queue leases)
+0b05a05cf,2026-09-05,U2,process-wide projection hooks vs per-root stores
+a3f3e90c5,2026-09-05,XD,
+4f28b66e8,2026-09-04,OBS,restart cause not recorded
+287205cc9,2026-09-04,U3,oversized documents stall/lose replication
+e87de4f50,2026-09-04,U3,oversized documents stall/lose replication
+a99fdc9ca,2026-09-04,XDOM,
+a617ea953,2026-09-03,XDOM,
+ff6e36212,2026-09-03,U2,two state sources for one fact (app copy vs registry)
+7c197f102,2026-09-03,ASSET,shell generation stamp mismatch
+2d560aec0,2026-09-03,XDOM,
+7f525833d,2026-09-03,XDOM,
+a795dfcec,2026-09-03,XDOM,
+8ade4d738,2026-09-02,XF,
+02aca8804,2026-09-02,MTAB,follower tab command delivery
+24920c9ff,2026-09-02,XDOM,
+57dc87f39,2026-09-02,XDOM,
+217ce4d64,2026-09-02,XF,
+94d7b0792,2026-09-02,XF,
+c2dda6da0,2026-09-02,XF,
+388dad97e,2026-09-02,XF,
+0615f22a4,2026-09-02,XF,
+814c2bc2b,2026-09-02,XDOM,
+ba0e75c0b,2026-09-02,XDOM,
+a10058bfb,2026-09-02,XDOM,
+445c4d669,2026-09-02,XF,
+0c3a817eb,2026-09-02,XDOM,
+e5f56956b,2026-09-01,XDOM,
+956f19abc,2026-09-01,XT,
+e299d62c7,2026-09-01,AUTH,identity/owner alias resolution
+3360ef9d6,2026-09-01,XDOM,
+bc5b54758,2026-09-01,U4,handshake size/time limit
+93189b2f9,2026-09-01,AUTH,runtime role/permission change not propagated to observers
+574df1d7e,2026-09-01,XF,
+6734be3d1,2026-09-01,ASSET,shell generation stamp mismatch

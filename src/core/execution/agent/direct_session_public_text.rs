@@ -102,6 +102,18 @@ impl PublicFilter {
         }
     }
 }
+
+/// Reuse the public assistant metadata filter for native Messages snapshots.
+/// This creates no provider binding or publication authority.
+pub(super) fn filter_native_message_text(text: &str, completed: bool) -> String {
+    let mut filter = PublicFilter::default();
+    let (mut public, _) = filter.push(text, 65536);
+    if completed {
+        public.push_str(&filter.finish());
+    }
+    public
+}
+
 struct Item {
     phase: String,
     filter: PublicFilter,

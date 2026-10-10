@@ -7,6 +7,8 @@
 
 #[path = "guest_registry_accounts.rs"]
 pub(crate) mod accounts;
+#[path = "guest_registry_checkpoint_identity.rs"]
+pub(crate) mod checkpoint_identity;
 #[path = "guest_registry_command.rs"]
 mod command;
 #[path = "guest_registry_core_resume.rs"]

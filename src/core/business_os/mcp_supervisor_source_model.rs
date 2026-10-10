@@ -58,6 +58,8 @@ struct ModelJob {
 }
 #[derive(Default)]
 struct ModelState {
+    published_text: String,
+    public_completed: bool,
     frames: VecDeque<Frame>,
     next: u64,
     acknowledged: u64,
@@ -530,7 +532,60 @@ fn prepare_invocation(
         fresh: true,
     })
 }
-async fn run_invocation(prepared: PreparedInvocation) {
+#[cfg(unix)]
+#[path = "mcp_supervisor_source_progress.rs"]
+mod progress;
+
+#[cfg(unix)]
+fn drain_progress(prepared: &PreparedInvocation) -> anyhow::Result<()> {
+    let draft = {
+        let mut state = prepared
+            .job
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native progress receiver poisoned"))?;
+        if state.failed || state.response_model.conflicting {
+            return Ok(());
+        }
+        let response = &state.response_model;
+        let (Some(model), Some(message), Some(witness)) =
+            (&response.model, &response.message_id, &state.witness)
+        else {
+            return Ok(());
+        };
+        if !(200..300).contains(&witness.status) {
+            return Ok(());
+        }
+        let raw = response.text_blocks.values().cloned().collect::<String>();
+        let text = crate::execution::agent::direct_session::filter_native_message_text(
+            &raw,
+            response.complete,
+        );
+        anyhow::ensure!(
+            text.starts_with(&state.published_text),
+            "native public prefix changed"
+        );
+        let offset = state.published_text.chars().count();
+        if text == state.published_text && (!response.complete || state.public_completed) {
+            return Ok(());
+        }
+        let draft = progress::Draft {
+            model: model.clone(),
+            message: message.clone(),
+            request: witness.request_id.clone(),
+            text: text[state.published_text.len()..].to_owned(),
+            offset,
+            completed: response.complete,
+        };
+        state.published_text = text;
+        state.public_completed = draft.completed;
+        draft
+    };
+    prepared.session.controller.with_current(|_, core, _| {
+        progress::publish_in_current(core, &prepared.session.controller, &prepared.id, &draft)
+    })
+}
+async fn run_invocation(mut prepared: PreparedInvocation) {
     let result = async {
         // Scoped model credential never becomes a Source DTO, env or Core row.
         let capability = prepared.session.proxy.with_scoped_capability(|_, token| {
@@ -542,7 +597,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
             .invoke(
                 &capability,
                 prepared.operation,
-                prepared.body,
+                std::mem::take(&mut prepared.body),
                 &prepared.correlation,
             )
             .await?;
@@ -551,9 +606,14 @@ async fn run_invocation(prepared: PreparedInvocation) {
                 .publish_next(|bytes, witness| prepared.job.push(bytes, witness, true))
                 .await?
                 .is_some()
-            {}
+            {
+                #[cfg(unix)]
+                drain_progress(&prepared)?;
+            }
         } else {
             reply.publish_buffered(|bytes, witness| prepared.job.push(bytes, witness, false))?;
+            #[cfg(unix)]
+            drain_progress(&prepared)?;
         }
         Ok::<_, anyhow::Error>(())
     }
@@ -712,6 +772,53 @@ mod tests {
             state: Mutex::new(ModelState::default()),
             task: Mutex::new(None),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_public_message_prefix_filters_fragmented_private_metadata_and_thinking() {
+        let mut seen = ResponseModelObservation::default();
+        seen.value(&json!({"type":"message_start","message":{"type":"message",
+            "id":"msg_native","model":"claude-opus-5-5"}}));
+        seen.value(&json!({"type":"content_block_start","index":0,
+            "content_block":{"type":"thinking","thinking":"PRIVATE REASONING"}}));
+        seen.value(&json!({"type":"content_block_start","index":1,
+            "content_block":{"type":"text","text":""}}));
+        let mut published = String::new();
+        for text in [
+            "Answer 🦊\n",
+            "```cto",
+            "x-crew\n",
+            "{private: hidden}",
+            "\n```",
+            "\nDone",
+        ] {
+            let frame = format!(
+                "data: {}\n",
+                json!({"type":"content_block_delta","index":1,
+                "delta":{"type":"text_delta","text":text}})
+            );
+            for bytes in frame.as_bytes().chunks(2) {
+                seen.observe(bytes, true, 200);
+                let raw = seen.text_blocks.values().cloned().collect::<String>();
+                let filtered = crate::execution::agent::direct_session::filter_native_message_text(
+                    &raw, false,
+                );
+                assert!(filtered.starts_with(&published));
+                assert!(!filtered.contains("private") && !filtered.contains("PRIVATE"));
+                published = filtered;
+            }
+        }
+        assert_eq!(published, "Answer 🦊\n\nDone");
+        seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+        seen.value(&json!({"type":"message_stop"}));
+        let raw = seen.text_blocks.values().cloned().collect::<String>();
+        assert_eq!(
+            crate::execution::agent::direct_session::filter_native_message_text(&raw, true),
+            published
+        );
+        assert_eq!(seen.message_id.as_deref(), Some("msg_native"));
+        assert!(!seen.conflicting);
     }
 
     #[test]

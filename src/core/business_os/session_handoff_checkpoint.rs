@@ -757,7 +757,7 @@ async fn copy<H: WebRTCConnectionHandler + 'static>(
             {
                 Part::Complete(_) => (),
                 Part::Pending(offset) => {
-                    return copy_pending(&target, verified_bytes, offset, Some(total)).await
+                    return copy_pending(&target, verified_bytes, offset, Some(total)).await;
                 }
             }
         }
@@ -1065,7 +1065,11 @@ pub(crate) fn assert_native_checkpoint_path(
         .unwrap();
     let (_, fresh) = make_fetch(None, 0);
     let pending = fetch_with_account(server.clone(), peer, fresh, auth.clone()).unwrap();
-    let progress_root = tempfile::tempdir().unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let progress_root = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let staged_artifact = ArtifactRef {
         sha256: "bb".repeat(32),
         size_bytes: 4,

@@ -445,6 +445,150 @@ fn adapter(
     ClaudeProviderExecutor::new(Arc::new(pool))
 }
 
+fn pool_with_disabled_fallback(
+    first: Arc<ClaudeSubscriptionMessagesExecutor>,
+    cooldowns: Arc<dyn CooldownStateStore>,
+) -> ClaudeSubscriptionAccountPool {
+    let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+    let fallback = account_executor(
+        "account-b",
+        Arc::new(MessagesOnlyTransport),
+        None,
+        conductor,
+    );
+    let candidates = ["account-a", "account-b"].map(|auth_id| AccountCandidate {
+        auth_id: auth_id.to_owned(),
+        provider: "claude".to_owned(),
+        priority: 0,
+        weight: 1,
+        websocket_enabled: false,
+        supported_models: vec!["claude-opus-5-5".to_owned()],
+        disabled: auth_id == "account-b",
+    });
+    let target = ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap();
+    ClaudeSubscriptionAccountPool::with_clock(
+        Arc::new(AccountRouter::new(cooldowns)),
+        candidates.to_vec(),
+        HashMap::from([
+            ("account-a".to_owned(), first),
+            ("account-b".to_owned(), fallback),
+        ]),
+        Arc::new(FixedAccountClock),
+    )
+    .unwrap()
+    .with_targets(HashMap::from([
+        ("account-a".to_owned(), target.clone()),
+        ("account-b".to_owned(), target),
+    ]))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn pool_preserves_buffered_upstream_rejection_when_fallback_is_disabled() {
+    for status in [429, 503] {
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+        let body = br#"{"error":{"type":"overloaded_error","message":"upstream failure"}}"#;
+        let transport = Arc::new(FixedMessagesTransport::new(status, body).with_headers(
+            Headers::from([("request-id".to_owned(), vec!["upstream-request".to_owned()])]),
+        ));
+        let first = account_executor("account-a", transport.clone(), None, conductor);
+        let pool = pool_with_disabled_fallback(first, cooldowns);
+        let outcome = pool
+            .execute_configured(
+                "claude-opus-5-5",
+                br#"{"model":"claude-opus-5-5","messages":[{"role":"user","content":"Hi"}]}"#
+                    .to_vec(),
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.outcome().response().status(), status);
+        assert_eq!(outcome.outcome().response().body(), body);
+        assert_eq!(outcome.attempted_auth_ids(), &["account-a".to_owned()]);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn pool_preserves_streaming_upstream_rejection_when_fallback_is_disabled() {
+    for status in [429, 503] {
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+        let body = br#"{"error":{"type":"overloaded_error","message":"upstream failure"}}"#;
+        let transport = Arc::new(FixedStreamingTransport {
+            status,
+            headers: Headers::new(),
+            error_body: body.to_vec(),
+            chunks: Vec::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let first = account_executor(
+            "account-a",
+            Arc::new(MessagesOnlyTransport),
+            Some(transport.clone()),
+            conductor,
+        );
+        let pool = pool_with_disabled_fallback(first, cooldowns);
+        let outcome = pool.execute_stream_configured(
+            "claude-opus-5-5",
+            br#"{"model":"claude-opus-5-5","messages":[{"role":"user","content":"Hi"}],"stream":true}"#.to_vec(),
+        ).await.unwrap();
+        assert_eq!(outcome.outcome().response().status(), status);
+        assert_eq!(outcome.outcome().response().error_body(), body);
+        assert_eq!(outcome.attempted_auth_ids(), &["account-a".to_owned()]);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[derive(Default)]
+struct CooldownStoreFailingAfterSave {
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl CooldownStateStore for CooldownStoreFailingAfterSave {
+    fn load(&self) -> Result<Vec<CooldownStateRecord>, CooldownStoreError> {
+        if self.failed.load(Ordering::SeqCst) {
+            Err(CooldownStoreError::Read)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn save(&self, _records: &[CooldownStateRecord]) -> Result<(), CooldownStoreError> {
+        self.failed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn pool_preserves_fail_closed_storage_errors_after_an_upstream_attempt() {
+    use crate::sdk::cliproxy::auth::AccountRoutingError;
+
+    let cooldowns = Arc::new(CooldownStoreFailingAfterSave::default());
+    let conductor = Arc::new(CooldownConductor::new(cooldowns.clone()));
+    let transport = Arc::new(FixedMessagesTransport::new(
+        429,
+        br#"{"error":{"type":"rate_limit_error"}}"#,
+    ));
+    let first = account_executor("account-a", transport.clone(), None, conductor);
+    let pool = pool_with_disabled_fallback(first, cooldowns);
+    let result = pool
+        .execute_configured(
+            "claude-opus-5-5",
+            br#"{"model":"claude-opus-5-5","messages":[{"role":"user","content":"Hi"}]}"#.to_vec(),
+            false,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(ClaudeAccountPoolError::Routing(AccountRoutingError::Store(
+            CooldownStoreError::Read
+        )))
+    ));
+    assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+}
+
 fn request(auth_id: &str, stream: bool) -> ExecutorRequest {
     ExecutorRequest {
         auth_id: auth_id.to_owned(),

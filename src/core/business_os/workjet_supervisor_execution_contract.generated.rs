@@ -82,6 +82,8 @@ pub(crate) struct ExecutionPageRequest {
     pub(crate) limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) include_public_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) include_native_message_text: Option<bool>,
 }
 impl WireValidate for ExecutionPageRequest {
     fn validate(&self) -> Result<(), String> {
@@ -110,6 +112,9 @@ impl WireValidate for ExecutionPageRequest {
             }
         }
         if let Some(value) = &self.include_public_text {
+            value.validate()?;
+        }
+        if let Some(value) = &self.include_native_message_text {
             value.validate()?;
         }
         Ok(())
@@ -280,6 +285,8 @@ pub(crate) struct ExecutionEvent {
     pub(crate) success: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) public_text: Option<PublicAssistantText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_message_text: Option<NativeMessageText>,
 }
 impl WireValidate for ExecutionEvent {
     fn validate(&self) -> Result<(), String> {
@@ -360,6 +367,9 @@ impl WireValidate for ExecutionEvent {
         if let Some(value) = &self.public_text {
             value.validate()?;
         }
+        if let Some(value) = &self.native_message_text {
+            value.validate()?;
+        }
         Ok(())
     }
 }
@@ -376,6 +386,8 @@ pub(crate) struct ExecutionPage {
     pub(crate) has_more: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) public_text_supported: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) native_message_text_supported: Option<bool>,
 }
 impl WireValidate for ExecutionPage {
     fn validate(&self) -> Result<(), String> {
@@ -423,6 +435,9 @@ impl WireValidate for ExecutionPage {
             value.validate()?;
         }
         if let Some(value) = &self.public_text_supported {
+            value.validate()?;
+        }
+        if let Some(value) = &self.native_message_text_supported {
             value.validate()?;
         }
         Ok(())
@@ -611,6 +626,106 @@ impl WireValidate for TurnHistoryPage {
         Ok(())
     }
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeMessageText {
+    pub(crate) execution_key: String,
+    pub(crate) model_operation_id: String,
+    pub(crate) native_message_id: String,
+    pub(crate) model: String,
+    pub(crate) upstream_request_id: String,
+    pub(crate) offset: u64,
+    pub(crate) text: String,
+    pub(crate) completed: bool,
+}
+impl WireValidate for NativeMessageText {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.execution_key;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("NativeMessageText.execution_key is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("NativeMessageText.execution_key violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeMessageText.execution_key violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.model_operation_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("NativeMessageText.model_operation_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("NativeMessageText.model_operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeMessageText.model_operation_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.native_message_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("NativeMessageText.native_message_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("NativeMessageText.native_message_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeMessageText.native_message_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.model;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("NativeMessageText.model is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("NativeMessageText.model violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeMessageText.model violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.upstream_request_id;
+            value.validate()?;
+            if value.trim().is_empty() {
+                return Err("NativeMessageText.upstream_request_id is blank".into());
+            }
+            if value.chars().count() < 1 {
+                return Err("NativeMessageText.upstream_request_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("NativeMessageText.upstream_request_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.offset;
+            value.validate()?;
+            if *value > 65536 {
+                return Err("NativeMessageText.offset violates maximum".into());
+            }
+        }
+        {
+            let value = &self.text;
+            value.validate()?;
+            if value.chars().count() > 4096 {
+                return Err("NativeMessageText.text violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.completed;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -642,6 +757,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "TurnHistoryPage" => serde_json::from_value::<TurnHistoryPage>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "NativeMessageText" => serde_json::from_value::<NativeMessageText>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown observer contract type".into()),

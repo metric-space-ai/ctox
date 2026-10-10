@@ -1,5 +1,36 @@
 # Native session handoff integration boundary
 
+## Core-only native checkpoint continuation
+
+A native Core session without a configured or retained machine can produce a
+protected checkpoint on macOS as well as Linux. Its source still requires
+checked shutdown of the actual original Core, its sealed local clean-effects
+capture, current native quorum/account/policy/controller authority, no pending
+effects and an assigned workspace. It publishes native-core-runtime.json with
+the actual enrolled guest ID and original Core UUID in the same protected
+manifest. A deserialized effects report, empty caller list or missing configured
+machine cannot create this witness.
+
+The protected receiver distinguishes this identity from the canonical VM
+artifacts. Missing, ambiguous, malformed or mixed Core/VM identities fail closed.
+Current protected guest enrollment remains a Linux target path. Core-only
+enrollment retains no VM service-session ID or process witness. After durable
+DATA protection, takeover and protected guest import, the genuine target native
+chat queue can load the original Core UUID and admit the already-owned job
+without handoff-restore-guest. It retains the target command/producer fences and
+fresh quorum checks before and after the real TurnStart. Failed or uncertain
+binding retires that target controller; it does not create a replacement Core.
+
+A checkpoint with any VM artifacts continues to require the original verified
+machine identity, restoration and exact retained child. Machine absence is
+derived from the native source controller/configuration and protected manifest,
+never a CLI mode/clean flag. Core-only restore requests reject before creating
+a machine attempt. The Core-only decoder/store and original-Core capsule tests
+are component regressions; installed Mac-to-Linux continuation, independent
+DATA receipts, stale source rejection, reconnect and abort remain acceptance
+work for goals 15/16/18.
+
+
 ## Host-owned target guest import
 
 After protected copy, `ctox sync handoff-import-guest <binding-digest> <guest-id>`
@@ -73,10 +104,12 @@ The response distinguishes `machineRestored:true` from `coreResumed:false` and
 `resumed:false`. It does not start a Core/provider or permit guest inputs from a
 new worker. Quorum reads before and after machine awaits must match the full accepted BeginEffect state. These reads do not prove a distributed atomic revocation fence during the QMP call; the local account/policy/controller guards cover that call, and this limitation remains an installed acceptance requirement. The machine retains its own runtime through child creation, migration, activation and reaping, including cancellation from the host's CurrentThread runtime. Authoritative source Core/tool effects and the original Core/provider
 factory/admission remain required for goals 15/18. This source connection is not
-installed acceptance evidence; the current source unknown-effect marker still
-prevents a successful production import/restore. Mac transport builds, including
-9228ec92437c with the nonce correction, cannot supply the current Linux-only
-machine witness. Real machine acceptance starts with an enrolled Linux source.
+installed acceptance evidence. Unresolved source effects still prevent import;
+only the actual quiesced Core effects capsule can clear the source marker. Mac
+transport builds such as 9228ec92437c cannot supply a Linux machine witness or
+the newer Core-only identity. VM acceptance starts with an enrolled Linux source;
+Core-only acceptance requires both endpoints to include the Core-only source and
+target connection described above.
 
 ## Fresh native source guest boot
 

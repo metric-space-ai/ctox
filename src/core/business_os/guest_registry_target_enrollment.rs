@@ -9,8 +9,15 @@ pub(super) struct ProtectedEnrollment {
     pub(super) checkpoint_digest: String,
     pub(super) spec: ExecutionSpec,
     pub(super) ownership: Ownership,
-    pub(super) service_session: String,
+    pub(super) service_session: Option<String>,
     pub(super) scope: target_handoff::TargetPolicyScope,
+}
+impl ProtectedEnrollment {
+    pub(super) fn machine_service_session(&self) -> Result<&str> {
+        self.service_session
+            .as_deref()
+            .context("Core-only checkpoint has no machine service session")
+    }
 }
 
 impl NativeGuestRegistry {
@@ -21,7 +28,7 @@ impl NativeGuestRegistry {
         &self,
         policy: &Connection,
         scope: &target_handoff::TargetPolicyScope,
-        identity: &super::super::guest_runtime::ProtectedGuestIdentity,
+        identity: &checkpoint_identity::ProtectedNativeGuestIdentity,
         binding_digest: &str,
         checkpoint_digest: &str,
         spec: &ExecutionSpec,
@@ -46,7 +53,7 @@ impl NativeGuestRegistry {
         &self,
         policy: &Connection,
         scope: &target_handoff::TargetPolicyScope,
-        identity: &super::super::guest_runtime::ProtectedGuestIdentity,
+        identity: &checkpoint_identity::ProtectedNativeGuestIdentity,
         binding_digest: &str,
         checkpoint_digest: &str,
         spec: &ExecutionSpec,
@@ -80,7 +87,7 @@ impl NativeGuestRegistry {
             checkpoint_digest: checkpoint_digest.into(),
             spec: spec.clone(),
             ownership: ownership.clone(),
-            service_session: identity.service_session().into(),
+            service_session: identity.service_session().map(str::to_owned),
             scope: scope.clone(),
         };
         // Retry only the exact retained original guest. Never revive a revoked

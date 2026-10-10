@@ -1,29 +1,29 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-provider-account-contract';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261010-shell-v2-provider-account-contract';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-provider-account-contract';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-provider-account-contract';
-import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-provider-account-contract';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-provider-account-contract';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-provider-account-contract';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-provider-account-contract';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-provider-account-contract';
-import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-provider-account-contract';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261010-shell-v2-audience-denial-fallback';
+import { CtoxResizer } from './shared/resizer.js?v=20261010-shell-v2-audience-denial-fallback';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261010-shell-v2-audience-denial-fallback';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261010-shell-v2-audience-denial-fallback';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261010-shell-v2-audience-denial-fallback';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createAppActions } from './shared/app-actions.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/app-lifecycle.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -32,20 +32,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/permissions.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261010-shell-v2-provider-account-contract';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/branding.js?v=20261010-shell-v2-audience-denial-fallback';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/presentation.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -56,9 +56,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-provider-account-contract';
-import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/shell-permissions-ui.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createDocumentsFacade } from './shared/documents.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -66,27 +66,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/maintenance-state.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/workspace-session.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/taskbar-pins.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261010-shell-v2-provider-account-contract';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-provider-account-contract';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-provider-account-contract';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-provider-account-contract';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-provider-account-contract';
+} from './shared/workjet-theme.js?v=20261010-shell-v2-audience-denial-fallback';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261010-shell-v2-audience-denial-fallback';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261010-shell-v2-audience-denial-fallback';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261010-shell-v2-audience-denial-fallback';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -94,14 +94,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261010-shell-v2-provider-account-contract';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-provider-account-contract';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-provider-account-contract';
+} from './shared/startup-deadlines.js?v=20261010-shell-v2-audience-denial-fallback';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261010-shell-v2-audience-denial-fallback';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261010-shell-v2-audience-denial-fallback';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-provider-account-contract';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-provider-account-contract';
+} from './shared/jour-fixe-presentation.mjs?v=20261010-shell-v2-audience-denial-fallback';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261010-shell-v2-audience-denial-fallback';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -122,7 +122,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261010-shell-v2-provider-account-contract';
+const APP_BUILD = '20261010-shell-v2-audience-denial-fallback';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -6272,7 +6272,8 @@ async function openModule(moduleId, options = {}) {
       governance: state.governance,
     });
     const fallbackId = visibleModuleFallbackId(mod.id);
-    setStatus(`${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim());
+    const denialStatus = `${moduleDisplayTitle(mod)} ist für diesen Account nicht sichtbar. ${lifecycle.reason || ''}`.trim();
+    setStatus(denialStatus);
     const { showBusinessAlert } = await loadShellDialogsModule();
     showBusinessAlert(shellLang() === 'de'
       ? 'Diese App ist für diesen Account nicht sichtbar.'
@@ -6286,8 +6287,13 @@ async function openModule(moduleId, options = {}) {
         force: options.force,
       });
     }
+    // Fallback mounting and the lazy dialog can update the workspace status.
+    // Keep the denied route's reason visible once that navigation completes.
+    state.moduleRouteDenialStatus = denialStatus;
+    setStatus(denialStatus);
     return;
   }
+  state.moduleRouteDenialStatus = '';
   // Every Business OS app is hosted by the shared window manager. The former
   // direct-mount escape hatch allowed legacy/runtime/imported modules to bypass
   // the common drag region and window controls; keep the shell surface
@@ -13835,6 +13841,7 @@ function boundedWorkjetExecutionRequest(value) {
     } }),
     ...(value.limit == null ? {} : { limit: value.limit }),
     ...(value.include_public_text == null ? {} : { include_public_text: value.include_public_text }),
+    ...(value.include_native_message_text == null ? {} : { include_native_message_text: value.include_native_message_text }),
   };
 }
 
@@ -13846,7 +13853,7 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
-  const routeAuthority = action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1'
+  const routeAuthority = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2'].includes(action)
     ? { sync: state.sync, instance: boundedWorkjetProjectText(
       state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
     ) } : null;
@@ -13981,7 +13988,7 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
+  const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
@@ -13994,7 +14001,7 @@ async function workjetProjectControl(request = {}) {
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
 
-  if (action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1') {
+  if (['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2'].includes(action)) {
     const requestSync = routeAuthority.sync;
     const instance = routeAuthority.instance;
     return requestSupervisorRoute(
@@ -16150,7 +16157,7 @@ function workspaceStatusText() {
 }
 
 function setWorkspaceStatus() {
-  setStatus(workspaceStatusText());
+  setStatus(state.moduleRouteDenialStatus || workspaceStatusText());
   renderShellInstanceStatus();
 }
 

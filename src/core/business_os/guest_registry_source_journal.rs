@@ -379,7 +379,7 @@ impl NativeGuestExecution {
             .with_current_capture_transaction(|worker, facts| {
                 self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                     verify()?;
-                    effects.verify_controller(entry)?;
+                    effects.verify_controller(entry, &self.registry)?;
                     core_configuration_bytes(&self.binding.spec, configuration)?;
                     validate_session_state(&self.binding.spec, session_state)?;
                     effects.bind_core_state(session_state)?;
@@ -447,7 +447,7 @@ impl NativeGuestExecution {
             self.with_held_worker_policy(worker, facts, |entry, verify, policy| {
                 self.registry.require_live_transport()?;
                 verify()?;
-                current.verify_controller(entry)?;
+                current.verify_controller(entry, &self.registry)?;
                 current.bind_core_state(session_state)?;
                 ensure!(
                     effects.same_observation(&current),

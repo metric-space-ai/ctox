@@ -112,7 +112,7 @@ fn original_target_guest_is_retained_once_and_cannot_become_a_fresh_job() {
                 registry.enroll_protected_target_in_policy(
                     policy,
                     &scope,
-                    identity,
+                    &checkpoint_identity::ProtectedNativeGuestIdentity::from_machine(identity),
                     binding,
                     &digest,
                     &spec,
@@ -158,7 +158,10 @@ fn original_target_guest_is_retained_once_and_cannot_become_a_fresh_job() {
         let original = entry.restoration.as_ref().unwrap();
         assert_eq!(original.spec, spec);
         assert_eq!(original.ownership, ownership);
-        assert_eq!(original.service_session, "original-service");
+        assert_eq!(
+            original.service_session.as_deref(),
+            Some("original-service")
+        );
         assert!(entry.provider.is_none() && entry.execution.is_none() && entry.imported.is_none());
         assert!(entry.desktop.is_none() && entry.process_effect.is_none());
     }
