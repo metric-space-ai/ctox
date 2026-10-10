@@ -871,7 +871,8 @@ async function synchronizeInitialData() {
   bootSchritt('readiness');
   // Die Liste erscheint sofort mit dem vorhandenen Stand; der Hinweis "wird
   // synchronisiert" bleibt, bis der Start fertig ist (vorher 6-7 s leer).
-  void reload().then(() => render()).catch(() => { scheduleCollectionReload(); });
+  const ersteLadung = reload().then(() => { render(); return true; })
+    .catch(() => { scheduleCollectionReload(); return false; });
   // Readiness ist eine BESCHRIFTUNG, kein Tor. `catching-up` ist im
   // Readiness-Vertrag der Sammeleimer fuer JEDEN nicht-terminalen Zustand -
   // auch fuer den dauerhaften: ein Tab, der nicht Multi-Tab-Leader ist,
@@ -885,7 +886,9 @@ async function synchronizeInitialData() {
   // Wir warten weiterhin, aber ein nicht erreichter Live-Zustand darf den
   // Start nicht mehr abbrechen.
   const nichtLive = [];
-  await Promise.all(REPLICATED_COLLECTIONS.map((collection) => waitForCollectionReadiness(collection)
+  await Promise.all(REPLICATED_COLLECTIONS.map((collection) => (DEMAND_ONLY_COLLECTIONS.has(collection)
+    ? waitForDemandCollection(collection, ersteLadung)
+    : waitForCollectionReadiness(collection))
     .catch((error) => {
       nichtLive.push(collection);
       console.info('[outbound-lead-generation] collection not live yet, continuing', {
@@ -897,7 +900,10 @@ async function synchronizeInitialData() {
   bootSchritt('seed-sources');
   const sourceContractChanged = await pflegeSchritt('seed-sources', () => seedSources());
   bootSchritt('reload');
-  await pflegeSchritt('reload-0', () => reload());
+  // Die Leads hat die erste Ladung schon vollstaendig vom Server gelesen;
+  // ein zweites Blaettern ueber alle Leads kostete den Start 10-40 s.
+  await pflegeSchritt('reload-0', () => reload(Object.keys(state.collections)
+    .filter((key) => key !== 'leads' || !state.collectionsEverLoaded?.has('leads'))));
   if (!listLeads().length) planeLeerNachladen();
   // Reparatur- und Abgleichsroutinen schreiben ganze Datensaetze. Auf einem
   // noch nicht live abgeglichenen Stand schrieben sie alte Staende zurueck
@@ -1102,6 +1108,27 @@ async function waitForReplicationBridge(bridge, collection, timeoutMs = REPLICAT
       setTimeout(() => reject(new Error(`${collection} konnte nicht synchronisiert werden.`)), timeoutMs);
     }),
   ]);
+}
+
+// Demand-only collections (collections.schema.json syncProfile) are never
+// replicated as a whole, so their readiness never turns "live". Waiting for
+// it cost every start the full 60-s timeout and skipped the start-up
+// reconciliation (thesen 10.10.2026, after the leads became demand-only on
+// 09.10.). For them "ready" is the first complete authoritative read.
+const DEMAND_ONLY_COLLECTIONS = new Set(['outbound_lead_generation_leads']);
+async function waitForDemandCollection(collection, ersteLadung, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
+  const key = collection === 'outbound_lead_generation_leads' ? 'leads' : collection;
+  let timer = null;
+  const timeout = new Promise((resolve) => { timer = globalThis.setTimeout(() => resolve(false), timeoutMs); });
+  try {
+    await Promise.race([ersteLadung, timeout]);
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
+  if (!state.collectionsEverLoaded?.has(key)) {
+    throw new Error(`${collection} konnte nicht vollständig aus CTOX gelesen werden.`);
+  }
+  state.syncWaitingCollections.delete(collection);
 }
 
 async function waitForCollectionReadiness(collection, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
