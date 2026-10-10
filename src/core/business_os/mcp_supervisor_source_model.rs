@@ -17,7 +17,7 @@ const MAX_OPERATIONS: usize = 64;
 const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native_model_requests (
  operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
  controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
- state TEXT NOT NULL, model TEXT, upstream_request_id TEXT, http_status INTEGER,
+ state TEXT NOT NULL, requested_model TEXT, response_model TEXT, upstream_request_id TEXT, http_status INTEGER,
  created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
 
 #[derive(Default)]
@@ -43,7 +43,74 @@ struct ModelState {
     finished: bool,
     failed: bool,
     witness: Option<UpstreamObservation>,
+    response_model: ResponseModelObservation,
 }
+#[derive(Default)]
+struct ResponseModelObservation {
+    pending: Vec<u8>,
+    skipping: bool,
+    model: Option<String>,
+    conflicting: bool,
+}
+impl ResponseModelObservation {
+    fn value(&mut self, value: &Value) {
+        let message = if value["type"] == "message_start" {
+            &value["message"]
+        } else {
+            value
+        };
+        if message["type"] != "message" {
+            return;
+        }
+        let Some(model) = message["model"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        else {
+            return;
+        };
+        if self.model.as_deref().is_some_and(|old| old != model) {
+            self.conflicting = true;
+        } else {
+            self.model = Some(model.to_owned());
+        }
+    }
+    fn observe(&mut self, bytes: &[u8], streaming: bool, status: u16) {
+        if !(200..300).contains(&status) {
+            return;
+        }
+        if !streaming {
+            if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+                self.value(&value);
+            }
+            return;
+        }
+        // Bounded incremental SSE line decoder; large content deltas are skipped,
+        // never reinterpreted as a new message header.
+        for byte in bytes {
+            if *byte == b'\n' {
+                if !self.skipping {
+                    if let Some(data) = self.pending.strip_prefix(b"data: ") {
+                        if let Ok(value) = serde_json::from_slice::<Value>(data) {
+                            if value["type"] == "message_start" {
+                                self.value(&value);
+                            }
+                        }
+                    }
+                }
+                self.pending.clear();
+                self.skipping = false;
+            } else if !self.skipping {
+                if self.pending.len() == 64 * 1024 {
+                    self.pending.clear();
+                    self.skipping = true;
+                } else {
+                    self.pending.push(*byte);
+                }
+            }
+        }
+    }
+}
+
 struct Frame {
     sequence: u64,
     bytes: Vec<u8>,
@@ -338,13 +405,17 @@ async fn run_invocation(prepared: PreparedInvocation) {
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    let observation = {
+    let (observation, response_model, conflicting) = {
         let mut state = prepared
             .job
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.witness.take()
+        (
+            state.witness.take(),
+            state.response_model.model.clone(),
+            state.response_model.conflicting,
+        )
     };
     // No nested store access inside Models' bounded extraction callback.
     let recorded = prepared.session.controller.with_current(|_, core, _| {
@@ -354,16 +425,17 @@ async fn run_invocation(prepared: PreparedInvocation) {
         };
         let changed = core.execute(
             "UPDATE workjet_supervisor_native_model_requests SET
-            state=?1,model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5
+            state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,response_model=?8
             WHERE operation_id=?6 AND controller_id=?7",
             params![
-                if result.is_ok() { "observed" } else { "failed" },
+                if result.is_ok() && !conflicting { "observed" } else { "failed" },
                 model,
                 request,
                 status,
                 now_ms(),
                 prepared.id,
-                prepared.session.controller.controller_id()
+                prepared.session.controller.controller_id(),
+                response_model
             ],
         )?;
         anyhow::ensure!(changed == 1, "native model observation row changed");
@@ -375,7 +447,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.finished = true;
-    state.failed = result.is_err() || recorded.is_err();
+    state.failed = result.is_err() || recorded.is_err() || state.response_model.conflicting;
 }
 impl ModelJob {
     fn push(
@@ -386,13 +458,16 @@ impl ModelJob {
     ) -> anyhow::Result<()> {
         let mut state = self
             .state
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("native model receiver busy"))?;
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native model receiver poisoned"))?;
         anyhow::ensure!(
             !state.finished && state.total.saturating_add(bytes.len()) <= MAX_REPLY,
             "native model receiver budget reached"
         );
         state.total += bytes.len();
+        state
+            .response_model
+            .observe(bytes, streaming, witness.http_status);
         state.witness = Some(UpstreamObservation {
             model: witness.model.clone(),
             request_id: witness.client_request_id.clone(),
@@ -413,8 +488,8 @@ impl ModelJob {
     fn read(&self, sequence: u64) -> anyhow::Result<Value> {
         let mut state = self
             .state
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("native model receiver busy"))?;
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native model receiver poisoned"))?;
         if sequence > state.acknowledged {
             anyhow::ensure!(
                 sequence == state.acknowledged + 1
@@ -459,6 +534,44 @@ mod tests {
             task: Mutex::new(None),
         }
     }
+
+    #[test]
+    fn native_response_model_is_observed_from_header_not_requested_or_delta_text() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-", true, 200);
+        assert!(seen.model.is_none());
+        seen.observe(b"5-5\"}}\n", true, 200);
+        assert_eq!(seen.model.as_deref(), Some("claude-opus-5-5"));
+        let mut missing = ResponseModelObservation::default();
+        missing.observe(
+            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"model\"}}\n",
+            true,
+            200,
+        );
+        assert!(missing.model.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}",
+            false,
+            401,
+        );
+        assert!(missing.model.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}",
+            false,
+            200,
+        );
+        assert_eq!(missing.model.as_deref(), Some("claude-opus-5-5"));
+    }
+    #[test]
+    fn oversized_sse_line_does_not_reinterpret_its_tail_as_a_message_header() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(&vec![b'x'; 65537], true, 200);
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}}\n", true, 200);
+        assert!(seen.model.is_none());
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\"}}\n", true, 200);
+        assert_eq!(seen.model.as_deref(), Some("claude-opus-5-5"));
+    }
+
     // Buffered queue fixtures only; genuine HTTP witnesses are not fabricated.
     fn frame(job: &ModelJob, bytes: &[u8], status: u16) {
         let mut state = job.state.lock().unwrap();
