@@ -168,7 +168,7 @@ async fn revoked_authority_before_dispatch_never_polls_the_transport() {
 }
 #[tokio::test]
 async fn authority_retirement_before_publication_prevents_a_green_result() {
-    let checks = AtomicUsize::new(0);
+    let retired = AtomicBool::new(false);
     let result = bounded_probe(
         MODEL,
         ACCOUNT,
@@ -176,13 +176,16 @@ async fn authority_retirement_before_publication_prevents_a_green_result() {
         Duration::from_secs(1),
         Duration::from_secs(1),
         || {
-            if checks.fetch_add(1, Ordering::SeqCst) < 2 {
-                Ok(())
-            } else {
+            if retired.load(Ordering::SeqCst) {
                 anyhow::bail!("retired")
+            } else {
+                Ok(())
             }
         },
-        async { Ok(success()) },
+        async {
+            retired.store(true, Ordering::SeqCst);
+            Ok(success())
+        },
     )
     .await;
     assert_eq!(result.status, ProbeStatus::Unavailable);
