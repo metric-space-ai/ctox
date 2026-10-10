@@ -46,6 +46,12 @@ and DataRead policy and uses guarded publication alongside `worker_dispatch`.
 It never re-enters a store/writer inside that reservation, manufactures an
 execution controller, confirms Owner todos or creates a second plan/schedule.
 
+The native model ingress separately retains its 98,304-byte request budget.
+The Source consumer must not inject the whole assembled goal into one model
+request or accumulate every raw page in model history. Retain verified snapshot
+bytes under the original Source and present bounded current-step/goal context;
+keep the model ingress guard and original project/controller custody.
+
 The existing Core confirmed plan remains responsible for emission, retry and
 completion; the registered Supervisor/worker Source remains responsible for
 delegation. Harness must map the additional fixed descriptor to the matching
