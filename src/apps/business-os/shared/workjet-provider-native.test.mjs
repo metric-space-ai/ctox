@@ -145,3 +145,43 @@ test('shell integration captures the existing command bus and instance authority
   assert.match(source, /source: 'workjet-provider-control'/);
   assert.match(source, /state.sync !== sync/);
 });
+test('optional controls metadata is strictly public and omission remains unsupported', () => {
+  assert.equal(projectNativeProviderRegistry(registry()).accounts[0].controls, undefined);
+  const value = registry();
+  value.accounts[0].controls = { canEnable: true, canRemove: false, secret: 'private' };
+  assert.deepEqual(projectNativeProviderRegistry(value).accounts[0].controls,
+    { canEnable: true, canRemove: false });
+  for (const invalidControls of [null, {}, { canEnable: true },
+    { canEnable: 'true', canRemove: true }, { canEnable: true, canRemove: 1 }]) {
+    value.accounts[0].controls = invalidControls;
+    assert.throws(() => projectNativeProviderRegistry(value));
+  }
+});
+test('account controls preserve exact canonical account and policy revisions', async () => {
+  for (const action of ['enable', 'remove']) {
+    const port = transport();
+    const fields = { accountId: reference.accountId, expectedAccountRevision: 2, expectedRevision: 0 };
+    if (action === 'enable') fields.enabled = false;
+    const result = await requestNativeProviders({ ...request('instance.providers.account.' + action), ...fields }, port);
+    assert.equal(port.calls[0].command.command_type, 'ctox.workjet.providers.account.' + action);
+    assert.deepEqual(port.calls[0].command.payload, {
+      account_id: reference.accountId, expected_account_revision: 2, expected_revision: 0,
+      ...(action === 'enable' ? { enabled: false } : {}),
+    });
+    assert.equal(result.action, 'instance.providers.account.' + action);
+    assert.equal(result.operationId, operationId);
+  }
+});
+test('invalid account controls fail before any command is admitted', async () => {
+  const base = { ...request('instance.providers.account.enable'), accountId: reference.accountId,
+    expectedAccountRevision: 2, expectedRevision: 1, enabled: true };
+  for (const fields of [{ expectedAccountRevision: 0 }, { expectedRevision: -1 },
+    { expectedAccountRevision: 1.5 }, { expectedRevision: Number.MAX_SAFE_INTEGER },
+    { enabled: 1 }, { enabled: undefined }, { accountId: '' },
+    { holderInstanceId: 'forged' }, { owner: 'forged' }, { secret: 'private' },
+    { localAccountId: 'private' }, { action: 'instance.providers.account.remove' }]) {
+    const port = transport();
+    await assert.rejects(requestNativeProviders({ ...base, ...fields }, port));
+    assert.equal(port.calls.length, 0);
+  }
+});

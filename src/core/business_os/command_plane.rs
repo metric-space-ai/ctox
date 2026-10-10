@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 132] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 134] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -363,6 +363,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 132] = [
     "ctox.workjet.providers.models.select",
     "ctox.workjet.providers.models.exclude",
     "ctox.workjet.providers.withdraw",
+    "ctox.workjet.providers.account.enable",
+    "ctox.workjet.providers.account.remove",
     "ctox.workjet.computer.assign",
     "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.endpoint.disable",
@@ -1234,6 +1236,8 @@ impl CentralCommandPolicyRequirement {
                 | "ctox.workjet.providers.models.select"
                 | "ctox.workjet.providers.models.exclude"
                 | "ctox.workjet.providers.withdraw"
+                | "ctox.workjet.providers.account.enable"
+                | "ctox.workjet.providers.account.remove"
         ) || super::store_workjet_computers::requires_capability_management(command)
         {
             Some(CommandPolicyRequirement::workspace(
@@ -2003,7 +2007,9 @@ fn dispatch_business_command(
         | "ctox.workjet.providers.observe_native"
         | "ctox.workjet.providers.models.select"
         | "ctox.workjet.providers.models.exclude"
-        | "ctox.workjet.providers.withdraw" => {
+        | "ctox.workjet.providers.withdraw"
+        | "ctox.workjet.providers.account.enable"
+        | "ctox.workjet.providers.account.remove" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let actor = session_user_id(session)
                 .context("provider command requires an authenticated actor")?;

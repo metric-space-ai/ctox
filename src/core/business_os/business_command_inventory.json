@@ -115,6 +115,8 @@
     "ctox.workjet.project.upsert",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
+    "ctox.workjet.providers.account.enable",
+    "ctox.workjet.providers.account.remove",
     "ctox.workjet.providers.adopt_native",
     "ctox.workjet.providers.list",
     "ctox.workjet.providers.models.exclude",

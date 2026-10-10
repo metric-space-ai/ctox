@@ -19,6 +19,17 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 pub(super) const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS business_provider_account_controls (
+    command_id TEXT PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    actor_user_id TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    pending_json TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS business_provider_account_controls_active
+    ON business_provider_account_controls(owner_user_id) WHERE completed=0;
+
 CREATE TABLE IF NOT EXISTS business_provider_federation_policy (
     owner_user_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL CHECK(revision > 0)
@@ -67,6 +78,9 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     models_json TEXT NOT NULL,
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
+
+#[path = "provider_account_controls.rs"]
+pub(in crate::business_os) mod account_controls;
 
 const MAX_ACCOUNTS: usize = 256;
 const MAX_ID_BYTES: usize = 256;
@@ -183,6 +197,9 @@ pub(super) fn handle_command(
         command.record_id.is_none(),
         "provider commands do not accept record_id"
     );
+    if account_controls::supports(&command.command_type) {
+        return account_controls::handle(root, command, actor, admission);
+    }
     match command.command_type.as_str() {
         "ctox.workjet.providers.list" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
@@ -737,6 +754,7 @@ fn list(conn: &Connection, owner: &str) -> Result<Value> {
         entry["modelCatalogObserved"] = catalog["observed"].clone();
         entry["modelCatalog"] = catalog;
     }
+    account_controls::project(conn, &mut rows)?;
     let providers = models::project(conn, owner, &mut rows)?;
     Ok(
         json!({"ok":true,"schema":"ctox.provider-federation-registry.v1",
