@@ -268,6 +268,129 @@ pub(super) fn read_in_current(
     Ok(Some(reply))
 }
 
+/// Historical data read for the authenticated current Owner/project selection.
+/// This never constructs a controller, lease, consumer or model capability.
+pub(super) fn read_owned_computation(
+    core: &Connection,
+    owner: &str,
+    requested: &RequestedRoute,
+) -> anyhow::Result<Option<Value>> {
+    let exists: bool = core.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='workjet_supervisor_native_completions')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(None);
+    }
+    let row: Option<(String, String, String, String, String, String, String, String, String, i64)> =
+        core.query_row(
+            "SELECT r.evidence_json,r.evidence_sha256,r.reply_text,r.reply_sha256,
+                    r.controller_id,r.offer_id,r.execution_key,r.lease_hash,a.requested_json,r.published_at_ms
+             FROM workjet_supervisor_native_completions r
+             JOIN workjet_supervisor_source_offers o
+               ON o.offer_id=r.offer_id AND o.controller_id=r.controller_id
+              AND o.execution_key=r.execution_key AND o.lease_hash=r.lease_hash
+              AND o.owner_user_id=r.owner_user_id
+             JOIN workjet_supervisor_route_attempts a
+               ON a.execution_key=r.execution_key AND a.lease_hash=r.lease_hash
+              AND a.owner_user_id=r.owner_user_id
+             WHERE r.owner_user_id=?1 AND o.project_id=?2 AND o.supervisor_thread_id=?3
+               AND o.computer_id=?4 AND r.published_at_ms IS NOT NULL
+               AND json_extract(a.requested_json,'$.project_id')=?2
+               AND json_extract(a.requested_json,'$.supervisor_thread_id')=?3
+             ORDER BY r.published_at_ms DESC,r.controller_id DESC LIMIT 1",
+            params![owner,requested.project_id,requested.supervisor_thread_id,requested.computer_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,
+                      row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?)),
+        ).optional()?;
+    let Some((
+        raw,
+        hash,
+        reply,
+        reply_hash,
+        controller,
+        offer,
+        execution,
+        lease,
+        sealed,
+        published,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        sealed.len() <= 16 * 1024,
+        "native requested route exceeds budget"
+    );
+    let sealed: RequestedRoute = serde_json::from_str(&sealed)?;
+    if sealed != *requested {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        raw.len() <= 16 * 1024
+            && digest_text(&raw) == hash
+            && !reply.trim().is_empty()
+            && reply.len() <= 64 * 1024
+            && digest_text(&reply) == reply_hash,
+        "native computation receipt changed"
+    );
+    let evidence: Value = serde_json::from_str(&raw)?;
+    anyhow::ensure!(
+        evidence["schema"] == "ctox.workjet.supervisor_computed.v1"
+            && evidence["owner_user_id"] == owner
+            && evidence["offer_id"] == offer
+            && evidence["controller_id"] == controller
+            && evidence["execution_key"] == execution
+            && evidence["lease_hash"] == lease
+            && evidence["project_id"] == requested.project_id
+            && evidence["supervisor_thread_id"] == requested.supervisor_thread_id
+            && evidence["reply_sha256"] == reply_hash
+            && evidence["configured"]["luma_id"] == requested.luma_id
+            && evidence["configured"]["route_id"] == requested.route_id
+            && evidence["configured"]["revision"] == requested.configuration_revision,
+        "native computation receipt binding differs"
+    );
+    let observed = &evidence["observed"];
+    anyhow::ensure!(
+        observed["harness"] == requested.harness
+            && observed["computer_id"] == requested.computer_id
+            && observed["account_id"] == requested.native_account.account_id,
+        "native computation selection differs"
+    );
+    // Rebuild the original SDK journal and join the immutable native HTTP model
+    // witness. A completion blob, requested model or SDK result alone is insufficient.
+    let parent = sdk::joined_in_current(core, &controller, &execution, &lease)?
+        .context("native computation SDK/model join missing")?;
+    anyhow::ensure!(
+        observed["sdk_session_id"] == parent.session_id
+            && observed["sdk_turn_id"] == parent.turn_id
+            && observed["sdk_assistant_id"] == parent.assistant_id
+            && observed["sdk_result_id"] == parent.result_id
+            && observed["closed_child_pids"] == json!(parent.child_pids)
+            && observed["model_operation_id"] == parent.operation_id
+            && observed["model"] == parent.model
+            && observed["native_message_id"] == parent.message_id
+            && observed["upstream_request_id"] == parent.request_id
+            && observed["model_finished_at_ms"] == parent.finished_at_ms
+            && parent.text == reply,
+        "native computation model/SDK witness differs"
+    );
+    Ok(Some(json!({
+        "receipt_id":hash,"execution_key":execution,
+        "selected_route":{"luma_id":requested.luma_id,
+            "configuration_revision":requested.configuration_revision,"route_id":requested.route_id},
+        "harness":observed["harness"],"computer_id":observed["computer_id"],
+        "account_id":observed["account_id"],"model":parent.model,
+        "model_operation_id":parent.operation_id,"native_message_id":parent.message_id,
+        "upstream_request_id":parent.request_id,"model_finished_at_ms":parent.finished_at_ms,
+        "sdk_session_id":parent.session_id,"sdk_turn_id":parent.turn_id,
+        "sdk_assistant_id":parent.assistant_id,"sdk_result_id":parent.result_id,
+        "published_at_ms":published
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,16 +591,111 @@ mod tests {
             ensure_not_computed(&core, controller).is_err(),
             "completed turn cannot invoke a fresh model"
         );
+
         ensure_not_computed(&core, "foreign-controller")?;
+        assert!(
+            super::super::super::super::read_computed_route(
+                root.path(),
+                "owner",
+                "project",
+                super::super::super::super::tests::THREAD
+            )?["actual"]
+                .is_null(),
+            "an unpublished completion must not be shown"
+        );
+
         core.execute(
             "UPDATE workjet_supervisor_native_completions SET published_at_ms=3",
             [],
         )?;
+
+        // Historical data keeps native and SDK correlation IDs separate.
+        let route = super::super::super::super::read_computed_route(
+            root.path(),
+            "owner",
+            "project",
+            super::super::super::super::tests::THREAD,
+        )?;
+        assert_eq!(route["actual"]["execution_key"], offer.lease.execution_key);
+        assert_eq!(route["actual"]["sdk_turn_id"], "fixture-turn");
+        assert_eq!(route["actual"]["native_message_id"], "fixture-message");
+        assert_eq!(route["actual"]["model"], offer.lease.requested.model);
+        assert_eq!(route["actual"]["selected_route"]["luma_id"], "project-luma");
+        assert!(route["actual"].get("run_id").is_none());
+        assert!(route["actual"].get("consumer").is_none());
+        assert!(route["actual"].get("private_local_account_id").is_none());
+        assert!(super::super::super::super::read_computed_route(
+            root.path(),
+            "foreign",
+            "project",
+            super::super::super::super::tests::THREAD
+        )
+        .is_err());
+        let original = super::super::super::super::read_configured_route(
+            root.path(),
+            "owner",
+            "project",
+            super::super::super::super::tests::THREAD,
+        )?;
+        assert!(
+            original["actual"].is_null(),
+            "v1 contract must remain unchanged"
+        );
+        core.execute_batch("BEGIN IMMEDIATE")?;
+        assert_eq!(
+            super::super::super::super::read_computed_route(
+                root.path(),
+                "owner",
+                "project",
+                super::super::super::super::tests::THREAD
+            )?["actual"],
+            route["actual"],
+            "read must work beside a Core writer"
+        );
+        core.execute_batch("ROLLBACK")?;
         assert_eq!(offer.wait_for_native_result()?, "native fixture reply");
         core.execute("UPDATE communication_routing_state SET lease_worker_id='replacement' WHERE route_status='leased'",[])?;
         assert!(
             offer.wait_for_native_result().is_err(),
             "replaced native lease must never reuse an old reply"
+        );
+        assert_eq!(
+            super::super::super::super::read_computed_route(
+                root.path(),
+                "owner",
+                "project",
+                super::super::super::super::tests::THREAD
+            )?["actual"],
+            route["actual"],
+            "a historical receipt read cannot restore execution rights"
+        );
+        core.execute(
+            "UPDATE workjet_supervisor_source_offers SET state='closed'",
+            [],
+        )?;
+        assert_eq!(
+            super::super::super::super::read_computed_route(
+                root.path(),
+                "owner",
+                "project",
+                super::super::super::super::tests::THREAD
+            )?["actual"],
+            route["actual"],
+            "the persisted witness outlives Source custody"
+        );
+        core.execute(
+            "UPDATE workjet_supervisor_native_model_requests SET response_text='tampered'",
+            [],
+        )?;
+        assert!(
+            super::super::super::super::read_computed_route(
+                root.path(),
+                "owner",
+                "project",
+                super::super::super::super::tests::THREAD
+            )
+            .is_err(),
+            "a receipt blob cannot conceal a changed native HTTP witness"
         );
         Ok(())
     }

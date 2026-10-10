@@ -59,6 +59,7 @@ mod workjet_confirmed_plan;
 pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_session;
 #[path = "mcp_supervisor_luma.rs"]
 mod supervisor_luma;
+pub(in crate::business_os) use supervisor_luma::read_computed_route as read_supervisor_computed_route;
 pub(in crate::business_os) use supervisor_luma::read_configured_route as read_supervisor_configured_route;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;

@@ -36,6 +36,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       "include_public_text": {
         "type": "bool",
         "optional": true
+      },
+      "include_native_message_text": {
+        "type": "bool",
+        "optional": true
       }
     }
   },
@@ -151,6 +155,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
       "public_text": {
         "type": "PublicAssistantText",
         "optional": true
+      },
+      "native_message_text": {
+        "type": "NativeMessageText",
+        "optional": true
       }
     }
   },
@@ -182,6 +190,10 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "type": "bool"
       },
       "public_text_supported": {
+        "type": "bool",
+        "optional": true
+      },
+      "native_message_text_supported": {
         "type": "bool",
         "optional": true
       }
@@ -265,6 +277,46 @@ export const SUPERVISOR_EXECUTION_TYPES = deepFreeze({
         "optional": true
       },
       "has_more": {
+        "type": "bool"
+      }
+    }
+  },
+  "NativeMessageText": {
+    "fields": {
+      "execution_key": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "model_operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "native_message_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "model": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "upstream_request_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "offset": {
+        "type": "u64",
+        "maximum": 65536
+      },
+      "text": {
+        "type": "String",
+        "max_chars": 4096
+      },
+      "completed": {
         "type": "bool"
       }
     }

@@ -10,6 +10,9 @@ import { validateSupervisorRouteDisplayValue } from './workjet-supervisor-route-
 const fixture = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-supervisor-route-display-v1.json', import.meta.url)));
 const route = fixture.valid_cases.find(c => c.type === 'SupervisorRouteDisplay' && c.value.configured).value;
 const caps = fixture.valid_cases.find(c => c.type === 'SupervisorRouteCapabilities').value;
+const computed = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-supervisor-route-computation-v2.json', import.meta.url)));
+const computedRoute = computed.valid_cases.find(c=>c.type==='SupervisorRouteDisplay' && c.value.actual).value;
+const computedCaps = computed.valid_cases.find(c=>c.type==='SupervisorRouteCapabilities').value;
 const actor = { id: 'owner', role: 'chef' };
 const request = { action: 'project.supervisor.route.read.v1', commandId: 'read-route',
   projectId: route.project_id, threadId: route.supervisor_thread_id };
@@ -29,6 +32,8 @@ function transport(value = route, mutate = () => {}) {
 for (const [action, value, field] of [
   ['project.supervisor.route.read.v1', route, 'route'],
   ['project.supervisor.route.capabilities.v1', caps, 'capabilities'],
+  ['project.supervisor.route.read.v2', computedRoute, 'route'],
+  ['project.supervisor.route.capabilities.v2', computedCaps, 'capabilities'],
 ]) {
   test(action + ' requires an exact native project/thread receipt', async () => {
     const t = transport(value);
@@ -130,8 +135,10 @@ test('actual Shell control uses Supervisor admission and fences instance changes
   const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
   const source = app.slice(app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS'),
     app.indexOf('async function waitForSyncBridgeReady', app.indexOf('const WORKJET_PROJECT_CONTROL_MAX_RESULTS')));
+  for (const [action,value,field] of [['project.supervisor.route.capabilities.v1',caps,'capabilities'],
+    ['project.supervisor.route.capabilities.v2',computedCaps,'capabilities'], ['project.supervisor.route.read.v2',computedRoute,'route']]) {
   for (const changedDuringReadiness of [false, true]) {
-    const t = transport(caps);
+    const t = transport(value);
     const state = { session: actor, db: {}, sync: {}, syncConfig: { instance_id: 'native' },
       commandBus: { dispatch: t.dispatch } };
     let admitted = 0;
@@ -144,14 +151,37 @@ test('actual Shell control uses Supervisor admission and fences instance changes
     vm.runInContext(source + '\nrequireWorkjetSupervisorDataPlane = admittedSupervisor;\n'
       + 'requireWorkjetProjectDataPlane = () => { throw new Error("wrong admission"); };\n'
       + 'globalThis.control = workjetProjectControl;', context);
-    const call = context.control({ ...request, action: 'project.supervisor.route.capabilities.v1' });
+    const call = context.control({ ...request, action });
     if (changedDuringReadiness) {
       await assert.rejects(call, /instance or authority changed/);
       assert.equal(t.commands.length, 0);
     } else {
-      assert.deepEqual((await call).capabilities, caps);
+      assert.deepEqual((await call)[field], value);
       assert.equal(t.commands.length, 1);
     }
     assert.equal(admitted, 1);
   }
+  }
+});
+
+test('v2 keeps observed SDK/native IDs distinct and rejects private selectors or version substitution', async () => {
+  const wanted={...request,action:'project.supervisor.route.read.v2'};
+  const response=await requestSupervisorRoute(transport(computedRoute).dispatch,wanted,actor,()=>{});
+  assert.deepEqual(response.route.actual,computedRoute.actual);
+  assert.equal(response.route.actual.run_id,undefined);
+  assert.equal(response.route.actual.turn_id,undefined);
+  for (const mutate of [
+    r=>{r.result.actual.private_local_account_id='private';},
+    r=>{r.result.actual.turn_id='sdk-as-native';},
+    r=>{r.result.actual.model_operation_id='';},
+    r=>{r.result.schema='ctox.workjet.supervisor.route-display.v1';},
+    r=>{r.payload.thread_id='foreign';},
+  ]) {
+    const t=transport(computedRoute,mutate);
+    await assert.rejects(requestSupervisorRoute(t.dispatch,wanted,actor,()=>{}));
+  }
+  await assert.rejects(requestSupervisorRoute(transport(route).dispatch,wanted,actor,()=>{}));
+  const nullRoute=computed.valid_cases.find(c=>c.type==='SupervisorRouteDisplay' && c.value.configured && !c.value.actual).value;
+  const pending=await requestSupervisorRoute(transport(nullRoute).dispatch,wanted,actor,()=>{});
+  assert.equal(pending.route.actual,null);
 });

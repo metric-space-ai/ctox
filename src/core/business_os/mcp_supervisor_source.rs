@@ -688,6 +688,15 @@ impl WebRTCPublicationGuard for OfferPublication {
 }
 #[path = "mcp_supervisor_source_model.rs"]
 mod model;
+
+pub(super) fn read_owned_computation(
+    core: &Connection,
+    owner: &str,
+    requested: &RequestedRoute,
+) -> anyhow::Result<Option<Value>> {
+    result::read_owned_computation(core, owner, requested)
+}
+
 #[path = "mcp_supervisor_source_result.rs"]
 mod result;
 #[path = "mcp_supervisor_source_sdk.rs"]
