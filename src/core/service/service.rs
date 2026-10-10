@@ -12460,6 +12460,84 @@ struct SpreadsheetAttachmentEvidence {
     sheet_name: String,
     row_count: usize,
     headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+const REVIEW_ATTACHMENT_PREVIEW_ROWS: usize = 25;
+const REVIEW_ATTACHMENT_PREVIEW_CHARS: usize = 3000;
+
+/// The files of the mail a reply answers. Same-thread evidence shows only
+/// subject and preview, so a review approved a reply to an Excel request that
+/// named three unrelated companies (10.10.2026). Spreadsheets and text files
+/// are shown with their first rows so the review can compare.
+fn inbound_attachment_review_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    let Some(inbound_key) = inbound_email_reply_message_key(job)
+        .or_else(|| founder_communication_rework_inbound_key(job))
+        .map(str::to_owned)
+    else {
+        return Vec::new();
+    };
+    let Some(metadata) = load_inbound_email_metadata(root, &inbound_key) else {
+        return Vec::new();
+    };
+    let attachments = metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    attachments
+        .iter()
+        .filter(|attachment| attachment.get("isInline").and_then(Value::as_bool) != Some(true))
+        .take(5)
+        .map(|attachment| {
+            let name = attachment.get("name").and_then(Value::as_str).unwrap_or("Anhang");
+            let size = attachment.get("sizeBytes").and_then(Value::as_u64).unwrap_or(0);
+            let origin = attachment
+                .get("fromEarlierMail")
+                .and_then(|earlier| earlier.get("subject"))
+                .and_then(Value::as_str)
+                .map(|subject| format!(" (from the earlier thread mail `{subject}`)"))
+                .unwrap_or_default();
+            let Some(path) = attachment.get("path").and_then(Value::as_str) else {
+                return format!(
+                    "Attachment of the answered mail{origin}: `{name}` was not stored. A reply must not claim its content."
+                );
+            };
+            let mut line = format!(
+                "Attachment of the answered mail{origin}: `{name}` ({size} bytes) at `{path}`. A reply to this mail must be based on this content."
+            );
+            let lower = path.to_ascii_lowercase();
+            let preview = if lower.ends_with(".xlsx") {
+                inspect_xlsx_attachment(path).ok().map(|evidence| {
+                    format!(
+                        "sheet `{}`, {} rows: {}",
+                        evidence.sheet_name,
+                        evidence.row_count,
+                        evidence
+                            .rows
+                            .iter()
+                            .take(REVIEW_ATTACHMENT_PREVIEW_ROWS)
+                            .map(|row| row.join(" | "))
+                            .collect::<Vec<_>>()
+                            .join(" ; ")
+                    )
+                })
+            } else if lower.ends_with(".csv") || lower.ends_with(".txt") || lower.ends_with(".tsv") {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .map(|text| text.lines().take(REVIEW_ATTACHMENT_PREVIEW_ROWS).collect::<Vec<_>>().join(" ; "))
+            } else {
+                None
+            };
+            if let Some(preview) = preview {
+                line.push_str(&format!(
+                    " Content preview: {}",
+                    clip_text(&preview, REVIEW_ATTACHMENT_PREVIEW_CHARS)
+                ));
+            }
+            line
+        })
+        .collect()
 }
 
 fn attachment_evidence_summaries(paths: &[String]) -> Vec<String> {
@@ -12571,6 +12649,7 @@ fn collect_review_evidence_summaries(
         }
     }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
+    evidence.extend(inbound_attachment_review_evidence(root, job));
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
     evidence.extend(review_external_work_backing_evidence_summaries(root, job));
@@ -13430,7 +13509,8 @@ fn inspect_xlsx_attachment(path: &str) -> Result<SpreadsheetAttachmentEvidence> 
         path: path.to_string(),
         sheet_name,
         row_count: rows.len(),
-        headers: rows.into_iter().next().unwrap_or_default(),
+        headers: rows.first().cloned().unwrap_or_default(),
+        rows,
     })
 }
 
@@ -47001,6 +47081,59 @@ Was jetzt zu tun ist:\n\
         zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
         zip.write_all(sheet.as_bytes()).unwrap();
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn review_sees_the_spreadsheet_of_the_answered_mail() {
+        let root = temp_root("review-inbound-attachment-evidence");
+        let xlsx = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        std::fs::create_dir_all(xlsx.parent().unwrap()).unwrap();
+        write_minimal_xlsx(&xlsx, &["Firmenname", "Ort"], 2);
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (?1, 'email', 'email:crew@example.test', 'thread-m1', 'm1', 'inbound', 'INBOX',
+                'Owner', 'owner@example.test', '[]', '[]', '[]', 'Recherche', 'Recherche',
+                'Bitte die Firmen aus der Excel recherchieren.', '', '', 'normal', 'received', 0, 1,
+                '2026-10-09T10:27:38Z', '2026-10-09T10:28:26Z', ?2)"#,
+            rusqlite::params![
+                "email:crew@example.test::inbox::m1",
+                serde_json::json!({"attachments": [{
+                    "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                    "path": xlsx.display().to_string()
+                }]})
+                .to_string()
+            ],
+        )
+        .expect("insert inbound mail");
+        drop(conn);
+        let job = QueuedPrompt {
+            queue_task_metadata: serde_json::json!({}),
+            preview: String::new(),
+            source_label: "email:founder".to_string(),
+            goal: "Recherche".to_string(),
+            prompt: String::new(),
+            suggested_skill: None,
+            leased_message_keys: vec!["email:crew@example.test::inbox::m1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread-m1".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let evidence = inbound_attachment_review_evidence(&root, &job);
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].contains("`Recherche-Test.xlsx` (1691 bytes)"));
+        assert!(evidence[0].contains("must be based on this content"));
+        assert!(evidence[0].contains("Firmenname | Ort ; Company 0 | 12345 ; Company 1 | 12345"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
