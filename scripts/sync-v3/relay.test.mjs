@@ -18,7 +18,10 @@ for (const rtt of [0, 300, 600]) test(`independent UDP echo traverses ${rtt} ms 
       `candidate:test 1 udp 123 127.0.0.1 ${socket.address().port} typ host` } } });
     const n = endpoint(native, 'ctox_instance'), b = endpoint(browser, 'browser');
     const rewritten = await relay.rewrite(message(native), n, b);
-    await relay.rewrite(message(browser), b, n);
+    const browserOffer = message(browser);
+    // The browser advertises a LAN address but actually uses loopback.
+    browserOffer.data.candidate.candidate = browserOffer.data.candidate.candidate.replace('127.0.0.1', '172.18.0.2');
+    await relay.rewrite(browserOffer, b, n);
     const port = Number(rewritten.data.candidate.candidate.split(' ')[5]);
     assert.notEqual(port, native.address().port);
     const received = once(browser, 'message', { signal: AbortSignal.timeout(3000) });

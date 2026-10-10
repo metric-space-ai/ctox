@@ -21,9 +21,16 @@ class UdpRelay {
           holdCount: 0, holdSumMs: 0, holdMinMs: null, holdMaxMs: 0 };
         socket.on('error', (error) => this.errors.push(error.code || 'udp_error'));
         socket.on('message', (data, from) => {
-          const side = ['native', 'browser'].find(name => pair[name]
-            && pair[name].address === from.address && pair[name].port === from.port);
+          const side = pair.native?.address === from.address && pair.native?.port === from.port
+            ? 'native' : from.address === '127.0.0.1' ? 'browser' : null;
           if (!side || this.closed) return;
+          // Chromium may advertise its LAN candidate but send to the relay
+          // through a loopback candidate. Learn the observed return endpoint
+          // like a NAT relay; native remains pinned to its declared loopback.
+          if (side === 'browser') {
+            pair.browser = { address: from.address, port: from.port };
+            pair.browserObserved = true;
+          }
           if (pair.queuedBytes + data.length > 16 * 1024 * 1024 || pair.timers.size > 16384) {
             this.errors.push('relay_queue_bound');
             return;
@@ -72,8 +79,9 @@ class UdpRelay {
     const side = role === 'ctox_instance' ? 'native' : role === 'browser' ? 'browser' : null;
     if (!side || (side === 'native' && parts[4] !== '127.0.0.1')) throw Error('Non-isolated relay endpoint');
     const endpoint = { address: parts[4], port };
-    if (pair[side] && (pair[side].address !== endpoint.address || pair[side].port !== endpoint.port)) return null;
-    pair[side] = endpoint;
+    if (side === 'native' && pair.native
+      && (pair.native.address !== endpoint.address || pair.native.port !== endpoint.port)) return null;
+    if (side === 'native' || !pair.browserObserved) pair[side] = endpoint;
     parts[4] = '127.0.0.1';
     parts[5] = String(pair.port);
     if (pair.native && pair.browser) {
