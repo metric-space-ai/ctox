@@ -101,7 +101,10 @@ impl AdmittedConsumerAuthority {
     ) -> Result<T> {
         let mut policy = store::open_store(&self.root)?;
         policy.busy_timeout(std::time::Duration::ZERO)?;
-        let mut core = Connection::open(crate::paths::core_db(&self.root))?;
+        let mut core = Connection::open_with_flags(
+            crate::paths::core_db(&self.root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         core.busy_timeout(std::time::Duration::ZERO)?;
         self.transport
             .with_current_peer_capability(&self.peer, &self.token, || {

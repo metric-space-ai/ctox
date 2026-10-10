@@ -263,6 +263,9 @@ fn combined_source_core_policy_fence_blocks_both_writers_and_rolls_back_errors()
     let f = Fixture::new(Some("owner"))?;
     f.assign("owner", "opaque-computer", Some(&f.pairing))?;
     let expected = f.resolve()?;
+    // Use the same persistence bootstrap as a real native service, before
+    // opening Core for the combined fence. No hand-authored KV schema.
+    crate::persistence::load_text_value(f.root.path(), "holding-fixture-bootstrap")?;
     let mut core = Connection::open(crate::paths::core_db(f.root.path()))?;
     core.execute_batch("CREATE TABLE holding_fixture (id INTEGER PRIMARY KEY)")?;
     let mut policy = store::open_store(f.root.path())?;
