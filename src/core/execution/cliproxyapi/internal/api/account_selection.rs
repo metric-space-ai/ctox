@@ -7,6 +7,7 @@ pub(crate) struct AccountSelection {
     requested: Option<String>,
     selected: Option<String>,
     error_class: Option<&'static str>,
+    upstream_status: Option<u16>,
 }
 tokio::task_local! { pub(crate) static ACCOUNT_SELECTION: Mutex<AccountSelection>; }
 pub fn requested_account() -> Option<String> {
@@ -44,6 +45,9 @@ pub(crate) fn acknowledgement() -> String {
                 .unwrap_or_default();
             if let Some(class) = state.error_class {
                 headers.push_str(&format!("X-CTOX-Error-Class: {class}\r\n"));
+            }
+            if let Some(status) = state.upstream_status {
+                headers.push_str(&format!("X-CTOX-Upstream-Status: {status}\r\n"));
             }
             headers
         })
@@ -137,7 +141,43 @@ pub fn record_upstream_status(status: u16, body: &[u8]) {
             "network-provider"
         })
     };
-    let _ = ACCOUNT_SELECTION.try_with(|state| state.lock().unwrap().error_class = class);
+    let _ = ACCOUNT_SELECTION.try_with(|state| {
+        let mut state = state.lock().unwrap();
+        state.error_class = class;
+        state.upstream_status = Some(status);
+    });
+}
+
+#[cfg(test)]
+mod upstream_witness_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_actual_upstream_io_can_supply_a_status_witness() {
+        ACCOUNT_SELECTION.scope(Mutex::new(Default::default()), async {
+            request_account(Some("exact-account".into()));
+            record_selected("exact-account");
+            assert!(!acknowledgement().contains("X-CTOX-Upstream-Status"));
+            record_upstream_status(429, b"private provider body");
+            assert!(acknowledgement().contains("X-CTOX-Upstream-Status: 429\r\n"));
+            assert!(acknowledgement().contains("X-CTOX-Error-Class: quota-rate-limit\r\n"));
+            assert!(!acknowledgement().contains("private provider body"));
+            record_upstream_status(200, b"private generated text");
+            assert!(acknowledgement().contains("X-CTOX-Upstream-Status: 200\r\n"));
+            assert!(!acknowledgement().contains("X-CTOX-Error-Class"));
+            assert!(!acknowledgement().contains("private generated text"));
+        }).await;
+        assert!(acknowledgement().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unpinned_requests_never_publish_probe_status_or_error_class() {
+        ACCOUNT_SELECTION.scope(Mutex::new(Default::default()), async {
+            record_selected("regular-account");
+            record_upstream_status(401, b"private credential error");
+            assert_eq!(acknowledgement(), "X-CTOX-Account-Selected: regular-account\r\n");
+        }).await;
+    }
 }
 
 #[cfg(test)]
