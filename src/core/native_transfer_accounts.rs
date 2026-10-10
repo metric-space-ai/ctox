@@ -805,6 +805,47 @@ impl NativeTransferAccountHost {
             .map_err(|_| host_error())
     }
 
+    /// Bounded metadata lookup in the original encrypted account store. This
+    /// never provisions, refreshes routing, or loads a credential for the caller.
+    pub(crate) async fn source_candidates(
+        &self,
+        instance_id: &str,
+    ) -> io::Result<Vec<NativeTransferAccount>> {
+        let host = self.clone();
+        let instance_id = instance_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let records = crate::secrets::list_secret_records(&host.root, Some(AUTHORITY_SCOPE))?;
+            ensure!(
+                records.len() <= 128,
+                "native source lookup record budget exceeded"
+            );
+            let mut accounts = Vec::new();
+            for record in records {
+                let value = host
+                    .read_record(AUTHORITY_SCOPE, &record.secret_name)?
+                    .ok_or_else(unavailable)?;
+                let account: NativeTransferAccount = serde_json::from_str(&value)?;
+                account.validate()?;
+                ensure!(
+                    record.secret_name == authority_name(&account.target_id),
+                    "native account authority unavailable"
+                );
+                if account.active && account.instance_id == instance_id {
+                    accounts.push(account);
+                    ensure!(
+                        accounts.len() <= 4,
+                        "native source lookup candidate budget exceeded"
+                    );
+                }
+            }
+            accounts.sort_by(|a, b| a.target_id.cmp(&b.target_id));
+            Ok::<_, anyhow::Error>(accounts)
+        })
+        .await
+        .map_err(|_| host_error())?
+        .map_err(|_| host_error())
+    }
+
     /// Enumeration restores ID callbacks after daemon restart, without loading
     /// credentials. Each callback resolves live state again when actually used.
     pub(crate) async fn providers(

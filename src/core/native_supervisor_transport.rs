@@ -111,6 +111,14 @@ impl Source {
         target: &str,
         database: Arc<QueryDatabase>,
     ) -> Result<Self> {
+        Self::open_database(root, target, database, true).await
+    }
+    async fn open_database(
+        root: &Path,
+        target: &str,
+        database: Arc<QueryDatabase>,
+        refresh: bool,
+    ) -> Result<Self> {
         let options_database = database.clone();
         let host = NativeTransferAccountHost::new(
             root.to_owned(),
@@ -125,7 +133,7 @@ impl Source {
             .context("native Source target is not enrolled")?;
         for attempt in 0..2 {
             let (mut options, deadline) = match host.recovery_options(target).await? {
-                Some(options) if attempt == 0 => (options, None),
+                Some(options) if attempt == 0 && refresh => (options, None),
                 Some(_) => return Err(unavailable()),
                 None => {
                     let (options, deadline) = host.native_options_with_deadline(target).await?;
@@ -254,6 +262,25 @@ impl Source {
             "native Source generation retired"
         );
         self.enrollment.current(|| Ok(()))
+    }
+    fn facts(&self) -> Value {
+        let account = &self.enrollment.original;
+        json!({"version":1,"targetId":account.target_id,"instanceId":account.instance_id,
+            "publicIdentity":account.public_identity,"accountEpoch":account.account_epoch,
+            "peerId":self.peer.peer_id(),"generation":self.peer.generation(),
+            "consumer":self.association["consumer"]})
+    }
+    fn publish_facts(&self, value: &Value) -> Result<()> {
+        self.session
+            .pool()
+            .connection_handler
+            .with_current_connection(&self.peer, || {
+                self.enrollment.current(|| {
+                    println!("{}", value);
+                    Ok(())
+                })
+            })
+            .ok_or_else(unavailable)?
     }
     async fn exchange_method(&self, method: &str, params: Vec<Value>) -> Result<Value> {
         self.live()?;
@@ -442,13 +469,138 @@ async fn stop_signal() -> io::Result<()> {
 /// The managed Root/NodeService consumer must retain this process across UI Quit.
 /// This entry point does not install that consumer or enroll/grant authority.
 pub(crate) fn serve(root: &Path, target: &str, directory: &Path) -> Result<()> {
+    run(root, Some(target), None, directory, false)
+}
+
+/// Resolve the existing enrollment using the real native association, then keep
+/// that exact Source. Public selection facts never construct execution authority.
+pub(crate) fn selected(
+    root: &Path,
+    instance: &str,
+    computer: &str,
+    directory: &Path,
+    lookup: bool,
+) -> Result<()> {
+    let expected = ExpectedSource::new(instance, computer)?;
+    run(root, None, Some(expected), directory, lookup)
+}
+
+#[derive(Clone)]
+struct ExpectedSource {
+    instance: String,
+    computer: String,
+}
+impl ExpectedSource {
+    fn new(instance: &str, computer: &str) -> Result<Self> {
+        for value in [instance, computer] {
+            ensure!(
+                !value.is_empty()
+                    && value.len() <= 256
+                    && value.trim() == value
+                    && !value.chars().any(char::is_control),
+                "invalid native Source selection"
+            );
+        }
+        Ok(Self {
+            instance: instance.into(),
+            computer: computer.into(),
+        })
+    }
+    fn matches(&self, account: &NativeTransferAccount, association: &Value) -> bool {
+        account.instance_id == self.instance
+            && association_matches(account, association)
+            && association["consumer"]["computerId"] == self.computer
+    }
+}
+
+async fn resolve(root: &Path, expected: &ExpectedSource, directory: &Path) -> Result<Source> {
+    let host = NativeTransferAccountHost::new(
+        root.to_owned(),
+        Arc::new(|_| Box::pin(async { Err(io::Error::other("lookup has no default transport")) })),
+    );
+    let candidates = host.source_candidates(&expected.instance).await?;
+    ensure!(
+        !candidates.is_empty(),
+        "native Source has no enrolled candidate"
+    );
+    let mut selected: Option<Source> = None;
+    for (index, account) in candidates.iter().enumerate() {
+        let database = QueryDatabase::at_path(directory.join(format!("lookup-{index}.sqlite3")));
+        let result = Source::open_database(root, &account.target_id, database.clone(), false).await;
+        let source = match result {
+            Ok(source) => source,
+            Err(error) => {
+                let _ = database.close().await;
+                if let Some(previous) = selected {
+                    let _ = previous.shutdown().await;
+                }
+                return Err(error);
+            }
+        };
+        if source.enrollment.original != *account {
+            let _ = source.shutdown().await;
+            if let Some(previous) = selected {
+                let _ = previous.shutdown().await;
+            }
+            return Err(unavailable());
+        }
+        if expected.matches(account, &source.association) {
+            if let Some(previous) = selected {
+                let _ = previous.shutdown().await;
+                let _ = source.shutdown().await;
+                return Err(anyhow::anyhow!("ambiguous native Source enrollment"));
+            }
+            selected = Some(source);
+        } else {
+            source.shutdown().await?;
+        }
+    }
+    let source = selected.context("native Source computer is not associated")?;
+    let revalidated = async {
+        ensure!(
+            host.source_candidates(&expected.instance).await? == candidates,
+            "native Source candidate set changed"
+        );
+        let current = source
+            .exchange_method(CONSUMER_METHOD, vec![json!({"version":1})])
+            .await?;
+        ensure!(
+            current == source.association
+                && expected.matches(&source.enrollment.original, &current),
+            "native Source association changed"
+        );
+        source.live()
+    }
+    .await;
+    if let Err(error) = revalidated {
+        let _ = source.shutdown().await;
+        return Err(error);
+    }
+    Ok(source)
+}
+
+fn run(
+    root: &Path,
+    target: Option<&str>,
+    expected: Option<ExpectedSource>,
+    directory: &Path,
+    lookup: bool,
+) -> Result<()> {
     let _directory = HostDirectoryLock::acquire(directory)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let source = Arc::new(Source::open(root, target, directory).await?);
+        let source = Arc::new(match expected {
+            Some(ref expected) => resolve(root, expected, directory).await?,
+            None => Source::open(root, target.context("native Source target missing")?, directory).await?,
+        });
+        if lookup {
+            let published = source.publish_facts(&json!({"protocolVersion":1,"source":source.facts(),"transportReady":false,"executionReady":false}));
+            let stopped = source.shutdown().await;
+            published?; stopped?; return Ok(());
+        }
         let pool = source.session.pool();
         // Subscribe before exposing IPC, then revalidate to cover an earlier disconnect.
         let mut disconnected = pool.connection_handler.disconnect_stream();
@@ -462,7 +614,9 @@ pub(crate) fn serve(root: &Path, target: &str, directory: &Path) -> Result<()> {
             let _ = source.shutdown().await;
             return Err(error);
         }
-        println!("{}", json!({"protocolVersion":1,"endpoint":local.endpoint(),"transportReady":true,"executionReady":false}));
+        if let Err(error) = source.publish_facts(&json!({"protocolVersion":1,"endpoint":local.endpoint(),"source":source.facts(),"transportReady":true,"executionReady":false})) {
+            source.enrollment.retire(); let _ = local.shutdown().await; let _ = source.shutdown().await; return Err(error);
+        }
         let expires_in = Duration::from_millis(
             source.enrollment.expires_at_ms.saturating_sub(chrono::Utc::now().timestamp_millis()).max(0) as u64,
         );
