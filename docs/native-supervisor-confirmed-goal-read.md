@@ -14,7 +14,9 @@ not converted into completed status. The ordinary MCP read is a read-only
 DEFERRED snapshot; it does not initialize schemas, emit work or take a writer
 reservation.
 
-The selected-Luma Source additionally exposes the fixed native tool
+The selected-Luma Source advertises the additional tool only when its claim sets
+`include_confirmed_goal_read: true`; older claims retain their one existing
+descriptor. It then exposes the fixed native tool
 `confirmed_goal_read` with empty arguments. It uses the existing original
 controller reservation and guarded publication, alongside `worker_dispatch`.
 It never re-enters a store/writer inside that reservation, manufactures an

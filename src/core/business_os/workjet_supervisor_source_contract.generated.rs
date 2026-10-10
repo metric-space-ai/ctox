@@ -116,6 +116,8 @@ pub(crate) struct SourceOperation {
     pub(crate) tool_arguments_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sdk_observation: Option<SourceSdkObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) include_confirmed_goal_read: Option<bool>,
 }
 impl WireValidate for SourceOperation {
     fn validate(&self) -> Result<(), String> {
@@ -200,6 +202,9 @@ impl WireValidate for SourceOperation {
             }
         }
         if let Some(value) = &self.sdk_observation {
+            value.validate()?;
+        }
+        if let Some(value) = &self.include_confirmed_goal_read {
             value.validate()?;
         }
         Ok(())

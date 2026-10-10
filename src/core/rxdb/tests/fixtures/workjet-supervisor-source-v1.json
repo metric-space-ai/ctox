@@ -83,6 +83,10 @@
         "sdk_observation": {
           "type": "SourceSdkObservation",
           "optional": true
+        },
+        "include_confirmed_goal_read": {
+          "type": "bool",
+          "optional": true
         }
       }
     },
@@ -308,6 +312,15 @@
     {
       "type": "SourceNativeTool",
       "value": "confirmed_goal_read"
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
+        "include_confirmed_goal_read": true
+      }
     }
   ],
   "invalid_cases": [
@@ -375,6 +388,15 @@
         "sequence": 0,
         "kind": "sdk-result",
         "actual": true
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "aacb3052-673c-4afb-b2a8-85f0a2e784ad",
+        "include_confirmed_goal_read": "true"
       }
     }
   ],

@@ -83,6 +83,10 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "sdk_observation": {
         "type": "SourceSdkObservation",
         "optional": true
+      },
+      "include_confirmed_goal_read": {
+        "type": "bool",
+        "optional": true
       }
     }
   },

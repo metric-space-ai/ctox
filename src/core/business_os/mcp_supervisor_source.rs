@@ -234,9 +234,11 @@ impl NativeSupervisorSourceHost {
         self.prune()?;
         match operation.action {
             wire::SourceAction::Poll => self.poll(authority),
-            wire::SourceAction::Claim => {
-                self.claim(authority, operation.offer_id.as_deref().unwrap())
-            }
+            wire::SourceAction::Claim => self.claim(
+                authority,
+                operation.offer_id.as_deref().unwrap(),
+                operation.include_confirmed_goal_read == Some(true),
+            ),
             wire::SourceAction::ToolCall => tools::respond(self, authority, &operation),
             wire::SourceAction::SdkObserve => sdk::respond(self, authority, &operation),
             wire::SourceAction::Status | wire::SourceAction::Cancel => {
@@ -335,6 +337,7 @@ impl NativeSupervisorSourceHost {
         &self,
         authority: AdmittedConsumerAuthority,
         id: &str,
+        include_confirmed_goal_read: bool,
     ) -> anyhow::Result<GuardedAuxiliaryResponse> {
         authority.with_current_core(|facts, core, _| {
             let row = read_offer(core, id, facts)?;
@@ -365,7 +368,12 @@ impl NativeSupervisorSourceHost {
                         && row.deadline_ms > now_ms(),
                     "native Source claim retired"
                 );
-                Ok(claim_value(id, &row, controller))
+                Ok(claim_value(
+                    id,
+                    &row,
+                    controller,
+                    include_confirmed_goal_read,
+                ))
             })?;
             return Ok(GuardedAuxiliaryResponse {
                 result,
@@ -409,6 +417,7 @@ impl NativeSupervisorSourceHost {
             id,
             &claimed_row.context("native claim row missing")?,
             &controller,
+            include_confirmed_goal_read,
         );
         controllers.insert(id.to_owned(), controller);
         Ok(GuardedAuxiliaryResponse {
@@ -534,10 +543,15 @@ fn offer_value(
     offer.validate().map_err(anyhow::Error::msg)?;
     Ok(serde_json::to_value(offer)?)
 }
-fn claim_value(id: &str, row: &OfferRow, controller: &NativeSupervisorHoldingController) -> Value {
+fn claim_value(
+    id: &str,
+    row: &OfferRow,
+    controller: &NativeSupervisorHoldingController,
+    include_confirmed_goal_read: bool,
+) -> Value {
     json!({"version":1,"state":"claimed","offer_id":id,"execution_key":row.execution_key,
         "controller_id":controller.controller_id(),"prompt":row.prompt,"deadline_ms":row.deadline_ms,
-        "native_tools":tools::descriptors(),
+        "native_tools":tools::descriptors(include_confirmed_goal_read),
         "execution_ready":false})
 }
 fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> {
@@ -631,6 +645,11 @@ fn parse_operation(params: Vec<Value>) -> anyhow::Result<wire::SourceOperation> 
         operation.action == wire::SourceAction::ToolCall
             || (operation.native_tool.is_none() && operation.tool_arguments_json.is_none()),
         "native tool fields cannot alter model/control authority"
+    );
+    anyhow::ensure!(
+        operation.action == wire::SourceAction::Claim
+            || operation.include_confirmed_goal_read.is_none(),
+        "native goal-read capability opt-in is only accepted on claim"
     );
     anyhow::ensure!(shape, "native Source action fields differ");
     anyhow::ensure!(

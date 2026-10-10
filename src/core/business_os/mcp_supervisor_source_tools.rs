@@ -45,8 +45,8 @@ fn goal_request(id: &str, raw: &str) -> anyhow::Result<Value> {
     Ok(json!({"action":"read_confirmed_goal","request":request}))
 }
 
-pub(super) fn descriptors() -> Value {
-    json!([{"name":"worker_dispatch",
+pub(super) fn descriptors(include_confirmed_goal_read: bool) -> Value {
+    let mut tools = json!([{"name":"worker_dispatch",
         "description":"Request one owned worker via the existing registered project Source. Acknowledged startup is not completed work.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["task"],
             "properties":{"task":{"type":"string","minLength":1,"maxLength":16384},
@@ -54,7 +54,14 @@ pub(super) fn descriptors() -> Value {
                 "computer_id":{"type":"string","maxLength":256},
                 "worker_profile_id":{"type":"string","maxLength":256}}}},
         {"name":"confirmed_goal_read","description":"Read this project’s actual Owner-confirmed goal, native step status and saved results. Null means no confirmed definition. Read-only; never confirms, replans or completes work.",
-        "inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}])
+        "inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}]);
+    if !include_confirmed_goal_read {
+        tools
+            .as_array_mut()
+            .expect("fixed tool descriptors")
+            .truncate(1);
+    }
+    tools
 }
 pub(super) fn respond(
     host: &NativeSupervisorSourceHost,
@@ -285,6 +292,13 @@ mod tests {
             "controller_id":uuid::Uuid::new_v4().to_string(),"operation_id":id,
             "native_tool":"confirmed_goal_read","tool_arguments_json":"{}"});
         parse_operation(vec![operation])?;
+        let claim = json!({"version":1,"action":"claim","offer_id":uuid::Uuid::new_v4().to_string(),"include_confirmed_goal_read":true});
+        parse_operation(vec![claim.clone()])?;
+        let mut invalid = claim;
+        invalid["action"] = json!("poll");
+        assert!(parse_operation(vec![invalid]).is_err());
+        assert_eq!(descriptors(false).as_array().unwrap().len(), 1);
+        assert_eq!(descriptors(true)[1]["name"], "confirmed_goal_read");
         Ok(())
     }
 
@@ -340,7 +354,8 @@ mod tests {
             json!({"version":1,"action":"poll","native_tool":"worker_dispatch"})
         ])
         .is_err());
-        assert_eq!(descriptors().as_array().unwrap().len(), 2);
+        assert_eq!(descriptors(true).as_array().unwrap().len(), 2);
+        assert_eq!(descriptors(false).as_array().unwrap().len(), 1);
         Ok(())
     }
 }
