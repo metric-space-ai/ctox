@@ -208,8 +208,9 @@ impl NativeTransferAccountHost {
         struct CredentialBinding<'a> {
             version: u8,
             account: NativeTransferAccount,
-            // Skip the bearer without materializing an additional plaintext copy.
-            capability_token: serde::de::IgnoredAny,
+            // Borrow the bearer without materializing an additional plaintext copy.
+            #[serde(borrow)]
+            capability_token: &'a str,
         }
         expected.validate()?;
         ensure!(expected.active, "native enrollment retired");
