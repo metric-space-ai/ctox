@@ -1,6 +1,7 @@
 # CTOX Sync v3 S0: fixture and independent byte oracle
 
-First S0 slice against RFC draft `d1b0c0f1fe80b0143a89cc1410ae93ccf4d236f0`.
+First S0 slice against the binding RFC v2, PR586 source
+`6954a1fd36e0f4fc056d7f276b41fd0dd78c3ccb`.
 The RFC/contract owner is Claude's “Outbound app Funktionsproblem (fork)” session;
 Architecture is the single implementation lane. This is measurement tooling,
 not an engine replacement, data-schema migration or performance acceptance.
@@ -55,7 +56,11 @@ is sequential across supplied peers, not an atomic cross-peer network snapshot.
 static page. Two real DataChannels in the same browser send known UTF-8 and
 binary payloads. Receiver delivery length and message count are independent
 oracles for `getStats`; twenty aliases of the receiving connection must still
-report one connection and exactly the sent payload bytes. Peers, browser and
+report one connection and exactly the sent payload bytes. The same measured
+interval also reproduces naive per-collection aggregation: 1,146,880 bytes for
+twenty aliases versus 57,344 bytes for the unique connection and independently
+delivered payload. This is a counter correctness comparison, not an installed
+engine performance before/after. Peers, browser and
 HTTP listener close on completion/error; the browser has a 30-second bound.
 This tests no customer or native CTOX instance and claims no relay performance.
 
@@ -66,10 +71,21 @@ This release check gates fixture integrity and counter correctness only. It
 synthetic self-test for installed measurement. Still required: canonical tenant
 seed/import, actual shell start phases and app-visible-data markers, native RPC
 histograms and write acknowledgements, baseline before/after reports, 300-ms
-relay impairment, 24-hour lock observation, and a measured regression gate in
+and 600-ms relay impairment, browser heap/IndexedDB baseline, server CPU and
+write amplification baseline, 24-hour lock observation, and a measured regression gate in
 the release pipeline. Whole-network overhead needs an independent transport
 capture/counter if the RFC owner chooses that unit for the 2 MB budget.
 No WELSCH live measurement before 12 October 2026 13:00 Europe/Berlin.
+
+The controlling sequence is S0 measurement → S1 content-hashed module graph
+and generated inventories → S2 six-behavior profiles, known/unknown/stale,
+declared ownership and one business_commands writer → S3 session authority
+context → S4 one projection writer per collection and retirement of shadow
+tables → S5 lifecycle/transport → S6 specification. S1 is its own stage directly
+after S0; hand-maintained asset stamps are retired there, not hidden inside
+old-path cleanup. Pending local writes must drain before the RFC's IndexedDB
+contract-change reload. This PR changes neither runtime assets nor stamps.
+Merge follows final-head checks and the RFC owner's gate review.
 
 ## Preserved Transfer/peer-group work
 

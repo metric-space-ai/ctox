@@ -73,7 +73,14 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 20));
       } while (true);
       return { expectedBytes, deliveredBytes: received.reduce((sum, value) => sum + value, 0),
-        connections: before.connections, delta, scope: 'in-browser-loopback', installedAcceptance: false };
+        connections: before.connections, delta,
+        aggregationCounterexample: {
+          aliases: aliases.length,
+          naivePerCollectionBytes: aliases.reduce((sum) => sum + delta.totals.bytesReceived, 0),
+          uniqueConnectionBytes: delta.totals.bytesReceived,
+          scope: 'same RTC interval; alias aggregation reproduction, not deployed-engine before/after',
+        },
+        scope: 'in-browser-loopback', installedAcceptance: false };
     } finally {
       sender.close();
       receiver.close();
@@ -85,6 +92,8 @@ try {
   assert.equal(result.delta.totals.bytesReceived, result.expectedBytes);
   assert.equal(result.delta.totals.messagesReceived, 4);
   assert.equal(result.delta.totals.bytesSent, 0);
+  assert.equal(result.aggregationCounterexample.naivePerCollectionBytes, 1146880);
+  assert.equal(result.aggregationCounterexample.uniqueConnectionBytes, 57344);
   console.log(JSON.stringify({ counterOraclePassed: true, ...result }));
 } finally {
   clearTimeout(deadline);
