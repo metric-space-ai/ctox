@@ -86,7 +86,7 @@ impl<P: Clone + Eq + Hash + Send + Sync + 'static> NativeGuestCoreOwner for Rece
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn original_journal_rejects_mutation_symlink_hardlink_and_public_permissions() {

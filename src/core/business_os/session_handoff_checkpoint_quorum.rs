@@ -4,7 +4,7 @@
 //! Public signed metadata only; neither operation resumes an executor.
 use super::*;
 use anyhow::Context;
-use ctox_sync::authority::{client::ExecutionAuthority, Command, Receipt, Request};
+use ctox_sync::authority::{Command, Receipt, Request, client::ExecutionAuthority};
 use ctox_sync::contracts::CheckpointCopyReceipt;
 
 type Registry = super::super::super::super::NativeGuestRegistry;
@@ -264,11 +264,13 @@ pub(super) fn assert_dirty_copy_cannot_acknowledge<P: Clone + Eq + Hash + Send +
     });
     assert!(result.is_err());
     assert!(!signed);
-    assert!(!store
-        .load(&target.request.checkpoint_digest)
-        .unwrap()
-        .pending_effects
-        .is_empty());
+    assert!(
+        !store
+            .load(&target.request.checkpoint_digest)
+            .unwrap()
+            .pending_effects
+            .is_empty()
+    );
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 //! Existing-job target ownership only. No Core turn or VM activation.
 use super::*;
-use ctox_sync::authority::{client::take_over_checkpoint, Command, Ownership, Request};
+use ctox_sync::authority::{Command, Ownership, Request, client::take_over_checkpoint};
 
 type Registry = super::super::super::super::NativeGuestRegistry;
 
