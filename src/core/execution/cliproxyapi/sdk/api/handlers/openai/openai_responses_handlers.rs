@@ -1144,7 +1144,7 @@ fn parse_request(body: &[u8]) -> Result<ResponsesRequest, &'static str> {
 
 fn pool_error_response(error: ClaudeAccountPoolError) -> OpenAiResponsesHttpResponse {
     let (status, message) = match error {
-        ClaudeAccountPoolError::Routing(_) => (503, "no Claude account is currently available"),
+        ClaudeAccountPoolError::Routing(error) => return claude_routing_error_response(error),
         ClaudeAccountPoolError::Execution(_) => (502, "Claude upstream transport failed"),
         ClaudeAccountPoolError::OutcomePersistence => {
             (503, "Claude account outcome could not be persisted")
@@ -1152,6 +1152,50 @@ fn pool_error_response(error: ClaudeAccountPoolError) -> OpenAiResponsesHttpResp
         ClaudeAccountPoolError::Configuration => (500, "Claude runtime is not configured"),
     };
     OpenAiResponsesHttpResponse::error(status, message)
+}
+
+fn claude_routing_error_response(
+    error: crate::sdk::cliproxy::auth::AccountRoutingError,
+) -> OpenAiResponsesHttpResponse {
+    use crate::sdk::cliproxy::auth::{AccountRoutingError, AccountSelectionError};
+
+    let (code, message, retry_at_ms) = match error {
+        AccountRoutingError::Store(_)
+        | AccountRoutingError::Selection(AccountSelectionError::State) => (
+            "gateway_account_state_unavailable",
+            "Claude account state could not be read or saved. Check local storage access.",
+            None,
+        ),
+        AccountRoutingError::Selection(AccountSelectionError::NotFound) => (
+            "gateway_account_not_found",
+            "No Claude account is configured for this request. Check Settings > Models.",
+            None,
+        ),
+        AccountRoutingError::Selection(AccountSelectionError::Unavailable) => (
+            "gateway_account_unavailable",
+            "No Claude account is eligible for this model. Check enabled accounts and reported limits in Settings > Models.",
+            None,
+        ),
+        AccountRoutingError::Selection(AccountSelectionError::Cooldown { retry_after_ms }) => (
+            "gateway_account_cooldown",
+            "Claude accounts are in a gateway retry cooldown. Retry after the recorded deadline.",
+            Some(retry_after_ms),
+        ),
+    };
+    let mut error = json!({
+        "message": message,
+        "type": "server_error",
+        "code": code,
+        "source": "gateway",
+    });
+    // The selector supplies an absolute Unix-millisecond deadline, not a duration.
+    if let Some(deadline) = retry_at_ms {
+        error["retry_at_ms"] = json!(deadline);
+    }
+    OpenAiResponsesHttpResponse::json(
+        503,
+        serde_json::to_vec(&json!({ "error": error })).unwrap_or_else(|_| b"{}".to_vec()),
+    )
 }
 
 fn codex_pool_error_response(error: CodexAccountPoolError) -> OpenAiResponsesHttpResponse {
@@ -1321,6 +1365,47 @@ fn redact_stream_failure_message(chunk: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_gateway_selection_errors_have_distinct_non_upstream_codes() {
+        use crate::sdk::cliproxy::auth::{
+            AccountRoutingError, AccountSelectionError, CooldownStoreError,
+        };
+
+        for (reason, code) in [
+            (AccountRoutingError::Store(CooldownStoreError::Read), "gateway_account_state_unavailable"),
+            (AccountRoutingError::Store(CooldownStoreError::Write), "gateway_account_state_unavailable"),
+            (AccountRoutingError::Store(CooldownStoreError::InvalidRecord), "gateway_account_state_unavailable"),
+            (AccountRoutingError::Selection(AccountSelectionError::State), "gateway_account_state_unavailable"),
+            (AccountRoutingError::Selection(AccountSelectionError::NotFound), "gateway_account_not_found"),
+            (AccountRoutingError::Selection(AccountSelectionError::Unavailable), "gateway_account_unavailable"),
+        ] {
+            let response = pool_error_response(ClaudeAccountPoolError::Routing(reason));
+            assert_eq!(response.status(), 503);
+            let body: Value = serde_json::from_slice(response.body()).unwrap();
+            assert_eq!(body["error"]["source"], "gateway");
+            assert_eq!(body["error"]["code"], code);
+            assert!(body["error"].get("retry_at_ms").is_none());
+            assert!(!body["error"]["message"].as_str().unwrap().contains("Sign in"));
+        }
+    }
+
+    #[test]
+    fn claude_gateway_cooldown_reports_absolute_deadline() {
+        use crate::sdk::cliproxy::auth::{AccountRoutingError, AccountSelectionError};
+
+        let response = pool_error_response(ClaudeAccountPoolError::Routing(
+            AccountRoutingError::Selection(AccountSelectionError::Cooldown {
+                retry_after_ms: 1_791_645_000_000,
+            }),
+        ));
+        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(response.status(), 503);
+        assert_eq!(body["error"]["code"], "gateway_account_cooldown");
+        assert_eq!(body["error"]["source"], "gateway");
+        assert_eq!(body["error"]["retry_at_ms"], 1_791_645_000_000_i64);
+        assert!(!body["error"]["message"].as_str().unwrap().contains("denied"));
+    }
 
     #[test]
     fn request_requires_json_object_and_model() {

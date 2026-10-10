@@ -47,8 +47,9 @@ use super::helps::{
 };
 use crate::internal::registry::lookup_model_info;
 use crate::sdk::cliproxy::auth::{
-    AccountCandidate, AccountExecutionResult, AccountRouter, AccountRoutingError, Auth,
-    CooldownConductor, UnauthorizedReplayDecision, UnauthorizedReplayState,
+    AccountCandidate, AccountExecutionResult, AccountRouter, AccountRoutingError,
+    AccountSelectionError, Auth, CooldownConductor, UnauthorizedReplayDecision,
+    UnauthorizedReplayState,
 };
 use crate::sdk::cliproxy::executor::{ExecutionMetadata, Headers, JsonMetadata};
 use serde_json::Value;
@@ -1847,10 +1848,18 @@ impl ClaudeSubscriptionAccountPool {
         let mut last_outcome = None;
 
         while !remaining.is_empty() {
-            let selected = self
-                .router
-                .select("claude", Some(model), self.clock.now_ms(), &remaining)
-                .map_err(ClaudeAccountPoolError::Routing)?;
+            let selected = match self.router.select(
+                "claude", Some(model), self.clock.now_ms(), &remaining,
+            ) {
+                Ok(selected) => selected,
+                // Preserve the prior upstream result when no eligible fallback remains.
+                Err(AccountRoutingError::Selection(
+                    AccountSelectionError::NotFound
+                    | AccountSelectionError::Unavailable
+                    | AccountSelectionError::Cooldown { .. },
+                )) if !attempted_auth_ids.is_empty() => break,
+                Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
+            };
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
@@ -1931,10 +1940,18 @@ impl ClaudeSubscriptionAccountPool {
         let mut last_outcome = None;
 
         while !remaining.is_empty() {
-            let selected = self
-                .router
-                .select("claude", Some(model), self.clock.now_ms(), &remaining)
-                .map_err(ClaudeAccountPoolError::Routing)?;
+            let selected = match self.router.select(
+                "claude", Some(model), self.clock.now_ms(), &remaining,
+            ) {
+                Ok(selected) => selected,
+                // Preserve the prior upstream result when no eligible fallback remains.
+                Err(AccountRoutingError::Selection(
+                    AccountSelectionError::NotFound
+                    | AccountSelectionError::Unavailable
+                    | AccountSelectionError::Cooldown { .. },
+                )) if !attempted_auth_ids.is_empty() => break,
+                Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
+            };
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
