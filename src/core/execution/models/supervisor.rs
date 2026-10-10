@@ -975,6 +975,9 @@ fn managed_runtime_ports(root: &Path) -> Result<Vec<u16>> {
 }
 
 fn append_managed_backend_runtime_ports(root: &Path, ports: &mut Vec<u16>) -> Result<()> {
+    // A switch to API/IPC can clear engine_port while a legacy default
+    // listener still belongs to the managed cleanup inventory.
+    push_unique_port(ports, runtime_state::default_local_engine_port());
     if let Some(state) = runtime_state::load_or_resolve_runtime_state(root).ok() {
         if let Some(port) = state.engine_port {
             push_unique_port(ports, port);
@@ -2616,7 +2619,21 @@ fn wait_for_backend_ready(
         }
         if let Some(pid) = read_pid(pid_path) {
             if !process_is_alive(pid) {
-                let detail = managed_backend_failure_detail(log_path, None);
+                // The child may exit during the readiness probe after the
+                // first try_wait. Reap it before losing its real exit status.
+                let exit_status = child
+                    .as_deref_mut()
+                    .map(Child::try_wait)
+                    .transpose()
+                    .with_context(|| {
+                        format!(
+                            "failed to poll {} backend child for {}",
+                            role.as_env_value(),
+                            spec.display_model
+                        )
+                    })?
+                    .flatten();
+                let detail = managed_backend_failure_detail(log_path, exit_status);
                 anyhow::bail!(
                     "{} backend for {} exited before becoming ready{}",
                     role.as_env_value(),
@@ -2667,7 +2684,8 @@ fn managed_backend_failure_detail(
     exit_status: Option<ExitStatus>,
 ) -> Option<String> {
     let exit_status_detail = exit_status.map(|status| status.to_string());
-    let raw = std::fs::read_to_string(log_path).ok()?;
+    // A missing/unreadable log must not discard an observed child exit.
+    let raw = std::fs::read_to_string(log_path).unwrap_or_default();
     let lines = raw
         .lines()
         .map(str::trim)
@@ -3034,7 +3052,6 @@ const CHAT_MANAGED_BACKEND_OVERRIDE_KEYS: &[&str] = &[
     "CTOX_ENGINE_ISQ_SINGLETHREAD",
     "CTOX_ENGINE_ISQ_CPU_THREADS",
     "CTOX_ENGINE_PARALLEL_IMMEDIATE_ISQ",
-    "CTOX_CHAT_SHARE_AUXILIARY_GPUS",
     "CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP",
     "CTOX_EMBEDDING_GPU_LAYER_RESERVATION",
     "CTOX_STT_GPU_LAYER_RESERVATION",
@@ -4765,6 +4782,21 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("exit status"));
         assert!(message.contains("Applying ISQ on 1 threads."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_failure_detail_retains_real_exit_status_without_a_log() {
+        let root = tempfile::tempdir().unwrap();
+        let status = Command::new("/bin/sh")
+            .args(["-c", "exit 17"])
+            .status()
+            .unwrap();
+        let detail =
+            managed_backend_failure_detail(&root.path().join("absent-backend.log"), Some(status))
+                .unwrap();
+        assert!(detail.contains("exit status: 17"), "{detail}");
+        assert!(detail.contains("inspect"), "{detail}");
     }
 
     #[test]
