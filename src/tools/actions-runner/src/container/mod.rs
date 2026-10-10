@@ -33,14 +33,17 @@
 
 pub mod docker_api;
 pub mod docker_auth;
+#[cfg(feature = "docker")]
 pub mod docker_build;
 pub mod docker_cli;
 pub mod docker_merge;
+#[cfg(feature = "docker")]
 pub mod docker_engine;
 pub mod docker_log;
 pub mod docker_opts;
 pub mod docker_opts_mounts;
 pub mod docker_opts_types;
+#[cfg(feature = "docker")]
 pub mod docker_resources;
 pub mod docker_socket;
 pub mod docker_specs;

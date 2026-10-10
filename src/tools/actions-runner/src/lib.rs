@@ -1,52 +1,20 @@
-//! GitHub Actions execution engine for CTOX.
+//! Workjet Actions' in-tree Rust port of nektos/act (MIT).
 //!
-//! Rust port of [`nektos/act`](https://github.com/nektos/act) (MIT,
-//! Copyright (c) Christoph Schitt). The port keeps act's observable
-//! behaviour: workflow YAML authored for GitHub Actions must run unchanged.
+//! The default build exposes the native host backend, workflow/model and
+//! expression APIs, file commands, artifact/cache protocols and pure parsers.
+//! Docker execution is preserved behind the maintenance-only `docker` feature;
+//! CTOX depends on this crate with that feature disabled.
 //!
-//! Upstream packages map to modules one-to-one:
+//! This is an engine library, not an admitted Workjet Actions service. Native
+//! execution must be called only after the service has acquired its resource,
+//! storage and source leases and installed OS limits (subsequent slices).
+//! Workflow scheduling, action loading and complete step orchestration are not
+//! implemented by this port. See README.md for the measured API inventory and
+//! the distinction between parsing, preparation and end-to-end execution.
 //!
-//! | act `pkg/`      | module                        | ported |
-//! |-----------------|-------------------------------|--------|
-//! | `workflowpattern` | [`workflow_pattern`]         | yes    |
-//! | `lookpath`        | [`lookpath`]                 | yes    |
-//! | `model`           | [`model`]                    | yes    |
-//! | `exprparser`      | [`expr`]                     | yes    |
-//! | `filecollector`   | [`filecollector`]            | yes    |
-//! | `schema`          | [`schema`]                   | yes    |
-//! | `artifacts`       | [`artifacts`]                | yes    |
-//! | `artifactcache`   | [`artifactcache`]            | yes    |
-//! | `common`          | [`common`]                   | yes    |
-//! | `container`       | [`container`]                | yes    |
-//! | `runner`          | [`runner`]                   | partly |
-//! | `gh`              | *(pending)*                  | no     |
-//!
-//! "yes" means every upstream test function in the package runs here as a Rust
-//! test, and every source file in it is ported. One package is qualified: the
-//! seven test functions in `docker_run_test.go` need a live Docker daemon to run
-//! against, so they are not reproduced here — that is a property of the tests,
-//! not a gap in the port, and the code they cover is.
-//!
-//! `runner` is **partly**: [`runner::command`], the workflow-command grammar —
-//! `::set-output::`, `##[add-path]`, `stop-commands`, `add-mask`, `save-state` —
-//! is ported and carries all ten upstream test functions, and
-//! [`runner::expression`] ports the interpolation rewriter.
-//! [`runner::run_context`] ports `RunContext`, the context-free half of
-//! `run_context.go` and `getGithubContext`, and [`model::GithubContext`]
-//! ports the `github` context itself. Not ported: the container lifecycle in
-//! `run_context.go`, the git clone executor, the evaluator's context tree
-//! (`getEvaluatorInputs`, `getWorkflowSecrets`, `getWorkflowVars`),
-//! `EvaluateYamlNode` and `Interpolate`, and the `step` trait with its five
-//! implementations.
-//!
-//! `artifacts`' `TestArtifactFlow` also needs the runner and Docker, so it is
-//! the one upstream test in an otherwise complete package that does not run
-//! here.
-//!
-//! [`validate`] ports act's schema validator, [`http`] the `net/http` +
-//! `httprouter` exchange that the two servers share, and [`yaml_node`],
-//! [`gitignore`], [`gomatch`] and [`git_index`] port the third-party packages
-//! act leans on that act itself does not contain.
+//! Upstream-derived source comments describe act behavior and port provenance;
+//! they are not claims that an entire GitHub Actions workflow runs unchanged.
+pub mod host;
 
 pub mod artifactcache;
 pub mod artifacts;

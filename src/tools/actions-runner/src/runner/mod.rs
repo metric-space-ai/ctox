@@ -45,6 +45,7 @@
 
 pub mod command;
 pub mod expression;
+#[cfg(feature = "docker")]
 pub mod job_container;
 pub mod node_tool;
 pub mod run_context;

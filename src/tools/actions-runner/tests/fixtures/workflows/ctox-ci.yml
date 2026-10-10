@@ -1,0 +1,500 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # A new push supersedes a PR head; main keeps its running build and only the newest pending one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-business-os-desktop:
+    if: ${{ !github.event.pull_request.draft }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+    name: Business OS Desktop E2E (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/apps/business-os-desktop/package-lock.json
+
+      - name: Install Linux Electron dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 \
+            libnotify4 libxtst6 xdg-utils xvfb dbus-x11 \
+            gnome-keyring libsecret-tools
+
+      - name: Install dependencies
+        working-directory: src/apps/business-os-desktop
+        run: |
+          npm ci
+          npm audit --audit-level=low
+
+      - name: Unit tests
+        working-directory: src/apps/business-os-desktop
+        run: npm test
+
+      - name: Syntax checks
+        working-directory: src/apps/business-os-desktop
+        run: npm run check
+
+      - name: Release config check
+        working-directory: src/apps/business-os-desktop
+        run: npm run release:check
+
+      - name: Packaged bundled helper smoke
+        if: runner.os == 'macOS'
+        working-directory: src/apps/business-os-desktop
+        run: npm run pack:dir:bundled-runtime-smoke
+
+      - name: Electron smokes
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run test:electron-smoke
+
+      - name: Electron smokes (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: xvfb-run -a npm run test:electron-smoke
+
+      - name: Platform keychain runtime smoke
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run smoke:keychain-runtime
+
+      - name: Platform keychain runtime smoke (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: |
+          dbus-run-session -- bash -lc '
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+            npm run smoke:keychain-runtime
+          '
+
+  check-desktop:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-22.04
+    name: Desktop extra check (linux)
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: "1.93.0"
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          workspaces: src/apps/desktop -> target
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libfontconfig1-dev pkg-config
+
+      - name: Check
+        working-directory: src/apps/desktop
+        run: cargo check --locked
+
+      - name: Business OS WebRTC pairing tests
+        working-directory: src/apps/desktop
+        run: |
+          cargo test --locked desktop_web_deploy_url
+          cargo test --locked business_os_peer_status
+
+  check-ctox:
+    if: ${{ !github.event.pull_request.draft }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    name: CTOX CLI check (${{ matrix.target }})
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ./.github/actions/build-pi-sidecar
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: "1.93.0"
+          components: rustfmt
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          node-version: "22"
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3 ripgrep
+          rg --version
+
+      - name: Business OS JS dependency bootstrap
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm ci --ignore-scripts --prefix src/apps/business-os
+          npm audit --audit-level=low --prefix src/apps/business-os
+
+      - name: Install Business OS browser test runtime
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+
+      - name: Business OS Office mobile height
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
+      - name: Guard Office notification contract
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os run qa:office-notifications -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
+
+      - name: Business OS JS tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm --prefix src/apps/business-os test
+          npm --prefix src/apps/business-os run test:module-bundles
+
+      - name: Format check
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo fmt --check
+
+      - name: Install Rust dependency auditor
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Audit Rust dependencies
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: src/scripts/audit-rust-dependencies.sh
+
+      - name: Installer script checks
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          bash -n install.sh
+          bash tests/install-release-staging.sh
+          bash tests/install_greppy_shim_smoke.sh
+          python3 tests/test_build_cache.py
+
+      - name: AppSec non-network fixture gates
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          bwrap --version
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml scanner_schema_covers_all_allowlisted_tools --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_realistic_web_scanner_outputs_validate_contracts --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_remaining_allowlisted_tools_have_structured_output --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml analyze_high_impact_pinned_outputs_extract_actionable_evidence --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml failed_scanner_run_is_classified_as_blocked_tool_failed --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml oci_layout_signature_smoke_verifies_signed_unsigned_config_and_layer_contracts --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml logic_contract_native_bearer_reference_authenticates_without_retaining_secret --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml identity_session_fixture_proves_saml_signature_replay_fixation_and_recovery --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml native_grpc_fixture_executes_authenticated_reflection_unary_and_streaming --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml authenticated_transport_fixture_injects_session_without_retaining_it --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml cloud_kubernetes_live_fixture_proves_auth_and_positive_negative_posture --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml mobile_artifact_inspector_decodes_android_and_ios_positive_negative_controls --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml android_binary_axml_manifest_decoder_proves_secure_controls --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml artifact_signature_verification_distinguishes_valid_invalid_and_partial --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml desktop_artifact_inspector_proves_appx_and_tauri_positive_negative_controls --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml electron_artifact_inspector_proves_secure_insecure_and_opaque_packages --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml native_hardening_parser_reports_elf_pe_and_macho_controls --quiet
+          CTOX_BROWSER_RUNTIME_LIVE_FIXTURE=1 \
+            CTOX_PLAYWRIGHT_MODULE="$PWD/src/apps/business-os/node_modules/playwright/index.mjs" \
+            cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml browser_runtime_live_chromium_fixture_proves_authenticated_positive_and_negative_cases --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_bundle_exports_authz_replay_issue_and_fix_check_script --quiet
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml finding_verify_bundle_executes_proof_script_and_records_fix_status --quiet
+
+      - name: Build rxdb wire daemon (cross-process smokes)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # The cross-process-* smokes in the ctox-rxdb suite are the only
+        # proof that the JS demand loaders and the Rust dispatchers agree on
+        # real wire bytes. Without this binary they SKIP; run-all.mjs is
+        # invoked with --require-wire-daemon below so a missing build fails
+        # the job instead of silently dropping that coverage.
+        run: |
+          CARGO_TARGET_DIR="$PWD/runtime/build/cargo-target" \
+            cargo build --locked --manifest-path src/core/rxdb/Cargo.toml --example v15_wire_daemon
+      - name: SQL Server adapter contract
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --manifest-path src/tools/sqlserver-mcp/Cargo.toml --quiet
+
+      - name: Business OS RxDB-only contract
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          node --check src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node --check src/core/rxdb/tools/browser_rust_smoke.js
+          node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js
+          node --check src/core/rxdb/tools/browser_rust_soak.js
+          node --check src/core/rxdb/tools/business_os_production_smoke_registry.js
+          node --check src/core/rxdb/tools/print_soak_summary.js
+          node --check src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node --check src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node --check src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node --check src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_templates.js
+          node --check src/core/rxdb/tools/print_sync_production_readiness_95_report.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js
+          node --check src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js
+          node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js
+          node --check src/core/rxdb/tools/assert_js_no_package_manager.js
+          node --check src/core/rxdb/tools/business_os_connection_modes_smoke.js
+          node --check src/apps/business-os/scripts/assert-sync-error-classification.mjs
+          node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
+          node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
+          node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
+          node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          node --check src/apps/business-os/scripts/assert-module-conformance.mjs
+          node --check src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
+          node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
+          node --check src/apps/business-os/scripts/audit-business-os-content.mjs
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/generate-module-registry.mjs --check
+          node src/apps/business-os/scripts/assert-module-collection-allowlists.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.mjs
+          node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
+          node src/apps/business-os/scripts/assert-production-release-docs.mjs
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
+          node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
+          node src/apps/business-os/scripts/audit-business-os-content.mjs
+          node src/apps/business-os/scripts/assert-sync-error-classification.mjs
+          node src/apps/business-os/scripts/assert-module-context-contract.mjs
+          node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
+          node src/apps/business-os/scripts/assert-business-chat-layout.mjs
+          node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
+          node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node src/core/rxdb/tools/assert_sync_production_readiness_95.js
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
+          node src/core/rxdb/tools/build_sync_production_readiness_95_artifact.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_templates.js --self-test
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_app_runtime_package_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_browser_recovery_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_full_matrix.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_operational_gate.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_runbook_exercises.js --self-test
+          node src/core/rxdb/tools/run_sync_production_readiness_95_wan_turn_matrix.js --self-test
+          node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js
+          node src/core/rxdb/tools/print_sync_production_readiness_95_report.js || true
+          node src/core/rxdb/tools/assert_js_fork_release_evidence.js
+          node src/core/rxdb/tools/assert_js_no_package_manager.js
+          SMOKE_MATRIX_SELF_TEST=1 node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+          node src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs
+          node src/apps/business-os/rxdb/tests/query-api-smoke.mjs
+          node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
+          node src/core/rxdb/tools/build_business_os_schema_contract.mjs
+          # Full ctox-rxdb smoke + guard suite (auto-discovers every
+          # *-smoke.mjs, incl. contract-drift, bundle-reproducibility and the
+          # data-plane ratchet guards). The three explicit smoke invocations
+          # above stay for the release-evidence contract.
+          COMMAND_PLANE_BASELINE_PATH=runtime/build/command-plane/ci-baseline.json node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
+
+      - name: Upload command-plane baseline
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: command-plane-ci-baseline
+          path: runtime/build/command-plane/ci-baseline.json
+          if-no-files-found: error
+
+      - name: rxdb-rs crate tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # The ctox-rxdb crate is NOT a cargo workspace member: the root
+        # cargo test/check never compiles or runs its 230+ unit tests. This
+        # is the only CI coverage the WebRTC data plane's Rust side has.
+        run: cargo test --manifest-path src/core/rxdb/Cargo.toml --quiet
+
+      - name: ctox-rxdb-js bundle provenance
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          node --check src/core/rxdb/tools/assert_js_fork_dependency_audit.js
+          node src/core/rxdb/tools/assert_js_fork_dependency_audit.js
+          node src/scripts/vendor-builds/build-ctox-rxdb-js.mjs --artifact-dir runtime/build/ctox-rxdb-js --write-provenance
+
+      - name: Upload ctox-rxdb-js bundle evidence
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-rxdb-js-bundle-evidence
+          path: |
+            runtime/build/ctox-rxdb-js/ctox-rxdb-js.mjs
+            runtime/build/ctox-rxdb-js/ctox-rxdb-js.provenance.json
+            src/apps/business-os/rxdb/manifest.json
+            src/apps/business-os/rxdb/README.md
+            src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
+            src/apps/business-os/rxdb/src/event-target.mjs
+            src/apps/business-os/rxdb/src/index.mjs
+            src/apps/business-os/rxdb/src/observable.mjs
+            src/apps/business-os/rxdb/src/replication-webrtc.mjs
+            src/apps/business-os/rxdb/src/rx-database.mjs
+            src/apps/business-os/rxdb/src/schema.mjs
+            src/apps/business-os/rxdb/src/storage-indexeddb.mjs
+            src/apps/business-os/rxdb/src/webrtc-native.mjs
+            src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs
+            src/apps/business-os/rxdb/tests/query-api-smoke.mjs
+            src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
+          if-no-files-found: error
+
+      - name: Update backup credential and SQLite recovery
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox --jobs 2 state_backup -- --test-threads=2
+
+      - name: Managed release switch guards
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test --locked --bin ctox --jobs 2 watchdog_ -- --test-threads=2
+          cargo test --locked --bin ctox --jobs 2 legacy_global_real_binary_tracks_activation_and_rollback -- --test-threads=2
+
+      - name: Business OS command idempotency
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
+
+      - name: Business OS schema hash parity
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox native_all_schema_hashes_match_browser_contract_fixture
+
+      - name: Business OS file sync policy
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_indexes_large_file_lazily_until_materialized
+
+      - name: Business OS file chunk generations
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_records_new_chunk_generation_after_update
+
+      - name: Business OS file chunk retention
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_prunes_stale_chunk_generations
+
+      - name: Business OS deletion projection regressions
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox projection_tombstone_tests
+
+      - name: Business OS file tombstones
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_files_from_workspace_root_tombstones_renamed_files
+
+      - name: Business OS production browser gate
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm --prefix src/apps/business-os run qa:design-gates
+          node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+          SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
+          SMOKE_MODES="$SMOKE_MODES" \
+          SMOKE_MATRIX_ATTEMPTS=1 \
+          SMOKE_PAGE_PATH=/index.html \
+          SMOKE_MODE_TIMEOUT_MS=300000 \
+          SMOKE_BROWSER_WARNING_BUDGET=0 \
+          SMOKE_BROWSER_ERROR_BUDGET=0 \
+          SMOKE_BROWSER_REQUEST_FAILURE_BUDGET=0 \
+          BUSINESS_PORT=61701 \
+          SIGNALING_PORT=61702 \
+          node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+
+      - name: Upload Business OS production smoke evidence
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: business-os-production-smoke-evidence
+          path: |
+            runtime/build/business-os-smoke-matrix-summary.json
+            output/playwright/business-os-design-matrix/
+            output/playwright/business-os-design-diff/visual-diff.json
+            output/playwright/business-os-accessibility-contract.json
+          if-no-files-found: error
+
+      - name: Check
+        run: cargo check --locked --target ${{ matrix.target }}
+
+      - name: Windows encrypted Secret Store runtime smoke
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          cargo test --locked --bin ctox `
+            "secrets::tests::secret_store_encrypts_values_at_rest_and_round_trips" `
+            -- --exact
+          New-Item -ItemType Directory -Force -Path runtime/build/deployment-audit | Out-Null
+          $contract = @{
+            version = "ctox.deployment_audit.windows_secret_store_acceptance.v1"
+            generated_at = (Get-Date).ToUniversalTime().ToString("o")
+            platform = "windows-x86_64"
+            target = "${{ matrix.target }}"
+            test = "secrets::tests::secret_store_encrypts_values_at_rest_and_round_trips"
+            gates = @{
+              encrypted_at_rest = $true
+              write_read_round_trip = $true
+              sqlite_runtime_path = $true
+            }
+            ok = $true
+          }
+          $contract | ConvertTo-Json -Depth 5 | Set-Content `
+            -Encoding utf8 `
+            runtime/build/deployment-audit/windows-secret-store-acceptance.json
+
+      - name: Upload Windows Secret Store evidence
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-secret-store-acceptance
+          path: runtime/build/deployment-audit/windows-secret-store-acceptance.json
+          if-no-files-found: error
+
+      - name: Harness core tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core compact_controller --quiet
+
+      - name: Harness spawn liveness proof
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core harness_subagent_spawn_model_is_bounded_and_leaf_only --quiet
+          cargo run --locked -- process-mining spawn-liveness

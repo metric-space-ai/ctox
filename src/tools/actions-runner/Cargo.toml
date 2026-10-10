@@ -5,6 +5,11 @@ edition = "2021"
 publish = false
 description = "GitHub Actions workflow execution engine for CTOX (Rust port of nektos/act)"
 
+[features]
+default = []
+# Preserved upstream backend for port maintenance only. Workjet never enables it.
+docker = ["dep:bollard"]
+
 [dependencies]
 # The executor algebra, the JWT signing and the error plumbing all speak
 # `anyhow`, which is already a dependency of CTOX itself.
@@ -13,7 +18,7 @@ anyhow = "1"
 # `github.com/moby/moby/client`; `bollard` is the maintained Rust client for
 # the same Engine API over the same unix socket / npipe, and is the one Rust
 # ecosystem project the Docker back-end is built on.
-bollard = "0.21"
+bollard = { version = "0.21", optional = true }
 # bollard's request bodies are `bytes::Bytes` and its responses are
 # `Stream`s, so both crates are named here directly rather than reached through
 # bollard. They are already in the tree as its dependencies, so this adds no

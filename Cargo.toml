@@ -34,6 +34,7 @@ tempfile = "3"
 ctox-doc-stack = { path = "src/tools/doc-stack" }
 ctox-cliproxyapi = { path = "src/core/execution/cliproxyapi", default-features = false, features = ["anthropic-fingerprint-transport", "codex-http-transport", "antigravity-http-transport"] }
 ctox-appsec-pentest = { path = "src/tools/appsec-pentest" }
+ctox-actions-runner = { path = "src/tools/actions-runner", default-features = false }
 ctox-pdf-parse = { path = "src/tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_0_6b" }
 ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }
@@ -138,6 +139,7 @@ tempfile = "3"
 members = [
     "src/core/execution/cliproxyapi",
     "src/tools/postgres-adapter",
+    "src/tools/actions-runner",
 ]
 exclude = [
     "src/apps/desktop",
@@ -153,7 +155,6 @@ exclude = [
     "src/core/transfers/aria2-rust",
     "src/core/transfers/vendor/smb",
     "src/tools/appsec-pentest",
-    "src/tools/actions-runner",
     "src/tools/doc-stack",
     "src/tools/google-fetch",
     "src/tools/pdf-parse",
