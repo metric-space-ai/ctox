@@ -58,6 +58,10 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<Value> {
             super::email_native::sync_registered_account(root, address, limit)
         }
         Some("trusted-authserv") => trusted_authserv(root, &args[1..]),
+        Some("dkim-probe") if args.len() == 5 && args[1] == "--address" && args[3] == "--limit" => {
+            let limit = args[4].parse::<usize>().context("invalid probe limit")?;
+            super::email_native::dkim_probe_registered_account(root, &args[2], limit)
+        }
         Some("auth-results") if args.len() == 3 && args[1] == "--message-key" => {
             auth_results(root, &args[2])
         }

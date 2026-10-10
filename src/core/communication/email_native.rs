@@ -296,13 +296,8 @@ fn registered_account_settings(
     Ok(settings)
 }
 
-fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
-    let email = setting(settings, "CTO_EMAIL_ADDRESS");
-    if email.is_empty() {
-        return Ok(None);
-    }
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let mut args = vec!["sync".to_string(), "--email".to_string(), email.clone()];
+fn sync_args_from_settings(settings: &BTreeMap<String, String>, email: &str) -> Vec<String> {
+    let mut args = vec!["sync".to_string(), "--email".to_string(), email.to_string()];
     if let Some(provider) = settings
         .get("CTO_EMAIL_PROVIDER")
         .map(|value| value.trim())
@@ -351,6 +346,144 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
             args.push(value.to_string());
         }
     }
+    args
+}
+
+/// Feasibility probe for the DKIM trust anchor (security review 10.10.2026):
+/// fetches the MIME of the newest stored inbound mails of a registered EWS
+/// account and verifies their DKIM signatures in memory. It returns one
+/// aggregate row per signature; no MIME, header value or address leaves the
+/// process and nothing is written.
+pub(crate) fn dkim_probe_registered_account(
+    root: &Path,
+    address: &str,
+    limit: usize,
+) -> Result<Value> {
+    let settings = registered_account_settings(root, address, limit.clamp(1, 50))?;
+    let email = setting(&settings, "CTO_EMAIL_ADDRESS");
+    let args = sync_args_from_settings(&settings, &email);
+    let runtime = runtime_from_settings(root, &settings);
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let request = AdapterSyncCommandRequest {
+        db_path: db_path.as_path(),
+        passthrough_args: &args,
+        skip_flags: &["--db", "--channel"],
+    };
+    let options = sync_options_from_args(root, &runtime, &request)?;
+    anyhow::ensure!(
+        matches!(options.provider.as_str(), "ews" | "owa"),
+        "dkim probe supports EWS accounts only"
+    );
+    let client = EwsClient::from_options(&options)?;
+    let account_key = format!("email:{}", options.email.trim().to_ascii_lowercase());
+    let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut stmt = conn.prepare(
+        "SELECT message_key, remote_id FROM communication_messages
+         WHERE account_key = ?1 AND channel = 'email' AND direction = 'inbound'
+         ORDER BY observed_at DESC LIMIT ?2",
+    )?;
+    let mails = stmt
+        .query_map(
+            rusqlite::params![account_key, limit.clamp(1, 50) as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let authenticator = mail_auth::MessageAuthenticator::new_system_conf()
+        .map_err(|error| anyhow!("dns resolver: {error}"))?;
+    let tokio = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let mut rows = Vec::new();
+    for (message_key, remote_id) in mails {
+        let body = format!(
+            r#"<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:IncludeMimeContent>true</t:IncludeMimeContent></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds>"#,
+            xml_escape(&remote_id)
+        );
+        let mime = client.request("GetItem", "", &body).and_then(|xml| {
+            let document = Document::parse(&xml).context("invalid EWS GetItem response")?;
+            let encoded = document
+                .descendants()
+                .find(|node| node.is_element() && node.tag_name().name() == "MimeContent")
+                .and_then(|node| node.text())
+                .context("EWS returned no MimeContent")?
+                .split_whitespace()
+                .collect::<String>();
+            BASE64_STANDARD
+                .decode(encoded)
+                .context("MimeContent is not valid base64")
+        });
+        let mime = match mime {
+            Ok(mime) => mime,
+            Err(error) => {
+                rows.push(json!({"message_key": message_key, "result": "fetch_error",
+                    "reason": error.to_string().chars().take(120).collect::<String>()}));
+                continue;
+            }
+        };
+        let Some(message) = mail_auth::AuthenticatedMessage::parse(&mime) else {
+            rows.push(json!({"message_key": message_key, "result": "unparsable"}));
+            continue;
+        };
+        let from_domains = message
+            .from
+            .iter()
+            .filter_map(|from| {
+                from.rsplit_once('@')
+                    .map(|(_, domain)| domain.to_ascii_lowercase())
+            })
+            .collect::<Vec<_>>();
+        let outputs = tokio.block_on(authenticator.verify_dkim(&message));
+        if outputs.is_empty() {
+            rows.push(json!({"message_key": message_key, "result": "no_signature",
+                "from_headers": message.from.len()}));
+            continue;
+        }
+        for output in outputs {
+            let (result, reason) = match output.result() {
+                mail_auth::DkimResult::Pass => ("pass", String::new()),
+                mail_auth::DkimResult::Neutral(error) => ("neutral", error.to_string()),
+                mail_auth::DkimResult::Fail(error) => ("fail", error.to_string()),
+                mail_auth::DkimResult::PermError(error) => ("permerror", error.to_string()),
+                mail_auth::DkimResult::TempError(error) => ("temperror", error.to_string()),
+                mail_auth::DkimResult::None => ("none", String::new()),
+            };
+            let signature = output.signature();
+            let d = signature
+                .map(|sig| sig.d.to_ascii_lowercase())
+                .unwrap_or_default();
+            let headers = signature
+                .map(|sig| {
+                    sig.h
+                        .iter()
+                        .map(|h| h.to_ascii_lowercase())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            rows.push(json!({
+                "message_key": message_key,
+                "d": d,
+                "s": signature.map(|sig| sig.s.clone()).unwrap_or_default(),
+                "result": result,
+                "reason": reason,
+                "from_headers": message.from.len(),
+                "aligned": !d.is_empty() && from_domains.iter().any(|domain| domain == &d || domain.ends_with(&format!(".{d}"))),
+                "has_l": signature.is_some_and(|sig| sig.l > 0),
+                "h_has_from": headers.iter().any(|h| h == "from"),
+                "h_has_date": headers.iter().any(|h| h == "date"),
+                "h_has_to": headers.iter().any(|h| h == "to"),
+            }));
+        }
+    }
+    Ok(json!({"ok": true, "signatures": rows}))
+}
+
+fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
+    let email = setting(settings, "CTO_EMAIL_ADDRESS");
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let args = sync_args_from_settings(settings, &email);
     let runtime = runtime_from_settings(root, settings);
     let request = AdapterSyncCommandRequest {
         db_path: db_path.as_path(),
