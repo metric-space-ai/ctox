@@ -1,5 +1,5 @@
 import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261011-shell-v2-project-policy-post94c8d';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261011-shell-v2-project-policy-post94c8d';
+import { requestNativeProviders, requestNativeModelCheck } from './shared/workjet-provider-native.mjs?v=20261011-shell-v2-project-policy-post94c8d';
 import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261011-shell-v2-project-policy-post94c8d';
 import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261011-shell-v2-project-policy-post94c8d';
 import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261011-shell-v2-project-policy-post94c8d';
@@ -13947,6 +13947,17 @@ async function workjetProjectControl(request = {}) {
   }
   if (action.startsWith('project.presentation.')) {
     return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
+  }
+  if (action === 'instance.providers.models.check') {
+    const sync = state.sync;
+    const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'native instanceId', 256);
+    return requestNativeModelCheck(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
+        throw Object.assign(new Error('Provider instance or authority changed.'), { code: 'PROVIDER_SCOPE_CHANGED' });
+      }
+    });
   }
   if (action.startsWith('instance.providers.')) {
     const sync = state.sync;
