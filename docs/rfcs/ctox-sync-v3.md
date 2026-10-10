@@ -1,211 +1,235 @@
 # RFC: CTOX Sync v3 — vom Fehlerflicken zur spezifizierten Sync-Engine
 
-Status: Entwurf zur Diskussion · 10.10.2026 · Autor: Claude (Supervisor thesen/CTOX)
-Bezug: `docs/ctox-rxdb.md`, `docs/ctox-sync-plan-2026-08-10.md`,
-`docs/ctox-sync-production-readiness-95.md`, `docs/ctox-sync-feldbefund-*.md`
+Status: Entwurf v2 zur Umsetzung · 10.10.2026
+Owner Vertrag/Gates: Claude-Sitzung „Outbound app Funktionsproblem (fork)“ ·
+Supervisor: Claude-Sitzung „Supervising ctox, workjet, ctox-dev“ ·
+Umsetzung (einziger Strang): Codex-Parent „Architektur Rework“ (01a0879f-d2e0-72c3-9353-4ef802b2998b)
+Belege: `docs/rfcs/ctox-sync-v3-evidence/root-causes-2026-10-10.md` und
+`classification-2026-10-10.csv` (366 klassifizierte Fixes), Messungen thesen 10.10.2026.
 
-## 0. Worum es geht
+## 0. Ziel und Grenzen
 
-CTOX Sync verbindet Browser und Rechner mit einer CTOX-Instanz ohne HTTPS-Datenpfad
-und ohne Tunnel: WebRTC-DataChannel, RxDB-artige Replikation, SQLite als Wahrheit
-auf der Instanz. Diese Grundentscheidung bleibt — sie ist der Grund, warum CTOX auf
-beliebigen Rechnern hinter NAT läuft.
+CTOX Sync verbindet Browser und Rechner mit einer CTOX-Instanz ohne HTTPS-Datenpfad und
+ohne Tunnel (WebRTC-DataChannel, RxDB-artige Replikation, SQLite auf der Instanz). Diese
+Grundentscheidung bleibt. Was endet, ist die Weiterentwicklung als Folge von Einzelfixes.
 
-Was nicht bleiben kann, ist die Art, wie die Engine weiterentwickelt wird: als
-Folge von Einzelfixes für das jeweils letzte Symptom. Der Plan ersetzt das durch
-einen festen Vertrag, feste Messbudgets und einen schrittweisen Umbau, bei dem jede
-Stufe für sich auslieferbar ist und gemessen wird.
+Die Ursachen sind nicht vermutet, sondern aus der vollständigen Fix-Historie abgeleitet
+(§1). Jede Architekturänderung in §3 ist einer Ursachenklasse mit gezählten Fixes
+zugeordnet; die Reihenfolge in §5 folgt dem Anteil künftiger Fixes, den sie verhindert,
+und ihrem Risiko.
 
-Nicht-Ziele: keine HTTP-Datenbrücke (AGENTS.md, Datengrenze bleibt), kein Ersatz von
-WebRTC, kein Big-Bang-Neuschreiben. Umgebaut wird nach dem Strangler-Muster: neuer
-Pfad neben dem alten, umschalten je Sammlung, alten Pfad löschen, wenn gemessen.
+Nicht-Ziele: keine HTTP-Datenbrücke (AGENTS.md), kein Ersatz von WebRTC, kein
+Big-Bang-Neuschreiben. Umbau nach Strangler-Muster: neuer Pfad neben dem alten,
+Umschalten je Sammlung, alten Pfad löschen, wenn gemessen.
 
-## 1. Befund mit Zahlen
+## 1. Befund
 
-### 1.1 Änderungsdruck ohne Spezifikation
+### 1.1 Fix-Historie (01.09.–10.10.2026)
 
-- 781 Commits seit 01.09.2026 nur in `rxdb/src`, `src/core/rxdb`,
-  `rxdb_peer*.rs`, `shared/sync.js`.
-- 9 Feldbefund-Dokumente seit 06.09. (Erstpull, Wartungssperre, frischer Tab ohne
-  Peer, Start-Stream-Limit, Auth-Grenze …).
-- `docs/ctox-rxdb.md` (3.556 Zeilen) beginnt mit ~40 angehängten
-  Einzelfall-Abschnitten vor der eigentlichen Architektur. Die Doku ist ein
-  Änderungsprotokoll, keine Spezifikation.
+781 Commits an Sync-Pfaden, davon **366 echte Fixes** (Rest: 206 Features, 118 nur Tests,
+52 Domänen-/UI-Fixes, 39 Doku/Format/Stempel). **Die Fix-Rate steigt**: September 6,6 je
+Tag, 01.–10.10. 16,9 je Tag (05.–10.10. allein 142). 72 % der Fixes von Codex-Workern,
+7 als `[UNVERIFIED]` gelandet. Der Fix-Hotspot `store.rs` (48.808 Zeilen, 101 Fixes) lag
+bisher nicht einmal im Sync-Pfadbegriff.
 
-### 1.2 Regressionen der letzten Tage (alle gemessen, thesen)
+| Klasse | Fixes | % | Kern der Ursache |
+|---|---:|---:|---|
+| U2 Speicher/Projektionen ohne Schreibhoheit | 59 | 16,1 | mehrere Schreiber je Datum, Projektionen schreiben RxDB-Tabellen direkt, Schatten-/Kompat-Tabellen als Rückfall-Lesequellen |
+| AUTH Rechte an jeder Await-Stelle | 43 | 11,7 | Autorität wird je Handler/Fenster neu geprüft statt einmal je Verbindung festgelegt |
+| ASSET Cache-Stempel von Hand | 36 (+17 reine Bumps) | 9,8 | `?v=`/Shell-Generation global und manuell gepflegt |
+| U1 impliziter Profil-/Readiness-Vertrag | 31 | 8,5 | das Profil einer Sammlung steuert still sechs Verhalten |
+| GEN Verträge/Register doppelt von Hand | 29 | 7,9 | Befehlsinventar, Allowlisten, Schemata JS↔Rust driften |
+| LIFE Ressourcen-Lebenszyklus | 28 | 7,7 | Slots, Leases, Beobachter, Timer ohne Besitzer |
+| U4 Transport | 24 | 6,6 | Sitzungs-/Responder-Lebenszyklus unspezifiziert, Flusskontrolle beidseitig verschieden; Head-of-line nur ~6 Fälle |
+| U5 parallele Änderer | 22 | 6,0 | Integrationsreparaturen nach parallelen Merges |
+| CMD Command-Bus-Semantik | 18 | 4,9 | Idempotenz, Endzustände, Doppelzustellung |
+| OBS nachgerüstete Diagnose | 17 | 4,6 | Messwerkzeuge erst nach Vorfällen, teils falsch |
+| U3 Dokumentgröße/Wachstum | 13 | 3,6 | wirkt vor allem indirekt (Folgefehler der Größenbegrenzung) |
+| QRY Abfrage-/Invalidierungsstürme | 12 | 3,3 | gehört zu U1 |
+| SQL Verbindungen/Transaktionen | 9 | 2,5 | gehört zu U2 |
+| REPL Checkpoints, Uhren, falsche Acks | 8 | 2,2 | |
+| SCHEMA Versions-/Migrationsdrift | 6 | 1,6 | |
+| IDB IndexedDB-Journal/Cache | 6 | 1,6 | |
+| MTAB Multi-Tab | 4 | 1,1 | gehört zu U1 |
 
-| Datum | Änderung | Wirkung | Warum unbemerkt |
-|---|---|---|---|
-| 09.10. | Leads auf `syncProfile: demand-only` (dc0a0591b) | Outbound-Start 60 s Timeout, Leads doppelt geblättert, Start-Abgleich übersprungen → 145 s bis „fertig“ | App wartete auf Readiness `live`, die ein demand-only-Profil nie erreicht; kein Ladezeit-Gate |
-| 08.–10.10. | Daten wachsen mit der Kampagne | `business_commands` 177 MB, Leads Ø 80 KB, Queue-Tasks Ø 27 KB Prompt | Heiße und kalte Daten liegen in denselben Dokumenten |
-| laufend | Byte-Zähler `frameTransport.receivedBytes` | meldet 20 MB, über die Leitung gingen 1,2 MB | Zähler zählt je Sammlungseintrag dieselbe Verbindung |
+Unsicherheit ±15–20 % je Klasse (ein Klassifizierer, 75 % der Fix-Commits ohne Text).
 
-### 1.3 Was gemessen NICHT das Problem ist
+Zusätzlich vom Supervisor aus dem Betrieb belegt und hier zugeordnet: Abfragesemantik-Fallen
+(`find()` kappt bei 200, REAL- vs. TEXT-Zeitvergleich, nicht ausgewertete Löschmarken) → U1/QRY;
+Demand-Sidecar-LRU verdrängt eager Zeilen → IDB/U1; Live-SQLite per Datei kopiert/geöffnet,
+Watchdog-Neustart mitten in Wartung → LIFE/SQL; Slot-/Binary-/Asset-Drift beim Deploy →
+ASSET; falsche Zähler und Netzweg-Messfehler → OBS.
 
-- WebRTC-Rundlaufzeit 22 ms (ICE relay/udp), Server-Antwort auf lokale
-  HTTP- und Abfrageanfragen < 3 ms, Last 0,4.
-- Kaltstart direkt auf srvki1 (Chromium lokal): Leads 7,1 s, fertig 10,8 s.
-- Der DataChannel trägt asynchrone Daten problemlos. Die Probleme entstehen
-  oberhalb (Vertrag, Datenmodell, Protokollablauf) und im Netzweg einzelner
-  Clients (UDP über TURN 270–980 ms vom Owner-Netz).
+### 1.2 Die tiefsten Fix-Ketten (Beispiele)
 
-## 2. Ursachen
+- Projektionsschreiber halten den SQLite-Schreib-Lock: 13 Fixes in 33 Tagen, noch am 10.10.
+- RxDB-Hüllen nach ungültigen Projektionsschreibvorgängen repariert: 8 Fixes an einem Tag.
+- Größenlimit in der Projektion (`e87de4f50`) → Datei-Platzhalter (`88b4af3f8`) → 12
+  abgebrochene Peer-Starts (`17b12b15f`).
+- eager↔demand-Profil: ≥10 Fixes in Folge (`ee2259f7d` → … → `dc0a0591b` → `1773924d1`),
+  zuletzt 145 s Outbound-Start (thesen 10.10.).
+- #211 Steuerebenen-Rechte: 10 Fixes in 5 Tagen, je Review eine weitere Await-Stelle.
+- Shell-Stempel: 27 Fixes an 16 Tagen, zwei Tenant-Boot-Ausfälle.
 
-### U1 — Kein expliziter Zustandsvertrag
+### 1.3 Was gemessen nicht das Problem ist
 
-Eine Sammlung kann eager repliziert, demand-geladen, projiziert oder Steuerkanal
-sein. Daraus folgen Zustände (`phase`, `readiness`, `roomCircuit`, Leader/Follower,
-Query-Readiness, Demand-Fenster), deren Bedeutung je Profil verschieden ist. Jede
-App interpretiert sie selbst (Outbound: `waitForCollectionReadiness` mit 60 s,
-`withLeadQueryAuthority`, eigener Lade-Timeout 45 s). Ändert sich das Profil einer
-Sammlung, bricht jede App, die die alte Semantik angenommen hat — ohne dass ein
-Test es merkt.
+WebRTC-RTT 22 ms, Server-Antwort < 3 ms, Kaltstart lokal auf srvki1 7–11 s, 1,2 MB bis zur
+ersten Lead-Zeile. Der DataChannel trägt asynchrone Daten. Langsam ist der UDP-Weg einzelner
+Clients über TURN (Owner-Netz 270–980 ms).
 
-### U2 — Drei Speicher, Projektionsketten, doppelte Schreibwege
+## 2. Ursachen (nach Hebel geordnet)
 
-`ctox.sqlite3` (Kern) → `business-os.sqlite3` (Projektion) → `business-os-rxdb.sqlite3`
-(RxDB-Dokumente). Derselbe Zustand existiert in drei Formen; Projektions-Loops
-schreiben periodisch (Cockpit-Pass Median 41 ms, p95 2,6 s, max 8,9 s). Folgen:
-Sperren (188 „database is locked“ am 08.10., 2 in 10 h nach den Fixes), unklare
-Schreibhoheit, schwer reproduzierbare Rennen.
+- **K1 Kein Eigentümer je Datum (U2+SQL, ≈20 %)**: Derselbe Zustand lebt in `ctox.sqlite3`,
+  `business-os.sqlite3` und `business-os-rxdb.sqlite3`; mehrere Schreiber, Projektionen am
+  RxDB-Dokument-API vorbei, alte Tabellen als Lese-Rückfall. Jeder Fix behandelt einen
+  Schreibweg lokal.
+- **K2 Profil ist kein Vertrag (U1+QRY+MTAB, ≈13 % + 35 App-Kompensationen)**: Das Profil
+  einer Sammlung entscheidet still über Lesepfad, Readiness, Push, Verdrängung,
+  Checkpoint-Gültigkeit und Follower-Tab-Bedienung. Apps raten die Semantik.
+- **K3 Autorität ohne Kontext (AUTH, ≈12–16 %)**: Rechte werden an jeder Await-Stelle neu
+  geprüft; prozessweite Sperren als Notbehelf.
+- **K4 Handgepflegte globale Singletons (ASSET+GEN, ≈18 %)**: Cache-Stempel, Befehlsinventar,
+  Allowlisten, Schemata doppelt von Hand → Defekte und die größten Merge-Konflikte (→ U5).
+- **K5 Lebenszyklus und Transport ohne Zustandsmaschine (LIFE+U4+REPL, ≈16 %)**.
+- **K6 Datenmenge (U3)**: kleine direkte Klasse, aber Auslöser von Folgefehlern und der
+  Ladezeit (`business_commands` 177 MB, Leads Ø 80 KB, Prompts Ø 27 KB).
+- **K7 Prozess (U5+OBS)**: parallele Änderer, keine Gates, unvalidierte Messwerkzeuge.
 
-### U3 — Überladenes Datenmodell
+## 3. Zielbild
 
-Was eine Liste braucht (Name, Status, Zeitstempel) und was nur die Detailansicht
-oder der Agent braucht (Belege, Feldstatus, Prompts, Ergebnisse) liegt im selben
-Dokument. Abgeschlossene Befehle bleiben voll repliziert. Jede neue Funktion macht
-die heißen Pfade schwerer; Projektions-Workarounds (Listen-DTOs, Sidecar-Caches)
-behandeln Symptome je App.
+### 3.1 Profilvertrag (gegen K2)
 
-### U4 — Ein Kanal, eine Warteschlange, viele Rundreisen
+Ein Profil je Sammlung im generierten Schemavertrag, jedes mit allen sechs Verhalten
+ausdrücklich festgelegt:
 
-Steuerframes, interaktive Abfragen und Massendaten teilen einen DataChannel. Eine
-langsame `business_commands`-Abfrage (3,3 s) hielt die Lead-Seiten auf. Listen
-werden seitenweise nacheinander geholt; jede Seite ist eine Rundreise plus
-Chunk-Acks. Auf Relay-Netzen multipliziert sich das.
+| Profil | Lesepfad | „bereit“ | Push | Verdrängung | Checkpoint | Follower-Tab |
+|---|---|---|---|---|---|---|
+| `replicated` | lokal nach Vollpull | Vollpull bestätigt | lokal + Master-Ack | nie | gültig | vom Leader gespiegelt |
+| `demand` | autoritative Abfrage, Fenster-Cache | Antwort auf die konkrete Abfrage | nur Befehl/bestätigter Write | LRU nur eigene Fenster | je Fenster | eigene Abfrage über Leader |
+| `control` | Befehlsstatus | Kanal offen | nur Command-Bus | nie | Append-only | gespiegelt |
+| `stream` | flüchtige Ereignisse | Kanal offen | nein | sofort | keiner | eigener Abonnent |
 
-### U5 — Keine Messbudgets, parallele Änderer
+Datenzustand ist dreiwertig: `known` / `unknown` / `stale` — „leer“ und „noch nicht
+geladen“ sind nie dasselbe. Apps nutzen nur `ctx.data.ready/read/write/subscribe`; ein
+statischer Wächter verbietet das Auswerten von `phase`, `readiness`, `roomCircuit` oder
+Query-Readiness in App-Code. Abfragesemantik (Limits, Zeitvergleiche, Löschmarken) ist Teil
+des Vertrags und getestet.
 
-Kein Build misst Kaltstart, Neuladen, Abfrage- oder Schreiblatenz gegen echte
-Datenmengen. Mehrere Worker (Codex/Workjet) ändern gleichzeitig am Sync; jeder Fix
-ist lokal korrekt, die Summe regrediert.
+### 3.2 Ein Eigentümer je Datum, ein Projektionsschreiber (gegen K1)
 
-## 3. Zielbild v3
+Eigentum je Sammlung und Feld im Schemavertrag; der native Peer lehnt Schreibvorgänge von
+Nicht-Eigentümern endgültig ab; der Browser schreibt nie servereigene Felder. Genau ein
+gebündelter Projektionsschreiber schreibt RxDB-Tabellen, und zwar über das
+RxDB-Dokument-API. Schatten- und Kompat-Tabellen werden als Lesequellen stillgelegt. Eine
+langlebige Schreibverbindung mit IMMEDIATE-Transaktionen. Umgesetzt Sammlung für Sammlung,
+`business_commands` zuerst.
 
-### 3.1 Sync-Vertrag (Spezifikation statt Implementierungsdetail)
+### 3.3 Sitzungskontext mit Fähigkeiten (gegen K3)
 
-Jede Sammlung hat genau ein Profil, deklariert im Schema-Vertrag
-(`src/core/rxdb/tests/fixtures/*.json`, beidseitig generiert):
+Autorität wird je Verbindungsgeneration einmal in einen unveränderlichen Kontext aufgelöst.
+Handler und Fenster deklarieren ihren Bedarf; das Framework prüft bei Annahme und bei
+Veröffentlichung; Cache-Schlüssel enthalten den Rechte-Digest. Keine prozessweiten Sperren.
 
-| Profil | Datenfluss | „bereit“ heißt | Schreiben |
-|---|---|---|---|
-| `replicated` | vollständig, Push + Pull | erster vollständiger Pull bestätigt | lokal sofort, bestätigt mit Master-Ack |
-| `demand` | nur abgefragte Fenster | erste autoritative Antwort auf die konkrete Abfrage | nur über Befehl oder bestätigten Write |
-| `control` | Befehle/Status, append-only | Steuerkanal offen | ausschließlich über Command-Bus |
-| `stream` (neu) | Ereignisse ohne Historie (Präsenz, Fortschritt) | Kanal offen | nicht persistiert im Browser |
+### 3.4 Generiert statt gepflegt (gegen K4)
 
-Apps sehen genau eine Schnittstelle: `ctx.data.ready(collection, query?)`,
-`ctx.data.read(...)`, `ctx.data.write(...)`, `ctx.data.subscribe(...)` mit der
-obigen Semantik. Kein App-Code wertet `phase`, `readiness`, `roomCircuit` oder
-Query-Readiness direkt aus. Ein statischer Wächter verbietet das (wie
-`assert-rxdb-only`).
+Ein beim Build erzeugter, inhaltsgehashter Modulgraph (Import-Map) ersetzt jedes `?v=` und
+jeden Generationsstempel. Befehlsinventar, Allowlisten und Schemadarstellungen werden aus
+einem Register erzeugt; CI prüft nur noch „generiert = eingecheckt“.
 
-### 3.2 Datenklassen
+### 3.5 Lebenszyklus und Transport (gegen K5)
 
-- **Listenfelder** (heiß, klein): repliziert oder als serverseitige Projektion.
-- **Detail/Belege** (kalt, groß): `demand`, je Datensatz nachgeladen.
-- **Prompts, Ergebnisse, Verläufe abgeschlossener Arbeit**: nicht im Browser,
-  nur auf Abruf.
-- **Aufbewahrung**: abgeschlossene `business_commands` nach N Tagen aus der
-  Replikation (Archiv bleibt im Kern abrufbar).
+Strukturierte Nebenläufigkeit: jeder Slot, jede Lease, jeder Beobachter und Timer gehört
+einer Verbindungsgeneration oder einem View-Scope und endet mit ihm. Eine spezifizierte
+Zustandsmaschine für WebRTC-Sitzung und Responder, ein gemeinsames Annahme- und
+Flusskontrollprotokoll für beide Seiten, getrennte Spuren (`control`, `interactive`, `bulk`)
+als eigene DataChannels, gebündelte Abfragen statt Seiten-Rundreisen, TURN über TCP/TLS 443
+als Rückfall, Sitzungs-/ICE-Wiederaufnahme beim Neuladen.
 
-Budget: kein repliziertes Dokument > 8 KB, keine eager-Sammlung > 2 MB im
-Neuladen-Pfad einer App.
+### 3.6 Datenklassen (gegen K6)
 
-### 3.3 Eine Wahrheit, ein Schreiber je Datum
+Listenfelder repliziert oder serverseitig projiziert; Belege, Feldstatus, Prompts und
+Ergebnisse `demand`; abgeschlossene Befehle nach Frist aus der Replikation (Archiv im Kern).
+Budget: kein repliziertes Dokument > 8 KB.
 
-Jedes Datum hat genau einen Eigentümer-Speicher. Projektionen werden zu einem
-einzigen Projektions-Schreiber mit Batching und fester Taktung zusammengefasst;
-keine zweite Kopie in einer Zwischendatenbank für Daten, die nur der Browser
-liest. Ziel: Projektionspass p95 < 200 ms, null „database is locked“.
+### 3.7 Beobachtbarkeit mit geprüften Instrumenten (gegen K7)
 
-### 3.4 Transport
-
-- **Getrennte Spuren**: je ein DataChannel (eigener SCTP-Stream, kein
-  Head-of-line) für `control`, `interactive` (Abfragen der sichtbaren App) und
-  `bulk` (Pull, Dateien). Die sichtbare App hat Vorrang vor Hintergrund-Apps.
-- **Gebündelte Abfragen**: eine Liste in einer Anfrage mit Server-Streaming
-  statt seitenweise Rundreisen.
-- **Netzwege**: TURN über TCP/TLS 443 als automatischer Rückfall, wenn der
-  UDP-Weg schlecht ist (bleibt WebRTC, keine HTTP-Daten).
-- **Warmstart**: Sitzungs- und ICE-Wiederaufnahme, damit ein Neuladen nicht den
-  vollen Aufbau zahlt.
-
-### 3.5 Beobachtbarkeit
-
-Ein Startprotokoll je Ladevorgang (Phasen der Shell, erste Antwort je Sammlung,
-App bereit) in `CTOX_BUSINESS_OS_STATUS`; echte Byte-Zähler je Verbindung und
-Spur; serverseitig Latenz-Histogramme je RPC. Das ist die Datengrundlage der
-Gates in §4.
+Startprotokoll je Ladevorgang, Byte-Zähler je Verbindung und Spur, RPC-Latenzen
+serverseitig. Jedes Instrument hat einen Selbsttest gegen eine unabhängige Messung (Beispiel:
+`frameTransport.receivedBytes` meldete 20 MB bei 1,2 MB auf der Leitung).
 
 ## 4. Messbudgets (Gates)
 
-Benchmark-Datensatz mit thesen-Größe (850 Leads à 80 KB, 6.000 Befehle, 400
-Queue-Tasks, 2.000 Chats) als Fixture; gemessen lokal auf dem Server und über
-einen gedrosselten Relay-Pfad (300 ms RTT).
+Benchmark-Fixture in thesen-Größe (850 Leads à 80 KB, 6.000 Befehle, 400 Queue-Tasks, 2.000
+Chats); gemessen lokal und über gedrosselte Relay-Pfade mit 300 ms und 600 ms RTT.
 
 | Messgröße | Budget |
 |---|---|
-| Neuladen, App interaktiv (Daten sichtbar) | ≤ 3 s lokal, ≤ 6 s Relay |
-| Neuladen, App „fertig“ | ≤ 6 s lokal, ≤ 12 s Relay |
-| Kaltstart frischer Browser, App fertig | ≤ 12 s lokal, ≤ 30 s Relay |
+| Neuladen, Daten sichtbar | ≤ 3 s lokal, ≤ 6 s Relay 300 ms |
+| Neuladen, App fertig | ≤ 6 s lokal, ≤ 12 s Relay 300 ms |
+| Kaltstart frischer Browser, App fertig | ≤ 12 s lokal, ≤ 30 s Relay 300 ms |
 | Abfrage p95 (interaktive Spur) | ≤ 300 ms lokal |
 | Schreib-Bestätigung p95 | ≤ 1 s |
-| Bytes bis „App interaktiv“ | ≤ 2 MB |
+| Bytes bis „Daten sichtbar“ | ≤ 2 MB |
+| Browser-Heap / IndexedDB nach Neuladen | festgelegt in S0 nach Ist-Messung |
+| Server-CPU je Projektionspass, Schreibverstärkung | festgelegt in S0 |
 | „database is locked“ | 0 je 24 h |
 
-Jedes Release und jede Sync-Änderung zeigt die Messung vorher/nachher. Wer ein
-Budget reißt, merged nicht. Vor jedem Tenant-Deploy läuft dieselbe Messung live.
+Jede Sync-Änderung belegt die Messung vorher/nachher im PR. Wer ein Budget reißt, merged
+nicht. Vor jedem Tenant-Deploy dieselbe Messung live (welsch nicht vor Mo 12.10. 13:00).
 
-## 5. Vorgehen in Stufen
+## 5. Stufen
 
-Jede Stufe ist eigenständig auslieferbar, endet mit Messung und lässt das System
-in einem besseren, nie in einem halben Zustand.
+| Stufe | Inhalt | Gate / Ergebnis | verhindert |
+|---|---|---|---|
+| **S0 Messfundament** | Benchmark-Fixture, Mess-Harness im Repo, Gate im Release, geprüfte Instrumente, Startprotokoll | Ist-Werte aller Budgets; Release blockiert bei Regression | K7 |
+| **S1 Generiert statt gepflegt** | Modulgraph mit Inhaltshash, generierte Inventare/Allowlisten/Schemata | keine `?v=`-Commits mehr; Konfliktquelle weg | K4 (≈18 %) |
+| **S2 Profilvertrag + Eigentum deklariert** | Profile §3.1 mit sechs Verhalten und Tri-State im Vertrag; Eigentum je Feld deklariert; `ctx.data`-API; Wächter; Apps migriert (Outbound, Crew, Mail, Sellify); **ein Schreiber für `business_commands`** vorgezogen | App-eigene Readiness-Logik gelöscht; 0 Sperren durch `business_commands` | K2 (≈13 %), Teil K1 |
+| **S3 Sitzungskontext** | Autorität je Verbindungsgeneration, deklarierter Bedarf, Rechte-Digest in Cache-Schlüsseln | prozessweite Sperren entfernt | K3 (≈12 %) |
+| **S4 Ein Projektionsschreiber** | Sammlung für Sammlung auf Eigentümer + Einzel-Schreiber, Schattentabellen stilllegen, Datenklassen §3.6 | 0 „database is locked“, Projektionspass im Budget | K1 (≈20 %), K6 |
+| **S5 Lebenszyklus und Transport** | Strukturierte Nebenläufigkeit, Sitzungszustandsmaschine, Spuren, gebündelte Abfragen, TURN-TCP, Warmstart | Relay-Budgets erfüllt | K5 (≈16 %) |
+| **S6 Doku als Spezifikation** | `ctox-rxdb.md` neu: Vertrag, Architektur, Protokoll; Einzelfälle ins Änderungsprotokoll | Doku = Vertrag | — |
 
-| Stufe | Inhalt | Ergebnis / Gate |
+Begründung: S1 ist billig, mechanisch und nimmt die größten Konfliktquellen weg (wirkt
+sofort gegen U5). S2 und S4 hängen zusammen (das Profil legt fest, wer je Sammlung schreibt)
+und laufen nach Strangler Sammlung für Sammlung; S3 liegt daneben, weil Autorität und
+Eigentum Deklarationen im selben Vertrag sind. S5 zuletzt, weil Transport heute nur ~7 % der
+Fixes verursacht und von weniger Daten (S4) profitiert.
+
+IndexedDB-Bestände werden bei Vertragswechsel verworfen und neu geladen — erst nachdem lokal
+gestufte, noch nicht synchronisierte Schreibvorgänge abgeflossen sind.
+
+## 6. Arbeitsweise und Durchsetzung (aktiv seit 10.10.2026)
+
+- **Ruleset auf `main`** („main: CTOX Sync v3 guard“): nur per PR, Pflicht-Check
+  `sync-scope-guard`, kein Force-Push, kein Löschen, keine Ausnahmen. Alle Agenten pushen
+  über dasselbe Admin-Konto; deshalb erzwingt nur das Ruleset, nicht CODEOWNERS.
+- **`sync-scope-guard`**: PRs auf Sync-Kern-Pfaden brauchen ein Label `sync-v3:S<n>`, das
+  der Owner vergibt. Offene Entscheidung: `store.rs` (Fix-Hotspot) aufnehmen, sobald S2 die
+  Sync-Teile daraus herausgelöst hat.
+- **Ein Umsetzungsstrang** im Sync-Kern; andere Stränge (Crew-Cockpit-Projektionen, Workjet
+  Actions, Supervisor-Journale) melden neue Sammlungen mit Profil nach §3.1 an und legen
+  keine neuen Projektionsketten ohne S4-Eintrag an.
+- **Keine App-Workarounds** für Sync-Symptome; bestehende (Outbound-Zwischenspeicher,
+  App-Readiness) werden in S2 zurückgebaut.
+- **Feldbefunde** werden Benchmark-Fall + reproduzierender Test, kein neuer Doku-Abschnitt.
+- **Fortschrittswache** alle 2 Stunden (geplante Aufgabe `ctox-sync-v3-wache`) prüft Stufe,
+  Commits ohne Label, Stillstand des Umsetzungsstrangs und greift über den Supervisor ein.
+
+## 7. Laufende Arbeiten und Zusammenführung
+
+| Arbeit | Bezug | Vorgehen |
 |---|---|---|
-| **S0 Messfundament** (zuerst) | Benchmark-Fixture, Mess-Harness (`measure-*`-Skripte als Repo-Werkzeug), Gate im Release-Skript, echte Zähler, Startprotokoll | Ist-Werte aller Budgets dokumentiert; Release blockiert bei Regression |
-| **S1 Vertrag** | Profil-Tabelle §3.1 im Schema-Vertrag, `ctx.data.ready/read/write/subscribe` in Shell + Runtime, Wächter gegen direkte Zustandsauswertung | Outbound, Crew, Mail, Sellify auf neue API migriert; App-eigene Readiness-Logik gelöscht |
-| **S2 Datenklassen** | Listenprojektion serverseitig, Belege/Prompts `demand`, Aufbewahrung für Befehle | Bytes bis „interaktiv“ ≤ 2 MB; Dokumentgrößen-Budget erzwungen |
-| **S3 Transport** | Spuren, gebündelte Abfragen, TURN-TCP-Rückfall, Warmstart | Relay-Budgets erfüllt |
-| **S4 Ein Schreiber** | Projektionskette zusammenführen, Schreibhoheit je Datum | 0 Sperren, Projektionspass p95 < 200 ms |
-| **S5 Doku als Spezifikation** | `ctox-rxdb.md` neu geschnitten: Vertrag, Architektur, Protokoll; Einzelfälle in ein Änderungsprotokoll | Doku beschreibt den Ist-Vertrag vollständig |
+| Codex „Architektur Rework“ (6 Etappen: gemeinsamer Sync-Kern Workjet/CTOX) | S2–S5 | wird auf diese RFC ausgerichtet; seine Etappen werden den Stufen zugeordnet |
+| Crew-Cockpit-Projektionen, Supervisor-SDK-Journale (#570, #578) | K1/S4 | keine weiteren Projektionswege ohne S4 |
+| ctox#576 main-CI-Reparatur (SQLITE_SCHEMA in Katalogprojektion) | S0 | Label `sync-v3:S0`; Lesefehler 17 als wiederholbar behandeln (Statement neu vorbereiten), keine neue Projektion |
+| PRs #85, #71, #31, #60, #481, #476 | S2/S4 | Owner ordnet je PR eine Stufe zu oder stellt zurück |
+| Workjet Actions (neue Sammlungen Build-Knoten, Jobs, Leases) | §3.1 | Profile `control`/`stream`/`demand` von Beginn an |
+| Präzedenzfälle | S4/§3.6 | Knowledge-Stream (Parquet on demand), Demand-Sidecar-Fix #243 |
 
-Reihenfolge-Begründung: S0 macht jede weitere Stufe messbar. S1 beseitigt die
-Klasse von Regressionen, die heute am teuersten ist (App bricht bei
-Profiländerung). S2 vor S3, weil weniger Bytes jede Transportfrage entschärfen.
-S4 zuletzt, weil es den Kern berührt und den größten Testaufwand hat.
+## 8. Offene Entscheidungen
 
-## 6. Arbeitsweise (gegen die Regressionsfalle)
-
-1. **Ein Owner** für Vertrag und Protokoll. Änderungen daran nur per RFC mit
-   Messbeleg.
-2. **Keine App-Workarounds** für Sync-Symptome ohne Ticket an den Sync-Owner;
-   App-seitige Zwischenlösungen (z. B. Outbound-Zwischenspeicher) werden in S1/S2
-   zurückgebaut.
-3. **Ein Sync-Worker zur Zeit** im Kern (`rxdb/src`, `src/core/rxdb`,
-   `rxdb_peer*`, `sync.js`); parallele Worker nur in getrennten Stufen.
-4. **Feldbefunde** gehen als Messung + reproduzierender Test in den
-   Benchmark, nicht als neuer Abschnitt oben in die Doku.
-5. **Jede Stufe endet mit Live-Messung** auf thesen und welsch.
-
-## 7. Offene Entscheidungen
-
-- Aufbewahrungsfrist für abgeschlossene Befehle im Browser (Vorschlag 7 Tage).
-- TURN über TCP/TLS 443 für alle Tenants freigeben (Kosten Cloudflare-TURN).
-- Wer ist Sync-Owner (eine Sitzung/ein Worker-Strang, nicht wechselnd)?
-- Migration bestehender IndexedDB-Bestände: verwerfen und neu laden (einfach)
-  oder migrieren (aufwendig) — Vorschlag: verwerfen, da alles autoritativ auf der
-  Instanz liegt.
-- Zeitrahmen: S0 ~1 Woche, S1 ~2 Wochen, S2 ~2 Wochen, S3 ~2 Wochen, S4 ~3
-  Wochen, S5 begleitend.
+- Aufbewahrungsfrist abgeschlossener Befehle im Browser (Vorschlag 7 Tage).
+- TURN über TCP/TLS 443 für alle Tenants (Kosten Cloudflare-TURN).
+- `store.rs` in den Guard-Pfad aufnehmen (nach S2).
+- Zeitrahmen: S0 1 Woche, S1 1 Woche, S2 3 Wochen, S3 2 Wochen (parallel zu S4-Beginn),
+  S4 3–4 Wochen, S5 2–3 Wochen, S6 begleitend.
