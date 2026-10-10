@@ -13847,7 +13847,7 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
-  const routeAuthority = action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1'
+  const routeAuthority = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2'].includes(action)
     ? { sync: state.sync, instance: boundedWorkjetProjectText(
       state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
     ) } : null;
@@ -13982,7 +13982,7 @@ async function workjetProjectControl(request = {}) {
   // Reserve a delivery margin inside Workjet's 30-second desktop call.
   const listDeadline = action === 'project.list'
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
-  const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
+  const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
@@ -13995,7 +13995,7 @@ async function workjetProjectControl(request = {}) {
     ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
     : await acquisition;
 
-  if (action === 'project.supervisor.route.read.v1' || action === 'project.supervisor.route.capabilities.v1') {
+  if (['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2'].includes(action)) {
     const requestSync = routeAuthority.sync;
     const instance = routeAuthority.instance;
     return requestSupervisorRoute(
