@@ -336,7 +336,10 @@ pub fn install_kimi_subscription(
             .iter_mut()
             .find(|account| account.id == account_id)
         {
-            *account = config.clone();
+            // Apply only credentials to the latest saved account policy.
+            account.access_token_secret = config.access_token_secret.clone();
+            account.refresh_token_secret = config.refresh_token_secret.clone();
+            account.state_secret = config.state_secret.clone();
         } else {
             runtime.kimi_subscription_accounts.push(config.clone());
         }
@@ -1149,7 +1152,8 @@ data: [DONE]
             account.disabled = true;
             account.priority = -10;
             account.weight = 3;
-            account.models.clear();
+            // Observed in the live Kimi catalog, not a synthesized model ID.
+            account.models = vec!["k3".to_owned()];
         })
         .unwrap();
         let before = load_provider_integration_config(root.path()).unwrap();
