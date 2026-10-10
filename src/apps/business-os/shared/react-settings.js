@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261010-shell-v2-audience-denial-fallback';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261010-shell-v2-project-execution-policy';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

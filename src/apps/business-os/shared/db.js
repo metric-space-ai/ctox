@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-audience-denial-fallback';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-project-execution-policy';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
