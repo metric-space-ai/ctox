@@ -33,7 +33,51 @@ def read(path):
     return command("greppy", "rg", "--no-heading", "--no-line-number", "^", str(path))
 
 def load(path):
-    return json.loads(read(path))
+    value = json.loads(read(path))
+    if not isinstance(value, dict) or value.get("kind") != "terminal-inventory-reference-v1":
+        return value
+    name = value.get("file", "")
+    if not re.fullmatch(r"terminal-inventory/[a-f0-9]{64}[.]json", name):
+        raise ValueError("Unsafe terminal inventory reference")
+    raw_path = evidence_storage.ROOT / name
+    row = evidence_storage.locator(raw_path)
+    if row is None or row["sha256"] != value.get("sha256") or int(row["bytes"]) != value.get("bytes"):
+        raise ValueError("Terminal inventory reference checksum mismatch")
+    snapshot = json.loads(read(raw_path))
+    if (sha(snapshot) != Path(name).stem or
+            snapshot.get("collected_at") != value.get("collected_at") or
+            len(snapshot.get("prs", [])) != value.get("pr_count") or
+            any(not terminal(pr) for pr in snapshot["prs"])):
+        raise ValueError("Terminal inventory reference metadata mismatch")
+    return snapshot
+
+def save_inventory(base, snapshot):
+    """Keep full raw inventories on gpu3 and only verified references locally."""
+    if any(not terminal(pr) for pr in snapshot["prs"]):
+        raise ValueError("Active PR in terminal inventory")
+    raw_path = evidence_storage.ROOT / "terminal-inventory" / (sha(snapshot) + ".json")
+    save_raw(raw_path, snapshot)
+    row = evidence_storage.locator(raw_path)
+    if row is None:
+        raise ValueError("Missing verified terminal inventory receipt")
+    reference = dict(kind="terminal-inventory-reference-v1", file=evidence_storage.relative(raw_path),
+                     bytes=int(row["bytes"]), sha256=row["sha256"],
+                     collected_at=snapshot["collected_at"], pr_count=len(snapshot["prs"]))
+    current = base / "terminal-evidence/current.json"
+    if current.exists():
+        previous_text = read(current)
+        previous = json.loads(previous_text)
+        if previous.get("kind") != "terminal-inventory-reference-v1":
+            # Never replace a legacy local raw file before an exact remote SHA match.
+            original_sha = hashlib.sha256(current.read_bytes()).hexdigest()
+            preserved = evidence_storage.ROOT / "terminal-inventory" / ("legacy-" + original_sha + ".json")
+            save_raw(preserved, previous)
+            receipt = evidence_storage.locator(preserved)
+            if receipt is None or receipt["sha256"] != original_sha:
+                raise ValueError("Legacy inventory bytes must be verified/offloaded before replacement")
+    save(base / "terminal-evidence/snapshots" / (sha(snapshot) + ".json"), reference)
+    save(current, reference)
+    return reference
 
 def save(path, value):
     if evidence_storage.relative(path) is not None:
@@ -111,7 +155,7 @@ def collect(base, repositories=REPOS):
     for url in sorted(extra):
         # Existing external registry cases only. Do not inventory unrelated repositories.
         pr = json.loads(command("gh", "pr", "view", url, "--json",
-            "number,title,url,state,baseRefName,headRefName,headRefOid,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
+            "number,title,url,state,baseRefName,headRefName,headRefOid,createdAt,closedAt,mergedAt,mergeCommit,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
         if terminal(pr):
             pr.update(repository=url.split("github.com/")[1].split("/pull/")[0],
                       project="External registry", snapshot_at=now())
@@ -120,9 +164,7 @@ def collect(base, repositories=REPOS):
     current_path = base / "terminal-evidence/current.json"
     previous = load(current_path) if current_path.exists() else {}
     snapshot["terminal_event_history"] = retain_terminal_history(previous, gathered)
-    destination = base / "terminal-evidence/snapshots" / (sha(snapshot) + ".json")
-    save(destination, snapshot)
-    save(base / "terminal-evidence/current.json", snapshot)
+    save_inventory(base, snapshot)
     print("Saved", len(gathered), "terminal PRs", flush=True)
     return snapshot
 
@@ -613,8 +655,8 @@ def bootstrap(base):
     current_path = base / "terminal-evidence/current.json"
     previous = load(current_path) if current_path.exists() else {}
     history = retain_terminal_history(previous, prs)
-    save(current_path, dict(version=1, collected_at=now(), repositories=list(REPOS),
-                            prs=prs, terminal_event_history=history))
+    save_inventory(base, dict(version=1, collected_at=now(), repositories=list(REPOS),
+                              prs=prs, terminal_event_history=history))
     return build(base)
 
 def main():

@@ -19,6 +19,17 @@ class DailyTests(unittest.TestCase):
         self.reader = patch.object(report, "read", lambda p: Path(p).read_text())
         self.reader.start()
         self.addCleanup(self.reader.stop)
+        # Storage transport is covered separately; these tests isolate terminal reconciliation.
+        self.inventory_writer = patch.object(report, "save_inventory",
+            lambda base, snapshot: report.save(base / "terminal-evidence/current.json", snapshot))
+        self.inventory_writer.start()
+        self.addCleanup(self.inventory_writer.stop)
+        self.storage_root = patch.object(report.evidence_storage, "ROOT", self.base / "raw")
+        self.storage_root.start()
+        self.addCleanup(self.storage_root.stop)
+        self.raw_writer = patch.object(report, "save_raw", lambda path, value: report.save(path, value))
+        self.raw_writer.start()
+        self.addCleanup(self.raw_writer.stop)
         self.since = daily.instant(daily.START)
 
     def change(self, number, state="closed", closed=daily.START, head="a" * 40):
