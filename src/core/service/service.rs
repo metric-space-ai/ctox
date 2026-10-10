@@ -17671,6 +17671,18 @@ fn route_external_messages_with_priority_dispatch(
         {
             continue;
         }
+        // A reply without a file of its own is about the file earlier in the
+        // thread: hand those attachments to the prompt and the readable roots.
+        let mut message = message;
+        if message.channel == "email" && !email_metadata_has_attachments(&message.metadata) {
+            if let Ok(conn) = channels::open_channel_db(&crate::paths::core_db(root)) {
+                add_thread_attachments_if_missing(
+                    &conn,
+                    &message.message_key,
+                    &mut message.metadata,
+                );
+            }
+        }
         let prompt = if let Some(inbound_key) = founder_rework_inbound_key.as_deref() {
             render_founder_communication_rework_execution_prompt(
                 root,
@@ -19358,6 +19370,14 @@ fn render_founder_rework_prompt_for_queue_job(root: &Path, job: &mut QueuedPromp
     let prompt = render_founder_rework_prompt(root, &job.goal, &inbound_key, &job.prompt);
     job.preview = preview_text(&prompt);
     job.prompt = prompt;
+    // The turn may only read the attachment directories named in its metadata.
+    if let Some(attachments) = load_inbound_email_metadata(root, &inbound_key)
+        .and_then(|metadata| metadata.get("attachments").cloned())
+    {
+        if let Some(object) = job.queue_task_metadata.as_object_mut() {
+            object.insert("attachments".to_string(), attachments);
+        }
+    }
 }
 
 fn render_founder_rework_prompt(
@@ -19443,7 +19463,94 @@ fn load_inbound_email_metadata(root: &Path, inbound_message_key: &str) -> Option
             |row| row.get(0),
         )
         .ok()?;
-    serde_json::from_str(&raw).ok()
+    let mut metadata: Value = serde_json::from_str(&raw).ok()?;
+    add_thread_attachments_if_missing(&conn, inbound_message_key, &mut metadata);
+    Some(metadata)
+}
+
+fn email_metadata_has_attachments(metadata: &Value) -> bool {
+    metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .is_some_and(|list| !list.is_empty())
+}
+
+/// A reply in a thread usually carries no file of its own; the file it is about
+/// sits on an earlier mail ("Die Firmen stimmen nicht, bitte die Excel
+/// nochmal", 10.10.2026). When the mail has no attachments, the stored
+/// attachments of earlier inbound mails in the same thread are handed over,
+/// newest mail first, each marked with the mail it came from.
+fn add_thread_attachments_if_missing(
+    conn: &rusqlite::Connection,
+    message_key: &str,
+    metadata: &mut Value,
+) {
+    if email_metadata_has_attachments(metadata) || !metadata.is_object() {
+        return;
+    }
+    let attachments = earlier_thread_attachments(conn, message_key);
+    if attachments.is_empty() {
+        return;
+    }
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("attachments".to_string(), Value::Array(attachments));
+    }
+}
+
+fn earlier_thread_attachments(conn: &rusqlite::Connection, message_key: &str) -> Vec<Value> {
+    let Ok(mut stmt) = conn.prepare(
+        r#"
+        SELECT earlier.subject, earlier.external_created_at, earlier.metadata_json
+        FROM communication_messages current
+        JOIN communication_messages earlier
+          ON earlier.account_key = current.account_key
+         AND earlier.thread_key = current.thread_key
+         AND earlier.message_key <> current.message_key
+        WHERE current.message_key = ?1
+          AND current.channel = 'email'
+          AND earlier.channel = 'email'
+          AND earlier.direction = 'inbound'
+          AND earlier.has_attachments = 1
+          AND TRIM(current.thread_key) <> ''
+          AND earlier.observed_at <= current.observed_at
+        ORDER BY earlier.observed_at DESC
+        LIMIT 5
+        "#,
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![message_key], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    });
+    let Ok(rows) = rows else {
+        return Vec::new();
+    };
+    let mut attachments = Vec::new();
+    for (subject, created_at, raw) in rows.flatten() {
+        let Ok(earlier) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        for attachment in earlier
+            .get("attachments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let mut attachment = attachment.clone();
+            if let Some(object) = attachment.as_object_mut() {
+                object.insert(
+                    "fromEarlierMail".to_string(),
+                    serde_json::json!({ "subject": subject, "receivedAt": created_at }),
+                );
+            }
+            attachments.push(attachment);
+        }
+    }
+    attachments
 }
 
 fn load_founder_inbound_context_for_rework(
@@ -23173,7 +23280,14 @@ fn render_inbound_attachments(metadata: &Value) -> String {
     else {
         return String::new();
     };
-    let mut lines = vec!["Anhaenge dieser Mail:".to_string()];
+    let from_thread = list
+        .iter()
+        .any(|attachment| attachment.get("fromEarlierMail").is_some());
+    let mut lines = vec![if from_thread {
+        "Anhaenge aus diesem Mail-Verlauf (diese Mail selbst hat keinen Anhang):".to_string()
+    } else {
+        "Anhaenge dieser Mail:".to_string()
+    }];
     for attachment in list {
         if attachment.get("isInline").and_then(Value::as_bool) == Some(true) {
             continue;
@@ -23186,8 +23300,19 @@ fn render_inbound_attachments(metadata: &Value) -> String {
             .get("sizeBytes")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        let origin = attachment
+            .get("fromEarlierMail")
+            .map(|earlier| {
+                let subject = earlier.get("subject").and_then(Value::as_str).unwrap_or("");
+                let received = earlier
+                    .get("receivedAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                format!(" aus der Mail \"{subject}\" vom {received}")
+            })
+            .unwrap_or_default();
         match attachment.get("path").and_then(Value::as_str) {
-            Some(path) => lines.push(format!("- {name} ({size} Bytes): {path}")),
+            Some(path) => lines.push(format!("- {name} ({size} Bytes{origin}): {path}")),
             None => lines.push(format!(
                 "- {name}: {}",
                 attachment
@@ -37990,6 +38115,10 @@ Business OS command:
             "- Recherche-Test.xlsx (1691 Bytes): {}",
             attachment_path.display()
         )));
+        assert_eq!(
+            inbound_attachment_readable_roots(&leased.queue_task_metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
     }
 
     #[test]
@@ -45904,6 +46033,72 @@ Use shell tools to create or update these files."
             inbound_attachment_readable_roots(&metadata),
             vec![attachment_path.parent().unwrap().to_path_buf()]
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_reply_without_a_file_gets_the_attachment_of_its_thread() {
+        let root = temp_root("ctox-thread-attachment-fallback");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        let attachment_path = root.join("raw/attachments/m1/Recherche-Test.xlsx");
+        let insert = |key: &str,
+                      subject: &str,
+                      body: &str,
+                      observed: &str,
+                      metadata: Value,
+                      has: i64| {
+            conn.execute(
+                r#"INSERT INTO communication_messages (
+                    message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                    sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                    bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                    trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                    metadata_json
+                ) VALUES (?1, 'email', 'email:crew@example.test', 'thread-m1', ?1, 'inbound', 'INBOX',
+                    'Owner', 'owner@example.test', '[]', '[]', '[]', ?2, ?2, ?3, '', '', 'normal',
+                    'received', 0, ?6, ?4, ?4, ?5)"#,
+                rusqlite::params![key, subject, body, observed, metadata.to_string(), has],
+            )
+            .expect("insert mail");
+        };
+        insert(
+            "email:crew@example.test::inbox::m1",
+            "Recherche",
+            "Bitte die Firmen aus der Excel recherchieren.",
+            "2026-10-09T10:28:26Z",
+            serde_json::json!({"attachments": [{
+                "name": "Recherche-Test.xlsx", "sizeBytes": 1691,
+                "path": attachment_path.display().to_string()
+            }]}),
+            1,
+        );
+        insert(
+            "email:crew@example.test::inbox::m2",
+            "Re: Recherche",
+            "Die Firmen stimmen nicht, bitte die Excel nochmal.",
+            "2026-10-10T10:17:03Z",
+            serde_json::json!({}),
+            0,
+        );
+        drop(conn);
+
+        let metadata = load_inbound_email_metadata(&root, "email:crew@example.test::inbox::m2")
+            .expect("reply metadata");
+        let text = render_inbound_attachments(&metadata);
+        assert!(text.contains("Anhaenge aus diesem Mail-Verlauf"));
+        assert!(text.contains(&format!(
+            "- Recherche-Test.xlsx (1691 Bytes aus der Mail \"Recherche\" vom 2026-10-09T10:28:26Z): {}",
+            attachment_path.display()
+        )));
+        assert_eq!(
+            inbound_attachment_readable_roots(&metadata),
+            vec![attachment_path.parent().unwrap().to_path_buf()]
+        );
+        // A mail with its own file keeps exactly that file.
+        let own = load_inbound_email_metadata(&root, "email:crew@example.test::inbox::m1")
+            .expect("original metadata");
+        assert!(render_inbound_attachments(&own).starts_with("Anhaenge dieser Mail:"));
         let _ = std::fs::remove_dir_all(root);
     }
 
