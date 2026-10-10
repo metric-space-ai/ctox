@@ -1373,12 +1373,30 @@ mod tests {
         };
 
         for (reason, code) in [
-            (AccountRoutingError::Store(CooldownStoreError::Read), "gateway_account_state_unavailable"),
-            (AccountRoutingError::Store(CooldownStoreError::Write), "gateway_account_state_unavailable"),
-            (AccountRoutingError::Store(CooldownStoreError::InvalidRecord), "gateway_account_state_unavailable"),
-            (AccountRoutingError::Selection(AccountSelectionError::State), "gateway_account_state_unavailable"),
-            (AccountRoutingError::Selection(AccountSelectionError::NotFound), "gateway_account_not_found"),
-            (AccountRoutingError::Selection(AccountSelectionError::Unavailable), "gateway_account_unavailable"),
+            (
+                AccountRoutingError::Store(CooldownStoreError::Read),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Store(CooldownStoreError::Write),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Store(CooldownStoreError::InvalidRecord),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Selection(AccountSelectionError::State),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Selection(AccountSelectionError::NotFound),
+                "gateway_account_not_found",
+            ),
+            (
+                AccountRoutingError::Selection(AccountSelectionError::Unavailable),
+                "gateway_account_unavailable",
+            ),
         ] {
             let response = pool_error_response(ClaudeAccountPoolError::Routing(reason));
             assert_eq!(response.status(), 503);
@@ -1386,7 +1404,10 @@ mod tests {
             assert_eq!(body["error"]["source"], "gateway");
             assert_eq!(body["error"]["code"], code);
             assert!(body["error"].get("retry_at_ms").is_none());
-            assert!(!body["error"]["message"].as_str().unwrap().contains("Sign in"));
+            assert!(!body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Sign in"));
         }
     }
 
@@ -1404,7 +1425,10 @@ mod tests {
         assert_eq!(body["error"]["code"], "gateway_account_cooldown");
         assert_eq!(body["error"]["source"], "gateway");
         assert_eq!(body["error"]["retry_at_ms"], 1_791_645_000_000_i64);
-        assert!(!body["error"]["message"].as_str().unwrap().contains("denied"));
+        assert!(!body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("denied"));
     }
 
     #[test]
