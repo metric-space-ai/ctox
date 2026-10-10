@@ -136,6 +136,13 @@ impl Source {
                 host.account(target).await?.as_ref() == Some(&original),
                 "native Source account changed"
             );
+            // Seal the credential generation before network awaits; never adopt a
+            // rotation that happened during startup as if it admitted this peer.
+            let enrollment = deadline
+                .map(|deadline| {
+                    EnrollmentGuard::capture(host.clone(), original.clone(), deadline.expires_at_ms)
+                })
+                .transpose()?;
             options.local_session_provider = Some(host.provider_for_account(original.clone()));
             let session = Arc::new(
                 NativeSyncSession::start_data_client(options)
@@ -193,19 +200,7 @@ impl Source {
                     return Err(error);
                 }
             };
-            if let Some(deadline) = deadline {
-                let enrollment = match EnrollmentGuard::capture(
-                    host.clone(),
-                    original.clone(),
-                    deadline.expires_at_ms,
-                ) {
-                    Ok(guard) => guard,
-                    Err(error) => {
-                        session.shutdown().await;
-                        let _ = database.close().await;
-                        return Err(error);
-                    }
-                };
+            if let Some(enrollment) = enrollment {
                 let mut source = Self {
                     database,
                     session,

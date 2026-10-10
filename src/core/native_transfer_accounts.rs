@@ -205,7 +205,7 @@ impl NativeTransferAccountHost {
     ) -> Result<T> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct CredentialBinding {
+        struct CredentialBinding<'a> {
             version: u8,
             account: NativeTransferAccount,
             // Skip the bearer without materializing an additional plaintext copy.
@@ -228,7 +228,10 @@ impl NativeTransferAccountHost {
                 );
                 let current: NativeTransferAccount = serde_json::from_slice(values[0])?;
                 let credential: CredentialBinding = serde_json::from_slice(values[1])?;
-                let _ = credential.capability_token;
+                ensure!(
+                    !credential.capability_token.is_empty(),
+                    "native credential missing"
+                );
                 ensure!(
                     current == *expected
                         && credential.version == 1
