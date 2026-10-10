@@ -67,6 +67,8 @@ pub(crate) enum SourceAction {
     ModelRead,
     #[serde(rename = "tool_call")]
     ToolCall,
+    #[serde(rename = "sdk_observe")]
+    SdkObserve,
 }
 impl WireValidate for SourceAction {
     fn validate(&self) -> Result<(), String> {
@@ -112,6 +114,8 @@ pub(crate) struct SourceOperation {
     pub(crate) native_tool: Option<SourceNativeTool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tool_arguments_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sdk_observation: Option<SourceSdkObservation>,
 }
 impl WireValidate for SourceOperation {
     fn validate(&self) -> Result<(), String> {
@@ -194,6 +198,9 @@ impl WireValidate for SourceOperation {
             if value.chars().count() > 65536 {
                 return Err("SourceOperation.tool_arguments_json violates max_chars".into());
             }
+        }
+        if let Some(value) = &self.sdk_observation {
+            value.validate()?;
         }
         Ok(())
     }
@@ -357,6 +364,191 @@ impl WireValidate for SourceNativeTool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum SourceSdkObservationKind {
+    #[serde(rename = "child-spawned")]
+    ChildSpawned,
+    #[serde(rename = "child-closed")]
+    ChildClosed,
+    #[serde(rename = "sdk-init")]
+    SdkInit,
+    #[serde(rename = "turn-submitted")]
+    TurnSubmitted,
+    #[serde(rename = "parent-assistant")]
+    ParentAssistant,
+    #[serde(rename = "sdk-result")]
+    SdkResult,
+    #[serde(rename = "sdk-stream-joined")]
+    SdkStreamJoined,
+    #[serde(rename = "sdk-query-close-returned")]
+    SdkQueryCloseReturned,
+}
+impl WireValidate for SourceSdkObservationKind {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceSdkObservation {
+    pub(crate) version: u64,
+    pub(crate) sequence: u64,
+    pub(crate) kind: SourceSdkObservationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) init_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) message_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) assistant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) result_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) subtype: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pid: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) is_error: Option<bool>,
+}
+impl WireValidate for SourceSdkObservation {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.version;
+            value.validate()?;
+            if *value < 1 {
+                return Err("SourceSdkObservation.version violates minimum".into());
+            }
+            if *value > 1 {
+                return Err("SourceSdkObservation.version violates maximum".into());
+            }
+        }
+        {
+            let value = &self.sequence;
+            value.validate()?;
+            if *value > 511 {
+                return Err("SourceSdkObservation.sequence violates maximum".into());
+            }
+        }
+        {
+            let value = &self.kind;
+            value.validate()?;
+        }
+        if let Some(value) = &self.session_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.session_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.session_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.init_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.init_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.init_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.turn_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.turn_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.turn_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.message_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.message_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.message_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.message_model {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.message_model violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.message_model violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.assistant_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.assistant_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.assistant_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.result_id {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.result_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.result_id violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.subtype {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.subtype violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.subtype violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.signal {
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("SourceSdkObservation.signal violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("SourceSdkObservation.signal violates max_chars".into());
+            }
+        }
+        if let Some(value) = &self.pid {
+            value.validate()?;
+            if *value < 1 {
+                return Err("SourceSdkObservation.pid violates minimum".into());
+            }
+            if *value > 4294967295 {
+                return Err("SourceSdkObservation.pid violates maximum".into());
+            }
+        }
+        if let Some(value) = &self.exit_code {
+            value.validate()?;
+            if *value < -2147483648 {
+                return Err("SourceSdkObservation.exit_code violates minimum".into());
+            }
+            if *value > 2147483647 {
+                return Err("SourceSdkObservation.exit_code violates maximum".into());
+            }
+        }
+        if let Some(value) = &self.is_error {
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -379,6 +571,12 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "SourceNativeTool" => serde_json::from_value::<SourceNativeTool>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceSdkObservationKind" => serde_json::from_value::<SourceSdkObservationKind>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "SourceSdkObservation" => serde_json::from_value::<SourceSdkObservation>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         _ => Err("unknown contract type".into()),

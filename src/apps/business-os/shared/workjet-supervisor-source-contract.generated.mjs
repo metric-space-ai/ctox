@@ -10,7 +10,8 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "cancel",
       "model_invoke",
       "model_read",
-      "tool_call"
+      "tool_call",
+      "sdk_observe"
     ]
   },
   "SourceOfferState": {
@@ -77,6 +78,10 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
         "type": "String",
         "min_chars": 1,
         "max_chars": 65536,
+        "optional": true
+      },
+      "sdk_observation": {
+        "type": "SourceSdkObservation",
         "optional": true
       }
     }
@@ -153,6 +158,104 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
     "enum": [
       "worker_dispatch"
     ]
+  },
+  "SourceSdkObservationKind": {
+    "enum": [
+      "child-spawned",
+      "child-closed",
+      "sdk-init",
+      "turn-submitted",
+      "parent-assistant",
+      "sdk-result",
+      "sdk-stream-joined",
+      "sdk-query-close-returned"
+    ]
+  },
+  "SourceSdkObservation": {
+    "fields": {
+      "version": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 1
+      },
+      "sequence": {
+        "type": "u64",
+        "maximum": 511
+      },
+      "kind": {
+        "type": "SourceSdkObservationKind"
+      },
+      "session_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "init_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "turn_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "message_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "message_model": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "assistant_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "result_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "subtype": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "signal": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256,
+        "optional": true
+      },
+      "pid": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 4294967295,
+        "optional": true
+      },
+      "exit_code": {
+        "type": "i64",
+        "minimum": -2147483648,
+        "maximum": 2147483647,
+        "optional": true
+      },
+      "is_error": {
+        "type": "bool",
+        "optional": true
+      }
+    }
   }
 });
 export const SUPERVISOR_SOURCE_COMMANDS = deepFreeze({
