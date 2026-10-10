@@ -17191,6 +17191,14 @@ fn system_time_to_unix_nanos(time: SystemTime) -> u128 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
+pub(crate) fn exercise_busy_or_backlogged_kpi_router_for_test(
+    root: &Path,
+    busy: bool,
+) -> Result<()> {
+    tests::kpi_router_tick_without_model(root, busy)
+}
+
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     route_external_messages_with_priority_dispatch(root, state, |prompt| {
         enqueue_prompt(
@@ -17207,6 +17215,20 @@ fn route_external_messages_with_priority_dispatch(
     state: &Arc<Mutex<SharedState>>,
     dispatch_priority: impl FnOnce(QueuedPrompt),
 ) -> Result<()> {
+    // Native recipe refresh reads admitted task receipts and writes bounded KPI
+    // metadata; it never leases work, invokes a model or changes a schedule.
+    // Keep it before every router early-return so an ongoing turn, a ready
+    // prompt, idle preflight or queue pressure cannot starve the hourly refresh.
+    // A maintenance failure must not suppress the existing communication path.
+    if let Err(error) = crate::business_os::refresh_due_workjet_project_kpis(root) {
+        push_event(
+            state,
+            format!(
+                "Project KPI refresh deferred: {}",
+                clip_text(&error.to_string(), 180)
+            ),
+        );
+    }
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
@@ -29637,6 +29659,38 @@ Business OS command:
             },
         )
         .unwrap()
+    }
+
+    pub(super) fn kpi_router_tick_without_model(root: &Path, busy: bool) -> Result<()> {
+        let mut shared = SharedState::default();
+        shared.busy = busy;
+        let state = Arc::new(Mutex::new(shared));
+        if busy {
+            assert!(active_agent_loop_in_progress(&state));
+        } else {
+            for index in 0..QUEUE_PRESSURE_GUARD_THRESHOLD + 1 {
+                priority_system_dispatch_test_task(
+                    root,
+                    &format!("kpi-background-normal-{index}"),
+                    "normal",
+                    None,
+                );
+            }
+            assert!(queue_pressure_active(root, &state));
+        }
+        route_external_messages_with_priority_dispatch(root, &state, |_| {
+            panic!("KPI maintenance must not start a priority model worker");
+        })?;
+        let shared = lock_shared_state(&state);
+        assert_eq!(shared.busy, busy);
+        assert_eq!(shared.worker_active_count, 0);
+        if !busy {
+            assert_eq!(
+                channels::count_queue_tasks(root, &["pending".to_owned()])?,
+                QUEUE_PRESSURE_GUARD_THRESHOLD + 1
+            );
+        }
+        Ok(())
     }
 
     #[test]
