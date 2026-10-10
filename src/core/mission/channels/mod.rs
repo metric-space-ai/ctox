@@ -7371,6 +7371,25 @@ fn set_routing_status(
     Ok(())
 }
 
+/// Raw routing status of one inbound message, or `None` when it has no
+/// routing row.
+pub(crate) fn inbound_route_status(root: &Path, message_key: &str) -> Result<Option<String>> {
+    let db_path = resolve_db_path(root, None);
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(None);
+    };
+    if !channel_projection_tables_exist(&conn, &["communication_routing_state"])? {
+        return Ok(None);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT route_status FROM communication_routing_state WHERE message_key = ?1 LIMIT 1",
+            params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
 pub(crate) fn current_queue_route_status(conn: &Connection, message_key: &str) -> Result<String> {
     let raw = conn
         .query_row(
