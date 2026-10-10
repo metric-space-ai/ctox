@@ -1,0 +1,156 @@
+{
+  "schema": "ctox.workjet.supervisor.source.v1",
+  "contract_version": 1,
+  "types": {
+    "SourceAction": {
+      "enum": [
+        "poll",
+        "claim",
+        "status",
+        "cancel"
+      ]
+    },
+    "SourceOfferState": {
+      "enum": [
+        "offered",
+        "claimed",
+        "closed"
+      ]
+    },
+    "SourceOperation": {
+      "fields": {
+        "version": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "action": {
+          "type": "SourceAction"
+        },
+        "offer_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        },
+        "controller_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36,
+          "optional": true
+        }
+      }
+    },
+    "SourceRequestedRoute": {
+      "fields": {
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "luma_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 160
+        },
+        "configuration_revision": {
+          "type": "u64",
+          "minimum": 1
+        },
+        "computer_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "harness": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 32
+        },
+        "model": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        }
+      }
+    },
+    "SourceOffer": {
+      "fields": {
+        "offer_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "execution_key": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 512
+        },
+        "route": {
+          "type": "SourceRequestedRoute"
+        },
+        "deadline_ms": {
+          "type": "i64",
+          "minimum": 1
+        },
+        "state": {
+          "type": "SourceOfferState"
+        }
+      }
+    }
+  },
+  "valid_cases": [
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "poll"
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 2,
+        "action": "poll"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "poll",
+        "computer_id": "caller-not-authority"
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "report",
+        "actual": true
+      }
+    },
+    {
+      "type": "SourceOperation",
+      "value": {
+        "version": 1,
+        "action": "claim",
+        "offer_id": "short"
+      }
+    }
+  ],
+  "commands": {
+    "ctox.workjet.project.supervisor.execution.v1": {
+      "request": "SourceOperation",
+      "transport": "guarded native auxiliary WebRTC; no HTTP data path",
+      "authority": "actual enrolled Source + original native lease; DTOs are not permits"
+    }
+  }
+}

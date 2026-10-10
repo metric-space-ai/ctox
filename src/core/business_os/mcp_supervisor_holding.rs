@@ -74,18 +74,30 @@ impl NativeSupervisorExecutionLease {
                 .is_some_and(|expiry| expiry > now_ms()),
             unavailable("supervisor_execution_fenced", "native session expired")
         );
-        let context = context_from_arguments_with_trusted_gateway_context(
-            workjet_worker_dispatch::TOOL,
-            &json!({}),
-            Some(&self.trusted),
-        )?;
         anyhow::ensure!(
-            facts.owner_user_id == context.actor && facts.computer_id == self.requested.computer_id,
+            self.trusted["actor"].as_str() == Some(facts.owner_user_id.as_str())
+                && facts.computer_id == self.requested.computer_id,
             unavailable(
                 "supervisor_execution_fenced",
                 "admitted holder is not the selected Owner/computer"
             )
         );
+        self.current_native(core, policy)
+    }
+    /// Native service wait only. This verifies the original lease and selection
+    /// but grants no Source/model dispatch or publication permission.
+    fn current_native(&self, core: &Connection, policy: &Connection) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.trusted["expires_at_ms"]
+                .as_i64()
+                .is_some_and(|expiry| expiry > now_ms()),
+            unavailable("supervisor_execution_fenced", "native session expired")
+        );
+        let context = context_from_arguments_with_trusted_gateway_context(
+            workjet_worker_dispatch::TOOL,
+            &json!({}),
+            Some(&self.trusted),
+        )?;
         let (project, thread, _) =
             workjet_jour_fixe::bound_project(core, policy, &context, &self.trusted).map_err(
                 |_| {
@@ -243,8 +255,17 @@ impl NativeSupervisorHoldingController {
         lease: std::sync::Arc<NativeSupervisorExecutionLease>,
         authority: AdmittedConsumerAuthority,
     ) -> anyhow::Result<Self> {
+        Self::claim_shared_with(lease, authority, |_, _, _, _| Ok(()))
+    }
+    pub(crate) fn claim_shared_with(
+        lease: std::sync::Arc<NativeSupervisorExecutionLease>,
+        authority: AdmittedConsumerAuthority,
+        claimed: impl FnOnce(&str, &ConsumerFacts, &Connection, &Connection) -> anyhow::Result<()>,
+    ) -> anyhow::Result<Self> {
         let (id, consumer_json) = lease.with_current(&authority, |facts, core, policy| {
-            claim_in_fence(&lease, core, policy, facts)
+            let claimed_controller = claim_in_fence(&lease, core, policy, facts)?;
+            claimed(&claimed_controller.0, facts, core, policy)?;
+            Ok(claimed_controller)
         })?;
         Ok(Self {
             lease,
@@ -312,6 +333,8 @@ impl NativeSupervisorHoldingController {
 }
 #[path = "mcp_supervisor_publication.rs"]
 mod publication;
+#[path = "mcp_supervisor_source.rs"]
+pub(in crate::business_os) mod source;
 pub(crate) use publication::{
     NativeSupervisorCurrentPublication, NativeSupervisorPublicationCheck,
 };

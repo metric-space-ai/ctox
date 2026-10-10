@@ -3230,6 +3230,7 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
+                super::mcp_channel::NativeSupervisorSourceHost::register(&pool, &root)?;
                 let consumer_root = root.clone();
                 super::rxdb_peer_speech_settings::register(&pool, &root)?;
                 let consumer_transport = pool.connection_handler.clone();

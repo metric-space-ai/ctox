@@ -132,6 +132,8 @@ pub(crate) mod workjet_supervisor_execution_contract;
 pub(crate) mod workjet_supervisor_luma_contract;
 #[path = "workjet_supervisor_route_display_contract.generated.rs"]
 pub(crate) mod workjet_supervisor_route_display_contract;
+#[path = "workjet_supervisor_source_contract.generated.rs"]
+pub(crate) mod workjet_supervisor_source_contract;
 pub mod workjet_transfer_git;
 #[path = "workjet_worker_outcome_contract.generated.rs"]
 pub(crate) mod workjet_worker_outcome_contract;
