@@ -105,10 +105,10 @@ def reconcile(base, previous, changes, since, query_at):
                     reopened.append(url)
                     del mapping[url]
                 continue
-            evidence = base / "terminal-evidence/source" / (
+            evidence = report.evidence_storage.ROOT / "terminal-delta" / (
                 "daily-" + repository.replace("/", "-") + "-" +
                 str(pr["number"]) + "-" + report.sha(pr) + ".json")
-            report.save(evidence, pr)
+            report.save_raw(evidence, pr)
             pr["terminal_delta_evidence"] = str(evidence)
             mapping[url] = pr
             (refreshed if prior else added).append(url)
@@ -140,10 +140,7 @@ def update(base, start=START):
         snapshot["daily_policy"] = dict(start_at=baseline.isoformat(),
             repositories=list(report.REPOS), timezone="Europe/Berlin",
             hour=19, minute=15, active_prs_assessed=False)
-        if delta["added"] or delta["refreshed"] or delta["reopened"]:
-            report.save(directory / "snapshots" / (report.sha(snapshot) + ".json"),
-                        snapshot)
-        report.save(directory / "current.json", snapshot)
+        report.save_inventory(base, snapshot)
         # No assessment API is called: recorded criteria/model provenance stay immutable.
         result = report.build(base)
         state.update(version=1, start_at=baseline.isoformat(),
