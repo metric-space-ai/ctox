@@ -622,7 +622,7 @@ mod tests {
             ("operation_kind", "count_tokens", "messages"),
             ("state", "accepted", "observed"),
             ("response_message_id", "other-message", "msg_observed"),
-            ("response_model", "requested-only", "claude-opus-5-5"),
+            ("response_model", "", "claude-opus-5-5"),
             ("response_stop_reason", "max_tokens", "end_turn"),
         ] {
             core.execute(
