@@ -316,4 +316,79 @@ class ReportTests(unittest.TestCase):
         self.assertIn('id="prev"',html)
         self.assertIn('id="next"',html)
 
+class InventoryStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name) / "report"
+        self.root = Path(self.temp.name) / "raw"
+        self.remote = {}
+        self.receipts = {}
+        self.addCleanup(patch.stopall)
+        patch.object(r.evidence_storage, "ROOT", self.root).start()
+        patch.object(r, "save_raw", side_effect=self.remote_write).start()
+        patch.object(r.evidence_storage, "locator", side_effect=lambda p:self.receipts.get(Path(p))).start()
+        patch.object(r, "read", side_effect=lambda p:self.remote[Path(p)] if Path(p) in self.remote else Path(p).read_text()).start()
+        self.snapshot = dict(version=1, collected_at="2026-10-10T17:00:00Z",
+                             prs=[dict(url="terminal-pr", state="MERGED", body="evidence")])
+        self.current = self.base / "terminal-evidence/current.json"
+
+    def remote_write(self, path, value):
+        text = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+        self.remote[Path(path)] = text
+        self.receipts[Path(path)] = dict(file=str(Path(path).relative_to(self.root)),
+            bytes=len(text.encode()), sha256=hashlib.sha256(text.encode()).hexdigest())
+
+    def test_large_inventory_is_remote_and_build_input_is_reproducible(self):
+        self.snapshot["prs"][0]["body"] = "x" * 20_000_001
+        reference = r.save_inventory(self.base, self.snapshot)
+        self.assertGreater(reference["bytes"], 20_000_000)
+        self.assertLess(self.current.stat().st_size, 1000)
+        self.assertFalse(self.root.exists())
+        self.assertEqual(r.load(self.current), self.snapshot)
+        archived = list((self.base / "terminal-evidence/snapshots").glob("*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(r.load(archived[0]), self.snapshot)
+
+    def test_remote_failure_preserves_existing_local_inventory(self):
+        r.save(self.current, self.snapshot)
+        original = self.current.read_bytes()
+        with patch.object(r, "save_raw", side_effect=RuntimeError("transport failure")):
+            with self.assertRaisesRegex(RuntimeError, "transport failure"):
+                r.save_inventory(self.base, self.snapshot)
+        self.assertEqual(self.current.read_bytes(), original)
+
+    def test_legacy_raw_is_sha_verified_before_reference_replacement(self):
+        r.save(self.current, self.snapshot)
+        original = self.current.read_bytes()
+        r.save_inventory(self.base, self.snapshot)
+        backups = [p for p in self.remote if p.name.startswith("legacy-")]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(self.remote[backups[0]].encode(), original)
+        self.assertEqual(r.load(self.current), self.snapshot)
+
+    def test_noncanonical_legacy_bytes_are_kept_on_checksum_mismatch(self):
+        self.current.parent.mkdir(parents=True)
+        self.current.write_text(json.dumps(self.snapshot))
+        original = self.current.read_bytes()
+        with self.assertRaisesRegex(ValueError, "Legacy inventory bytes"):
+            r.save_inventory(self.base, self.snapshot)
+        self.assertEqual(self.current.read_bytes(), original)
+
+    def test_reference_rejects_tampering_traversal_and_active_prs(self):
+        reference = r.save_inventory(self.base, self.snapshot)
+        tampered = dict(reference, sha256="0"*64)
+        r.save(self.current, tampered)
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            r.load(self.current)
+        r.save(self.current, dict(reference, file="../other.json"))
+        with self.assertRaisesRegex(ValueError, "Unsafe"):
+            r.load(self.current)
+        active = copy.deepcopy(self.snapshot)
+        active["prs"][0]["state"] = "OPEN"
+        reference = r.save_inventory(self.base, active)
+        with self.assertRaisesRegex(ValueError, "metadata mismatch"):
+            r.load(self.current)
+
+
 if __name__=="__main__":unittest.main()
