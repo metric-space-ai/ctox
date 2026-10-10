@@ -510,9 +510,10 @@ fn output_budget_for_runtime_state(
     // Realized context belongs to the active model, not every adapter request.
     state
         .filter(|state| {
-            state.active_model.as_deref().is_some_and(|active| {
-                active.eq_ignore_ascii_case(model_id)
-            })
+            state
+                .active_model
+                .as_deref()
+                .is_some_and(|active| active.eq_ignore_ascii_case(model_id))
         })
         .and_then(|state| state.realized_context_tokens.map(|value| value as usize))
         .filter(|value| *value > 0)
@@ -1727,15 +1728,29 @@ mod output_budget_tests {
     #[test]
     fn output_budget_uses_only_the_matching_active_runtime() {
         let root = tempfile::tempdir().unwrap();
-        let mut state = runtime_state::derive_runtime_state_from_env_map(root.path(), &BTreeMap::new()).unwrap();
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", None), 131_072);
+        let mut state =
+            runtime_state::derive_runtime_state_from_env_map(root.path(), &BTreeMap::new())
+                .unwrap();
+        assert_eq!(
+            output_budget_for_runtime_state("openai/gpt-oss-120b", None),
+            131_072
+        );
         // A different active model's 256k plan must not enlarge GPT-OSS's budget.
         state.realized_context_tokens = Some(262_144);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
+        assert_eq!(
+            output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)),
+            131_072
+        );
         state.active_model = Some("openai/gpt-oss-120b".to_string());
         state.realized_context_tokens = Some(65_536);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 65_536);
+        assert_eq!(
+            output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)),
+            65_536
+        );
         state.realized_context_tokens = Some(0);
-        assert_eq!(output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)), 131_072);
+        assert_eq!(
+            output_budget_for_runtime_state("openai/gpt-oss-120b", Some(&state)),
+            131_072
+        );
     }
 }

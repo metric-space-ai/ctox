@@ -108,11 +108,13 @@ where
 {
     let conn = open_sqlite(root)?;
     let tx = SqliteWriteTransaction::begin(&conn, "payload.legacy_import")?;
-    let existing: Option<String> = tx.query_row(
-        &format!("SELECT payload_json FROM {PAYLOAD_TABLE} WHERE payload_key = ?1"),
-        params![key],
-        |row| row.get(0),
-    ).optional()?;
+    let existing: Option<String> = tx
+        .query_row(
+            &format!("SELECT payload_json FROM {PAYLOAD_TABLE} WHERE payload_key = ?1"),
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
     let value = match existing {
         Some(raw) => serde_json::from_str(&raw)?,
         None => {

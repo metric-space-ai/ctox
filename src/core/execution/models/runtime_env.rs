@@ -672,24 +672,35 @@ mod tests {
             effective.get("OPENROUTER_API_KEY").map(String::as_str),
             Some("or-store")
         );
-        assert_eq!(
-            effective.get("CTOX_CUDA_HOME").map(String::as_str),
-            None
-        );
-        assert_eq!(
-            effective.get("CTOX_ENGINE_LOG").map(String::as_str),
-            None
-        );
+        assert_eq!(effective.get("CTOX_CUDA_HOME").map(String::as_str), None);
+        assert_eq!(effective.get("CTOX_ENGINE_LOG").map(String::as_str), None);
 
         set_runtime_env_value(&root, "CTOX_CUDA_HOME", "/store/cuda").unwrap();
         set_runtime_env_value(&root, "CTOX_ENGINE_LOG", "/store/engine.log").unwrap();
         let effective = effective_runtime_env_map(&root).unwrap();
-        assert_eq!(env_or_config(&root, "CTOX_CUDA_HOME").as_deref(), Some("/store/cuda"));
-        assert_eq!(effective.get("CTOX_CUDA_HOME").map(String::as_str), Some("/store/cuda"));
-        assert_eq!(effective.get("CTOX_ENGINE_LOG").map(String::as_str), Some("/store/engine.log"));
-        assert_eq!(effective.get("OPENAI_API_KEY").map(String::as_str), Some("sk-store"));
-        assert_eq!(effective.get("OPENROUTER_API_KEY").map(String::as_str), Some("or-store"));
-        assert!(!load_persisted_runtime_env_map(&root).unwrap().contains_key("OPENAI_API_KEY"));
+        assert_eq!(
+            env_or_config(&root, "CTOX_CUDA_HOME").as_deref(),
+            Some("/store/cuda")
+        );
+        assert_eq!(
+            effective.get("CTOX_CUDA_HOME").map(String::as_str),
+            Some("/store/cuda")
+        );
+        assert_eq!(
+            effective.get("CTOX_ENGINE_LOG").map(String::as_str),
+            Some("/store/engine.log")
+        );
+        assert_eq!(
+            effective.get("OPENAI_API_KEY").map(String::as_str),
+            Some("sk-store")
+        );
+        assert_eq!(
+            effective.get("OPENROUTER_API_KEY").map(String::as_str),
+            Some("or-store")
+        );
+        assert!(!load_persisted_runtime_env_map(&root)
+            .unwrap()
+            .contains_key("OPENAI_API_KEY"));
 
         std::fs::remove_dir_all(root).unwrap();
     }

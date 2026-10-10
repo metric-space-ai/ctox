@@ -6665,11 +6665,19 @@ mod tests {
         std::fs::write(
             directory.join(format!("{slug}.json")),
             serde_json::to_vec(&manifest).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         let reserves = compute_aux_reserves_mb(
-            Some(&root), &hardware(3, 24_576), &env_map, ChatPreset::Quality, &[],
+            Some(&root),
+            &hardware(3, 24_576),
+            &env_map,
+            ChatPreset::Quality,
+            &[],
         );
-        assert_eq!(reserves, BTreeMap::from([(0, 1_100), (1, 4_200), (2, 1_234)]));
+        assert_eq!(
+            reserves,
+            BTreeMap::from([(0, 1_100), (1, 4_200), (2, 1_234)])
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

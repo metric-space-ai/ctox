@@ -427,9 +427,14 @@ mod tests {
                     visible_devices: vec![2],
                     reserved_mb_by_gpu: BTreeMap::from([(2, 1024)]),
                 }],
-            }).unwrap(),
-        ).unwrap();
-        assert!(load_runtime_ownership_state(&root).unwrap().workloads.is_empty());
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(load_runtime_ownership_state(&root)
+            .unwrap()
+            .workloads
+            .is_empty());
         assert!(!legacy_path.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -454,12 +459,16 @@ mod tests {
             // Initialize the store, then commit on an independent connection
             // after legacy capture and before the migration's writer fence.
             assert!(persistence::load_json_payload::<RuntimeOwnershipState>(
-                &root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
-            ).unwrap().is_none());
+                &root,
+                RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
+            )
+            .unwrap()
+            .is_none());
             let mut canonical = RuntimeOwnershipState::default();
             if replacement {
                 let mut workload = BackendRuntimeResidency::from_lease(
-                    ledger.leases[0].clone(), RuntimeResidencyPhase::Starting
+                    ledger.leases[0].clone(),
+                    RuntimeResidencyPhase::Starting,
                 );
                 workload.port = Some(4321);
                 workload.reserved_mb_by_gpu = BTreeMap::from([(2, 2048)]);
@@ -470,8 +479,14 @@ mod tests {
                 "INSERT INTO ctox_payload_store (payload_key, payload_json, updated_at) VALUES (?1, ?2, 0)",
                 rusqlite::params![RUNTIME_OWNERSHIP_STATE_STORAGE_KEY, serde_json::to_string(&canonical).unwrap()],
             ).unwrap();
-            assert_eq!(import_legacy_runtime_ownership(&root, Ok(captured)).unwrap(), canonical);
-            assert_eq!(load_persisted_runtime_ownership_state(&root).unwrap(), canonical);
+            assert_eq!(
+                import_legacy_runtime_ownership(&root, Ok(captured)).unwrap(),
+                canonical
+            );
+            assert_eq!(
+                load_persisted_runtime_ownership_state(&root).unwrap(),
+                canonical
+            );
             assert!(!legacy_path.exists());
             drop(competing);
             std::fs::remove_dir_all(root).unwrap();
@@ -486,8 +501,11 @@ mod tests {
         assert!(load_runtime_ownership_state(&root).is_err());
         assert_eq!(std::fs::read(&legacy_path).unwrap(), b"invalid json");
         assert!(persistence::load_json_payload::<RuntimeOwnershipState>(
-            &root, RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
-        ).unwrap().is_none());
+            &root,
+            RUNTIME_OWNERSHIP_STATE_STORAGE_KEY
+        )
+        .unwrap()
+        .is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
