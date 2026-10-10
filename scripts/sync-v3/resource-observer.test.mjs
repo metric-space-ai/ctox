@@ -9,6 +9,15 @@ test('actual tick frequency and one-core basis, not wall time or whole-server CP
  const delta = cpuInterval(snapshot(0, 100), snapshot(2000, 200), 100);
  assert.equal(delta.processCpuMs, 1000); assert.equal(delta.peerCpuMs, 500); assert.equal(delta.peerPercentOfOneCore, 25);
 });
+test('thread births and exits produce explicit bounds, never zero or invented exact CPU', () => {
+ const a = snapshot(0, 100), b = snapshot(2000, 200);
+ b.threads.push({ tid: 5, startedTicks: 5, ticks: 10 });
+ const delta = cpuInterval(a, b, 100);
+ assert.equal(delta.peerCpuMs, null); assert.equal(delta.peerCoverage, 'bounded-thread-churn');
+ assert.equal(delta.peerCpuLowerMs, 500); assert.equal(delta.peerCpuUpperMs, 1000); assert.equal(delta.newThreads, 1);
+ const exit = cpuInterval({ ...a, threads: [...a.threads, { tid: 6, startedTicks: 6, ticks: 5 }] }, snapshot(2000, 200), 100);
+ assert.equal(exit.peerCpuMs, null); assert.equal(exit.vanishedThreads, 1);
+});
 test('PID reuse, thread replacement and counter reset cannot become zero CPU', () => {
  const first = snapshot(0, 100), last = snapshot(2000, 200);
  assert.throws(() => cpuInterval(first, { ...last, pid: 43 }, 100), /identity/);

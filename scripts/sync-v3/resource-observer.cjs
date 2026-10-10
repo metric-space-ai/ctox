@@ -23,10 +23,20 @@ function cpuInterval(a, b, hz) {
   const total = cpuDelta(a.process, b.process, elapsedMs, hz);
   if (!total) throw Error('CPU process counter reset or identity changed');
   const old = new Map(a.threads.map(t => [`${t.tid}:${t.startedTicks}`, t]));
-  const intervals = b.threads.map(t => cpuDelta(old.get(`${t.tid}:${t.startedTicks}`), t, elapsedMs, hz));
-  if (intervals.some(x => !x) || old.size !== b.threads.length) throw Error('Native peer thread set changed');
-  const peerCpuMs = intervals.reduce((n, x) => n + x.cpuMs, 0);
-  return { elapsedMs, processCpuMs: total.cpuMs, peerCpuMs, peerPercentOfOneCore: peerCpuMs / elapsedMs * 100 };
+  const oldIds = new Map(a.threads.map(t => [t.tid, t]));
+  const stable = b.threads.filter(t => old.has(`${t.tid}:${t.startedTicks}`));
+  if (b.threads.some(t => oldIds.has(t.tid) && oldIds.get(t.tid).startedTicks !== t.startedTicks)) throw Error('Native peer thread set identity replaced');
+  const intervals = stable.map(t => cpuDelta(old.get(`${t.tid}:${t.startedTicks}`), t, elapsedMs, hz));
+  if (intervals.some(x => !x)) throw Error('Native peer thread counter reset');
+  const lower = intervals.reduce((n, x) => n + x.cpuMs, 0);
+  const newThreads = b.threads.length - stable.length, vanishedThreads = a.threads.length - stable.length;
+  const exact = newThreads === 0 && vanishedThreads === 0;
+  // Unseen thread lifetimes cannot be reconstructed from two procfs snapshots.
+  // Bound missing peer work by all process work; snapshots are not atomic.
+  const upper = exact ? lower : Math.max(lower, total.cpuMs);
+  return { elapsedMs, processCpuMs: total.cpuMs, peerCpuMs: exact ? lower : null,
+    peerCpuLowerMs: lower, peerCpuUpperMs: upper, peerPercentOfOneCore: exact ? lower / elapsedMs * 100 : null,
+    peerCoverage: exact ? 'stable-thread-set' : 'bounded-thread-churn', newThreads, vanishedThreads };
 }
 function summarize(samples, hz) {
   if (samples.length < 3) throw Error('Resource samples incomplete');

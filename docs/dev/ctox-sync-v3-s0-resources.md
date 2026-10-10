@@ -15,12 +15,12 @@ are retained; unavailable meters fail rather than silently report zero.
 
 CPU comes from /proc of the exact harness-owned server PID and named native peer
 Tokio/supervisor threads (Linux comm is truncated to15characters). CPU deltas use
-actual CLK_TCK and process/thread start identity; changes or resets fail. Server
+actual CLK_TCK and process/thread start identity; reuse or resets fail. Thread births/exits carry explicit CPU lower/upper bounds (stable observed peer work/all process work), not invented exact CPU. Server
 CPU and peer-thread CPU are separate. Browser-to-Node callback reception is the
 CPU boundary; browser timestamps and meter overhead are recorded. This observes
 sys+user CPU, not stacks or exclusive attribution to one asynchronous request.
 
-The normal lane runner exercises20resource/transport tests, a real SQLite lock
+The normal lane runner exercises21resource/transport tests, a real SQLite lock
 probe self-test, all three browser/native relay cases, and a20s end-to-end soak
 on the0ms case. The long mode86400 starts systemd --user unit
 ctox-sync-v3-s0-locks-20261010 from inside the same normal admitted lane. The lane
