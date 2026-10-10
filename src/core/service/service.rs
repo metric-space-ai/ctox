@@ -169,6 +169,10 @@ pub(crate) fn queue_pressure_threshold() -> usize {
     QUEUE_PRESSURE_GUARD_THRESHOLD
 }
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
+// During a research campaign 20+ queue tasks wait almost all the time. Every
+// finished guard turn (~10 min) was immediately followed by the next one, at
+// the front of the queue (10.10.2026: an owner mail waited behind it).
+const QUEUE_GUARD_MIN_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
@@ -969,6 +973,9 @@ impl Default for WorkerSessionSlot {
 
 #[derive(Debug)]
 struct SharedState {
+    /// When the queue pressure guard was last put into the queue; see
+    /// QUEUE_GUARD_MIN_INTERVAL.
+    queue_guard_last_inserted_at: Option<Instant>,
     busy: bool,
     worker_active_count: usize,
     serial_prompt_starting: bool,
@@ -999,6 +1006,7 @@ struct SharedState {
 impl Default for SharedState {
     fn default() -> Self {
         Self {
+            queue_guard_last_inserted_at: None,
             busy: false,
             worker_active_count: 0,
             serial_prompt_starting: false,
@@ -18877,8 +18885,11 @@ fn queued_prompt_dispatch_rank(prompt: &QueuedPrompt) -> u8 {
 
 fn source_label_dispatch_rank(source_label: &str) -> u8 {
     let lowered = source_label.trim().to_ascii_lowercase();
+    // The guard is internal maintenance: it ranks above ordinary queue work
+    // but never above waiting communication (it had rank 5 and kept an owner
+    // mail waiting behind back-to-back guard turns, 10.10.2026).
     if lowered == QUEUE_GUARD_SOURCE_LABEL {
-        return 5;
+        return 2;
     }
     if lowered == "tui"
         || lowered == "email:owner"
@@ -18922,16 +18933,9 @@ fn highest_leasable_inbound_rank(root: &Path, settings: &BTreeMap<String, String
 
 fn insert_pending_prompt_ordered(queue: &mut VecDeque<QueuedPrompt>, prompt: QueuedPrompt) {
     let new_rank = queued_prompt_dispatch_rank(&prompt);
-    let guard_offset = usize::from(
-        matches!(queue.front(), Some(front) if front.source_label == QUEUE_GUARD_SOURCE_LABEL),
-    );
-    let insert_at = queue
-        .iter()
-        .enumerate()
-        .skip(guard_offset)
-        .find_map(|(idx, existing)| {
-            (new_rank > queued_prompt_dispatch_rank(existing)).then_some(idx)
-        });
+    let insert_at = queue.iter().enumerate().find_map(|(idx, existing)| {
+        (new_rank > queued_prompt_dispatch_rank(existing)).then_some(idx)
+    });
     if let Some(idx) = insert_at {
         queue.insert(idx, prompt);
     } else {
@@ -24518,26 +24522,44 @@ fn ensure_queue_guard_locked(root: &Path, shared: &mut SharedState) {
     if !queue_guard_needed(root, shared) || queue_guard_present(shared) {
         return;
     }
+    if shared
+        .queue_guard_last_inserted_at
+        .is_some_and(|at| at.elapsed() < QUEUE_GUARD_MIN_INTERVAL)
+    {
+        return;
+    }
     let pending = shared
         .pending_prompts
         .len()
         .max(channels::pending_queue_task_count_uncached(root).unwrap_or(0));
     let guard_prompt = build_queue_guard_prompt(root, pending);
-    shared.pending_prompts.push_front(QueuedPrompt {
-        queue_task_metadata: Value::Null,
-        prompt: guard_prompt.clone(),
-        goal: guard_prompt,
-        preview: "Queue pressure guard".to_string(),
-        source_label: QUEUE_GUARD_SOURCE_LABEL.to_string(),
-        suggested_skill: None,
-        leased_message_keys: Vec::new(),
-        leased_ticket_event_keys: Vec::new(),
-        thread_key: None,
-        workspace_root: None,
-        ticket_self_work_id: None,
-        outbound_email: None,
-        outbound_anchor: None,
-    });
+    // Waiting communication (mail, chat, TUI) keeps its place before the guard.
+    let position = shared
+        .pending_prompts
+        .iter()
+        .rposition(|prompt| {
+            source_label_dispatch_rank(&prompt.source_label) >= COMMUNICATION_INBOUND_DISPATCH_RANK
+        })
+        .map_or(0, |index| index + 1);
+    shared.queue_guard_last_inserted_at = Some(Instant::now());
+    shared.pending_prompts.insert(
+        position,
+        QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: guard_prompt.clone(),
+            goal: guard_prompt,
+            preview: "Queue pressure guard".to_string(),
+            source_label: QUEUE_GUARD_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        },
+    );
     if let Err(err) = governance::record_event(
         root,
         governance::GovernanceEventRequest {
@@ -30749,6 +30771,62 @@ Business OS command:
                 .map(|event| (&event.reason, &event.action_taken))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn queue_guard_waits_behind_owner_mail_and_does_not_repeat_at_once() {
+        let root = temp_root("queue-guard-behind-mail");
+        let job = |label: &str, index: usize| QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: format!("prompt-{index}"),
+            goal: format!("goal-{index}"),
+            preview: format!("preview-{index}"),
+            source_label: label.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut shared = SharedState::default();
+        shared.pending_prompts = (0..QUEUE_PRESSURE_GUARD_THRESHOLD)
+            .map(|index| job("queue", index))
+            .collect();
+        insert_pending_prompt_ordered(&mut shared.pending_prompts, job("email:founder", 99));
+
+        ensure_queue_guard_locked(&root, &mut shared);
+        let labels = shared
+            .pending_prompts
+            .iter()
+            .take(3)
+            .map(|item| item.source_label.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["email:founder", QUEUE_GUARD_SOURCE_LABEL, "queue"]
+        );
+
+        // A mail arriving while the guard waits still goes first.
+        insert_pending_prompt_ordered(&mut shared.pending_prompts, job("email", 100));
+        assert_eq!(shared.pending_prompts[1].source_label, "email");
+        assert_eq!(
+            shared.pending_prompts[2].source_label,
+            QUEUE_GUARD_SOURCE_LABEL
+        );
+
+        // Once the guard ran, the next one waits for the interval even though
+        // the queue is still above the threshold.
+        shared
+            .pending_prompts
+            .retain(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL);
+        ensure_queue_guard_locked(&root, &mut shared);
+        assert!(shared
+            .pending_prompts
+            .iter()
+            .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
     }
 
     #[test]
