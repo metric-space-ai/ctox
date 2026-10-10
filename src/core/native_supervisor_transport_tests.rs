@@ -133,7 +133,7 @@ fn account_epoch_pairing_and_explicit_retirement_never_rebind_the_guard() {
         "isolated-fixture-original",
     );
     assert!(captured
-        .current(|| panic!("substituted account published"))
+        .current::<()>(|| panic!("substituted account published"))
         .is_err());
     store(
         root.path(),
@@ -144,7 +144,7 @@ fn account_epoch_pairing_and_explicit_retirement_never_rebind_the_guard() {
     let active = guard(root.path(), &original);
     active.retire();
     assert!(active
-        .current(|| panic!("retired source published"))
+        .current::<()>(|| panic!("retired source published"))
         .is_err());
     let mut unpaired = original.clone();
     unpaired
@@ -161,7 +161,7 @@ fn account_epoch_pairing_and_explicit_retirement_never_rebind_the_guard() {
         "isolated-fixture-original",
     );
     assert!(captured
-        .current(|| panic!("substituted pairing published"))
+        .current::<()>(|| panic!("substituted pairing published"))
         .is_err());
 }
 
