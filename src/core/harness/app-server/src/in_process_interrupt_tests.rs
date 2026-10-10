@@ -68,6 +68,12 @@ async fn completed(client: &mut InProcessClientHandle, thread: &str, turn: &str)
             {
                 assert_eq!(event.thread_id, thread);
                 assert_eq!(event.turn.id, turn, "no other turn may complete");
+                assert_ne!(
+                    event.turn.status,
+                    TurnStatus::Failed,
+                    "unexpected failed model turn: {:?}",
+                    event.turn.error
+                );
                 return event.turn.status;
             }
         }
