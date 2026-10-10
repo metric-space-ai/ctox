@@ -243,7 +243,13 @@ pub(in crate::business_os) fn read_configured_route(
     let binding = super::super::project_chats::supervisor_turns::binding_from_connection(
         &policy, owner, project_id, thread_id, false,
     )?;
-    let route = resolve(&policy, owner, &binding.project_id, &binding.thread_id)?;
+    let route =
+        resolve(&policy, owner, &binding.project_id, &binding.thread_id).map_err(|error| {
+            let code = error
+                .downcast_ref::<SupervisorLumaUnavailable>()
+                .map_or("invalid_supervisor_luma_configuration", |error| error.code);
+            unavailable(code, "configured project Supervisor route is unavailable")
+        })?;
     let mut result = json!({
         "schema": "ctox.workjet.supervisor.route-display.v1",
         "project_id": binding.project_id,

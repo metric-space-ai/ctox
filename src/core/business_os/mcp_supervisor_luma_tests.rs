@@ -400,6 +400,13 @@ fn configured_route_read_refuses_foreign_owner_project_thread_and_stale_model_au
     )?;
     let response = owner_route_read(root.path(), "read-stale", "owner", "project", THREAD)?;
     assert_eq!(response["status"], "failed", "{response}");
+    assert!(response
+        .to_string()
+        .contains("supervisor_account_model_unavailable"));
+    assert!(!response.to_string().contains("native-account"));
+    assert!(!response
+        .to_string()
+        .contains("private-selector-not-exported"));
     assert_eq!(routes(root.path())?, 0);
     Ok(())
 }
