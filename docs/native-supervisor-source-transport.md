@@ -10,7 +10,18 @@ The original native target public identity, instance, account epoch, actor and
 possession-bound device come from NativeTransferAccountHost's existing native
 BusinessData account store. First enrollment remains the real protected native
 pairing path. Its pairing must be associated with the selected workjet_computers
-record by the existing Owner computer.assign policy. A computer label, desktop
+record by the existing Owner computer.assign policy. The normal Workjet computer
+control request accepts an optional `deviceBindingId` (bounded to 160 characters)
+from that existing native pairing. The Shell sends it as `device_binding_id`
+through the existing RxDB/WebRTC command bus. Native Owner policy validates the
+current pairing; caller-supplied Owner/inviter authority is rejected. Confirmation
+requires the exact correlated successful native receipt with the same computer,
+Owner, assigned status and binding. A cached assigned row cannot confirm a new
+binding, and a pairing receipt alone does not establish that association.
+The public response still contains only the existing computer projection;
+the retained native Source verifies actual current association facts separately.
+
+A computer label, desktop
 guest credential, default-account choice or transfer grant cannot replace it.
 
 The process waits for native pin/nonce admission, checks the actual source
