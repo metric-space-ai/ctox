@@ -1346,7 +1346,7 @@ fn validate_default_provider(
         _ => false,
     };
     anyhow::ensure!(
-        configured || matches!(provider.as_str(), "claude" | "codex" | "antigravity"),
+        configured || provider == "claude",
         "default proxy provider is not configured"
     );
     // A user account action may leave the selected provider dormant. Keep the
