@@ -10,6 +10,8 @@ use super::{
     },
 };
 use crate::business_os::consumer_authority::AdmittedConsumerAuthority;
+use ctox_cliproxyapi::internal::auth::xai::native_http;
+
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
