@@ -17,11 +17,22 @@
 /// counts as authenticated.
 pub(crate) const TRUSTED_AUTHSERV_IDS_KEY: &str = "CTO_EMAIL_TRUSTED_AUTHSERV_IDS";
 
+/// The configured ids; malformed entries are dropped and never trusted.
 pub(crate) fn trusted_authserv_ids(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(|id| id.trim().to_ascii_lowercase())
-        .filter(|id| !id.is_empty())
+        .filter(|id| valid_authserv_id(id))
         .collect()
+}
+
+/// An authserv-id is a host-like name. Anything with `=`, `;`, blanks or
+/// parentheses is a method result or a comment, never a server name: an
+/// Exchange Online stamp starts directly with `spf=pass` and has no id at all.
+pub(crate) fn valid_authserv_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, '=' | ';' | '(' | ')' | ',' | '"'))
 }
 
 /// True when the From domain of `sender_address` is authenticated by every
@@ -103,9 +114,14 @@ impl MethodResult {
 fn parse(header: &str) -> ParsedHeader {
     let cleaned = strip_comments(header);
     let mut segments = cleaned.split(';');
+    // A first segment that is already a method result (`spf=pass ...`) has
+    // no authserv-id; such a header never belongs to a trusted server.
     let authserv_id = segments
         .next()
+        .map(str::trim)
+        .filter(|first| !first.contains('='))
         .and_then(|first| first.split_whitespace().next())
+        .filter(|id| valid_authserv_id(id))
         .unwrap_or_default()
         .to_ascii_lowercase();
     let results = segments
@@ -180,6 +196,34 @@ mod tests {
             &dkim_only,
             &trusted(),
             "a@mail.metric-space.ai"
+        ));
+    }
+
+    #[test]
+    fn a_stamp_without_authserv_id_never_authenticates() {
+        // Exchange Online stamps without an authserv-id.
+        let microsoft = headers(&["spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=metric-space.ai; dkim=pass (signature was verified) header.d=metric-space.ai;dmarc=pass action=none header.from=metric-space.ai;compauth=pass reason=100"]);
+        for ids in [
+            "spf=pass",
+            "spf=pass smtp.mailfrom=metric-space.ai",
+            "",
+            "metric-space.ai",
+        ] {
+            assert!(!sender_domain_authenticated(
+                &microsoft,
+                &trusted_authserv_ids(ids),
+                "michael.welsch@metric-space.ai"
+            ));
+        }
+        assert!(
+            trusted_authserv_ids("spf=pass, a b, (x), mx.ok.example")
+                == vec!["mx.ok.example".to_string()]
+        );
+        let empty_id = headers(&["; dmarc=pass header.from=metric-space.ai"]);
+        assert!(!sender_domain_authenticated(
+            &empty_id,
+            &trusted(),
+            "michael.welsch@metric-space.ai"
         ));
     }
 

@@ -73,10 +73,21 @@ fn trusted_authserv(root: &Path, args: &[String]) -> Result<Value> {
     match args {
         [] => {}
         [flag, ids] if flag == "--set" => {
-            let ids = trusted_authserv_ids(ids);
-            if ids.is_empty() {
+            let entries = ids
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
                 bail!("trusted-authserv --set needs at least one authserv-id");
             }
+            if let Some(invalid) = entries
+                .iter()
+                .find(|id| !super::sender_authentication::valid_authserv_id(id))
+            {
+                bail!("not an authserv-id (no '=', ';', blanks or parentheses): {invalid}");
+            }
+            let ids = trusted_authserv_ids(ids);
             runtime_env::set_runtime_env_value(root, TRUSTED_AUTHSERV_IDS_KEY, &ids.join(","))?;
         }
         [flag] if flag == "--clear" => {
@@ -178,6 +189,9 @@ mod tests {
             json!(["mx.example.test", "b.example.test"])
         );
         assert!(run(root, &args(&["trusted-authserv", "--set", " , "])).is_err());
+        for invalid in ["spf=pass", "mx.example.test;", "a b", "(comment)"] {
+            assert!(run(root, &args(&["trusted-authserv", "--set", invalid])).is_err());
+        }
         let cleared = run(root, &args(&["trusted-authserv", "--clear"]))?;
         assert_eq!(cleared["trusted_authserv_ids"], json!([]));
         Ok(())

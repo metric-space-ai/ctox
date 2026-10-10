@@ -872,7 +872,7 @@ pub(crate) fn issue_internal_communication_session_token(
         anyhow::bail!("communication session turn has no queue lease");
     };
     anyhow::ensure!(
-        matches!(lease_status.as_str(), "leased" | "running"),
+        matches!(lease_status.as_str(), "leased" | "running") && lease_started_at.is_some(),
         "communication session turn is not leased"
     );
     let issued_at_ms = now_ms();
@@ -936,6 +936,7 @@ fn verify_communication_session(
     anyhow::ensure!(
         lease.as_ref().is_some_and(|(status, started_at)| {
             matches!(status.as_str(), "leased" | "running")
+                && started_at.is_some()
                 && started_at == &binding.lease_started_at
         }),
         "communication session turn is no longer leased"
@@ -15235,8 +15236,8 @@ mod tests {
         let core = crate::mission::channels::open_channel_db(&crate::paths::core_db(root))?;
         for key in [mail, rework] {
             core.execute(
-                "INSERT INTO communication_routing_state (message_key, route_status, updated_at)
-                 VALUES (?1, 'leased', '2026-10-10T00:00:00Z')",
+                "INSERT INTO communication_routing_state (message_key, route_status, leased_at, updated_at)
+                 VALUES (?1, 'leased', '2026-10-10T08:00:00Z', '2026-10-10T00:00:00Z')",
                 [key],
             )?;
         }
@@ -15322,8 +15323,15 @@ mod tests {
             [rework],
         )?;
         assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        // A lease without a start time never validates a session.
         core.execute(
             "UPDATE communication_routing_state SET leased_at = NULL WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        assert!(issue(rework, "owner@example.test").is_err());
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = '2026-10-10T08:00:00Z' WHERE message_key = ?1",
             [rework],
         )?;
         assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
