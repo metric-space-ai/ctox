@@ -417,6 +417,9 @@ async fn run_invocation(prepared: PreparedInvocation) {
             state.response_model.conflicting,
         )
     };
+    let upstream_ok = observation
+        .as_ref()
+        .is_some_and(|w| (200..300).contains(&w.status));
     // No nested store access inside Models' bounded extraction callback.
     let recorded = prepared.session.controller.with_current(|_, core, _| {
         let (model, request, status) = match observation {
@@ -428,7 +431,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
             state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,response_model=?8
             WHERE operation_id=?6 AND controller_id=?7",
             params![
-                if result.is_ok() && !conflicting { "observed" } else { "failed" },
+                if result.is_ok() && !conflicting && upstream_ok { "observed" } else { "failed" },
                 model,
                 request,
                 status,
@@ -447,7 +450,8 @@ async fn run_invocation(prepared: PreparedInvocation) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.finished = true;
-    state.failed = result.is_err() || recorded.is_err() || state.response_model.conflicting;
+    state.failed =
+        result.is_err() || recorded.is_err() || state.response_model.conflicting || !upstream_ok;
 }
 impl ModelJob {
     fn push(
