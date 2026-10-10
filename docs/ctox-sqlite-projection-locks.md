@@ -14,7 +14,12 @@ Retention now discovers candidates outside a transaction and reserves an
 IMMEDIATE writer separately for each orphan. It rechecks the attempt identity,
 start/finalization state, current lease and durable finalization before deleting
 the selection event, tombstone outbox, attempt and assignment together.
-A candidate started or leased in the meantime survives. The existing limits
+A candidate started or leased in the meantime survives. Empty maintenance is
+read-only: SQLite reserves its sole writer even for an UPDATE or DELETE that
+matches zero rows. Finalization evidence and finished-retention candidates are
+therefore discovered outside a transaction, and current guards are rechecked
+under one short IMMEDIATE reservation per candidate. Reopened routes and rows
+that entered the newest-500 window survive. The existing limits
 (128 orphans and 128 completed rows; newest 500 completed rows retained) remain.
 
 Batch queue admission previously reserved IMMEDIATE before ranking all pending
@@ -33,7 +38,11 @@ remain atomic. Single-record writes keep their existing boundaries. Cold event
 delivery prepares payloads and deduplication outside the writer, then commits at
 most 64 source records and 64 mirror records per separate transaction, using the
 same per-row merge/envelope functions. Source commit precedes mirror delivery;
-notifications follow mirror commit. A failed mirror chunk rolls back together,
+notifications follow mirror commit. Batch replication clocks are reserved from the
+persisted collection high-water mark under that mirror's IMMEDIATE transaction,
+including when another retained writer has advanced it since this cache opened.
+Each row is strictly later than the earlier feed cursor; rollback publishes no
+reservation. A failed mirror chunk rolls back together,
 retains completed chunks in the dedupe cache and restores the unclaimed replay
 cursor so its unpublished rows stay eligible. No writer reservation spans a full
 pass or both independently delivered stores. Repeated source upserts and mirror
@@ -55,7 +64,8 @@ document content or credentials are logged. The fixed threshold is 50 ms.
 
 Operations covered: queue.lease_task, queue.lease_batch, queue.ack_attempt,
 queue.ack_messages,
-crew.retention_orphan, crew.finalize_attempt, projection.source_upsert,
+crew.retention_orphan, crew.retention_start_evidence, crew.retention_finished,
+crew.finalize_attempt, projection.source_upsert,
 projection.source_tombstone, projection.rxdb_upsert and
 projection.rxdb_tombstone, projection.source_batch and projection.rxdb_batch.
 Queue operations may reserve attached projection

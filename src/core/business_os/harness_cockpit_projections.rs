@@ -742,12 +742,14 @@ fn refresh_measured_with(
     if flags & MAINTENANCE != 0 {
         // Maintenance must never suppress unrelated cockpit projections. Older
         // databases have attempts but no tombstone outbox until their migration.
+        let mut maintenance_stage = "crew.retention";
         let maintenance = timing.phase("retain_attempts", || -> Result<()> {
             if !has_table(conn, "crew_attempts")? || !has_table(conn, "crew_projection_tombstones")?
             {
                 return Ok(());
             }
             crate::crew::retain_attempts(conn, Utc::now().timestamp_millis())?;
+            maintenance_stage = "crew.tombstone_scan";
             let ids = conn
                 .prepare(
                     "SELECT event_id FROM crew_projection_tombstones ORDER BY event_id LIMIT 128",
@@ -755,12 +757,14 @@ fn refresh_measured_with(
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for id in ids {
+                maintenance_stage = "crew.tombstone_publish";
                 writer.tombstone_source_projection(
                     "ctox_harness_events",
                     &id,
                     Utc::now().timestamp_millis(),
                 )?;
                 if writer.inner.delivered_to_rxdb("ctox_harness_events") {
+                    maintenance_stage = "crew.tombstone_ack";
                     conn.execute(
                         "DELETE FROM crew_projection_tombstones WHERE event_id=?1",
                         [&id],
@@ -771,8 +775,19 @@ fn refresh_measured_with(
         });
         match maintenance {
             Ok(()) => writer.crew_maintenance_warned = false,
-            Err(_) if !writer.crew_maintenance_warned => {
-                eprintln!("[ctox cockpit] crew maintenance failed; other projections continue; next maintenance retries");
+            Err(error) if !writer.crew_maintenance_warned => {
+                // Operational codes and fixed phase names only: SQL, event
+                // payloads and account data never enter this diagnostic.
+                let sqlite_code =
+                    error
+                        .chain()
+                        .find_map(|cause| match cause.downcast_ref::<rusqlite::Error>() {
+                            Some(rusqlite::Error::SqliteFailure(code, _)) => {
+                                Some(code.extended_code)
+                            }
+                            _ => None,
+                        });
+                eprintln!("[ctox cockpit] crew maintenance failed operation={maintenance_stage} sqlite_code={sqlite_code:?}; other projections continue; next maintenance retries");
                 writer.crew_maintenance_warned = true;
             }
             Err(_) => {}

@@ -13513,9 +13513,18 @@ impl RxdbCollectionWriter {
         if records.is_empty() {
             return Ok(());
         }
-        let mut replication_lwt = self.last_replication_lwt;
         let tx =
             crate::persistence::SqliteWriteTransaction::begin(&self.conn, "projection.rxdb_batch")?;
+        // Another retained writer may have published since this cache opened.
+        // Reserve clocks from the persisted high-water mark while owning the
+        // writer, so every committed row stays beyond an earlier feed cursor.
+        let persisted_lwt = tx
+            .prepare_cached(&format!(
+                "SELECT COALESCE(MAX(lastWriteTime), 0) FROM {}",
+                self.table
+            ))?
+            .query_row([], |row| row.get::<_, f64>(0))? as i64;
+        let mut replication_lwt = self.last_replication_lwt.max(persisted_lwt);
         for (id, updated, payload) in records {
             let now = now_ms().min(i64::MAX as u128) as i64;
             replication_lwt = now.max(replication_lwt.saturating_add(1));

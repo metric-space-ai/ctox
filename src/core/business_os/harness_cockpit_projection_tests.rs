@@ -1167,6 +1167,52 @@ fn failed_event_batch_retries_unpublished_rows_without_advancing_cursor() -> Res
 }
 
 #[test]
+fn retained_projection_writers_publish_batches_beyond_the_persisted_feed_cursor() -> Result<()> {
+    let (root, _) = setup()?;
+    let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+    let rows = |prefix: &str, count: usize| {
+        (0..count).map(|n| {
+            let id = format!("{prefix}-{n}");
+            (id.clone(), 1, json!({"id":id,"kind":"phase","task_id":"clock-fixture","created_at_ms":1,"updated_at_ms":1}))
+        }).collect::<Vec<_>>()
+    };
+    let mut left = BusinessProjectionWriter::open(root.path())?;
+    let mut right = BusinessProjectionWriter::open(root.path())?;
+    // Both retain a mirror writer before another publisher advances its clock.
+    left.upsert_source_projection_batch("ctox_harness_events", rows("prime-left", 1))?;
+    right.upsert_source_projection_batch("ctox_harness_events", rows("prime-right", 1))?;
+    let future = Utc::now().timestamp_millis() + 60_000;
+    rxdb.execute(
+        "UPDATE ctox_business_os__ctox_harness_events__v0
+         SET lastWriteTime=?1,data=json_set(data,'$._meta.lwt',?1)
+         WHERE id='prime-right-0'",
+        [future],
+    )?;
+    // Future/skewed persisted clocks make this regression independent of
+    // scheduler speed. Source timestamps remain ordinary projection facts.
+    left.upsert_source_projection_batch("ctox_harness_events", rows("clock-left", 2))?;
+    let watermark: f64 = rxdb.query_row(
+        "SELECT MAX(lastWriteTime) FROM ctox_business_os__ctox_harness_events__v0",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(watermark > future as f64);
+    right.upsert_source_projection_batch("ctox_harness_events", rows("clock-right", 2))?;
+    let visible: i64 = rxdb.query_row(
+        "SELECT COUNT(*) FROM ctox_business_os__ctox_harness_events__v0
+         WHERE id IN ('clock-right-0','clock-right-1') AND lastWriteTime>?1
+           AND json_extract(data,'$._meta.lwt')=lastWriteTime",
+        [watermark],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        visible, 2,
+        "retained writer rows must remain eligible after the earlier cursor"
+    );
+    Ok(())
+}
+
+#[test]
 fn projection_batches_keep_committed_chunks_and_retry_failed_mirror() -> Result<()> {
     let (root, _) = setup()?;
     let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
