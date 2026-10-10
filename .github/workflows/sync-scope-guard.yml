@@ -1,0 +1,40 @@
+name: sync-scope-guard
+
+# CTOX Sync v3 (docs/rfcs/ctox-sync-v3.md §6): changes to the sync contract,
+# protocol or native peer land only as part of an RFC stage. A pull request
+# that touches the sync core must carry a `sync-v3:S<n>` label. Runs on every
+# pull request so it can be a required check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sync-scope-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check sync paths against the RFC stage label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          changed=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename')
+          sync=$(printf '%s\n' "$changed" | grep -E '^(src/apps/business-os/rxdb/|src/core/rxdb/|src/core/business_os/rxdb_peer[^/]*\.rs$|src/apps/business-os/shared/(sync|db|rxdb-runtime)\.js$|src/core/business_os/command_plane\.rs$|docs/ctox-rxdb\.md$)' || true)
+          if [ -z "$sync" ]; then
+            echo "No sync-core paths touched."
+            exit 0
+          fi
+          echo "Sync-core paths touched:"
+          printf '  %s\n' $sync
+          if printf '%s' "$LABELS" | grep -Eq '"sync-v3:S[0-5]"'; then
+            echo "Stage label present: $LABELS"
+            exit 0
+          fi
+          echo "::error::This PR changes the CTOX Sync core but has no sync-v3:S<n> label. Sync changes land only as an RFC stage (docs/rfcs/ctox-sync-v3.md). Ask the sync owner to assign the stage."
+          exit 1
