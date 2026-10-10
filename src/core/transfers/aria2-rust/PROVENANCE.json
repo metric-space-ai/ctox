@@ -59,5 +59,13 @@
     "tests/room_share.rs": "95efffa8342a486b34e0b42f9f1b937b182a2d4c0922cd2485ae1b47c267fb70",
     "tests/rpc.rs": "e0766fb86cae070414ae8f1897a6fc2a774701eeecb61ec11d0535b3d1bd07e1",
     "tests/sftp_download.rs": "fba27faa8310027e1b683745a471f5ad887d6906674405a6f9cf2dfefb65f9a9"
+  },
+  "ctox_overlays": {
+    "Cargo.lock": {
+      "upstream_sha256": "5ff8de54d96e58daf887f85ba94a8e292b8c5c92721392e983fafea3810aa069",
+      "installed_sha256": "61d8e2dbe4d147fae0f1070937566fcdcb49936cfddc5e115ea2362b16cd8b73",
+      "source_commit": "505771b49fe0f0754bb5d9fd7f082817da34481f",
+      "reason": "RUSTSEC-2026-0285: rustls 0.23.44 → 0.23.45; version and registry checksum only"
+    }
   }
 }

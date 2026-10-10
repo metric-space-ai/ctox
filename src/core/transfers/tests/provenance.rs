@@ -43,7 +43,7 @@ fn receipt_revision_matches_the_in_tree_engine_source() {
     // Bind the entire immutable-source file list to this reviewed upstream pin.
     assert_eq!(
         format!("{:x}", Sha256::digest(manifest)),
-        "28b9aa23b3c9a45ce40521a8e12aa92af1a505b3076f0eeb6e0fea63791e4a6d",
+        "64072edfdea01b427dcc47348396a23140c3b993a19096d2f3e04530117bc858",
         "engine source changes require an explicit provenance/receipt pin update"
     );
     let provenance: serde_json::Value = serde_json::from_slice(manifest).unwrap();
@@ -51,6 +51,18 @@ fn receipt_revision_matches_the_in_tree_engine_source() {
     assert_eq!(provenance["license"], "GPL-2.0-or-later");
     let files = provenance["files"].as_object().unwrap();
     assert_eq!(files.len(), 55, "retain the complete tracked upstream tree");
+    let overlays = provenance["ctox_overlays"].as_object().unwrap();
+    assert_eq!(
+        overlays.len(),
+        1,
+        "only the reviewed lockfile overlay is allowed"
+    );
+    let lock_overlay = &overlays["Cargo.lock"];
+    assert_eq!(lock_overlay["upstream_sha256"], files["Cargo.lock"]);
+    assert_eq!(
+        lock_overlay["source_commit"],
+        "505771b49fe0f0754bb5d9fd7f082817da34481f"
+    );
     let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("aria2-rust");
     let mut actual = std::collections::BTreeSet::new();
     imported_files(&engine, &engine, &mut actual);
@@ -61,12 +73,17 @@ fn receipt_revision_matches_the_in_tree_engine_source() {
         "reject unlisted engine source/build files"
     );
     for (name, expected) in files {
+        let expected = if name == "Cargo.lock" {
+            lock_overlay["installed_sha256"].as_str().unwrap()
+        } else {
+            expected.as_str().unwrap()
+        };
         let bytes = std::fs::read(engine.join(name)).unwrap_or_else(|error| {
             panic!("imported engine file {name} must remain available: {error}")
         });
         assert_eq!(
             format!("{:x}", Sha256::digest(&bytes)),
-            expected.as_str().unwrap(),
+            expected,
             "imported engine file {name} differs from the pinned upstream source"
         );
     }
