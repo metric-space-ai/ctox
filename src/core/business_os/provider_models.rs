@@ -326,17 +326,28 @@ impl ConsumableModel {
         apply: impl FnOnce(&ConsumerFacts, &ConsumableModel) -> Result<T>,
     ) -> Result<T> {
         authority.with_current(|facts, conn| {
-            let current = consumable_model(
-                conn,
-                facts,
-                &self.account.account_id,
-                self.account.account_revision,
-                &self.model,
-                store::now_ms() as i64,
-            )?;
-            assert_same_binding(self, &current)?;
-            apply(facts, &current)
+            self.assert_current_in_policy(facts, conn)?;
+            apply(facts, self)
         })
+    }
+
+    /// Recheck an already sealed model inside the actual controller's held
+    /// source/issuer/Core/Policy fence. This neither enters another fence nor
+    /// constructs selection or execution authority from caller facts.
+    pub(crate) fn assert_current_in_policy(
+        &self,
+        facts: &ConsumerFacts,
+        policy: &Connection,
+    ) -> Result<()> {
+        let current = consumable_model(
+            policy,
+            facts,
+            &self.account.account_id,
+            self.account.account_revision,
+            &self.model,
+            store::now_ms() as i64,
+        )?;
+        assert_same_binding(self, &current)
     }
 }
 
