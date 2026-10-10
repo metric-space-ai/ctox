@@ -17,8 +17,24 @@ const MAX_OPERATIONS: usize = 64;
 const MODEL_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_supervisor_native_model_requests (
  operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
  controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
- state TEXT NOT NULL, requested_model TEXT, response_model TEXT, upstream_request_id TEXT, http_status INTEGER,
+ state TEXT NOT NULL, operation_kind TEXT, requested_model TEXT, response_model TEXT, response_message_id TEXT, upstream_request_id TEXT, http_status INTEGER,
  created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER);";
+
+fn ensure_model_schema(core: &Connection) -> anyhow::Result<()> {
+    core.execute_batch(MODEL_SCHEMA)?;
+    let columns = core
+        .prepare("PRAGMA table_info(workjet_supervisor_native_model_requests)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for column in ["response_message_id", "operation_kind"] {
+        if !columns.iter().any(|existing| existing == column) {
+            core.execute_batch(&format!(
+                "ALTER TABLE workjet_supervisor_native_model_requests ADD COLUMN {column} TEXT"
+            ))?;
+        }
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 pub(super) struct ModelRegistry {
@@ -50,6 +66,7 @@ struct ResponseModelObservation {
     pending: Vec<u8>,
     skipping: bool,
     model: Option<String>,
+    message_id: Option<String>,
     conflicting: bool,
 }
 impl ResponseModelObservation {
@@ -72,6 +89,18 @@ impl ResponseModelObservation {
             self.conflicting = true;
         } else {
             self.model = Some(model.to_owned());
+        }
+        // This is the native upstream response's message identity. The SDK
+        // correlation, outgoing request ID and requested model are not witnesses.
+        if let Some(id) = message["id"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        {
+            if self.message_id.as_deref().is_some_and(|old| old != id) {
+                self.conflicting = true;
+            } else {
+                self.message_id = Some(id.to_owned());
+            }
         }
     }
     fn observe(&mut self, bytes: &[u8], streaming: bool, status: u16) {
@@ -350,12 +379,16 @@ fn prepare_invocation(
         "native model operation capacity reached"
     );
     session.controller.with_current(|_,core,_| {
-        core.execute_batch(MODEL_SCHEMA)?;
+        ensure_model_schema(core)?;
         core.execute("INSERT INTO workjet_supervisor_native_model_requests
-            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms)
-            VALUES (?1,?2,?3,?4,?5,?6,'accepted',?7)",
+            (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms,operation_kind)
+            VALUES (?1,?2,?3,?4,?5,?6,'accepted',?7,?8)",
             params![id,session.controller.execution_key(),session.controller.lease.lease_hash,
-                session.controller.controller_id(),correlation,hash,now_ms()])?;
+                session.controller.controller_id(),correlation,hash,now_ms(),
+                match op {
+                    wire::SourceModelOperation::Messages => "messages",
+                    wire::SourceModelOperation::CountTokens => "count_tokens",
+                }])?;
         Ok(())
     })?;
     let job = Arc::new(ModelJob {
@@ -405,7 +438,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    let (observation, response_model, conflicting) = {
+    let (observation, response_model, response_message_id, conflicting) = {
         let mut state = prepared
             .job
             .state
@@ -414,6 +447,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
         (
             state.witness.take(),
             state.response_model.model.clone(),
+            state.response_model.message_id.clone(),
             state.response_model.conflicting,
         )
     };
@@ -428,17 +462,23 @@ async fn run_invocation(prepared: PreparedInvocation) {
         };
         let changed = core.execute(
             "UPDATE workjet_supervisor_native_model_requests SET
-            state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,response_model=?8
+            state=?1,requested_model=?2,upstream_request_id=?3,http_status=?4,finished_at_ms=?5,
+            response_model=?8,response_message_id=?9
             WHERE operation_id=?6 AND controller_id=?7",
             params![
-                if result.is_ok() && !conflicting && upstream_ok { "observed" } else { "failed" },
+                if result.is_ok() && !conflicting && upstream_ok {
+                    "observed"
+                } else {
+                    "failed"
+                },
                 model,
                 request,
                 status,
                 now_ms(),
                 prepared.id,
                 prepared.session.controller.controller_id(),
-                response_model
+                response_model,
+                response_message_id
             ],
         )?;
         anyhow::ensure!(changed == 1, "native model observation row changed");
@@ -537,6 +577,75 @@ mod tests {
             state: Mutex::new(ModelState::default()),
             task: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn native_response_message_id_is_not_request_or_content_correlation() {
+        let mut seen = ResponseModelObservation::default();
+        seen.observe(b"data: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_ob", true, 200);
+        assert!(seen.message_id.is_none());
+        seen.observe(b"served\"}}\n", true, 200);
+        assert_eq!(seen.message_id.as_deref(), Some("msg_observed"));
+        let mut missing = ResponseModelObservation::default();
+        missing.observe(
+            b"data: {\"type\":\"content_block_delta\",\"delta\":{\"id\":\"msg_content\"}}\n",
+            true,
+            200,
+        );
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_denied\"}",
+            false,
+            401,
+        );
+        assert!(missing.message_id.is_none());
+        missing.observe(
+            b"{\"type\":\"message\",\"model\":\"claude-opus-5-5\",\"id\":\"msg_buffered\"}",
+            false,
+            200,
+        );
+        assert_eq!(missing.message_id.as_deref(), Some("msg_buffered"));
+        assert!(!missing.conflicting);
+    }
+
+    #[test]
+    fn conflicting_native_response_message_ids_cannot_form_one_witness() {
+        let mut seen = ResponseModelObservation::default();
+        for id in ["msg_first", "msg_first", "msg_other"] {
+            let value = json!({"type":"message","model":"claude-opus-5-5","id":id});
+            seen.observe(&serde_json::to_vec(&value).unwrap(), false, 200);
+        }
+        assert!(seen.conflicting);
+        assert_eq!(seen.message_id.as_deref(), Some("msg_first"));
+    }
+
+    #[test]
+    fn model_message_id_migration_preserves_existing_requested_only_rows() -> anyhow::Result<()> {
+        let core = Connection::open_in_memory()?;
+        core.execute_batch(
+            "CREATE TABLE workjet_supervisor_native_model_requests (
+                operation_id TEXT PRIMARY KEY, execution_key TEXT NOT NULL, lease_hash TEXT NOT NULL,
+                controller_id TEXT NOT NULL, sdk_correlation TEXT NOT NULL, body_hash TEXT NOT NULL,
+                state TEXT NOT NULL, requested_model TEXT, response_model TEXT,
+                upstream_request_id TEXT, http_status INTEGER, created_at_ms INTEGER NOT NULL,
+                finished_at_ms INTEGER);
+             INSERT INTO workjet_supervisor_native_model_requests
+                (operation_id,execution_key,lease_hash,controller_id,sdk_correlation,body_hash,state,created_at_ms)
+                VALUES ('existing','execution','lease','controller','requested-only','body','accepted',1);",
+        )?;
+        ensure_model_schema(&core)?;
+        ensure_model_schema(&core)?;
+        let row = core.query_row(
+            "SELECT sdk_correlation,response_message_id,operation_kind FROM workjet_supervisor_native_model_requests
+             WHERE operation_id='existing'",
+            [],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?
+            )),
+        )?;
+        assert_eq!(row, ("requested-only".into(), None, None));
+        Ok(())
     }
 
     #[test]

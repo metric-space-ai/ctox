@@ -33,6 +33,10 @@ import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
+  actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
+  startupCacheScope, writeStartupSnapshot,
+} from './startup-cache.mjs';
+import {
   CUSTOM_GROUP_LABEL, customFieldKey, fieldGroupsFor, isCustomFieldKey, normalizeCustomFields, normalizeFieldLabels,
 } from './field-catalog.mjs';
 
@@ -656,6 +660,7 @@ const state = {
   campaignMutationMessage: '',
   adapterInspectorSourceId: '',
   syncPending: true,
+  nurZwischenstand: false,
   // Waehrend des Starts schreibt die App nichts automatisch (25.09.2026: ein
   // frisch gestarteter Browser schrieb 13 Leads mit altem Stand zurueck).
   startLaeuft: true,
@@ -721,6 +726,7 @@ export async function mount(ctx) {
   // Die Daten kommen dadurch nicht frueher, aber die App ist sofort da und
   // sagt ehrlich, dass sie noch synchronisiert.
   render();
+  void zeigeStartZwischenstand();
   reload()
     .then(() => render())
     .catch((error) => {
@@ -754,6 +760,9 @@ export async function mount(ctx) {
     if (state.leerNachladenTimer) globalThis.clearTimeout(state.leerNachladenTimer);
     state.leerNachladenTimer = null;
     if (state.commandRefreshTimer) globalThis.clearInterval(state.commandRefreshTimer);
+    if (state.startupSnapshotTimer) globalThis.clearTimeout(state.startupSnapshotTimer);
+    state.startupSnapshotTimer = null;
+    state.nurZwischenstand = false;
     if (state.kampagnenPersonenTimer) globalThis.clearInterval(state.kampagnenPersonenTimer);
     if (state.freitextTakt) globalThis.clearInterval(state.freitextTakt);
     state.freitextTakt = null;
@@ -862,7 +871,8 @@ async function synchronizeInitialData() {
   bootSchritt('readiness');
   // Die Liste erscheint sofort mit dem vorhandenen Stand; der Hinweis "wird
   // synchronisiert" bleibt, bis der Start fertig ist (vorher 6-7 s leer).
-  void reload().then(() => render()).catch(() => { scheduleCollectionReload(); });
+  const ersteLadung = reload().then(() => { render(); return true; })
+    .catch(() => { scheduleCollectionReload(); return false; });
   // Readiness ist eine BESCHRIFTUNG, kein Tor. `catching-up` ist im
   // Readiness-Vertrag der Sammeleimer fuer JEDEN nicht-terminalen Zustand -
   // auch fuer den dauerhaften: ein Tab, der nicht Multi-Tab-Leader ist,
@@ -876,7 +886,9 @@ async function synchronizeInitialData() {
   // Wir warten weiterhin, aber ein nicht erreichter Live-Zustand darf den
   // Start nicht mehr abbrechen.
   const nichtLive = [];
-  await Promise.all(REPLICATED_COLLECTIONS.map((collection) => waitForCollectionReadiness(collection)
+  await Promise.all(REPLICATED_COLLECTIONS.map((collection) => (DEMAND_ONLY_COLLECTIONS.has(collection)
+    ? waitForDemandCollection(collection, ersteLadung)
+    : waitForCollectionReadiness(collection))
     .catch((error) => {
       nichtLive.push(collection);
       console.info('[outbound-lead-generation] collection not live yet, continuing', {
@@ -888,7 +900,10 @@ async function synchronizeInitialData() {
   bootSchritt('seed-sources');
   const sourceContractChanged = await pflegeSchritt('seed-sources', () => seedSources());
   bootSchritt('reload');
-  await pflegeSchritt('reload-0', () => reload());
+  // Die Leads hat die erste Ladung schon vollstaendig vom Server gelesen;
+  // ein zweites Blaettern ueber alle Leads kostete den Start 10-40 s.
+  await pflegeSchritt('reload-0', () => reload(Object.keys(state.collections)
+    .filter((key) => key !== 'leads' || !state.collectionsEverLoaded?.has('leads'))));
   if (!listLeads().length) planeLeerNachladen();
   // Reparatur- und Abgleichsroutinen schreiben ganze Datensaetze. Auf einem
   // noch nicht live abgeglichenen Stand schrieben sie alte Staende zurueck
@@ -1093,6 +1108,27 @@ async function waitForReplicationBridge(bridge, collection, timeoutMs = REPLICAT
       setTimeout(() => reject(new Error(`${collection} konnte nicht synchronisiert werden.`)), timeoutMs);
     }),
   ]);
+}
+
+// Demand-only collections (collections.schema.json syncProfile) are never
+// replicated as a whole, so their readiness never turns "live". Waiting for
+// it cost every start the full 60-s timeout and skipped the start-up
+// reconciliation (thesen 10.10.2026, after the leads became demand-only on
+// 09.10.). For them "ready" is the first complete authoritative read.
+const DEMAND_ONLY_COLLECTIONS = new Set(['outbound_lead_generation_leads']);
+async function waitForDemandCollection(collection, ersteLadung, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
+  const key = collection === 'outbound_lead_generation_leads' ? 'leads' : collection;
+  let timer = null;
+  const timeout = new Promise((resolve) => { timer = globalThis.setTimeout(() => resolve(false), timeoutMs); });
+  try {
+    await Promise.race([ersteLadung, timeout]);
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
+  if (!state.collectionsEverLoaded?.has(key)) {
+    throw new Error(`${collection} konnte nicht vollständig aus CTOX gelesen werden.`);
+  }
+  state.syncWaitingCollections.delete(collection);
 }
 
 async function waitForCollectionReadiness(collection, timeoutMs = REPLICATION_WRITE_TIMEOUT_MS) {
@@ -1495,7 +1531,15 @@ function bindUi() {
   if (!state.freitextTakt) state.freitextTakt = globalThis.setInterval(() => { void verarbeiteFreitextAntworten().catch(() => {}); }, 20_000);
   host.addEventListener('pointerdown', () => { state.sourcePanelPointerAt = Date.now(); }, true);
   host.addEventListener('click', (event) => {
-    if (event.target?.closest?.('[data-action]')) state.sourcePanelUserActionAt = Date.now();
+    const actionElement = event.target?.closest?.('[data-action]');
+    if (actionElement) state.sourcePanelUserActionAt = Date.now();
+    if (state.nurZwischenstand && actionElement && !actionAllowedOnStartupSnapshot(actionElement.dataset.action)) {
+      event.preventDefault();
+      event.stopPropagation();
+      state.zwischenstandHinweisAt = Date.now();
+      renderSyncLine();
+      return undefined;
+    }
     // Jede Aktion ist async; ein Fehler (Wartung/Schreibschutz, abgerissene
     // Verbindung, Validierung) flog bisher als unbehandelte Ablehnung aus dem
     // Klick und der Nutzer sah nichts. Klicktest 11.09.2026: ~15 stille
@@ -1733,7 +1777,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
     const collection = collections[key];
     if (key === 'leads') {
       const changes = changesByKey?.get?.('leads');
-      const canPatch = changes instanceof Map && state.leadListRows
+      const canPatch = changes instanceof Map && state.leadListRows && !state.nurZwischenstand
         && state.leadHydrationBindingGeneration === bindingGeneration;
       if (canPatch) {
         try {
@@ -1779,6 +1823,75 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
   const fresh = new Map(results.filter(([key]) => lauf >= (applied.get(key) || 0)));
   for (const key of fresh.keys()) applied.set(key, lauf);
   if (!fresh.size) return;
+  if (fresh.has('leads')) state.nurZwischenstand = false;
+  applyFreshCollections(fresh, bindingGeneration, leadChanges);
+  if (fresh.has('leads')) scheduleStartupSnapshotSave();
+  } finally {
+    if (failures.length) {
+      throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
+        code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
+        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)?.message])),
+      });
+    }
+  }
+}
+
+function startupSnapshotScope() {
+  return startupCacheScope({
+    host: globalThis.location?.host || '',
+    userId: state.ctx?.session?.user?.id || state.ctx?.session?.userId || '',
+  });
+}
+
+// Shows this browser's last list (startup-cache.mjs) until the live read lands.
+async function zeigeStartZwischenstand() {
+  const generation = state.collectionBindingGeneration;
+  const snapshot = await readStartupSnapshot(startupSnapshotScope());
+  if (!snapshot || !state.uiMounted || generation !== state.collectionBindingGeneration) return;
+  if (state.reloadAngewendetJeSammlung?.has('leads')) return;
+  const fresh = new Map([
+    ['sources', snapshot.sources], ['adapters', snapshot.adapters], ['imports', snapshot.imports],
+    ['researchPolicies', snapshot.researchPolicies], ['leads', snapshot.leads],
+  ]);
+  state.nurZwischenstand = true;
+  state.zwischenstandVomMs = snapshot.savedAtMs;
+  try {
+    applyFreshCollections(fresh, generation, { changedIds: new Set(), removedIds: new Set() });
+  } catch (error) {
+    state.nurZwischenstand = false;
+    console.warn('[outbound-lead-generation] Gespeicherter Stand nicht anzeigbar', String(error?.message || error).slice(0, 140));
+    return;
+  }
+  render();
+}
+
+const STARTUP_SNAPSHOT_MIN_INTERVAL_MS = 60_000;
+const STARTUP_SNAPSHOT_KEYS = ['sources', 'adapters', 'imports', 'researchPolicies', 'leads'];
+function scheduleStartupSnapshotSave() {
+  if (state.startupSnapshotTimer) return;
+  const wait = Math.max(5000, STARTUP_SNAPSHOT_MIN_INTERVAL_MS - (Date.now() - (state.startupSnapshotSavedAt || 0)));
+  state.startupSnapshotTimer = globalThis.setTimeout(() => {
+    state.startupSnapshotTimer = null;
+    void saveStartupSnapshot();
+  }, wait);
+}
+
+async function saveStartupSnapshot() {
+  if (!state.uiMounted || state.nurZwischenstand) return;
+  if (!STARTUP_SNAPSHOT_KEYS.every(key => state.collectionsEverLoaded?.has(key))) return;
+  state.startupSnapshotSavedAt = Date.now();
+  await writeStartupSnapshot(startupSnapshotScope(), buildStartupSnapshot({
+    sources: state.sources,
+    adapters: state.adapters,
+    imports: state.imports,
+    researchPolicies: [state.researchPolicyRecord, state.digestRecord, state.digestStatus],
+    leads: listLeads(),
+  }));
+}
+
+// Applies loaded collection rows to the app state. Used by the live reload
+// and, once at start, by the browser's last list snapshot (startup-cache.mjs).
+function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   const sources = fresh.get('sources');
   const adapters = fresh.get('adapters');
   const imports = fresh.get('imports');
@@ -1870,14 +1983,6 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
     state.selectedLeadId = selectedCampaignLeads[0]?.id || '';
   }
   void loadSelectedLeadDetails();
-  } finally {
-    if (failures.length) {
-      throw Object.assign(new Error('Daten konnten nicht geladen werden: ' + failures.join(', ')), {
-        code: 'OUTBOUND_COLLECTION_READ_FAILED', failedKeys: failures,
-        details: Object.fromEntries(failures.map(key => [key, readErrors.get(key)?.message])),
-      });
-    }
-  }
 }
 
 function listLeads() { return state.leadListRows || state.leads; }
@@ -2129,6 +2234,13 @@ function renderSyncLine() {
     const failed = visibleErrors.map(key => labels[key] || key).join(', ');
     line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
     line.className = 'is-error';
+  } else if (state.nurZwischenstand) {
+    const vom = new Date(state.zwischenstandVomMs || Date.now()).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const gesperrt = Date.now() - (state.zwischenstandHinweisAt || 0) < 8000;
+    line.textContent = gesperrt
+      ? `Gespeicherter Stand vom ${vom}. Änderungen sind möglich, sobald der aktuelle Stand aus CTOX geladen ist.`
+      : `Gespeicherter Stand vom ${vom} – wird mit CTOX abgeglichen`;
+    line.className = 'is-syncing';
   } else if (state.syncPending || state.collectionReadErrors?.size) {
     line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
     line.className = 'is-syncing';
@@ -4907,6 +5019,8 @@ function terminalCampaignQueuedLeadPatch(lead, command, nowMs = Date.now()) {
 }
 
 async function reconcileCampaignResearchRuns({ authoritative = false } = {}) {
+  // Background reconciliation writes leads; never on the startup snapshot.
+  if (state.nurZwischenstand) return false;
   if (state.reconcilingCampaignRuns) return false;
   const campaigns = campaignRows().map((campaign) => campaign.name).filter(Boolean);
   if (!campaigns.length) return false;
@@ -5650,6 +5764,7 @@ function baueFreitextUrteil(roh, pruefung, commandId) {
 }
 
 async function verarbeiteFreitextAntworten() {
+  if (state.nurZwischenstand) return;
   if (state.freitextVerarbeitung) return;
   const collection = state.ctx?.db?.collection?.('business_commands');
   if (!collection?.findOne) return;
@@ -6623,6 +6738,7 @@ async function ergaenzeKampagnenPersonen(lead) {
   return ergaenzt + verknuepft;
 }
 async function kampagnenPersonenPflege() {
+  if (state.nurZwischenstand) return;
   if (state.kampagnenPersonenLaeuft) return;
   state.kampagnenPersonenLaeuft = true;
   try {
@@ -8029,6 +8145,7 @@ async function openSourceAuthorization(item, authAssist) {
 }
 
 async function reconcileAdapterCommands({ authoritative = false } = {}) {
+  if (state.nurZwischenstand) return false;
   if (state.reconcilingAdapterCommands) return false;
   const trackedAdapters = state.adapters.filter((adapter) => {
     const commandId = String(adapter.last_command_id || '').trim();
@@ -10582,6 +10699,7 @@ function abgleichDiagnose(stufe, daten = {}) {
   state.abgleichDiagnoseStufe = { stufe, seit: Date.now(), daten };
 }
 async function reconcileResearchCommands({ authoritative = false } = {}) {
+  if (state.nurZwischenstand) return false;
   if (state.reconcilingCommands) {
     const haengt = state.abgleichDiagnoseStufe;
     if (haengt && Date.now() - haengt.seit > 30_000 && Date.now() - Number(state.abgleichDiagnoseHaengtGemeldet || 0) > 60_000) {

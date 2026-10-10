@@ -10,6 +10,8 @@ const actions = new Map([
   ['instance.providers.observe', 'ctox.workjet.providers.observe_native'],
   ['instance.providers.models.select', 'ctox.workjet.providers.models.select'],
   ['instance.providers.models.exclude', 'ctox.workjet.providers.models.exclude'],
+  ['instance.providers.account.enable', 'ctox.workjet.providers.account.enable'],
+  ['instance.providers.account.remove', 'ctox.workjet.providers.account.remove'],
 ]);
 
 function invalid() { throw new TypeError('Invalid native provider metadata or request.'); }
@@ -83,6 +85,10 @@ export function projectNativeProviderRegistry(value) {
       credentialReady: boolean(account.credentialReady), revision,
       observedAtMs: integer(account.observedAtMs, 1),
       nativeAccountReference: { accountId: id, holderInstanceId: holderId, accountRevision: revision },
+      ...(account.controls === undefined ? {} : { controls: {
+        canEnable: boolean(object(account.controls).canEnable),
+        canRemove: boolean(account.controls.canRemove),
+      } }),
       modelCatalogObserved: boolean(account.modelCatalogObserved),
       modelCatalog: catalog(account.modelCatalog),
       excludedModels: models(account.excludedModels),
@@ -110,10 +116,18 @@ function commandFor(request) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) invalid();
   const allowed = new Set(['version', 'action', 'operationId']);
   const payload = {};
-  if (request.action === 'instance.providers.observe' || request.action === 'instance.providers.models.exclude') {
+  if (request.action === 'instance.providers.observe' || request.action === 'instance.providers.models.exclude'
+    || request.action.startsWith('instance.providers.account.')) {
     allowed.add('accountId'); allowed.add('expectedAccountRevision');
     payload.account_id = text(request.accountId);
     payload.expected_account_revision = integer(request.expectedAccountRevision, 1);
+  }
+  if (request.action.startsWith('instance.providers.account.')) {
+    allowed.add('expectedRevision');
+    payload.expected_revision = integer(request.expectedRevision);
+    if (request.action === 'instance.providers.account.enable') {
+      allowed.add('enabled'); payload.enabled = boolean(request.enabled);
+    }
   }
   if (request.action === 'instance.providers.models.select') {
     allowed.add('provider'); payload.provider = text(request.provider);
