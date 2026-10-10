@@ -33,6 +33,10 @@ fn task(turn: &Value) -> &str {
 }
 fn begin(root: &Path, turn: &Value, worker: &str, attempt: &str) -> anyhow::Result<()> {
     channels::lease_queue_task(root, task(turn), worker)?;
+    assert_eq!(
+        channels::record_queue_lease_worker(root, &[task(turn).to_owned()], worker, worker)?,
+        1
+    );
     ensure!(channels::transition_business_command_for_task(
         root,
         task(turn),
@@ -97,6 +101,15 @@ fn supervisor_owner_input_batch_waits_for_every_task_effect() -> anyhow::Result<
         .clone();
     begin(root.path(), &first, "batch-worker", "batch-attempt")?;
     channels::lease_queue_task(root.path(), task(&second), "batch-worker")?;
+    assert_eq!(
+        channels::record_queue_lease_worker(
+            root.path(),
+            &[task(&second).to_owned()],
+            "batch-worker",
+            "batch-worker"
+        )?,
+        1
+    );
     ensure!(channels::transition_business_command_for_task(
         root.path(),
         task(&second),
