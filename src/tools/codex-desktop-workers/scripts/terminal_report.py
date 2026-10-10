@@ -12,6 +12,7 @@ import sqlite3
 import statistics
 import subprocess
 import uuid
+import terminal_evidence_storage as evidence_storage
 
 REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev",
          "metric-space-ai/greppy", "mkh-welsch/miltonticket-app")
@@ -27,18 +28,27 @@ def command(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.PIPE, timeout=90)
 
 def read(path):
+    if evidence_storage.relative(path) is not None:
+        return evidence_storage.read_text(path)
     return command("greppy", "rg", "--no-heading", "--no-line-number", "^", str(path))
 
 def load(path):
     return json.loads(read(path))
 
 def save(path, value):
+    if evidence_storage.relative(path) is not None:
+        evidence_storage.save_json(path, value)
+        return
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     stage = path.with_name(path.name + "." + uuid.uuid4().hex + ".writing")
     stage.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
     stage.chmod(0o600)
     os.replace(stage, path)
+
+def save_raw(path, value):
+    """Raw extraction always goes directly to verified gpu3 storage."""
+    evidence_storage.save_json(path, value, force_remote=True)
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()

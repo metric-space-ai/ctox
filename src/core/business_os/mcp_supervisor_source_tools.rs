@@ -33,55 +33,72 @@ fn request(id: &str, raw: &str) -> anyhow::Result<Value> {
     }
     Ok(request)
 }
-pub(super) fn descriptors() -> Value {
-    json!([{"name":"worker_dispatch",
+
+fn goal_request(id: &str, raw: &str) -> anyhow::Result<Value> {
+    uuid::Uuid::parse_str(id)?;
+    anyhow::ensure!(
+        !raw.is_empty() && raw.len() <= 1024,
+        "goal read arguments exceed budget"
+    );
+    let request: wire::SourceGoalReadArguments = serde_json::from_str(raw)?;
+    request.validate().map_err(anyhow::Error::msg)?;
+    Ok(json!({"action":"read_confirmed_goal","request":{}}))
+}
+
+pub(super) fn descriptors(include_confirmed_goal_read: bool) -> Value {
+    let mut tools = json!([{"name":"worker_dispatch",
         "description":"Request one owned worker via the existing registered project Source. Acknowledged startup is not completed work.",
         "inputSchema":{"type":"object","additionalProperties":false,"required":["task"],
             "properties":{"task":{"type":"string","minLength":1,"maxLength":16384},
                 "title":{"type":"string","maxLength":200},
                 "computer_id":{"type":"string","maxLength":256},
-                "worker_profile_id":{"type":"string","maxLength":256}}}}])
+                "worker_profile_id":{"type":"string","maxLength":256}}}},
+        {"name":"confirmed_goal_read","description":"Read a lossless JSON snapshot of this project’s confirmed goal and native progress in bounded pages. Start with empty arguments, then copy next_cursor as cursor. Join json_fragment bytes and verify document_sha256; document_complete only means snapshot EOF. Explicit changed/unavailable states require a fresh empty read, never Source retirement. Read-only.",
+        "inputSchema":{"type":"object","additionalProperties":false,"properties":{"cursor":{"type":"string","minLength":1,"maxLength":128}}}}]);
+    if !include_confirmed_goal_read {
+        tools
+            .as_array_mut()
+            .expect("fixed tool descriptors")
+            .truncate(1);
+    }
+    tools
 }
 pub(super) fn respond(
     host: &NativeSupervisorSourceHost,
     authority: AdmittedConsumerAuthority,
     operation: &wire::SourceOperation,
 ) -> anyhow::Result<GuardedAuxiliaryResponse> {
-    anyhow::ensure!(
-        operation.native_tool == Some(wire::SourceNativeTool::WorkerDispatch),
-        "unsupported native Supervisor tool"
-    );
+    let kind = operation
+        .native_tool
+        .context("native Supervisor tool missing")?;
     let id = operation
         .operation_id
         .as_deref()
         .context("native tool operation missing")?;
-    let arguments = request(
-        id,
-        operation
-            .tool_arguments_json
-            .as_deref()
-            .context("native tool arguments missing")?,
-    )?;
+    let raw = operation
+        .tool_arguments_json
+        .as_deref()
+        .context("native tool arguments missing")?;
+    let (tool, name, arguments) = match kind {
+        wire::SourceNativeTool::WorkerDispatch => (
+            workjet_worker_dispatch::TOOL,
+            "worker_dispatch",
+            request(id, raw)?,
+        ),
+        wire::SourceNativeTool::ConfirmedGoalRead => (
+            workjet_jour_fixe::READ_TOOL,
+            "confirmed_goal_read",
+            goal_request(id, raw)?,
+        ),
+    };
     let controller = host.original_controller(&authority, operation)?;
     let trusted = &controller.lease.trusted;
-    enforce_internal_command_session_scope(
-        workjet_worker_dispatch::TOOL,
-        &arguments,
-        Some(trusted),
-    )?;
-    let context = context_from_arguments_with_trusted_gateway_context(
-        workjet_worker_dispatch::TOOL,
-        &arguments,
-        Some(trusted),
-    )?;
+    enforce_internal_command_session_scope(tool, &arguments, Some(trusted))?;
+    let context =
+        context_from_arguments_with_trusted_gateway_context(tool, &arguments, Some(trusted))?;
     // Coarse existing channel policy before the scope, then all lease/project/
     // role/epoch checks share the actual Core/Policy mutation reservation.
-    enforce_business_os_mcp_policy(
-        &host.root,
-        &context,
-        workjet_worker_dispatch::TOOL,
-        &arguments,
-    )?;
+    enforce_business_os_mcp_policy(&host.root, &context, tool, &arguments)?;
     let publication = controller.publication_for(&authority, Arc::new(ControllerOnly))?;
     let result = controller.with_current(|facts, core, policy| {
         let row = read_offer(
@@ -98,9 +115,30 @@ pub(super) fn respond(
                 && row.deadline_ms > now_ms(),
             "native Source tool offer retired"
         );
-        workjet_worker_dispatch::dispatch_in_native_scope(
-            core, policy, &context, trusted, &arguments,
-        )
+        match kind {
+            wire::SourceNativeTool::WorkerDispatch => {
+                workjet_worker_dispatch::dispatch_in_native_scope(
+                    core, policy, &context, trusted, &arguments,
+                )
+            }
+            wire::SourceNativeTool::ConfirmedGoalRead => {
+                let current = workjet_jour_fixe::read_confirmed_goal_in_native_scope(
+                    core, policy, &context, trusted,
+                )?;
+                let request: wire::SourceGoalReadArguments = serde_json::from_str(raw)?;
+                host.goal_reads
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native goal snapshot lock unavailable"))?
+                    .page(
+                        controller.controller_id(),
+                        id,
+                        request.cursor.as_deref(),
+                        current,
+                        row.deadline_ms,
+                        now_ms(),
+                    )
+            }
+        }
     })?;
     anyhow::ensure!(
         serde_json::to_vec(&result)?.len() <= 64 * 1024,
@@ -108,7 +146,7 @@ pub(super) fn respond(
     );
     Ok(GuardedAuxiliaryResponse {
         result: json!({"version":1,"state":"tool_result",
-        "operation_id":id,"native_tool":"worker_dispatch","result":result,"execution_ready":false}),
+        "operation_id":id,"native_tool":name,"result":result,"execution_ready":false}),
         publication,
     })
 }
@@ -239,6 +277,49 @@ mod tests {
     }
 
     #[test]
+    fn native_goal_tool_has_no_caller_selected_project_or_execution() -> anyhow::Result<()> {
+        let id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            goal_request(&id, "{}")?,
+            json!({"action":"read_confirmed_goal","request":{}})
+        );
+        for key in [
+            "owner",
+            "project_id",
+            "goal_id",
+            "lease",
+            "token",
+            "root",
+            "action",
+            "url",
+        ] {
+            assert!(
+                goal_request(&id, &json!({key:"caller"}).to_string()).is_err(),
+                "{key}"
+            );
+        }
+        assert!(goal_request("not-an-operation", "{}").is_err());
+        assert!(goal_request(&id, &json!({"cursor":"x".repeat(129)}).to_string()).is_err());
+        assert_eq!(
+            goal_request(&id, &json!({"cursor":format!("{id}:24576")}).to_string())?,
+            json!({"action":"read_confirmed_goal","request":{}})
+        );
+        assert!(goal_request(&id, &" ".repeat(1025)).is_err());
+        let operation = json!({"version":1,"action":"tool_call","offer_id":uuid::Uuid::new_v4().to_string(),
+            "controller_id":uuid::Uuid::new_v4().to_string(),"operation_id":id,
+            "native_tool":"confirmed_goal_read","tool_arguments_json":"{}"});
+        parse_operation(vec![operation])?;
+        let claim = json!({"version":1,"action":"claim","offer_id":uuid::Uuid::new_v4().to_string(),"include_confirmed_goal_read":true});
+        parse_operation(vec![claim.clone()])?;
+        let mut invalid = claim;
+        invalid["action"] = json!("poll");
+        assert!(parse_operation(vec![invalid]).is_err());
+        assert_eq!(descriptors(false).as_array().unwrap().len(), 1);
+        assert_eq!(descriptors(true)[1]["name"], "confirmed_goal_read");
+        Ok(())
+    }
+
+    #[test]
     fn sdk_tool_cannot_choose_authority_action_or_dispatch_identity() -> anyhow::Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         let raw = json!({"task":"Make an owned change"}).to_string();
@@ -290,7 +371,8 @@ mod tests {
             json!({"version":1,"action":"poll","native_tool":"worker_dispatch"})
         ])
         .is_err());
-        assert_eq!(descriptors().as_array().unwrap().len(), 1);
+        assert_eq!(descriptors(true).as_array().unwrap().len(), 2);
+        assert_eq!(descriptors(false).as_array().unwrap().len(), 1);
         Ok(())
     }
 }

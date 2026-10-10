@@ -18,6 +18,7 @@ pub(super) struct SourceEffects {
     process_effect_reconciled: bool,
     machine_entries: Vec<ctox_sync::contracts::WorkspaceEntry>,
     core_effects: Option<ctox_core::NativeCoreEffectCapture>,
+    core_only: Option<checkpoint_identity::CoreRuntimeIdentity>,
 }
 
 impl SourceEffects {
@@ -68,13 +69,19 @@ impl SourceEffects {
             process_effect_reconciled: false,
             machine_entries: Vec::new(),
             core_effects: None,
+            core_only: None,
         })
     }
 
     /// Called under the actual source worker/account/policy/controller fences,
     /// after the authority read. It does not stop a guest or complete an effect.
-    pub(super) fn verify_controller(&mut self, entry: &Registration) -> Result<()> {
+    pub(super) fn verify_controller(
+        &mut self,
+        entry: &Registration,
+        registry: &NativeGuestRegistry,
+    ) -> Result<()> {
         self.process = None;
+        self.core_only = None;
         self.child_stop_observed = false;
         self.process_effect_reconciled = false;
         self.machine_entries.clear();
@@ -84,9 +91,28 @@ impl SourceEffects {
                 ensure!(
                     entry.desktop.is_none()
                         && entry.source_machine.is_none()
+                        && entry.source_boot.is_none()
+                        && entry.target_machine.is_none()
+                        && entry.desktop_io.is_none()
                         && entry.stopped_status.is_none(),
                     "native source child has no registered effect"
                 );
+                let machine_configured = registry
+                    .machine_configuration
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("native machine configuration poisoned"))?
+                    .is_some();
+                let protected_core = entry
+                    .restoration
+                    .as_ref()
+                    .is_some_and(|protected| protected.service_session.is_none());
+                if protected_core || (!machine_configured && entry.restoration.is_none()) {
+                    self.core_only = Some(checkpoint_identity::CoreRuntimeIdentity {
+                        version: 1,
+                        guest_id: entry.assignment.destination.guest_id.clone(),
+                        session_id: self.job.spec.session_id.clone(),
+                    });
+                }
             }
             (Some(id), Some(process)) => {
                 let destination = &entry.assignment.destination;
@@ -151,6 +177,14 @@ impl SourceEffects {
         &self.machine_entries
     }
 
+    pub(super) fn core_runtime_bytes(&self) -> Result<Option<Vec<u8>>> {
+        self.core_only
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(Into::into)
+    }
+
     pub(super) fn same_quorum(&self, other: &Self) -> bool {
         self.job == other.job
     }
@@ -161,6 +195,7 @@ impl SourceEffects {
 
     pub(super) fn same_observation(&self, other: &Self) -> bool {
         self.job == other.job
+            && self.core_only == other.core_only
             && self.process == other.process
             && self.child_stop_observed == other.child_stop_observed
             && self.process_effect_reconciled == other.process_effect_reconciled
@@ -174,14 +209,20 @@ impl SourceEffects {
     // A wire report, empty effect list or stopped child supplies none of them.
     fn reconciled(&self) -> bool {
         self.job.pending_effects.is_empty()
-            && self.child_stop_observed
-            && self.process_effect_reconciled
-            && !self.machine_entries.is_empty()
-            && self.process.as_ref().is_some_and(|process| {
-                process.job_id == self.job.spec.job_id
-                    && process.ownership == self.job.ownership
-                    && self.job.completed_effects.contains(&process.effect_id)
-            })
+            && (self.core_only.as_ref().is_some_and(|identity| {
+                identity.session_id == self.job.spec.session_id
+                    && self.process.is_none()
+                    && self.machine_entries.is_empty()
+                    && !self.child_stop_observed
+                    && !self.process_effect_reconciled
+            }) || (self.child_stop_observed
+                && self.process_effect_reconciled
+                && !self.machine_entries.is_empty()
+                && self.process.as_ref().is_some_and(|process| {
+                    process.job_id == self.job.spec.job_id
+                        && process.ownership == self.job.ownership
+                        && self.job.completed_effects.contains(&process.effect_id)
+                })))
             && self.core_effects.as_ref().is_some_and(|capture| {
                 capture.session_id().to_string() == self.job.spec.session_id
                     && !capture.requires_reconciliation()

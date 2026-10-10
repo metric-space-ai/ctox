@@ -66,6 +66,79 @@ fn token(root: &Path, task: &str) -> anyhow::Result<String> {
 fn call(root: &Path, trusted: &Value, tool: &str, args: Value) -> anyhow::Result<Value> {
     super::super::call_tool_inner(root, tool, args, Some(trusted))
 }
+
+#[test]
+fn confirmed_goal_read_uses_the_actual_definition_and_progress_without_new_work(
+) -> anyhow::Result<()> {
+    let (root, task) = fixture()?;
+    let trusted = verify_internal_command_session_token(root.path(), &token(root.path(), &task)?)?;
+    let args = json!({"action":"read_confirmed_goal","request":{}});
+    let first = call(
+        root.path(),
+        &trusted,
+        workjet_jour_fixe::READ_TOOL,
+        args.clone(),
+    )?;
+    assert_eq!(first["project_id"], "project");
+    assert_eq!(first["confirmed_goal"]["goal"]["revision"], 1);
+    assert_eq!(
+        first["confirmed_goal"]["items"][0]["title"],
+        "Prove reopening"
+    );
+    assert_eq!(first["confirmed_goal"]["steps"][0]["status"], "queued");
+    assert_eq!(
+        first["confirmed_goal"]["steps"][0]["dispatch"]["message_key"],
+        task
+    );
+    let mut core = Connection::open(crate::paths::core_db(root.path()))?;
+    let before: i64 = core.query_row("SELECT count(*) FROM communication_messages", [], |r| {
+        r.get(0)
+    })?;
+    let tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "UPDATE planned_steps SET last_result_excerpt='UNCOMMITTED' WHERE last_message_key=?1",
+        [&task],
+    )?;
+    assert_eq!(
+        call(
+            root.path(),
+            &trusted,
+            workjet_jour_fixe::READ_TOOL,
+            args.clone()
+        )?,
+        first
+    );
+    tx.rollback()?;
+    core.execute("UPDATE planned_steps SET last_result_excerpt='Saved native partial evidence' WHERE last_message_key=?1",[&task])?;
+    let refreshed = call(
+        root.path(),
+        &trusted,
+        workjet_jour_fixe::READ_TOOL,
+        args.clone(),
+    )?;
+    assert_eq!(
+        refreshed["confirmed_goal"]["steps"][0]["result_excerpt"],
+        "Saved native partial evidence"
+    );
+    assert_eq!(refreshed["confirmed_goal"]["steps"][0]["status"], "queued");
+    assert_eq!(
+        core.query_row("SELECT count(*) FROM communication_messages", [], |r| r
+            .get::<_, i64>(0))?,
+        before
+    );
+    for key in ["project_id", "owner_user_id", "goal_id", "lease"] {
+        let mut bad = args.clone();
+        bad["request"][key] = json!("caller");
+        assert!(call(root.path(), &trusted, workjet_jour_fixe::READ_TOOL, bad).is_err());
+    }
+    core.execute(
+        "UPDATE communication_routing_state SET lease_worker_id='replacement' WHERE message_key=?1",
+        [&task],
+    )?;
+    assert!(call(root.path(), &trusted, workjet_jour_fixe::READ_TOOL, args).is_err());
+    Ok(())
+}
+
 fn read() -> Value {
     json!({"action":"read_meeting","request":{"project_id":"project","meeting_id":"meeting-1"}})
 }

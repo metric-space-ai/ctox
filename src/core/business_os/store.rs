@@ -13939,6 +13939,71 @@ pub fn upsert_projection_record(
 /// External app-record permission does not issue native research receipts.
 /// Guard the effective patch under the same IMMEDIATE transaction as its RxDB
 /// write. Native projections and typed writebacks keep their trusted path.
+/// One live document of an RxDB collection, or `None` when it is missing or
+/// deleted.
+pub(super) fn read_rxdb_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(None);
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = reader
+        .conn
+        .query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = ?1 AND {deleted_expression} = 0",
+                reader.table
+            ),
+            [record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(raw
+        .map(|raw| serde_json::from_str::<Value>(&raw))
+        .transpose()?
+        .filter(|value| !is_rxdb_deleted_document(value)))
+}
+
+/// Payload of the newest Outbound lead research task the app started (not a
+/// gap-closing continuation). The native import action reuses its research
+/// policy for imported leads; see outbound_lead_import.rs.
+pub(super) fn latest_outbound_lead_research_payload(root: &Path) -> anyhow::Result<Option<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, "business_commands")? else {
+        return Ok(None);
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let mut statement = reader.conn.prepare(&format!(
+        "SELECT data FROM {} WHERE {deleted_expression} = 0 \
+           AND json_extract(data, '$.command_type') = 'business_os.chat.task' \
+           AND json_extract(data, '$.module') = 'outbound-lead-generation' \
+           AND json_extract(data, '$.payload.writeback_contract.command_type') = 'outbound.lead.research_writeback' \
+           AND json_extract(data, '$.payload.lead_id') IS NOT NULL \
+         ORDER BY json_extract(data, '$.created_at_ms') DESC LIMIT 25",
+        reader.table
+    ))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for raw in rows {
+        let Ok(document) = serde_json::from_str::<Value>(&raw?) else {
+            continue;
+        };
+        let payload = &document["payload"];
+        let prompt = payload["prompt"].as_str().unwrap_or_default();
+        if prompt.starts_with("Starte eine Outbound") && payload["source_policy"].is_object() {
+            return Ok(Some(payload.clone()));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn upsert_external_projection_record(
     root: &Path,
     collection: &str,

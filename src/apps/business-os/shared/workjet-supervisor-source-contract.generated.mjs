@@ -83,6 +83,10 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "sdk_observation": {
         "type": "SourceSdkObservation",
         "optional": true
+      },
+      "include_confirmed_goal_read": {
+        "type": "bool",
+        "optional": true
       }
     }
   },
@@ -156,7 +160,8 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
   },
   "SourceNativeTool": {
     "enum": [
-      "worker_dispatch"
+      "worker_dispatch",
+      "confirmed_goal_read"
     ]
   },
   "SourceSdkObservationKind": {
@@ -254,6 +259,85 @@ export const SUPERVISOR_SOURCE_TYPES = deepFreeze({
       "is_error": {
         "type": "bool",
         "optional": true
+      }
+    }
+  },
+  "SourceGoalReadArguments": {
+    "fields": {
+      "cursor": {
+        "type": "String",
+        "optional": true,
+        "min_chars": 1,
+        "max_chars": 128
+      }
+    }
+  },
+  "SourceGoalReadPageState": {
+    "enum": [
+      "page",
+      "snapshot_changed",
+      "snapshot_unavailable",
+      "capacity_unavailable"
+    ]
+  },
+  "SourceGoalReadPage": {
+    "fields": {
+      "schema": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "state": {
+        "type": "SourceGoalReadPageState"
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "supervisor_thread_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "snapshot_id": {
+        "type": "String",
+        "min_chars": 36,
+        "max_chars": 36
+      },
+      "document_sha256": {
+        "type": "String",
+        "min_chars": 64,
+        "max_chars": 64
+      },
+      "document_bytes": {
+        "type": "u64",
+        "maximum": 1052672
+      },
+      "byte_offset": {
+        "type": "u64",
+        "maximum": 1052672
+      },
+      "byte_length": {
+        "type": "u64",
+        "maximum": 24576
+      },
+      "json_fragment": {
+        "type": "String",
+        "max_chars": 24576
+      },
+      "captured_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "document_complete": {
+        "type": "bool"
+      },
+      "next_cursor": {
+        "type": "String",
+        "optional": true,
+        "min_chars": 1,
+        "max_chars": 128
       }
     }
   }

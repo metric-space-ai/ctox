@@ -178,6 +178,29 @@ impl NativeGuestCoreResume {
         Ok(loaded)
     }
 }
+pub(super) fn require_core_only(
+    entry: &Registration,
+    protected: &ProtectedEnrollment,
+) -> Result<()> {
+    ensure!(
+        protected.service_session.is_none()
+            && entry.restoration.as_ref() == Some(protected)
+            && entry.process_effect.is_none()
+            && entry.registered_process.is_none(),
+        "Core-only target has a machine identity or process attempt"
+    );
+    #[cfg(target_os = "linux")]
+    ensure!(
+        entry.desktop.is_none()
+            && entry.desktop_io.is_none()
+            && entry.source_boot.is_none()
+            && entry.source_machine.is_none()
+            && entry.target_machine.is_none()
+            && entry.stopped_status.is_none(),
+        "Core-only target has retained machine state"
+    );
+    Ok(())
+}
 
 fn stage_core_journal(
     source: &Path,

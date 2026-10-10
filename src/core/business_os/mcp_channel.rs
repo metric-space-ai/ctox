@@ -3608,9 +3608,15 @@ fn call_tool_inner(
         "business_os.execute_action" => {
             let module_id = required_arg(&arguments, "module_id")?;
             let action_id = required_arg(&arguments, "action_id")?;
-            serde_json::to_value(execute_action(
-                root, &context, &module_id, &action_id, &arguments,
-            )?)?
+            if module_id == super::outbound_lead_import::MODULE_ID
+                && action_id == super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION
+            {
+                execute_outbound_lead_import(root, &context, &arguments)?
+            } else {
+                serde_json::to_value(execute_action(
+                    root, &context, &module_id, &action_id, &arguments,
+                )?)?
+            }
         }
         "business_os.get_command_status" => {
             let command_id = required_arg(&arguments, "command_id")?;
@@ -5247,7 +5253,10 @@ pub fn list_module_actions(
                 false,
             ),
         ],
-        "outbound-lead-generation" => vec![person_research_action_descriptor(&module.id)],
+        "outbound-lead-generation" => vec![
+            person_research_action_descriptor(&module.id),
+            outbound_lead_import_action_descriptor(&module.id),
+        ],
         _ => Vec::new(),
     });
     let has_external_sql = store::local_external_data_source_declarations(root)?
@@ -8579,6 +8588,90 @@ fn action_descriptor(
             "additionalProperties": true
         }),
     }
+}
+
+/// Leads from a list (e.g. a mail's spreadsheet) into a named Outbound
+/// campaign, and their research started like the app's "Recherchieren".
+/// Authorization: Outbound module data write for the resolved actor, the same
+/// decision every other Outbound execute_action takes.
+fn execute_outbound_lead_import(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    context.validate()?;
+    let module_id = super::outbound_lead_import::MODULE_ID;
+    enforce_module_policy(root, module_id)?;
+    let mut policy_arguments = arguments_with_module_id(arguments, module_id);
+    policy_arguments["action_id"] =
+        Value::String(super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION.to_string());
+    enforce_business_os_mcp_policy(
+        root,
+        context,
+        "business_os.execute_action",
+        &policy_arguments,
+    )?;
+    let request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
+        anyhow::Error::new(BusinessOsMcpError::validation("payload", error.to_string()))
+    })?;
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let client_context = serde_json::json!({
+        "channel": &context.channel,
+        "surface": &context.surface,
+        "actor": actor,
+        "mcp_actor": &context.actor,
+        "workspace": &context.workspace,
+        "request_id": &context.request_id,
+        "requires_confirmation": false,
+        "confirmation_state": confirmation_state_as_str(&context.confirmation_state),
+        "proposal_only": false,
+        "mcp_tool": &context.tool,
+        "source": "outbound-lead-generation-ctox-import",
+    });
+    super::outbound_lead_import::import_and_research(root, &request, &client_context)
+}
+
+fn outbound_lead_import_action_descriptor(module_id: &str) -> BusinessOsActionDescriptor {
+    let mut descriptor = action_descriptor(
+        super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+        module_id,
+        "Import companies as leads and start their research",
+        "Create leads for the given companies in a named Outbound campaign and start each lead's research exactly like the app's research button (same research policy, sources and writeback). Use it when someone sends a list or spreadsheet of companies to research. Repeating the call with the same campaign and names neither duplicates leads nor restarts running research. Report progress only from the returned lead ids and their records.",
+        "write",
+        false,
+        false,
+    );
+    descriptor.input_schema = serde_json::json!({
+        "type": "object",
+        "required": ["payload"],
+        "properties": {
+            "payload": {
+                "type": "object",
+                "required": ["campaign", "rows"],
+                "properties": {
+                    "campaign": { "type": "string", "minLength": 1 },
+                    "rows": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 200,
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": { "type": "string", "minLength": 1 },
+                                "website": { "type": "string" },
+                                "city": { "type": "string" },
+                                "country": { "type": "string", "enum": ["DE", "AT", "CH"] }
+                            }
+                        }
+                    },
+                    "start_research": { "type": "boolean", "default": true },
+                    "source_note": { "type": "string" }
+                }
+            }
+        }
+    });
+    descriptor
 }
 
 fn person_research_action_descriptor(module_id: &str) -> BusinessOsActionDescriptor {
@@ -14955,6 +15048,133 @@ mod tests {
         assert!(action_ids.contains(&"support.agent.writeback"));
         assert!(action_ids.contains(&"support.agent.apply_suggestion"));
         assert!(action_ids.contains(&"support.agent.reject_suggestion"));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_lead_import_creates_campaign_leads_once_and_needs_an_app_template_for_research(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &[
+                "outbound_lead_generation_leads",
+                "outbound_lead_generation_imports",
+            ],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        // The leads live in the RxDB store (native row layout).
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let rxdb = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        for table in [
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "ctox_business_os__outbound_lead_generation_imports__v0",
+            "ctox_business_os__business_commands__v2",
+        ] {
+            rxdb.execute_batch(&format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+                    deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL,
+                    data TEXT NOT NULL
+                )"
+            ))?;
+        }
+
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "outbound-lead-generation",
+        )?;
+        assert!(actions.items.iter().any(|action| action.action_id
+            == super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION));
+
+        let arguments = serde_json::json!({
+            "module_id": "outbound-lead-generation",
+            "action_id": super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+            "payload": {
+                "campaign": "Recherche aus Mail",
+                "rows": [
+                    { "name": "Hedinger GmbH & Co. KG", "website": "hedinger.de", "city": "Stuttgart" },
+                    { "name": "Carl Roth GmbH + Co. KG", "website": "carlroth.com", "city": "Karlsruhe" }
+                ],
+                "start_research": false
+            }
+        });
+        let context = test_context("business_os.execute_action");
+        let first = execute_outbound_lead_import(root, &context, &arguments)?;
+        assert_eq!(first["leads"].as_array().map(Vec::len), Some(2));
+        assert_eq!(first["leads"][0]["created"], true);
+        let lead_id = super::super::outbound_lead_import::lead_id_for(
+            "Recherche aus Mail",
+            "Hedinger GmbH & Co. KG",
+        );
+        let lead =
+            store::read_rxdb_collection_record(root, "outbound_lead_generation_leads", &lead_id)?
+                .context("imported lead")?;
+        assert_eq!(lead["campaign"], "Recherche aus Mail");
+        assert_eq!(lead["city"], "Stuttgart");
+        assert_eq!(lead["research_status"], "new");
+
+        // A retried turn neither duplicates the leads nor fails.
+        let second = execute_outbound_lead_import(root, &context, &arguments)?;
+        assert_eq!(second["leads"][0]["created"], false);
+
+        // Research needs the app's research policy; without a research task
+        // started in the app there is nothing to copy, and the action says so.
+        let mut with_research = arguments.clone();
+        with_research["payload"]["start_research"] = serde_json::json!(true);
+        let error = execute_outbound_lead_import(root, &context, &with_research)
+            .expect_err("research without an app template must fail loudly");
+        assert!(error.to_string().contains("Outbound app"));
+
+        // With a research task the app started, each new lead gets its own.
+        let template = serde_json::json!({
+            "id": "leadgen-lead-research-app",
+            "command_id": "leadgen-lead-research-app",
+            "module": "outbound-lead-generation",
+            "command_type": "business_os.chat.task",
+            "record_id": "lead_app",
+            "created_at_ms": 1,
+            "payload": {
+                "lead_id": "lead_app",
+                "company": "App GmbH",
+                "mode": "update_firm",
+                "fields": ["firma_name"],
+                "source_policy": { "skill": "outbound-lead-generation-research" },
+                "required_skills": ["outbound-lead-generation-research"],
+                "writeback_contract": {
+                    "collection": "outbound_lead_generation_leads",
+                    "command_type": "outbound.lead.research_writeback",
+                    "record_ids": ["lead_app"]
+                },
+                "prompt": "Starte eine Outbound Nachrecherche für App GmbH [lead_app] (Auftrag leadgen-lead-research-app)."
+            }
+        });
+        rxdb.execute(
+            "INSERT INTO ctox_business_os__business_commands__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, '1-a', 0, 1, ?2)",
+            rusqlite::params!["leadgen-lead-research-app", template.to_string()],
+        )?;
+        let started = execute_outbound_lead_import(root, &context, &with_research)?;
+        let command_id = started["leads"][0]["research"]["command_id"]
+            .as_str()
+            .context("research command id")?
+            .to_string();
+        let lead =
+            store::read_rxdb_collection_record(root, "outbound_lead_generation_leads", &lead_id)?
+                .context("lead after research start")?;
+        assert_eq!(lead["research_status"], "queued");
+        assert_eq!(lead["command_id"], serde_json::json!(command_id));
+        let projection = crate::mission::channels::business_command_projection(root, &command_id)?;
+        assert_eq!(projection["record_id"], serde_json::json!(lead_id));
+        // Starting again keeps the running research.
+        let again = execute_outbound_lead_import(root, &context, &with_research)?;
+        assert_eq!(again["leads"][0]["research"]["status"], "already_started");
         Ok(())
     }
 

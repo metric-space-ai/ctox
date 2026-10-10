@@ -1,6 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-//! First actual Core turn reuses the protected target child; it never boots a replacement.
+//! Original target Core turns retain quorum/producer fences, with an optional protected machine.
 use super::*;
 use ctox_sync::authority::Job;
 
@@ -18,45 +18,24 @@ impl NativeGuestTurnReady {
 }
 pub(crate) struct TargetTurnReady {
     execution: NativeGuestExecution,
-    machine: Arc<target_machine::TargetMachine>,
+    machine: Option<Arc<target_machine::TargetMachine>>,
     accepted: Job,
     complete: bool,
 }
-impl Drop for TargetTurnReady {
-    fn drop(&mut self) {
-        if self.complete {
-            return;
-        }
-        // Invalidate synchronously before waiting on this owned controller.
-        // Stop only the exact transferred child. Never clear a pending effect.
-        self.machine.retire();
-        if let Ok(registration) = self
-            .execution
-            .registry
-            .registration(&self.execution.guest_id)
-        {
-            let mut entry = registration
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if entry
-                .target_machine
-                .as_ref()
-                .is_some_and(|m| Arc::ptr_eq(m, &self.machine))
-                && entry.execution.as_ref() == Some(&self.execution.binding)
-            {
-                entry.revoked = true;
-                let _ = self.execution.registry.retire_frame(&mut entry);
-                let io = entry.desktop_io.clone();
-                if let Some(desktop) = entry.desktop.as_mut() {
-                    if let Ok(status) = super::machine_io::run(io.as_deref(), desktop.stop()) {
-                        entry.stopped_status = Some(status);
-                    }
-                }
+impl TargetTurnReady {
+    fn matches_retained(&self, entry: &Registration) -> bool {
+        let Some(protected) = &entry.restoration else {
+            return false;
+        };
+        match (&self.machine, &entry.target_machine) {
+            (Some(expected), Some(actual)) => {
+                protected.service_session.is_some() && Arc::ptr_eq(expected, actual)
             }
+            (None, None) => core_resume::require_core_only(entry, protected).is_ok(),
+            _ => false,
         }
     }
-}
-impl TargetTurnReady {
+
     async fn commit_started(mut self, thread: &str, turn: &str) -> Result<()> {
         let current = self
             .execution
@@ -79,7 +58,7 @@ impl TargetTurnReady {
                         facts.provider_session_id == thread
                             && actual_turn == Some(turn)
                             && thread == self.execution.binding.spec.session_id,
-                        "target machine requires the actual original Core turn"
+                        "target requires the actual original Core turn"
                     );
                     self.execution.with_held_worker_policy_guarded(
                         worker,
@@ -87,11 +66,8 @@ impl TargetTurnReady {
                         identity,
                         |entry, verify, _| {
                             ensure!(
-                                entry
-                                    .target_machine
-                                    .as_ref()
-                                    .is_some_and(|m| Arc::ptr_eq(m, &self.machine)),
-                                "original target machine changed before turn binding"
+                                self.matches_retained(entry),
+                                "original target runtime changed before turn binding"
                             );
                             core_resume::validate_original_job(
                                 entry,
@@ -108,6 +84,38 @@ impl TargetTurnReady {
         })?;
         self.complete = true;
         Ok(())
+    }
+}
+impl Drop for TargetTurnReady {
+    fn drop(&mut self) {
+        if self.complete {
+            return;
+        }
+        // Invalidate synchronously. A Core-only attempt never creates/stops a child.
+        if let Some(machine) = &self.machine {
+            machine.retire();
+        }
+        if let Ok(registration) = self
+            .execution
+            .registry
+            .registration(&self.execution.guest_id)
+        {
+            let mut entry = registration
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if self.matches_retained(&entry)
+                && entry.execution.as_ref() == Some(&self.execution.binding)
+            {
+                entry.revoked = true;
+                let _ = self.execution.registry.retire_frame(&mut entry);
+                let io = entry.desktop_io.clone();
+                if let Some(desktop) = entry.desktop.as_mut() {
+                    if let Ok(status) = super::machine_io::run(io.as_deref(), desktop.stop()) {
+                        entry.stopped_status = Some(status);
+                    }
+                }
+            }
+        }
     }
 }
 impl NativeGuestExecution {
@@ -128,14 +136,16 @@ impl NativeGuestExecution {
             .validate_ownership(&self.binding.spec.job_id, &self.binding.ownership)
             .await?;
         let machine = self.with_current(|entry, verify| {
-            core_resume::validate_original_job(
-                entry,
-                entry
-                    .restoration
-                    .as_ref()
-                    .context("original target enrollment missing")?,
-                &current,
-            )?;
+            let protected = entry
+                .restoration
+                .as_ref()
+                .context("original target enrollment missing")?;
+            core_resume::validate_original_job(entry, protected, &current)?;
+            if protected.service_session.is_none() {
+                core_resume::require_core_only(entry, protected)?;
+                verify()?;
+                return Ok(None);
+            }
             ensure!(
                 entry.desktop.is_some()
                     && entry.desktop_io.is_some()
@@ -144,10 +154,12 @@ impl NativeGuestExecution {
                 "target turn has no retained original desktop"
             );
             verify()?;
-            Ok(entry
-                .target_machine
-                .clone()
-                .context("original target machine missing")?)
+            Ok(Some(
+                entry
+                    .target_machine
+                    .clone()
+                    .context("original target machine missing")?,
+            ))
         })?;
         Ok(Some(NativeGuestTurnReady::Target(TargetTurnReady {
             execution: self.clone(),
