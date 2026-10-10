@@ -227,6 +227,9 @@ impl ResponseModelObservation {
                     if let Some(data) = self.pending.strip_prefix(b"data: ") {
                         if let Ok(value) = serde_json::from_slice::<Value>(data) {
                             self.value(&value);
+                        } else {
+                            // Never silently discard a native answer delta.
+                            self.conflicting = true;
                         }
                     }
                 }
@@ -241,6 +244,11 @@ impl ResponseModelObservation {
                     self.pending.push(*byte);
                 }
             }
+        }
+    }
+    fn finish(&mut self) {
+        if self.skipping || !self.pending.is_empty() {
+            self.conflicting = true;
         }
     }
 }
@@ -557,6 +565,7 @@ async fn run_invocation(prepared: PreparedInvocation) {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.response_model.finish();
         (
             state.witness.take(),
             state.response_model.model.clone(),
@@ -770,6 +779,26 @@ mod tests {
         seen.value(&json!({"type":"message_stop"}));
         assert!(seen.conflicting);
         assert!(seen.completed_text().is_none());
+    }
+
+    #[test]
+    fn malformed_or_unfinished_sse_line_cannot_hide_a_native_delta() {
+        for tail in [
+            "data: {not-json}\n",
+            "data: {\"type\":\"content_block_delta\"",
+        ] {
+            let mut seen = ResponseModelObservation::default();
+            seen.value(&json!({"type":"message_start","message":{"type":"message",
+                "id":"msg_observed","model":"claude-opus-5-5"}}));
+            seen.value(&json!({"type":"content_block_start","index":0,
+                "content_block":{"type":"text","text":"Only a prefix"}}));
+            seen.observe(tail.as_bytes(), true, 200);
+            seen.value(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}));
+            seen.value(&json!({"type":"message_stop"}));
+            seen.finish();
+            assert!(seen.conflicting);
+            assert!(seen.completed_text().is_none());
+        }
     }
 
     #[test]
