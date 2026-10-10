@@ -3774,12 +3774,14 @@ fn ews_trust_headers(node: roxmltree::Node<'_, '_>) -> Value {
             .iter()
             .find(|wanted| wanted.eq_ignore_ascii_case(name))
         {
-            let value = header
-                .text()
-                .unwrap_or_default()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
+            let value = redact_ip_addresses(
+                &header
+                    .text()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
             if let Some(list) = values
                 .entry(wanted.to_string())
                 .or_insert_with(|| json!([]))
@@ -3794,6 +3796,36 @@ fn ews_trust_headers(node: roxmltree::Node<'_, '_>) -> Value {
         "names": names.into_iter().collect::<Vec<_>>(),
         "values": values,
     })
+}
+
+/// Antispam and SPF headers name the connecting IP; it is not needed to judge
+/// the trust anchor and is not stored.
+fn redact_ip_addresses(value: &str) -> String {
+    let is_ip_char = |ch: char| ch.is_ascii_hexdigit() || ch == ':' || ch == '.';
+    let mut out = String::with_capacity(value.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        let core = run.trim_matches(|ch| ch == ':' || ch == '.');
+        if core.len() >= 3 && core.parse::<std::net::IpAddr>().is_ok() {
+            let start = run.find(core).unwrap_or(0);
+            out.push_str(&run[..start]);
+            out.push_str("<ip>");
+            out.push_str(&run[start + core.len()..]);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for ch in value.chars() {
+        if is_ip_char(ch) {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 /// File attachments listed by GetItem (`item:Attachments`). Inline images of
@@ -6213,6 +6245,12 @@ mod tests {
         assert_eq!(
             super::ews_trust_headers(without.root_element())["present"],
             false
+        );
+        assert_eq!(
+            super::redact_ip_addresses(
+                "CIP:192.0.2.10;CTRY:DE;IPV:NLI; client-ip=2001:db8::1; SCL:1; face"
+            ),
+            "CIP:<ip>;CTRY:DE;IPV:NLI; client-ip=<ip>; SCL:1; face"
         );
         Ok(())
     }
