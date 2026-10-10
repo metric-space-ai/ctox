@@ -188,7 +188,7 @@ impl Source {
             let peer = match ready {
                 Ok(peer) => peer,
                 Err(error) => {
-                    let _ = session.shutdown().await;
+                    session.shutdown().await;
                     let _ = database.close().await;
                     return Err(error);
                 }
@@ -201,7 +201,7 @@ impl Source {
                 ) {
                     Ok(guard) => guard,
                     Err(error) => {
-                        let _ = session.shutdown().await;
+                        session.shutdown().await;
                         let _ = database.close().await;
                         return Err(error);
                     }
@@ -241,7 +241,7 @@ impl Source {
                     &peer,
                 )
                 .await;
-            session.shutdown().await.map_err(|_| unavailable())?;
+            session.shutdown().await;
             if renewed.is_err() || host.account(target).await?.as_ref() != Some(&original) {
                 database.close().await?;
                 return Err(unavailable());
@@ -312,10 +312,8 @@ impl Source {
     }
     async fn shutdown(&self) -> Result<()> {
         self.enrollment.retire(); // Synchronous before any transport/IPC drain.
-        let session = self.session.shutdown().await;
-        let database = self.database.close().await;
-        session.map_err(|_| unavailable())?;
-        database.map_err(|_| unavailable())
+        self.session.shutdown().await;
+        self.database.close().await.map_err(|_| unavailable())
     }
 }
 fn association_matches(account: &NativeTransferAccount, reply: &Value) -> bool {
