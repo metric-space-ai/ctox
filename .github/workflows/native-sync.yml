@@ -450,6 +450,7 @@ jobs:
         run: |
           set -o pipefail
           node --test src/core/rxdb/tools/threads_rightclick_peers.test.js
+          node --test src/core/rxdb/tools/audience_fixture_readiness.test.js
           CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
             SMOKE_MODE=business-os-threads-rightclick-ui SMOKE_PAGE_PATH=/index.html \
             BUSINESS_PORT=8879 SIGNALING_PORT=18878 \
