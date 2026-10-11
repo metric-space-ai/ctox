@@ -7642,7 +7642,11 @@ fn start_prompt_worker(
                             && business_os_app_validation_may_own_completion(&job);
                         app_validation_rework = false;
                         app_validation_terminal_failure = false;
-                        let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
+                        let expected_artifact_refs = resolve_founder_execution_thread_refs(
+                            &root,
+                            &job,
+                            expected_outcome_artifacts_for_job(&job),
+                        );
                         let gap_closure_witness_feedback =
                             match person_research_gap_closure_witness_feedback(&root, &job) {
                                 Ok(feedback) => feedback,
@@ -14237,7 +14241,8 @@ fn delivered_outcome_artifacts_for_job(
 }
 
 fn worker_attempt_artifact_recheck_details(root: &Path, job: &QueuedPrompt) -> String {
-    let expected = expected_outcome_artifacts_for_job(job);
+    let expected =
+        resolve_founder_execution_thread_refs(root, job, expected_outcome_artifacts_for_job(job));
     match delivered_outcome_artifacts_for_job(root, job, &expected) {
         Ok(delivered) => serde_json::json!({
             "expected_count": expected.len(),
@@ -14861,6 +14866,61 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
 
 fn outcome_thread_artifact_key(thread_key: &str) -> String {
     format!("thread:{}", thread_key.trim())
+}
+
+/// Owner, founder and admin mail jobs run under an isolated execution thread
+/// (`email-review:<role>:<digest>`, see `isolated_founder_email_thread_key`),
+/// but their reviewed reply goes to the mail's own thread. The outcome witness
+/// looked for the reply in the execution thread, never found it, and failed
+/// every such reply after it was sent; the route then fell back to pending
+/// (thesen 11.10.2026, three times). An expected reply in that execution
+/// thread is mapped to the leased inbound mail's thread, but only when the
+/// execution thread was derived from exactly that mail thread.
+fn resolve_founder_execution_thread_refs(
+    root: &Path,
+    job: &QueuedPrompt,
+    refs: Vec<ArtifactRef>,
+) -> Vec<ArtifactRef> {
+    let Some(inbound_key) = inbound_email_reply_message_key(job) else {
+        return refs;
+    };
+    let mail_thread = channels::open_channel_db(&crate::paths::core_db(root))
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT thread_key FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+                params![inbound_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+        })
+        .filter(|thread| !thread.trim().is_empty());
+    let Some(mail_thread) = mail_thread else {
+        return refs;
+    };
+    refs.into_iter()
+        .map(|mut artifact| {
+            let derived_from_mail_thread = artifact.kind == ArtifactKind::OutboundEmail
+                && artifact
+                    .primary_key
+                    .strip_prefix("thread:")
+                    .and_then(|thread| thread.strip_prefix("email-review:"))
+                    .and_then(|rest| rest.split_once(':'))
+                    .is_some_and(|(role, _)| {
+                        artifact.primary_key
+                            == outcome_thread_artifact_key(&isolated_founder_email_thread_key(
+                                &mail_thread,
+                                role,
+                            ))
+                    });
+            if derived_from_mail_thread {
+                artifact.primary_key = outcome_thread_artifact_key(&mail_thread);
+            }
+            artifact
+        })
+        .collect()
 }
 
 fn prompt_declares_reviewed_founder_send(prompt: &str) -> bool {
@@ -47676,6 +47736,101 @@ Was jetzt zu tun ist:\n\
         assert_eq!(refs[0].kind, ArtifactKind::OutboundEmail);
         assert_eq!(refs[0].primary_key, "thread:thread:julia");
         assert_eq!(refs[0].expected_terminal_state, "accepted");
+    }
+
+    #[test]
+    fn reviewed_owner_reply_in_the_mail_thread_satisfies_the_outcome_witness() {
+        // thesen 11.10.2026: the owner-mail job ran under its isolated
+        // execution thread; the witness looked for the sent reply there and
+        // failed three reviewed, sent replies, so the route fell back to
+        // pending and the mail risked a second reply.
+        let root = temp_root("owner-reply-execution-thread");
+        let inbound_key = "email:lena@example.test::inbox::recherche";
+        let mail_thread = "AAQkRecherche=";
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open channel db");
+        for (key, direction, status, at) in [
+            (inbound_key, "inbound", "received", "2026-10-10T10:17:33Z"),
+            (
+                "email:lena@example.test::sent::<reply@example.test>",
+                "outbound",
+                "accepted",
+                "2026-10-11T14:18:16Z",
+            ),
+        ] {
+            conn.execute(
+                r#"INSERT INTO communication_messages (
+                    message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                    sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                    bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                    trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                    metadata_json
+                ) VALUES (
+                    ?1, 'email', 'email:lena@example.test', ?2, ?1, ?3, 'INBOX', 'Michael',
+                    'michael@example.test', '[]', '[]', '[]', 'Re: Recherche', '', '', '', '',
+                    'normal', ?4, 0, 0, ?5, ?5, '{}'
+                )"#,
+                rusqlite::params![key, mail_thread, direction, status, at],
+            )
+            .expect("failed to insert mail");
+        }
+        let job = QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: "Beantworte die Owner-Mail.".to_string(),
+            goal: "owner reply".to_string(),
+            preview: "owner reply".to_string(),
+            source_label: "email:owner".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![inbound_key.to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(isolated_founder_email_thread_key(mail_thread, "owner")),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        // The unmapped expectation names the execution thread and finds nothing.
+        let unmapped = expected_outcome_artifacts_for_job(&job);
+        assert!(unmapped[0]
+            .primary_key
+            .starts_with("thread:email-review:owner:"));
+        assert!(delivered_outcome_artifacts_for_job(&root, &job, &unmapped)
+            .expect("delivered lookup")
+            .is_empty());
+
+        let expected = resolve_founder_execution_thread_refs(&root, &job, unmapped);
+        assert_eq!(expected[0].primary_key, format!("thread:{mail_thread}"));
+        let delivered =
+            delivered_outcome_artifacts_for_job(&root, &job, &expected).expect("delivered lookup");
+        assert_eq!(delivered.len(), 1);
+        enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("the sent reply in the mail thread is the outcome");
+
+        // With the accepted Completed proof the route may become handled: no
+        // fallback to pending, so no second lease and no second reply.
+        channels::ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
+            .expect("a proven reply closes the mail");
+        let route: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| row.get(0),
+            )
+            .expect("route row");
+        assert_eq!(route, "handled");
+
+        // A foreign isolated thread is never remapped onto this mail.
+        let mut foreign = job.clone();
+        foreign.thread_key = Some(isolated_founder_email_thread_key("other-thread", "owner"));
+        let refs = resolve_founder_execution_thread_refs(
+            &root,
+            &foreign,
+            expected_outcome_artifacts_for_job(&foreign),
+        );
+        assert!(refs[0]
+            .primary_key
+            .starts_with("thread:email-review:owner:"));
     }
 
     #[test]
