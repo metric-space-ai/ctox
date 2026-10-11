@@ -100,6 +100,7 @@ function startNativeCpuProfile(child, { outputPath, phase = () => 'unknown', int
   child.once('exit', exited);
   sample();
   if (!stopped) { timer = setInterval(sample, intervalMs); timer.unref(); }
+  stop.sample = sample;
   return stop;
 }
 

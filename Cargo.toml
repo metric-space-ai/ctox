@@ -54,6 +54,7 @@ git2 = { version = "0.20", default-features = false }
 include_dir = "0.7"
 libc = "0.2"
 mailparse = "0.16"
+mail-auth = { version = "0.13", default-features = false, features = ["ring"] }
 notify = "8.2"
 polars = { version = "0.53.0", default-features = false, features = [
     "lazy", "new_streaming",
