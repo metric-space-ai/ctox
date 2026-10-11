@@ -12151,6 +12151,23 @@ pub(in crate::business_os) mod tests {
         assert_eq!(document.get("owner_user_id"), Some(&json!("owner")));
         assert_eq!(document.get("device_binding_id"), Some(&json!("")));
         assert_eq!(document.get("replication_up"), Some(&json!(false)));
+        let detected = json!({
+            "id":"detected-v2","display_name":"Detected","hosting_mode":"workstation","status":"assigned",
+            "capabilities":["build"],"self_hosted_colocation":false,"owner_user_id":"owner",
+            "created_at_ms":100,"updated_at_ms":200,"device_binding_id":"","actor_epoch":0,
+            "last_seen_at_ms":0,"replication_up":false,"is_deleted":false,
+            "roles":{"build":true,"storage":false},"active":false,"host_key_fingerprint":null,
+            "machine_id":"fixture-machine","detected_facts":{"checkedAt":"2026-10-11T20:00:00Z",
+                "machineId":"fixture-machine","operatingSystem":"Linux","architecture":"x86_64",
+                "cpuCores":8,"ramBytes":1,"homeDirectory":"/home/fixture",
+                "workDirectory":"/home/fixture/.workjet/computer-work","freeBytes":1,
+                "gpus":[],"toolchains":{},"codingTools":{},"warnings":[]}
+        });
+        reopened
+            .collection("workjet_computers")
+            .unwrap()
+            .insert(detected)
+            .await?;
         reopened.close().await?;
         Ok(())
     }
@@ -12162,7 +12179,7 @@ pub(in crate::business_os) mod tests {
         std::fs::create_dir_all(root.path().join("runtime"))?;
         let collection = "workjet_computers";
         let version = expected_rxdb_collection_version(collection);
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         create_runtime_migration_source_table(root.path(), collection, 0)?;
         let legacy = json!({
             "id": "legacy-computer", "display_name": "Existing workstation",
@@ -12248,6 +12265,39 @@ pub(in crate::business_os) mod tests {
             sqlite_table_row_count(&conn, &rxdb_collection_version_table_name(collection, 0))?,
             2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn workjet_computer_v1_migration_keeps_owner_binding_and_tombstone() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "workjet_computers";
+        assert_eq!(expected_rxdb_collection_version(collection), 2);
+        create_runtime_migration_source_table(root.path(), collection, 1)?;
+        create_runtime_migration_source_table(root.path(), collection, 2)?;
+        let retained = json!({"id":"retained-v1","display_name":"Existing",
+            "hosting_mode":"workstation","status":"unassigned","capabilities":["coding"],
+            "self_hosted_colocation":false,"owner_user_id":"owner","created_at_ms":100,
+            "updated_at_ms":200,"unassigned_at_ms":200,"device_binding_id":"binding",
+            "actor_epoch":7,"last_seen_at_ms":190,"replication_up":true,"is_deleted":true});
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            1,
+            "retained-v1",
+            200.0,
+            retained.clone(),
+        )?;
+        let migrated = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migrated["verified_rows"], 1);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        let raw: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__workjet_computers__v2 WHERE id = 'retained-v1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&raw)?, retained);
         Ok(())
     }
 

@@ -252,6 +252,9 @@ fn with_endpoint_authority<T>(
     // Schema initialization happens before taking the secret authority fence.
     let conn = open_store(root)?;
     conn.busy_timeout(std::time::Duration::ZERO)?;
+    if expected.is_none() {
+        ensure_job_admission(&conn, request)?;
+    }
     let initial = resolve_record(&conn, request)?;
     let refs = initial.connection.credential_references();
     let keys = refs
@@ -263,6 +266,9 @@ fn with_endpoint_authority<T>(
         &keys,
         |values, credential_revision| {
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)?;
+            if expected.is_none() {
+                ensure_job_admission(&tx, request)?;
+            }
             let mut current = resolve_record(&tx, request)?;
             anyhow::ensure!(
                 current.connection.credential_references() == refs,
@@ -285,6 +291,20 @@ fn with_endpoint_authority<T>(
             apply(&current, values)
         },
     )
+}
+
+fn ensure_job_admission(conn: &Connection, request: &ComputerEndpointRequest) -> Result<()> {
+    let computer = assigned_computer(conn, &request.owner_user_id, &request.computer_id)?;
+    anyhow::ensure!(computer["active"] != false, "computer is inactive");
+    let role = match request.usage {
+        EndpointUse::Build => "build",
+        EndpointUse::Storage { .. } => "storage",
+    };
+    anyhow::ensure!(
+        computer["roles"][role] != false,
+        "computer role is inactive"
+    );
+    Ok(())
 }
 
 fn resolve_record(

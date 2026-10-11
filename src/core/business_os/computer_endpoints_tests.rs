@@ -81,6 +81,41 @@ fn fixture(root: &Path) -> Result<()> {
 }
 
 #[test]
+fn inactive_storage_denies_new_admission_but_retains_the_admitted_job() -> Result<()> {
+    let root = tempdir()?;
+    fixture(root.path())?;
+    let admitted = resolve_computer_endpoint(root.path(), &request())?;
+    dispatch(
+        root.path(),
+        "ctox.workjet.computer.assign",
+        json!({"computer_id":"computer-1","display_name":"NAS","hosting_mode":"self_hosted","active":false}),
+    )?;
+    let error = resolve_computer_endpoint(root.path(), &request()).unwrap_err();
+    assert!(error.to_string().contains("inactive"));
+    with_current_computer_endpoint(
+        root.path(),
+        &request(),
+        &admitted.fingerprint,
+        |_, _| Ok(()),
+    )?;
+    dispatch(
+        root.path(),
+        "ctox.workjet.computer.assign",
+        json!({"computer_id":"computer-1","display_name":"NAS","hosting_mode":"self_hosted",
+            "active":true,"roles":{"build":false,"storage":false}}),
+    )?;
+    assert!(resolve_computer_endpoint(root.path(), &request()).is_err());
+    dispatch(
+        root.path(),
+        "ctox.workjet.computer.assign",
+        json!({"computer_id":"computer-1","display_name":"NAS","hosting_mode":"self_hosted",
+            "roles":{"build":false,"storage":true}}),
+    )?;
+    resolve_computer_endpoint(root.path(), &request())?;
+    Ok(())
+}
+
+#[test]
 fn endpoint_commands_require_verified_owner_admin_and_immutable_computer_binding() -> Result<()> {
     let root = tempdir()?;
     assign(

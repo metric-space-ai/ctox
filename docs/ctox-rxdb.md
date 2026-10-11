@@ -460,6 +460,28 @@ fresh SQLite connection can replay old frames onto the new main file. The
 read-only intake lane never deletes or checkpoints the SQLite file family.
 The existing notifier/lost-wakeup check and retry budget remain.
 
+### Detected Workjet computers (v1 to v2)
+
+The existing computer assignment command accepts optional roles, active,
+detected_facts and host_key_fingerprint (camel-case names in the Guest bridge).
+Missing fields preserve native values; legacy operational configuration and
+endpoint authority remain intact. New ordinary computers default to active
+with the build role. Existing agentless/storage grants retain their semantics.
+Facts are bounded public observations, never connection credentials or grants.
+
+The existing native projection and computer.list expose these fields and the
+machine_id derived from detected facts. Computer IDs stay opaque and ownership
+filtering stays native. Version 2 is an additive schema upgrade with an identity
+migration from v1; binding, owner, revisions and tombstones are retained.
+Generate module JSON, contract, hashes and bundle together before delivery.
+
+New build/storage endpoint admissions check active and their role before secret
+access and again under the existing authority transaction. Bound operations may
+finish with their retained fingerprint; key, endpoint and grant revocation still
+deny them. Build capacity observations refuse inactive targets. No SSH key is
+created by assigning detected facts. Existing connection/grant configuration is
+not replaced by hardware observations.
+
 ### Workjet computer schema upgrade (v0 to v1)
 
 Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,

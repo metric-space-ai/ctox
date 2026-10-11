@@ -38,6 +38,14 @@ struct ComputerAssignPayload {
     _inbound_channel: Option<String>,
     computer_id: String,
     display_name: String,
+    #[serde(default)]
+    roles: Option<Value>,
+    #[serde(default)]
+    active: Option<bool>,
+    #[serde(default, alias = "detectedFacts")]
+    detected_facts: Option<Value>,
+    #[serde(default, alias = "hostKeyFingerprint")]
+    host_key_fingerprint: Option<String>,
     hosting_mode: String,
     #[serde(default)]
     capabilities: Vec<String>,
@@ -100,7 +108,17 @@ pub(super) fn requires_capability_management(command: &BusinessCommand) -> bool 
         || (command.command_type == "ctox.workjet.computer.assign"
             && (command.payload.get("capability_config").is_some()
                 || command.payload.get("agentless").is_some()
-                || command.payload.get("device_binding_id").is_some()))
+                || command.payload.get("device_binding_id").is_some()
+                || [
+                    "roles",
+                    "active",
+                    "detected_facts",
+                    "detectedFacts",
+                    "host_key_fingerprint",
+                    "hostKeyFingerprint",
+                ]
+                .iter()
+                .any(|field| command.payload.get(*field).is_some())))
 }
 
 fn migrate_signed_owner_alias(
@@ -188,6 +206,7 @@ fn handle_workjet_computer_list_command(
         "collection": COMPUTERS_COLLECTION,
         "count": computers.len().min(limit),
         "truncated": truncated,
+        "computers": computers.iter().take(limit).map(public_computer_record).collect::<Vec<_>>(),
     }))
 }
 
@@ -264,6 +283,53 @@ fn handle_workjet_computer_assign_command(
             .unwrap_or(false)
     });
     validate_capabilities(&mut capability_config, agentless)?;
+    let roles = payload
+        .roles
+        .clone()
+        .or_else(|| existing.as_ref().and_then(|row| row.get("roles")).cloned())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "build": !agentless,
+                "storage": capability_config.iter().any(|entry| entry.kind() == "storage")
+            })
+        });
+    validate_computer_roles(&roles)?;
+    let active = payload
+        .active
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|row| row.get("active"))
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(true);
+    let detected_facts = payload
+        .detected_facts
+        .clone()
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|row| row.get("detected_facts"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null);
+    if !detected_facts.is_null() {
+        validate_detected_facts(&detected_facts)?;
+    }
+    let supplied_pin = command
+        .payload
+        .get("host_key_fingerprint")
+        .or_else(|| command.payload.get("hostKeyFingerprint"));
+    let host_key_fingerprint = if supplied_pin.is_some() {
+        serde_json::to_value(&payload.host_key_fingerprint)?
+    } else {
+        existing
+            .as_ref()
+            .and_then(|row| row.get("host_key_fingerprint"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    validate_host_key_fingerprint(&host_key_fingerprint)?;
     anyhow::ensure!(
         !agentless || (hosting_mode == "self_hosted" && !payload.self_hosted_colocation),
         "an agentless storage computer must be self_hosted without daemon co-location"
@@ -275,8 +341,8 @@ fn handle_workjet_computer_assign_command(
             capabilities.remove(kind);
         } else {
             anyhow::ensure!(
-                !capabilities.contains(kind),
-                "{kind} requires typed capability_config"
+                !capabilities.contains(kind) || !detected_facts.is_null(),
+                "{kind} requires typed capability_config or detected facts"
             );
         }
     }
@@ -285,6 +351,12 @@ fn handle_workjet_computer_assign_command(
             .iter()
             .map(|capability| capability.kind().to_owned()),
     );
+    if roles["build"] == false {
+        capabilities.remove("build");
+    }
+    if roles["storage"] == false {
+        capabilities.remove("storage");
+    }
     anyhow::ensure!(capabilities.len() <= 32, "capabilities exceeds 32 entries");
     anyhow::ensure!(
         !agentless || capabilities.iter().all(|kind| kind == "storage"),
@@ -343,6 +415,11 @@ fn handle_workjet_computer_assign_command(
         "display_name": display_name,
         "hosting_mode": hosting_mode,
         "status": "assigned",
+        "roles": roles,
+        "active": active,
+        "detected_facts": detected_facts,
+        "host_key_fingerprint": host_key_fingerprint,
+        "machine_id": detected_facts.get("machineId").cloned().unwrap_or(Value::Null),
         "capabilities": capabilities,
         "self_hosted_colocation": payload.self_hosted_colocation,
         "device_binding_id": device_binding_id,
@@ -543,13 +620,7 @@ pub(super) fn project_computer_record(root: &Path, record: &Value) -> anyhow::Re
     // v1 has additionalProperties:false. Keep operational configuration in
     // the native record until the coordinated Workjet schema upgrade; its
     // stable capability names remain visible on the current WebRTC surface.
-    let mut projection = record.clone();
-    if let Some(object) = projection.as_object_mut() {
-        object.remove("capability_config");
-        object.remove("capability_epoch");
-        object.remove("agentless");
-        object.remove("native_device_binding");
-    }
+    let projection = public_computer_record(record);
     upsert_rxdb_collection_record(
         root,
         COMPUTERS_COLLECTION,
@@ -557,6 +628,168 @@ pub(super) fn project_computer_record(root: &Path, record: &Value) -> anyhow::Re
         updated_at_ms,
         projection,
     )?;
+    Ok(())
+}
+
+fn public_computer_record(record: &Value) -> Value {
+    let mut projection = record.clone();
+    if let Some(object) = projection.as_object_mut() {
+        object.remove("capability_config");
+        object.remove("capability_epoch");
+        object.remove("agentless");
+        object.remove("native_device_binding");
+    }
+    projection
+}
+
+fn bounded_object<'a>(
+    value: &'a Value,
+    allowed: &[&str],
+) -> anyhow::Result<&'a serde_json::Map<String, Value>> {
+    let object = value
+        .as_object()
+        .context("computer metadata must be an object")?;
+    anyhow::ensure!(
+        object.keys().all(|key| allowed.contains(&key.as_str())),
+        "unknown computer metadata field"
+    );
+    Ok(object)
+}
+
+fn validate_computer_roles(value: &Value) -> anyhow::Result<()> {
+    bounded_object(value, &["build", "storage"])?;
+    anyhow::ensure!(
+        value["build"].is_boolean() && value["storage"].is_boolean(),
+        "computer roles must contain boolean build and storage"
+    );
+    Ok(())
+}
+
+fn validate_host_key_fingerprint(value: &Value) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let fingerprint = value
+        .as_str()
+        .context("host-key fingerprint must be text or null")?;
+    let encoded = fingerprint
+        .strip_prefix("SHA256:")
+        .context("host-key fingerprint must use SHA256")?;
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded)?;
+    anyhow::ensure!(
+        bytes.len() == 32
+            && base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes) == encoded,
+        "invalid host-key fingerprint"
+    );
+    Ok(())
+}
+
+fn validate_detected_facts(value: &Value) -> anyhow::Result<()> {
+    bounded_object(
+        value,
+        &[
+            "checkedAt",
+            "machineId",
+            "operatingSystem",
+            "architecture",
+            "cpuCores",
+            "ramBytes",
+            "homeDirectory",
+            "workDirectory",
+            "freeBytes",
+            "gpus",
+            "toolchains",
+            "codingTools",
+            "warnings",
+        ],
+    )?;
+    anyhow::ensure!(
+        serde_json::to_vec(value)?.len() <= 65536,
+        "computer facts exceed 64 KiB"
+    );
+    for field in [
+        "checkedAt",
+        "operatingSystem",
+        "architecture",
+        "homeDirectory",
+        "workDirectory",
+    ] {
+        bounded_required(
+            value[field]
+                .as_str()
+                .context("computer fact must be text")?,
+            field,
+            4096,
+        )?;
+    }
+    if !value["machineId"].is_null() {
+        bounded_required(
+            value["machineId"]
+                .as_str()
+                .context("machine ID must be text")?,
+            "machineId",
+            4096,
+        )?;
+    }
+    let cores = value["cpuCores"]
+        .as_u64()
+        .context("CPU cores must be positive integer")?;
+    anyhow::ensure!((1..=65535).contains(&cores), "invalid CPU core count");
+    for field in ["ramBytes", "freeBytes"] {
+        anyhow::ensure!(
+            value[field]
+                .as_u64()
+                .is_some_and(|n| n <= 9_007_199_254_740_991),
+            "invalid detected byte count"
+        );
+    }
+    for field in ["toolchains", "codingTools"] {
+        let versions = value[field]
+            .as_object()
+            .context("versions must be an object")?;
+        anyhow::ensure!(versions.len() <= 32, "too many detected tools");
+        for (tool, version) in versions {
+            bounded_required(tool, "tool name", 128)?;
+            bounded_required(
+                version.as_str().context("version must be text")?,
+                "version",
+                4096,
+            )?;
+        }
+    }
+    let gpus = value["gpus"].as_array().context("GPUs must be an array")?;
+    anyhow::ensure!(gpus.len() <= 32, "too many detected GPUs");
+    for gpu in gpus {
+        bounded_object(gpu, &["model", "vramBytes", "unifiedMemory"])?;
+        bounded_required(
+            gpu["model"].as_str().context("GPU model must be text")?,
+            "GPU model",
+            4096,
+        )?;
+        anyhow::ensure!(
+            gpu["unifiedMemory"].is_boolean(),
+            "GPU memory kind must be boolean"
+        );
+        anyhow::ensure!(
+            gpu["vramBytes"].is_null()
+                || gpu["vramBytes"]
+                    .as_u64()
+                    .is_some_and(|n| n <= 9_007_199_254_740_991),
+            "invalid GPU memory"
+        );
+    }
+    let warnings = value["warnings"]
+        .as_array()
+        .context("warnings must be an array")?;
+    anyhow::ensure!(warnings.len() <= 64, "too many computer warnings");
+    for warning in warnings {
+        bounded_required(
+            warning.as_str().context("warning must be text")?,
+            "warning",
+            4096,
+        )?;
+    }
     Ok(())
 }
 
@@ -649,6 +882,75 @@ mod tests {
             ),
             "owner-1",
         )
+    }
+
+    #[test]
+    fn detected_metadata_preserves_legacy_grants_and_projects_identity() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        create_workjet_computer_rxdb_projection_table(root.path())?;
+        let config = json!([{"kind":"build","ssh_endpoint_ref":"endpoint-1","slots":3,"jobs":6,
+            "lane_root":"/lane","disk_floor_gib":20,"toolchains":["rust-stable"]}]);
+        let base = json!({"computer_id":"computer-facts","display_name":"GPU",
+            "hosting_mode":"workstation","capability_config":config,"capabilities":[]});
+        handle_workjet_computer_assign_command(
+            root.path(),
+            &command("ctox.workjet.computer.assign", base),
+            "owner-1",
+        )?;
+        let facts = json!({"checkedAt":"2026-10-11T20:00:00Z","machineId":"fixture-machine",
+            "operatingSystem":"Linux","architecture":"x86_64","cpuCores":16,"ramBytes":128000000000u64,
+            "homeDirectory":"/home/fixture","workDirectory":"/home/fixture/.workjet/computer-work",
+            "freeBytes":400000000000u64,"gpus":[],"toolchains":{"rustc":"rustc 1.90"},
+            "codingTools":{},"warnings":[]});
+        let pin = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let upgrade = json!({"computer_id":"computer-facts","display_name":"GPU","hosting_mode":"workstation",
+            "roles":{"build":true,"storage":false},"active":false,"detected_facts":facts,
+            "host_key_fingerprint":pin});
+        let first = handle_workjet_computer_store_command(
+            root.path(),
+            &command("ctox.workjet.computer.assign", upgrade.clone()),
+            "owner-1",
+            None,
+            "chef",
+        )?;
+        assert_eq!(first["computer"]["capability_config"], config);
+        let refreshed = assign(root.path(), "computer-facts")?;
+        for field in [
+            "roles",
+            "active",
+            "detected_facts",
+            "host_key_fingerprint",
+            "machine_id",
+            "capability_config",
+        ] {
+            assert_eq!(
+                first["computer"][field], refreshed["computer"][field],
+                "{field}"
+            );
+        }
+        let projected =
+            load_rxdb_collection_record(root.path(), COMPUTERS_COLLECTION, "computer-facts")?
+                .context("projected computer")?;
+        assert_eq!(projected["detected_facts"], facts);
+        assert_eq!(projected["active"], false);
+        assert_eq!(projected["machine_id"], "fixture-machine");
+        assert_eq!(projected["host_key_fingerprint"], pin);
+        assert!(projected.get("capability_config").is_none());
+        let listed = handle_workjet_computer_list_command(
+            root.path(),
+            &command("ctox.workjet.computer.list", json!({})),
+            "owner-1",
+        )?;
+        assert_eq!(listed["computers"][0]["machine_id"], "fixture-machine");
+        assert!(handle_workjet_computer_store_command(
+            root.path(),
+            &command("ctox.workjet.computer.assign", upgrade),
+            "owner-1",
+            None,
+            "user"
+        )
+        .is_err());
+        Ok(())
     }
 
     #[test]
@@ -846,7 +1148,12 @@ mod tests {
             "owner-1",
         )?;
         assert_eq!(listed["count"], 1);
-        assert!(listed.get("computers").is_none());
+        assert_eq!(listed["computers"].as_array().map(Vec::len), Some(1));
+        assert_eq!(listed["computers"][0]["id"], "computer-1");
+        assert_eq!(listed["computers"][0]["owner_user_id"], "owner-1");
+        assert!(listed["computers"][0]
+            .get("native_device_binding")
+            .is_none());
 
         let unassign = command(
             "ctox.workjet.computer.unassign",

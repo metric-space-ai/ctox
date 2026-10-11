@@ -54,12 +54,27 @@ impl NativeBuildSsh {
             !saved_fingerprint.is_empty(),
             "job endpoint fingerprint is missing"
         );
-        let bound = Self::bind(root, request)?;
         ensure!(
-            bound.fingerprint == saved_fingerprint,
-            "build endpoint changed since job admission"
+            request.usage == EndpointUse::Build,
+            "a build endpoint use is required"
         );
-        Ok(bound)
+        let endpoint =
+            with_current_computer_endpoint(root, &request, saved_fingerprint, |endpoint, _| {
+                Ok(endpoint.clone())
+            })?;
+        let ComputerCapability::Build(grant) = endpoint.grant else {
+            anyhow::bail!("a typed build grant is required");
+        };
+        ensure!(
+            matches!(endpoint.connection, ComputerEndpoint::Ssh { .. }),
+            "build requires SSH"
+        );
+        Ok(Self {
+            root: root.to_owned(),
+            request,
+            fingerprint: endpoint.fingerprint,
+            grant,
+        })
     }
 
     pub(crate) fn grant(&self) -> &BuildCapability {
@@ -132,6 +147,7 @@ impl NativeBuildSsh {
     /// Nonblocking observation using the prototype's actual lock files.
     /// The runner must still obtain a lease; this result is never a reservation.
     pub(crate) fn availability(&self) -> Result<BuildAvailability> {
+        resolve_computer_endpoint(&self.root, &self.request)?;
         let script = format!(
             r#"set -euo pipefail
 lane={}
@@ -243,6 +259,29 @@ mod tests {
             None,
             json!({}),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn inactive_build_denies_binding_and_capacity_without_remote_io() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        fixture(root.path())?;
+        let admitted = NativeBuildSsh::bind(root.path(), request())?;
+        dispatch(
+            root.path(),
+            "ctox.workjet.computer.assign",
+            json!({"computer_id":"build-computer","display_name":"Build","hosting_mode":"self_hosted","active":false}),
+        )?;
+        assert!(NativeBuildSsh::bind(root.path(), request()).is_err());
+        assert!(admitted.availability().is_err());
+        admitted.with_current(|_| Ok(()))?;
+        NativeBuildSsh::resume(root.path(), request(), admitted.fingerprint())?;
+        dispatch(
+            root.path(),
+            "ctox.workjet.computer.assign",
+            json!({"computer_id":"build-computer","display_name":"Build","hosting_mode":"self_hosted","active":true}),
+        )?;
+        NativeBuildSsh::bind(root.path(), request())?;
         Ok(())
     }
 
