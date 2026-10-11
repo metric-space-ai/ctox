@@ -30,8 +30,7 @@ impl HostHttpClient for Wire {
                 "api-first",
                 "fixture-credential-first",
                 None,
-                "test",
-                "private fixture",
+                serde_json::json!({"purpose":"private fixture"}),
             )
             .unwrap();
         }
@@ -74,8 +73,7 @@ fn setup() -> (tempfile::TempDir, StoredProviderIntegrationConfig) {
             &a.api_key_secret.name,
             &format!("fixture-credential-{}", a.id),
             None,
-            "test",
-            "private fixture",
+            serde_json::json!({"purpose":"private fixture"}),
         )
         .unwrap();
     }
@@ -126,8 +124,7 @@ async fn same_bytes_new_generation_rejects_stale_route_before_io() {
         "api-first",
         "fixture-credential-first",
         None,
-        "test",
-        "private fixture",
+        serde_json::json!({"purpose":"private fixture"}),
     )
     .unwrap();
     let body =
@@ -184,6 +181,9 @@ fn private_topology_rejects_aliases_and_borrowed_secret_scopes() {
     config.api_key_accounts.truncate(1);
     config.api_key_accounts[0].api_key_secret.scope = "credentials".into();
     assert!(config.validate().is_err());
+    config.api_key_accounts[0].api_key_secret.scope = "provider-api-keys".into();
+    config.api_key_accounts[0].id = crate::execution::cliproxyapi_xai::ACCOUNT_ID.into();
+    assert!(config.validate().is_err());
 }
 
 #[tokio::test]
@@ -210,8 +210,7 @@ async fn topology_and_credential_changes_refresh_without_a_service_restart() {
         "api-first",
         "rotated-fixture-credential",
         None,
-        "test",
-        "private fixture",
+        serde_json::json!({"purpose":"private fixture"}),
     )
     .unwrap();
     let replacement = routes.route_for("xai").unwrap().unwrap();
