@@ -37,7 +37,9 @@ struct Target {
     #[serde(default = "legacy_provider")]
     provider: String,
 }
-fn legacy_provider() -> String { "claude".into() }
+fn legacy_provider() -> String {
+    "claude".into()
+}
 #[derive(Serialize, Deserialize)]
 struct Pending {
     request: Request,

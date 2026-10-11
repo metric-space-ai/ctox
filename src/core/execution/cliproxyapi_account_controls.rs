@@ -13,7 +13,11 @@ mod tests;
 #[path = "cliproxyapi_account_control_binding.rs"]
 mod binding;
 
-pub(crate) fn account_binding(root: &Path, provider: &str, id: &str) -> anyhow::Result<Option<String>> {
+pub(crate) fn account_binding(
+    root: &Path,
+    provider: &str,
+    id: &str,
+) -> anyhow::Result<Option<String>> {
     let Some(first) = binding::capture(root, provider, id)? else {
         return Ok(None);
     };
@@ -84,7 +88,17 @@ pub(crate) fn apply(
     enabled: Option<bool>,
     validate_current_authority: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    apply_account(root, id, hash, actor, "claude", local, expected_binding, enabled, validate_current_authority)
+    apply_account(
+        root,
+        id,
+        hash,
+        actor,
+        "claude",
+        local,
+        expected_binding,
+        enabled,
+        validate_current_authority,
+    )
 }
 
 /// Provider is resolved from the admitted private account, never caller input.
@@ -129,8 +143,7 @@ pub(crate) fn apply_account(
         captured.set_enabled(&mut stored.runtime, enabled.unwrap());
     }
     anyhow::ensure!(
-        account_binding(root, provider, local)?.as_deref()
-            == Some(expected_binding),
+        account_binding(root, provider, local)?.as_deref() == Some(expected_binding),
         "native credential generation changed; refresh account metadata"
     );
     // Preserve the default even when dormant. Never select another provider.
@@ -214,11 +227,18 @@ pub(crate) fn finish(root: &Path, id: &str, hash: &str, actor: &str) -> anyhow::
     );
     let runtime: CliproxyRuntimeConfig = serde_json::from_str(&raw.1)?;
     if effect.enabled.is_none() {
-        anyhow::ensure!(!binding::configured(&runtime, &effect.provider, &effect.local_id),
-            "provider account was reconfigured; reconciliation required");
+        anyhow::ensure!(
+            !binding::configured(&runtime, &effect.provider, &effect.local_id),
+            "provider account was reconfigured; reconciliation required"
+        );
         crate::secrets::delete_secret_records_if_versions(root, &effect.keys)?;
         if effect.provider == "claude" {
-            super::account_quotas::remove_under_lifecycle(root, "claude", &effect.local_id, &_guard)?;
+            super::account_quotas::remove_under_lifecycle(
+                root,
+                "claude",
+                &effect.local_id,
+                &_guard,
+            )?;
         }
     }
     tx.commit()?;
