@@ -2,10 +2,8 @@
 // License: Apache-2.0
 
 use super::rxdb_peer::{
-    incremental_upsert_projection_if_changed, now_ms, projection_sleep_secs,
-    upsert_business_record_projection, BUSINESS_COMMAND_ACTIVE_POLL_SECS,
-    BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS, BUSINESS_COMMAND_IDLE_POLL_SECS,
-    NATIVE_RXDB_WRITE_LOCK,
+    incremental_upsert_projection_if_changed, now_ms, upsert_business_record_projection,
+    BUSINESS_COMMAND_ACTIVE_POLL_SECS, BUSINESS_COMMAND_IDLE_POLL_SECS, NATIVE_RXDB_WRITE_LOCK,
 };
 use super::rxdb_peer_projections::{
     appsec_projection_collection, support_projection_collection, threads_projection_collection,
@@ -21,10 +19,22 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub(super) async fn deliver_business_command_outbox_background_loop(root: PathBuf) {
+    deliver_business_command_outbox_with_idle_delay(
+        root,
+        Duration::from_secs(BUSINESS_COMMAND_ACTIVE_POLL_SECS),
+    )
+    .await;
+}
+
+async fn deliver_business_command_outbox_with_idle_delay(root: PathBuf, idle_delay: Duration) {
     let mut idle_rounds = 0u32;
+    let mut last_invariant_sweep = std::time::Instant::now();
+    let invariant_sweep_interval = Duration::from_secs(60 * BUSINESS_COMMAND_IDLE_POLL_SECS);
     loop {
         let result: anyhow::Result<usize> = async {
-            if idle_rounds > 0 && idle_rounds % 60 == 0 {
+            // Keep the former roughly thirty-minute reconciliation cadence;
+            // faster receipt polling must not multiply expensive sweeps.
+            if idle_rounds > 0 && last_invariant_sweep.elapsed() >= invariant_sweep_interval {
                 let reconcile_root = root.clone();
                 tokio::task::spawn_blocking(move || {
                     crate::mission::channels::audit_and_migrate_business_command_storage(
@@ -34,6 +44,7 @@ pub(super) async fn deliver_business_command_outbox_background_loop(root: PathBu
                 })
                 .await
                 .context("join business command invariant reconciliation")??;
+                last_invariant_sweep = std::time::Instant::now();
             }
             let outbox_root = root.clone();
             let outbox = tokio::task::spawn_blocking(move || {
@@ -50,13 +61,10 @@ pub(super) async fn deliver_business_command_outbox_background_loop(root: PathBu
         match result {
             Ok(0) => {
                 idle_rounds = idle_rounds.saturating_add(1);
-                tokio::time::sleep(Duration::from_secs(projection_sleep_secs(
-                    BUSINESS_COMMAND_ACTIVE_POLL_SECS,
-                    BUSINESS_COMMAND_IDLE_POLL_SECS,
-                    BUSINESS_COMMAND_IDLE_BACKOFF_AFTER_TICKS,
-                    idle_rounds,
-                )))
-                .await;
+                // Unlike command intake, canonical outbox append has no table
+                // notifier here. A thirty-second idle sleep delays newly
+                // terminal receipts and their local RxDB mirrors by that much.
+                tokio::time::sleep(idle_delay).await;
             }
             Ok(_) => {
                 idle_rounds = 0;
@@ -250,4 +258,117 @@ pub(super) async fn project_appsec_command_result(
     Ok(())
 }
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::mission::channels;
+    use rusqlite::{params, Connection, OpenFlags};
+    use serde_json::json;
+    use std::time::Instant;
+
+    fn seed_terminal(root: &std::path::Path, id: &str) -> anyhow::Result<()> {
+        channels::claim_business_control_command(
+            root,
+            channels::BusinessCommandClaimRequest {
+                command_id: id.to_owned(),
+                idempotency_key: id.to_owned(),
+                payload_hash: format!("sha256:{id}"),
+                module: "ctox".to_owned(),
+                command_type: "ctox.workjet.project.list".to_owned(),
+                record_id: String::new(),
+                intent: json!({"command_id": id, "command_type": "ctox.workjet.project.list"}),
+                created_at_ms: now_ms() as i64,
+            },
+        )?;
+        channels::complete_business_control_command(
+            root,
+            id,
+            "completed",
+            &json!({"ok": true, "count": 0}),
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn delivered_count(root: &std::path::Path, id: &str) -> anyhow::Result<i64> {
+        let path = crate::paths::core_db(root);
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM business_command_outbox
+             WHERE command_id = ?1 AND status = 'delivered'",
+            params![id],
+            |row| row.get(0),
+        )?)
+    }
+
+    async fn measure_idle_delivery(original_cadence: bool) -> anyhow::Result<f64> {
+        let root = tempfile::tempdir()?;
+        // Initialize both actual native mirror destinations, then drain them.
+        seed_terminal(root.path(), "outbox-warmup")?;
+        while store::deliver_business_command_outbox(root.path(), 10)?["processed"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+        {}
+        assert_eq!(delivered_count(root.path(), "outbox-warmup")?, 4);
+
+        let fixture_root = root.path().to_path_buf();
+        let consumer = tokio::spawn(async move {
+            if original_cadence {
+                deliver_business_command_outbox_with_idle_delay(
+                    fixture_root,
+                    Duration::from_secs(BUSINESS_COMMAND_IDLE_POLL_SECS),
+                )
+                .await;
+            } else {
+                deliver_business_command_outbox_background_loop(fixture_root).await;
+            }
+        });
+        // This fixture is idle and initialized before the new receipt arrives.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let started = Instant::now();
+        seed_terminal(root.path(), "outbox-after-idle")?;
+        let result = tokio::time::timeout(Duration::from_secs(35), async {
+            while delivered_count(root.path(), "outbox-after-idle")? < 4 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            anyhow::Ok(())
+        })
+        .await;
+        consumer.abort();
+        let _ = consumer.await;
+        result??;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "outbox_idle_delivery_timing={}",
+            json!({
+                "original_idle_cadence": original_cadence,
+                "elapsed_ms": elapsed_ms, "delivered_events": 4,
+                "destinations": ["business-os", "rxdb"],
+            })
+        );
+        assert_eq!(
+            channels::inspect_business_command(root.path(), "outbox-after-idle")?
+                .expect("retained native command")["command"]["terminal_status"],
+            "completed"
+        );
+        Ok(elapsed_ms)
+    }
+
+    #[tokio::test]
+    async fn idle_outbox_delivers_new_terminal_without_a_thirty_second_wait() -> anyhow::Result<()>
+    {
+        // Same actual SQLite destinations and consumer, with the old idle
+        // cadence for the baseline and the production entry point for the fix.
+        let before_ms = measure_idle_delivery(true).await?;
+        let after_ms = measure_idle_delivery(false).await?;
+        assert!(
+            before_ms > 25_000.0,
+            "baseline must reach the original idle sleep"
+        );
+        assert!(
+            after_ms < 2000.0,
+            "a newly terminal command waited {after_ms:.1} ms behind the idle outbox poll"
+        );
+        Ok(())
+    }
+}
