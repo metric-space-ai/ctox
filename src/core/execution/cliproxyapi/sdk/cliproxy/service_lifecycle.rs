@@ -115,6 +115,11 @@ impl Service {
         }
         *self.watcher.lock().unwrap() = Some(watcher);
 
+        if let Some(fetcher) = &self.xai_version_fetcher {
+            let updater = crate::internal::runtime::executor::helps::xai_client_version::start_xai_version_updater(Arc::clone(fetcher));
+            *self.xai_version_updater.lock().unwrap() = Some(updater);
+        }
+
         let result = tokio::select! {
             () = cancellation.cancelled() => Err(ServiceError::new(ServiceErrorKind::Cancelled, "service context cancelled")),
             result = &mut server_task => match result {
@@ -139,6 +144,10 @@ impl Service {
         }
 
         let mut first_error = None;
+        let updater = self.xai_version_updater.lock().unwrap().take();
+        if let Some(updater) = updater {
+            updater.stop().await;
+        }
         let watcher = self.watcher.lock().unwrap().take();
         if let Some(watcher) = watcher {
             if let Err(error) = watcher.stop() {

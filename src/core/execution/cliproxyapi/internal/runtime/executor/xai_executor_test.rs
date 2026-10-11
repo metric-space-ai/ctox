@@ -128,7 +128,7 @@ fn api_and_chat_headers_remain_distinct() {
     assert_eq!(chat[XAI_TOKEN_AUTH_HEADER], vec![XAI_TOKEN_AUTH_VALUE]);
     assert_eq!(chat[XAI_CLIENT_VERSION_HEADER], vec!["1.0.44"]);
     assert_eq!(chat["x-grok-conv-id"], vec!["session"]);
-    assert_eq!(chat["User-Agent"], vec!["xai-grok-workspace/1.0.44"]);
+    assert_eq!(chat["User-Agent"], vec!["xai-grok-workspace/1.0.46"]);
     assert_eq!(chat[XAI_CLIENT_IDENTIFIER_HEADER], vec!["grok-shell"]);
     assert_eq!(
         chat[XAI_AUTHENTICATE_RESPONSE_HEADER],
