@@ -386,13 +386,47 @@ pub(crate) fn records_for_source_message(
 
 const MAIL_RECORD_TEXT_LIMIT: usize = 6000;
 
+/// Whether the record's research has finished. The app parks a finished
+/// research in `needs_review` until a person checks it; read raw, that status
+/// made the mail agent answer "die Recherche laeuft noch" while both leads
+/// held their results (thesen, 11.10.2026).
+pub(crate) fn research_finished(record: &Value) -> bool {
+    matches!(
+        record["research_status"].as_str().unwrap_or(""),
+        "needs_review" | "done" | "completed" | "researched" | "validated"
+    )
+}
+
+fn research_state_for_mail(record: &Value) -> String {
+    let status = record["research_status"].as_str().unwrap_or("-");
+    if research_finished(record) {
+        return "abgeschlossen (Ergebnisse unten)".to_string();
+    }
+    match status {
+        "new" => "nicht gestartet".to_string(),
+        "queued" | "running" | "researching" | "in_progress" => "laeuft noch".to_string(),
+        "failed" => "fehlgeschlagen".to_string(),
+        other => format!("Status {other}"),
+    }
+}
+
+fn validation_state_for_mail(record: &Value) -> String {
+    match record["validation_status"].as_str().unwrap_or("-") {
+        "pending" => "Sichtpruefung durch das Team offen".to_string(),
+        "validated" => "vom Team geprueft".to_string(),
+        other => format!("Status {other}"),
+    }
+}
+
 /// The records as a bounded, quotable block for the mail prompt.
 pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
     if records.is_empty() {
         return String::new();
     }
     let mut text = String::from(
-        "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern):\n",
+        "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern). \
+         Steht bei einem Datensatz \"Recherche abgeschlossen\", ist die Recherche fertig: die Antwort nennt seine Ergebnisse mit Quelle \
+         und behauptet nicht, die Recherche laufe noch oder Ergebnisse kaemen spaeter.\n",
     );
     for record in records {
         let evidence = record["evidence"].as_array().map(Vec::len).unwrap_or(0);
@@ -403,11 +437,18 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
             record["campaign"].as_str().unwrap_or(""),
             record["website"].as_str().unwrap_or("-"),
             record["city"].as_str().unwrap_or("-"),
-            record["research_status"].as_str().unwrap_or("-"),
-            record["validation_status"].as_str().unwrap_or("-"),
+            research_state_for_mail(record),
+            validation_state_for_mail(record),
             evidence,
         ));
-        for item in record["evidence"].as_array().into_iter().flatten().take(40) {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in record["evidence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| seen.insert((item["field_key"].to_string(), item["value"].to_string())))
+            .take(40)
+        {
             let sources = item["sources"]
                 .as_array()
                 .into_iter()
@@ -476,6 +517,18 @@ mod tests {
             rendered.contains("firma_umsatz: 12 Mio (Quelle: https://register.example/hedinger)")
         );
         assert!(render_records_for_mail(&[]).is_empty());
+        // A finished research waiting for a person's check is reported as
+        // finished, with each result once (thesen, 11.10.2026).
+        let duplicate = json!({"field_key": "umsatz", "value": "140,6 Mio. EUR"});
+        let rendered = render_records_for_mail(&[json!({
+            "id": "lead_h", "name": "Hedinger GmbH & Co. KG", "research_status": "needs_review",
+            "validation_status": "pending", "evidence": [duplicate.clone(), duplicate]
+        })]);
+        assert!(rendered.contains("Recherche abgeschlossen (Ergebnisse unten), Pruefung Sichtpruefung durch das Team offen"));
+        assert!(!rendered.contains("needs_review"));
+        assert_eq!(rendered.matches("umsatz: 140,6 Mio. EUR").count(), 1);
+        let running = render_records_for_mail(&[json!({"name": "X", "research_status": "queued"})]);
+        assert!(running.contains("Recherche laeuft noch"));
     }
 
     /// A lead the browser cannot save blocks the whole collection: its first
