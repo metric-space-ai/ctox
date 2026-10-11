@@ -38,6 +38,7 @@ for (const rtt of [0, 300, 600]) test(`independent UDP echo traverses ${rtt} ms 
     assert.equal(snapshot.pairs[0].forwarded.native, 1);
     assert.equal(snapshot.pairs[0].bytes.browser, data.length);
     assert.equal(snapshot.pairs[0].bytes.native, data.length);
+    assert.ok(snapshot.pairs[0].holdMinMs >= rtt / 2, 'Every observed datagram retains the monotonic minimum');
   } finally { await relay.close(); native.close(); browser.close(); }
 });
 

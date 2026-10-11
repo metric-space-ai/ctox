@@ -4532,6 +4532,7 @@ function ensureCtoxSmokeBinary() {
       });
     }
     const page = await browser.newPage();
+    if (syncV3Probe) await syncV3Probe.observe(page, globalThis.__ctoxProcess.pid, `http://127.0.0.1:${businessPort}`);
     if (
       smokeMode === 'business-os-app-release-ui'
       || smokeMode === 'business-os-agent-scope-ui'

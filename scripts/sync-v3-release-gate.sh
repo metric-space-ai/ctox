@@ -7,7 +7,8 @@ cd "$(dirname "$0")/.."
 playwright_module=${1:?Supply the pinned Playwright module path}
 fixture_parent=$(mktemp -d "$TMPDIR/ctox-sync-v3-s0.XXXXXX")
 trap 'rm -rf -- "$fixture_parent"' EXIT
-node --test scripts/sync-v3/measurement.test.mjs scripts/sync-v3/relay.test.mjs scripts/sync-v3/phase-analysis.test.mjs
+node --test --test-concurrency=2 scripts/sync-v3/measurement.test.mjs scripts/sync-v3/relay.test.mjs scripts/sync-v3/phase-analysis.test.mjs scripts/sync-v3/resource-observer.test.mjs
+python3 scripts/sync-v3/sqlite-lock-probe.py --self-test
 node scripts/measure-sync-v3.mjs --validate-fixture
 node scripts/measure-sync-v3.mjs --fixture "$fixture_parent/fixture"
 node scripts/measure-sync-v3.mjs --verify-fixture "$fixture_parent/fixture"
