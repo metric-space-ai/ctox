@@ -24,26 +24,57 @@ pub(super) struct Routes {
 }
 impl Routes {
     pub(super) fn route_for(&self, provider: &str) -> anyhow::Result<Option<Arc<Handler>>> {
-        let mut stored = crate::execution::cliproxyapi_integration::load_provider_integration_config(&self.root)?;
-        stored.config.api_key_accounts.retain(|a| a.endpoint.provider() == provider && !a.disabled && !a.models.is_empty());
-        let mut cached = self.cached.lock().map_err(|_| anyhow::anyhow!("API route cache unavailable"))?;
-        if stored.config.api_key_accounts.is_empty() { cached.remove(provider); return Ok(None); }
+        if !matches!(provider, "zai" | "minimax" | "xai" | "kimi") {
+            return Ok(None);
+        }
+        let mut stored =
+            crate::execution::cliproxyapi_integration::load_provider_integration_config(
+                &self.root,
+            )?;
+        stored
+            .config
+            .api_key_accounts
+            .retain(|a| a.endpoint.provider() == provider && !a.disabled && !a.models.is_empty());
+        let mut cached = self
+            .cached
+            .lock()
+            .map_err(|_| anyhow::anyhow!("API route cache unavailable"))?;
+        if stored.config.api_key_accounts.is_empty() {
+            cached.remove(provider);
+            return Ok(None);
+        }
         if let Some(handler) = cached.get(provider) {
             if handler.accounts.len() == stored.config.api_key_accounts.len()
-                && handler.accounts.iter().zip(&stored.config.api_key_accounts).all(|(a, config)| a.config == *config && current(&self.root, config, &a.version)) {
+                && handler
+                    .accounts
+                    .iter()
+                    .zip(&stored.config.api_key_accounts)
+                    .all(|(a, config)| {
+                        a.config == *config && current(&self.root, config, &a.version)
+                    })
+            {
                 return Ok(Some(handler.clone()));
             }
         }
-        let mut transport = self.http.lock().map_err(|_| anyhow::anyhow!("API transport unavailable"))?;
+        let mut transport = self
+            .http
+            .lock()
+            .map_err(|_| anyhow::anyhow!("API transport unavailable"))?;
         let http = match transport.as_ref() {
             Some(http) => http.clone(),
             None => {
-                let http: Arc<dyn HostHttpClient> = Arc::new(ApiKeyHttpClient::new(None, self.timeout).map_err(|_| anyhow::anyhow!("API provider transport unavailable"))?);
-                *transport = Some(http.clone()); http
+                let http: Arc<dyn HostHttpClient> = Arc::new(
+                    ApiKeyHttpClient::new(None, self.timeout)
+                        .map_err(|_| anyhow::anyhow!("API provider transport unavailable"))?,
+                );
+                *transport = Some(http.clone());
+                http
             }
         };
         let handler = build_with_http(&self.root, &stored, http)?.remove(provider);
-        if let Some(handler) = &handler { cached.insert(provider.to_owned(), handler.clone()); }
+        if let Some(handler) = &handler {
+            cached.insert(provider.to_owned(), handler.clone());
+        }
         Ok(handler)
     }
 }
@@ -111,7 +142,12 @@ pub(super) fn build(
 ) -> anyhow::Result<Arc<Routes>> {
     // Keep the manager even for OAuth-only startup. A subsequently added API
     // account becomes usable without rebuilding the instance proxy service.
-    Ok(Arc::new(Routes { root: root.to_path_buf(), timeout, http: std::sync::Mutex::new(None), cached: std::sync::Mutex::new(BTreeMap::new()) }))
+    Ok(Arc::new(Routes {
+        root: root.to_path_buf(),
+        timeout,
+        http: std::sync::Mutex::new(None),
+        cached: std::sync::Mutex::new(BTreeMap::new()),
+    }))
 }
 fn build_with_http(
     root: &Path,

@@ -211,7 +211,9 @@ mod tests {
         sender
             .send(ExecutorStreamChunk {
                 payload: vec![],
-                error: Some(Arc::new(std::io::Error::other("private upstream credential"))),
+                error: Some(Arc::new(std::io::Error::other(
+                    "private upstream credential",
+                ))),
             })
             .await
             .unwrap();
