@@ -1,6 +1,7 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
+use std::sync::Mutex;
 use crate::execution::cliproxyapi_integration::{
     save_provider_integration_config, ApiKeyEndpoint, ProviderIntegrationConfig, ProviderSecretRef,
 };
@@ -15,7 +16,7 @@ struct Wire {
 }
 impl HostHttpClient for Wire {
     fn execute_stream<'a>(&'a self, _request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
-        Box::pin(async { Err(anyhow::anyhow!("buffered fixture")) })
+        Box::pin(async { Err(Arc::new(std::io::Error::other("buffered fixture")) as ctox_cliproxyapi::sdk::pluginapi::PluginExecutionError) })
     }
     fn execute<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpResponse> {
         self.seen.lock().unwrap().push(request);
@@ -180,4 +181,41 @@ fn private_topology_rejects_aliases_and_borrowed_secret_scopes() {
     config.api_key_accounts.truncate(1);
     config.api_key_accounts[0].api_key_secret.scope = "credentials".into();
     assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn topology_and_credential_changes_refresh_without_a_service_restart() {
+    let (root,stored) = setup();
+    let initial = ProviderIntegrationConfig::default();
+    save_provider_integration_config(root.path(),stored.revision,&initial).unwrap();
+    let snapshot = crate::execution::cliproxyapi_integration::load_provider_integration_config(root.path()).unwrap();
+    let routes = build(root.path(),&snapshot,Duration::from_secs(5)).unwrap();
+    let wire = Arc::new(Wire::default());
+    *routes.http.lock().unwrap() = Some(wire.clone());
+    assert!(routes.route_for("xai").unwrap().is_none());
+    save_provider_integration_config(root.path(),snapshot.revision,&stored.config).unwrap();
+    let first = routes.route_for("xai").unwrap().unwrap();
+    assert!(Arc::ptr_eq(&first,&routes.route_for("xai").unwrap().unwrap()));
+    crate::secrets::write_secret_record(root.path(),"provider-api-keys","api-first","rotated-fixture-credential",None,"test","private fixture").unwrap();
+    let replacement = routes.route_for("xai").unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&first,&replacement));
+    let body = serde_json::to_vec(&serde_json::json!({"model":model_fixture(),"input":"Hi"})).unwrap();
+    let OpenAiResponsesRouteResponse::Buffered(stale) = first.handle_route(&body).await else { panic!("buffered expected") };
+    assert_eq!(stale.status(),409);
+    let OpenAiResponsesRouteResponse::Buffered(fresh) = replacement.handle_route(&body).await else { panic!("buffered expected") };
+    assert_eq!(fresh.status(),200);
+    let seen = wire.seen.lock().unwrap(); assert_eq!(seen.len(),1);
+    assert!(seen[0].headers.values().flatten().any(|value|value == "Bearer rotated-fixture-credential"));
+    drop(seen);
+    let mut disabled = crate::execution::cliproxyapi_integration::load_provider_integration_config(root.path()).unwrap();
+    disabled.config.api_key_accounts[0].disabled = true;
+    save_provider_integration_config(root.path(),disabled.revision,&disabled.config).unwrap();
+    let enabled = routes.route_for("xai").unwrap().unwrap();
+    let OpenAiResponsesRouteResponse::Buffered(response) = enabled.handle_route(&body).await else { panic!("buffered expected") };
+    assert_eq!(response.status(),200);
+    assert!(wire.seen.lock().unwrap()[1].headers.values().flatten().any(|value|value == "Bearer fixture-credential-second"));
+    let mut removed = crate::execution::cliproxyapi_integration::load_provider_integration_config(root.path()).unwrap();
+    removed.config.api_key_accounts.clear();
+    save_provider_integration_config(root.path(),removed.revision,&removed.config).unwrap();
+    assert!(routes.route_for("xai").unwrap().is_none());
 }

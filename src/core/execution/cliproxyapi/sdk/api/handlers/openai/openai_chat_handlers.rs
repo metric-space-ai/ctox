@@ -171,6 +171,7 @@ pub(crate) async fn handle_openai_chat_route<H: OpenAiResponsesRouteHandler + ?S
         }
         OpenAiResponsesRouteResponse::Stream(source) => ChatStreamSource::Claude(source),
         OpenAiResponsesRouteResponse::CodexStream(source) => ChatStreamSource::Codex(source),
+        OpenAiResponsesRouteResponse::GenericStream(source) => ChatStreamSource::Generic(source),
         OpenAiResponsesRouteResponse::AntigravityStream(source) => {
             ChatStreamSource::Antigravity(source)
         }
@@ -224,6 +225,7 @@ enum ChatStreamSource {
     Buffered(Option<Vec<u8>>),
     Claude(Box<OpenAiResponsesStreamBootstrap>),
     Codex(Box<OpenAiResponsesCodexStream>),
+    Generic(Box<super::OpenAiResponsesGenericStream>),
     Antigravity(Box<OpenAiResponsesAntigravityStream>),
 }
 
@@ -233,6 +235,7 @@ impl ChatStreamSource {
             Self::Buffered(body) => body.take(),
             Self::Claude(source) => source.next_chunk().await.map(delimit_event),
             Self::Codex(source) => source.next_chunk().await,
+            Self::Generic(source) => source.next_chunk().await,
             Self::Antigravity(source) => source.next_chunk().await.map(delimit_event),
         }
     }
