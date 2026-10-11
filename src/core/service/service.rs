@@ -12581,7 +12581,7 @@ fn mail_order_review_evidence(root: &Path, inbound_message_key: &str) -> Vec<Str
         .iter()
         .map(|record| {
             let finished = if crate::business_os::outbound_lead_import::research_finished(record) {
-                " Its research is FINISHED and the results are in the record: a reply that says the research is still running or that results will follow later contradicts it and must be rejected; the reply must report the results."
+                " Its research run has ENDED and its results are in the record (some fields may be open): a reply that says the research is still running or that results will follow later contradicts it and must be rejected; the reply must report the results and name open fields as open."
             } else {
                 ""
             };
