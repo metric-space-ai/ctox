@@ -1885,7 +1885,9 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
-            let quota_observation = self.router.begin_claude_quota_observation(&selected.auth_id)
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
                 .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_stream_for_model_with_context(
@@ -1989,7 +1991,9 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
-            let quota_observation = self.router.begin_claude_quota_observation(&selected.auth_id)
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
                 .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_for_model_with_context(
