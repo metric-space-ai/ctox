@@ -36,7 +36,7 @@ impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
     ) -> Pin<Box<dyn Future<Output = Result<
         ctox_cliproxyapi::internal::runtime::executor::claude_executor::ClaudeMessagesStreamResponse,
         ClaudeMessagesTransportFailure,
-    >> + Send + 'a>> {
+    >> + Send + 'a>>{
         Box::pin(async move {
             let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
             assert_eq!(body["stream"], true);
