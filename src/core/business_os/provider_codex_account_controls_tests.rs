@@ -221,51 +221,104 @@ fn native_controls_codex_old_removal_receipt_cannot_remove_recreated_generation(
     Ok(())
 }
 
-fn refresh_credentials(marker: &str) -> Result<ctox_cliproxyapi::internal::auth::codex::CodexStoredCredentials> {
+fn refresh_credentials(
+    marker: &str,
+) -> Result<ctox_cliproxyapi::internal::auth::codex::CodexStoredCredentials> {
     use ctox_cliproxyapi::internal::auth::codex::{CodexStoredCredentials, SecretString};
-    Ok(CodexStoredCredentials::new(SecretString::new(format!("id-{marker}"))?,SecretString::new(format!("access-{marker}"))?,SecretString::new(format!("refresh-{marker}"))?))
+    Ok(CodexStoredCredentials::new(
+        SecretString::new(format!("id-{marker}"))?,
+        SecretString::new(format!("access-{marker}"))?,
+        SecretString::new(format!("refresh-{marker}"))?,
+    ))
 }
-fn refresh_handles(f: &Fixture) -> Result<ctox_cliproxyapi::internal::auth::codex::CodexCredentialHandles> {
-    proxy::load_instance_proxy_config(f.root.path())?.unwrap().runtime.codex_accounts.iter().find(|a|a.id=="owned-codex-a").unwrap().credential_handles().map_err(|_|anyhow::anyhow!("fixture handles unavailable"))
+fn refresh_handles(
+    f: &Fixture,
+) -> Result<ctox_cliproxyapi::internal::auth::codex::CodexCredentialHandles> {
+    proxy::load_instance_proxy_config(f.root.path())?
+        .unwrap()
+        .runtime
+        .codex_accounts
+        .iter()
+        .find(|a| a.id == "owned-codex-a")
+        .unwrap()
+        .credential_handles()
+        .map_err(|_| anyhow::anyhow!("fixture handles unavailable"))
 }
 #[test]
 fn native_controls_codex_late_refresh_cannot_resurrect_removed_credentials() -> Result<()> {
     use ctox_cliproxyapi::internal::auth::codex::CodexSecretStore;
-    let (f,id)=codex_fixture()?;let handles=refresh_handles(&f)?;
-    let secret_store=proxy::CtoxCodexSecretStore::new(f.root.path());
-    let snapshot=secret_store.load_credentials_for_refresh(&handles)?;
-    let (cmd,admission,_)=admitted(&f,&id,None,"owner")?;
-    handle(f.root.path(),&cmd,"owner",Some(&admission))?;
-    assert!(secret_store.store_refreshed_credentials(&handles,&snapshot,&refresh_credentials("late")?).is_err());
-    for suffix in ["id","access","refresh"] { assert!(crate::secrets::secret_record_content_version(f.root.path(),"provider-subscriptions",&format!("owned-codex-a-{suffix}"))?.is_none()); }
-    assert!(holder::account_binding(f.root.path(),"codex","owned-codex-b")?.is_some()); Ok(())
+    let (f, id) = codex_fixture()?;
+    let handles = refresh_handles(&f)?;
+    let secret_store = proxy::CtoxCodexSecretStore::new(f.root.path());
+    let snapshot = secret_store.load_credentials_for_refresh(&handles)?;
+    let (cmd, admission, _) = admitted(&f, &id, None, "owner")?;
+    handle(f.root.path(), &cmd, "owner", Some(&admission))?;
+    assert!(secret_store
+        .store_refreshed_credentials(&handles, &snapshot, &refresh_credentials("late")?)
+        .is_err());
+    for suffix in ["id", "access", "refresh"] {
+        assert!(crate::secrets::secret_record_content_version(
+            f.root.path(),
+            "provider-subscriptions",
+            &format!("owned-codex-a-{suffix}")
+        )?
+        .is_none());
+    }
+    assert!(holder::account_binding(f.root.path(), "codex", "owned-codex-b")?.is_some());
+    Ok(())
 }
 #[test]
 fn native_controls_codex_late_refresh_rejected_between_topology_commit_and_cleanup() -> Result<()> {
     use ctox_cliproxyapi::internal::auth::codex::CodexSecretStore;
-    let (f,_)=codex_fixture()?;let handles=refresh_handles(&f)?;
-    let secret_store=proxy::CtoxCodexSecretStore::new(f.root.path());
-    let snapshot=secret_store.load_credentials_for_refresh(&handles)?;
-    let binding=holder::account_binding(f.root.path(),"codex","owned-codex-a")?.unwrap();
-    holder::apply_account(f.root.path(),"codex-cleanup-window","hash","owner","codex","owned-codex-a",&binding,None,||Ok(()))?;
-    assert!(secret_store.store_refreshed_credentials(&handles,&snapshot,&refresh_credentials("late")?).is_err());
+    let (f, _) = codex_fixture()?;
+    let handles = refresh_handles(&f)?;
+    let secret_store = proxy::CtoxCodexSecretStore::new(f.root.path());
+    let snapshot = secret_store.load_credentials_for_refresh(&handles)?;
+    let binding = holder::account_binding(f.root.path(), "codex", "owned-codex-a")?.unwrap();
+    holder::apply_account(
+        f.root.path(),
+        "codex-cleanup-window",
+        "hash",
+        "owner",
+        "codex",
+        "owned-codex-a",
+        &binding,
+        None,
+        || Ok(()),
+    )?;
+    assert!(secret_store
+        .store_refreshed_credentials(&handles, &snapshot, &refresh_credentials("late")?)
+        .is_err());
     // The actual tuple is unchanged until the separately recoverable cleanup.
-    assert_eq!(secret_store.load_credentials(&handles)?,snapshot.credentials);
-    holder::finish(f.root.path(),"codex-cleanup-window","hash","owner")?;
-    assert!(secret_store.load_credentials(&handles).is_err()); Ok(())
+    assert_eq!(
+        secret_store.load_credentials(&handles)?,
+        snapshot.credentials
+    );
+    holder::finish(f.root.path(), "codex-cleanup-window", "hash", "owner")?;
+    assert!(secret_store.load_credentials(&handles).is_err());
+    Ok(())
 }
 #[test]
-fn native_controls_codex_refresh_generation_cas_accepts_current_and_rejects_relogin() -> Result<()> {
+fn native_controls_codex_refresh_generation_cas_accepts_current_and_rejects_relogin() -> Result<()>
+{
     use ctox_cliproxyapi::internal::auth::codex::CodexSecretStore;
-    let (f,_)=codex_fixture()?;let handles=refresh_handles(&f)?;
-    let secret_store=proxy::CtoxCodexSecretStore::new(f.root.path());
-    let current=secret_store.load_credentials_for_refresh(&handles)?;
-    let fresh=refresh_credentials("fresh")?;
-    secret_store.store_refreshed_credentials(&handles,&current,&fresh)?;
-    assert_eq!(secret_store.load_credentials(&handles)?,fresh);
-    let stale=secret_store.load_credentials_for_refresh(&handles)?;
+    let (f, _) = codex_fixture()?;
+    let handles = refresh_handles(&f)?;
+    let secret_store = proxy::CtoxCodexSecretStore::new(f.root.path());
+    let current = secret_store.load_credentials_for_refresh(&handles)?;
+    let fresh = refresh_credentials("fresh")?;
+    secret_store.store_refreshed_credentials(&handles, &current, &fresh)?;
+    assert_eq!(secret_store.load_credentials(&handles)?, fresh);
+    let stale = secret_store.load_credentials_for_refresh(&handles)?;
     // Same bytes, new encrypted generation: an old refresh must not overwrite it.
-    install(&f,"owned-codex-a","fresh")?;
-    assert!(secret_store.store_refreshed_credentials(&handles,&stale,&refresh_credentials("stale-network-result")?).is_err());
-    assert_eq!(secret_store.load_credentials(&handles)?,fresh); Ok(())
+    install(&f, "owned-codex-a", "fresh")?;
+    assert!(secret_store
+        .store_refreshed_credentials(
+            &handles,
+            &stale,
+            &refresh_credentials("stale-network-result")?
+        )
+        .is_err());
+    assert_eq!(secret_store.load_credentials(&handles)?, fresh);
+    Ok(())
 }

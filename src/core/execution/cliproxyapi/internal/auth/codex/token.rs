@@ -189,13 +189,24 @@ pub trait CodexSecretStore: Send + Sync {
         credentials: &CodexStoredCredentials,
     ) -> Result<(), SecretStoreError>;
 
-    fn load_credentials_for_refresh(&self, handles: &CodexCredentialHandles) -> Result<CodexRefreshSnapshot, SecretStoreError> {
-        Ok(CodexRefreshSnapshot { credentials: self.load_credentials(handles)?, generation: None })
+    fn load_credentials_for_refresh(
+        &self,
+        handles: &CodexCredentialHandles,
+    ) -> Result<CodexRefreshSnapshot, SecretStoreError> {
+        Ok(CodexRefreshSnapshot {
+            credentials: self.load_credentials(handles)?,
+            generation: None,
+        })
     }
 
     /// Concurrent persistent stores must override with an atomic generation CAS.
     /// The default retains compatibility for portable single-owner stores.
-    fn store_refreshed_credentials(&self, handles: &CodexCredentialHandles, expected: &CodexRefreshSnapshot, credentials: &CodexStoredCredentials) -> Result<(), SecretStoreError> {
+    fn store_refreshed_credentials(
+        &self,
+        handles: &CodexCredentialHandles,
+        expected: &CodexRefreshSnapshot,
+        credentials: &CodexStoredCredentials,
+    ) -> Result<(), SecretStoreError> {
         let _ = expected;
         self.store_credentials(handles, credentials)
     }

@@ -1073,47 +1073,117 @@ impl codex_auth::CodexSecretStore for CtoxCodexSecretStore {
         .map_err(|_| codex_auth::SecretStoreError::Write)
     }
 
-    fn load_credentials_for_refresh(&self, handles: &codex_auth::CodexCredentialHandles) -> Result<codex_auth::CodexRefreshSnapshot, codex_auth::SecretStoreError> {
+    fn load_credentials_for_refresh(
+        &self,
+        handles: &codex_auth::CodexCredentialHandles,
+    ) -> Result<codex_auth::CodexRefreshSnapshot, codex_auth::SecretStoreError> {
         if is_instance_codex_handles(handles) {
-            return Ok(codex_auth::CodexRefreshSnapshot { credentials: self.load_credentials(handles)?, generation: None });
+            return Ok(codex_auth::CodexRefreshSnapshot {
+                credentials: self.load_credentials(handles)?,
+                generation: None,
+            });
         }
         let _guard = crate::secrets::credential_lifecycle_guard();
-        let versions = codex_refresh_versions(&self.root, handles).map_err(|_| codex_auth::SecretStoreError::Read)?.ok_or(codex_auth::SecretStoreError::Missing)?;
+        let versions = codex_refresh_versions(&self.root, handles)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .ok_or(codex_auth::SecretStoreError::Missing)?;
         let credentials = self.load_credentials(handles)?;
-        if codex_refresh_versions(&self.root, handles).map_err(|_| codex_auth::SecretStoreError::Read)?.as_ref() != Some(&versions) {
+        if codex_refresh_versions(&self.root, handles)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .as_ref()
+            != Some(&versions)
+        {
             return Err(codex_auth::SecretStoreError::Read);
         }
-        Ok(codex_auth::CodexRefreshSnapshot { credentials, generation: Some(serde_json::to_string(&versions).map_err(|_| codex_auth::SecretStoreError::Read)?) })
+        Ok(codex_auth::CodexRefreshSnapshot {
+            credentials,
+            generation: Some(
+                serde_json::to_string(&versions).map_err(|_| codex_auth::SecretStoreError::Read)?,
+            ),
+        })
     }
 
-    fn store_refreshed_credentials(&self, handles: &codex_auth::CodexCredentialHandles, expected: &codex_auth::CodexRefreshSnapshot, credentials: &codex_auth::CodexStoredCredentials) -> Result<(), codex_auth::SecretStoreError> {
+    fn store_refreshed_credentials(
+        &self,
+        handles: &codex_auth::CodexCredentialHandles,
+        expected: &codex_auth::CodexRefreshSnapshot,
+        credentials: &codex_auth::CodexStoredCredentials,
+    ) -> Result<(), codex_auth::SecretStoreError> {
         // The inherited single auth snapshot is not a removable owned account.
-        if is_instance_codex_handles(handles) { return self.store_credentials(handles, credentials); }
+        if is_instance_codex_handles(handles) {
+            return self.store_credentials(handles, credentials);
+        }
         let _guard = crate::secrets::credential_lifecycle_guard();
         // Controls use this same fence across topology COMMIT. A refresh must
         // not write in the interval between account removal and secret cleanup.
-        let stored = load_instance_proxy_config(&self.root).map_err(|_| codex_auth::SecretStoreError::Read)?.ok_or(codex_auth::SecretStoreError::Write)?;
-        if !stored.runtime.codex_accounts.iter().any(|a| a.credential_handles().is_ok_and(|h| h == *handles)) {
+        let stored = load_instance_proxy_config(&self.root)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .ok_or(codex_auth::SecretStoreError::Write)?;
+        if !stored
+            .runtime
+            .codex_accounts
+            .iter()
+            .any(|a| a.credential_handles().is_ok_and(|h| h == *handles))
+        {
             return Err(codex_auth::SecretStoreError::Write);
         }
-        let versions: Vec<String> = serde_json::from_str(expected.generation.as_deref().ok_or(codex_auth::SecretStoreError::Write)?).map_err(|_| codex_auth::SecretStoreError::Write)?;
-        if versions.len() != 3 { return Err(codex_auth::SecretStoreError::Write); }
-        let keys = [handles.id_token(), handles.access_token(), handles.refresh_token()];
-        let guards = keys.iter().zip(versions).map(|(k,v)|(k.scope().to_owned(),k.name().to_owned(),v)).collect::<Vec<_>>();
-        let values = [credentials.id_token(), credentials.access_token(), credentials.refresh_token()];
-        let records = keys.iter().zip(values).map(|(k,v)| crate::secrets::SecretRecordWrite {
-            scope: k.scope(), name: k.name(), value: v.expose_secret(),
-            description: Some("Codex subscription refreshed token"), metadata: codex_secret_metadata(k.kind()),
-        }).collect::<Vec<_>>();
-        match crate::secrets::compare_and_write_secret_records_if_versions(&self.root, &guards, &records) {
+        let versions: Vec<String> = serde_json::from_str(
+            expected
+                .generation
+                .as_deref()
+                .ok_or(codex_auth::SecretStoreError::Write)?,
+        )
+        .map_err(|_| codex_auth::SecretStoreError::Write)?;
+        if versions.len() != 3 {
+            return Err(codex_auth::SecretStoreError::Write);
+        }
+        let keys = [
+            handles.id_token(),
+            handles.access_token(),
+            handles.refresh_token(),
+        ];
+        let guards = keys
+            .iter()
+            .zip(versions)
+            .map(|(k, v)| (k.scope().to_owned(), k.name().to_owned(), v))
+            .collect::<Vec<_>>();
+        let values = [
+            credentials.id_token(),
+            credentials.access_token(),
+            credentials.refresh_token(),
+        ];
+        let records = keys
+            .iter()
+            .zip(values)
+            .map(|(k, v)| crate::secrets::SecretRecordWrite {
+                scope: k.scope(),
+                name: k.name(),
+                value: v.expose_secret(),
+                description: Some("Codex subscription refreshed token"),
+                metadata: codex_secret_metadata(k.kind()),
+            })
+            .collect::<Vec<_>>();
+        match crate::secrets::compare_and_write_secret_records_if_versions(
+            &self.root, &guards, &records,
+        ) {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(codex_auth::SecretStoreError::Write),
         }
     }
 }
 
-fn codex_refresh_versions(root: &Path, handles: &codex_auth::CodexCredentialHandles) -> anyhow::Result<Option<Vec<String>>> {
-    [handles.id_token(), handles.access_token(), handles.refresh_token()].iter().map(|k| crate::secrets::secret_record_content_version(root,k.scope(),k.name())).collect()
+fn codex_refresh_versions(
+    root: &Path,
+    handles: &codex_auth::CodexCredentialHandles,
+) -> anyhow::Result<Option<Vec<String>>> {
+    [
+        handles.id_token(),
+        handles.access_token(),
+        handles.refresh_token(),
+    ]
+    .iter()
+    .map(|k| crate::secrets::secret_record_content_version(root, k.scope(), k.name()))
+    .collect()
 }
 
 fn codex_secret(value: String) -> Result<codex_auth::SecretString, codex_auth::SecretStoreError> {
