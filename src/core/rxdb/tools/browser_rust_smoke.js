@@ -1838,11 +1838,11 @@ async function seedBusinessOsThreadsScaleNativeSetup() {
           is_deleted: false,
           _meta: { lwt: timestamp },
           _attachments: {},
-          _rev: '1-threads-scale-smoke',
+          _rev: '1-threadsscale',
         };
         rows.push(`(
           '${sqlString(id)}',
-          '1-threads-scale-smoke',
+          '1-threadsscale',
           0,
           ${timestamp},
           '${sqlString(JSON.stringify(document))}'
