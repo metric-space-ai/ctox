@@ -26,6 +26,46 @@ function transport(rewrite = value => value) {
   const calls = [];
   return { calls, assertCurrent() {}, async dispatch(command, options) {
     calls.push({ command, options }); return rewrite(receipt(command));
+test('reported limits retain actual values and strip all nested private fields', async () => {
+  const value = registry();
+  const quota = { state: 'reported', observedAtMs: 1000, generation: 'never-public',
+    windows: [{ kind: 'five_hour', status: 'allowed', resetAtMs: 5000,
+      utilization: 0.25, secret: 'never-public' },
+    { kind: 'seven_day', status: 'rejected', resetAtMs: 9000, utilization: null }] };
+  value.accounts[0].reportedQuota = quota;
+  const projected = projectNativeProviderRegistry(value);
+  assert.deepEqual(projected.accounts[0].reportedQuota, { state: 'reported', observedAtMs: 1000,
+    windows: [{ kind: 'five_hour', status: 'allowed', resetAtMs: 5000, utilization: 0.25 },
+      { kind: 'seven_day', status: 'rejected', resetAtMs: 9000, utilization: null }] });
+  assert.equal(JSON.stringify(projected).includes('never-public'), false);
+  const result = await requestNativeProviders(request('instance.providers.read'), transport(receipt => ({
+    ...receipt, result: value,
+  })));
+  assert.deepEqual(result.registry.accounts[0].reportedQuota, projected.accounts[0].reportedQuota);
+});
+test('unknown and read failures never fabricate provider utilization or auth failures', () => {
+  for (const quota of [{ state: 'unknown' },
+    { state: 'unavailable', errorClass: 'quota_read_failed' }]) {
+    const value = registry(); value.accounts[0].reportedQuota = { ...quota, secret: 'private-value' };
+    assert.deepEqual(projectNativeProviderRegistry(value).accounts[0].reportedQuota, quota);
+  }
+  assert.equal(projectNativeProviderRegistry(registry()).accounts[0].reportedQuota, undefined);
+});
+test('invalid quotas are rejected at the existing renderer boundary', () => {
+  const good = { kind: 'five_hour', status: 'allowed', resetAtMs: 5000, utilization: 0.25 };
+  for (const quota of [
+    { state: 'reported', observedAtMs: 1000, windows: [] },
+    { state: 'reported', observedAtMs: 1000, windows: [good, good] },
+    { state: 'reported', observedAtMs: 1000, windows: [{ ...good, utilization: 25 }] },
+    { state: 'reported', observedAtMs: 1000, windows: [{ ...good, utilization: NaN }] },
+    { state: 'reported', observedAtMs: 1000, windows: [{ ...good, resetAtMs: 999 }] },
+    { state: 'reported', observedAtMs: 1000, windows: [{ ...good, kind: 'invented' }] },
+    { state: 'unavailable', errorClass: 'credentials_rejected' },
+  ]) {
+    const value = registry(); value.accounts[0].reportedQuota = quota;
+    assert.throws(() => projectNativeProviderRegistry(value));
+  }
+});
   } };
 }
 test('reading uses one existing admitted command without adoption or account mutation', async () => {
