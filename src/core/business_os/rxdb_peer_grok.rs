@@ -285,7 +285,8 @@ async fn handle(
                 xai::discover_models(&authority.root),
                 Duration::from_secs(8),
             ),
-        ).await;
+        )
+        .await;
         catalog_binding = used.map(xai::CredentialUse::into_content_version);
         match catalog? {
             Some(Ok(live)) => models = live,
@@ -392,7 +393,8 @@ async fn handle(
                         probe(&authority.root, model),
                         deadline.saturating_duration_since(Instant::now()),
                     ),
-                ).await;
+                )
+                .await;
                 used_binding = used.map(xai::CredentialUse::into_content_version);
                 let result = attempt?.unwrap_or_else(|| Err(ProbeFailure::from("timeout")));
                 if result.is_ok() && used_binding.is_none() {
@@ -407,25 +409,23 @@ async fn handle(
             // observation identifies what was used, rather than guessing from
             // the Secret Store after the response. Unobserved local failures
             // can only remain attached to an unchanged pre-request version.
-            let used_binding = used_binding.or_else(|| {
-                result.is_err().then(|| before.clone()).flatten()
-            });
+            let used_binding = used_binding.or(before.filter(|_| result.is_err()));
             if used_binding != after {
                 // Do not attach an old success or rejection to the replacement.
                 returned_check = Value::Null;
                 models.clear();
                 catalog_error = Some(ProbeFailure::from("request_failed"));
             } else {
-            let failure = result.err();
-            let check = json!({"modelId":model,"status":if failure.is_none(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if failure.is_none(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":failure.as_ref().map(|f| f.code),"upstream":failure.and_then(|f| f.upstream)});
-            crate::persistence::store_json_payload(
-                &authority.root,
-                CHECK_KEY,
-                Some(
-                    &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":used_binding,"check":check}),
-                ),
-            )?;
-            returned_check = check;
+                let failure = result.err();
+                let check = json!({"modelId":model,"status":if failure.is_none(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if failure.is_none(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":failure.as_ref().map(|f| f.code),"upstream":failure.and_then(|f| f.upstream)});
+                crate::persistence::store_json_payload(
+                    &authority.root,
+                    CHECK_KEY,
+                    Some(
+                        &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":used_binding,"check":check}),
+                    ),
+                )?;
+                returned_check = check;
             }
         }
         _ => {}
@@ -725,7 +725,8 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn oauth_refresh_during_probe_certifies_only_the_refreshed_credential() -> anyhow::Result<()> {
+    async fn oauth_refresh_during_probe_certifies_only_the_refreshed_credential(
+    ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let root = tempfile::tempdir()?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -733,8 +734,12 @@ mod tests {
         let expires_at = chrono::Utc::now().timestamp() + 302;
         let record = json!({"access":"private-before-refresh","refresh":"private-refresh-fixture","identity":null,"expires_at":expires_at,"token_endpoint":format!("{endpoint}/token")});
         crate::secrets::write_secret_record(
-            root.path(), "provider-subscriptions", "xai-instance-oauth",
-            &record.to_string(), None, json!({}),
+            root.path(),
+            "provider-subscriptions",
+            "xai-instance-oauth",
+            &record.to_string(),
+            None,
+            json!({}),
         )?;
         let original_binding = xai::credential_binding(root.path())?;
         xai::test_endpoint(root.path(), Some(endpoint));
@@ -747,9 +752,9 @@ mod tests {
                 let body = match index {
                     0 => {
                         assert!(request.starts_with("GET /models"));
-                        assert!(request.to_ascii_lowercase().contains(
-                            "authorization: bearer private-before-refresh"
-                        ));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-before-refresh"));
                         // Let expiry enter the refresh window only after the
                         // first catalog has selected the original credential.
                         while chrono::Utc::now().timestamp() < expires_at - 300 {
@@ -761,29 +766,40 @@ mod tests {
                         assert!(request.starts_with("POST /token"));
                         json!({"access_token":"private-after-refresh",
                             "refresh_token":"private-refresh-replacement",
-                            "token_type":"Bearer","expires_in":3600}).to_string()
+                            "token_type":"Bearer","expires_in":3600})
+                        .to_string()
                     }
                     2 => {
                         assert!(request.starts_with("GET /models"));
-                        assert!(request.to_ascii_lowercase().contains(
-                            "authorization: bearer private-after-refresh"
-                        ));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-after-refresh"));
                         json!({"data":[{"id":"grok-4.7"}]}).to_string()
                     }
                     _ => {
                         assert!(request.starts_with("POST /responses"));
-                        assert!(request.to_ascii_lowercase().contains(
-                            "authorization: bearer private-after-refresh"
-                        ));
-                        format!("data: {}\n\n", json!({
-                            "type":"response.completed","response":completed_reply(),
-                        }))
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-after-refresh"));
+                        format!(
+                            "data: {}\n\n",
+                            json!({
+                                "type":"response.completed","response":completed_reply(),
+                            })
+                        )
                     }
                 };
-                socket.write_all(format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(), body,
-                ).as_bytes()).await.unwrap();
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
             }
         });
         let mut req = request("instance.grok.check");
@@ -792,16 +808,16 @@ mod tests {
             Arc::new(Controller::new(root.path())?),
             auth(root.path(), "chef", Arc::new(|| true))?,
             vec![req],
-        ).await?;
+        )
+        .await?;
         tokio::time::timeout(Duration::from_secs(5), server).await??;
         xai::test_endpoint(root.path(), None);
         let refreshed_binding = xai::credential_binding(root.path())?;
         assert_ne!(refreshed_binding, original_binding);
         assert_eq!(response.result["check"]["status"], "ok");
         assert_eq!(saved_check(root.path())?["status"], "ok");
-        let persisted = crate::persistence::load_json_payload::<Value>(
-            root.path(), CHECK_KEY,
-        )?.unwrap();
+        let persisted =
+            crate::persistence::load_json_payload::<Value>(root.path(), CHECK_KEY)?.unwrap();
         assert_eq!(persisted["binding"], json!(refreshed_binding));
         assert!(!response.result.to_string().contains("private-"));
         Ok(())
@@ -813,12 +829,19 @@ mod tests {
             let root = tempfile::tempdir()?;
             let record = json!({"access":"private-before-inference","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
             crate::secrets::write_secret_record(
-                root.path(), "provider-subscriptions", "xai-instance-oauth",
-                &record.to_string(), None, json!({}),
+                root.path(),
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &record.to_string(),
+                None,
+                json!({}),
             )?;
             let original_binding = xai::credential_binding(root.path())?;
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-            xai::test_endpoint(root.path(), Some(format!("http://{}", listener.local_addr()?)));
+            xai::test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
             let server_root = root.path().to_path_buf();
             let (finished, mut completion) = tokio::sync::oneshot::channel::<()>();
             let server = tokio::spawn(async move {
@@ -832,9 +855,9 @@ mod tests {
                     let mut data = vec![0; 8192];
                     let read = socket.read(&mut data).await.unwrap();
                     let request = String::from_utf8_lossy(&data[..read]);
-                    assert!(request.to_ascii_lowercase().contains(
-                        "authorization: bearer private-before-inference"
-                    ));
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer private-before-inference"));
                     if index == 2 {
                         inference_requests += 1;
                         assert!(request.starts_with("POST /responses"));
@@ -845,22 +868,36 @@ mod tests {
                         let mut replacement = record.clone();
                         replacement["access"] = json!("private-after-inference");
                         crate::secrets::write_secret_record(
-                            &server_root, "provider-subscriptions", "xai-instance-oauth",
-                            &replacement.to_string(), None, json!({}),
-                        ).unwrap();
+                            &server_root,
+                            "provider-subscriptions",
+                            "xai-instance-oauth",
+                            &replacement.to_string(),
+                            None,
+                            json!({}),
+                        )
+                        .unwrap();
                     }
                     let body = if index < 2 {
                         json!({"data":[{"id":"grok-4.7"}]}).to_string()
                     } else {
-                        format!("data: {}\n\n", json!({
-                            "type":"response.completed",
-                            "response":completed_reply(),
-                        }))
+                        format!(
+                            "data: {}\n\n",
+                            json!({
+                                "type":"response.completed",
+                                "response":completed_reply(),
+                            })
+                        )
                     };
-                    socket.write_all(format!(
+                    socket
+                        .write_all(
+                            format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         body.len(), body,
-                    ).as_bytes()).await.unwrap();
+                    )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
                 }
                 inference_requests
             });
@@ -870,20 +907,26 @@ mod tests {
                 Arc::new(Controller::new(root.path())?),
                 auth(root.path(), "chef", Arc::new(|| true))?,
                 vec![req],
-            ).await;
+            )
+            .await;
             let _ = finished.send(());
             let inference_requests = server.await?;
             xai::test_endpoint(root.path(), None);
             assert_ne!(xai::credential_binding(root.path())?, original_binding);
-            assert_ne!(saved_check(root.path())?["status"], "ok",
-                "the replacement account must not inherit the old account's green check");
+            assert_ne!(
+                saved_check(root.path())?["status"],
+                "ok",
+                "the replacement account must not inherit the old account's green check"
+            );
             if let Ok(response) = response {
                 assert_ne!(response.result["check"]["status"], "ok");
                 assert!(!response.result.to_string().contains("private-"));
             }
             if replace_during_catalog {
-                assert_eq!(inference_requests, 0,
-                    "replacement during route discovery must prevent dispatch");
+                assert_eq!(
+                    inference_requests, 0,
+                    "replacement during route discovery must prevent dispatch"
+                );
             } else {
                 assert_eq!(inference_requests, 1);
             }

@@ -48,32 +48,43 @@ pub(crate) async fn observe_credential_use<T>(
     root: &Path,
     work: impl std::future::Future<Output = T>,
 ) -> (T, Option<CredentialUse>) {
-    CREDENTIAL_OBSERVER.scope(
-        Mutex::new(CredentialObserver {
-            root: root.to_owned(),
-            observed: None,
-            ambiguous: false,
-        }),
-        async {
-            let result = work.await;
-            let observed = CREDENTIAL_OBSERVER.with(|slot| {
-                let mut slot = slot.lock().ok()?;
-                if slot.ambiguous { None } else { slot.observed.take() }
-            });
-            (result, observed)
-        },
-    ).await
+    CREDENTIAL_OBSERVER
+        .scope(
+            Mutex::new(CredentialObserver {
+                root: root.to_owned(),
+                observed: None,
+                ambiguous: false,
+            }),
+            async {
+                let result = work.await;
+                let observed = CREDENTIAL_OBSERVER.with(|slot| {
+                    let mut slot = slot.lock().ok()?;
+                    if slot.ambiguous {
+                        None
+                    } else {
+                        slot.observed.take()
+                    }
+                });
+                (result, observed)
+            },
+        )
+        .await
 }
 fn record_credential_use(root: &Path, version: &str) {
     let _ = CREDENTIAL_OBSERVER.try_with(|slot| {
         if let Ok(mut slot) = slot.lock() {
             if slot.root != root
-                || slot.observed.as_ref().is_some_and(|observed| observed.version != version)
+                || slot
+                    .observed
+                    .as_ref()
+                    .is_some_and(|observed| observed.version != version)
             {
                 slot.ambiguous = true;
                 slot.observed = None;
             } else if !slot.ambiguous {
-                slot.observed = Some(CredentialUse { version: version.to_owned() });
+                slot.observed = Some(CredentialUse {
+                    version: version.to_owned(),
+                });
             }
         }
     });
@@ -564,7 +575,10 @@ fn endpoint(root: &Path) -> String {
     let _ = root;
     CLI_CHAT_PROXY_BASE_URL.into()
 }
-async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Result<(Stored, String)> {
+async fn active_record(
+    root: &Path,
+    client: &native_http::Client,
+) -> anyhow::Result<(Stored, String)> {
     let (encoded, mut version) = crate::secrets::read_secret_value_versioned(root, SCOPE, NAME)?;
     let encoded = Zeroizing::new(encoded);
     let mut record: Stored = serde_json::from_str(&encoded)?;
