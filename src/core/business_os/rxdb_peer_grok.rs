@@ -698,6 +698,90 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    async fn replaced_inference_credential_cannot_certify_the_new_account() -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for replace_during_catalog in [true, false] {
+            let root = tempfile::tempdir()?;
+            let record = json!({"access":"private-before-inference","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+            crate::secrets::write_secret_record(
+                root.path(), "provider-subscriptions", "xai-instance-oauth",
+                &record.to_string(), None, json!({}),
+            )?;
+            let original_binding = xai::credential_binding(root.path())?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            xai::test_endpoint(root.path(), Some(format!("http://{}", listener.local_addr()?)));
+            let server_root = root.path().to_path_buf();
+            let (finished, mut completion) = tokio::sync::oneshot::channel::<()>();
+            let server = tokio::spawn(async move {
+                let mut inference_requests = 0;
+                for index in 0..3 {
+                    let (mut socket, _) = tokio::select! {
+                        biased;
+                        _ = &mut completion, if index == 2 && replace_during_catalog => break,
+                        accepted = listener.accept() => accepted.unwrap(),
+                    };
+                    let mut data = vec![0; 8192];
+                    let read = socket.read(&mut data).await.unwrap();
+                    let request = String::from_utf8_lossy(&data[..read]);
+                    assert!(request.to_ascii_lowercase().contains(
+                        "authorization: bearer private-before-inference"
+                    ));
+                    if index == 2 {
+                        inference_requests += 1;
+                        assert!(request.starts_with("POST /responses"));
+                    } else {
+                        assert!(request.starts_with("GET /models"));
+                    }
+                    if index == if replace_during_catalog { 1 } else { 2 } {
+                        let mut replacement = record.clone();
+                        replacement["access"] = json!("private-after-inference");
+                        crate::secrets::write_secret_record(
+                            &server_root, "provider-subscriptions", "xai-instance-oauth",
+                            &replacement.to_string(), None, json!({}),
+                        ).unwrap();
+                    }
+                    let body = if index < 2 {
+                        json!({"data":[{"id":"grok-4.7"}]}).to_string()
+                    } else {
+                        format!("data: {}\n\n", json!({
+                            "type":"response.completed",
+                            "response":completed_reply(),
+                        }))
+                    };
+                    socket.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body,
+                    ).as_bytes()).await.unwrap();
+                }
+                inference_requests
+            });
+            let mut req = request("instance.grok.check");
+            req["modelId"] = json!("grok-4.7");
+            let response = handle(
+                Arc::new(Controller::new(root.path())?),
+                auth(root.path(), "chef", Arc::new(|| true))?,
+                vec![req],
+            ).await;
+            let _ = finished.send(());
+            let inference_requests = server.await?;
+            xai::test_endpoint(root.path(), None);
+            assert_ne!(xai::credential_binding(root.path())?, original_binding);
+            assert_ne!(saved_check(root.path())?["status"], "ok",
+                "the replacement account must not inherit the old account's green check");
+            if let Ok(response) = response {
+                assert_ne!(response.result["check"]["status"], "ok");
+                assert!(!response.result.to_string().contains("private-"));
+            }
+            if replace_during_catalog {
+                assert_eq!(inference_requests, 0,
+                    "replacement during route discovery must prevent dispatch");
+            } else {
+                assert_eq!(inference_requests, 1);
+            }
+        }
+        Ok(())
+    }
+    #[tokio::test]
     async fn credential_replacement_during_discovery_discards_catalog_and_old_check(
     ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
