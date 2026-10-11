@@ -8,18 +8,14 @@ The desktop consumer must allowlist stage names, validate finite bounded duratio
 
 This instrumentation does not reset IndexedDB, replay commands, change authority, bypass the peer transport or claim installed acceptance. It must ship in the signed Business OS shell as well as the matching Workjet desktop bridge.
 
-## Terminal tracking in a retained guest
-
 The `command` project-list phase wraps the complete dispatch, including preinsert readiness and push; the phase alone does not prove insertion or native execution. The correlated sample distinguishes those boundaries. A complete preinsert sample plus push acknowledgement followed by a caller timeout means the guest is still waiting to observe the receipt; it must not be described as slow native processing without the native marks.
-
-`shared/command-bus.js::waitForCommandState` serializes its status rebinds. Previously the first bind used an ordinary demand read, so it could join an earlier unresolved query window. Its held `rebindInFlight` then queued even revision-bound retries and generic master-change revalidation behind that read. Demand collections now start with a fresh exact-ID revision, using the existing loader's connection-generation and permission fences. Collections without a demand loader keep the previous local read path. Native failure, missing authority, finite retry/deadline and cleanup behavior remain enforced.
 
 Reproduce the before/after wait on an isolated native protocol fixture:
 
 ```sh
 PLAYWRIGHT_MODULE_PATH=/absolute/path/to/declared/playwright \
 PLAYWRIGHT_BROWSERS_PATH=/absolute/path/to/browser/cache \
-node src/apps/business-os/shared/workjet-command-native.browser.mjs \
+node src/apps/business-os/scripts/workjet-command-native.browser.mjs \
   --native /absolute/path/to/v15_wire_daemon \
   --baseline /absolute/path/to/before-command-bus.js --output /absolute/path/to/result.json
 ```
