@@ -48,6 +48,12 @@ struct SchedulerState {
     weighted: HashMap<String, SmoothWeightedState>,
 }
 
+pub(crate) struct StandardSelectionState<'a> {
+    pub cooldowns: &'a [CooldownStateRecord],
+    pub options: &'a SchedulerPickOptions,
+    pub expiries: &'a std::collections::BTreeMap<String, i64>,
+}
+
 pub struct AuthScheduler {
     strategy: SchedulerStrategy,
     state: Mutex<SchedulerState>,
@@ -105,16 +111,15 @@ impl AuthScheduler {
     /// Fixed CTOX setup. Eligibility/cooldowns use the same canonical filter;
     /// fresh requests consume the earliest reported usable window, then the
     /// stable account ID. Portable manual strategies are unchanged.
-    pub fn pick_standard(
+    pub(crate) fn pick_standard(
         &self,
         provider: &str,
         model: Option<&str>,
         now_ms: i64,
         candidates: &[AccountCandidate],
-        cooldowns: &[CooldownStateRecord],
-        options: &SchedulerPickOptions,
-        expiries: &std::collections::BTreeMap<String, i64>,
+        state: StandardSelectionState<'_>,
     ) -> Result<AccountCandidate, AccountSelectionError> {
+        let StandardSelectionState { cooldowns, options, expiries } = state;
         let provider = provider.trim().to_ascii_lowercase();
         if provider.is_empty() {
             return Err(AccountSelectionError::NotFound);
