@@ -11983,6 +11983,13 @@ fn configure_business_os_mcp_session_for_queue_job(
 ) -> Result<bool> {
     let Some(command_id) = metadata_string(&job.queue_task_metadata, "business_os_command_id")
     else {
+        if let Some(token) = issue_communication_session_for_mail_job(root, job)? {
+            options.disable_mcp_servers = false;
+            options.enable_business_os_mcp = true;
+            options.business_os_mcp_command_session = Some(token);
+            options.force_isolated_session = true;
+            return Ok(true);
+        }
         if job.leased_message_keys.len() != 1
             || !job.leased_message_keys[0].starts_with("plan:system::")
         {
@@ -12132,6 +12139,92 @@ fn configure_business_os_mcp_session_for_queue_job(
     options.business_os_mcp_command_session = Some(token);
     options.force_isolated_session = true;
     Ok(true)
+}
+
+/// A mail turn from the owner, a founder or an admin acts as the sender's
+/// Business OS user for the few actions a mail may start (lead import).
+/// The sender role comes from the From address, which anyone can forge, so a
+/// session also needs the receiving server's own DMARC/DKIM pass for the From
+/// domain (`communication::sender_authentication`, security review
+/// 10.10.2026). Ordinary mail, unauthenticated mail and mails without an
+/// active Business OS user get no session.
+fn issue_communication_session_for_mail_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    let Some(sender_role) = job
+        .source_label
+        .strip_prefix("email:")
+        .filter(|role| matches!(*role, "owner" | "founder" | "admin"))
+    else {
+        return Ok(None);
+    };
+    let (Some(inbound_key), Some(lease_key)) = (
+        inbound_email_reply_message_key(job),
+        job.leased_message_keys.first(),
+    ) else {
+        return Ok(None);
+    };
+    let Some((sender_address, authentication_results)) =
+        inbound_email_sender_authentication(root, inbound_key)?
+    else {
+        return Ok(None);
+    };
+    let trusted_authserv_ids = crate::communication::sender_authentication::trusted_authserv_ids(
+        &runtime_env::env_or_config(
+            root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+        )
+        .unwrap_or_default(),
+    );
+    if !crate::communication::sender_authentication::sender_domain_authenticated(
+        &authentication_results,
+        &trusted_authserv_ids,
+        &sender_address,
+    ) {
+        return Ok(None);
+    }
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("communication");
+    crate::business_os::mcp_channel::issue_internal_communication_session_token(
+        root,
+        inbound_key,
+        lease_key,
+        sender_role,
+        &sender_address,
+        workspace,
+    )
+}
+
+/// Sender address and the `Authentication-Results` headers stored at intake.
+fn inbound_email_sender_authentication(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<Option<(String, Vec<String>)>> {
+    let conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+    let Some((address, metadata_json)) = conn
+        .query_row(
+            "SELECT sender_address, metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let address = address.trim().to_ascii_lowercase();
+    if address.is_empty() {
+        return Ok(None);
+    }
+    let results = serde_json::from_str::<Value>(&metadata_json)
+        .ok()
+        .and_then(|metadata| metadata.get("authenticationResults").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    Ok(Some((address, results)))
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
@@ -38277,6 +38370,71 @@ Business OS command:
             inbound_attachment_readable_roots(&leased.queue_task_metadata),
             vec![attachment_path.parent().unwrap().to_path_buf()]
         );
+
+        // The rework may act on Business OS as the sender (lead import from
+        // the Excel); a sender without a Business OS user gets no session.
+        let mut options = chat_turn_session_options_for_queue_job(&leased);
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure without business user")
+        );
+        assert!(options.business_os_mcp_command_session.is_none());
+        crate::business_os::store::open_store(&root)
+            .expect("open business store")
+            .execute(
+                "INSERT INTO business_users (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+                 VALUES ('owner@example.test', 'Owner', 'founder', 1, 1, 1)",
+                [],
+            )
+            .expect("seed sender");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "INSERT INTO communication_routing_state (message_key, route_status, updated_at)
+                 VALUES (?1, 'review_rework', '2026-10-10T00:00:00Z')
+                 ON CONFLICT(message_key) DO UPDATE SET route_status = 'review_rework'",
+                [inbound_key],
+            )
+            .expect("mail waits in rework");
+        // The From address alone is forgeable: without the receiving
+        // server's own pass for the From domain there is no session.
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure unauthenticated mail")
+        );
+        runtime_env::set_runtime_env_value(
+            &root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+            "mx.example.test",
+        )
+        .expect("trust the receiving server");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "UPDATE communication_messages
+                 SET metadata_json = json_set(metadata_json, '$.authenticationResults',
+                     json_array('mx.example.test; dkim=pass header.d=example.test; dmarc=pass action=none header.from=example.test'))
+                 WHERE message_key = ?1",
+                [inbound_key],
+            )
+            .expect("store the server's pass");
+        assert!(
+            configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure mail session")
+        );
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let trusted = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            &root,
+            options
+                .business_os_mcp_command_session
+                .as_deref()
+                .expect("mail session token"),
+        )
+        .expect("live mail session");
+        assert_eq!(trusted["actor"], "owner@example.test");
+        assert_eq!(trusted["role"], "founder");
+        assert_eq!(trusted["communication_session"], true);
     }
 
     #[test]

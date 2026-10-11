@@ -20064,6 +20064,16 @@ fn trusted_rxdb_command_user(
     })
 }
 
+/// Role of an active Business OS user, or `None` when the user is unknown or
+/// inactive.
+pub(crate) fn active_business_user_role(
+    root: &Path,
+    user_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let conn = open_store(root)?;
+    Ok(active_business_user(&conn, user_id)?.map(|user| user.role))
+}
+
 fn active_business_user(
     conn: &Connection,
     actor_id: &str,
