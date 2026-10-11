@@ -14122,6 +14122,7 @@ fn delivered_outcome_artifacts_for_job(
     }
     let conn = channels::open_channel_db(&crate::paths::core_db(&root))?;
     let fresh_cutoff = workspace_artifact_fresh_cutoff_for_job(root, job);
+    let email_lease_cutoff = inbound_email_lease_cutoff(&conn, job)?;
     let mut delivered = Vec::new();
     for expected in expected_artifact_refs {
         if expected.kind == ArtifactKind::WorkspaceFile {
@@ -14182,36 +14183,19 @@ fn delivered_outcome_artifacts_for_job(
             continue;
         }
         let message_key = if let Some(thread_key) = expected.primary_key.strip_prefix("thread:") {
-            conn.query_row(
-                r#"
-                SELECT message_key
-                FROM communication_messages
-                WHERE channel = 'email'
-                  AND direction = 'outbound'
-                  AND thread_key = ?1
-                  AND status = ?2
-                ORDER BY observed_at DESC
-                LIMIT 1
-                "#,
-                params![thread_key, expected.expected_terminal_state.as_str()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
+            newest_outbound_email_since(
+                &conn,
+                Some(thread_key),
+                expected.expected_terminal_state.as_str(),
+                email_lease_cutoff,
+            )?
         } else if expected.primary_key == "*" {
-            conn.query_row(
-                r#"
-                SELECT message_key
-                FROM communication_messages
-                WHERE channel = 'email'
-                  AND direction = 'outbound'
-                  AND status = ?1
-                ORDER BY observed_at DESC
-                LIMIT 1
-                "#,
-                params![expected.expected_terminal_state.as_str()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
+            newest_outbound_email_since(
+                &conn,
+                None,
+                expected.expected_terminal_state.as_str(),
+                email_lease_cutoff,
+            )?
         } else {
             conn.query_row(
                 r#"
@@ -14238,6 +14222,70 @@ fn delivered_outcome_artifacts_for_job(
         }
     }
     Ok(delivered)
+}
+
+/// When the job's leased inbound mails were leased for this attempt. A reply
+/// in their thread only proves this attempt's outcome when it was recorded
+/// after that lease: a mail thread can already hold earlier replies (thesen
+/// 11.10.2026: four), and an earlier reply must not close a new attempt whose
+/// own reply never went out.
+fn inbound_email_lease_cutoff(conn: &Connection, job: &QueuedPrompt) -> Result<Option<SystemTime>> {
+    let mut cutoff: Option<SystemTime> = None;
+    for message_key in job
+        .leased_message_keys
+        .iter()
+        .filter(|key| key.starts_with("email:"))
+    {
+        let leased_at: Option<String> = conn
+            .query_row(
+                "SELECT leased_at FROM communication_routing_state WHERE message_key = ?1",
+                params![message_key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(time) = leased_at.as_deref().and_then(parse_rfc3339_system_time) {
+            if cutoff.map_or(true, |current| time > current) {
+                cutoff = Some(time);
+            }
+        }
+    }
+    Ok(cutoff)
+}
+
+/// The newest outbound email in `status` (optionally in one thread) recorded
+/// at or after `since`.
+fn newest_outbound_email_since(
+    conn: &Connection,
+    thread_key: Option<&str>,
+    status: &str,
+    since: Option<SystemTime>,
+) -> Result<Option<String>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT message_key, observed_at
+        FROM communication_messages
+        WHERE channel = 'email'
+          AND direction = 'outbound'
+          AND (?1 IS NULL OR thread_key = ?1)
+          AND status = ?2
+        ORDER BY observed_at DESC
+        LIMIT 50
+        "#,
+    )?;
+    let rows = statement.query_map(params![thread_key, status], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (message_key, observed_at) = row?;
+        let recent_enough = since.map_or(true, |since| {
+            parse_rfc3339_system_time(&observed_at).is_some_and(|observed| observed >= since)
+        });
+        if recent_enough {
+            return Ok(Some(message_key));
+        }
+    }
+    Ok(None)
 }
 
 fn worker_attempt_artifact_recheck_details(root: &Path, job: &QueuedPrompt) -> String {
@@ -47796,6 +47844,15 @@ Was jetzt zu tun ist:\n\
             outbound_anchor: None,
         };
 
+        // The attempt was leased after an earlier reply: only a reply recorded
+        // after this lease proves this attempt's outcome.
+        conn.execute(
+            "INSERT INTO communication_routing_state (message_key, route_status, leased_at, updated_at)
+             VALUES (?1, 'leased', '2026-10-11T14:02:12Z', '2026-10-11T14:02:12Z')",
+            rusqlite::params![inbound_key],
+        )
+        .expect("lease route");
+
         // The unmapped expectation names the execution thread and finds nothing.
         let unmapped = expected_outcome_artifacts_for_job(&job);
         assert!(unmapped[0]
@@ -47825,6 +47882,25 @@ Was jetzt zu tun ist:\n\
             )
             .expect("route row");
         assert_eq!(route, "handled");
+
+        // Negative: an attempt leased after the newest reply in the mail
+        // thread is not satisfied by that earlier reply.
+        conn.execute(
+            "UPDATE communication_routing_state SET route_status = 'leased', leased_at = '2026-10-11T15:00:00Z' WHERE message_key = ?1",
+            rusqlite::params![inbound_key],
+        )
+        .expect("re-lease");
+        let expected = resolve_founder_execution_thread_refs(
+            &root,
+            &job,
+            expected_outcome_artifacts_for_job(&job),
+        );
+        assert!(
+            delivered_outcome_artifacts_for_job(&root, &job, &expected)
+                .expect("delivered lookup")
+                .is_empty(),
+            "an earlier reply in the same mail thread must not satisfy a later attempt"
+        );
 
         // A foreign isolated thread is never remapped onto this mail.
         let mut foreign = job.clone();
