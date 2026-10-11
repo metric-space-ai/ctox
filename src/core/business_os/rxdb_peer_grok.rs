@@ -432,20 +432,28 @@ mod tests {
         let valid = completed_reply();
         let mut cases = vec![(valid.clone(), Value::Null)];
         for (field, value) in [
-            ("output", json!([])),
-            ("model", Value::Null),
+            ("output", Some(json!([]))),
+            ("model", None),
             (
                 "model",
-                json!(format!("{} ", valid["model"].as_str().unwrap())),
+                Some(json!(format!("{} ", valid["model"].as_str().unwrap()))),
             ),
         ] {
             let mut invalid = valid.clone();
-            invalid[field] = value;
+            if let Some(value) = value {
+                invalid[field] = value;
+            } else {
+                invalid.as_object_mut().unwrap().remove(field);
+            }
             cases.push((invalid, json!("invalid_response")));
         }
-        for role in [Value::Null, json!("user"), json!("tool")] {
+        for role in [None, Some(json!("user")), Some(json!("tool"))] {
             let mut invalid = valid.clone();
-            invalid["output"][0]["role"] = role;
+            if let Some(role) = role {
+                invalid["output"][0]["role"] = role;
+            } else {
+                invalid["output"][0].as_object_mut().unwrap().remove("role");
+            }
             cases.push((invalid, json!("invalid_response")));
         }
         let mut whitespace = valid;
