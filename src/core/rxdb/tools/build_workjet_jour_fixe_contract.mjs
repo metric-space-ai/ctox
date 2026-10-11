@@ -7,6 +7,13 @@ import { execFileSync } from 'node:child_process';
 
 const CONTRACTS = [
   {
+    fixture: 'workjet-worker-execution-policy-v1.json',
+    rust: '../../business_os/workjet_worker_execution_policy_contract.generated.rs',
+    js: '../../../apps/business-os/shared/workjet-worker-execution-policy-contract.generated.mjs',
+    prefix: 'WORKER_EXECUTION_POLICY',
+    validator: 'validateWorkerExecutionPolicyValue',
+  },
+  {
     fixture: 'workjet-project-execution-policy-v1.json',
     rust: '../../business_os/workjet_project_execution_policy_contract.generated.rs',
     js: '../../../apps/business-os/shared/workjet-project-execution-policy-contract.generated.mjs',
@@ -79,7 +86,16 @@ function buildContract({ fixture: fixtureName, rust: rustRel, js: jsRel, prefix,
   }
   rust += 'impl<T: WireValidate> WireValidate for Vec<T> { fn validate(&self) -> Result<(), String> { for item in self { item.validate()?; } Ok(()) } }\n';
   for (const [name, type] of Object.entries(spec.types)) {
-    rust += type.enum ? '\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n' : '\n#[derive(Debug, Clone, Deserialize, Serialize)]\n';
+    rust += type.enum ? '\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n'
+      : `\n#[derive(Debug, Clone, Deserialize, Serialize${type.derive_eq ? ', PartialEq, Eq' : ''})]\n`;
+    const rustFields = new Set();
+    for (const [field, definition] of Object.entries(type.fields ?? {})) {
+      const rustField = definition.rust_name ?? field;
+      if (!/^[a-zA-Z_][a-zA-Z_0-9]*$/.test(rustField) || rustFields.has(rustField)) {
+        throw new Error(name + ': invalid or duplicate Rust field ' + rustField);
+      }
+      rustFields.add(rustField);
+    }
     if (type.enum) {
       rust += `pub(crate) enum ${name} {\n` + type.enum.map(v => `#[serde(rename = ${JSON.stringify(v)})]\n${v.split(/[^A-Za-z0-9]+/).map(part => part[0].toUpperCase() + part.slice(1)).join('')},`).join('\n') + '\n}\n';
       rust += `impl WireValidate for ${name} { fn validate(&self) -> Result<(), String> { Ok(()) } }\n`;
@@ -88,11 +104,13 @@ function buildContract({ fixture: fixtureName, rust: rustRel, js: jsRel, prefix,
     rust += '#[serde(deny_unknown_fields)]\n' + `pub(crate) struct ${name} {\n`;
     for (const [field, f] of Object.entries(type.fields)) {
       if (f.optional) rust += '#[serde(default, skip_serializing_if = "Option::is_none")]\n';
-      rust += `pub(crate) ${field}: ${f.optional ? `Option<${f.type}>` : f.type},\n`;
+      if (f.rust_name && f.rust_name !== field) rust += `#[serde(rename = ${JSON.stringify(field)})]\n`;
+      rust += `pub(crate) ${f.rust_name ?? field}: ${f.optional ? `Option<${f.type}>` : f.type},\n`;
     }
     rust += `}\nimpl WireValidate for ${name} { fn validate(&self) -> Result<(), String> {\n`;
     for (const [field, f] of Object.entries(type.fields)) {
-      rust += f.optional ? `if let Some(value) = &self.${field} {\n` : `{ let value = &self.${field};\n`;
+      const rustField = f.rust_name ?? field;
+      rust += f.optional ? `if let Some(value) = &self.${rustField} {\n` : `{ let value = &self.${rustField};\n`;
       rust += 'value.validate()?;\n';
       const expr = { min_chars:'value.chars().count()', max_chars:'value.chars().count()', min_items:'value.len()', max_items:'value.len()', minimum:'*value', maximum:'*value' };
       for (const [key, op] of Object.entries({min_chars:'<',max_chars:'>',min_items:'<',max_items:'>',minimum:'<',maximum:'>'})) {
@@ -107,7 +125,9 @@ function buildContract({ fixture: fixtureName, rust: rustRel, js: jsRel, prefix,
     }
     for (const order of type.ordered_fields ?? []) {
       if (!type.fields[order.before] || !type.fields[order.after]) throw new Error(name + ': unknown ordered field');
-      rust += `if self.${order.after} <= self.${order.before} { return Err(${JSON.stringify(name + '.' + order.after + ' must follow ' + order.before)}.into()); }\n`;
+      const before = type.fields[order.before].rust_name ?? order.before;
+      const after = type.fields[order.after].rust_name ?? order.after;
+      rust += `if self.${after} <= self.${before} { return Err(${JSON.stringify(name + '.' + order.after + ' must follow ' + order.before)}.into()); }\n`;
     }
     rust += 'Ok(()) } }\n';
   }
