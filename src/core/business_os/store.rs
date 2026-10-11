@@ -13970,6 +13970,35 @@ pub(super) fn read_rxdb_collection_record(
         .filter(|value| !is_rxdb_deleted_document(value)))
 }
 
+/// Outbound leads an import created for exactly this inbound mail key.
+pub(crate) fn outbound_leads_for_source_message(
+    root: &Path,
+    message_key: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")? else {
+        return Ok(Vec::new());
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let mut statement = reader.conn.prepare(&format!(
+        "SELECT data FROM {} WHERE {deleted_expression} = 0 \
+           AND json_extract(data, '$.payload.source_message_key') = ?1 \
+         ORDER BY id LIMIT 50",
+        reader.table
+    ))?;
+    let rows = statement.query_map([message_key], |row| row.get::<_, String>(0))?;
+    let mut records = Vec::new();
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        if !is_rxdb_deleted_document(&document) {
+            records.push(document);
+        }
+    }
+    Ok(records)
+}
+
 /// Payload of the newest Outbound lead research task the app started (not a
 /// gap-closing continuation). The native import action reuses its research
 /// policy for imported leads; see outbound_lead_import.rs.

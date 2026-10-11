@@ -38,6 +38,9 @@ pub(super) struct ImportRequest {
     pub rows: Vec<ImportRow>,
     pub start_research: bool,
     pub source_note: String,
+    /// Inbound mail the import answers. Mail turns read back exactly the
+    /// records carrying their own mail's key (`records_for_source_message`).
+    pub source_message_key: String,
 }
 
 fn clean(value: Option<&Value>) -> String {
@@ -110,6 +113,14 @@ pub(super) fn parse_request(arguments: &Value) -> anyhow::Result<ImportRequest> 
             .and_then(Value::as_bool)
             .unwrap_or(true),
         source_note: clean(payload.get("source_note")),
+        source_message_key: {
+            let key = clean(payload.get("source_message_key"));
+            anyhow::ensure!(
+                key.is_empty() || key.starts_with("email:"),
+                "payload.source_message_key must be an inbound mail key"
+            );
+            key
+        },
     })
 }
 
@@ -177,6 +188,7 @@ pub(super) fn lead_document(
             },
             "import_source": "ctox_action",
             "min_independent_sources": 1,
+            "source_message_key": request.source_message_key,
         },
         "created_at_ms": now_ms,
         "updated_at_ms": now_ms,
@@ -272,6 +284,7 @@ pub(super) fn import_and_research(
             "lead_count": request.rows.len(),
             "payload": {
                 "source_note": request.source_note,
+                "source_message_key": request.source_message_key,
                 "file_names": [],
                 "invalid_rows": [],
                 "duplicate_rows": [],
@@ -356,9 +369,114 @@ pub(super) fn import_and_research(
     }))
 }
 
+/// Leads an import created for exactly this inbound mail. A mail turn may
+/// state work and results only from these records; it never searches other
+/// records (thesen 10.10.2026: the review held a reply whose "research runs"
+/// and "verified" facts had no record the mail turn could read).
+pub(crate) fn records_for_source_message(
+    root: &std::path::Path,
+    message_key: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let message_key = message_key.trim();
+    if !message_key.starts_with("email:") {
+        return Ok(Vec::new());
+    }
+    store::outbound_leads_for_source_message(root, message_key)
+}
+
+const MAIL_RECORD_TEXT_LIMIT: usize = 6000;
+
+/// The records as a bounded, quotable block for the mail prompt.
+pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
+    if records.is_empty() {
+        return String::new();
+    }
+    let mut text = String::from(
+        "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern):\n",
+    );
+    for record in records {
+        let evidence = record["evidence"].as_array().map(Vec::len).unwrap_or(0);
+        text.push_str(&format!(
+            "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche {}, Pruefung {}, {} Belege\n",
+            record["name"].as_str().unwrap_or("?"),
+            record["id"].as_str().unwrap_or("?"),
+            record["campaign"].as_str().unwrap_or(""),
+            record["website"].as_str().unwrap_or("-"),
+            record["city"].as_str().unwrap_or("-"),
+            record["research_status"].as_str().unwrap_or("-"),
+            record["validation_status"].as_str().unwrap_or("-"),
+            evidence,
+        ));
+        for item in record["evidence"].as_array().into_iter().flatten().take(40) {
+            let sources = item["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|source| {
+                    source
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| source["url"].as_str().map(str::to_owned))
+                })
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!(
+                "    {}: {}{}\n",
+                item["field_key"].as_str().unwrap_or("?"),
+                item["value"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| item["value"].to_string()),
+                if sources.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (Quelle: {sources})")
+                },
+            ));
+        }
+        if text.len() > MAIL_RECORD_TEXT_LIMIT {
+            break;
+        }
+    }
+    let mut text: String = text.chars().take(MAIL_RECORD_TEXT_LIMIT).collect();
+    text.push('\n');
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_message_key_is_an_inbound_mail_key_and_lands_on_the_lead() {
+        let mut arguments = json!({
+            "payload": {
+                "campaign": "Recherche aus Mail",
+                "rows": [{ "name": "Hedinger GmbH & Co. KG" }],
+                "source_message_key": "email:crew@example.test::inbox::42"
+            }
+        });
+        let request = parse_request(&arguments).expect("mail key");
+        let lead = lead_document(&request, &request.rows[0], 0, 1);
+        assert_eq!(
+            lead["payload"]["source_message_key"],
+            "email:crew@example.test::inbox::42"
+        );
+        arguments["payload"]["source_message_key"] = json!("queue:system::x");
+        assert!(parse_request(&arguments).is_err());
+        let rendered = render_records_for_mail(&[json!({
+            "id": "lead_x", "name": "Hedinger GmbH & Co. KG", "campaign": "C",
+            "website": "hedinger.de", "city": "Stuttgart", "research_status": "done",
+            "validation_status": "validated",
+            "evidence": [{"field_key": "firma_umsatz", "value": "12 Mio",
+                "sources": [{"url": "https://register.example/hedinger"}]}]
+        })]);
+        assert!(
+            rendered.contains("firma_umsatz: 12 Mio (Quelle: https://register.example/hedinger)")
+        );
+        assert!(render_records_for_mail(&[]).is_empty());
+    }
 
     /// A lead the browser cannot save blocks the whole collection: its first
     /// update failed the schema check (422, "required field 'evidence' is
