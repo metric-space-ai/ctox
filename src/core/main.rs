@@ -7269,7 +7269,8 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.is_empty())
             .unwrap();
-        let command = channels::business_command_projection(&root, command_id).unwrap();
+        let command =
+            crate::mission::channels::business_command_projection(&root, command_id).unwrap();
         assert_eq!(command["status"], "accepted");
         assert_eq!(
             command.pointer("/payload/owner_user_id"),
