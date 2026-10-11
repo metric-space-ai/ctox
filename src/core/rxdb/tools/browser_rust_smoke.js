@@ -5292,13 +5292,19 @@ function ensureCtoxSmokeBinary() {
               && !loading;
           }, null, { timeout: 60000 });
         } else {
-          await page.waitForFunction(() => {
+          await page.waitForFunction((mode) => {
             const state = globalThis.ctoxBusinessOsSmoke?.state;
             const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
             const shellOpened = Boolean(document.body?.dataset?.moduleShell);
             const loading = Boolean(document.body?.dataset?.moduleLoading);
-            return modulesLoaded && shellOpened && !loading;
-          }, null, { timeout: 60000 });
+            // A mounted module precedes bootstrap's final catalog flush.
+            // Fresh-profile fixtures must not race that pending projection.
+            const fixtureReady = mode !== 'business-os-fresh-profile-ui'
+              || (state?.initialModuleOpened === true
+                && !state.catalogRefreshQueued && !state.catalogRefreshTimer
+                && !state.catalogRefreshRunning);
+            return modulesLoaded && shellOpened && !loading && fixtureReady;
+          }, smokeMode, { timeout: 60000 });
         }
         outerPhaseTimings.shellReadyWaitMs = Date.now() - shellReadyWaitStartedAt;
         if (smokeMode === 'business-os-sellify-scale-ui') {
@@ -6047,6 +6053,9 @@ function ensureCtoxSmokeBinary() {
               ...catalog,
               id: 'module-catalog',
               ok: catalog.ok !== false,
+              // Catalog notifications replace modules AND governance. Publish
+              // the fixture's grants atomically with its module metadata.
+              governance,
               modules: [
                 ...modules.filter((mod) => !insertedIds.has(mod?.id)),
                 privateModule,
