@@ -644,8 +644,7 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
             request = request.header(&key, value);
         }
     }
-    let bytes =
-        bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await;
+    let bytes = bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await;
     anyhow::ensure!(
         credential_binding(root)?.as_deref() == Some(catalog_binding.as_str()),
         "Grok credential changed during discovery"

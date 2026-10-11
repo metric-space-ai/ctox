@@ -40,9 +40,13 @@ async fn replaced_catalog_credential_cannot_reject_the_new_account() {
                     .unwrap();
             });
             let result = if routing {
-                execute_route_at(root.path(), br#"{"model":"grok-4.7","input":"Hi"}"#, &endpoint)
-                    .await
-                    .map(|_| ())
+                execute_route_at(
+                    root.path(),
+                    br#"{"model":"grok-4.7","input":"Hi"}"#,
+                    &endpoint,
+                )
+                .await
+                .map(|_| ())
             } else {
                 discover_models(root.path()).await.map(|_| ())
             };
@@ -59,7 +63,11 @@ async fn replaced_catalog_credential_cannot_reject_the_new_account() {
             assert_eq!(response.status(), 502);
             assert!(route_rejection(response.status(), response.body()).is_none());
             let public = String::from_utf8_lossy(response.body());
-            for private in ["fixture-access", "private-catalog-replacement", "private-upstream-rejection-body"] {
+            for private in [
+                "fixture-access",
+                "private-catalog-replacement",
+                "private-upstream-rejection-body",
+            ] {
                 assert!(!public.contains(private));
             }
         }
