@@ -24,14 +24,40 @@ also requires the current native `workjet_projects.execution_policy` to be
 `autonomous_worktree` with exactly its referenced revision. Owner reset or
 re-enabling with a newer revision invalidates the previous reference.
 
-The supplied `sourceSupervisorThreadId` must join the real
-`workjet_supervisor_bindings` registry for this Owner and project and the
-current native `user_threads` source provenance. An arbitrary external Workjet
-Parent ID, copied role or browser metadata does not satisfy that join.
-This uses the existing native supervisor-bind command's output, not a new
-projection chain. A Parent that has not actually been enrolled natively is
-denied. Broader Parent enrollment is a separate producer dependency; callers
-must not substitute the root Supervisor ID for a Parent.
+For a Supervisor, `sourceSupervisorThreadId` joins the existing native
+Supervisor registry and current history. For a Persistent Worker, that legacy
+field name retains the **actual calling Parent UUID**. The optional
+`parentTeamBinding` carries the complete `result.binding` produced by
+`ctox.workjet.project.persistent_worker.bind`:
+
+```json
+{
+  "contract": "ctox.workjet.persistent-worker-binding.v1",
+  "owner_user_id": "<canonical Owner>",
+  "project_id": "<native project>",
+  "supervisor_thread_id": "<native Supervisor UUID>",
+  "thread_id": "<actual Parent UUID>",
+  "role": "persistent_worker",
+  "revision": 1,
+  "state": "active"
+}
+```
+
+The same fixture generates its strict native/browser wire types. Each issue,
+claim, revalidate and renewal compares the full reference against the private
+native Parent registry, exact Owner/project/Root affiliation and current open
+Parent history/role. Root UUID substitution, missing references for a known
+native Parent, revision changes, revoke/rebind, closed/archived/deleted history
+and foreign affiliation fail closed. A copied metadata role cannot enroll a
+Parent. The producer is documented in
+[native Parent enrollment](native-workjet-persistent-worker-enrollment.md).
+This consumer adds no publisher, collection, enrollment or permission bypass.
+
+A Parent reference is pinned even without an autonomous-worktree policy.
+The full reference and actual calling UUID participate in the immutable permit
+and current authority fingerprint. Requests omitting both references keep
+their legacy receipt/fingerprint bytes; a known native Parent cannot use that
+compatibility path to omit its reference.
 
 The receipt echoes the exact immutable reference after these checks. It
 participates in the authority fingerprint and lost-ACK correlation. Changed
@@ -50,5 +76,5 @@ current account grant. No execution adapter is advertised as supporting
 autonomous-worktree on the strength of this change; supported modes remain
 empty until genuine installed enforcement is measured.
 
-Existing requests without the field remain unchanged. Configure/list roundtrip
+Existing requests without either reference remain unchanged. Configure/list roundtrip
 and policy CAS are described in `workjet-project-execution-policy.md`.

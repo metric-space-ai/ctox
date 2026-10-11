@@ -25,10 +25,64 @@
           "maximum": 9007199254740991
         }
       }
+    },
+    "WorkerParentBindingContract": {
+      "enum": [
+        "ctox.workjet.persistent-worker-binding.v1"
+      ]
+    },
+    "WorkerParentBindingRole": {
+      "enum": [
+        "persistent_worker"
+      ]
+    },
+    "WorkerParentBindingState": {
+      "enum": [
+        "active"
+      ]
+    },
+    "WorkerParentBinding": {
+      "derive_eq": true,
+      "fields": {
+        "contract": {
+          "type": "WorkerParentBindingContract"
+        },
+        "owner_user_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "project_id": {
+          "type": "String",
+          "min_chars": 1,
+          "max_chars": 256
+        },
+        "supervisor_thread_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "thread_id": {
+          "type": "String",
+          "min_chars": 36,
+          "max_chars": 36
+        },
+        "role": {
+          "type": "WorkerParentBindingRole"
+        },
+        "revision": {
+          "type": "u64",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "type": "WorkerParentBindingState"
+        }
+      }
     }
   },
   "commands": {
-    "business_os.remote_worker_admission": "Optional binding.executionPolicy is a strict project policy reference, never a team/path/provider grant. Issue/claim/revalidate/renew require current Owner project mode/revision and a genuine current native supervisor/team join. Missing preserves legacy admission; null is rejected; revoke remains usable after reset."
+    "business_os.remote_worker_admission": "Optional binding.executionPolicy is a strict project policy reference, never a team/path/provider grant. Optional parentTeamBinding pins the complete native Owner-issued Persistent Worker reference and the actual calling thread UUID. Issue/claim/revalidate/renew check current private enrollment, exact affiliation/revision and native history. Known native Parents cannot omit their reference. Null, added fields and Root substitution are rejected. Absence of both references preserves legacy admission bytes; revoke uses the original exact receipt binding after policy reset or Parent revocation."
   },
   "valid_cases": [
     {
@@ -45,6 +99,32 @@
         "mode": "autonomous-worktree",
         "projectId": "project-1",
         "revision": 9007199254740991
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 9007199254740991,
+        "state": "active"
       }
     }
   ],
@@ -133,6 +213,205 @@
       "value": {
         "projectId": "project-1",
         "revision": 1
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": null
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "unknown",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "supervisor",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "one_shot_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "revoked"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 0,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": -1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1.5,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 9007199254740992,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "short",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "short",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active",
+        "workspaceRoot": "/"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": null,
+        "project_id": "project-1",
+        "supervisor_thread_id": "b2cd2661-181e-41fd-a54e-ea5642ccf0dc",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
+      }
+    },
+    {
+      "type": "WorkerParentBinding",
+      "value": {
+        "contract": "ctox.workjet.persistent-worker-binding.v1",
+        "owner_user_id": "owner",
+        "project_id": "project-1",
+        "thread_id": "21a77758-8723-431b-bbeb-3aa9f0507c4d",
+        "role": "persistent_worker",
+        "revision": 1,
+        "state": "active"
       }
     }
   ]

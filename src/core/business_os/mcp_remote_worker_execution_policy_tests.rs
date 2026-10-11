@@ -4,6 +4,9 @@ use super::*;
 
 const NATIVE_SUPERVISOR: &str = "b2cd2661-181e-41fd-a54e-ea5642ccf0dc";
 
+#[path = "mcp_remote_worker_parent_binding_tests.rs"]
+mod parent_binding;
+
 fn policy(root: &Path, mode: &str, revision: u64) -> anyhow::Result<()> {
     let mut project =
         store::outbound_load_record(&store::open_store(root)?, "workjet_projects", "project-1")?
@@ -297,6 +300,7 @@ fn remote_worker_execution_policy_rejects_null_extra_fields_and_other_project() 
         .as_array()
         .unwrap()
         .iter()
+        .filter(|case| case["type"] == "WorkerExecutionPolicyReference")
         .map(|case| case["value"].clone())
         .collect();
     invalid_refs

@@ -5,9 +5,10 @@
 //! locator, never a target bearer credential: every operation returns through
 //! the source's authenticated managed MCP connection and current policy store.
 use super::super::workjet_worker_execution_policy_contract::{
-    WireValidate, WorkerExecutionPolicyReference,
+    WireValidate, WorkerExecutionPolicyReference, WorkerParentBinding,
 };
 use super::*;
+use super::super::project_chats::persistent_worker_binding::{self, PersistentWorkerBinding as NativeParentBinding};
 use rusqlite::{Connection, TransactionBehavior};
 use sha2::{Digest, Sha256};
 
@@ -76,6 +77,12 @@ struct Binding {
         deserialize_with = "present_execution_policy"
     )]
     execution_policy: Option<WorkerExecutionPolicyReference>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_parent_team_binding"
+    )]
+    parent_team_binding: Option<WorkerParentBinding>,
 }
 
 fn present_execution_policy<'de, D>(
@@ -88,12 +95,22 @@ where
     WorkerExecutionPolicyReference::deserialize(deserializer).map(Some)
 }
 
-fn execution_policy_schema() -> Value {
+fn present_parent_team_binding<'de, D>(
+    deserializer: D,
+) -> Result<Option<WorkerParentBinding>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // An omitted reference preserves legacy requests; null cannot drop a Parent.
+    WorkerParentBinding::deserialize(deserializer).map(Some)
+}
+
+fn worker_reference_schema(kind: &str) -> Value {
     let spec: Value = serde_json::from_str(include_str!(
         "../rxdb/tests/fixtures/workjet-worker-execution-policy-v1.json"
     ))
     .expect("compiled worker execution policy fixture");
-    super::workjet_jour_fixe::schema(&spec, "WorkerExecutionPolicyReference")
+    super::workjet_jour_fixe::schema(&spec, kind)
 }
 
 #[derive(Deserialize)]
@@ -197,7 +214,8 @@ pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
                         "targetEnvironmentId":{"type":"string"},"targetConnectionId":{"type":"string"},
                         "targetInstanceId":{"type":"string"},"targetComputerId":{"type":"string"},
                         "repositoryUrl":{"type":"string"},"repositoryHead":{"type":"string"},"workspaceKey":{"type":"string"},
-                        "executionPolicy":execution_policy_schema(),
+                        "executionPolicy":worker_reference_schema("WorkerExecutionPolicyReference"),
+                        "parentTeamBinding":worker_reference_schema("WorkerParentBinding"),
                         "credentialRef":ref_schema(&["environmentId","accountId"]),
                         "providerRef":ref_schema(&["environmentId","provider"]),
                         "modelRef":ref_schema(&["environmentId","provider","modelId"]),
@@ -508,16 +526,28 @@ fn current_authority(
             current.mode,
             current.revision
         );
-        // External parent/thread labels are not native team identities. Only
-        // the persisted Owner/project supervisor binding and its native
-        // user_threads provenance can satisfy this current producer seam.
-        // Broader Parent enrollment and target confinement remain separate.
-        super::workjet_worker_dispatch::current_project(
+    }
+    let parent: Option<NativeParentBinding> = binding
+        .parent_team_binding
+        .as_ref()
+        .map(|reference| serde_json::from_value(serde_json::to_value(reference)?))
+        .transpose()?;
+    if binding.execution_policy.is_some() || parent.is_some() {
+        // Retain the actual calling Parent UUID. Its Root UUID only proves
+        // affiliation inside the Owner-issued, revision-bound native reference.
+        super::workjet_worker_dispatch::current_project_with_team_binding(
             conn,
             context,
             &binding.project_id,
             &binding.source_supervisor_thread_id,
+            parent.as_ref(),
         )?;
+    }
+    if parent.is_none() {
+        anyhow::ensure!(
+            persistent_worker_binding::for_thread(conn, &context.actor, &binding.source_supervisor_thread_id)?.is_none(),
+            "native Parent requires its complete Owner-issued binding"
+        );
     }
     let native_repo = project["repo_url"]
         .as_str()
@@ -539,6 +569,10 @@ fn current_authority(
         authority["executionPolicy"] = serde_json::to_value(reference)?;
         authority["nativeSupervisorThreadId"] =
             serde_json::json!(binding.source_supervisor_thread_id);
+    }
+    if let Some(reference) = &binding.parent_team_binding {
+        authority["parentTeamBinding"] = serde_json::to_value(reference)?;
+        authority["nativeCallingThreadId"] = serde_json::json!(binding.source_supervisor_thread_id);
     }
     // Keep the omitted/default path byte-compatible with existing permits.
     let fingerprint = format!(
@@ -672,6 +706,22 @@ fn validate_binding(binding: &Binding) -> anyhow::Result<()> {
         anyhow::ensure!(
             reference.project_id == binding.project_id,
             "worker execution policy project differs from binding project"
+        );
+    }
+    if let Some(reference) = &binding.parent_team_binding {
+        reference.validate().map_err(anyhow::Error::msg)?;
+        for value in [&reference.owner_user_id, &reference.project_id] {
+            label(value)?;
+        }
+        for value in [&reference.thread_id, &reference.supervisor_thread_id] {
+            let id = uuid::Uuid::parse_str(value).context("native team thread must be a UUID")?;
+            anyhow::ensure!(!id.is_nil() && id.to_string() == *value, "native team thread UUID must be canonical and non-nil");
+        }
+        anyhow::ensure!(
+            reference.project_id == binding.project_id
+                && reference.thread_id == binding.source_supervisor_thread_id
+                && reference.thread_id != reference.supervisor_thread_id,
+            "native Parent binding project or actual calling UUID differs"
         );
     }
     anyhow::ensure!(
