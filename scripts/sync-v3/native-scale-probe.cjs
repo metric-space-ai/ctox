@@ -4,6 +4,11 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const names = ['sync_v3_scale_leads', 'sync_v3_scale_commands', 'sync_v3_scale_tasks', 'sync_v3_scale_chats'];
+let resourceObserver, busyCount;
+async function observe(page, pid, origin) {
+  resourceObserver = await require('./resource-observer.cjs').attach(page, pid, origin);
+  busyCount = require('./lock-soak.cjs').loggedBusyObserver(globalThis.__ctoxProcess);
+}
 function definitions() {
   return Object.fromEntries(names.map(name => [name, { syncProfile: 'demand-only', schema: {
     version: 0, primaryKey: 'id', type: 'object', additionalProperties: true,
@@ -138,7 +143,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const ack = new Promise((resolve, reject) => { resolveAck = resolve; rejectAck = reject; });
           ack.catch(() => {});
           const started = performance.now();
-          trace.marks[`write-${index}-start`] = started;
+          trace.mark(`write-${index}-start`, started);
           let conflictReplies = 0;
           const attempts = [];
           peer.request = async function (...args) {
@@ -165,8 +170,10 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
             }
             try {
               const requestStartedAt = performance.now();
+              if (selected) trace.mark(`write-${index}-attempt-${attempts.length}-start`, requestStartedAt);
               const response = await original.apply(this, args);
               if (selected) {
+                trace.mark(`write-${index}-attempt-${attempts.length}-end`);
                 recordProof('after-response');
                 if (!connection || peer.connections?.get?.(args[0]) !== connection) rejectAck(Error('Accepted write changed its actual request connection'));
                 attempts.push({ startAt: requestStartedAt, endAt: performance.now(), conflicts: Array.isArray(response) ? response.length : null });
@@ -182,7 +189,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
           const localMs = performance.now() - started;
           trace.mark(`write-${index}-local-commit`);
           const nativeAckMs = await withDeadline(ack, 30000, 'Native masterWrite ACK timeout');
-          trace.marks[`write-${index}-ack`] = started + nativeAckMs;
+          trace.mark(`write-${index}-ack`, started + nativeAckMs);
           if (rttMs && nativeAckMs < rttMs * 0.75) throw Error('Write ACK bypassed delayed relay');
           if (!await globalThis.__syncV3NativeReadback(leadName, first.id, marker)) throw Error('Native ACK not backed by SQLite write');
           trace.mark(`write-${index}-sqlite-verified`);
@@ -195,6 +202,9 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       if (requestProofs.length !== samples.reduce((count, sample) => count + sample.attempts.length, 0)
         || requestProofs.some(proof => proof.channelState !== 'open' || !proof.pairs.length)) throw Error('Actual write request relay proof incomplete');
       if (!pairs.length || pairs.some(pair => pair.remoteAddress !== '127.0.0.1' || !Number.isInteger(pair.remotePort))) throw Error('No selected loopback relay candidate proof');
+      for (let interval = 1; interval <= 2; interval++) {
+        await wait(10000); trace.mark(`idle-${interval * 10}s`);
+      }
       await trace.drain();
       if (trace.errors.length) throw Error(`Phase trace failed: ${JSON.stringify(trace.errors)}`);
       return { mode: 'sync-v3-scale-relay', requestedRttMs: rttMs,
@@ -216,8 +226,16 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
     throw error;
   });
   result.fixture = fixture;
+  result.resources = await resourceObserver.finish();
+  result.nativeLoggedBusyEvents = busyCount();
   fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-scale-result.json'), JSON.stringify(result, null, 2) + '\n');
   await page.screenshot({ path: path.join(runtimeRoot, 'sync-v3-visible-data.png') });
+  const soakSeconds = Number(process.argv.find(arg => arg.startsWith('--sync-v3-soak-seconds='))?.split('=')[1] || 0);
+  if (soakSeconds) {
+    const statusPath = process.argv.find(arg => arg.startsWith('--sync-v3-soak-status='))?.slice('--sync-v3-soak-status='.length);
+    result.soak = await require('./lock-soak.cjs').runSoak(page, sqlite, runtimeRoot, soakSeconds, statusPath, busyCount);
+    fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-scale-result.json'), JSON.stringify(result, null, 2) + '\n');
+  }
   return result;
 }
-module.exports = { seed, install, run, definitions };
+module.exports = { seed, install, observe, run, definitions };

@@ -53,11 +53,16 @@ class UdpRelay {
   forward(pair, item) {
     const other = pair[item.side === 'native' ? 'browser' : 'native'];
     const wait = Math.max(0, this.rttMs / 2 - (performance.now() - item.arrived));
-    const timer = setTimeout(() => {
+    let timer;
+    const schedule = delay => { timer = setTimeout(send, Math.ceil(delay)); pair.timers.add(timer); };
+    const send = () => {
       pair.timers.delete(timer);
-      pair.queuedBytes -= item.data.length;
-      if (this.closed) return;
+      if (this.closed) { pair.queuedBytes -= item.data.length; return; }
       const hold = performance.now() - item.arrived;
+      // Node timers can fire against an older event-loop clock under packet load.
+      // The monotonic delay oracle is authoritative; never forward early.
+      if (hold < this.rttMs / 2) { schedule(this.rttMs / 2 - hold); return; }
+      pair.queuedBytes -= item.data.length;
       pair.holdCount++;
       pair.holdSumMs += hold;
       pair.holdMinMs = Math.min(pair.holdMinMs ?? hold, hold);
@@ -66,8 +71,8 @@ class UdpRelay {
         if (error) this.errors.push(error.code || 'udp_send_error');
         else { pair.forwarded[item.side]++; pair.bytes[item.side] += item.data.length; }
       });
-    }, wait);
-    pair.timers.add(timer);
+    };
+    schedule(wait);
   }
   rewriteCandidate(pair, role, line) {
     const parts = line.trim().replace(/^a=/, '').split(/\s+/);
