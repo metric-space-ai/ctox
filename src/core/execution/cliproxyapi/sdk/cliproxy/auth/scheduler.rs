@@ -119,7 +119,11 @@ impl AuthScheduler {
         candidates: &[AccountCandidate],
         state: StandardSelectionState<'_>,
     ) -> Result<AccountCandidate, AccountSelectionError> {
-        let StandardSelectionState { cooldowns, options, expiries } = state;
+        let StandardSelectionState {
+            cooldowns,
+            options,
+            expiries,
+        } = state;
         let provider = provider.trim().to_ascii_lowercase();
         if provider.is_empty() {
             return Err(AccountSelectionError::NotFound);
