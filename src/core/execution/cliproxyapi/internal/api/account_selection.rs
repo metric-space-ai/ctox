@@ -22,7 +22,7 @@ pub(crate) fn request_account(id: Option<String>) {
 
 /// Request-local identity only. Durable bindings belong to the host's store.
 pub(crate) fn request_session(headers: &crate::sdk::cliproxy::executor::Headers, body: &[u8]) {
-    use crate::internal::runtime::executor::helps::claude_code_session::{
+    use crate::internal::runtime::executor::helps::{
         extract_claude_code_session_id, header_value_case_insensitive,
     };
     let mut session = [
