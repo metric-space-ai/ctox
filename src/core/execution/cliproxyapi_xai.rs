@@ -25,6 +25,59 @@ pub fn subscription_installed(root: &Path) -> bool {
 pub(crate) fn credential_binding(root: &Path) -> anyhow::Result<Option<String>> {
     crate::secrets::secret_record_content_version(root, SCOPE, NAME)
 }
+
+/// Private observation of the credential actually loaded by the native route.
+/// It grants no execution authority and has no browser/JSON representation.
+pub(crate) struct CredentialUse {
+    version: String,
+}
+impl CredentialUse {
+    pub(crate) fn into_content_version(self) -> String {
+        self.version
+    }
+}
+struct CredentialObserver {
+    root: PathBuf,
+    observed: Option<CredentialUse>,
+    ambiguous: bool,
+}
+tokio::task_local! {
+    static CREDENTIAL_OBSERVER: Mutex<CredentialObserver>;
+}
+pub(crate) async fn observe_credential_use<T>(
+    root: &Path,
+    work: impl std::future::Future<Output = T>,
+) -> (T, Option<CredentialUse>) {
+    CREDENTIAL_OBSERVER.scope(
+        Mutex::new(CredentialObserver {
+            root: root.to_owned(),
+            observed: None,
+            ambiguous: false,
+        }),
+        async {
+            let result = work.await;
+            let observed = CREDENTIAL_OBSERVER.with(|slot| {
+                let mut slot = slot.lock().ok()?;
+                if slot.ambiguous { None } else { slot.observed.take() }
+            });
+            (result, observed)
+        },
+    ).await
+}
+fn record_credential_use(root: &Path, version: &str) {
+    let _ = CREDENTIAL_OBSERVER.try_with(|slot| {
+        if let Ok(mut slot) = slot.lock() {
+            if slot.root != root
+                || slot.observed.as_ref().is_some_and(|observed| observed.version != version)
+            {
+                slot.ambiguous = true;
+                slot.observed = None;
+            } else if !slot.ambiguous {
+                slot.observed = Some(CredentialUse { version: version.to_owned() });
+            }
+        }
+    });
+}
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum XaiLoginProgress {
@@ -511,8 +564,9 @@ fn endpoint(root: &Path) -> String {
     let _ = root;
     CLI_CHAT_PROXY_BASE_URL.into()
 }
-async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Result<Stored> {
-    let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
+async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Result<(Stored, String)> {
+    let (encoded, mut version) = crate::secrets::read_secret_value_versioned(root, SCOPE, NAME)?;
+    let encoded = Zeroizing::new(encoded);
     let mut record: Stored = serde_json::from_str(&encoded)?;
     if record.expires_at.is_some_and(|expiry| {
         expiry
@@ -547,11 +601,12 @@ async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Res
             token_endpoint: record.token_endpoint.clone(),
         };
         save_bundle(root, &bundle)?;
-        record = serde_json::from_str(&Zeroizing::new(crate::secrets::read_secret_value(
-            root, SCOPE, NAME,
-        )?))?;
+        let (refreshed, refreshed_version) =
+            crate::secrets::read_secret_value_versioned(root, SCOPE, NAME)?;
+        record = serde_json::from_str(&Zeroizing::new(refreshed))?;
+        version = refreshed_version;
     }
-    Ok(record)
+    Ok((record, version))
 }
 pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
     use ctox_cliproxyapi::internal::runtime::executor::xai_executor_request::apply_xai_chat_headers;
@@ -561,8 +616,8 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
         .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .build()?;
-    let record = active_record(root, &client).await?;
-    let catalog_binding = credential_binding(root)?;
+    let (record, catalog_binding) = active_record(root, &client).await?;
+    record_credential_use(root, &catalog_binding);
     let mut auth = Auth::default();
     auth.attributes.insert("auth_kind".into(), "oauth".into());
     auth.attributes
@@ -578,7 +633,7 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
     let bytes =
         bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await?;
     anyhow::ensure!(
-        credential_binding(root)? == catalog_binding,
+        credential_binding(root)?.as_deref() == Some(catalog_binding.as_str()),
         "Grok credential changed during discovery"
     );
     let catalog: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -634,7 +689,8 @@ async fn execute_route_at(
         .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(60))
         .build()?;
-    let record = active_record(root, &client).await?;
+    let (record, route_binding) = active_record(root, &client).await?;
+    record_credential_use(root, &route_binding);
     let request: serde_json::Value = serde_json::from_slice(body)?;
     let model = request
         .get("model")
@@ -659,6 +715,10 @@ async fn execute_route_at(
         UpstreamStage::Catalog,
     )
     .await?;
+    anyhow::ensure!(
+        credential_binding(root)?.as_deref() == Some(route_binding.as_str()),
+        "Grok credential changed during route discovery"
+    );
     let catalog: serde_json::Value = serde_json::from_slice(&catalog)?;
     anyhow::ensure!(
         catalog
@@ -703,7 +763,12 @@ async fn execute_route_at(
         32 * 1024 * 1024,
         UpstreamStage::Inference,
     )
-    .await?;
+    .await;
+    anyhow::ensure!(
+        credential_binding(root)?.as_deref() == Some(route_binding.as_str()),
+        "Grok credential changed during inference"
+    );
+    let data = data?;
     let data = if stream {
         data
     } else {
