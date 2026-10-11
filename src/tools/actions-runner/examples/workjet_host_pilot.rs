@@ -229,7 +229,28 @@ fn unavailable(step: &ctox_actions_runner::model::Step, parsed: &HostWorkflow) -
     None
 }
 fn remap_tmp(value: &str, tmp: &Path) -> String {
-    value.replace("/tmp/", &format!("{}/", tmp.display()))
+    let destination = tmp.to_string_lossy();
+    let mut result = String::new();
+    let mut cursor = 0;
+    for (index, _) in value.match_indices("/tmp") {
+        let before = value[..index].chars().next_back();
+        let after = value[index + 4..].chars().next();
+        let boundary_before = before.is_none_or(|c| c.is_whitespace() || "'\"=:<>({[".contains(c));
+        let boundary_after =
+            after.is_none_or(|c| c == '/' || c.is_whitespace() || "'\");,]}".contains(c));
+        let already_mapped = value[index..].starts_with(destination.as_ref())
+            && value[index + destination.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c == '/');
+        if boundary_before && boundary_after && !already_mapped {
+            result.push_str(&value[cursor..index]);
+            result.push_str(&destination);
+            cursor = index + 4;
+        }
+    }
+    result.push_str(&value[cursor..]);
+    result
 }
 fn builtin(
     step: &ctox_actions_runner::model::Step,
@@ -818,13 +839,29 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn temp_remapping_preserves_owned_paths_and_is_idempotent() {
+        let root = Path::new("/mnt/sata8t/build/job/tmp");
+        let owned = root.join("cache/node-gyp").display().to_string();
+        assert_eq!(remap_tmp(&owned, root), owned);
+        let script = "cache=/tmp/cache; cat '/tmp/report' /var/tmp/keep https://host/tmp/keep";
+        let mapped = remap_tmp(script, root);
+        assert_eq!(mapped, "cache=/mnt/sata8t/build/job/tmp/cache; cat '/mnt/sata8t/build/job/tmp/report' /var/tmp/keep https://host/tmp/keep");
+        assert_eq!(remap_tmp(&mapped, root), mapped);
+        assert_eq!(remap_tmp("/tmp", root), root.display().to_string());
+        assert_eq!(
+            remap_tmp("/tmp/build/job/cache", Path::new("/tmp/build/job")),
+            "/tmp/build/job/cache"
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn native_failure_preserves_always_and_skips_success_steps() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source");
         fs::create_dir_all(source.join(".github/workflows")).unwrap();
-        fs::write(source.join(".github/workflows/test.yml"),"on: pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - name: failing\n        run: echo observed; exit 7\n      - name: skipped\n        run: echo forbidden\n      - name: cleanup\n        if: always()\n        run: echo cleaned\n").unwrap();
+        fs::write(source.join(".github/workflows/test.yml"),"on: pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - name: failing\n        run: mkdir -p \"$XDG_CACHE_HOME/node-gyp\"; echo cached > \"$XDG_CACHE_HOME/node-gyp/test\"; echo observed; exit 7\n      - name: skipped\n        run: echo forbidden\n      - name: cleanup\n        if: always()\n        run: echo cleaned\n").unwrap();
         let config = Config {
             source,
             build_root: root.path().join("build"),
@@ -848,6 +885,10 @@ mod tests {
         assert!(job.steps[2].excerpt.contains("cleaned"));
         assert!(!config.build_root.join("test.yml/check/worktree").exists());
         assert!(!config.build_root.join("test.yml/check/tmp").exists());
+        assert!(fs::read_dir(config.build_root.join("test.yml/check"))
+            .unwrap()
+            .next()
+            .is_none());
     }
     #[test]
     fn container_job_is_blocked_without_copy_or_execution() {
