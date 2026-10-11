@@ -1161,6 +1161,7 @@ fn claude_routing_error_response(
 
     let (code, message, retry_at_ms) = match error {
         AccountRoutingError::Store(_)
+        | AccountRoutingError::Session(_)
         | AccountRoutingError::Selection(AccountSelectionError::State) => (
             "gateway_account_state_unavailable",
             "Claude account state could not be read or saved. Check local storage access.",

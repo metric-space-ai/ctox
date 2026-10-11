@@ -20,10 +20,14 @@ fn error(kind: AccountSessionStoreError) -> AccountRoutingError {
     AccountRoutingError::Session(kind)
 }
 fn read(conn: &Connection, key: &str) -> Result<Option<String>, AccountRoutingError> {
-    let raw: Option<String> = conn.query_row(
-        "SELECT payload_json FROM ctox_payload_store WHERE payload_key = ?1",
-        [key], |row| row.get(0),
-    ).optional().map_err(|_| error(AccountSessionStoreError::Read))?;
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM ctox_payload_store WHERE payload_key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| error(AccountSessionStoreError::Read))?;
     raw.map(|raw| {
         let id: String = serde_json::from_str(&raw)
             .map_err(|_| error(AccountSessionStoreError::InvalidRecord))?;
@@ -31,7 +35,8 @@ fn read(conn: &Connection, key: &str) -> Result<Option<String>, AccountRoutingEr
             return Err(error(AccountSessionStoreError::InvalidRecord));
         }
         Ok(id)
-    }).transpose()
+    })
+    .transpose()
 }
 impl AccountSessionStore for CtoxAccountSessionStore {
     fn choose(
@@ -39,7 +44,11 @@ impl AccountSessionStore for CtoxAccountSessionStore {
         key: &str,
         choose: &mut dyn FnMut(Option<&str>) -> Result<String, AccountRoutingError>,
     ) -> Result<String, AccountRoutingError> {
-        if key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+        if key.len() != 64
+            || !key
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
             return Err(error(AccountSessionStoreError::InvalidRecord));
         }
         let key = format!("{PREFIX}{key}");
@@ -52,8 +61,9 @@ impl AccountSessionStore for CtoxAccountSessionStore {
         if previous.as_deref() == Some(selected.as_str()) {
             return Ok(selected);
         }
-        let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "cliproxyapi.session.select")
-            .map_err(|_| error(AccountSessionStoreError::Write))?;
+        let tx =
+            crate::persistence::SqliteWriteTransaction::begin(&conn, "cliproxyapi.session.select")
+                .map_err(|_| error(AccountSessionStoreError::Write))?;
         let current = read(&tx, &key)?;
         let selected = choose(current.as_deref())?;
         if !ctox_cliproxyapi::internal::api::account_selection::valid_account_id(&selected) {
@@ -75,7 +85,8 @@ impl AccountSessionStore for CtoxAccountSessionStore {
                 params![key, serde_json::to_string(&selected).map_err(|_| error(AccountSessionStoreError::InvalidRecord))?],
             ).map_err(|_| error(AccountSessionStoreError::Write))?;
         }
-        tx.commit().map_err(|_| error(AccountSessionStoreError::Write))?;
+        tx.commit()
+            .map_err(|_| error(AccountSessionStoreError::Write))?;
         Ok(selected)
     }
 }
@@ -90,10 +101,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let key = account_session_key("claude", None, "private-session-label").unwrap();
         let first = CtoxAccountSessionStore::new(root.path());
-        assert_eq!(first.choose(&key, &mut |prior| Ok(prior.unwrap_or("account-a").into())).unwrap(), "account-a");
+        assert_eq!(
+            first
+                .choose(&key, &mut |prior| Ok(prior.unwrap_or("account-a").into()))
+                .unwrap(),
+            "account-a"
+        );
         drop(first);
         let restored = CtoxAccountSessionStore::new(root.path());
-        assert_eq!(restored.choose(&key, &mut |prior| Ok(prior.unwrap_or("account-b").into())).unwrap(), "account-a");
+        assert_eq!(
+            restored
+                .choose(&key, &mut |prior| Ok(prior.unwrap_or("account-b").into()))
+                .unwrap(),
+            "account-a"
+        );
         let conn = crate::persistence::open_sqlite(root.path()).unwrap();
         let (stored_key, raw): (String,String) = conn.query_row(
             "SELECT payload_key,payload_json FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.session.v1:%'", [], |r| Ok((r.get(0)?,r.get(1)?)),
@@ -109,18 +130,20 @@ mod tests {
         crate::persistence::open_sqlite(root.path()).unwrap();
         let key = account_session_key("codex", None, "concurrent-session").unwrap();
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let threads = ["account-a","account-b"].map(|fallback| {
+        let threads = ["account-a", "account-b"].map(|fallback| {
             let root = root.path().to_path_buf();
             let key = key.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 let store = CtoxAccountSessionStore::new(root);
                 barrier.wait();
-                store.choose(&key, &mut |prior| Ok(prior.unwrap_or(fallback).into())).unwrap()
+                store
+                    .choose(&key, &mut |prior| Ok(prior.unwrap_or(fallback).into()))
+                    .unwrap()
             })
         });
-        let [a,b] = threads.map(|thread| thread.join().unwrap());
-        assert_eq!(a,b);
+        let [a, b] = threads.map(|thread| thread.join().unwrap());
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -130,8 +153,21 @@ mod tests {
         let key = account_session_key("antigravity", None, "session").unwrap();
         let fail = || AccountRoutingError::Selection(AccountSelectionError::Unavailable);
         assert_eq!(store.choose(&key, &mut |_| Err(fail())), Err(fail()));
-        assert_eq!(store.choose(&key, &mut |prior| { assert!(prior.is_none()); Ok("account-a".into()) }).unwrap(), "account-a");
+        assert_eq!(
+            store
+                .choose(&key, &mut |prior| {
+                    assert!(prior.is_none());
+                    Ok("account-a".into())
+                })
+                .unwrap(),
+            "account-a"
+        );
         assert_eq!(store.choose(&key, &mut |_| Err(fail())), Err(fail()));
-        assert_eq!(store.choose(&key, &mut |prior| Ok(prior.unwrap().into())).unwrap(), "account-a");
+        assert_eq!(
+            store
+                .choose(&key, &mut |prior| Ok(prior.unwrap().into()))
+                .unwrap(),
+            "account-a"
+        );
     }
 }

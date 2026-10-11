@@ -25,16 +25,27 @@ pub(crate) fn request_session(headers: &crate::sdk::cliproxy::executor::Headers,
     use crate::internal::runtime::executor::helps::claude_code_session::{
         extract_claude_code_session_id, header_value_case_insensitive,
     };
-    let mut session = ["X-CTOX-Session-ID", "X-Claude-Code-Session-Id", "X-Session-ID", "session_id"]
-        .into_iter()
-        .map(|name| header_value_case_insensitive(Some(headers), name))
-        .find(|value| !value.is_empty());
+    let mut session = [
+        "X-CTOX-Session-ID",
+        "X-Claude-Code-Session-Id",
+        "X-Session-ID",
+        "session_id",
+    ]
+    .into_iter()
+    .map(|name| header_value_case_insensitive(Some(headers), name))
+    .find(|value| !value.is_empty());
     if session.is_none() {
-        session = serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|root| {
-            [root.get("session_id"), root.get("prompt_cache_key")]
-                .into_iter().flatten().filter_map(serde_json::Value::as_str)
-                .map(str::trim).find(|value| !value.is_empty()).map(str::to_owned)
-        });
+        session = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|root| {
+                [root.get("session_id"), root.get("prompt_cache_key")]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .find(|value| !value.is_empty())
+                    .map(str::to_owned)
+            });
     }
     if session.is_none() {
         let legacy = extract_claude_code_session_id(body, None);
@@ -45,10 +56,19 @@ pub(crate) fn request_session(headers: &crate::sdk::cliproxy::executor::Headers,
 }
 
 pub(crate) fn session_key(provider: &str, model: Option<&str>) -> Option<String> {
-    ACCOUNT_SELECTION.try_with(|state| {
-        state.lock().unwrap().session.as_deref()
-            .and_then(|session| crate::sdk::cliproxy::auth::account_session_key(provider, model, session))
-    }).ok().flatten()
+    ACCOUNT_SELECTION
+        .try_with(|state| {
+            state
+                .lock()
+                .unwrap()
+                .session
+                .as_deref()
+                .and_then(|session| {
+                    crate::sdk::cliproxy::auth::account_session_key(provider, model, session)
+                })
+        })
+        .ok()
+        .flatten()
 }
 pub fn candidates(accounts: &[AccountCandidate]) -> Vec<AccountCandidate> {
     let requested = requested_account();

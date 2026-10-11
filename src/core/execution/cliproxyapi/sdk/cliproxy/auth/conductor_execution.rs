@@ -216,16 +216,25 @@ impl AccountRouter {
             if let (Some(sessions), Some(key)) = (&self.sessions, key) {
                 let mut selected = None;
                 let id = sessions.choose(&key, &mut |retained| {
-                    let retained = retained.and_then(|id| {
+                    let retained = if let Some(id) = retained {
                         let mut pinned = options.clone();
                         pinned.pinned_auth_id = Some(id.to_owned());
-                        self.scheduler
+                        match self.scheduler
                             .pick_single(provider, model, now_ms, candidates, &cooldowns, &pinned)
-                            .ok()
-                    });
+                        {
+                            Ok(candidate) => Some(candidate),
+                            Err(AccountSelectionError::NotFound
+                                | AccountSelectionError::Unavailable
+                                | AccountSelectionError::Cooldown { .. }) => None,
+                            Err(error) => return Err(AccountRoutingError::Selection(error)),
+                        }
+                    } else {
+                        None
+                    };
                     let candidate = match retained {
                         Some(candidate) => candidate,
-                        None => self.scheduler
+                        None => self
+                            .scheduler
                             .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
                             .map_err(AccountRoutingError::Selection)?,
                     };
