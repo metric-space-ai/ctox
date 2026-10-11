@@ -11983,6 +11983,13 @@ fn configure_business_os_mcp_session_for_queue_job(
 ) -> Result<bool> {
     let Some(command_id) = metadata_string(&job.queue_task_metadata, "business_os_command_id")
     else {
+        if let Some(token) = issue_communication_session_for_mail_job(root, job)? {
+            options.disable_mcp_servers = false;
+            options.enable_business_os_mcp = true;
+            options.business_os_mcp_command_session = Some(token);
+            options.force_isolated_session = true;
+            return Ok(true);
+        }
         if job.leased_message_keys.len() != 1
             || !job.leased_message_keys[0].starts_with("plan:system::")
         {
@@ -12132,6 +12139,92 @@ fn configure_business_os_mcp_session_for_queue_job(
     options.business_os_mcp_command_session = Some(token);
     options.force_isolated_session = true;
     Ok(true)
+}
+
+/// A mail turn from the owner, a founder or an admin acts as the sender's
+/// Business OS user for the few actions a mail may start (lead import).
+/// The sender role comes from the From address, which anyone can forge, so a
+/// session also needs the receiving server's own DMARC/DKIM pass for the From
+/// domain (`communication::sender_authentication`, security review
+/// 10.10.2026). Ordinary mail, unauthenticated mail and mails without an
+/// active Business OS user get no session.
+fn issue_communication_session_for_mail_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    let Some(sender_role) = job
+        .source_label
+        .strip_prefix("email:")
+        .filter(|role| matches!(*role, "owner" | "founder" | "admin"))
+    else {
+        return Ok(None);
+    };
+    let (Some(inbound_key), Some(lease_key)) = (
+        inbound_email_reply_message_key(job),
+        job.leased_message_keys.first(),
+    ) else {
+        return Ok(None);
+    };
+    let Some((sender_address, authentication_results)) =
+        inbound_email_sender_authentication(root, inbound_key)?
+    else {
+        return Ok(None);
+    };
+    let trusted_authserv_ids = crate::communication::sender_authentication::trusted_authserv_ids(
+        &runtime_env::env_or_config(
+            root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+        )
+        .unwrap_or_default(),
+    );
+    if !crate::communication::sender_authentication::sender_domain_authenticated(
+        &authentication_results,
+        &trusted_authserv_ids,
+        &sender_address,
+    ) {
+        return Ok(None);
+    }
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("communication");
+    crate::business_os::mcp_channel::issue_internal_communication_session_token(
+        root,
+        inbound_key,
+        lease_key,
+        sender_role,
+        &sender_address,
+        workspace,
+    )
+}
+
+/// Sender address and the `Authentication-Results` headers stored at intake.
+fn inbound_email_sender_authentication(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<Option<(String, Vec<String>)>> {
+    let conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+    let Some((address, metadata_json)) = conn
+        .query_row(
+            "SELECT sender_address, metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let address = address.trim().to_ascii_lowercase();
+    if address.is_empty() {
+        return Ok(None);
+    }
+    let results = serde_json::from_str::<Value>(&metadata_json)
+        .ok()
+        .and_then(|metadata| metadata.get("authenticationResults").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    Ok(Some((address, results)))
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
@@ -17141,39 +17234,14 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let source_stamp = channel_router_source_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let unchanged_elapsed = {
-        let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(previous) = guard.as_ref() else {
-            return false;
-        };
-        if !channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now) {
-            return false;
-        }
-        now.duration_since(previous.last_idle_pass)
-    };
-    if unchanged_elapsed < Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS) {
-        return true;
-    }
-    if channels::pending_queue_task_count_uncached(root)
-        .map(|count| count > 0)
-        .unwrap_or(false)
-    {
-        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard
-            .as_ref()
-            .is_some_and(|previous| previous.root == root_path)
-        {
-            *guard = None;
-        }
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
         return false;
-    }
-    // Keep the expensive full router asleep while still bounding the cheap
-    // durable-queue safety check. This avoids an eight-second idle DB poll.
-    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(previous) = guard.as_mut().filter(|previous| previous.root == root_path) {
-        previous.last_idle_pass = now;
-    }
-    true
+    };
+    // Unchanged state expires after one hour in the gate matcher. A second
+    // durable-queue poll at that same deadline is unreachable and would reopen
+    // SQLite unnecessarily if moved back to the old 30-second interval.
+    channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now)
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
@@ -38277,6 +38345,71 @@ Business OS command:
             inbound_attachment_readable_roots(&leased.queue_task_metadata),
             vec![attachment_path.parent().unwrap().to_path_buf()]
         );
+
+        // The rework may act on Business OS as the sender (lead import from
+        // the Excel); a sender without a Business OS user gets no session.
+        let mut options = chat_turn_session_options_for_queue_job(&leased);
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure without business user")
+        );
+        assert!(options.business_os_mcp_command_session.is_none());
+        crate::business_os::store::open_store(&root)
+            .expect("open business store")
+            .execute(
+                "INSERT INTO business_users (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+                 VALUES ('owner@example.test', 'Owner', 'founder', 1, 1, 1)",
+                [],
+            )
+            .expect("seed sender");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "INSERT INTO communication_routing_state (message_key, route_status, updated_at)
+                 VALUES (?1, 'review_rework', '2026-10-10T00:00:00Z')
+                 ON CONFLICT(message_key) DO UPDATE SET route_status = 'review_rework'",
+                [inbound_key],
+            )
+            .expect("mail waits in rework");
+        // The From address alone is forgeable: without the receiving
+        // server's own pass for the From domain there is no session.
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure unauthenticated mail")
+        );
+        runtime_env::set_runtime_env_value(
+            &root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+            "mx.example.test",
+        )
+        .expect("trust the receiving server");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "UPDATE communication_messages
+                 SET metadata_json = json_set(metadata_json, '$.authenticationResults',
+                     json_array('mx.example.test; dkim=pass header.d=example.test; dmarc=pass action=none header.from=example.test'))
+                 WHERE message_key = ?1",
+                [inbound_key],
+            )
+            .expect("store the server's pass");
+        assert!(
+            configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure mail session")
+        );
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let trusted = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            &root,
+            options
+                .business_os_mcp_command_session
+                .as_deref()
+                .expect("mail session token"),
+        )
+        .expect("live mail session");
+        assert_eq!(trusted["actor"], "owner@example.test");
+        assert_eq!(trusted["role"], "founder");
+        assert_eq!(trusted["communication_session"], true);
     }
 
     #[test]
@@ -44027,7 +44160,7 @@ Use shell tools to create or update these files."
     #[test]
     fn idle_router_safety_poll_reopens_for_pending_durable_queue() {
         let root = temp_root("ctox-idle-router-pending-safety-poll");
-        channels::create_queue_task(
+        let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Pending safety-poll work".to_string(),
@@ -44044,23 +44177,54 @@ Use shell tools to create or update these files."
         .expect("create pending queue task");
         let settings = BTreeMap::new();
         mark_idle_channel_router_pass(&root, &settings);
-        {
-            let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.as_mut().expect("idle router gate").last_idle_pass = Instant::now()
-                - Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS + 1);
+        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+        let db_path = crate::paths::core_db(&root);
+
+        for idle_seconds in [31, 3599] {
+            {
+                let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                guard.as_mut().expect("idle router gate").last_idle_pass =
+                    Instant::now() - Duration::from_secs(idle_seconds);
+            }
+            channels::reset_channel_db_open_count_for_tests(&db_path);
+            assert!(
+                should_skip_idle_channel_router_tick(&root, &settings),
+                "unchanged state must stay asleep before the hourly safety deadline"
+            );
+            assert_eq!(
+                channels::channel_db_open_count_for_tests(&db_path),
+                0,
+                "unchanged idle checks must not reopen SQLite to poll durable work"
+            );
         }
 
+        {
+            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = guard.as_mut().expect("idle router gate");
+            let now = Instant::now();
+            previous.last_idle_pass = now - Duration::from_secs(3600);
+            assert!(
+                !channel_router_idle_gate_matches(
+                    previous,
+                    &root,
+                    &previous.source_stamp,
+                    &settings,
+                    now,
+                ),
+                "the unchanged gate must expire exactly at the hourly deadline"
+            );
+        }
         assert!(
             !should_skip_idle_channel_router_tick(&root, &settings),
-            "pending durable work must wake an unchanged idle router after the bounded safety poll"
+            "pending durable work must reopen the router at the hourly safety deadline"
         );
-        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-        assert!(
-            gate.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_none(),
-            "the stale idle gate must be cleared before durable dispatch"
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("expired idle gate must allow routing");
+        assert_eq!(
+            route_status_for(&root, &task.message_key),
+            "leased",
+            "the expired gate must allow real durable dispatch without a separate safety poll"
         );
 
         let _ = std::fs::remove_dir_all(root);

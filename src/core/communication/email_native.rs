@@ -296,13 +296,8 @@ fn registered_account_settings(
     Ok(settings)
 }
 
-fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
-    let email = setting(settings, "CTO_EMAIL_ADDRESS");
-    if email.is_empty() {
-        return Ok(None);
-    }
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let mut args = vec!["sync".to_string(), "--email".to_string(), email.clone()];
+fn sync_args_from_settings(settings: &BTreeMap<String, String>, email: &str) -> Vec<String> {
+    let mut args = vec!["sync".to_string(), "--email".to_string(), email.to_string()];
     if let Some(provider) = settings
         .get("CTO_EMAIL_PROVIDER")
         .map(|value| value.trim())
@@ -351,6 +346,144 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
             args.push(value.to_string());
         }
     }
+    args
+}
+
+/// Feasibility probe for the DKIM trust anchor (security review 10.10.2026):
+/// fetches the MIME of the newest stored inbound mails of a registered EWS
+/// account and verifies their DKIM signatures in memory. It returns one
+/// aggregate row per signature; no MIME, header value or address leaves the
+/// process and nothing is written.
+pub(crate) fn dkim_probe_registered_account(
+    root: &Path,
+    address: &str,
+    limit: usize,
+) -> Result<Value> {
+    let settings = registered_account_settings(root, address, limit.clamp(1, 50))?;
+    let email = setting(&settings, "CTO_EMAIL_ADDRESS");
+    let args = sync_args_from_settings(&settings, &email);
+    let runtime = runtime_from_settings(root, &settings);
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let request = AdapterSyncCommandRequest {
+        db_path: db_path.as_path(),
+        passthrough_args: &args,
+        skip_flags: &["--db", "--channel"],
+    };
+    let options = sync_options_from_args(root, &runtime, &request)?;
+    anyhow::ensure!(
+        matches!(options.provider.as_str(), "ews" | "owa"),
+        "dkim probe supports EWS accounts only"
+    );
+    let client = EwsClient::from_options(&options)?;
+    let account_key = format!("email:{}", options.email.trim().to_ascii_lowercase());
+    let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut stmt = conn.prepare(
+        "SELECT message_key, remote_id FROM communication_messages
+         WHERE account_key = ?1 AND channel = 'email' AND direction = 'inbound'
+         ORDER BY observed_at DESC LIMIT ?2",
+    )?;
+    let mails = stmt
+        .query_map(
+            rusqlite::params![account_key, limit.clamp(1, 50) as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let authenticator = mail_auth::MessageAuthenticator::new_system_conf()
+        .map_err(|error| anyhow!("dns resolver: {error}"))?;
+    let tokio = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let mut rows = Vec::new();
+    for (message_key, remote_id) in mails {
+        let body = format!(
+            r#"<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:IncludeMimeContent>true</t:IncludeMimeContent></m:ItemShape><m:ItemIds><t:ItemId Id="{}"/></m:ItemIds>"#,
+            xml_escape(&remote_id)
+        );
+        let mime = client.request("GetItem", "", &body).and_then(|xml| {
+            let document = Document::parse(&xml).context("invalid EWS GetItem response")?;
+            let encoded = document
+                .descendants()
+                .find(|node| node.is_element() && node.tag_name().name() == "MimeContent")
+                .and_then(|node| node.text())
+                .context("EWS returned no MimeContent")?
+                .split_whitespace()
+                .collect::<String>();
+            BASE64_STANDARD
+                .decode(encoded)
+                .context("MimeContent is not valid base64")
+        });
+        let mime = match mime {
+            Ok(mime) => mime,
+            Err(error) => {
+                rows.push(json!({"message_key": message_key, "result": "fetch_error",
+                    "reason": error.to_string().chars().take(120).collect::<String>()}));
+                continue;
+            }
+        };
+        let Some(message) = mail_auth::AuthenticatedMessage::parse(&mime) else {
+            rows.push(json!({"message_key": message_key, "result": "unparsable"}));
+            continue;
+        };
+        let from_domains = message
+            .from
+            .iter()
+            .filter_map(|from| {
+                from.rsplit_once('@')
+                    .map(|(_, domain)| domain.to_ascii_lowercase())
+            })
+            .collect::<Vec<_>>();
+        let outputs = tokio.block_on(authenticator.verify_dkim(&message));
+        if outputs.is_empty() {
+            rows.push(json!({"message_key": message_key, "result": "no_signature",
+                "from_headers": message.from.len()}));
+            continue;
+        }
+        for output in outputs {
+            let (result, reason) = match output.result() {
+                mail_auth::DkimResult::Pass => ("pass", String::new()),
+                mail_auth::DkimResult::Neutral(error) => ("neutral", error.to_string()),
+                mail_auth::DkimResult::Fail(error) => ("fail", error.to_string()),
+                mail_auth::DkimResult::PermError(error) => ("permerror", error.to_string()),
+                mail_auth::DkimResult::TempError(error) => ("temperror", error.to_string()),
+                mail_auth::DkimResult::None => ("none", String::new()),
+            };
+            let signature = output.signature();
+            let d = signature
+                .map(|sig| sig.d.to_ascii_lowercase())
+                .unwrap_or_default();
+            let headers = signature
+                .map(|sig| {
+                    sig.h
+                        .iter()
+                        .map(|h| h.to_ascii_lowercase())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            rows.push(json!({
+                "message_key": message_key,
+                "d": d,
+                "s": signature.map(|sig| sig.s.clone()).unwrap_or_default(),
+                "result": result,
+                "reason": reason,
+                "from_headers": message.from.len(),
+                "aligned": !d.is_empty() && from_domains.iter().any(|domain| domain == &d || domain.ends_with(&format!(".{d}"))),
+                "has_l": signature.is_some_and(|sig| sig.l > 0),
+                "h_has_from": headers.iter().any(|h| h == "from"),
+                "h_has_date": headers.iter().any(|h| h == "date"),
+                "h_has_to": headers.iter().any(|h| h == "to"),
+            }));
+        }
+    }
+    Ok(json!({"ok": true, "signatures": rows}))
+}
+
+fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
+    let email = setting(settings, "CTO_EMAIL_ADDRESS");
+    if email.is_empty() {
+        return Ok(None);
+    }
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let args = sync_args_from_settings(settings, &email);
     let runtime = runtime_from_settings(root, settings);
     let request = AdapterSyncCommandRequest {
         db_path: db_path.as_path(),
@@ -963,6 +1096,43 @@ fn store_provider_message(
 ) -> Result<bool> {
     let message_key = message_key_from_remote(account_key, &item.folder_hint, &item.remote_id);
     if known_communication_message(conn, &message_key)? {
+        // Mails stored before intake kept the Authentication-Results get them
+        // on the next poll; a stored value is never replaced.
+        if matches!(options.provider.as_str(), "ews" | "owa") {
+            if let Some(trust) = item
+                .metadata
+                .get("trustHeaders")
+                .filter(|value| value["present"] == true)
+            {
+                conn.execute(
+                    r#"UPDATE communication_messages
+                       SET metadata_json = json_set(metadata_json, '$.trustHeaders', json(?1))
+                       WHERE message_key = ?2 AND channel = 'email' AND account_key = ?3
+                         AND remote_id = ?4 AND json_valid(metadata_json)
+                         AND json_type(metadata_json, '$.trustHeaders') IS NULL"#,
+                    rusqlite::params![trust.to_string(), message_key, account_key, item.remote_id],
+                )?;
+            }
+            if let Some(results) = item
+                .metadata
+                .get("authenticationResults")
+                .filter(|value| value.as_array().is_some_and(|list| !list.is_empty()))
+            {
+                conn.execute(
+                    r#"UPDATE communication_messages
+                       SET metadata_json = json_set(metadata_json, '$.authenticationResults', json(?1))
+                       WHERE message_key = ?2 AND channel = 'email' AND account_key = ?3
+                         AND remote_id = ?4 AND json_valid(metadata_json)
+                         AND json_type(metadata_json, '$.authenticationResults') IS NULL"#,
+                    rusqlite::params![
+                        results.to_string(),
+                        message_key,
+                        account_key,
+                        item.remote_id,
+                    ],
+                )?;
+            }
+        }
         // Older EWS polls persisted envelopes without bodies. Enrich those rows
         // in place rather than replaying the upsert/refresh path, which would
         // overwrite read state, routing metadata and thread customization.
@@ -3435,6 +3605,7 @@ fn list_ews_folder(
 <t:FieldURI FieldURI="message:InternetMessageId"/>
 <t:FieldURI FieldURI="item:InReplyTo"/>
 <t:FieldURI FieldURI="message:References"/>
+<t:FieldURI FieldURI="item:InternetMessageHeaders"/>
 </t:AdditionalProperties></m:ItemShape><m:ItemIds>{item_ids}</m:ItemIds>"#,
         );
         let hydrated = (|| -> Result<Vec<MailboxMessage>> {
@@ -3673,8 +3844,121 @@ fn normalize_ews_mail_item(
             "inReplyTo": descendant_text(node, "InReplyTo").unwrap_or_default(),
             "references": descendant_text(node, "References").unwrap_or_default(),
             "attachments": ews_file_attachment_metadata(node),
+            "authenticationResults": ews_authentication_results(node),
+            "trustHeaders": ews_trust_headers(node),
         }),
     })
+}
+
+/// `Authentication-Results` headers as delivered, for sender authentication
+/// (`communication::sender_authentication`). Other headers are not kept.
+fn ews_authentication_results(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    node.children()
+        .find(|child| child.is_element() && child.tag_name().name() == "InternetMessageHeaders")
+        .map(|headers| {
+            headers
+                .children()
+                .filter(|header| {
+                    header.is_element()
+                        && header.tag_name().name() == "InternetMessageHeader"
+                        && header
+                            .attribute("HeaderName")
+                            .is_some_and(|name| name.eq_ignore_ascii_case("Authentication-Results"))
+                })
+                .filter_map(|header| header.text())
+                .map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Headers a receiving system may use to vouch for a sender, kept to decide
+/// which trust anchor an instance's mail path offers: every header name, and
+/// the values of the few authentication headers. Bodies of other headers are
+/// not kept.
+const EWS_TRUST_HEADER_VALUES: [&str; 6] = [
+    "ARC-Authentication-Results",
+    "Received-SPF",
+    "X-MS-Exchange-Organization-AuthAs",
+    "X-MS-Exchange-Organization-AuthSource",
+    "X-MS-Exchange-Organization-SCL",
+    "X-Forefront-Antispam-Report",
+];
+
+fn ews_trust_headers(node: roxmltree::Node<'_, '_>) -> Value {
+    let Some(headers) = node
+        .children()
+        .find(|child| child.is_element() && child.tag_name().name() == "InternetMessageHeaders")
+    else {
+        return json!({"present": false});
+    };
+    let mut names = BTreeSet::new();
+    let mut values = serde_json::Map::new();
+    for header in headers
+        .children()
+        .filter(|header| header.is_element() && header.tag_name().name() == "InternetMessageHeader")
+    {
+        let Some(name) = header.attribute("HeaderName") else {
+            continue;
+        };
+        names.insert(name.to_ascii_lowercase());
+        if let Some(wanted) = EWS_TRUST_HEADER_VALUES
+            .iter()
+            .find(|wanted| wanted.eq_ignore_ascii_case(name))
+        {
+            let value = redact_ip_addresses(
+                &header
+                    .text()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            if let Some(list) = values
+                .entry(wanted.to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+            {
+                list.push(json!(value));
+            }
+        }
+    }
+    json!({
+        "present": true,
+        "names": names.into_iter().collect::<Vec<_>>(),
+        "values": values,
+    })
+}
+
+/// Antispam and SPF headers name the connecting IP; it is not needed to judge
+/// the trust anchor and is not stored.
+fn redact_ip_addresses(value: &str) -> String {
+    let is_ip_char = |ch: char| ch.is_ascii_hexdigit() || ch == ':' || ch == '.';
+    let mut out = String::with_capacity(value.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        let core = run.trim_matches(|ch| ch == ':' || ch == '.');
+        if core.len() >= 3 && core.parse::<std::net::IpAddr>().is_ok() {
+            let start = run.find(core).unwrap_or(0);
+            out.push_str(&run[..start]);
+            out.push_str("<ip>");
+            out.push_str(&run[start + core.len()..]);
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for ch in value.chars() {
+        if is_ip_char(ch) {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 /// File attachments listed by GetItem (`item:Attachments`). Inline images of
@@ -5897,6 +6181,62 @@ mod tests {
     }
 
     #[test]
+    fn ews_resync_adds_missing_authentication_results_once() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+        let mut options = empty_options();
+        options.email = "agent@example.test".into();
+        options.provider = "ews".into();
+        let account = "email:agent@example.test";
+        // Stored before intake captured the headers: no key at all.
+        let mut old = ews_recovery_message("Stored text")?;
+        old.metadata
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("metadata object"))?
+            .remove("authenticationResults");
+        let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, old
+        )?);
+        let stored = |conn: &rusqlite::Connection| -> anyhow::Result<serde_json::Value> {
+            let raw: String = conn.query_row(
+                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        assert!(stored(&conn)?.get("authenticationResults").is_none());
+        let with_results = |value: &str| -> anyhow::Result<super::MailboxMessage> {
+            let mut item = ews_recovery_message("New text")?;
+            item.metadata["authenticationResults"] = serde_json::json!([value]);
+            Ok(item)
+        };
+        super::store_provider_message(
+            &mut conn,
+            &options,
+            account,
+            with_results("mx.example.test; dmarc=pass header.from=example.test")?,
+        )?;
+        assert_eq!(
+            stored(&conn)?["authenticationResults"],
+            serde_json::json!(["mx.example.test; dmarc=pass header.from=example.test"])
+        );
+        // A later poll never replaces what was captured.
+        super::store_provider_message(
+            &mut conn,
+            &options,
+            account,
+            with_results("mx.example.test; dmarc=fail header.from=example.test")?,
+        )?;
+        assert_eq!(
+            stored(&conn)?["authenticationResults"],
+            serde_json::json!(["mx.example.test; dmarc=pass header.from=example.test"])
+        );
+        Ok(())
+    }
+
+    #[test]
     fn ews_resync_preserves_custom_preview_while_hydrating_html() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
@@ -5967,6 +6307,7 @@ mod tests {
                     "item:InReplyTo",
                     "message:References",
                     "message:InternetMessageId",
+                    "item:InternetMessageHeaders",
                 ] {
                     assert!(body.contains(field));
                 }
@@ -6002,6 +6343,48 @@ mod tests {
         assert!(!mail.seen);
         assert!(mail.has_attachments);
         assert_eq!(mail.external_created_at, "2026-09-12T08:00:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn ews_keeps_only_the_authentication_results_headers() -> anyhow::Result<()> {
+        let xml = r#"<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+<t:InternetMessageHeaders>
+<t:InternetMessageHeader HeaderName="Received">from mx.example.test</t:InternetMessageHeader>
+<t:InternetMessageHeader HeaderName="Authentication-Results">mx.thesen.example;
+ dmarc=pass action=none header.from=metric-space.ai</t:InternetMessageHeader>
+<t:InternetMessageHeader HeaderName="authentication-results">attacker.example; dmarc=pass</t:InternetMessageHeader>
+</t:InternetMessageHeaders>
+</t:Message>"#;
+        let document = roxmltree::Document::parse(xml)?;
+        assert_eq!(
+            super::ews_authentication_results(document.root_element()),
+            vec![
+                "mx.thesen.example; dmarc=pass action=none header.from=metric-space.ai",
+                "attacker.example; dmarc=pass",
+            ]
+        );
+        let without = roxmltree::Document::parse(
+            r#"<t:Message xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types"/>"#,
+        )?;
+        assert!(super::ews_authentication_results(without.root_element()).is_empty());
+        let trust = super::ews_trust_headers(document.root_element());
+        assert_eq!(
+            trust["names"],
+            serde_json::json!(["authentication-results", "received"])
+        );
+        assert_eq!(trust["present"], true);
+        assert!(trust["values"].get("Received").is_none());
+        assert_eq!(
+            super::ews_trust_headers(without.root_element())["present"],
+            false
+        );
+        assert_eq!(
+            super::redact_ip_addresses(
+                "CIP:192.0.2.10;CTRY:DE;IPV:NLI; client-ip=2001:db8::1; SCL:1; face"
+            ),
+            "CIP:<ip>;CTRY:DE;IPV:NLI; client-ip=<ip>; SCL:1; face"
+        );
         Ok(())
     }
 

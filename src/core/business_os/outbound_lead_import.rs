@@ -160,7 +160,9 @@ pub(super) fn lead_document(
         "sellify_status": "not_started",
         "task_id": "",
         "command_id": "",
+        "contacts": [],
         "selected_contact_ids": [],
+        "evidence": [],
         "data": {
             "herkunft_import": herkunft,
             "statistische_kampagne": request.campaign,
@@ -357,6 +359,52 @@ pub(super) fn import_and_research(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lead the browser cannot save blocks the whole collection: its first
+    /// update failed the schema check (422, "required field 'evidence' is
+    /// missing"), was retried forever and kept every lead query from becoming
+    /// ready (thesen 10.10.2026). Imported leads carry every required field.
+    #[test]
+    fn imported_lead_has_every_field_the_lead_schema_requires() {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../apps/business-os/customer-modules/outbound-lead-generation/collections.schema.json"
+        ))
+        .expect("lead schema");
+        let leads = schema
+            .pointer("/collections/outbound_lead_generation_leads/schema")
+            .or_else(|| {
+                schema
+                    .get("collections")
+                    .and_then(Value::as_array)
+                    .and_then(|list| {
+                        list.iter()
+                            .find(|entry| entry["name"] == "outbound_lead_generation_leads")
+                    })
+                    .and_then(|entry| entry.get("schema"))
+            })
+            .or_else(|| schema.pointer("/outbound_lead_generation_leads/schema"))
+            .or_else(|| schema.pointer("/outbound_lead_generation_leads"))
+            .expect("lead collection schema");
+        let request = request();
+        let document = lead_document(&request, &request.rows[0], 0, 1);
+        for field in leads["required"].as_array().expect("required list") {
+            let field = field.as_str().expect("field name");
+            assert!(
+                document.get(field).is_some(),
+                "imported lead lacks `{field}`"
+            );
+            if let Some(kind) = leads.pointer(&format!("/properties/{field}/type")) {
+                let ok = match kind.as_str() {
+                    Some("array") => document[field].is_array(),
+                    Some("object") => document[field].is_object(),
+                    Some("string") => document[field].is_string(),
+                    Some("number") | Some("integer") => document[field].is_number(),
+                    _ => true,
+                };
+                assert!(ok, "imported lead field `{field}` is not of type {kind}");
+            }
+        }
+    }
 
     fn request() -> ImportRequest {
         parse_request(&json!({
