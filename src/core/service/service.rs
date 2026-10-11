@@ -12567,10 +12567,6 @@ struct SpreadsheetAttachmentEvidence {
 const REVIEW_ATTACHMENT_PREVIEW_ROWS: usize = 25;
 const REVIEW_ATTACHMENT_PREVIEW_CHARS: usize = 3000;
 
-/// The files of the mail a reply answers. Same-thread evidence shows only
-/// subject and preview, so a review approved a reply to an Excel request that
-/// named three unrelated companies (10.10.2026). Spreadsheets and text files
-/// are shown with their first rows so the review can compare.
 /// Records created for exactly this mail (lead import with its key). They let
 /// a mail turn state started work and results, and let the review check them.
 fn mail_order_records_block(root: &Path, inbound_message_key: &str) -> String {
@@ -12597,6 +12593,10 @@ fn mail_order_review_evidence(root: &Path, inbound_message_key: &str) -> Vec<Str
         .collect()
 }
 
+/// The files of the mail a reply answers. Same-thread evidence shows only
+/// subject and preview, so a review approved a reply to an Excel request that
+/// named three unrelated companies (10.10.2026). Spreadsheets and text files
+/// are shown with their first rows so the review can compare.
 fn inbound_attachment_review_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String> {
     let Some(inbound_key) = inbound_email_reply_message_key(job)
         .or_else(|| founder_communication_rework_inbound_key(job))

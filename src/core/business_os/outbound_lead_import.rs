@@ -448,10 +448,6 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
 mod tests {
     use super::*;
 
-    /// A lead the browser cannot save blocks the whole collection: its first
-    /// update failed the schema check (422, "required field 'evidence' is
-    /// missing"), was retried forever and kept every lead query from becoming
-    /// ready (thesen 10.10.2026). Imported leads carry every required field.
     #[test]
     fn source_message_key_is_an_inbound_mail_key_and_lands_on_the_lead() {
         let mut arguments = json!({
@@ -482,6 +478,10 @@ mod tests {
         assert!(render_records_for_mail(&[]).is_empty());
     }
 
+    /// A lead the browser cannot save blocks the whole collection: its first
+    /// update failed the schema check (422, "required field 'evidence' is
+    /// missing"), was retried forever and kept every lead query from becoming
+    /// ready (thesen 10.10.2026). Imported leads carry every required field.
     #[test]
     fn imported_lead_has_every_field_the_lead_schema_requires() {
         let schema: Value = serde_json::from_str(include_str!(
