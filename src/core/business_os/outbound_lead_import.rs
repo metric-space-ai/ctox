@@ -386,28 +386,154 @@ pub(crate) fn records_for_source_message(
 
 const MAIL_RECORD_TEXT_LIMIT: usize = 6000;
 
+/// Whether the record's research run has ended with its results written
+/// back. The app parks such a lead in `needs_review` until a person checks
+/// it; read raw, that status made the mail agent answer "die Recherche laeuft
+/// noch" while both leads held their results (thesen, 11.10.2026). Ended is
+/// not complete: on thesen every such lead also has fields without a match or
+/// still open, which `field_summary_for_mail` names.
+pub(crate) fn research_finished(record: &Value) -> bool {
+    matches!(
+        record["research_status"].as_str().unwrap_or(""),
+        "needs_review" | "done" | "completed" | "researched" | "validated"
+    )
+}
+
+fn research_state_for_mail(record: &Value) -> String {
+    let status = record["research_status"].as_str().unwrap_or("-");
+    if research_finished(record) {
+        return format!(
+            "Lauf beendet, Ergebnisse unten; {}",
+            field_summary_for_mail(record)
+        );
+    }
+    match status {
+        "new" => "nicht gestartet".to_string(),
+        "queued" | "running" | "researching" | "in_progress" => "laeuft noch".to_string(),
+        "failed" => "fehlgeschlagen".to_string(),
+        other => format!("Status {other}"),
+    }
+}
+
+/// Counts of the research's field states and the fields still open, from the
+/// lead's `field_status` (verified / no_match / action_required).
+fn field_summary_for_mail(record: &Value) -> String {
+    let Some(fields) = record["field_status"].as_object() else {
+        return "Feldstatus unbekannt".to_string();
+    };
+    let (mut verified, mut no_match, mut open) = (0, 0, Vec::new());
+    for (key, state) in fields {
+        match state["status"].as_str().unwrap_or("") {
+            "verified" | "ok" => verified += 1,
+            "no_match" | "unsupported" => no_match += 1,
+            _ => open.push(key.as_str()),
+        }
+    }
+    let open_text = if open.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", open.join(", "))
+    };
+    format!(
+        "{verified} Felder belegt, {no_match} ohne Treffer, {} offen{open_text}",
+        open.len()
+    )
+}
+
+fn validation_state_for_mail(record: &Value) -> String {
+    match record["validation_status"].as_str().unwrap_or("-") {
+        "pending" => "Sichtpruefung durch das Team offen".to_string(),
+        "validated" => "vom Team geprueft".to_string(),
+        other => format!("Status {other}"),
+    }
+}
+
+/// Order of the order-record fields in the mail block: what a reply names
+/// first. Unknown fields keep their research order after these.
+fn mail_field_rank(field: &str) -> usize {
+    const ORDER: [&str; 16] = [
+        "firma_name",
+        "firma_geschaeftsfuehrung",
+        "umsatz",
+        "mitarbeiter",
+        "firma_besucheranschrift",
+        "firma_anschrift",
+        "firma_plz",
+        "firma_ort",
+        "firma_telefon",
+        "firma_email",
+        "firma_domain",
+        "firma_geschaeftstaetigkeit",
+        "firma_prokura",
+        "person_vorname",
+        "person_nachname",
+        "person_funktion",
+    ];
+    match field {
+        "firma_homepage_fact_sheet" => ORDER.len() + 2,
+        _ => ORDER
+            .iter()
+            .position(|known| *known == field)
+            .unwrap_or(ORDER.len() + 1),
+    }
+}
+
+/// A source as a short readable address: no query or map viewport, at most
+/// 90 characters. Map links and search URLs ran to 300 characters and used up
+/// the block's budget.
+fn short_source(source: &str) -> String {
+    let source = source.trim();
+    let end = source
+        .find(['?', '#'])
+        .into_iter()
+        .chain(source.find("/@"))
+        .min()
+        .unwrap_or(source.len());
+    let source = &source[..end];
+    if source.chars().count() <= 90 {
+        source.to_string()
+    } else {
+        format!("{}...", source.chars().take(87).collect::<String>())
+    }
+}
+
 /// The records as a bounded, quotable block for the mail prompt.
 pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
     if records.is_empty() {
         return String::new();
     }
     let mut text = String::from(
-        "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern):\n",
+        "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern). \
+         Steht bei einem Datensatz \"Recherche: Lauf beendet\", liegen seine Ergebnisse vor: die Antwort nennt sie mit Quelle, benennt \
+         die offenen Felder als offen und behauptet nicht, die Recherche laufe noch oder Ergebnisse kaemen spaeter.\n",
     );
+    let share = MAIL_RECORD_TEXT_LIMIT.saturating_sub(text.len()) / records.len().max(1);
     for record in records {
+        let mut part = String::new();
         let evidence = record["evidence"].as_array().map(Vec::len).unwrap_or(0);
-        text.push_str(&format!(
-            "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche {}, Pruefung {}, {} Belege\n",
+        part.push_str(&format!(
+            "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche: {}, Pruefung: {}, {} Belege\n",
             record["name"].as_str().unwrap_or("?"),
             record["id"].as_str().unwrap_or("?"),
             record["campaign"].as_str().unwrap_or(""),
             record["website"].as_str().unwrap_or("-"),
             record["city"].as_str().unwrap_or("-"),
-            record["research_status"].as_str().unwrap_or("-"),
-            record["validation_status"].as_str().unwrap_or("-"),
+            research_state_for_mail(record),
+            validation_state_for_mail(record),
             evidence,
         ));
-        for item in record["evidence"].as_array().into_iter().flatten().take(40) {
+        // One line per (field, value) with up to two of its sources. The
+        // research stores one evidence entry per source, with the address in
+        // `source_url` (thesen) or in a `sources` list.
+        let mut lines: Vec<((String, String), Vec<String>)> = Vec::new();
+        for item in record["evidence"].as_array().into_iter().flatten() {
+            let key = (
+                item["field_key"].as_str().unwrap_or("?").to_string(),
+                item["value"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| item["value"].to_string()),
+            );
             let sources = item["sources"]
                 .as_array()
                 .into_iter()
@@ -418,26 +544,58 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
                         .map(str::to_owned)
                         .or_else(|| source["url"].as_str().map(str::to_owned))
                 })
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(", ");
-            text.push_str(&format!(
-                "    {}: {}{}\n",
-                item["field_key"].as_str().unwrap_or("?"),
-                item["value"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| item["value"].to_string()),
+                .chain(item["source_url"].as_str().map(str::to_owned))
+                .filter(|source| !source.trim().is_empty());
+            let index = match lines.iter().position(|(existing, _)| *existing == key) {
+                Some(index) => index,
+                None if lines.len() < 200 => {
+                    lines.push((key, Vec::new()));
+                    lines.len() - 1
+                }
+                None => continue,
+            };
+            let line = &mut lines[index].1;
+            for source in sources {
+                if line.len() < 2 && !line.contains(&source) {
+                    line.push(source);
+                }
+            }
+        }
+        // Key facts first, long free text last, so a cut drops the least
+        // useful lines (thesen 11.10.2026: revenue sat late and was cut).
+        lines.sort_by_key(|((field, _), _)| mail_field_rank(field));
+        for ((field, value), sources) in &lines {
+            part.push_str(&format!(
+                "    {field}: {value}{}\n",
                 if sources.is_empty() {
                     String::new()
                 } else {
-                    format!(" (Quelle: {sources})")
+                    format!(
+                        " (Quelle: {})",
+                        sources
+                            .iter()
+                            .map(|source| short_source(source))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 },
             ));
         }
-        if text.len() > MAIL_RECORD_TEXT_LIMIT {
-            break;
+        // Every record gets the same share of the budget, cut at a line, so a
+        // long first record cannot crowd out the next one (thesen 11.10.2026:
+        // the second lead ended before its management and revenue).
+        if part.len() > share {
+            let mut cut = 0;
+            for (index, _) in part.match_indices('\n') {
+                if index + 1 > share {
+                    break;
+                }
+                cut = index + 1;
+            }
+            part.truncate(cut);
+            part.push_str("    (weitere Felder gekuerzt)\n");
         }
+        text.push_str(&part);
     }
     let mut text: String = text.chars().take(MAIL_RECORD_TEXT_LIMIT).collect();
     text.push('\n');
@@ -476,6 +634,55 @@ mod tests {
             rendered.contains("firma_umsatz: 12 Mio (Quelle: https://register.example/hedinger)")
         );
         assert!(render_records_for_mail(&[]).is_empty());
+        // A finished research waiting for a person's check is reported as
+        // finished, with each result once (thesen, 11.10.2026).
+        let rendered = render_records_for_mail(&[json!({
+            "id": "lead_h", "name": "Hedinger GmbH & Co. KG", "research_status": "needs_review",
+            "validation_status": "pending", "evidence": [
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://northdata.example/h"},
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://register.example/h"},
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://third.example/h"}],
+            "field_status": {"umsatz": {"status": "verified"}, "wz_code": {"status": "no_match"},
+                "mitarbeiter": {"status": "action_required"}}
+        })]);
+        assert!(rendered.contains(
+            "Recherche: Lauf beendet, Ergebnisse unten; 1 Felder belegt, 1 ohne Treffer, 1 offen (mitarbeiter), Pruefung: Sichtpruefung durch das Team offen"
+        ));
+        assert!(!rendered.contains("needs_review"));
+        assert_eq!(rendered.matches("umsatz: 140,6 Mio. EUR").count(), 1);
+        assert!(rendered.contains(
+            "umsatz: 140,6 Mio. EUR (Quelle: https://northdata.example/h, https://register.example/h)"
+        ));
+        // A long first record cannot crowd out the second one, and map links
+        // are shortened to their place.
+        let long_values: Vec<Value> = (0..200)
+            .map(|index| json!({"field_key": format!("feld_{index}"), "value": "x".repeat(60),
+                "source_url": format!("https://www.google.com/maps/place/A/@48.7,9.2,12z/data={}", "y".repeat(200))}))
+            .collect();
+        let two = render_records_for_mail(&[
+            json!({"name": "Erste GmbH", "research_status": "needs_review", "evidence": long_values}),
+            json!({"name": "Zweite GmbH", "research_status": "needs_review", "evidence": [
+                {"field_key": "umsatz", "value": "103,1 Mio.", "source_url": "https://register.example/z?x=1"}]}),
+        ]);
+        assert!(two.contains("umsatz: 103,1 Mio. (Quelle: https://register.example/z)"));
+        // Revenue stored after many other fields still survives the cut.
+        let mut late = long_values_for_rank();
+        late.push(json!({"field_key": "umsatz", "value": "140,6 Mio.", "source_url": "https://n.example/h"}));
+        let ranked = render_records_for_mail(&[
+            json!({"name": "A", "research_status": "needs_review", "evidence": late.clone()}),
+            json!({"name": "B", "research_status": "needs_review", "evidence": late}),
+        ]);
+        assert_eq!(
+            ranked
+                .matches("umsatz: 140,6 Mio. (Quelle: https://n.example/h)")
+                .count(),
+            2
+        );
+        assert!(two.contains("(weitere Felder gekuerzt)"));
+        assert!(two.contains("(Quelle: https://www.google.com/maps/place/A)"));
+        assert!(two.len() <= MAIL_RECORD_TEXT_LIMIT + 1);
+        let running = render_records_for_mail(&[json!({"name": "X", "research_status": "queued"})]);
+        assert!(running.contains("Recherche: laeuft noch"));
     }
 
     /// A lead the browser cannot save blocks the whole collection: its first
@@ -607,5 +814,11 @@ mod tests {
         assert!(!serde_json::to_string(&payload)
             .unwrap()
             .contains("lead_old"));
+    }
+
+    fn long_values_for_rank() -> Vec<Value> {
+        (0..60)
+            .map(|index| json!({"field_key": format!("feld_{index}"), "value": "x".repeat(60)}))
+            .collect()
     }
 }

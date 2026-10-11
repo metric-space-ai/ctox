@@ -15549,7 +15549,7 @@ mod tests {
                 .is_empty()
         );
         let rendered = super::super::outbound_lead_import::render_records_for_mail(&own);
-        assert!(rendered.contains("Eigene GmbH") && rendered.contains("Recherche new"));
+        assert!(rendered.contains("Eigene GmbH") && rendered.contains("Recherche: nicht gestartet"));
         assert!(!rendered.contains("Fremde GmbH"));
         Ok(())
     }
