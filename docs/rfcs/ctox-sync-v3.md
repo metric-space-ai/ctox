@@ -198,6 +198,197 @@ Fixes verursacht und von weniger Daten (S4) profitiert.
 IndexedDB-Bestände werden bei Vertragswechsel verworfen und neu geladen — erst nachdem lokal
 gestufte, noch nicht synchronisierte Schreibvorgänge abgeflossen sind.
 
+
+### 5.1 S1-Gate-Plan: Modulgraph und Inventare (11.10.2026)
+
+**Plan zur Gate-Prüfung, vor der ersten S1-Code-Scheibe.** S0-Werkzeuge aus
+#585/#597/#598/#600 sind auf main. S1 läuft unabhängig vom noch offenen
+kontinuierlichen 24-h-Nachweis. Diese Scheibe ändert ausschließlich die RFC;
+die folgenden Grenzen sind vorgeschlagene S1-Regressionsbudgets, keine neuen
+Messungen und keine bereits erfüllten Produktziele.
+
+#### Lieferumfang und Reihenfolge
+
+| Scheibe | Ergebnis | Gate |
+|---|---|---|
+| S1-A Modulgraph erzeugen | Deterministisches Manifest der Shell-, Sync- und App-Einstiege einschließlich transitiver ESM-, Worker-, CSS- und sonstiger Asset-Abhängigkeiten; bestehende Loader zunächst weiter bedienen. | Zwei saubere Generierungen ergeben dieselben Bytes; keine Zeit-, Pfad-, Host- oder Zufallsanteile. Fehlende Abhängigkeit, mehrdeutiger Einstieg oder nicht deklarierter dynamischer Import scheitert mit Quellort. |
+| S1-B Modulgraph konsumieren | Import-Map bzw. generierte URLs aus Inhaltshashes; ein stabiler Bootstrap wählt genau ein Manifest einer veröffentlichten Shell-/Modulrevision. Alle bisherigen globalen `?v=`-/Generationsstempel im deklarierten Umfang entfallen. | Warm-/Kaltladen, Update und Rollback laden jeweils einen vollständigen Graphen; Änderung eines Blatts invalidiert genau seine betroffenen transitiven Verbraucher. Unabhängige Teilgraphen behalten ihre Identität. Kein Commit ist mehr allein zum Stempelwechsel nötig. |
+| S1-C Kanonisches Register | Ein Register für Befehle, Sammlungen, Schemata und deklarierte Verbraucher; daraus native/browserseitige Inventare, statische Allowlisten, Schemadarstellungen und menschenlesbare Übersicht erzeugen. | Jeder bisherige Eintrag hat Quelle, Verbraucher und Migrationsstatus; fehlende, doppelte oder widersprüchliche IDs/Referenzen scheitern. Beide Verbraucher werden gemeinsam regeneriert. Kein zweites handgepflegtes Inventar. |
+| S1-D Verbraucher und Release-Prüfung | Bestehende Verbraucher schrittweise auf die erzeugten Artefakte umstellen; driftfreie Regenerierung in der vorhandenen Release-/CI-Prüfung erzwingen. | „generiert = eingecheckt“ auf dem finalen Head; absichtlich veränderte Ausgabe schlägt fehl. Bestehende Wire-, Schema-, Rechte- und Shell-Gates bleiben wirksam. S0-Vorher/Nachher im selben PR. |
+
+Jede Scheibe bleibt ein PR von höchstens 70 Minuten Implementierungsarbeit mit
+`sync-v3:S1` vom RFC-Owner. Scope, betroffene Verbraucher und noch verbleibende
+Legacy-Einstiege stehen im PR. S1 endet erst mit vollständiger Abdeckung des
+deklarierten Graphen und Registers; ein teilweise generiertes Verzeichnis
+erfüllt das Abschlussgate nicht.
+
+**Modulgraph-Vertrag.** Ein Knoten bindet kanonischen Quellpfad, exakte
+Asset-Bytes und deklarierte Abhängigkeiten; die Identität bindet auch deren
+Inhalte. Zyklen werden als deterministisch geordnete Komponenten behandelt,
+nicht über rekursive, voneinander abhängige Hashes. Der Generator unterscheidet
+Quellhash, erzeugten Asset-Hash und Manifest-Hash. Nicht statisch auflösbare
+Importziele brauchen eine endliche deklarierte Menge oder einen ausdrücklich
+versionierten Erweiterungseinstieg; sie werden nie still ausgelassen.
+Reihenfolge, absoluter Build-Pfad und Dateizeit dürfen keine Identität ändern.
+Eine Byteänderung, eine entfernte Abhängigkeit und ein Zyklus sind negative
+bzw. Perturbations-Fixtures. Unbenutzte Assets werden als solche ausgewiesen.
+
+Für runtime-installierte Module wird der Graph aus der jeweiligen zugelassenen
+Modulrevision erzeugt und an sie gebunden; die Installation erfordert keinen
+neuen nativen Compilerlauf. Shell-Pack und Rollback referenzieren vorhandene
+vollständige Graphen. Manifestintegrität ersetzt weder Paket-Signatur noch
+Installations-/Source-View-/Datenrechte. Schema- oder Storage-Generationen sind
+keine Asset-Stempel: ihre Lebenszyklussemantik bleibt bis zur jeweiligen
+Vertragsstufe erhalten. Dieser Wechsel löscht weder IndexedDB noch lokale
+ausstehende Writes.
+
+**Register-Vertrag.** Die bestehende kanonische Wire-Fixture-Pipeline
+(`docs/ctox-rxdb.md`, §7) bleibt erhalten und wird eingebunden; bereits
+kanonische Fixtures werden nicht als zweite Quelle kopiert. Das Register
+verknüpft Befehls-ID/Version, Control-/Queue-Klassifikation, Payload-/Ergebnis-
+Schema, Handler, Sammlungen, Migrationen, Schreiber, Leseverbraucher und
+statische Zugangsdeklarationen. Dynamische Modulbefehle behalten den bestehenden
+nativen, policy-geprüften Erweiterungspfad; ein statisches Inventar darf sie
+nicht pauschal verweigern oder freigeben.
+
+Native und Browser werden aus derselben Schemaquelle versorgt. Jede Sammlung
+führt ihre nativen Import-/Projektions-/sonstigen Schreibpfade mit
+Schema-Version und Validierungspunkt auf, insbesondere `outbound_lead_import`.
+Fehlende Validierung oder mehrfache Schreiber erscheinen als offene S2/S4-Lücke,
+nicht als erfundener erfolgreicher Nachweis. Noch nicht festgelegte Profile,
+Eigentümer und Feldauthorität bleiben ausdrücklich unbekannt mit zuständiger
+Stufe. S1 erzeugt keine Grants, erweitert keine Rechte und ändert keine
+Command-/ACK-Semantik; die Zuordnung wird durch vorhandene Policy-Tests und
+Vorher/Nachher-Inventardiffs geprüft. Geheimnisse, Tokens, Credential-Referenzen
+und private Kontodaten gehören in keines der veröffentlichten Artefakte.
+
+#### S0-Bezug und Messdefinitionen
+
+Die unveränderte Scale-Fixture hat **9.250 Dokumente / 257.848.000 JSON-Bytes**:
+850 Leads, 6.000 Befehle, 400 Queue-Tasks und 2.000 Chats als isolierte
+größenäquivalente Modulsammlungen. Sichtbar werden 20 vollständige 80-KB-Zeilen;
+je Fall gibt es fünf sequenzielle Writes mit echter Master-ACK und unabhängigem
+SQLite-Readback. Gemessen wird über tatsächliche RTCPeerConnections/DataChannels
+mit UDP-Relay **0/300/600 ms RTT**, halber Verzögerung je Richtung und geprüfter
+Delay-Oracle. Das ist keine installierte TURN- oder Outbound-Abnahme.
+
+| Baseline | Werkzeug-Head / gpu3-Lauf | Sichtbar 0/300/600 ms RTT (ms) | ACK-p95 0/300/600 ms RTT (ms) |
+|---|---|---|---|
+| S0-2 (#597) | `355af7aa16ea55b1ac3f8f16911c1eedc640ed31` / `sync-v3-s0-relay-latency-20261010T174613Z` | 5.185,9 / 17.455,2 / 35.775,3 | 205,4 / 4.067,5 / 7.963,7 |
+| S0-3 (#598) | `03a843f80d514dff86eef6aad1aba69f33ee3879` / `sync-v3-s0-phase-rtts-20261010T194728Z` | 5.245,4 / 19.283,2 / 34.973,6 | 236,2 / 4.444,4 / 7.954,9 |
+| S0-4 (#600) | `6bb64615f921993285e14c49dba5f0b20467d9f6` / `sync-v3-s0-resources-20261010T203520Z` | 3.279,4 / 19.389,7 / 38.069,5 | 220,3 / 5.092,5 / 9.234,6 |
+
+Alle drei verwenden den shared native `7e21f6052b633d5efaa85e8c5d6c1b420d527076`,
+Binary-SHA256 `741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba`.
+S0-3 nennt hier **Navigation start → sichtbar**; sein Observer-Boot beginnt
+später. Beim Vergleich bleibt die Messdefinition pro Paar identisch.
+Statische HTTP-Assets liegen außerhalb der Relay-Verzögerung. S1 misst deren
+Requests/Cache-Hits/Bytes zusätzlich separat und schreibt sie nicht den
+DataChannel-Zählern zu. Deren S0-Baseline ist bislang **unbekannt**; S1-A erhebt
+sie vor der Loader-Umstellung.
+
+#### Budgets je S1-Prüfpunkt
+
+Die S0-Läufe sind explorative Einzelmessungen, keine statistischen SLOs.
+Für den mechanischen S1-Umbau gilt: Vorher und Nachher mit denselben Werkzeugen,
+Fixture, Browser-Version, Ressourcenlimits und Relay-Fällen auf der gpu3-Lane.
+Der tatsächliche Native-Head und Binary-Digest stehen in beiden Belegen; bei
+einer nativen Änderung muss auch der Nachher-Binary diesen Head enthalten.
+Die historischen Werte werden niemals als Messung eines neuen main relabelt.
+
+Für Zeit/Heap/IDB/CPU gilt sowohl die untenstehende historische Hülle als auch
+**höchstens +10 % gegenüber dem passenden Vorher-Lauf**, zuzüglich nur der
+ausgewiesenen Messauflösung (CPU: 20 ms bei 100-Hz-/proc-Ablesung).
+Die Hülle ist 110 % des höchsten passenden S0-Wertes, nach oben gerundet.
+Ein Überschreiten bleibt ein Finding; keine selektive Mittelung oder Änderung
+von Fixture/Timeout, um es zu verstecken. Nur ein konkreter Mess-/Umgebungsfehler
+begründet eine Wiederholung mit erhaltenem ersten Ergebnis.
+
+| Prüfpunkt | S0-Ist 0/300/600 ms RTT | vorgeschlagenes S1-Budget / Nachweis |
+|---|---|---|
+| Graph/Register deterministisch | vorher von Hand gepflegte Stempel/Inventare | 0 Byte Drift bei zwei Generierungen; 0 undefinierte Referenzen; 0 still ausgelassene Importe; 0 zusätzliche manuell gepflegte Vertragskopien. |
+| Cache-/Update-/Rollback-Kohärenz | globaler Generationswechsel, Asset-Bytes bisher unbekannt | 0 gemischte Graphrevisionen, 0 stale/missing Assets; Änderung bleibt im betroffenen Teilgraphen. Unverändertes Warm-Reload lädt 0 neue gehashte Asset-Payloads. Bootstrap-Revalidierung separat zählen. Asset-Payload/Request-Zahl im gleichen Kaltfall steigt gegenüber S1-A um höchstens 10 %; keine zusätzliche sequenzielle Loader-Rundreise. |
+| Navigation → sichtbare Daten | Hülle 5.245,4 / 19.389,7 / 38.069,5 ms | ≤ 5.770 / 21.329 / 41.877 ms, zusätzlich Paar-Regel. Keine Readiness-Abkürzung oder leere Liste als Erfolg. |
+| Write → akzeptierter Master-ACK, p95 | Hülle 236,2 / 5.092,5 / 9.234,6 ms | ≤ 260 / 5.602 / 10.159 ms, zusätzlich Paar-Regel; 5/5 gültige Writes je Fall im nativen SQLite bestätigt. Transport-ACK allein zählt nicht. |
+| Browser-Heap peak | S0-4: 28,97 / 25,39 / 38,43 MiB | ≤ 31,87 / 27,94 / 42,28 MiB, zusätzlich Paar-Regel; dieselben CDP-Samples, kein erzwungener GC. |
+| IndexedDB am Ende | S0-4: 5,104 / 5,340 / 5,604 MiB | ≤ 5,62 / 5,88 / 6,17 MiB, zusätzlich Paar-Regel; kein Vollreplikat der 257,8 MB im Demand-Cache. 20-s-Idle-Zuwachs ≤ 8 KiB (S0: 4.860 / 4.146 / 0 B); ausstehende Writes bleiben erhalten. |
+| Native Server-CPU gesamt | S0-4: 2.940 / 4.520 / 5.050 ms | ≤ 3.254 / 4.992 / 5.575 ms einschließlich 20-ms-Auflösung; zusätzlich Paar-Regel. |
+| Native CPU je Phase | S0-4: Boot 310/470/450; Health 2.090/3.310/3.610; Setup 0/0/0; Readiness 30/0/80; Query 210/330/420; Paint 0/0/0; fünf Writes 140/350/440 ms | Je genannter Phase ≤ Ist × 1,10 + 20 ms und Paar-Regel. Kein Summieren überlappender Thread-Envelope-Werte; unbekannte Kurzzeit-Threads bleiben unbekannt. |
+| Protokoll-/RTT-Aufschlüsselung | S0-3: 35,57 Health- und 13,67 Query-RTT-Äquivalente; Write 2 + 4 sequenzielle Frame-ACK-Fenster | 0 durch S1 zusätzlich eingeführte sequenzielle Protokoll-/ACK-Barrieren. Dieselben Phasen ausweisen; parallele RPCs und pipelinierte ACKs nicht als sequenzielle RTTs zählen. |
+| Fehler-/Schema-/Rechte-Gates | unabhängige Byte-/Delay-Oracle, vorhandene Drift- und Policy-Tests | 0 gefälschte ACKs, übersprungene Pflichtprüfungen oder Rechteerweiterungen; Negative Fixtures müssen fehlschlagen. Byte-Oracle bleibt exakt, nicht mit 10-%-Toleranz. |
+
+Die S0-4-Heapwerte enthalten Beobachter und keine GC-Normalisierung; IDB ist
+Origin-Quota, keine gesamte Browser-RAM-Messung. CPU ist der vollständige
+eigene native PID, nicht ein bewiesener Projektionspass. Projektionspass-CPU
+und Schreibverstärkung fehlen noch als gesonderte Baselines für S2/S4 und
+werden nicht aus der Health-Phase erfunden. Bei Bytes bleiben SCTP-Anwendungs-
+Bytes, ICE-Statistik und UDP-Datagramm-Bytes getrennt; das ≤2-MB-Produktziel aus
+§4 wird nicht mit einem anderen Zähler für bestanden erklärt.
+
+**S5 bleibt verbindlich:** bei 600 ms RTT Navigation bis sichtbare Daten
+≤ **10 RTT-Äquivalente (6.000 ms)**, Write-ACK-p95 ≤ **3 RTT (1.800 ms)**.
+Diese End-to-End-Ziele sind keine Differenz-von-0-ms-Berechnung; S0-3 verwendet
+diese Differenz nur zur Ursachenanalyse. S0/S1 erfüllen die S5-Ziele bislang
+nicht. Die höheren S1-Regressionshüllen erlauben keine Lockerung von §4/S5.
+
+#### Fester Benchmark-Fall: 422 darf keine Sammlung blockieren
+
+Fall-ID **schema-rejected-write-readiness**. Ausgangsbefund: nativer
+`outbound_lead_import` ohne `contacts`/`evidence`, danach permanenter
+`master_write`-Fehler 422, endloser Push und Readiness-Timeout 44.998 ms;
+laut THESEN-Bericht 6/6 fehlgeschlagene App-Starts. Die genaue Feldrevision
+und Dokument-IDs sind nicht geliefert; das ist ein gemeldeter Feldbefund,
+noch keine unabhängig reproduzierte Fixture.
+
+Die kommende Fixture verwendet das echte kanonische Lead-Schema und dieselbe
+Scale-Verteilung, aktuelle native Autorität und den echten WebRTC-Schreibpfad.
+Zwei Varianten lassen jeweils `contacts` bzw. `evidence` weg. Ein ausschließlich
+offline erzeugter, isolierter Altbestand enthält das fehlerhafte Dokument,
+um die Bestands-Reconciliation zu prüfen; die normale Produktion darf solche
+Zeilen nicht als Testinjektion schreiben. Parallel liegen gültige sichtbare
+Zeilen und ein gültiger unabhängiger Write vor. Ein Kontrolllauf ohne die
+ungültige Zeile verwendet denselben Seed und dieselben IDs. Alle drei
+Relay-Fälle, Reload und korrigierte gezielte Wiederzustellung gehören zum Fall.
+
+| Stufe | Prüfpunkt und Erwartung |
+|---|---|
+| S1 | Register ordnet Import und Browser-Reconciliation demselben Schema zu; fehlende native Vorabvalidierung ist als S2-Lücke sichtbar. Reproduktion zählt tatsächliche Requests/Rejections, Zeitpunkt der Bereitschaft und Quarantäne-Status. Der aktuelle Defekt bleibt als erwartetes negatives Baseline-Ergebnis erhalten; S1 wird dadurch nicht fälschlich als repariert gemeldet. |
+| S2 | Derselbe ungültige Import wird vor Persistierung gegen das kanonische App-Schema abgelehnt; keine gültige Dokumentrevision entsteht. Beide Pflichtfeldvarianten und ein gültiger Import werden geprüft. |
+| S5 | Ein permanenter Schemafehler beendet automatische Zustellung genau des betroffenen Writes. Sichtbarer, dem berechtigten Nutzer zugeordneter Quarantäne-Eintrag mit Dokument-/Write-ID, Fehlerklasse, Schema-Version und Korrekturaktion; ausstehende Änderungen bleiben erhalten. Kein erfolgreicher ACK für den abgelehnten Write. |
+| S5 | Gültige Zeilen erreichen query-spezifische Bereitschaft trotz Quarantäne: Zeit ≤ Kontrolllauf × 1,10 + 1.000 ms, zusätzlich innerhalb der S5-Relay-Ziele. Der unabhängige gültige Write bekommt einen echten akzeptierten ACK und SQLite-Readback. 0 automatische Wiederholungen nach klassifiziertem permanentem Fehler, auch über Reload; nur ausdrückliche Korrektur/erneute Zustellung reaktiviert den Write. |
+| S2/S5 | Quarantäne wird nach Reload sichtbar wiederhergestellt; korrigierter Write wird genau einmal erfolgreich zugestellt und sein Eintrag entsprechend aufgelöst. Authority-/Transportfehler bleiben getrennt und behalten ihre bisherigen sicheren Retry-/Revocation-Regeln. Keine fremden IDs/Payloads werden zur Diagnose offengelegt. |
+
+Quarantäne-Repräsentation und UX werden in S2/S5 spezifiziert, ohne neuen
+Projektionsschreiber oder HTTP-Datenpfad. Der Benchmark darf die fehlerhafte
+Zeile weder still löschen noch sie als gültig ausgeben oder Readiness
+synthetisch bestätigen.
+
+#### Nachweis und offener S0-Abschluss
+
+Jeder Code-PR enthält Generator-/Consumer-Head, tatsächlich verwendeten Native-
+und Browser-Stand, Lane-ID, Rohbericht, Zähler-Selbsttests, Vorher/Nachher samt
+Abweichungen und Cleanup. Linux-/Browserläufe gehen über die normale gpu3-Lane
+in eine isolierte Acceptance-Präfix; vorhandene shared Binaries werden nur
+wiederverwendet, wenn sie den zu prüfenden nativen Stand tatsächlich abdecken.
+Es gibt keinen parallelen Baseline-Build, Tenant-Deploy oder Live-Faultlauf.
+
+Der erste S0-4-Soak wurde am **10.10.2026, 22:24:19Z** für P0 normal beendet:
+6.145,282 s, 1.400 Writes, 1.049 Probes, 0 geloggte Busy-Ereignisse/Probe-Retries,
+maximale Probe-Admission 27,809 ms. **Kein 24-h-Pass und kein laufender Soak**
+aus diesem Beleg. Ein neuer kontinuierlicher 24-h-Lauf braucht eigene Unit und
+Ergebnisdatei sowie normale Lane-Admission; Intervalle werden nicht addiert.
+Das S0-Abschlussbudget bleibt 0 geloggte Lockfehler/0 fehlgeschlagene Writes,
+0 abgewiesene Probes und 0 Probe-Busy-Retries über volle 24 h. Unprotokollierte
+native Busy-Handler-Wartezeit bleibt unbekannt. Dieser Nachweis läuft separat
+vom S1-Gate und hält S1 nicht auf.
+
+Die Ausgangsbelege liegen beim Umsetzungsowner unter
+`~/.codex/task-evidence/sync-v3/`: `S0-2-final-report.json`,
+`S0-3-final-report.json`, `S0-4-METRICS.json`,
+`S0-4-P0-YIELD.json` und `S1-S2-INVENTAR-20261010.md`.
+Die jeweiligen PRs #597/#598/#600 bewahren die Lane-Zuordnung und
+Messlimits. Dieser Plan-PR führt keinen neuen Messlauf aus.
+
 ## 6. Arbeitsweise und Durchsetzung (aktiv seit 10.10.2026)
 
 - **Ruleset auf `main`** („main: CTOX Sync v3 guard“): nur per PR, Pflicht-Check

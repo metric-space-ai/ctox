@@ -298,7 +298,7 @@ impl NativeSupervisorSourceHost {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })?;
-        for id in ids {
+        if let Some(id) = ids.into_iter().next() {
             // Native encrypted token read/capture OUTSIDE all publication locks.
             let token = Zeroizing::new(crate::secrets::read_secret_value(
                 &self.root,

@@ -430,6 +430,100 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
       options,
     };
   }, 5000, 'threads requester directory restriction');
+  // Observe before dispatch so asynchronous DOM work cannot fall between
+  // 100-ms samples. rAF marks a render opportunity, not an actual paint entry;
+  // retain the second frame as the conservative paint confirmation.
+  function measureContextPrompt(submit, message, timeoutMs = 5000) {
+    const submittedAt = performance.now();
+    return new Promise((resolve, reject) => {
+      let domVisibleMs = null;
+      let firstRenderFrameMs = null;
+      let firstRenderFrameTimestamp = null;
+      let frame;
+      let timer;
+      let mutations;
+      let tasks;
+      const longTasks = [];
+      const longTasksSupported = typeof PerformanceObserver !== 'undefined'
+        && PerformanceObserver.supportedEntryTypes.includes('longtask');
+      const visible = () => {
+        const promptWindow = [...document.querySelectorAll('.ctox-chat-window.is-active')]
+          .find((element) => element.textContent.includes(message));
+        const rect = promptWindow?.getBoundingClientRect();
+        const style = promptWindow ? getComputedStyle(promptWindow) : null;
+        return Boolean(rect && rect.width > 0 && rect.height > 0
+          && rect.bottom > 0 && rect.top < innerHeight
+          && rect.right > 0 && rect.left < innerWidth
+          && style.display !== 'none' && style.visibility !== 'hidden'
+          && Number(style.opacity) > 0
+          && !document.querySelector('.ctox-global-context-menu:not([hidden])'));
+      };
+      const recordTasks = (entries) => {
+        for (const entry of entries) {
+          if (entry.startTime + entry.duration <= submittedAt) continue;
+          longTasks.push({ startMs: entry.startTime - submittedAt, durationMs: entry.duration });
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        cancelAnimationFrame(frame);
+        mutations?.disconnect();
+        if (tasks) {
+          recordTasks(tasks.takeRecords());
+          tasks.disconnect();
+        }
+      };
+      const observeDom = () => {
+        if (domVisibleMs === null && visible()) {
+          domVisibleMs = performance.now() - submittedAt;
+          mutations.disconnect();
+        }
+      };
+      const observeFrame = (timestamp) => {
+        observeDom();
+        if (!visible()) {
+          // A transient/hidden window is not a paint confirmation.
+          firstRenderFrameMs = null;
+          firstRenderFrameTimestamp = null;
+        } else if (firstRenderFrameMs === null) {
+          // The rAF timestamp can precede submission in the same frame; use
+          // callback entry time for elapsed time and retain both for diagnosis.
+          firstRenderFrameMs = performance.now() - submittedAt;
+          firstRenderFrameTimestamp = timestamp - submittedAt;
+        } else {
+          const firstPaintMs = performance.now() - submittedAt;
+          cleanup();
+          resolve({ domVisibleMs, firstRenderFrameMs, firstRenderFrameTimestamp,
+            firstPaintMs, paintConfirmationFrameTimestamp: timestamp - submittedAt,
+            longTasksSupported, longTasks });
+          return;
+        }
+        frame = requestAnimationFrame(observeFrame);
+      };
+      try {
+        mutations = new MutationObserver(observeDom);
+        mutations.observe(document.documentElement, {
+          subtree: true, childList: true, attributes: true, characterData: true,
+        });
+        if (longTasksSupported) {
+          tasks = new PerformanceObserver((list) => recordTasks(list.getEntries()));
+          tasks.observe({ type: 'longtask', buffered: false });
+        }
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('context prompt visible before native receipt timed out: '
+            + JSON.stringify({ domVisibleMs, firstRenderFrameMs, longTasksSupported, longTasks })));
+        }, timeoutMs);
+        submit();
+        observeDom();
+        frame = requestAnimationFrame(observeFrame);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
+  }
+
   const submitContextMode = async ({ mode, message, userId, contextRecordId = targetRecordId }) => {
     await openTargetModule();
     const contextTarget = document.querySelector('[data-threads-rightclick-fixture]');
@@ -473,29 +567,16 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
     }
     textarea.value = message;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    const submittedAt = performance.now();
-    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    const submit = () => form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     if (!needsApproval) {
-      await waitFor(() => {
-        const promptWindow = [...document.querySelectorAll('.ctox-chat-window.is-active')]
-          .find((element) => element.textContent.includes(message));
-        const rect = promptWindow?.getBoundingClientRect();
-        const style = promptWindow ? getComputedStyle(promptWindow) : null;
-        return {
-          ok: Boolean(rect && rect.width > 0 && rect.height > 0
-            && rect.bottom > 0 && rect.top < innerHeight
-            && rect.right > 0 && rect.left < innerWidth
-            && style.display !== 'none' && style.visibility !== 'hidden'
-            && Number(style.opacity) > 0
-            && !document.querySelector('.ctox-global-context-menu:not([hidden])')),
-        };
-      }, 5000, 'context prompt visible before native receipt');
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const firstPaintMs = performance.now() - submittedAt;
-      console.log('context_prompt_first_paint=' + JSON.stringify({ mode, firstPaintMs }));
+      const timing = await measureContextPrompt(submit, message);
+      const { firstPaintMs } = timing;
+      console.log('context_prompt_first_paint=' + JSON.stringify({ mode, ...timing }));
       if (firstPaintMs >= 150) {
         throw new Error(`Context prompt first paint exceeded 150ms: ${firstPaintMs.toFixed(1)}ms`);
       }
+    } else {
+      submit();
     }
     await waitFor(() => ({
       ok: !document.querySelector('.ctox-global-context-menu:not([hidden])'),
