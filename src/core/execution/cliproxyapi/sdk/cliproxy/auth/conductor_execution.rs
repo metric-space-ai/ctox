@@ -149,6 +149,7 @@ pub struct AccountRouter {
     scheduler: AuthScheduler,
     store: Arc<dyn CooldownStateStore>,
     sessions: Option<Arc<dyn super::AccountSessionStore>>,
+    quotas: Option<Arc<dyn super::AccountQuotaStore>>,
 }
 
 impl AccountRouter {
@@ -157,6 +158,7 @@ impl AccountRouter {
             scheduler: AuthScheduler::new(SchedulerStrategy::RoundRobin),
             store,
             sessions: None,
+            quotas: None,
         }
     }
 
@@ -165,6 +167,7 @@ impl AccountRouter {
             scheduler: AuthScheduler::new(strategy),
             store,
             sessions: None,
+            quotas: None,
         }
     }
 
@@ -179,7 +182,61 @@ impl AccountRouter {
             scheduler: AuthScheduler::new(SchedulerStrategy::FillFirst),
             store,
             sessions: Some(sessions),
+            quotas: None,
         }
+    }
+
+    pub fn with_account_state_stores(
+        store: Arc<dyn CooldownStateStore>,
+        sessions: Arc<dyn super::AccountSessionStore>,
+        quotas: Arc<dyn super::AccountQuotaStore>,
+    ) -> Self {
+        let mut router = Self::with_session_store(store, sessions);
+        router.quotas = Some(quotas);
+        router
+    }
+
+    fn pick_fresh(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+        now_ms: i64,
+        candidates: &[AccountCandidate],
+        cooldowns: &[super::CooldownStateRecord],
+        options: &SchedulerPickOptions,
+    ) -> Result<AccountCandidate, AccountRoutingError> {
+        if options.pinned_auth_id.is_some()
+            || crate::internal::api::account_selection::requested_account().is_some()
+            || self.quotas.is_none()
+        {
+            return self.scheduler.pick_single(provider, model, now_ms, candidates, cooldowns, options)
+                .map_err(AccountRoutingError::Selection);
+        }
+        let ids = candidates.iter().filter(|candidate| candidate.provider.eq_ignore_ascii_case(provider))
+            .map(|candidate| candidate.auth_id.clone()).collect::<Vec<_>>();
+        let observations = self.quotas.as_ref().expect("quota store checked")
+            .load(provider, &ids).map_err(AccountRoutingError::Quota)?;
+        let expiries = observations.into_iter().filter_map(|(id, observation)| {
+            observation.usable_reset_at(now_ms).map(|reset| (id, reset))
+        }).collect();
+        self.scheduler.pick_standard(provider, model, now_ms, candidates, cooldowns, options, &expiries)
+            .map_err(AccountRoutingError::Selection)
+    }
+
+    /// Called only after an actual Claude transport response. Never accepts
+    /// caller metadata, cooldown estimates or billing headers as quota facts.
+    pub fn observe_claude_quota(
+        &self,
+        auth_id: &str,
+        headers: &crate::sdk::cliproxy::executor::Headers,
+        observed_at_ms: i64,
+    ) -> Result<(), AccountRoutingError> {
+        if let (Some(store), Some(snapshot)) = (&self.quotas,
+            crate::internal::runtime::executor::helps::claude_quota_observation(headers, observed_at_ms))
+        {
+            store.save("claude", auth_id, &snapshot).map_err(AccountRoutingError::Quota)?;
+        }
+        Ok(())
     }
 
     pub fn select(
@@ -236,10 +293,7 @@ impl AccountRouter {
                     };
                     let candidate = match retained {
                         Some(candidate) => candidate,
-                        None => self
-                            .scheduler
-                            .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
-                            .map_err(AccountRoutingError::Selection)?,
+                        None => self.pick_fresh(provider, model, now_ms, candidates, &cooldowns, options)?,
                     };
                     let id = candidate.auth_id.clone();
                     selected = Some(candidate);
@@ -250,9 +304,7 @@ impl AccountRouter {
                 );
             }
         }
-        self.scheduler
-            .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
-            .map_err(AccountRoutingError::Selection)
+        self.pick_fresh(provider, model, now_ms, candidates, &cooldowns, options)
     }
 
     pub fn select_mixed(
@@ -284,6 +336,7 @@ impl fmt::Debug for AccountRouter {
 pub enum AccountRoutingError {
     Store(CooldownStoreError),
     Session(super::AccountSessionStoreError),
+    Quota(super::AccountQuotaStoreError),
     Selection(AccountSelectionError),
 }
 
@@ -292,6 +345,7 @@ impl fmt::Display for AccountRoutingError {
         match self {
             Self::Store(error) => write!(formatter, "account state unavailable: {error}"),
             Self::Session(error) => write!(formatter, "account affinity unavailable: {error}"),
+            Self::Quota(error) => write!(formatter, "account quota unavailable: {error}"),
             Self::Selection(error) => write!(formatter, "account selection failed: {error}"),
         }
     }

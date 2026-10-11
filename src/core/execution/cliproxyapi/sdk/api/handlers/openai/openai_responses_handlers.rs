@@ -1162,6 +1162,7 @@ fn claude_routing_error_response(
     let (code, message, retry_at_ms) = match error {
         AccountRoutingError::Store(_)
         | AccountRoutingError::Session(_)
+        | AccountRoutingError::Quota(_)
         | AccountRoutingError::Selection(AccountSelectionError::State) => (
             "gateway_account_state_unavailable",
             "Claude account state could not be read or saved. Check local storage access.",
@@ -1370,11 +1371,27 @@ mod tests {
     #[test]
     fn claude_gateway_selection_errors_have_distinct_non_upstream_codes() {
         use crate::sdk::cliproxy::auth::{
-            AccountRoutingError, AccountSelectionError, AccountSessionStoreError,
+            AccountRoutingError, AccountSelectionError, AccountSessionStoreError, AccountQuotaStoreError,
             CooldownStoreError,
         };
 
         for (reason, code) in [
+            (
+                AccountRoutingError::Quota(AccountQuotaStoreError::Read),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Quota(AccountQuotaStoreError::Write),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Quota(AccountQuotaStoreError::InvalidRecord),
+                "gateway_account_state_unavailable",
+            ),
+            (
+                AccountRoutingError::Quota(AccountQuotaStoreError::Capacity),
+                "gateway_account_state_unavailable",
+            ),
             (
                 AccountRoutingError::Session(AccountSessionStoreError::Read),
                 "gateway_account_state_unavailable",
