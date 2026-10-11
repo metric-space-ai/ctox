@@ -15513,7 +15513,9 @@ mod tests {
             &for_mail("Unterschoben", mail, "Untergeschoben GmbH"),
         )
         .expect_err("a non-mail caller must not bind records to a mail");
-        assert!(foreign.to_string().contains("only the mail session of that mail"));
+        assert!(foreign
+            .to_string()
+            .contains("only the mail session of that mail"));
         execute_outbound_lead_import(
             root,
             &session(mail),
