@@ -148,6 +148,7 @@ pub fn publish_selected_auth_metadata(metadata: &mut ExecutionMetadata, auth: &m
 pub struct AccountRouter {
     scheduler: AuthScheduler,
     store: Arc<dyn CooldownStateStore>,
+    sessions: Option<Arc<dyn super::AccountSessionStore>>,
 }
 
 impl AccountRouter {
@@ -155,6 +156,7 @@ impl AccountRouter {
         Self {
             scheduler: AuthScheduler::new(SchedulerStrategy::RoundRobin),
             store,
+            sessions: None,
         }
     }
 
@@ -162,6 +164,21 @@ impl AccountRouter {
         Self {
             scheduler: AuthScheduler::new(strategy),
             store,
+            sessions: None,
+        }
+    }
+
+    /// CTOX's standard account setup: stable selection for a new session and
+    /// durable affinity for continuations. Explicit portable strategy APIs stay
+    /// available for upstream conformance; the CTOX host uses this constructor.
+    pub fn with_session_store(
+        store: Arc<dyn CooldownStateStore>,
+        sessions: Arc<dyn super::AccountSessionStore>,
+    ) -> Self {
+        Self {
+            scheduler: AuthScheduler::new(SchedulerStrategy::FillFirst),
+            store,
+            sessions: Some(sessions),
         }
     }
 
@@ -190,6 +207,37 @@ impl AccountRouter {
         options: &SchedulerPickOptions,
     ) -> Result<AccountCandidate, AccountRoutingError> {
         let cooldowns = self.store.load().map_err(AccountRoutingError::Store)?;
+        let key = crate::internal::api::account_selection::session_key(provider, model);
+        // An exact model check/pinned request must neither borrow nor replace
+        // the ordinary session's binding.
+        if options.pinned_auth_id.is_none()
+            && crate::internal::api::account_selection::requested_account().is_none()
+        {
+            if let (Some(sessions), Some(key)) = (&self.sessions, key) {
+                let mut selected = None;
+                let id = sessions.choose(&key, &mut |retained| {
+                    let retained = retained.and_then(|id| {
+                        let mut pinned = options.clone();
+                        pinned.pinned_auth_id = Some(id.to_owned());
+                        self.scheduler
+                            .pick_single(provider, model, now_ms, candidates, &cooldowns, &pinned)
+                            .ok()
+                    });
+                    let candidate = match retained {
+                        Some(candidate) => candidate,
+                        None => self.scheduler
+                            .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
+                            .map_err(AccountRoutingError::Selection)?,
+                    };
+                    let id = candidate.auth_id.clone();
+                    selected = Some(candidate);
+                    Ok(id)
+                })?;
+                return selected.filter(|candidate| candidate.auth_id == id).ok_or(
+                    AccountRoutingError::Session(super::AccountSessionStoreError::InvalidRecord),
+                );
+            }
+        }
         self.scheduler
             .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
             .map_err(AccountRoutingError::Selection)
@@ -223,6 +271,7 @@ impl fmt::Debug for AccountRouter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountRoutingError {
     Store(CooldownStoreError),
+    Session(super::AccountSessionStoreError),
     Selection(AccountSelectionError),
 }
 
@@ -230,6 +279,7 @@ impl fmt::Display for AccountRoutingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(error) => write!(formatter, "account state unavailable: {error}"),
+            Self::Session(error) => write!(formatter, "account affinity unavailable: {error}"),
             Self::Selection(error) => write!(formatter, "account selection failed: {error}"),
         }
     }
