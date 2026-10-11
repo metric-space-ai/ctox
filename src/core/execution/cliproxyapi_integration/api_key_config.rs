@@ -55,6 +55,9 @@ pub struct ApiKeyAccountConfig {
 }
 impl ApiKeyAccountConfig {
     pub fn validate(&self) -> Result<(), Error> {
+        if self.id == crate::execution::cliproxyapi_xai::ACCOUNT_ID {
+            return Err(Error::InvalidAccountId);
+        }
         if self.id.is_empty()
             || self.id.len() > 128
             || !self
