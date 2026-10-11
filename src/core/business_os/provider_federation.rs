@@ -79,7 +79,11 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
+#[path = "provider_quota_readback.rs"]
+mod quota_readback;
+
 #[path = "provider_account_controls.rs"]
+
 pub(in crate::business_os) mod account_controls;
 
 const MAX_ACCOUNTS: usize = 256;
@@ -203,10 +207,7 @@ pub(super) fn handle_command(
     match command.command_type.as_str() {
         "ctox.workjet.providers.list" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
-            let mut conn = store::open_store(root)?;
-            let snapshot = conn.transaction()?;
-            let owner = management_owner(&snapshot, actor)?;
-            list(&snapshot, &owner)
+            quota_readback::read(root, actor)
         }
         "ctox.workjet.providers.adopt_native" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;

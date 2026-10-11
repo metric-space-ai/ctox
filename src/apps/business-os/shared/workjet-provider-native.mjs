@@ -62,7 +62,33 @@ function catalog(value) {
   if (result.fresh && (!result.observed || result.lastSuccessAtMs === null || !lastAttempt?.success)) invalid();
   return result;
 }
+function reportedQuota(value) {
+  object(value);
+  if (value.state === 'unknown') return { state: 'unknown' };
+  if (value.state === 'unavailable') {
+    if (value.errorClass !== 'quota_read_failed') invalid();
+    return { state: 'unavailable', errorClass: 'quota_read_failed' };
+  }
+  if (value.state !== 'reported' || !Array.isArray(value.windows)
+    || value.windows.length < 1 || value.windows.length > 2) invalid();
+  const observedAtMs = integer(value.observedAtMs, 1);
+  const kinds = new Set();
+  const windows = value.windows.map(window => {
+    object(window);
+    if (!['five_hour', 'seven_day'].includes(window.kind) || kinds.has(window.kind)
+      || !['allowed', 'rejected'].includes(window.status)) invalid();
+    kinds.add(window.kind);
+    const resetAtMs = integer(window.resetAtMs, 1);
+    if (resetAtMs <= observedAtMs || resetAtMs - observedAtMs > 608_400_000
+      || (window.utilization !== null && (typeof window.utilization !== 'number'
+      || !Number.isFinite(window.utilization) || window.utilization < 0 || window.utilization > 1))) invalid();
+    return { kind: window.kind, status: window.status, resetAtMs, utilization: window.utilization };
+  });
+  // Even nested unknown fields never cross the renderer boundary.
+  return { state: 'reported', observedAtMs, windows };
+}
 export function projectNativeProviderRegistry(value) {
+
   object(value);
   if (value.ok !== true || value.schema !== schema || !Array.isArray(value.accounts)
     || value.accounts.length > 256 || !Array.isArray(value.providers) || value.providers.length > 256) invalid();
@@ -89,7 +115,9 @@ export function projectNativeProviderRegistry(value) {
         canEnable: boolean(object(account.controls).canEnable),
         canRemove: boolean(account.controls.canRemove),
       } }),
+      ...(account.reportedQuota === undefined ? {} : { reportedQuota: reportedQuota(account.reportedQuota) }),
       modelCatalogObserved: boolean(account.modelCatalogObserved),
+
       modelCatalog: catalog(account.modelCatalog),
       excludedModels: models(account.excludedModels),
       effectiveModels: models(account.effectiveModels, 1024),

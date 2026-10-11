@@ -76,7 +76,31 @@ mod account_sessions;
 use account_sessions::CtoxAccountSessionStore;
 #[path = "cliproxyapi_account_quotas.rs"]
 mod account_quotas;
+
+/// Holder-private selectors/bindings are supplied only by the authorized native
+/// provider registry. The callback receives normalized public quota fields and
+/// must revalidate current Policy authority before publishing them.
+pub(crate) fn with_reported_claude_quotas<T>(
+    root: &Path,
+    accounts: &[(&str, &str)],
+    publish: impl FnOnce(&std::collections::BTreeMap<String, serde_json::Value>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    account_quotas::with_public_snapshots(root, accounts, publish)
+}
+
 use account_quotas::CtoxAccountQuotaStore;
+
+#[cfg(test)]
+pub(crate) fn save_reported_quota_for_test(
+    root: &Path,
+    account: &str,
+    snapshot: &ctox_cliproxyapi::sdk::cliproxy::auth::ReportedQuotaSnapshot,
+) -> anyhow::Result<()> {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore;
+    CtoxAccountQuotaStore::new(root).save("claude", account, snapshot)?;
+    Ok(())
+}
+
 
 const COOLDOWN_STATE_PAYLOAD_KEY: &str = "cliproxyapi.auth.cooldown-state.v1";
 const INSTANCE_CHATGPT_AUTH_SCOPE: &str = "ctox-auth";
