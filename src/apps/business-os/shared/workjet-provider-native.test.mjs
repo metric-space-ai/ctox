@@ -26,6 +26,8 @@ function transport(rewrite = value => value) {
   const calls = [];
   return { calls, assertCurrent() {}, async dispatch(command, options) {
     calls.push({ command, options }); return rewrite(receipt(command));
+  } };
+}
 test('reported limits retain actual values and strip all nested private fields', async () => {
   const value = registry();
   const quota = { state: 'reported', observedAtMs: 1000, generation: 'never-public',
@@ -66,8 +68,6 @@ test('invalid quotas are rejected at the existing renderer boundary', () => {
     assert.throws(() => projectNativeProviderRegistry(value));
   }
 });
-  } };
-}
 test('reading uses one existing admitted command without adoption or account mutation', async () => {
   const port = transport();
   const result = await requestNativeProviders(request('instance.providers.read'), port);
