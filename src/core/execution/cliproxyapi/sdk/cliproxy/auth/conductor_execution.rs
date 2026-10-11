@@ -205,15 +205,31 @@ impl AccountRouter {
     ) -> Result<BTreeMap<String, i64>, AccountRoutingError> {
         if options.pinned_auth_id.is_some()
             || crate::internal::api::account_selection::requested_account().is_some()
-        { return Ok(BTreeMap::new()); }
-        let Some(store) = &self.quotas else { return Ok(BTreeMap::new()); };
-        let ids = candidates.iter()
-            .filter(|candidate| candidate.provider.trim().eq_ignore_ascii_case(provider.trim()))
-            .map(|candidate| candidate.auth_id.clone()).collect::<Vec<_>>();
-        let observations = store.load(provider, &ids).map_err(AccountRoutingError::Quota)?;
-        Ok(observations.into_iter().filter_map(|(id, observation)| {
-            observation.usable_reset_at(now_ms).map(|reset| (id, reset))
-        }).collect())
+        {
+            return Ok(BTreeMap::new());
+        }
+        let Some(store) = &self.quotas else {
+            return Ok(BTreeMap::new());
+        };
+        let ids = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .provider
+                    .trim()
+                    .eq_ignore_ascii_case(provider.trim())
+            })
+            .map(|candidate| candidate.auth_id.clone())
+            .collect::<Vec<_>>();
+        let observations = store
+            .load(provider, &ids)
+            .map_err(AccountRoutingError::Quota)?;
+        Ok(observations
+            .into_iter()
+            .filter_map(|(id, observation)| {
+                observation.usable_reset_at(now_ms).map(|reset| (id, reset))
+            })
+            .collect())
     }
 
     /// Called only after an actual Claude transport response. Never accepts
@@ -267,14 +283,26 @@ impl AccountRouter {
         // chooser may run twice and must never perform nested database I/O.
         let expiries = self.quota_expiries(provider, now_ms, candidates, options)?;
         let pick_fresh = || {
-            if self.quotas.is_some() && options.pinned_auth_id.is_none()
+            if self.quotas.is_some()
+                && options.pinned_auth_id.is_none()
                 && crate::internal::api::account_selection::requested_account().is_none()
             {
-                self.scheduler.pick_standard(provider, model, now_ms, candidates,
-                    super::scheduler::StandardSelectionState { cooldowns: &cooldowns, options, expiries: &expiries })
+                self.scheduler
+                    .pick_standard(
+                        provider,
+                        model,
+                        now_ms,
+                        candidates,
+                        super::scheduler::StandardSelectionState {
+                            cooldowns: &cooldowns,
+                            options,
+                            expiries: &expiries,
+                        },
+                    )
                     .map_err(AccountRoutingError::Selection)
             } else {
-                self.scheduler.pick_single(provider, model, now_ms, candidates, &cooldowns, options)
+                self.scheduler
+                    .pick_single(provider, model, now_ms, candidates, &cooldowns, options)
                     .map_err(AccountRoutingError::Selection)
             }
         };

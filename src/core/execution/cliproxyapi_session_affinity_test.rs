@@ -1,7 +1,9 @@
 // Origin: CTOX; License: AGPL-3.0-only
 // Included in the existing host tests; all credentials belong to a synthetic isolated root.
 #[derive(Default)]
-struct SessionMessagesTransport { headers: ctox_cliproxyapi::sdk::cliproxy::executor::Headers }
+struct SessionMessagesTransport {
+    headers: ctox_cliproxyapi::sdk::cliproxy::executor::Headers,
+}
 impl ClaudeMessagesTransport for SessionMessagesTransport {
     fn execute<'a>(
         &'a self,
@@ -49,13 +51,28 @@ impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
         &'a self,
         request: &'a ClaudeMessagesRequest,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse, ClaudeMessagesTransportFailure>> + Send + 'a>> {
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse,
+                        ClaudeMessagesTransportFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async move {
             let buffered = self.execute(request, timeout).await?;
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             tx.send(Ok(buffered.body().to_vec())).await.unwrap();
             drop(tx);
-            Ok(ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse::new(200, None, rx).with_headers(self.headers.clone()))
+            Ok(
+                ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse::new(
+                    200, None, rx,
+                )
+                .with_headers(self.headers.clone()),
+            )
         })
     }
 }
@@ -66,7 +83,15 @@ async fn session_http_turn(
     model: &str,
     account: Option<&str>,
 ) -> String {
-    session_http_turn_reported(root, config, model, account, "private-native-session", &HashMap::new()).await
+    session_http_turn_reported(
+        root,
+        config,
+        model,
+        account,
+        "private-native-session",
+        &HashMap::new(),
+    )
+    .await
 }
 async fn session_http_turn_reported(
     root: &Path,
@@ -86,8 +111,12 @@ async fn session_http_turn_reported(
                 entry.id.clone(),
                 ClaudeAccountTransports {
                     refresh: Arc::new(UnusedRefreshTransport),
-                    messages: Arc::new(SessionMessagesTransport { headers: reported.get(&entry.id).cloned().unwrap_or_default() }),
-                    messages_stream: Some(Arc::new(SessionMessagesTransport { headers: reported.get(&entry.id).cloned().unwrap_or_default() })),
+                    messages: Arc::new(SessionMessagesTransport {
+                        headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                    }),
+                    messages_stream: Some(Arc::new(SessionMessagesTransport {
+                        headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                    })),
                 },
             )
         })
@@ -110,7 +139,9 @@ async fn session_http_turn_reported(
         .await
         .unwrap();
     });
-    let body = serde_json::json!({"model":model,"input":"Hi","stream":session.starts_with("stream-")}).to_string();
+    let body =
+        serde_json::json!({"model":model,"input":"Hi","stream":session.starts_with("stream-")})
+            .to_string();
     let pin = account
         .map(|id| format!("X-CTOX-Account: {id}\r\n"))
         .unwrap_or_default();
@@ -195,31 +226,122 @@ async fn provider_quota_native_http_observations_rank_new_sessions_without_movin
     let root = tempfile::tempdir().unwrap();
     let mut config = stored_claude_runtime();
     let model = config.claude_accounts[0].models[0].clone();
-    let mut a = config.claude_accounts.remove(0); a.id = "account-a".into();
-    let mut b = a.clone(); b.id = "account-b".into();
-    b.access_token_secret.name = "second-access".into(); b.refresh_token_secret.name = "second-refresh".into();
-    config.claude_accounts = vec![a,b];
+    let mut a = config.claude_accounts.remove(0);
+    a.id = "account-a".into();
+    let mut b = a.clone();
+    b.id = "account-b".into();
+    b.access_token_secret.name = "second-access".into();
+    b.refresh_token_secret.name = "second-refresh".into();
+    config.claude_accounts = vec![a, b];
     for account in &config.claude_accounts {
-        CtoxClaudeSecretStore::new(root.path()).store_credentials(
-            &account.credential_handles().unwrap(), &credentials("synthetic-access", "synthetic-refresh"),
-        ).unwrap();
+        CtoxClaudeSecretStore::new(root.path())
+            .store_credentials(
+                &account.credential_handles().unwrap(),
+                &credentials("synthetic-access", "synthetic-refresh"),
+            )
+            .unwrap();
     }
-    let headers = |reset: &str| BTreeMap::from([
-        ("Anthropic-Ratelimit-Unified-5h-Status".into(),vec!["allowed".into()]),
-        ("Anthropic-Ratelimit-Unified-5h-Reset".into(),vec![reset.into()]),
-        ("Anthropic-Ratelimit-Unified-5h-Utilization".into(),vec!["0.25".into()]),
+    let headers = |reset: &str| {
+        BTreeMap::from([
+            (
+                "Anthropic-Ratelimit-Unified-5h-Status".into(),
+                vec!["allowed".into()],
+            ),
+            (
+                "Anthropic-Ratelimit-Unified-5h-Reset".into(),
+                vec![reset.into()],
+            ),
+            (
+                "Anthropic-Ratelimit-Unified-5h-Utilization".into(),
+                vec!["0.25".into()],
+            ),
+        ])
+    };
+    let mut reported = HashMap::from([
+        ("account-a".into(), headers("40")),
+        ("account-b".into(), headers("20")),
     ]);
-    let mut reported = HashMap::from([("account-a".into(),headers("40")),("account-b".into(),headers("20"))]);
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"ongoing-a",&reported).await,"account-a");
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,Some("account-b"),"stream-probe",&reported).await,"account-b");
-    let saved = CtoxAccountQuotaStore::new(root.path()).load("claude", &["account-b".into()]).unwrap();
-    assert_eq!(saved["account-b"].windows[0].reset_at_ms,20_000);
-    assert_eq!(saved["account-b"].windows[0].utilization,Some(0.25));
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"stream-new-b",&reported).await,"account-b");
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"ongoing-a",&reported).await,"account-a");
-    reported.insert("account-a".into(),headers("15"));
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,Some("account-a"),"probe",&reported).await,"account-a");
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"new-a",&reported).await,"account-a");
-    assert_eq!(session_http_turn_reported(root.path(),config,&model,None,"stream-new-b",&reported).await,"account-b");
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "ongoing-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            Some("account-b"),
+            "stream-probe",
+            &reported
+        )
+        .await,
+        "account-b"
+    );
+    let saved = CtoxAccountQuotaStore::new(root.path())
+        .load("claude", &["account-b".into()])
+        .unwrap();
+    assert_eq!(saved["account-b"].windows[0].reset_at_ms, 20_000);
+    assert_eq!(saved["account-b"].windows[0].utilization, Some(0.25));
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "stream-new-b",
+            &reported
+        )
+        .await,
+        "account-b"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "ongoing-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    reported.insert("account-a".into(), headers("15"));
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            Some("account-a"),
+            "probe",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "new-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(root.path(), config, &model, None, "stream-new-b", &reported)
+            .await,
+        "account-b"
+    );
 }
-
