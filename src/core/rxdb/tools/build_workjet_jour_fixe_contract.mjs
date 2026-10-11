@@ -7,6 +7,13 @@ import { execFileSync } from 'node:child_process';
 
 const CONTRACTS = [
   {
+    fixture: 'workjet-project-execution-policy-v1.json',
+    rust: '../../business_os/workjet_project_execution_policy_contract.generated.rs',
+    js: '../../../apps/business-os/shared/workjet-project-execution-policy-contract.generated.mjs',
+    prefix: 'PROJECT_EXECUTION_POLICY',
+    validator: 'validateProjectExecutionPolicyValue',
+  },
+  {
     fixture: 'workjet-supervisor-route-computation-v2.json',
     rust: '../../business_os/workjet_supervisor_route_computation_contract.generated.rs',
     js: '../../../apps/business-os/shared/workjet-supervisor-route-computation-contract.generated.mjs',
