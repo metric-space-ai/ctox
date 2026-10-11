@@ -28,6 +28,47 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
     }
 }
 
+impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
+    fn execute_stream<'a>(
+        &'a self,
+        request: &'a ClaudeMessagesRequest,
+        _: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<
+        ctox_cliproxyapi::internal::runtime::executor::claude_executor::ClaudeMessagesStreamResponse,
+        ClaudeMessagesTransportFailure,
+    >> + Send + 'a>> {
+        Box::pin(async move {
+            let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
+            assert_eq!(body["stream"], true);
+            let events = [
+                serde_json::json!({"type":"message_start","message":{
+                    "id":"message-test","type":"message","role":"assistant",
+                    "model":body["model"],"content":[],
+                    "usage":{"input_tokens":2,"output_tokens":0}
+                }}),
+                serde_json::json!({"type":"content_block_start","index":0,
+                    "content_block":{"type":"text","text":""}}),
+                serde_json::json!({"type":"content_block_delta","index":0,
+                    "delta":{"type":"text_delta","text":"Hi"}}),
+                serde_json::json!({"type":"content_block_stop","index":0}),
+                serde_json::json!({"type":"message_delta",
+                    "delta":{"stop_reason":"end_turn","stop_sequence":null},
+                    "usage":{"output_tokens":1}}),
+                serde_json::json!({"type":"message_stop"}),
+            ];
+            let mut bytes = Vec::new();
+            for event in events {
+                bytes.extend_from_slice(format!("data: {event}\n\n").as_bytes());
+            }
+            // One bounded chunk needs no detached producer task.
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            sender.send(Ok(bytes)).await.unwrap();
+            drop(sender);
+            Ok(ctox_cliproxyapi::internal::runtime::executor::claude_executor::ClaudeMessagesStreamResponse::new(200, None, receiver))
+        })
+    }
+}
+
 async fn session_http_turn(
     root: &Path,
     config: CliproxyRuntimeConfig,
@@ -45,7 +86,7 @@ async fn session_http_turn(
                 ClaudeAccountTransports {
                     refresh: Arc::new(UnusedRefreshTransport),
                     messages: Arc::new(SessionMessagesTransport),
-                    messages_stream: None,
+                    messages_stream: Some(Arc::new(SessionMessagesTransport)),
                 },
             )
         })
