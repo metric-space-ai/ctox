@@ -386,10 +386,12 @@ pub(crate) fn records_for_source_message(
 
 const MAIL_RECORD_TEXT_LIMIT: usize = 6000;
 
-/// Whether the record's research has finished. The app parks a finished
-/// research in `needs_review` until a person checks it; read raw, that status
-/// made the mail agent answer "die Recherche laeuft noch" while both leads
-/// held their results (thesen, 11.10.2026).
+/// Whether the record's research run has ended with its results written
+/// back. The app parks such a lead in `needs_review` until a person checks
+/// it; read raw, that status made the mail agent answer "die Recherche laeuft
+/// noch" while both leads held their results (thesen, 11.10.2026). Ended is
+/// not complete: on thesen every such lead also has fields without a match or
+/// still open, which `field_summary_for_mail` names.
 pub(crate) fn research_finished(record: &Value) -> bool {
     matches!(
         record["research_status"].as_str().unwrap_or(""),
@@ -400,7 +402,10 @@ pub(crate) fn research_finished(record: &Value) -> bool {
 fn research_state_for_mail(record: &Value) -> String {
     let status = record["research_status"].as_str().unwrap_or("-");
     if research_finished(record) {
-        return "abgeschlossen (Ergebnisse unten)".to_string();
+        return format!(
+            "Lauf beendet, Ergebnisse unten; {}",
+            field_summary_for_mail(record)
+        );
     }
     match status {
         "new" => "nicht gestartet".to_string(),
@@ -408,6 +413,31 @@ fn research_state_for_mail(record: &Value) -> String {
         "failed" => "fehlgeschlagen".to_string(),
         other => format!("Status {other}"),
     }
+}
+
+/// Counts of the research's field states and the fields still open, from the
+/// lead's `field_status` (verified / no_match / action_required).
+fn field_summary_for_mail(record: &Value) -> String {
+    let Some(fields) = record["field_status"].as_object() else {
+        return "Feldstatus unbekannt".to_string();
+    };
+    let (mut verified, mut no_match, mut open) = (0, 0, Vec::new());
+    for (key, state) in fields {
+        match state["status"].as_str().unwrap_or("") {
+            "verified" | "ok" => verified += 1,
+            "no_match" | "unsupported" => no_match += 1,
+            _ => open.push(key.as_str()),
+        }
+    }
+    let open_text = if open.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", open.join(", "))
+    };
+    format!(
+        "{verified} Felder belegt, {no_match} ohne Treffer, {} offen{open_text}",
+        open.len()
+    )
 }
 
 fn validation_state_for_mail(record: &Value) -> String {
@@ -425,13 +455,13 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
     }
     let mut text = String::from(
         "Auftragsdatensaetze dieser Mail (Outbound-Leads, nur lesen; nenne Arbeit, Status und Ergebnisse ausschliesslich aus diesen Feldern). \
-         Steht bei einem Datensatz \"Recherche abgeschlossen\", ist die Recherche fertig: die Antwort nennt seine Ergebnisse mit Quelle \
-         und behauptet nicht, die Recherche laufe noch oder Ergebnisse kaemen spaeter.\n",
+         Steht bei einem Datensatz \"Recherche: Lauf beendet\", liegen seine Ergebnisse vor: die Antwort nennt sie mit Quelle, benennt \
+         die offenen Felder als offen und behauptet nicht, die Recherche laufe noch oder Ergebnisse kaemen spaeter.\n",
     );
     for record in records {
         let evidence = record["evidence"].as_array().map(Vec::len).unwrap_or(0);
         text.push_str(&format!(
-            "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche {}, Pruefung {}, {} Belege\n",
+            "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche: {}, Pruefung: {}, {} Belege\n",
             record["name"].as_str().unwrap_or("?"),
             record["id"].as_str().unwrap_or("?"),
             record["campaign"].as_str().unwrap_or(""),
@@ -522,13 +552,17 @@ mod tests {
         let duplicate = json!({"field_key": "umsatz", "value": "140,6 Mio. EUR"});
         let rendered = render_records_for_mail(&[json!({
             "id": "lead_h", "name": "Hedinger GmbH & Co. KG", "research_status": "needs_review",
-            "validation_status": "pending", "evidence": [duplicate.clone(), duplicate]
+            "validation_status": "pending", "evidence": [duplicate.clone(), duplicate],
+            "field_status": {"umsatz": {"status": "verified"}, "wz_code": {"status": "no_match"},
+                "mitarbeiter": {"status": "action_required"}}
         })]);
-        assert!(rendered.contains("Recherche abgeschlossen (Ergebnisse unten), Pruefung Sichtpruefung durch das Team offen"));
+        assert!(rendered.contains(
+            "Recherche: Lauf beendet, Ergebnisse unten; 1 Felder belegt, 1 ohne Treffer, 1 offen (mitarbeiter), Pruefung: Sichtpruefung durch das Team offen"
+        ));
         assert!(!rendered.contains("needs_review"));
         assert_eq!(rendered.matches("umsatz: 140,6 Mio. EUR").count(), 1);
         let running = render_records_for_mail(&[json!({"name": "X", "research_status": "queued"})]);
-        assert!(running.contains("Recherche laeuft noch"));
+        assert!(running.contains("Recherche: laeuft noch"));
     }
 
     /// A lead the browser cannot save blocks the whole collection: its first
