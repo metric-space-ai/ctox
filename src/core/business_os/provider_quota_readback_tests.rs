@@ -20,6 +20,9 @@ fn install(f: &Fixture, token: &str) -> Result<()> {
     Ok(())
 }
 fn fixture() -> Result<(Fixture, String, String)> {
+    fixture_seeded(true)
+}
+fn fixture_seeded(seed: bool) -> Result<(Fixture, String, String)> {
     let f = Fixture::new()?;
     install(&f, "isolated-quota-readback")?;
     let holder = store::stable_instance_id(f.root.path())?;
@@ -58,7 +61,10 @@ fn fixture() -> Result<(Fixture, String, String)> {
             },
         ],
     };
-    proxy::save_reported_quota_for_test(f.root.path(), LOCAL, &quota)?;
+    if seed {
+        proxy::save_reported_quota_for_test(f.root.path(), LOCAL, &quota)?;
+    }
+
     Ok((f, holder, id))
 }
 fn quota<'a>(result: &'a Value, id: &str) -> &'a Value {
@@ -206,7 +212,7 @@ fn provider_quota_readback_revalidates_actor_and_changed_or_removed_target() -> 
 #[test]
 fn provider_quota_readback_disabled_and_expired_metadata_never_claim_current_capacity() -> Result<()>
 {
-    let (f, _, id) = fixture()?;
+    let (f, _, id) = fixture_seeded(false)?;
     let now = store::now_ms() as i64;
     proxy::save_reported_quota_for_test(
         f.root.path(),
