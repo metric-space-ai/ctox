@@ -1,0 +1,9 @@
+# Native API-key holder parity — implementation in progress
+
+This slice adds private typed API-key account topology to the existing native provider integration SQLite record. Z.ai platform/coding, MiniMax, xAI API, Kimi Coding and Moonshot global/China endpoints are distinct stored endpoint profiles. Secrets use only references in the dedicated `provider-api-keys` scope. The implementation adds no model IDs, static model defaults, environment toggles, additional listener or runtime infrastructure service.
+
+The existing instance Responses router builds these accounts through the existing OpenAI-compatible executor and a plain, bounded HTTP transport. It constructs the upstream credential itself. The root account/session/quota selector is reused; a configured empty model list exposes no wildcard route. The selected account is acknowledged by the existing response mechanism. Endpoint/configuration and encrypted credential generation are revalidated before and after buffered I/O and around streamed publication. Existing OAuth/default/main routes retain precedence and custody.
+
+This is a draft while the full native account path is implemented. Required follow-up in this PR: cold/hot topology behavior, API metadata and exact live discovery, private Owner/Admin credential ingress with automatic Kimi endpoint detection, enable/remove and model-check integration, focused regressions and final-head gpu3 qualification. The current code is not an installed product acceptance result and does not claim API-key management is exposed in Workjet yet.
+
+Model names in the isolated wire tests reuse the port's existing fixtures; they do not become production models or suggestions. No installed credentials or protected application files are inspected. Supervisor-only merge, the existing release writer, and the post-Monday execution-path hold remain in force.

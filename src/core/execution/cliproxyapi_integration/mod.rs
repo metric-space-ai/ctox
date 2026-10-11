@@ -14,6 +14,9 @@ use ctox_cliproxyapi::internal::config::validate_credential_weight;
 use serde::{Deserialize, Serialize};
 
 mod kimi_host;
+mod api_key_config;
+pub(crate) use kimi_host::save_provider_integration_config;
+pub use api_key_config::{ApiKeyAccountConfig, ApiKeyEndpoint};
 
 pub use kimi_host::{
     build_instance_kimi_auth, build_kimi_subscription_route,
@@ -153,6 +156,8 @@ pub struct ProviderIntegrationConfig {
     pub schema: String,
     #[serde(default)]
     pub kimi_subscription_accounts: Vec<KimiSubscriptionAccountConfig>,
+    #[serde(default)]
+    pub api_key_accounts: Vec<ApiKeyAccountConfig>,
 }
 
 impl Default for ProviderIntegrationConfig {
@@ -160,6 +165,7 @@ impl Default for ProviderIntegrationConfig {
         Self {
             schema: PROVIDER_INTEGRATION_SCHEMA.to_owned(),
             kimi_subscription_accounts: Vec::new(),
+            api_key_accounts: Vec::new(),
         }
     }
 }
@@ -171,6 +177,15 @@ impl ProviderIntegrationConfig {
         }
         let mut ids = HashSet::new();
         let mut secret_refs = HashSet::new();
+        for account in &self.api_key_accounts {
+            account.validate()?;
+            if !ids.insert(account.id.as_str()) {
+                return Err(ProviderIntegrationConfigError::DuplicateAccountId);
+            }
+            if !secret_refs.insert((account.api_key_secret.scope.trim(), account.api_key_secret.name.trim())) {
+                return Err(ProviderIntegrationConfigError::DuplicateSecretReference);
+            }
+        }
         for account in &self.kimi_subscription_accounts {
             account.validate()?;
             if !ids.insert(account.id.trim()) {

@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 pub mod aistudio_executor;
+pub mod api_key_transport;
 pub mod antigravity_executor;
 pub mod antigravity_executor_auth;
 pub mod antigravity_executor_credits;

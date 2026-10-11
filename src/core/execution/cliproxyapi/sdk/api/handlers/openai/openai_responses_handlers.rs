@@ -641,6 +641,7 @@ pub enum OpenAiResponsesRouteResponse {
     Stream(Box<OpenAiResponsesStreamBootstrap>),
     CodexStream(Box<OpenAiResponsesCodexStream>),
     AntigravityStream(Box<OpenAiResponsesAntigravityStream>),
+    GenericStream(Box<super::OpenAiResponsesGenericStream>),
 }
 
 pub struct OpenAiResponsesAntigravityStream {

@@ -179,7 +179,7 @@ pub fn load_provider_integration_config(
     Ok(StoredProviderIntegrationConfig { revision, config })
 }
 
-fn save_provider_integration_config(
+pub(crate) fn save_provider_integration_config(
     root: &Path,
     expected_revision: u64,
     config: &ProviderIntegrationConfig,
