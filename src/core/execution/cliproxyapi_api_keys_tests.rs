@@ -2,10 +2,11 @@
 // License: AGPL-3.0-only
 use super::*;
 use crate::execution::cliproxyapi_integration::{ApiKeyEndpoint, ProviderIntegrationConfig, ProviderSecretRef, save_provider_integration_config};
-use ctox_cliproxyapi::sdk::pluginapi::{HttpRequest, HttpResponse, PluginFuture};
+use ctox_cliproxyapi::sdk::pluginapi::{HttpRequest, HttpResponse, HttpStreamResponse, PluginFuture};
 #[derive(Default)]
 struct Wire { seen: Mutex<Vec<HttpRequest>>, root: Option<PathBuf>, rotate: bool }
 impl HostHttpClient for Wire {
+    fn execute_stream<'a>(&'a self, _request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> { Box::pin(async { Err(anyhow::anyhow!("buffered fixture")) }) }
     fn execute<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpResponse> {
         self.seen.lock().unwrap().push(request);
         if self.rotate { crate::secrets::write_secret_record(self.root.as_ref().unwrap(), "provider-api-keys", "api-first", "fixture-credential-first", None, "test", "private fixture").unwrap(); }
