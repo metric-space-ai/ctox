@@ -9,11 +9,8 @@
 //! This module covers everything that does not need a parsed YAML tree: the
 //! schema structures, the implicit definitions, and the function table.
 //!
-//! **Not yet ported.** Upstream's `schema.Node` walks a `yaml.Node` and checks
-//! it against these definitions, and it validates `${{ ... }}` expressions with
-//! `github.com/rhysd/actionlint`. Both need the YAML backend and the expression
-//! parser, which are the two open architectural decisions. See
-//! `docs/dev/ctox-actions-runner-port.md`.
+//! YAML node walking and expression validation live in `crate::validate` and
+//! `crate::expr`. See the crate README for the current API inventory and gaps.
 //!
 //! Upstream: <https://github.com/nektos/act> (MIT, Copyright (c) Christoph Schitt).
 

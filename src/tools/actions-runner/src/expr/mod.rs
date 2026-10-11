@@ -11,8 +11,8 @@
 //! and serves both consumers, which is one of the few places where the port is
 //! structurally simpler than the original.
 //!
-//! Upstream: <https://github.com/rhysd/actionlint> (MIT, Copyright (c) Yasuhiro
-//! Matsumoto), consumed by <https://github.com/nektos/act> (MIT, Copyright (c)
+//! Upstream: <https://github.com/rhysd/actionlint> (MIT, Copyright (c) 2021
+//! rhysd), consumed by <https://github.com/nektos/act> (MIT, Copyright (c)
 //! Christoph Schitt).
 //!
 //! Syntax: <https://docs.github.com/en/actions/learn-github-actions/expressions>

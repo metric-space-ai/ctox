@@ -39,6 +39,10 @@ struct Config {
     pr: u64,
     node_bin: PathBuf,
     step_timeout_seconds: u64,
+    #[serde(default)]
+    trusted_snapshot: bool,
+    #[serde(default)]
+    allowed_workflows: Vec<String>,
 }
 #[derive(Serialize)]
 struct Report {
@@ -99,20 +103,32 @@ struct LogState {
     file: fs::File,
     bytes: usize,
     tail: VecDeque<String>,
-    masks: Vec<String>,
 }
-struct Sink(Mutex<LogState>);
+type JobMasks = Arc<Mutex<Vec<String>>>;
+struct Sink {
+    state: Mutex<LogState>,
+    masks: JobMasks,
+}
+fn redact(message: &str, masks: &JobMasks) -> String {
+    let mut text = message.to_string();
+    for mask in masks.lock().unwrap().iter().filter(|m| !m.is_empty()) {
+        text = text.replace(mask, "***");
+    }
+    text
+}
 impl Sink {
-    fn new(path: &Path) -> Result<Self> {
-        Ok(Self(Mutex::new(LogState {
-            file: fs::File::create(path)?,
-            bytes: 0,
-            tail: VecDeque::new(),
-            masks: Vec::new(),
-        })))
+    fn new(path: &Path, masks: JobMasks) -> Result<Self> {
+        Ok(Self {
+            state: Mutex::new(LogState {
+                file: fs::File::create(path)?,
+                bytes: 0,
+                tail: VecDeque::new(),
+            }),
+            masks,
+        })
     }
     fn excerpt(&self) -> String {
-        self.0
+        self.state
             .lock()
             .unwrap()
             .tail
@@ -124,17 +140,16 @@ impl Sink {
 }
 impl LogSink for Sink {
     fn log(&self, _: Level, message: &str) {
-        let mut s = self.0.lock().unwrap();
         if let Some(mask) = message.strip_prefix("::add-mask::") {
-            s.masks.push(mask.into());
+            self.masks.lock().unwrap().push(
+                mask.replace("%0D", "\r")
+                    .replace("%0A", "\n")
+                    .replace("%25", "%"),
+            );
             return;
         }
-        let mut text = message.to_string();
-        for mask in &s.masks {
-            if !mask.is_empty() {
-                text = text.replace(mask, "***");
-            }
-        }
+        let mut text = redact(message, &self.masks);
+        let mut s = self.state.lock().unwrap();
         if text.to_ascii_lowercase().contains("authorization:") || text.contains("Bearer ") {
             text = "[redacted authentication output]".into();
         }
@@ -541,6 +556,7 @@ fn execute_job(
     ]);
     fs::write(tmp.join("empty-npmrc"), "")?;
     let mut failed = false;
+    let masks: JobMasks = Arc::new(Mutex::new(Vec::new()));
     for (index, mut step) in job.steps.iter().cloned().enumerate() {
         if step.id.is_empty() {
             step.id = format!("step-{index}");
@@ -597,7 +613,7 @@ fn execute_job(
             config.pr, parsed.workflow.file
         );
         let log_path = logs.join(format!("{index}.log"));
-        let sink = Arc::new(Sink::new(&log_path)?);
+        let sink = Arc::new(Sink::new(&log_path, masks.clone())?);
         host.replace_log_writer(sink.clone());
         entry.log = Some(log_path.display().to_string());
         let result = (|| -> Result<String> {
@@ -666,7 +682,7 @@ fn execute_job(
                 entry.exit_code = Some(0);
             }
             Err(error) => {
-                entry.reason = error.to_string();
+                entry.reason = redact(&error.to_string(), &masks);
                 entry.status = if entry.reason.starts_with("secret nicht verfügbar") {
                     "blocked".into()
                 } else {
@@ -709,6 +725,21 @@ fn execute_job(
     Ok(report)
 }
 fn execute(config: &Config) -> Result<Report> {
+    if !config.trusted_snapshot {
+        bail!("native pilot requires an explicitly trusted snapshot; no security sandbox");
+    }
+    for name in &config.allowed_workflows {
+        if name.is_empty()
+            || Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name)
+            || !matches!(
+                Path::new(name).extension().and_then(|s| s.to_str()),
+                Some("yml" | "yaml")
+            )
+            || !config.source.join(".github/workflows").join(name).is_file()
+        {
+            bail!("allowlist must name an existing workflow filename: {name}");
+        }
+    }
     if config.source_sha.len() != 40 || config.core_sha.len() != 40 {
         bail!("exact 40-character commit identities required");
     }
@@ -751,6 +782,21 @@ fn execute(config: &Config) -> Result<Report> {
             reason: String::new(),
             jobs: Vec::new(),
         };
+        if !parsed
+            .workflow
+            .on(&parsed.document)
+            .iter()
+            .any(|e| e == "pull_request")
+            && !config.allowed_workflows.contains(&name)
+        {
+            workflow.reason = "no pull_request trigger and not explicitly allowlisted".into();
+            report.workflows.push(workflow);
+            fs::write(
+                config.build_root.join("receipt.json"),
+                serde_json::to_vec_pretty(&report)?,
+            )?;
+            continue;
+        }
         let secrets = regex::Regex::new(r"secrets\.([A-Za-z_][A-Za-z0-9_]*)")?
             .captures_iter(&source)
             .map(|c| c[1].to_string())
@@ -830,7 +876,11 @@ fn main() -> Result<()> {
     let path=std::env::args().nth(1).context("usage: cargo run --example workjet_host_pilot -- CONFIG.json (inside admitted GPU lane only)")?;
     let config: Config = serde_json::from_slice(&fs::read(path)?)?;
     let report = execute(&config)?;
-    if report.workflows.iter().any(|w| w.status != "success") {
+    if report
+        .workflows
+        .iter()
+        .any(|w| w.status != "success" && w.status != "not_triggered")
+    {
         std::process::exit(1);
     }
     Ok(())
@@ -874,6 +924,8 @@ mod tests {
             pr: 1,
             node_bin: PathBuf::from("/usr/bin/node"),
             step_timeout_seconds: 10,
+            trusted_snapshot: true,
+            allowed_workflows: Vec::new(),
         };
         let report = execute(&config).unwrap();
         let job = &report.workflows[0].jobs[0];
@@ -908,11 +960,66 @@ mod tests {
             pr: 1,
             node_bin: PathBuf::from("/usr/bin/node"),
             step_timeout_seconds: 10,
+            trusted_snapshot: true,
+            allowed_workflows: Vec::new(),
         };
         let report = execute(&config).unwrap();
         assert_eq!(report.workflows[0].status, "failure");
         assert_eq!(report.workflows[0].jobs[0].status, "blocked");
         assert!(!config.build_root.join("test.yml/check/worktree").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_selection_is_pr_or_explicit_allowlist_only() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        fs::create_dir_all(source.join(".github/workflows")).unwrap();
+        fs::write(source.join(".github/workflows/manual.yml"), "on: workflow_dispatch\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ::add-mask::job-fixture\n      - run: echo job-fixture\n").unwrap();
+        let mut config = Config {
+            source,
+            build_root: root.path().join("not-selected"),
+            cache_root: root.path().join("cache"),
+            core_source: root.path().join("unused-core"),
+            source_sha: "1".repeat(40),
+            core_sha: "2".repeat(40),
+            engine_sha: "3".repeat(40),
+            repository: "fixture/project".into(),
+            pr: 1,
+            node_bin: PathBuf::from("/usr/bin/node"),
+            step_timeout_seconds: 10,
+            trusted_snapshot: true,
+            allowed_workflows: Vec::new(),
+        };
+        let report = execute(&config).unwrap();
+        assert_eq!(report.workflows[0].status, "not_triggered");
+        assert!(report.workflows[0].jobs.is_empty());
+        assert!(!config.build_root.join("manual.yml").exists());
+        config.build_root = root.path().join("allowlisted");
+        config.allowed_workflows.push("manual.yml".into());
+        let report = execute(&config).unwrap();
+        assert_eq!(report.workflows[0].status, "success");
+        let job = &report.workflows[0].jobs[0];
+        assert_eq!(job.steps[1].excerpt, "***");
+        assert_eq!(
+            fs::read_to_string(job.steps[1].log.as_ref().unwrap()).unwrap(),
+            "***\n"
+        );
+        config.build_root = root.path().join("untrusted");
+        config.trusted_snapshot = false;
+        assert!(execute(&config)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("trusted snapshot"));
+        assert!(!config.build_root.exists());
+        config.trusted_snapshot = true;
+        config.allowed_workflows = vec!["../manual.yml".into()];
+        assert!(execute(&config)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("allowlist"));
     }
 
     #[test]
@@ -941,10 +1048,23 @@ mod tests {
     fn masks_are_applied_before_persistence() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("log");
-        let sink = Sink::new(&path).unwrap();
+        let masks = Arc::new(Mutex::new(Vec::new()));
+        let sink = Sink::new(&path, masks.clone()).unwrap();
         sink.log(Level::Info, "::add-mask::fixture-value");
         sink.log(Level::Info, "echo fixture-value");
         assert_eq!(fs::read_to_string(path).unwrap(), "echo ***\n");
         assert!(!sink.excerpt().contains("fixture-value"));
+        let next = dir.path().join("next-step.log");
+        let next_sink = Sink::new(&next, masks).unwrap();
+        next_sink.log(Level::Info, "next fixture-value");
+        assert_eq!(fs::read_to_string(next).unwrap(), "next ***\n");
+        assert!(!next_sink.excerpt().contains("fixture-value"));
+        let other_job = Sink::new(
+            &dir.path().join("other.log"),
+            Arc::new(Mutex::new(Vec::new())),
+        )
+        .unwrap();
+        other_job.log(Level::Info, "fixture-value");
+        assert_eq!(other_job.excerpt(), "fixture-value");
     }
 }

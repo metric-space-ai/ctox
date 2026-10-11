@@ -36,8 +36,8 @@
 //! compare a backslash path against a forward-slash prefix, reject everything,
 //! and fail safe for the wrong reason.
 //!
-//! Upstream is a fork of the Go standard library (BSD-style licence, see the
-//! `LICENSE` file in the act tree).
+//! Derived from the Go standard library (BSD-3-Clause, Copyright 2009 The
+//! Go Authors); see `../THIRD-PARTY-NOTICES` for the retained license.
 
 /// `path.Clean`: the shortest path name equivalent to `p`, purely lexically.
 ///

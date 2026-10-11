@@ -22,9 +22,10 @@
     }
   ],
   "privateCorpus": {
-    "repo": "metric-space-ai/molecularity",
-    "commit": "8ff63d9db2a7d2bb82faba8983db3ef58654ff87",
-    "path": ".github/workflows/femfx-svd-fixtures.yml",
-    "status": "not vendored: private repository; pilot validation must use an authorized private snapshot"
+    "status": "not vendored: authorized private pilot corpus; identifiers retained only in private evidence"
+  },
+  "upstreamAct": {
+    "version": "v0.2.89",
+    "commit": "4f411281417e88660bea1c1a1749aa71ae0bd60f"
   }
 }

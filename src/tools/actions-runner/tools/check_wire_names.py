@@ -13,17 +13,14 @@ disagree, the daemon is what matters.
 
 Run from the crate root:
 
-    python3 tools/check_wire_names.py
+    python3 tools/check_wire_names.py /path/to/bollard-stubs/src/models.rs
 """
 
 import pathlib
 import re
 import sys
 
-STUB = pathlib.Path(
-    "/Users/michaelwelsch/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f"
-    "/bollard-stubs-1.53.1-rc.29.3.1/src/models.rs"
-)
+CRATE_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # The crate's struct -> the stub struct that models the same JSON object. In Go
 # `Config` is inlined into the create body and `Resources` into `HostConfig`, so
@@ -121,10 +118,13 @@ ACCEPTED = {
 
 
 def main() -> int:
-    stub = STUB.read_text()
+    if len(sys.argv) != 2:
+        print("usage: check_wire_names.py /path/to/bollard-stubs/src/models.rs", file=sys.stderr)
+        return 2
+    stub = pathlib.Path(sys.argv[1]).read_text()
     mine = {}
     for path in SOURCES:
-        for struct, names in renames(pathlib.Path(path).read_text()).items():
+        for struct, names in renames((CRATE_ROOT / path).read_text()).items():
             mine.setdefault(struct, {}).update(names)
 
     bad = 0

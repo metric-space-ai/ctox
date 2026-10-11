@@ -3,6 +3,7 @@ name = "ctox-actions-runner"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
 description = "GitHub Actions workflow execution engine for CTOX (Rust port of nektos/act)"
 
 [features]
@@ -35,7 +36,7 @@ hmac = "0.12"
 # `sha256` is not a default gix feature, but a repository may record
 # `extensions.objectFormat = sha256`, and the index decoder needs to know the
 # object hash width to size the entries. See `git_index::GitIndex::read`.
-gix = { version = "0.88.0", features = ["sha256"] }
+gix = { version = "0.88.0", default-features = false, features = ["index", "sha1", "sha256"] }
 # Enumerating the host's interface addresses, so the cache server can advertise
 # a reachable address on a machine without a default route. Cross-platform,
 # which matters because Windows build computers are a target.

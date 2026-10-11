@@ -68,8 +68,8 @@
 //!   the error *text* is part of the contract and the value is not.
 //! * `ParseFloat` and `FormatInt`. act never parses a float from a workflow.
 //!
-//! Upstream is a fork of the Go standard library (BSD-style licence, see the
-//! `LICENSE` file in the act tree).
+//! Derived from the Go standard library (BSD-3-Clause, Copyright 2009 The
+//! Go Authors); see `../THIRD-PARTY-NOTICES` for the retained license.
 
 /// Go's `strconv.ParseInt(s, 10, 64)` — base 10, 64-bit — **as act uses it**:
 /// the returned value, with the error folded in.

@@ -18,8 +18,8 @@
 //!   matcher with the path-awareness removed. `index.Glob` is called with
 //!   patterns like `vendor/**`, so `**` must be able to consume `/`.
 //!
-//! Upstream is a fork of the Go standard library (BSD-style licence, see the
-//! `LICENSE` file in the act and go-git trees).
+//! Derived from the Go standard library (BSD-3-Clause, Copyright 2009 The
+//! Go Authors) and go-git; see `../THIRD-PARTY-NOTICES` for retained notices.
 //!
 //! Deviations from upstream:
 //!

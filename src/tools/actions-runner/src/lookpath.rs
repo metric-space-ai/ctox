@@ -5,8 +5,8 @@
 //! container environment instead of the host process. That indirection is
 //! the reason this package exists, so [`Env`] is preserved here as a trait.
 //!
-//! Upstream is a fork of the Go standard library (BSD-style licence, see the
-//! `LICENSE` file in the act tree).
+//! Derived from the Go standard library (BSD-3-Clause, Copyright 2009 The
+//! Go Authors); see `../THIRD-PARTY-NOTICES` for the retained license.
 //!
 //! Deviations from upstream:
 //!

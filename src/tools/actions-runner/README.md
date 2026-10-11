@@ -1,10 +1,15 @@
 # Workjet Actions engine (S2)
 
-This is the in-tree Rust port of [nektos/act](https://github.com/nektos/act)
-preserved at `e215ae179b9e6de10fea369c84f170e7916c2c1f`. Upstream-derived
-source and its MIT notice are retained in [LICENSE-MIT](LICENSE-MIT).
+This is the in-tree Rust port of [nektos/act v0.2.89](https://github.com/nektos/act/tree/v0.2.89),
+upstream commit `4f411281417e88660bea1c1a1749aa71ae0bd60f`. The unchanged
+workflow schema matches that release. `e215ae179b9e6de10fea369c84f170e7916c2c1f`
+is the historical CTOX import commit, not an act revision. License texts,
+copyrights, source versions and translation notices are retained in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) and [LICENSE-MIT](LICENSE-MIT).
 
-CTOX links this workspace member with `default-features = false`. Native
+The engine is a workspace member, not a dependency of the CTOX binary: no CTOX
+runtime code calls it yet. S3 must add an explicit admitted service call path.
+Native
 `HostEnvironment` is the execution backend. The default build contains no
 Bollard dependency and cannot instantiate a Docker executor. The historical
 Docker execution/lifecycle modules are gated by the maintenance-only `docker`
@@ -60,9 +65,9 @@ The unchanged act `environment-files` workflow is additionally executed
 natively by a bounded test driver. That driver is explicitly test-only; it
 does not claim to implement production admission, quotas or scheduler behavior.
 
-Molecularity is a private repository. Its workflow is not copied into this
-public repository; provenance records its head/path. It remains an authorized
-private pilot input. Existing project workflows containing `sudo apt-get`
+Private pilot workflows and their repository identifiers, commits and paths
+are not copied into this public repository. They remain in authorized private
+evidence. Existing project workflows containing `sudo apt-get`
 need the documented native-toolchain provisioning distinction; no privileged
 setup command is silently skipped or run.
 
@@ -134,12 +139,23 @@ before the S3 fixture PR and assign its sync-v3:S<n> label; no label is self-iss
 ## Admitted host pilot (vorgabe-38)
 
 `examples/workjet_host_pilot.rs` is a bounded operator pilot for running supplied
-PR snapshots through this engine inside `gpu-build-run.sh`. Its typed JSON
+**trusted** PR snapshots through this engine inside `gpu-build-run.sh`. This
+is native execution under the lane user, not a security sandbox: that user's
+SSH identity and host files remain reachable by executed commands. Never admit
+untrusted forks or unreviewed snapshots. The manifest must explicitly set
+`trusted_snapshot: true`. Only workflows declaring `on: pull_request` are
+selected by default; other workflows require an exact filename in the trusted
+manifest's `allowed_workflows` list (default empty). Nonselected workflows are
+reported `not_triggered`, without dispatch fallback or execution. An explicitly
+allowlisted manual workflow uses its `workflow_dispatch` input defaults.
+
+Its typed JSON
 manifest pins the project/core/engine commits, source/root/cache paths, installed
 Node binary and per-step timeout. It performs no action downloads and reads no
 operator credentials. It preserves native exit codes, step conditions,
 continue-on-error, environment/output/path files, bounded redacted logs and
-per-workflow/job/step JSON receipts. Worktrees and job temporary files are removed
+per-workflow/job/step JSON receipts. `::add-mask::` values apply to every
+subsequent step in the same job and reset between jobs. Worktrees and job temporary files are removed
 after completion, including preparation failures.
 
 Three explicit native adapters cover snapshot `actions/checkout`, verification
@@ -165,3 +181,12 @@ Source receipts must use the committed final engine head. The prototype's dirty
 hash includes untracked filenames but not their contents, so it is insufficient
 for reusing uncommitted pilot results by hash alone; the managed snapshot manifest
 must hash every submitted file's bytes.
+
+## S3 review findings to resolve before exposing managed endpoints
+
+- F5: authenticate v4 artifact routes; reject empty, `.` and `..` artifact IDs
+  before any deletion; replace the cache server's LAN-IP binding with the
+  authenticated managed transport. These legacy endpoints are not exposed by S2.
+- F6: move act's runtime URL/token, XDG cache, color settings and process
+  environment inheritance into typed service configuration. Do not introduce
+  ambient production toggles or pass the lane user's environment to jobs.
