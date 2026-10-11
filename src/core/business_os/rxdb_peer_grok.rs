@@ -20,6 +20,8 @@ use std::{
 pub(super) const METHOD: &str = "ctox.workjet.grok.v1";
 pub(super) const CAPABILITY: &str = "ctox-workjet-grok-v1";
 const CHECK_KEY: &str = "grok_subscription_check";
+// Legacy checks did not require an assistant answer from the requested model.
+const CHECK_VALIDATION_VERSION: u64 = 2;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Request {
@@ -144,19 +146,21 @@ fn saved_check(root: &Path) -> anyhow::Result<Value> {
     let binding = xai::credential_binding(root)?;
     Ok(saved
         .filter(|s| {
-            binding
-                .as_deref()
-                .is_some_and(|b| s["binding"].as_str() == Some(b))
+            s["validationVersion"].as_u64() == Some(CHECK_VALIDATION_VERSION)
+                && binding
+                    .as_deref()
+                    .is_some_and(|b| s["binding"].as_str() == Some(b))
         })
         .map(|s| s["check"].clone())
         .unwrap_or(Value::Null))
 }
-fn genuine_text(body: &[u8]) -> bool {
+fn genuine_text(body: &[u8], requested_model: &str) -> bool {
     let Ok(v) = serde_json::from_slice::<Value>(body) else {
         return false;
     };
     if v.get("object").and_then(Value::as_str) != Some("response")
         || v.get("status").and_then(Value::as_str) != Some("completed")
+        || v.get("model").and_then(Value::as_str) != Some(requested_model)
     {
         return false;
     }
@@ -165,6 +169,7 @@ fn genuine_text(body: &[u8]) -> bool {
         .is_some_and(|items| {
             items.iter().any(|item| {
                 item.get("type").and_then(Value::as_str) == Some("message")
+                    && item.get("role").and_then(Value::as_str) == Some("assistant")
                     && item
                         .get("content")
                         .and_then(Value::as_array)
@@ -191,7 +196,7 @@ async fn probe(root: &Path, model: &str) -> Result<(), &'static str> {
         .map_err(|_| "request_failed")?;
     match router.handle_provider_route(Some("xai"), &body).await {
         OpenAiResponsesRouteResponse::Buffered(response) if response.status() == 200 => {
-            if genuine_text(response.body()) {
+            if genuine_text(response.body(), model) {
                 Ok(())
             } else {
                 Err("invalid_response")
@@ -353,7 +358,7 @@ async fn handle(
             crate::persistence::store_json_payload(
                 &authority.root,
                 CHECK_KEY,
-                Some(&json!({"binding":after,"check":check})),
+                Some(&json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":after,"check":check})),
             )?;
             returned_check = check;
         }
@@ -415,20 +420,36 @@ pub(super) fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn completed_reply() -> Value {
+        json!({"object":"response","status":"completed","model":"grok-4.7","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}]})
+    }
     #[tokio::test]
-    async fn shared_route_requires_real_text_and_reset_invalidates_check() -> anyhow::Result<()> {
+    async fn shared_route_requires_requested_model_assistant_text_and_reset_invalidates_check(
+    ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for (output, expected) in [
+        let valid = completed_reply();
+        let mut cases = vec![(valid.clone(), Value::Null)];
+        for (field, value) in [
+            ("output", json!([])),
+            ("model", Value::Null),
             (
-                json!([{ "type":"message","content":[{"type":"output_text","text":"Hi"}]}]),
-                Value::Null,
-            ),
-            (json!([]), json!("invalid_response")),
-            (
-                json!([{ "type":"message","content":[{"type":"output_text","text":" "}]}]),
-                json!("invalid_response"),
+                "model",
+                json!(format!("{} ", valid["model"].as_str().unwrap())),
             ),
         ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            cases.push((invalid, json!("invalid_response")));
+        }
+        for role in [Value::Null, json!("user"), json!("tool")] {
+            let mut invalid = valid.clone();
+            invalid["output"][0]["role"] = role;
+            cases.push((invalid, json!("invalid_response")));
+        }
+        let mut whitespace = valid;
+        whitespace["output"][0]["content"][0]["text"] = json!(" ");
+        cases.push((whitespace, json!("invalid_response")));
+        for (reply, expected) in cases {
             let root = tempfile::tempdir()?;
             let record = json!({"access":"private-fixture","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
             crate::secrets::write_secret_record(
@@ -460,7 +481,7 @@ mod tests {
                         assert!(request.starts_with("POST /responses"));
                         format!(
                             "data: {}\n\n",
-                            json!({"type":"response.completed","response":{"object":"response","status":"completed","output":output}})
+                            json!({"type":"response.completed","response":reply})
                         )
                     };
                     stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).as_bytes()).await.unwrap();
@@ -510,7 +531,7 @@ mod tests {
         crate::persistence::store_json_payload(
             root.path(),
             CHECK_KEY,
-            Some(&json!({"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
+            Some(&json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
         )?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         xai::test_endpoint(
@@ -565,8 +586,14 @@ mod tests {
     }
     #[test]
     fn failed_response_with_text_is_not_accepted() {
-        assert!(!genuine_text(br#"{"object":"response","status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"Partial"}]}]}"#));
-        assert!(!genuine_text(br#"{"object":"other","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}"#));
+        for (field, value) in [("status", "failed"), ("object", "other")] {
+            let mut reply = completed_reply();
+            reply[field] = json!(value);
+            assert!(!genuine_text(
+                &serde_json::to_vec(&reply).unwrap(),
+                "grok-4.7"
+            ));
+        }
     }
     #[test]
     fn genuine_text_required() {
@@ -575,11 +602,42 @@ mod tests {
             b"invalid",
             br#"{"output":[{"type":"message","content":[{"type":"output_text","text":"  "}]}]}"#,
         ] {
-            assert!(!genuine_text(body));
+            assert!(!genuine_text(body, "grok-4.7"));
         }
         assert!(genuine_text(
-            br#"{"object":"response","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]}]}"#
+            &serde_json::to_vec(&completed_reply()).unwrap(),
+            "grok-4.7"
         ));
+    }
+    #[test]
+    fn legacy_checks_cannot_survive_stricter_model_validation() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        crate::secrets::write_secret_record(
+            root.path(),
+            "provider-subscriptions",
+            "xai-instance-oauth",
+            "private-cache-fixture",
+            None,
+            json!({}),
+        )?;
+        let binding = xai::credential_binding(root.path())?;
+        let check = json!({"modelId":"grok-4.7","status":"ok"});
+        for version in [None, Some(1), Some(CHECK_VALIDATION_VERSION)] {
+            let mut cached = json!({"binding":binding,"check":check});
+            if let Some(version) = version {
+                cached["validationVersion"] = json!(version);
+            }
+            crate::persistence::store_json_payload(root.path(), CHECK_KEY, Some(&cached))?;
+            assert_eq!(
+                saved_check(root.path())?,
+                if version == Some(CHECK_VALIDATION_VERSION) {
+                    check.clone()
+                } else {
+                    Value::Null
+                }
+            );
+        }
+        Ok(())
     }
     fn auth(
         root: &Path,
