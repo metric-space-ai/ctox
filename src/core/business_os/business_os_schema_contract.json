@@ -12022,7 +12022,7 @@
     "additionalProperties": true
   },
   "workjet_computers": {
-    "version": 1,
+    "version": 2,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12058,6 +12058,46 @@
       },
       "self_hosted_colocation": {
         "type": "boolean"
+      },
+      "roles": {
+        "type": "object",
+        "properties": {
+          "build": {
+            "type": "boolean"
+          },
+          "storage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "build",
+          "storage"
+        ],
+        "additionalProperties": false
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "detected_facts": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": true
+      },
+      "host_key_fingerprint": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 256
+      },
+      "machine_id": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 4096
       },
       "device_binding_id": {
         "type": "string",

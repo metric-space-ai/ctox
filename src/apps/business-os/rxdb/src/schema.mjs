@@ -222,7 +222,7 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   user_thread_messages: '3e9ac54c218496245fdeaa9e8cd6f2f649455448703bada2ac290a1de4fd7646',
   user_thread_states: '71e70b8a2e44bd2b851b24fde40a5b4cd42cd9e0b6158525055a9c04743de9eb',
   user_threads: '97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb',
-  workjet_computers: '367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595',
+  workjet_computers: '3f11f62014027e0de029afdcc34e92edf9a14ecaeb714317d21d6ed78c1e4054',
   workjet_project_chats: 'f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e',
   workjet_project_workers: 'f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892',
   workjet_projects: 'a89d21f4956fd4fd8e3bc8627306fa504b7190a92cf623e52b1fcdecd1ceee1d',

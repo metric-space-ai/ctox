@@ -6,7 +6,7 @@ import { applyDeclarativeMigration } from '../../shared/declarative-migrations.j
 const packaged = JSON.parse(readFileSync(new URL('../../modules/ctox/collections.schema.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
 const schema = collections.workjet_computers;
-assert.equal(schema.version, 1, 'a changed v0 hash requires a new collection version');
+assert.equal(schema.version, 2, 'detected metadata requires a new collection version');
 assert.deepEqual(packaged.collections.workjet_computers, schema);
 assert.deepEqual(contract.workjet_computers, schema);
 
@@ -39,4 +39,8 @@ for (const [original, expected] of [
   assert.deepEqual(original, before, 'migration does not mutate source or revision metadata');
   assert.deepEqual(migrationStrategies.workjet_computers[1](js), js, 'retry is idempotent');
 }
-console.log('Workjet computer migration preserves legacy data, bindings, tombstones and revisions');
+const retained = { ...bound, active: false, roles: { build: false, storage: true },
+  detected_facts: { machineId: 'existing-machine' }, host_key_fingerprint: 'existing-pin' };
+assert.deepEqual(migrationStrategies.workjet_computers[2](retained), retained);
+assert.deepEqual(applyDeclarativeMigration(retained, packaged.migration_strategies.workjet_computers['2']), retained);
+console.log('Workjet computer migration preserves legacy data, bindings, tombstones, facts and revisions');

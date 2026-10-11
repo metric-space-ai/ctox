@@ -734,7 +734,7 @@ export const collections = {
     additionalProperties: false
   },
   workjet_computers: {
-    version: 1,
+    version: 2,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -748,6 +748,12 @@ export const collections = {
         items: { type: 'string', maxLength: 80 }
       },
       self_hosted_colocation: { type: 'boolean' },
+      roles: { type: 'object', properties: { build: { type: 'boolean' }, storage: { type: 'boolean' } },
+        required: ['build', 'storage'], additionalProperties: false },
+      active: { type: 'boolean' },
+      detected_facts: { type: ['object', 'null'], additionalProperties: true },
+      host_key_fingerprint: { type: ['string', 'null'], maxLength: 256 },
+      machine_id: { type: ['string', 'null'], maxLength: 4096 },
       device_binding_id: { type: 'string', maxLength: 160 },
       actor_epoch: { type: 'integer', minimum: 0 },
       last_seen_at_ms: { type: 'integer', minimum: 0 },
@@ -920,7 +926,8 @@ export const migrationStrategies = {
       last_seen_at_ms: oldDoc.last_seen_at_ms || 0,
       replication_up: oldDoc.replication_up || false,
       is_deleted: oldDoc.is_deleted || false
-    })
+    }),
+    2: (oldDoc) => oldDoc
   },
   business_commands: {
     1: (oldDoc) => ({

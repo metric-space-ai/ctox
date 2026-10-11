@@ -197,6 +197,8 @@ function capabilityControlFixture(receiptTransform = (receipt) => receipt) {
             id: payload.computer_id, owner_user_id: 'owner-1', display_name: payload.display_name,
             hosting_mode: payload.hosting_mode, status: 'assigned', self_hosted_colocation: false,
             capability_config: payload.capability_config, agentless: payload.agentless,
+            roles: payload.roles, active: payload.active, detected_facts: payload.detected_facts,
+            host_key_fingerprint: payload.host_key_fingerprint, machine_id: payload.detected_facts?.machineId,
             capabilities: payload.capability_config?.map((entry) => entry.kind) || [],
           };
           return receiptTransform({
@@ -344,4 +346,53 @@ test('native SSH key setup rejects wrong identity, unsupported material, and inl
     (receipt) => { receipt.result.private_key_bytes = 'secret'; return receipt; },
   ];
   for (const transform of transforms) await assert.rejects(capabilityControlFixture(transform).invoke(request));
+});
+
+const detectedAssignment = {
+  action: 'computer.assign', commandId: 'detected', computerId: 'computer-facts',
+  displayName: 'Fixture', hostingMode: 'workstation', roles: { build: true, storage: false }, active: false,
+  hostKeyFingerprint: 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  detectedFacts: { checkedAt: '2026-10-11T20:00:00Z', machineId: 'fixture-machine',
+    operatingSystem: 'Linux', architecture: 'x86_64', cpuCores: 16, ramBytes: 128000000000,
+    homeDirectory: '/home/fixture', workDirectory: '/home/fixture/.workjet/computer-work',
+    freeBytes: 400000000000, gpus: [], toolchains: { rustc: 'rustc 1.90' }, codingTools: {}, warnings: [] },
+};
+
+test('detected roles, inactive state and identity round-trip without manual capacity or key creation', async () => {
+  const { invoke, commands } = capabilityControlFixture();
+  const result = await invoke(detectedAssignment);
+  assert.deepEqual(result.computer.roles, detectedAssignment.roles);
+  assert.equal(result.computer.active, false);
+  assert.deepEqual(result.computer.detectedFacts, detectedAssignment.detectedFacts);
+  assert.equal(result.computer.machineId, 'fixture-machine');
+  assert.equal(result.computer.hostKeyFingerprint, detectedAssignment.hostKeyFingerprint);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].command_type, 'ctox.workjet.computer.assign');
+  assert.equal('capability_config' in commands[0].payload, false);
+  assert.equal(commands[0].payload.active, false);
+});
+
+test('missing legacy confirmation fields remain valid while conflicting supported fields fail', async () => {
+  const legacy = capabilityControlFixture((receipt) => {
+    for (const key of ['roles', 'active', 'detected_facts', 'host_key_fingerprint', 'machine_id']) delete receipt.result.computer[key];
+    return receipt;
+  });
+  const result = await legacy.invoke(detectedAssignment);
+  assert.equal(result.computer.status, 'assigned');
+  assert.equal('active' in result.computer, false);
+  await assert.rejects(capabilityControlFixture((receipt) => {
+    receipt.result.computer.active = true;
+    return receipt;
+  }).invoke(detectedAssignment), /not confirmed/);
+});
+
+test('invalid detected flags, facts and identity never reach native dispatch', async () => {
+  const { invoke, commands } = capabilityControlFixture();
+  for (const changed of [
+    { active: 'yes' }, { roles: { build: true, storage: false, private_key: 'never' } },
+    { hostKeyFingerprint: 'SHA256:short' },
+    { detectedFacts: { ...detectedAssignment.detectedFacts, cpuCores: 0 } },
+    { detectedFacts: { ...detectedAssignment.detectedFacts, private_key: 'never' } },
+  ]) await assert.rejects(invoke({ ...detectedAssignment, ...changed }));
+  assert.equal(commands.length, 0);
 });

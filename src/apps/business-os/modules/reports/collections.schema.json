@@ -1469,6 +1469,9 @@
       ],
       "primaryKey": "id",
       "properties": {
+        "active": {
+          "type": "boolean"
+        },
         "actor_epoch": {
           "minimum": 0,
           "type": "integer"
@@ -1485,6 +1488,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "detected_facts": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "device_binding_id": {
           "maxLength": 160,
           "type": "string"
@@ -1492,6 +1502,13 @@
         "display_name": {
           "maxLength": 256,
           "type": "string"
+        },
+        "host_key_fingerprint": {
+          "maxLength": 256,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "hosting_mode": {
           "enum": [
@@ -1511,12 +1528,35 @@
           "minimum": 0,
           "type": "integer"
         },
+        "machine_id": {
+          "maxLength": 4096,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "owner_user_id": {
           "maxLength": 256,
           "type": "string"
         },
         "replication_up": {
           "type": "boolean"
+        },
+        "roles": {
+          "additionalProperties": false,
+          "properties": {
+            "build": {
+              "type": "boolean"
+            },
+            "storage": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "build",
+            "storage"
+          ],
+          "type": "object"
         },
         "self_hosted_colocation": {
           "type": "boolean"
@@ -1554,7 +1594,7 @@
         "is_deleted"
       ],
       "type": "object",
-      "version": 1
+      "version": 2
     },
     "workjet_project_chats": {
       "additionalProperties": false,

@@ -13408,6 +13408,10 @@ async function workjetComputerControl(request = {}) {
       'hostingMode',
       'capabilities',
       'capabilityConfig',
+      'roles',
+      'active',
+      'detectedFacts',
+      'hostKeyFingerprint',
       'agentless',
       'selfHostedColocation',
       'colocationConfirmation',
@@ -13444,6 +13448,13 @@ async function workjetComputerControl(request = {}) {
     if (colocationConfirmation !== undefined) {
       payload.colocation_confirmation = colocationConfirmation;
     }
+    if (request.roles !== undefined) payload.roles = boundedWorkjetComputerRoles(request.roles);
+    if (request.active !== undefined) {
+      if (typeof request.active !== 'boolean') throw new Error('Invalid Workjet computer active flag.');
+      payload.active = request.active;
+    }
+    if (request.detectedFacts !== undefined) payload.detected_facts = boundedWorkjetComputerFacts(request.detectedFacts);
+    if (request.hostKeyFingerprint !== undefined) payload.host_key_fingerprint = boundedWorkjetComputerFingerprint(request.hostKeyFingerprint);
     if (request.capabilityConfig !== undefined) {
       payload.capability_config = boundedWorkjetOperationalCapabilities(request.capabilityConfig);
     }
@@ -13464,11 +13475,20 @@ async function workjetComputerControl(request = {}) {
       },
     }, { until: 'terminal', timeoutMs: WORKJET_COMPUTER_CONTROL_TIMEOUT_MS });
     // Typed grants are confirmed by their correlated native receipt, never by an old projection.
-    if (payload.capability_config !== undefined || payload.agentless !== undefined) {
+    if (payload.capability_config !== undefined || payload.agentless !== undefined
+      || payload.roles !== undefined || payload.active !== undefined
+      || payload.detected_facts !== undefined || payload.host_key_fingerprint !== undefined) {
       const native = completedWorkjetComputerResult(receipt, commandId)?.computer;
       if (!native || native.id !== computerId || native.owner_user_id !== ownerUserId
         || native.status !== 'assigned'
         || (payload.agentless !== undefined && native.agentless !== payload.agentless)
+        || (payload.active !== undefined && native.active !== undefined && native.active !== payload.active)
+        || (payload.roles !== undefined && native.roles !== undefined
+          && JSON.stringify(boundedWorkjetComputerRoles(native.roles)) !== JSON.stringify(payload.roles))
+        || (payload.detected_facts !== undefined && native.detected_facts !== undefined
+          && JSON.stringify(boundedWorkjetComputerFacts(native.detected_facts)) !== JSON.stringify(payload.detected_facts))
+        || (payload.host_key_fingerprint !== undefined && native.host_key_fingerprint !== undefined
+          && boundedWorkjetComputerFingerprint(native.host_key_fingerprint) !== payload.host_key_fingerprint)
         || (payload.capability_config !== undefined
           && JSON.stringify(boundedWorkjetOperationalCapabilities(native.capability_config))
             !== JSON.stringify(payload.capability_config))) {
@@ -13591,6 +13611,60 @@ async function workjetComputerControl(request = {}) {
   }
 
   throw new Error(`Unsupported Workjet computer control action: ${action}`);
+}
+
+function boundedWorkjetComputerRoles(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Workjet computer roles.');
+  assertWorkjetComputerPayloadKeys(value, new Set(['build', 'storage']));
+  if (typeof value.build !== 'boolean' || typeof value.storage !== 'boolean') throw new Error('Invalid Workjet computer roles.');
+  return { build: value.build, storage: value.storage };
+}
+
+function boundedWorkjetComputerFingerprint(value) {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !/^SHA256:[A-Za-z0-9+/]{43}$/.test(value)) throw new Error('Invalid Workjet host-key fingerprint.');
+  return value;
+}
+
+function boundedWorkjetComputerFacts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || JSON.stringify(value).length > 65536) throw new Error('Invalid Workjet detected facts.');
+  assertWorkjetComputerPayloadKeys(value, new Set(['checkedAt', 'machineId', 'operatingSystem', 'architecture',
+    'cpuCores', 'ramBytes', 'homeDirectory', 'workDirectory', 'freeBytes', 'gpus', 'toolchains', 'codingTools', 'warnings']));
+  const text = (input, label) => boundedWorkjetComputerText(input, label, 4096);
+  const bytes = (input) => {
+    if (!Number.isSafeInteger(input) || input < 0) throw new Error('Invalid Workjet detected byte count.');
+    return input;
+  };
+  const versions = (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+      || Object.keys(input).length > 32) throw new Error('Invalid Workjet detected tool versions.');
+    return Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b)).map(([tool, version]) =>
+      [boundedWorkjetComputerText(tool, 'tool', 128), text(version, 'version')]));
+  };
+  if (!Array.isArray(value.gpus) || value.gpus.length > 32
+    || !Array.isArray(value.warnings) || value.warnings.length > 64) throw new Error('Invalid Workjet GPU/warning list.');
+  return {
+    checkedAt: text(value.checkedAt, 'checkedAt'),
+    machineId: value.machineId === null ? null : text(value.machineId, 'machineId'),
+    operatingSystem: text(value.operatingSystem, 'operatingSystem'),
+    architecture: text(value.architecture, 'architecture'),
+    cpuCores: workjetComputerInteger(value.cpuCores, 'CPU cores', 65535),
+    ramBytes: bytes(value.ramBytes),
+    homeDirectory: text(value.homeDirectory, 'homeDirectory'),
+    workDirectory: text(value.workDirectory, 'workDirectory'),
+    freeBytes: bytes(value.freeBytes),
+    gpus: value.gpus.map((gpu) => {
+      if (!gpu || typeof gpu !== 'object' || Array.isArray(gpu)) throw new Error('Invalid Workjet GPU.');
+      assertWorkjetComputerPayloadKeys(gpu, new Set(['model', 'vramBytes', 'unifiedMemory']));
+      if (typeof gpu.unifiedMemory !== 'boolean') throw new Error('Invalid Workjet GPU memory kind.');
+      return { model: text(gpu.model, 'GPU model'), vramBytes: gpu.vramBytes === null ? null : bytes(gpu.vramBytes),
+        unifiedMemory: gpu.unifiedMemory };
+    }),
+    toolchains: versions(value.toolchains),
+    codingTools: versions(value.codingTools),
+    warnings: value.warnings.map((warning) => text(warning, 'warning')),
+  };
 }
 
 function completedWorkjetComputerResult(receipt, commandId) {
@@ -13794,6 +13868,11 @@ function boundedWorkjetComputerResult(value, options = {}) {
     displayName: boundedWorkjetComputerText(value.display_name, 'computer.displayName', 256),
     hostingMode: boundedWorkjetComputerHostingMode(value.hosting_mode),
     status: value.status,
+    ...(value.roles !== undefined ? { roles: boundedWorkjetComputerRoles(value.roles) } : {}),
+    ...(typeof value.active === 'boolean' ? { active: value.active } : {}),
+    ...(value.detected_facts != null ? { detectedFacts: boundedWorkjetComputerFacts(value.detected_facts) } : {}),
+    ...(value.host_key_fingerprint !== undefined ? { hostKeyFingerprint: boundedWorkjetComputerFingerprint(value.host_key_fingerprint) } : {}),
+    ...(value.machine_id != null ? { machineId: boundedWorkjetComputerText(value.machine_id, 'machineId', 4096) } : {}),
     capabilities: Object.freeze(boundedWorkjetComputerCapabilities(value.capabilities)),
     ...(options.includeOperationalDetails && value.capability_config !== undefined
       ? { capabilityConfig: Object.freeze(boundedWorkjetOperationalCapabilities(value.capability_config)) } : {}),
