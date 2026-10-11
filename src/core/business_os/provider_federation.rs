@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
 mod quota_readback;
 
 #[path = "provider_account_controls.rs"]
-
 pub(in crate::business_os) mod account_controls;
 
 const MAX_ACCOUNTS: usize = 256;

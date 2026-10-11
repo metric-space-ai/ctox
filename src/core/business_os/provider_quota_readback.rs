@@ -20,8 +20,23 @@ fn targets(conn: &Connection, owner: &str, holder: &str) -> Result<Vec<Target>> 
          WHERE a.owner_user_id=?1 AND a.holder_instance_id=?2 AND a.provider='claude'
            AND a.private_local_account_id<>?3 ORDER BY a.account_id LIMIT ?4",
     )?;
-    let result = query.query_map(params![owner,holder,INHERITED_NATIVE_ACCOUNT_ID,MAX_ACCOUNTS as i64+1],
-        |row| Ok(Target{id:row.get(0)?,local:row.get(1)?,binding:row.get(2)?,revision:row.get(3)?}))?
+    let result = query
+        .query_map(
+            params![
+                owner,
+                holder,
+                INHERITED_NATIVE_ACCOUNT_ID,
+                MAX_ACCOUNTS as i64 + 1
+            ],
+            |row| {
+                Ok(Target {
+                    id: row.get(0)?,
+                    local: row.get(1)?,
+                    binding: row.get(2)?,
+                    revision: row.get(3)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(result.len() <= MAX_ACCOUNTS, "quota account limit exceeded");
     Ok(result)
@@ -37,18 +52,29 @@ fn publish(
 ) -> Result<Value> {
     let mut conn = store::open_store(root)?;
     let snapshot = conn.transaction()?;
-    ensure!(management_owner(&snapshot, actor)? == owner, "quota reader authority changed");
+    ensure!(
+        management_owner(&snapshot, actor)? == owner,
+        "quota reader authority changed"
+    );
     let current = match holder {
-        Some(holder) if store::existing_instance_id(root).ok().as_deref() == Some(holder) =>
-            targets(&snapshot, owner, holder)?,
+        Some(holder) if store::existing_instance_id(root).ok().as_deref() == Some(holder) => {
+            targets(&snapshot, owner, holder)?
+        }
         _ => vec![],
     };
     let mut result = list(&snapshot, owner)?;
-    for account in result["accounts"].as_array_mut().context("account metadata is missing")? {
-        let observed = current.iter().find(|target| account["id"].as_str() == Some(target.id.as_str()))
+    for account in result["accounts"]
+        .as_array_mut()
+        .context("account metadata is missing")?
+    {
+        let observed = current
+            .iter()
+            .find(|target| account["id"].as_str() == Some(target.id.as_str()))
             .filter(|target| captured.contains(target))
             .and_then(|target| values.get(&target.local));
-        account["reportedQuota"] = observed.cloned().unwrap_or_else(|| json!({"state":"unknown"}));
+        account["reportedQuota"] = observed
+            .cloned()
+            .unwrap_or_else(|| json!({"state":"unknown"}));
     }
     Ok(result)
 }
@@ -61,14 +87,20 @@ pub(super) fn read(root: &Path, actor: &str) -> Result<Value> {
         // An older/remote holder can still supply account metadata. Missing
         // local identity never permits guessing its selector or quota.
         let holder = store::existing_instance_id(root).ok();
-        let captured = holder.as_deref().map(|h| targets(&snapshot, &owner, h))
-            .transpose()?.unwrap_or_default();
+        let captured = holder
+            .as_deref()
+            .map(|h| targets(&snapshot, &owner, h))
+            .transpose()?
+            .unwrap_or_default();
         (owner, holder, captured)
     };
-    let private = captured.iter().map(|target| (target.local.as_str(), target.binding.as_str()))
+    let private = captured
+        .iter()
+        .map(|target| (target.local.as_str(), target.binding.as_str()))
         .collect::<Vec<_>>();
-    crate::execution::cliproxyapi_host::with_reported_claude_quotas(root, &private, |values|
-        publish(root, actor, &owner, holder.as_deref(), &captured, values))
+    crate::execution::cliproxyapi_host::with_reported_claude_quotas(root, &private, |values| {
+        publish(root, actor, &owner, holder.as_deref(), &captured, values)
+    })
 }
 
 #[cfg(test)]
