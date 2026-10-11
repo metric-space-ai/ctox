@@ -2016,6 +2016,11 @@ fn outbound_lead_generation_lead_state_patch(
         lead_payload["research_started_at_ms"] = Value::Number(now.into());
     } else {
         lead_payload["research_finished_at_ms"] = Value::Number(now.into());
+        // The app records the queue phase of a running research
+        // (queued/leased/retry_wait) and never clears it. On thesen 471 of 828
+        // finished leads still carried such a phase hours to days after their
+        // command ended (11.10.2026); a finished research has no live phase.
+        lead_payload["research_execution_phase"] = Value::Null;
     }
     if let Some(error) = error.filter(|value| !value.trim().is_empty()) {
         lead_payload["research_error"] = Value::String(error.to_string());
@@ -3354,6 +3359,10 @@ mod tests {
         assert_eq!(completed["research_error"], Value::Null);
         assert_eq!(completed["native_research_terminal_status"], "needs_review");
         assert_eq!(completed["research_finished_at_ms"], 2_000);
+        assert_eq!(completed["research_execution_phase"], Value::Null);
+        assert_eq!(failed["research_execution_phase"], Value::Null);
+        let running = outbound_lead_generation_lead_state_patch("cmd-run", "running", None, 3_000);
+        assert!(running.get("research_execution_phase").is_none());
 
         let document = outbound_lead_generation_lead_state_document(
             "lead-1",
