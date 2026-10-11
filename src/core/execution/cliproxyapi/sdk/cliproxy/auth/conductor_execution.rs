@@ -232,11 +232,21 @@ impl AccountRouter {
             .collect())
     }
 
+    pub fn begin_claude_quota_observation(
+        &self,
+        auth_id: &str,
+    ) -> Result<super::ClaudeQuotaObservation, AccountRoutingError> {
+        let generation = self.quotas.as_ref().map(|store| {
+            store.capture_generation("claude", auth_id)
+        }).transpose().map_err(AccountRoutingError::Quota)?.flatten();
+        Ok(super::ClaudeQuotaObservation { auth_id: auth_id.into(), generation })
+    }
+
     /// Called only after an actual Claude transport response. Never accepts
     /// caller metadata, cooldown estimates or billing headers as quota facts.
     pub fn observe_claude_quota(
         &self,
-        auth_id: &str,
+        observation: super::ClaudeQuotaObservation,
         headers: &crate::sdk::cliproxy::executor::Headers,
         observed_at_ms: i64,
     ) -> Result<(), AccountRoutingError> {
@@ -248,7 +258,7 @@ impl AccountRouter {
             ),
         ) {
             store
-                .save("claude", auth_id, &snapshot)
+                .save_if_generation("claude", &observation.auth_id, &snapshot, observation.generation.as_ref())
                 .map_err(AccountRoutingError::Quota)?;
         }
         Ok(())

@@ -3,6 +3,7 @@
 #[derive(Default)]
 struct SessionMessagesTransport {
     headers: ctox_cliproxyapi::sdk::cliproxy::executor::Headers,
+    on_request: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 impl ClaudeMessagesTransport for SessionMessagesTransport {
     fn execute<'a>(
@@ -19,6 +20,9 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
         Box::pin(async move {
             let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
             assert_eq!(body["stream"], true);
+            if let Some(on_request) = &self.on_request {
+                on_request();
+            }
             let events = [
                 serde_json::json!({"type":"message_start","message":{
                     "id":"message-test","type":"message","role":"assistant",
@@ -77,6 +81,38 @@ impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
     }
 }
 
+#[tokio::test]
+async fn provider_quota_native_http_late_response_after_relogin_is_not_persisted() {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore;
+    for session in ["late-buffered", "stream-late-response"] {
+        let root = tempfile::tempdir().unwrap();
+        let config = stored_claude_runtime();
+        let account = config.claude_accounts[0].clone();
+        let model = account.models[0].clone();
+        CtoxClaudeSecretStore::new(root.path()).store_credentials(
+            &account.credential_handles().unwrap(), &credentials("before-access", "before-refresh")
+        ).unwrap();
+        let callback_root = root.path().to_owned();
+        let callback_id = account.id.clone();
+        let on_request: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            // Runs inside the actual buffered/streaming transport, after the
+            // pool captures its generation but before response headers arrive.
+            install_claude_subscription(&callback_root, &callback_id, &credentials("after-access", "after-refresh")).unwrap();
+        });
+        let reported = HashMap::from([(account.id.clone(), BTreeMap::from([
+            ("Anthropic-Ratelimit-Unified-5h-Status".into(), vec!["allowed".into()]),
+            ("Anthropic-Ratelimit-Unified-5h-Reset".into(), vec!["40".into()]),
+            ("Anthropic-Ratelimit-Unified-5h-Utilization".into(), vec!["0.25".into()]),
+        ]))]);
+        assert_eq!(session_http_turn_reported_during_transport(root.path(), config, &model, None, session, &reported, Some(on_request)).await, account.id);
+        let store = account_quotas::CtoxAccountQuotaStore::new(root.path());
+        assert!(store.load("claude", &[account.id]).unwrap().is_empty());
+        let conn = crate::persistence::open_sqlite(root.path()).unwrap();
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(rows, 0, "a late response cannot write quota into a different credential generation");
+    }
+}
+
 async fn session_http_turn(
     root: &Path,
     config: CliproxyRuntimeConfig,
@@ -101,7 +137,19 @@ async fn session_http_turn_reported(
     session: &str,
     reported: &HashMap<String, ctox_cliproxyapi::sdk::cliproxy::executor::Headers>,
 ) -> String {
+    session_http_turn_reported_during_transport(root, config, model, account, session, reported, None).await
+}
+async fn session_http_turn_reported_during_transport(
+    root: &Path,
+    config: CliproxyRuntimeConfig,
+    model: &str,
+    account: Option<&str>,
+    session: &str,
+    reported: &HashMap<String, ctox_cliproxyapi::sdk::cliproxy::executor::Headers>,
+    on_request: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    mutate_proxy_config(root, "claude", |runtime| *runtime = config.clone()).unwrap();
     let config = config.validate().unwrap();
     let transports = config
         .claude_accounts()
@@ -113,9 +161,11 @@ async fn session_http_turn_reported(
                     refresh: Arc::new(UnusedRefreshTransport),
                     messages: Arc::new(SessionMessagesTransport {
                         headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                        on_request: on_request.clone(),
                     }),
                     messages_stream: Some(Arc::new(SessionMessagesTransport {
                         headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                        on_request: on_request.clone(),
                     })),
                 },
             )

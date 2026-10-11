@@ -70,6 +70,25 @@ impl ReportedQuotaSnapshot {
 
 /// No credentials, client labels, prompts, raw headers or provider error text.
 /// The host serializes observations and rejects an older snapshot replacing a newer one.
+/// A generation is holder-private: never serialize it into public quota metadata.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountQuotaGeneration([u8; 32]);
+impl AccountQuotaGeneration {
+    pub fn from_host_digest(digest: [u8; 32]) -> Self {
+        Self(digest)
+    }
+    pub fn host_digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Captured before transport execution and consumed after an actual response.
+/// No Debug/Serialize: account selectors and generations remain holder-private.
+pub struct ClaudeQuotaObservation {
+    pub(super) auth_id: String,
+    pub(super) generation: Option<AccountQuotaGeneration>,
+}
+
 pub trait AccountQuotaStore: Send + Sync {
     fn load(
         &self,
@@ -82,6 +101,27 @@ pub trait AccountQuotaStore: Send + Sync {
         auth_id: &str,
         snapshot: &ReportedQuotaSnapshot,
     ) -> Result<(), AccountQuotaStoreError>;
+
+    fn capture_generation(
+        &self,
+        _provider: &str,
+        _auth_id: &str,
+    ) -> Result<Option<AccountQuotaGeneration>, AccountQuotaStoreError> {
+        Ok(None)
+    }
+
+    fn save_if_generation(
+        &self,
+        provider: &str,
+        auth_id: &str,
+        snapshot: &ReportedQuotaSnapshot,
+        generation: Option<&AccountQuotaGeneration>,
+    ) -> Result<(), AccountQuotaStoreError> {
+        if generation.is_some() {
+            return Err(AccountQuotaStoreError::InvalidRecord);
+        }
+        self.save(provider, auth_id, snapshot)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountQuotaStoreError {

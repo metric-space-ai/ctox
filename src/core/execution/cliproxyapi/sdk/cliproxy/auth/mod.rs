@@ -3,7 +3,8 @@
 
 pub mod account_quota;
 pub use account_quota::{
-    AccountQuotaStore, AccountQuotaStoreError, QuotaWindowKind, ReportedQuotaSnapshot,
+    AccountQuotaGeneration, AccountQuotaStore, AccountQuotaStoreError, ClaudeQuotaObservation,
+    QuotaWindowKind, ReportedQuotaSnapshot,
     ReportedQuotaStatus, ReportedQuotaWindow,
 };
 pub mod account_session;
