@@ -298,6 +298,13 @@ export function finalizeImportAnalysis(entries, meta, selectedGroups, grouped) {
   let selectedEntries = entries, selectedCount = entries.length;
   if (grouped) {
     const problemFree = rows.filter((_, i) => !entries[i].problems?.length);
+    // A first preview carries no selection. A large catalog is narrowed by
+    // list on purpose, but a small file that fits under the cap is imported
+    // whole: showing it as "0 gültige Leads" read as a failed import
+    // (THESEN, 11.10.2026: two-company Excel looked unimportable).
+    if (!Array.isArray(selectedGroups) && problemFree.length <= groupLimit) {
+      selectedGroups = selectImportGroups(problemFree, sheet).groups.map((g) => g.id);
+    }
     const groupsResult = selectImportGroups(problemFree, sheet, selectedGroups);
     groups = groupsResult.groups;
     const sel = selectImportGroups(rows, sheet, selectedGroups);
