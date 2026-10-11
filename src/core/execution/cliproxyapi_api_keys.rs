@@ -16,6 +16,38 @@ use ctox_cliproxyapi::internal::runtime::executor::{
 use ctox_cliproxyapi::sdk::api::handlers::openai::OpenAiResponsesGenericStream;
 use ctox_cliproxyapi::sdk::pluginapi::{HostHttpClient, ProviderExecutor};
 
+pub(super) struct Routes {
+    root: PathBuf,
+    timeout: Duration,
+    http: std::sync::Mutex<Option<Arc<dyn HostHttpClient>>>,
+    cached: std::sync::Mutex<BTreeMap<String, Arc<Handler>>>,
+}
+impl Routes {
+    pub(super) fn route_for(&self, provider: &str) -> anyhow::Result<Option<Arc<Handler>>> {
+        let mut stored = crate::execution::cliproxyapi_integration::load_provider_integration_config(&self.root)?;
+        stored.config.api_key_accounts.retain(|a| a.endpoint.provider() == provider && !a.disabled && !a.models.is_empty());
+        let mut cached = self.cached.lock().map_err(|_| anyhow::anyhow!("API route cache unavailable"))?;
+        if stored.config.api_key_accounts.is_empty() { cached.remove(provider); return Ok(None); }
+        if let Some(handler) = cached.get(provider) {
+            if handler.accounts.len() == stored.config.api_key_accounts.len()
+                && handler.accounts.iter().zip(&stored.config.api_key_accounts).all(|(a, config)| a.config == *config && current(&self.root, config, &a.version)) {
+                return Ok(Some(handler.clone()));
+            }
+        }
+        let mut transport = self.http.lock().map_err(|_| anyhow::anyhow!("API transport unavailable"))?;
+        let http = match transport.as_ref() {
+            Some(http) => http.clone(),
+            None => {
+                let http: Arc<dyn HostHttpClient> = Arc::new(ApiKeyHttpClient::new(None, self.timeout).map_err(|_| anyhow::anyhow!("API provider transport unavailable"))?);
+                *transport = Some(http.clone()); http
+            }
+        };
+        let handler = build_with_http(&self.root, &stored, http)?.remove(provider);
+        if let Some(handler) = &handler { cached.insert(provider.to_owned(), handler.clone()); }
+        Ok(handler)
+    }
+}
+
 struct Resolved {
     config: ApiKeyAccountConfig,
     key: Zeroizing<String>,
@@ -30,6 +62,7 @@ pub(super) struct Handler {
     executor: OpenAiCompatExecutor,
 }
 fn current(root: &Path, config: &ApiKeyAccountConfig, version: &str) -> bool {
+    let _guard = crate::secrets::credential_lifecycle_guard();
     crate::execution::cliproxyapi_integration::load_provider_integration_config(root).is_ok_and(
         |s| {
             s.config
@@ -73,22 +106,12 @@ fn resolve(
 }
 pub(super) fn build(
     root: &Path,
-    stored: &StoredProviderIntegrationConfig,
+    _stored: &StoredProviderIntegrationConfig,
     timeout: Duration,
-) -> anyhow::Result<BTreeMap<String, Arc<Handler>>> {
-    if !stored
-        .config
-        .api_key_accounts
-        .iter()
-        .any(|a| !a.disabled && !a.models.is_empty())
-    {
-        return Ok(BTreeMap::new());
-    }
-    let http: Arc<dyn HostHttpClient> = Arc::new(
-        ApiKeyHttpClient::new(None, timeout)
-            .map_err(|_| anyhow::anyhow!("API provider transport unavailable"))?,
-    );
-    build_with_http(root, stored, http)
+) -> anyhow::Result<Arc<Routes>> {
+    // Keep the manager even for OAuth-only startup. A subsequently added API
+    // account becomes usable without rebuilding the instance proxy service.
+    Ok(Arc::new(Routes { root: root.to_path_buf(), timeout, http: std::sync::Mutex::new(None), cached: std::sync::Mutex::new(BTreeMap::new()) }))
 }
 fn build_with_http(
     root: &Path,

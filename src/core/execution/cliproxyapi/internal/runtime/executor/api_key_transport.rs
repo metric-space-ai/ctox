@@ -5,7 +5,7 @@
 //!
 //! The OAuth providers each carry a bespoke transport with a browser
 //! fingerprint, because their upstreams inspect one. The API-key providers
-//! (see [`crate::internal::config::API_KEY_PROVIDERS`]) are ordinary
+//! (configured by the native holder) are ordinary
 //! OpenAI-compatible HTTP endpoints, so this transport stays deliberately
 //! plain: no emulation profile, no redirects, no retry, no ambient proxy.
 //!
