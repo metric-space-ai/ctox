@@ -70,14 +70,20 @@ impl CodexSubscriptionAuth {
         tokio::spawn(async move {
             let load_store = Arc::clone(&store);
             let load_handles = handles.clone();
-            let current =
-                tokio::task::spawn_blocking(move || load_store.load_credentials_for_refresh(&load_handles))
-                    .await
-                    .map_err(|_| CodexSubscriptionAuthError::Task)?
-                    .map_err(CodexSubscriptionAuthError::Store)?;
+            let current = tokio::task::spawn_blocking(move || {
+                load_store.load_credentials_for_refresh(&load_handles)
+            })
+            .await
+            .map_err(|_| CodexSubscriptionAuthError::Task)?
+            .map_err(CodexSubscriptionAuthError::Store)?;
             let refreshed_at = clock.now();
             let token = coordinator
-                .refresh(transport.as_ref(), clock.as_ref(), current.credentials.clone(), max_attempts)
+                .refresh(
+                    transport.as_ref(),
+                    clock.as_ref(),
+                    current.credentials.clone(),
+                    max_attempts,
+                )
                 .await
                 .map_err(CodexSubscriptionAuthError::Refresh)?;
             let credentials = CodexStoredCredentials::new(
@@ -89,7 +95,11 @@ impl CodexSubscriptionAuth {
             let persist_handles = handles.clone();
             let persist_credentials = credentials.clone();
             tokio::task::spawn_blocking(move || {
-                persist_store.store_refreshed_credentials(&persist_handles, &current, &persist_credentials)
+                persist_store.store_refreshed_credentials(
+                    &persist_handles,
+                    &current,
+                    &persist_credentials,
+                )
             })
             .await
             .map_err(|_| CodexSubscriptionAuthError::Task)?

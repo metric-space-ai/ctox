@@ -450,7 +450,15 @@ pub(crate) fn compare_and_write_secret_records_if_versions(
     versions: &[(String, String, String)],
     records: &[SecretRecordWrite<'_>],
 ) -> Result<bool> {
-    anyhow::ensure!(records.len() == versions.len() && records.iter().all(|r| versions.iter().filter(|(s,n,_)| s == r.scope && n == r.name).count() == 1), "credential generation guards do not cover the tuple");
+    anyhow::ensure!(
+        records.len() == versions.len()
+            && records.iter().all(|r| versions
+                .iter()
+                .filter(|(s, n, _)| s == r.scope && n == r.name)
+                .count()
+                == 1),
+        "credential generation guards do not cover the tuple"
+    );
     mutate_secret_records_with_versions(root, &[], records, &[], versions)
 }
 
@@ -488,7 +496,9 @@ fn mutate_secret_records_with_versions(
             "SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
             params![scope,name], |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?;
-        if !record.is_some_and(|(nonce,ciphertext)| stable_digest(&format!("{nonce}:{ciphertext}")) == *expected) {
+        if !record.is_some_and(|(nonce, ciphertext)| {
+            stable_digest(&format!("{nonce}:{ciphertext}")) == *expected
+        }) {
             return Ok(false);
         }
     }
