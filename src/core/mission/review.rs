@@ -1117,6 +1117,7 @@ Email communication gate:\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
 - inspect recent relevant meeting outcomes before judging the draft; if the latest meeting changed decisions, blockers, commitments, names, recipients, or proof expectations, the draft must reflect that newer context\n\
 - compare the draft against observed runtime facts and completed work; fail the review when the mail contradicts verified actions, hides completed verification, or says work still needs to be set up after it was already installed/tested\n\
+- when an earlier sent reply in this thread made a false or stale claim, a draft that explicitly corrects that reply is the supersession it needs: do not fail it because the earlier reply is still the latest sent message; check instead that the draft names what was wrong and states the verified facts\n\
 - when a founder explicitly requests setup, access, credentials, links, or next operational steps, require the draft to state the exact verified state and the exact remaining blocker or access path; vague option lists are not enough\n\
 - fail the review when the draft does not answer the latest founder mail, dodges the requested deliverable, promises future work instead of delivering, or leaks internal/system language\n\
 - fail the review when the recipients or cc list are wrong, when sender-only reply is incorrect, or when a forwarded/delegated founder mail should target different recipients\n\
@@ -1271,7 +1272,7 @@ Use the runtime DB path and workspace root above as the primary grounding points
 {systematic_research_review_work}\
 {lead_research_review_work}\
 \n\
-If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
+If active vision or active mission is missing for strategic work, that is a review failure unless the current task is explicitly establishing them. A direct reply to an owner, founder or admin mail takes its direction from that mail: do not fail it for a missing vision or mission.\n\
 \n\
 Respond in exactly this shape:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
@@ -2629,6 +2630,15 @@ mod tests {
         assert!(rendered.contains("setup, access, credentials, links, or next operational steps"));
         assert!(rendered.contains("does not answer the latest founder mail"));
         assert!(rendered.contains("Kurzstand: Ich liefere spaeter."));
+        // A correction of an earlier wrong reply is its supersession, not a
+        // conflict with it, and an owner reply needs no separate mission
+        // (thesen 11.10.2026: a correct correction failed on both, circularly).
+        assert!(rendered
+            .contains("a draft that explicitly corrects that reply is the supersession it needs"));
+        assert!(rendered.contains(
+            "A direct reply to an owner, founder or admin mail takes its direction from that mail: do not fail it for a missing vision or mission."
+        ));
+        assert!(!rendered.contains("missing for strategic or owner-visible work"));
     }
 
     #[test]

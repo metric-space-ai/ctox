@@ -20328,6 +20328,12 @@ fn founder_thread_has_later_reviewed_send(
     root: &Path,
     message: &channels::RoutedInboundMessage,
 ) -> Result<bool> {
+    // A review that reopened this mail after its own reply asks for a
+    // correction of that reply; the reply must not supersede the mail it
+    // answered (thesen 11.10.2026).
+    if channels::founder_reply_reopened_by_review_for_message(root, &message.message_key)? {
+        return Ok(false);
+    }
     if message.thread_key.trim().is_empty() || message.external_created_at.trim().is_empty() {
         return Ok(false);
     }
@@ -20356,6 +20362,12 @@ fn founder_subject_has_later_reviewed_send_to_sender(
     root: &Path,
     message: &channels::RoutedInboundMessage,
 ) -> Result<bool> {
+    // A review that reopened this mail after its own reply asks for a
+    // correction of that reply; the reply must not supersede the mail it
+    // answered (thesen 11.10.2026).
+    if channels::founder_reply_reopened_by_review_for_message(root, &message.message_key)? {
+        return Ok(false);
+    }
     let sender = message.sender_address.trim().to_ascii_lowercase();
     if sender.is_empty()
         || message.subject.trim().is_empty()
