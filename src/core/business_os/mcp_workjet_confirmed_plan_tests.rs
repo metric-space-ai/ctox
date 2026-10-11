@@ -149,7 +149,10 @@ fn actual_confirmed_plan_reads_the_goal_and_dispatches_once_without_a_fake_comma
     let registration = call(
         root.path(),
         &json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
-        "surface":"workjet","actor":"owner","role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance"}),
+        "surface":"workjet","actor":"owner","role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance",
+        // Source registration needs the managed write grant (#610).
+        "managed_policy":{"allowReads":false,"allowWrites":true,
+            "allowedCollections":["__ctox_no_access__"],"allowedTools":[workjet_worker_dispatch::TOOL]}}),
         workjet_worker_dispatch::TOOL,
         json!({"action":"register_source","source_environment_id":"source-env",
         "source_supervisor_thread_id":THREAD,"project_id":"project"}),

@@ -14,6 +14,9 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::internal::config::ValidatedRuntimeConfig;
+use crate::internal::runtime::executor::helps::xai_client_version::{
+    XaiVersionFetcher, XaiVersionUpdater,
+};
 use crate::sdk::api::options::ServerOption;
 
 use super::builder::{ServiceAssembly, ServiceBindingRequirement, ServiceBindings};
@@ -163,6 +166,8 @@ pub struct Service {
     pub(crate) auth_queue: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) shutdown_result: tokio::sync::Mutex<Option<Result<(), ServiceError>>>,
     pub(crate) runtime_graph: Option<Arc<ServiceRuntimeGraph>>,
+    pub(crate) xai_version_fetcher: Option<Arc<dyn XaiVersionFetcher>>,
+    pub(crate) xai_version_updater: Mutex<Option<XaiVersionUpdater>>,
 }
 
 impl Service {
@@ -172,6 +177,7 @@ impl Service {
         host: ServiceHost,
     ) -> Result<Arc<Self>, ServiceError> {
         let runtime_graph = bindings.runtime_graph.clone();
+        let xai_version_fetcher = bindings.xai_client_version_fetcher.clone();
         assembly
             .materialize(bindings)
             .map_err(|error| ServiceError::new(ServiceErrorKind::PluginHost, error.to_string()))?;
@@ -201,6 +207,8 @@ impl Service {
             auth_queue: Mutex::new(None),
             shutdown_result: tokio::sync::Mutex::new(None),
             runtime_graph,
+            xai_version_fetcher,
+            xai_version_updater: Mutex::new(None),
         }))
     }
 

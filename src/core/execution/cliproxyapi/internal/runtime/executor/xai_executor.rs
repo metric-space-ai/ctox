@@ -17,9 +17,11 @@ pub const DEFAULT_XAI_CHAT_BASE_URL: &str = crate::internal::auth::xai::CLI_CHAT
 pub const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
 pub const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
 pub const XAI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
-// ref: internal/runtime/executor/xai_executor.go:51-54 @ e2bff010
+// ref: internal/helps/xai_client_version.go @ d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5
+// Compatibility alias for the fallback; production headers use the cached version.
 // The subscription chat proxy rejects versions older than 1.0.13 with HTTP 426.
-pub const XAI_CLIENT_VERSION_VALUE: &str = "1.0.44";
+pub const XAI_CLIENT_VERSION_VALUE: &str =
+    super::helps::xai_client_version::DEFAULT_XAI_FALLBACK_CLIENT_VERSION;
 pub const XAI_CLIENT_IDENTIFIER_HEADER: &str = "x-grok-client-identifier";
 pub const XAI_CLIENT_IDENTIFIER_VALUE: &str = "grok-shell";
 pub const XAI_AUTHENTICATE_RESPONSE_HEADER: &str = "x-authenticateresponse";

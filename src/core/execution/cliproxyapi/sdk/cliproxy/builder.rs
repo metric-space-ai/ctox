@@ -170,6 +170,11 @@ pub struct ServiceBindings {
     /// Optional Home/watcher convergence graph. When bound, `Service` owns
     /// its lifetime and all watcher reloads flow through it.
     pub runtime_graph: Option<Arc<super::service_runtime::ServiceRuntimeGraph>>,
+    /// Anonymous version metadata capability, using the embedding host's
+    /// existing typed proxy configuration. No account credentials are supplied.
+    pub xai_client_version_fetcher: Option<
+        Arc<dyn crate::internal::runtime::executor::helps::xai_client_version::XaiVersionFetcher>,
+    >,
 }
 
 impl fmt::Debug for ServiceAssembly {

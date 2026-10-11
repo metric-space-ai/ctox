@@ -51,7 +51,40 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(group["score"]["mean"], 7.65)
         self.assertEqual(row["harness"], "claude-desktop")
         self.assertEqual(r.harness_label("unknown-native-client"), "unknown-native-client")
+    def test_claude_code_alias_combines_pr_means_without_rewriting_evidence(self):
+        first = dict(pr_url="one", role="parent", actor_id="a", schema=r.RUBRIC,
+                     model="claude-opus-5-5", harness="Claude Code",
+                     parent_completion={"weighted_total":4}, rework_iterations=2,
+                     iteration_scope="pr")
+        second = copy.deepcopy(first)
+        second.update(pr_url="two", actor_id="b", harness="claude",
+                      parent_completion={"weighted_total":8}, rework_iterations=0)
+        original = copy.deepcopy([first, second])
+        groups = r.leaderboard_data([first, second, copy.deepcopy(first)])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual((groups[0]["harness"], groups[0]["prs"]), ("claude", 2))
+        self.assertEqual(groups[0]["score"]["mean"], 6)
+        self.assertEqual(groups[0]["rework"]["mean"], 1)
+        self.assertEqual([first, second], original)
+
+    def test_codex_exec_joins_codex_harness_without_rewriting_native_client(self):
+        row = dict(pr_url="cli", role="parent", actor_id="cli", schema=r.RUBRIC,
+                   model="gpt-6.1-sol", harness="codex_exec",
+                   parent_completion={"weighted_total":4}, rework_iterations=2,
+                   iteration_scope="pr")
+        desktop = copy.deepcopy(row)
+        desktop.update(pr_url="desktop", actor_id="desktop", harness="Codex Desktop",
+                       parent_completion={"weighted_total":8}, rework_iterations=0)
+        original = copy.deepcopy([row, desktop])
+        group = r.leaderboard_data([row, desktop])[0]
+        self.assertEqual(len(r.leaderboard_data([row, desktop])), 1)
+        self.assertEqual((group["harness"], group["prs"], group["score"]["mean"], group["rework"]["mean"]),
+                         ("codex", 2, 6, 1))
+        self.assertEqual([row, desktop], original)
+
     def merge_fixture(self):
+
+
         pr = dict(url="pr", state="MERGED", headRefOid="a"*40,
                   mergedAt="2026-09-13T05:13:49Z", baseRefName="main")
         target = dict(branch="codex/devops-unification", head="a"*40,
@@ -282,5 +315,95 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(data["summary"]["terminal_prs"],len(data["prs"]))
         self.assertIn('id="prev"',html)
         self.assertIn('id="next"',html)
+
+class InventoryStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name) / "report"
+        self.root = Path(self.temp.name) / "raw"
+        self.remote = {}
+        self.receipts = {}
+        self.addCleanup(patch.stopall)
+        patch.object(r.evidence_storage, "ROOT", self.root).start()
+        patch.object(r, "save_raw", side_effect=self.remote_write).start()
+        patch.object(r.evidence_storage, "locator", side_effect=lambda p:self.receipts.get(Path(p))).start()
+        patch.object(r, "read", side_effect=lambda p:self.remote[Path(p)] if Path(p) in self.remote else Path(p).read_text()).start()
+        self.snapshot = dict(version=1, collected_at="2026-10-10T17:00:00Z",
+                             prs=[dict(url="terminal-pr", state="MERGED", body="evidence")])
+        self.current = self.base / "terminal-evidence/current.json"
+
+    def remote_write(self, path, value):
+        text = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+        self.remote[Path(path)] = text
+        self.receipts[Path(path)] = dict(file=str(Path(path).relative_to(self.root)),
+            bytes=len(text.encode()), sha256=hashlib.sha256(text.encode()).hexdigest())
+
+    def test_external_collection_preserves_actual_merge_commit(self):
+        pr = dict(number=28, url="https://github.com/metric-space-ai/learnordie/pull/28",
+                  state="MERGED", headRefOid="a"*40, mergeCommit=dict(oid="b"*40))
+        with patch.object(r, "jobs", return_value=[dict(pr_url=pr["url"], repository="metric-space-ai/learnordie")]), \
+             patch.object(r, "command", return_value=json.dumps(pr)) as command:
+            snapshot = r.collect(self.base, repositories=[])
+        self.assertEqual(snapshot["prs"][0]["mergeCommit"], pr["mergeCommit"])
+        self.assertIn("mergeCommit", command.call_args.args[-1].split(","))
+        self.assertEqual(r.load(self.current), snapshot)
+
+    def test_large_inventory_is_remote_and_build_input_is_reproducible(self):
+        self.snapshot["prs"][0]["body"] = "x" * 20_000_001
+        reference = r.save_inventory(self.base, self.snapshot)
+        self.assertGreater(reference["bytes"], 20_000_000)
+        self.assertLess(self.current.stat().st_size, 1000)
+        self.assertFalse(self.root.exists())
+        self.assertEqual(r.load(self.current), self.snapshot)
+        archived = list((self.base / "terminal-evidence/snapshots").glob("*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(r.load(archived[0]), self.snapshot)
+
+    def test_remote_failure_preserves_existing_local_inventory(self):
+        r.save(self.current, self.snapshot)
+        original = self.current.read_bytes()
+        with patch.object(r, "save_raw", side_effect=RuntimeError("transport failure")):
+            with self.assertRaisesRegex(RuntimeError, "transport failure"):
+                r.save_inventory(self.base, self.snapshot)
+        self.assertEqual(self.current.read_bytes(), original)
+
+    def test_legacy_raw_is_sha_verified_before_reference_replacement(self):
+        r.save(self.current, self.snapshot)
+        original = self.current.read_bytes()
+        r.save_inventory(self.base, self.snapshot)
+        backups = [p for p in self.remote if p.name.startswith("legacy-")]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(self.remote[backups[0]].encode(), original)
+        self.assertEqual(r.load(self.current), self.snapshot)
+
+    def test_noncanonical_legacy_bytes_are_kept_on_checksum_mismatch(self):
+        self.current.parent.mkdir(parents=True)
+        self.current.write_text(json.dumps(self.snapshot))
+        original = self.current.read_bytes()
+        with self.assertRaisesRegex(ValueError, "Legacy inventory bytes"):
+            r.save_inventory(self.base, self.snapshot)
+        self.assertEqual(self.current.read_bytes(), original)
+
+    def test_reference_rejects_tampering_traversal_and_active_prs(self):
+        reference = r.save_inventory(self.base, self.snapshot)
+        tampered = dict(reference, sha256="0"*64)
+        r.save(self.current, tampered)
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            r.load(self.current)
+        r.save(self.current, dict(reference, file="../other.json"))
+        with self.assertRaisesRegex(ValueError, "Unsafe"):
+            r.load(self.current)
+        active = copy.deepcopy(self.snapshot)
+        active["prs"][0]["state"] = "OPEN"
+        with self.assertRaisesRegex(ValueError, "Active PR"):
+            r.save_inventory(self.base, active)
+        raw_path = self.root / "terminal-inventory" / (r.sha(active) + ".json")
+        self.remote_write(raw_path, active)
+        r.save(self.current, dict(reference, file=str(raw_path.relative_to(self.root)),
+            sha256=self.receipts[raw_path]["sha256"], bytes=self.receipts[raw_path]["bytes"]))
+        with self.assertRaisesRegex(ValueError, "metadata mismatch"):
+            r.load(self.current)
+
 
 if __name__=="__main__":unittest.main()

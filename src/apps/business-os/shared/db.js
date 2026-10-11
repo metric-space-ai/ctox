@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-supervisor-native-message-progress';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261010-shell-v2-audience-denial-fallback';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

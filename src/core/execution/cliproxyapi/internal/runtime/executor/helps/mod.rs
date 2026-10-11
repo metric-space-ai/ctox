@@ -53,6 +53,7 @@ mod usage_helpers;
 mod user_id_cache;
 mod utls_client;
 mod vertex_payload_helpers;
+pub mod xai_client_version;
 
 pub(crate) use usage_helpers::UsageReporter;
 
