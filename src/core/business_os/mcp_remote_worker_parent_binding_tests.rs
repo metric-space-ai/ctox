@@ -20,6 +20,9 @@ fn enrollment(root: &Path, id: &str, kind: &str, revision: u64) -> anyhow::Resul
 
 fn parent_fixture(with_policy: bool) -> anyhow::Result<(tempfile::TempDir, Value)> {
     let root = autonomous_fixture()?;
+    crate::business_os::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
+        root.path(),
+    )?;
     let reference = enrollment(
         root.path(),
         "parent-enroll",
