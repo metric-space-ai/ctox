@@ -15,30 +15,6 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
     > {
         Box::pin(async move {
             let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
-            Ok(ClaudeMessagesResponse::new(
-                200,
-                serde_json::to_vec(&serde_json::json!({
-                    "id":"message-test","type":"message","role":"assistant","model":body["model"],
-                    "content":[{"type":"text","text":"Hi"}],"stop_reason":"end_turn",
-                    "usage":{"input_tokens":2,"output_tokens":1}
-                }))
-                .unwrap(),
-            ))
-        })
-    }
-}
-
-impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
-    fn execute_stream<'a>(
-        &'a self,
-        request: &'a ClaudeMessagesRequest,
-        _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<
-        ctox_cliproxyapi::internal::runtime::executor::claude_executor::ClaudeMessagesStreamResponse,
-        ClaudeMessagesTransportFailure,
-    >> + Send + 'a>>{
-        Box::pin(async move {
-            let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
             assert_eq!(body["stream"], true);
             let events = [
                 serde_json::json!({"type":"message_start","message":{
@@ -60,11 +36,9 @@ impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
             for event in events {
                 bytes.extend_from_slice(format!("data: {event}\n\n").as_bytes());
             }
-            // One bounded chunk needs no detached producer task.
-            let (sender, receiver) = tokio::sync::mpsc::channel(1);
-            sender.send(Ok(bytes)).await.unwrap();
-            drop(sender);
-            Ok(ctox_cliproxyapi::internal::runtime::executor::claude_executor::ClaudeMessagesStreamResponse::new(200, None, receiver))
+            // Buffered Responses clients still request SSE upstream. The native
+            // transport buffers that event stream before Responses aggregation.
+            Ok(ClaudeMessagesResponse::new(200, bytes))
         })
     }
 }
@@ -86,7 +60,7 @@ async fn session_http_turn(
                 ClaudeAccountTransports {
                     refresh: Arc::new(UnusedRefreshTransport),
                     messages: Arc::new(SessionMessagesTransport),
-                    messages_stream: Some(Arc::new(SessionMessagesTransport)),
+                    messages_stream: None,
                 },
             )
         })
