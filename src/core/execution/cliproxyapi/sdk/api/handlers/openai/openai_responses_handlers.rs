@@ -1370,7 +1370,8 @@ mod tests {
     #[test]
     fn claude_gateway_selection_errors_have_distinct_non_upstream_codes() {
         use crate::sdk::cliproxy::auth::{
-            AccountRoutingError, AccountSelectionError, AccountSessionStoreError, CooldownStoreError,
+            AccountRoutingError, AccountSelectionError, AccountSessionStoreError,
+            CooldownStoreError,
         };
 
         for (reason, code) in [
