@@ -20,6 +20,7 @@ pub(in crate::business_os) mod jour_fixe_local_narration;
 pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
 pub(in crate::business_os) mod jour_fixe_speech;
+pub(in crate::business_os) mod persistent_worker_binding;
 pub(in crate::business_os) mod presentation;
 pub(in crate::business_os) mod presentation_validator;
 mod privacy;
@@ -86,6 +87,8 @@ pub(super) fn is_command(command_type: &str) -> bool {
             command_type,
             "ctox.workjet.project.chat.ensure"
                 | "ctox.workjet.project.supervisor.bind"
+                | "ctox.workjet.project.persistent_worker.bind"
+                | "ctox.workjet.project.persistent_worker.revoke"
                 | "ctox.workjet.project.worker.add"
                 | "ctox.workjet.project.worker.remove"
                 | "ctox.workjet.project.chat.create"
@@ -143,6 +146,10 @@ fn apply_command(
     match command.command_type.as_str() {
         "ctox.workjet.project.supervisor.bind" => {
             supervisor_binding::apply(conn, command, owner, projections)
+        }
+        "ctox.workjet.project.persistent_worker.bind"
+        | "ctox.workjet.project.persistent_worker.revoke" => {
+            persistent_worker_binding::apply(conn, command, owner, projections)
         }
         "ctox.workjet.project.chat.ensure" => {
             let payload: ProjectPayload = serde_json::from_value(command.payload.clone())?;
