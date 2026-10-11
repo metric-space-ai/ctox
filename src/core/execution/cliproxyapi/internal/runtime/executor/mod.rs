@@ -2,7 +2,6 @@
 // License: AGPL-3.0-only
 
 pub mod aistudio_executor;
-pub mod api_key_transport;
 pub mod antigravity_executor;
 pub mod antigravity_executor_auth;
 pub mod antigravity_executor_credits;
@@ -11,6 +10,7 @@ pub mod antigravity_executor_request;
 pub mod antigravity_executor_stream;
 pub mod antigravity_executor_tokens;
 pub mod antigravity_reasoning_replay;
+pub mod api_key_transport;
 pub mod claude_executor;
 pub mod claude_executor_auth;
 mod claude_executor_buffered;

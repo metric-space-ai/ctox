@@ -138,7 +138,11 @@ mod native {
                 let mut body = Vec::new();
                 while let Some(chunk) = stream.next().await {
                     let chunk = chunk.map_err(failure)?;
-                    if body.len().checked_add(chunk.len()).is_none_or(|n| n > API_KEY_MAX_RESPONSE_BYTES) {
+                    if body
+                        .len()
+                        .checked_add(chunk.len())
+                        .is_none_or(|n| n > API_KEY_MAX_RESPONSE_BYTES)
+                    {
                         return Err(failure(()));
                     }
                     body.extend_from_slice(&chunk);
