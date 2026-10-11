@@ -4,16 +4,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('./browser_rust_smoke.js'), 'utf8');
-const anchor = source.indexOf('const shellReadyWaitStartedAt = Date.now();');
-const branch = source.indexOf('        } else {\n          await page.waitForFunction(', anchor);
-assert.ok(anchor >= 0 && branch > anchor);
-const start = source.indexOf('await page.waitForFunction(', branch) + 'await page.waitForFunction('.length;
-const end = source.indexOf('\n          },', start) + '\n          }'.length;
-assert.ok(end > start);
+const anchor = source.indexOf('const appShellReloadStartedAt = Date.now();');
+assert.ok(anchor >= 0);
+const start = source.indexOf('await page.waitForFunction(', anchor) + 'await page.waitForFunction('.length;
+const predicate = source.slice(start).match(/^([\s\S]*?), (?:null|smokeMode), \{ timeout: smokeHookWaitTimeoutMs \}\);/)?.[1];
+assert.ok(predicate, 'the readiness predicate must be read from the actual reload boundary');
 const state = { modules: [{ id: 'desktop' }], initialModuleOpened: false, bootTimings: { shellVisibleMs: null } };
 const dataset = { moduleShell: 'full' };
-const ready = vm.runInNewContext('(' + source.slice(start, end) + ')', {
-  ctoxBusinessOsSmoke: { state }, document: { body: { dataset } },
+const hook = { state, bootstrap: 'complete' };
+const ready = vm.runInNewContext('(' + predicate + ')', {
+  ctoxBusinessOsSmoke: hook, CTOX_BUSINESS_OS_STATUS: {}, document: { body: { dataset } },
 });
 
 test('audience fixture waits for shell completion and the outstanding catalog notification', () => {
@@ -29,6 +29,9 @@ test('audience fixture waits for shell completion and the outstanding catalog no
   dataset.moduleLoading = 'desktop';
   assert.equal(ready('business-os-app-audience-ui'), false, 'an active mount is still pending');
   delete dataset.moduleLoading;
+  hook.bootstrap = 'inline';
+  assert.equal(ready('business-os-app-audience-ui'), false, 'the inline hook is still a placeholder');
+  hook.bootstrap = 'complete';
   state.initialModuleOpened = false;
-  assert.equal(ready('business-os-ui-regression'), true, 'other modes retain their existing startup contract');
+  assert.equal(ready('business-os-ui-regression'), true, 'other modes retain their existing reload contract');
 });

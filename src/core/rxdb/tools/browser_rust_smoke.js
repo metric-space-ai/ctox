@@ -5292,20 +5292,13 @@ function ensureCtoxSmokeBinary() {
               && !loading;
           }, null, { timeout: 60000 });
         } else {
-          await page.waitForFunction((mode) => {
+          await page.waitForFunction(() => {
             const state = globalThis.ctoxBusinessOsSmoke?.state;
             const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
             const shellOpened = Boolean(document.body?.dataset?.moduleShell);
             const loading = Boolean(document.body?.dataset?.moduleLoading);
-            // The Audience fixture replaces the actor and grants. A visible
-            // first module alone does not mean bootstrap's catalog flush ended.
-            const audienceReady = mode !== 'business-os-app-audience-ui'
-              || (state?.initialModuleOpened === true
-                && Number.isFinite(state.bootTimings?.shellVisibleMs)
-                && !state.catalogRefreshQueued && !state.catalogRefreshTimer
-                && !state.catalogRefreshRunning);
-            return modulesLoaded && shellOpened && !loading && audienceReady;
-          }, smokeMode, { timeout: 60000 });
+            return modulesLoaded && shellOpened && !loading;
+          }, null, { timeout: 60000 });
         }
         outerPhaseTimings.shellReadyWaitMs = Date.now() - shellReadyWaitStartedAt;
         if (smokeMode === 'business-os-sellify-scale-ui') {
@@ -7715,11 +7708,21 @@ function ensureCtoxSmokeBinary() {
       }
       const appShellReloadStartedAt = Date.now();
       await page.reload({ waitUntil: 'commit', timeout: pageNavigationTimeoutMs });
-      await page.waitForFunction(() => Boolean(
-        globalThis.ctoxBusinessOsSmoke
-          && globalThis.ctoxBusinessOsSmoke.bootstrap !== 'inline'
-          && globalThis.CTOX_BUSINESS_OS_STATUS
-      ), null, { timeout: smokeHookWaitTimeoutMs });
+      await page.waitForFunction((mode) => {
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        if (!smoke || smoke.bootstrap === 'inline' || !globalThis.CTOX_BUSINESS_OS_STATUS) return false;
+        if (mode !== 'business-os-app-audience-ui') return true;
+        // Reload republishes the hook before bootstrap restores the first
+        // route and flushes the catalog. Do not install a fixture actor yet.
+        const state = smoke.state;
+        return state?.initialModuleOpened === true
+          && Number.isFinite(state.bootTimings?.shellVisibleMs)
+          && Array.isArray(state.modules) && state.modules.length > 0
+          && Boolean(document.body?.dataset?.moduleShell)
+          && !document.body?.dataset?.moduleLoading
+          && !state.catalogRefreshQueued && !state.catalogRefreshTimer
+          && !state.catalogRefreshRunning;
+      }, smokeMode, { timeout: smokeHookWaitTimeoutMs });
       if (smokeMode === 'business-os-dynamic-apps-ui') {
         waitForNativeModuleCatalogEntry(dynamicOpenModuleFixture.module.id, 30000);
         await page.waitForFunction((moduleId) => {
