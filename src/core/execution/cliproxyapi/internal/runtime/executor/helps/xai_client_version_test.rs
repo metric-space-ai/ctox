@@ -59,6 +59,7 @@ fn only_strict_numeric_versions_at_or_above_server_floor_are_accepted() {
         "1.0.46+build",
         "+1.0.46",
         "1.0.４６",
+        "1.0.9223372036854775808",
         "1.0.18446744073709551616",
     ] {
         assert_eq!(

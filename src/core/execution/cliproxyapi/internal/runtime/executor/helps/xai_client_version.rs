@@ -183,7 +183,7 @@ pub fn start_xai_version_updater(fetcher: Arc<dyn XaiVersionFetcher>) -> XaiVers
     shared_cache().start(fetcher)
 }
 
-fn strict_version(raw: &str) -> Option<[u64; 3]> {
+fn strict_version(raw: &str) -> Option<[i64; 3]> {
     let parts: Vec<_> = raw.split('.').collect();
     if parts.len() != 3 {
         return None;
