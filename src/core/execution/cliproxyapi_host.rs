@@ -76,6 +76,8 @@ mod account_sessions;
 use account_sessions::CtoxAccountSessionStore;
 #[path = "cliproxyapi_account_quotas.rs"]
 mod account_quotas;
+#[path = "cliproxyapi_api_keys.rs"]
+mod api_keys;
 
 /// Holder-private selectors/bindings are supplied only by the authorized native
 /// provider registry. The callback receives normalized public quota fields and
@@ -2255,6 +2257,7 @@ fn effective_instance_proxy_config(
         .iter()
         .any(|account| !account.disabled);
     let xai_enabled = crate::execution::cliproxyapi_xai::subscription_installed(root);
+    let api_enabled = integration.config.api_key_accounts.iter().any(|a| !a.disabled && !a.models.is_empty());
     let stored = load_instance_proxy_config(root)?;
     let automatic_codex = instance_codex_runtime_config(root)?;
     let portable = match (stored, automatic_codex) {
@@ -2295,7 +2298,7 @@ fn effective_instance_proxy_config(
     };
     let (default_provider, runtime) = match portable {
         Some(portable) => portable,
-        None if kimi_enabled || xai_enabled => {
+        None if kimi_enabled || xai_enabled || api_enabled => {
             let runtime = CliproxyRuntimeConfig {
                 request_timeout_ms: 30_000,
                 routing_strategy: SchedulerStrategy::RoundRobin,
@@ -2308,8 +2311,10 @@ fn effective_instance_proxy_config(
             (
                 if kimi_enabled {
                     "kimi".to_owned()
-                } else {
+                } else if xai_enabled {
                     String::new()
+                } else {
+                    integration.config.api_key_accounts.iter().find(|a| !a.disabled && !a.models.is_empty()).map(|a| a.endpoint.provider().to_owned()).unwrap_or_default()
                 },
                 runtime,
             )
@@ -2597,6 +2602,7 @@ pub struct InstanceResponsesRouter {
     default_provider: String,
     portable: Option<Arc<OpenAiResponsesProviderRouter>>,
     kimi: Option<Arc<KimiResponsesHandler>>,
+    api_keys: BTreeMap<String, Arc<api_keys::Handler>>,
 }
 
 impl fmt::Debug for InstanceResponsesRouter {
@@ -2631,6 +2637,13 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
             let provider = provider.unwrap_or(&self.default_provider).trim();
+            if let Some(handler) = self.api_keys.get(provider) {
+                let pinned = ctox_cliproxyapi::internal::api::account_selection::requested_account();
+                let legacy = (provider == "kimi" && self.kimi.is_some()) || (provider == "xai" && self.xai_root.as_ref().is_some_and(|r| crate::execution::cliproxyapi_xai::subscription_installed(r)));
+                if pinned.as_deref().is_some_and(|id| handler.contains(id)) || (pinned.is_none() && !legacy) {
+                    return handler.handle_route(body).await;
+                }
+            }
             if provider.eq_ignore_ascii_case("xai") {
                 if let Some(root) = &self.xai_root {
                     return crate::execution::cliproxyapi_xai::handle_route(root, body).await;
@@ -2731,6 +2744,7 @@ fn build_provider_routes(
 ) -> anyhow::Result<InstanceProviderRoutes> {
     let factory = CtoxCliproxyRuntimeFactory::new(root);
     let account_clock: Arc<dyn AccountStateClock> = Arc::new(SystemCtoxAccountStateClock);
+    let api_keys = api_keys::build(root, &effective.integration, effective.runtime.request_timeout())?;
     let mut auxiliary_handlers: Vec<Arc<dyn AuxiliaryRouteHandler>> = Vec::new();
     let mut kimi_accounts = effective
         .integration
@@ -2950,6 +2964,7 @@ fn build_provider_routes(
             default_provider: effective.default_provider.clone(),
             portable,
             kimi,
+            api_keys,
         }),
         messages,
         auxiliary: (!auxiliary_handlers.is_empty()).then(|| {
@@ -5356,6 +5371,7 @@ mod tests {
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: BTreeMap::new(),
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
@@ -6111,6 +6127,7 @@ mod tests {
         );
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: BTreeMap::new(),
             default_provider: "antigravity".to_owned(),
             portable: Some(portable),
             kimi: None,
@@ -6208,6 +6225,7 @@ mod tests {
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: BTreeMap::new(),
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {

@@ -10,7 +10,8 @@ autoexamples = false
 path = "lib.rs"
 
 [features]
-default = ["anthropic-fingerprint-transport", "codex-http-transport", "antigravity-http-transport"]
+default = ["anthropic-fingerprint-transport", "codex-http-transport", "antigravity-http-transport", "api-key-http-transport"]
+api-key-http-transport = ["dep:wreq", "wreq/stream"]
 anthropic-fingerprint-transport = ["dep:wreq", "dep:wreq-util", "wreq/stream"]
 codex-http-transport = ["dep:wreq", "dep:wreq-util", "wreq/stream"]
 antigravity-http-transport = ["dep:wreq", "dep:wreq-util", "wreq/stream"]

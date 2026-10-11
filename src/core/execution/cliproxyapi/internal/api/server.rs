@@ -632,7 +632,8 @@ fn prepare_response_writer(
         }
         OpenAiResponsesRouteResponse::Stream(_)
         | OpenAiResponsesRouteResponse::CodexStream(_)
-        | OpenAiResponsesRouteResponse::AntigravityStream(_) => (200, "text/event-stream"),
+        | OpenAiResponsesRouteResponse::AntigravityStream(_)
+        | OpenAiResponsesRouteResponse::GenericStream(_) => (200, "text/event-stream"),
     };
     writer.write_header(
         status,
@@ -792,6 +793,21 @@ where
             stream.shutdown().await
         }
         OpenAiResponsesRouteResponse::CodexStream(stream_response) => {
+            stream
+                .write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{}\r\n", super::account_selection::acknowledgement()).as_bytes(),
+                )
+                .await?;
+            while let Some(chunk) = stream_response.next_chunk().await {
+                let chunk_result = stream.write_all(&chunk).await;
+                if let Some(capture) = capture.as_deref_mut() {
+                    capture.write(&chunk);
+                }
+                chunk_result?;
+            }
+            stream.shutdown().await
+        }
+        OpenAiResponsesRouteResponse::GenericStream(stream_response) => {
             stream
                 .write_all(
                     format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n{}\r\n", super::account_selection::acknowledgement()).as_bytes(),
