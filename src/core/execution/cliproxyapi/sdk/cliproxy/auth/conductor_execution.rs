@@ -219,13 +219,16 @@ impl AccountRouter {
                     let retained = if let Some(id) = retained {
                         let mut pinned = options.clone();
                         pinned.pinned_auth_id = Some(id.to_owned());
-                        match self.scheduler
+                        match self
+                            .scheduler
                             .pick_single(provider, model, now_ms, candidates, &cooldowns, &pinned)
                         {
                             Ok(candidate) => Some(candidate),
-                            Err(AccountSelectionError::NotFound
+                            Err(
+                                AccountSelectionError::NotFound
                                 | AccountSelectionError::Unavailable
-                                | AccountSelectionError::Cooldown { .. }) => None,
+                                | AccountSelectionError::Cooldown { .. },
+                            ) => None,
                             Err(error) => return Err(AccountRoutingError::Selection(error)),
                         }
                     } else {
