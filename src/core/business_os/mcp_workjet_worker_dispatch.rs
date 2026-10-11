@@ -298,7 +298,13 @@ pub(super) fn execute(
     arguments: &Value,
     trusted: Option<&Value>,
 ) -> anyhow::Result<Value> {
-    let request: Request = serde_json::from_value(arguments.clone())?;
+    // Gateway transport metadata is already bound to the trusted request
+    // context. It is not an application argument or a source of authority.
+    let mut payload = arguments.clone();
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("_context");
+    }
+    let request: Request = serde_json::from_value(payload)?;
     let internal = context.trusted_role_source.as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE);
     if matches!(&request, Request::Dispatch { .. } | Request::Observe { .. }) {
         anyhow::ensure!(
@@ -312,6 +318,21 @@ pub(super) fn execute(
                 && context.channel == "ctox_dev_managed_mcp",
             "source controls require authenticated managed Owner/Admin MCP"
         );
+        anyhow::ensure!(
+            trusted.is_some_and(|gateway| gateway["managed_policy"]["allowWrites"] == true),
+            "worker source operation is outside this managed client write scope"
+        );
+        if let Some(tools) =
+            trusted.and_then(|gateway| gateway["managed_policy"].get("allowedTools"))
+        {
+            let tools = tools
+                .as_array()
+                .context("invalid managed worker source tool scope")?;
+            anyhow::ensure!(
+                tools.is_empty() || tools.iter().any(|tool| tool.as_str() == Some(TOOL)),
+                "worker source tool is outside this managed client scope"
+            );
+        }
     }
     if let Request::Observe { limit } = &request {
         return observe(
