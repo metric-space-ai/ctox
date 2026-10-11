@@ -50,6 +50,7 @@ fn adopt_native(f: &Fixture) -> Result<Value> {
 }
 fn codex_fixture() -> Result<(Fixture, String)> {
     let f = Fixture::new()?;
+    store::stable_instance_id(f.root.path())?;
     install(&f, "owned-codex-a", "first")?;
     install(&f, "owned-codex-b", "sibling")?;
     let state = adopt_native(&f)?;
