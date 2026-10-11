@@ -13846,7 +13846,62 @@ function boundedWorkjetExecutionRequest(value) {
   };
 }
 
-async function workjetProjectControl(request = {}) {
+async function dispatchWorkjetProjectList(command, options, deadline, diagnostics) {
+  let observe = typeof diagnostics?.onCommandTiming === 'function'
+    ? diagnostics.onCommandTiming : null;
+  const timing = observe ? await loadCommandBusModule().catch(() => null) : null;
+  if (!timing) observe = null;
+  if (observe) command.client_context.command_timing_probe = true;
+  try {
+    return await awaitWorkjetProjectListStep(
+      state.commandBus.dispatch(command, options), deadline, 'command',
+    );
+  } finally {
+    if (observe) {
+      // Same cached command-bus module as dispatch; no global event listener or
+      // shared current-command slot that could mix concurrent project reads.
+      const sample = timing.consumeCommandRoundtripTiming(command.id);
+      if (sample) {
+        const stagesMs = { ...(timing.commandRoundtripStagesFromMarks(sample.marks) || {}) };
+        const boundaries = [sample.marks.browser_dispatch_started,
+          ...['capability_resolved', 'database_resolved', 'sync_ready',
+            'authority_resolved', 'local_write_started'].map(name => sample.preinsert_marks[name]),
+          sample.marks.browser_local_inserted];
+        const names = ['initial_capability', 'document_and_database', 'sync_readiness',
+          'fresh_peer_authority', 'dependencies_and_revalidation', 'local_persistence'];
+        for (let index = 0; index < names.length; index += 1) {
+          if (Number.isFinite(boundaries[index]) && Number.isFinite(boundaries[index + 1])) {
+            stagesMs[names[index]] = Math.max(0, boundaries[index + 1] - boundaries[index]);
+          }
+        }
+        // Native marks can arrive before the push acknowledgement. Preserve
+        // each completed interval even when the complete roundtrip is absent.
+        for (const [name, from, to] of [
+          ['push', 'browser_local_inserted', 'browser_push_confirmed'],
+          ['local_to_native_intake', 'browser_local_inserted', 'native_dispatch_entered'],
+          ['native_processing', 'native_dispatch_entered', 'native_handler_completed'],
+          ['projection_commit', 'native_handler_completed', 'native_rxdb_projection_committed'],
+          ['commit_to_browser_observed', 'native_rxdb_projection_committed', 'browser_terminal_observed'],
+        ]) {
+          if (Number.isFinite(sample.marks[from]) && Number.isFinite(sample.marks[to])) {
+            stagesMs[name] = Math.max(0, sample.marks[to] - sample.marks[from]);
+          }
+        }
+        const pendingIndex = names.findIndex((_, index) =>
+          Number.isFinite(boundaries[index]) && !Number.isFinite(boundaries[index + 1]));
+        const pending = pendingIndex >= 0 ? {
+          pendingStage: names[pendingIndex],
+          pendingMs: Math.max(0, Date.now() - boundaries[pendingIndex]),
+        } : {};
+        try { observe({ commandId: command.id, stagesMs, ...pending }); } catch {
+          // Diagnostics cannot change command success or failure.
+        }
+      }
+    }
+  }
+}
+
+async function workjetProjectControl(request = {}, diagnostics = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new TypeError('Workjet project control request must be an object.');
   }
@@ -14629,7 +14684,7 @@ async function workjetProjectControl(request = {}) {
       }
     };
     assertCurrentIdentity();
-    const receipt = await awaitWorkjetProjectListStep(state.commandBus.dispatch({
+    const receipt = await dispatchWorkjetProjectList({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -14644,7 +14699,7 @@ async function workjetProjectControl(request = {}) {
       until: 'terminal',
       sync_queue_tasks: false,
       timeoutMs: Math.max(1, listDeadline - Date.now()),
-    }), listDeadline, 'command');
+    }, listDeadline, diagnostics);
     assertCurrentIdentity();
     if (receipt?.command_id !== commandId || receipt?.status !== 'completed'
       || receipt?.ok !== true || receipt?.result?.ok !== true
