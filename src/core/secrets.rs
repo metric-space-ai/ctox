@@ -443,11 +443,32 @@ pub(crate) fn compare_and_write_secret_records(
     mutate_secret_records(root, guards, records, deletes)
 }
 
+/// Atomically rotate only the exact encrypted generations captured before an
+/// OAuth network wait. Missing or replaced records reject the complete tuple.
+pub(crate) fn compare_and_write_secret_records_if_versions(
+    root: &Path,
+    versions: &[(String, String, String)],
+    records: &[SecretRecordWrite<'_>],
+) -> Result<bool> {
+    anyhow::ensure!(records.len() == versions.len() && records.iter().all(|r| versions.iter().filter(|(s,n,_)| s == r.scope && n == r.name).count() == 1), "credential generation guards do not cover the tuple");
+    mutate_secret_records_with_versions(root, &[], records, &[], versions)
+}
+
 fn mutate_secret_records(
     root: &Path,
     guards: &[(&str, &str, Option<&str>)],
     records: &[SecretRecordWrite<'_>],
     deletes: &[(&str, &str)],
+) -> Result<bool> {
+    mutate_secret_records_with_versions(root, guards, records, deletes, &[])
+}
+
+fn mutate_secret_records_with_versions(
+    root: &Path,
+    guards: &[(&str, &str, Option<&str>)],
+    records: &[SecretRecordWrite<'_>],
+    deletes: &[(&str, &str)],
+    versions: &[(String, String, String)],
 ) -> Result<bool> {
     let (key_bytes, _) = ensure_secret_master_key(root)?;
     let encrypted = records
@@ -462,6 +483,15 @@ fn mutate_secret_records(
         .collect::<Result<Vec<_>>>()?;
     let mut conn = open_secret_db(root)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for (scope, name, expected) in versions {
+        let record: Option<(String, String)> = tx.query_row(
+            "SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope,name], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        if !record.is_some_and(|(nonce,ciphertext)| stable_digest(&format!("{nonce}:{ciphertext}")) == *expected) {
+            return Ok(false);
+        }
+    }
     for &(scope, name, expected) in guards {
         let current: Option<(String, String)> = tx.query_row(
             "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",

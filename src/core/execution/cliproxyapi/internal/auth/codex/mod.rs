@@ -39,7 +39,7 @@ pub use openai_auth::{
 pub use pkce::{generate_code_challenge, generate_pkce_codes};
 pub use token::{
     CodexCredentialHandles, CodexSecretHandle, CodexSecretKind, CodexSecretStore,
-    CodexStoredCredentials, CodexTokenError, CodexTokenStorage, SecretStoreError, SecretString,
+    CodexRefreshSnapshot, CodexStoredCredentials, CodexTokenError, CodexTokenStorage, SecretStoreError, SecretString,
 };
 #[cfg(feature = "codex-http-transport")]
 pub use transport::{
