@@ -236,10 +236,17 @@ impl AccountRouter {
         &self,
         auth_id: &str,
     ) -> Result<super::ClaudeQuotaObservation, AccountRoutingError> {
-        let generation = self.quotas.as_ref().map(|store| {
-            store.capture_generation("claude", auth_id)
-        }).transpose().map_err(AccountRoutingError::Quota)?.flatten();
-        Ok(super::ClaudeQuotaObservation { auth_id: auth_id.into(), generation })
+        let generation = self
+            .quotas
+            .as_ref()
+            .map(|store| store.capture_generation("claude", auth_id))
+            .transpose()
+            .map_err(AccountRoutingError::Quota)?
+            .flatten();
+        Ok(super::ClaudeQuotaObservation {
+            auth_id: auth_id.into(),
+            generation,
+        })
     }
 
     /// Called only after an actual Claude transport response. Never accepts
@@ -258,7 +265,12 @@ impl AccountRouter {
             ),
         ) {
             store
-                .save_if_generation("claude", &observation.auth_id, &snapshot, observation.generation.as_ref())
+                .save_if_generation(
+                    "claude",
+                    &observation.auth_id,
+                    &snapshot,
+                    observation.generation.as_ref(),
+                )
                 .map_err(AccountRoutingError::Quota)?;
         }
         Ok(())

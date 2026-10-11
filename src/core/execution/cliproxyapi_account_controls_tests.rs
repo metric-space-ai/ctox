@@ -109,17 +109,35 @@ async fn native_controls_dormant_default_loads_starts_and_never_routes_to_anothe
 }
 
 #[test]
-fn native_controls_remove_quota_without_late_response_resurrection_or_sibling_loss() -> anyhow::Result<()> {
-    use ctox_cliproxyapi::sdk::cliproxy::auth::{AccountQuotaStore, QuotaWindowKind, ReportedQuotaSnapshot, ReportedQuotaStatus, ReportedQuotaWindow};
+fn native_controls_remove_quota_without_late_response_resurrection_or_sibling_loss(
+) -> anyhow::Result<()> {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::{
+        AccountQuotaStore, QuotaWindowKind, ReportedQuotaSnapshot, ReportedQuotaStatus,
+        ReportedQuotaWindow,
+    };
     let root = tempfile::tempdir()?;
     let install = |id: &str, access: &str| -> anyhow::Result<()> {
-        install_claude_subscription(root.path(), id, &ClaudeStoredCredentials::new(SecretString::new(access)?, SecretString::new(format!("refresh-{access}"))?))
+        install_claude_subscription(
+            root.path(),
+            id,
+            &ClaudeStoredCredentials::new(
+                SecretString::new(access)?,
+                SecretString::new(format!("refresh-{access}"))?,
+            ),
+        )
     };
-    let quota = |at: i64| ReportedQuotaSnapshot { observed_at_ms: at, windows: vec![ReportedQuotaWindow {
-        kind: QuotaWindowKind::FiveHour, status: ReportedQuotaStatus::Allowed, reset_at_ms: at + 10_000, utilization: Some(0.25)
-    }] };
+    let quota = |at: i64| ReportedQuotaSnapshot {
+        observed_at_ms: at,
+        windows: vec![ReportedQuotaWindow {
+            kind: QuotaWindowKind::FiveHour,
+            status: ReportedQuotaStatus::Allowed,
+            reset_at_ms: at + 10_000,
+            utilization: Some(0.25),
+        }],
+    };
     let binding = |id: &str| -> anyhow::Result<String> {
-        super::super::super::cliproxyapi_claude_catalog::account_binding(root.path(), id)?.context("fixture binding missing")
+        super::super::super::cliproxyapi_claude_catalog::account_binding(root.path(), id)?
+            .context("fixture binding missing")
     };
     let ids = ["quota-control-a".to_string(), "quota-control-b".to_string()];
     install(&ids[0], "old-quota-control-access")?;
@@ -129,23 +147,54 @@ fn native_controls_remove_quota_without_late_response_resurrection_or_sibling_lo
     store.save("claude", &ids[1], &quota(2_000))?;
     let in_flight = store.capture_generation("claude", &ids[0])?;
 
-    apply(root.path(), "quota-disable", "disable-hash", "owner", &ids[0], &binding(&ids[0])?, Some(false), || Ok(()))?;
+    apply(
+        root.path(),
+        "quota-disable",
+        "disable-hash",
+        "owner",
+        &ids[0],
+        &binding(&ids[0])?,
+        Some(false),
+        || Ok(()),
+    )?;
     finish(root.path(), "quota-disable", "disable-hash", "owner")?;
-    assert_eq!(store.load("claude", &ids)?[&ids[0]], quota(1_000), "disable retains actual observations");
-    apply(root.path(), "quota-remove", "remove-hash", "owner", &ids[0], &binding(&ids[0])?, None, || Ok(()))?;
+    assert_eq!(
+        store.load("claude", &ids)?[&ids[0]],
+        quota(1_000),
+        "disable retains actual observations"
+    );
+    apply(
+        root.path(),
+        "quota-remove",
+        "remove-hash",
+        "owner",
+        &ids[0],
+        &binding(&ids[0])?,
+        None,
+        || Ok(()),
+    )?;
     finish(root.path(), "quota-remove", "remove-hash", "owner")?;
     finish(root.path(), "quota-remove", "remove-hash", "owner")?;
     store.save_if_generation("claude", &ids[0], &quota(3_000), in_flight.as_ref())?;
-    assert_eq!(store.load("claude", &ids)?, std::collections::BTreeMap::from([(ids[1].clone(), quota(2_000))]));
+    assert_eq!(
+        store.load("claude", &ids)?,
+        std::collections::BTreeMap::from([(ids[1].clone(), quota(2_000))])
+    );
     let conn = crate::persistence::open_sqlite(root.path())?;
     let rows: i64 = conn.query_row("SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0))?;
-    assert_eq!(rows, 1, "the removed row was physically deleted and not recreated");
+    assert_eq!(
+        rows, 1,
+        "the removed row was physically deleted and not recreated"
+    );
     drop(conn);
 
     install(&ids[0], "new-quota-control-access")?;
     store.save("claude", &ids[0], &quota(4_000))?;
     store.save_if_generation("claude", &ids[0], &quota(5_000), in_flight.as_ref())?;
-    assert!(finish(root.path(), "quota-remove", "remove-hash", "owner").is_err(), "old removal proof cannot clear a re-created account");
+    assert!(
+        finish(root.path(), "quota-remove", "remove-hash", "owner").is_err(),
+        "old removal proof cannot clear a re-created account"
+    );
     assert_eq!(store.load("claude", &ids)?[&ids[0]], quota(4_000));
     assert_eq!(store.load("claude", &ids)?[&ids[1]], quota(2_000));
     Ok(())
