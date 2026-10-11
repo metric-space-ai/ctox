@@ -18,7 +18,7 @@ notices; this file covers incorporated/translated source.
 ========================================================================
 nektos/act — MIT
 Source: https://github.com/nektos/act/tree/v0.2.89
-Scope: Core model, runner, common, container and fixture ports; Copyright (c) 2019, act contributors.
+Scope: Core model, runner, common, container and fixture ports; Copyright (c) 2019 (as retained in upstream LICENSE).
 Changes: translated/adapted to Rust; schema JSON retained unchanged.
 License source: https://github.com/nektos/act/blob/v0.2.89/LICENSE
 

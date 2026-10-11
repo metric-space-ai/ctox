@@ -610,8 +610,11 @@ fn execute_job(
         let started = Instant::now();
         println!(
             "PR {} / {} / {job_id} / {name}: starting",
-            config.pr, parsed.workflow.file
+            config.pr,
+            parsed.workflow.file,
+            name = redact(&name, &masks)
         );
+        entry.step = redact(&entry.step, &masks);
         let log_path = logs.join(format!("{index}.log"));
         let sink = Arc::new(Sink::new(&log_path, masks.clone())?);
         host.replace_log_writer(sink.clone());
@@ -678,7 +681,7 @@ fn execute_job(
         match result {
             Ok(reason) => {
                 entry.status = "success".into();
-                entry.reason = reason;
+                entry.reason = redact(&reason, &masks);
                 entry.exit_code = Some(0);
             }
             Err(error) => {
@@ -710,7 +713,10 @@ fn execute_job(
         }
         println!(
             "PR {} / {job_id} / {name}: {} {}",
-            config.pr, entry.status, entry.reason
+            config.pr,
+            entry.status,
+            entry.reason,
+            name = redact(&name, &masks)
         );
         report.steps.push(entry);
     }
