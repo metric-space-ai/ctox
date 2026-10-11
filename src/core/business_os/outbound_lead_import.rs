@@ -471,14 +471,18 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
             validation_state_for_mail(record),
             evidence,
         ));
-        let mut seen = std::collections::BTreeSet::new();
-        for item in record["evidence"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|item| seen.insert((item["field_key"].to_string(), item["value"].to_string())))
-            .take(40)
-        {
+        // One line per (field, value) with up to two of its sources. The
+        // research stores one evidence entry per source, with the address in
+        // `source_url` (thesen) or in a `sources` list.
+        let mut lines: Vec<((String, String), Vec<String>)> = Vec::new();
+        for item in record["evidence"].as_array().into_iter().flatten() {
+            let key = (
+                item["field_key"].as_str().unwrap_or("?").to_string(),
+                item["value"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| item["value"].to_string()),
+            );
             let sources = item["sources"]
                 .as_array()
                 .into_iter()
@@ -489,20 +493,30 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
                         .map(str::to_owned)
                         .or_else(|| source["url"].as_str().map(str::to_owned))
                 })
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(", ");
+                .chain(item["source_url"].as_str().map(str::to_owned))
+                .filter(|source| !source.trim().is_empty());
+            let index = match lines.iter().position(|(existing, _)| *existing == key) {
+                Some(index) => index,
+                None if lines.len() < 40 => {
+                    lines.push((key, Vec::new()));
+                    lines.len() - 1
+                }
+                None => continue,
+            };
+            let line = &mut lines[index].1;
+            for source in sources {
+                if line.len() < 2 && !line.contains(&source) {
+                    line.push(source);
+                }
+            }
+        }
+        for ((field, value), sources) in &lines {
             text.push_str(&format!(
-                "    {}: {}{}\n",
-                item["field_key"].as_str().unwrap_or("?"),
-                item["value"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| item["value"].to_string()),
+                "    {field}: {value}{}\n",
                 if sources.is_empty() {
                     String::new()
                 } else {
-                    format!(" (Quelle: {sources})")
+                    format!(" (Quelle: {})", sources.join(", "))
                 },
             ));
         }
@@ -549,10 +563,12 @@ mod tests {
         assert!(render_records_for_mail(&[]).is_empty());
         // A finished research waiting for a person's check is reported as
         // finished, with each result once (thesen, 11.10.2026).
-        let duplicate = json!({"field_key": "umsatz", "value": "140,6 Mio. EUR"});
         let rendered = render_records_for_mail(&[json!({
             "id": "lead_h", "name": "Hedinger GmbH & Co. KG", "research_status": "needs_review",
-            "validation_status": "pending", "evidence": [duplicate.clone(), duplicate],
+            "validation_status": "pending", "evidence": [
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://northdata.example/h"},
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://register.example/h"},
+                {"field_key": "umsatz", "value": "140,6 Mio. EUR", "source_url": "https://third.example/h"}],
             "field_status": {"umsatz": {"status": "verified"}, "wz_code": {"status": "no_match"},
                 "mitarbeiter": {"status": "action_required"}}
         })]);
@@ -561,6 +577,9 @@ mod tests {
         ));
         assert!(!rendered.contains("needs_review"));
         assert_eq!(rendered.matches("umsatz: 140,6 Mio. EUR").count(), 1);
+        assert!(rendered.contains(
+            "umsatz: 140,6 Mio. EUR (Quelle: https://northdata.example/h, https://register.example/h)"
+        ));
         let running = render_records_for_mail(&[json!({"name": "X", "research_status": "queued"})]);
         assert!(running.contains("Recherche: laeuft noch"));
     }
