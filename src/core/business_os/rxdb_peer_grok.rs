@@ -185,7 +185,7 @@ fn genuine_text(body: &[u8], requested_model: &str) -> bool {
             })
         })
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ProbeFailure {
     code: &'static str,
     upstream: Option<xai::UpstreamHttpRejection>,
@@ -375,7 +375,7 @@ async fn handle(
             let started = Instant::now();
             let result = if before.is_none() {
                 Err(ProbeFailure::from("missing_credential"))
-            } else if let Some(error) = catalog_error {
+            } else if let Some(error) = catalog_error.clone() {
                 Err(error)
             } else if !models.iter().any(|m| m == model) {
                 Err(ProbeFailure::from("model_unavailable"))
@@ -413,7 +413,7 @@ async fn handle(
         returned_check = saved_check(&authority.root)?;
     }
     Ok(GuardedAuxiliaryResponse {
-        result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"check":returned_check}),
+        result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"catalogError":catalog_error.as_ref().map(|failure|json!({"errorCode":failure.code,"upstream":failure.upstream})),"check":returned_check}),
         publication: authority,
     })
 }
@@ -548,6 +548,55 @@ mod tests {
         .result;
         assert_eq!(response["check"]["errorCode"], "missing_credential");
         assert!(response["check"]["upstream"].is_null());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn account_read_exposes_actual_catalog_rejection_without_fabricating_model_check(
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for status in [401, 404, 429] {
+            let root = tempfile::tempdir()?;
+            let record = json!({"access":"private-read-fixture","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+            crate::secrets::write_secret_record(
+                root.path(),
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &record.to_string(),
+                None,
+                json!({}),
+            )?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            xai::test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 8192];
+                let read = socket.read(&mut data).await.unwrap();
+                assert!(data[..read].starts_with(b"GET /models"));
+                let body = "private-rejected-provider-body";
+                socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let response = handle(
+                Arc::new(Controller::new(root.path())?),
+                auth(root.path(), "chef", Arc::new(|| true))?,
+                vec![request("instance.grok.read")],
+            )
+            .await?
+            .result;
+            server.await?;
+            xai::test_endpoint(root.path(), None);
+            assert_eq!(response["models"], json!([]));
+            assert!(response["check"].is_null());
+            assert!(saved_check(root.path())?.is_null());
+            assert_eq!(
+                response["catalogError"],
+                json!({"errorCode":"request_failed","upstream":{"status":status,"stage":"catalog"}})
+            );
+            assert!(response["installed"].as_bool().unwrap());
+            assert!(!response.to_string().contains("private-"));
+        }
         Ok(())
     }
     #[tokio::test]
