@@ -677,6 +677,7 @@ mod tests {
             workjet_supervisor_epoch: None,
             workjet_supervisor_lease: None,
             workjet_confirmed_plan: None,
+            communication_binding: None,
             issued_at_ms: now_ms(),
             expires_at_ms: now_ms() + MCP_INTERNAL_SESSION_TTL_MS,
         };

@@ -17,6 +17,7 @@ pub(crate) mod mattermost_native;
 pub(crate) mod meeting_native;
 pub(crate) mod microsoft_graph_auth;
 pub(crate) mod runtime;
+pub(crate) mod sender_authentication;
 pub(crate) mod slack_native;
 pub(crate) mod teams_native;
 pub(crate) mod telegram_native;
