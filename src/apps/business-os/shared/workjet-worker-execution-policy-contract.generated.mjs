@@ -25,10 +25,64 @@ export const WORKER_EXECUTION_POLICY_TYPES = deepFreeze({
         "maximum": 9007199254740991
       }
     }
+  },
+  "WorkerParentBindingContract": {
+    "enum": [
+      "ctox.workjet.persistent-worker-binding.v1"
+    ]
+  },
+  "WorkerParentBindingRole": {
+    "enum": [
+      "persistent_worker"
+    ]
+  },
+  "WorkerParentBindingState": {
+    "enum": [
+      "active"
+    ]
+  },
+  "WorkerParentBinding": {
+    "derive_eq": true,
+    "fields": {
+      "contract": {
+        "type": "WorkerParentBindingContract"
+      },
+      "owner_user_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 256
+      },
+      "supervisor_thread_id": {
+        "type": "String",
+        "min_chars": 36,
+        "max_chars": 36
+      },
+      "thread_id": {
+        "type": "String",
+        "min_chars": 36,
+        "max_chars": 36
+      },
+      "role": {
+        "type": "WorkerParentBindingRole"
+      },
+      "revision": {
+        "type": "u64",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "state": {
+        "type": "WorkerParentBindingState"
+      }
+    }
   }
 });
 export const WORKER_EXECUTION_POLICY_COMMANDS = deepFreeze({
-  "business_os.remote_worker_admission": "Optional binding.executionPolicy is a strict project policy reference, never a team/path/provider grant. Issue/claim/revalidate/renew require current Owner project mode/revision and a genuine current native supervisor/team join. Missing preserves legacy admission; null is rejected; revoke remains usable after reset."
+  "business_os.remote_worker_admission": "Optional binding.executionPolicy is a strict project policy reference, never a team/path/provider grant. Optional parentTeamBinding pins the complete native Owner-issued Persistent Worker reference and the actual calling thread UUID. Issue/claim/revalidate/renew check current private enrollment, exact affiliation/revision and native history. Known native Parents cannot omit their reference. Null, added fields and Root substitution are rejected. Absence of both references preserves legacy admission bytes; revoke uses the original exact receipt binding after policy reset or Parent revocation."
 });
 
 function deepFreeze(value) {

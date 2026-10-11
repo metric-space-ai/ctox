@@ -100,6 +100,119 @@ impl WireValidate for WorkerExecutionPolicyReference {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum WorkerParentBindingContract {
+    #[serde(rename = "ctox.workjet.persistent-worker-binding.v1")]
+    CtoxWorkjetPersistentWorkerBindingV1,
+}
+impl WireValidate for WorkerParentBindingContract {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum WorkerParentBindingRole {
+    #[serde(rename = "persistent_worker")]
+    PersistentWorker,
+}
+impl WireValidate for WorkerParentBindingRole {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) enum WorkerParentBindingState {
+    #[serde(rename = "active")]
+    Active,
+}
+impl WireValidate for WorkerParentBindingState {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerParentBinding {
+    pub(crate) contract: WorkerParentBindingContract,
+    pub(crate) owner_user_id: String,
+    pub(crate) project_id: String,
+    pub(crate) supervisor_thread_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) role: WorkerParentBindingRole,
+    pub(crate) revision: u64,
+    pub(crate) state: WorkerParentBindingState,
+}
+impl WireValidate for WorkerParentBinding {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.contract;
+            value.validate()?;
+        }
+        {
+            let value = &self.owner_user_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("WorkerParentBinding.owner_user_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("WorkerParentBinding.owner_user_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("WorkerParentBinding.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 256 {
+                return Err("WorkerParentBinding.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.supervisor_thread_id;
+            value.validate()?;
+            if value.chars().count() < 36 {
+                return Err("WorkerParentBinding.supervisor_thread_id violates min_chars".into());
+            }
+            if value.chars().count() > 36 {
+                return Err("WorkerParentBinding.supervisor_thread_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.thread_id;
+            value.validate()?;
+            if value.chars().count() < 36 {
+                return Err("WorkerParentBinding.thread_id violates min_chars".into());
+            }
+            if value.chars().count() > 36 {
+                return Err("WorkerParentBinding.thread_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.role;
+            value.validate()?;
+        }
+        {
+            let value = &self.revision;
+            value.validate()?;
+            if *value < 1 {
+                return Err("WorkerParentBinding.revision violates minimum".into());
+            }
+            if *value > 9007199254740991 {
+                return Err("WorkerParentBinding.revision violates maximum".into());
+            }
+        }
+        {
+            let value = &self.state;
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(), String> {
     match kind {
@@ -111,6 +224,20 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
                 .map_err(|e| e.to_string())?
                 .validate()
         }
+        "WorkerParentBindingContract" => {
+            serde_json::from_value::<WorkerParentBindingContract>(value)
+                .map_err(|e| e.to_string())?
+                .validate()
+        }
+        "WorkerParentBindingRole" => serde_json::from_value::<WorkerParentBindingRole>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "WorkerParentBindingState" => serde_json::from_value::<WorkerParentBindingState>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "WorkerParentBinding" => serde_json::from_value::<WorkerParentBinding>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
         _ => Err("unknown contract type".into()),
     }
 }

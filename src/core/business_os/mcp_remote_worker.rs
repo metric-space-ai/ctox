@@ -4,11 +4,13 @@
 //! Source-native admission for a Workjet leaf worker. An opaque permit is a
 //! locator, never a target bearer credential: every operation returns through
 //! the source's authenticated managed MCP connection and current policy store.
+use super::super::project_chats::persistent_worker_binding::{
+    self, PersistentWorkerBinding as NativeParentBinding,
+};
 use super::super::workjet_worker_execution_policy_contract::{
     WireValidate, WorkerExecutionPolicyReference, WorkerParentBinding,
 };
 use super::*;
-use super::super::project_chats::persistent_worker_binding::{self, PersistentWorkerBinding as NativeParentBinding};
 use rusqlite::{Connection, TransactionBehavior};
 use sha2::{Digest, Sha256};
 
@@ -545,7 +547,12 @@ fn current_authority(
     }
     if parent.is_none() {
         anyhow::ensure!(
-            persistent_worker_binding::for_thread(conn, &context.actor, &binding.source_supervisor_thread_id)?.is_none(),
+            persistent_worker_binding::for_thread(
+                conn,
+                &context.actor,
+                &binding.source_supervisor_thread_id
+            )?
+            .is_none(),
             "native Parent requires its complete Owner-issued binding"
         );
     }
@@ -715,7 +722,10 @@ fn validate_binding(binding: &Binding) -> anyhow::Result<()> {
         }
         for value in [&reference.thread_id, &reference.supervisor_thread_id] {
             let id = uuid::Uuid::parse_str(value).context("native team thread must be a UUID")?;
-            anyhow::ensure!(!id.is_nil() && id.to_string() == *value, "native team thread UUID must be canonical and non-nil");
+            anyhow::ensure!(
+                !id.is_nil() && id.to_string() == *value,
+                "native team thread UUID must be canonical and non-nil"
+            );
         }
         anyhow::ensure!(
             reference.project_id == binding.project_id
