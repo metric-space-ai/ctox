@@ -2646,25 +2646,51 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
-            let normalized = provider.unwrap_or(&self.default_provider).trim().to_ascii_lowercase();
+            let normalized = provider
+                .unwrap_or(&self.default_provider)
+                .trim()
+                .to_ascii_lowercase();
             let provider = normalized.as_str();
             let pinned = ctox_cliproxyapi::internal::api::account_selection::requested_account();
             let legacy = (provider == "kimi" && self.kimi.is_some())
-                || (provider == "xai" && self.xai_root.as_ref().is_some_and(|r| crate::execution::cliproxyapi_xai::subscription_installed(r)));
+                || (provider == "xai"
+                    && self.xai_root.as_ref().is_some_and(|r| {
+                        crate::execution::cliproxyapi_xai::subscription_installed(r)
+                    }));
             if let Some(routes) = &self.api_keys {
                 // Preserve the existing unpinned OAuth route; explicitly bound
                 // API accounts use their own current holder credential only.
                 if pinned.is_some() || !legacy {
                     match routes.route_for(provider) {
-                        Ok(Some(handler)) if pinned.as_deref().is_some_and(|id| handler.contains(id)) || pinned.is_none() => return handler.handle_route(body).await,
-                        Ok(_) => {},
-                        Err(_) => return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(503, "API account configuration unavailable")),
+                        Ok(Some(handler))
+                            if pinned.as_deref().is_some_and(|id| handler.contains(id))
+                                || pinned.is_none() =>
+                        {
+                            return handler.handle_route(body).await
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            return OpenAiResponsesRouteResponse::Buffered(
+                                OpenAiResponsesHttpResponse::error(
+                                    503,
+                                    "API account configuration unavailable",
+                                ),
+                            )
+                        }
                     }
                 }
             }
             if provider.eq_ignore_ascii_case("xai") {
-                if pinned.as_deref().is_some_and(|id| id != crate::execution::cliproxyapi_xai::ACCOUNT_ID) {
-                    return OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::error(503, "requested provider account is unavailable"));
+                if pinned
+                    .as_deref()
+                    .is_some_and(|id| id != crate::execution::cliproxyapi_xai::ACCOUNT_ID)
+                {
+                    return OpenAiResponsesRouteResponse::Buffered(
+                        OpenAiResponsesHttpResponse::error(
+                            503,
+                            "requested provider account is unavailable",
+                        ),
+                    );
                 }
                 if let Some(root) = &self.xai_root {
                     return crate::execution::cliproxyapi_xai::handle_route(root, body).await;
