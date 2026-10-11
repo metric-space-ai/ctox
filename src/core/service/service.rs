@@ -12571,6 +12571,32 @@ const REVIEW_ATTACHMENT_PREVIEW_CHARS: usize = 3000;
 /// subject and preview, so a review approved a reply to an Excel request that
 /// named three unrelated companies (10.10.2026). Spreadsheets and text files
 /// are shown with their first rows so the review can compare.
+/// Records created for exactly this mail (lead import with its key). They let
+/// a mail turn state started work and results, and let the review check them.
+fn mail_order_records_block(root: &Path, inbound_message_key: &str) -> String {
+    crate::business_os::outbound_lead_import::records_for_source_message(root, inbound_message_key)
+        .map(|records| crate::business_os::outbound_lead_import::render_records_for_mail(&records))
+        .unwrap_or_default()
+}
+
+fn mail_order_review_evidence(root: &Path, inbound_message_key: &str) -> Vec<String> {
+    crate::business_os::outbound_lead_import::records_for_source_message(root, inbound_message_key)
+        .unwrap_or_default()
+        .iter()
+        .map(|record| {
+            format!(
+                "Order record for this mail: Outbound lead `{}` ({}), research_status `{}`, validation_status `{}`, {} evidence entries; command `{}`.",
+                record["name"].as_str().unwrap_or("?"),
+                record["id"].as_str().unwrap_or("?"),
+                record["research_status"].as_str().unwrap_or("-"),
+                record["validation_status"].as_str().unwrap_or("-"),
+                record["evidence"].as_array().map(Vec::len).unwrap_or(0),
+                record["command_id"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect()
+}
+
 fn inbound_attachment_review_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String> {
     let Some(inbound_key) = inbound_email_reply_message_key(job)
         .or_else(|| founder_communication_rework_inbound_key(job))
@@ -12751,6 +12777,11 @@ fn collect_review_evidence_summaries(
     }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
     evidence.extend(inbound_attachment_review_evidence(root, job));
+    if let Some(inbound_key) = inbound_email_reply_message_key(job)
+        .or_else(|| founder_communication_rework_inbound_key(job))
+    {
+        evidence.extend(mail_order_review_evidence(root, inbound_key));
+    }
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
     evidence.extend(review_external_work_backing_evidence_summaries(root, job));
@@ -19548,6 +19579,10 @@ fn render_founder_rework_prompt(
     let attachments = load_inbound_email_metadata(root, inbound_message_key)
         .map(|metadata| render_inbound_attachments(&metadata))
         .unwrap_or_default();
+    let attachments = format!(
+        "{attachments}{}",
+        mail_order_records_block(root, inbound_message_key)
+    );
     let title = subject.trim();
     let title_line = if title.is_empty() {
         String::new()
@@ -23518,7 +23553,10 @@ fn enrich_inbound_prompt(
             message.sender_address.trim()
         };
         let authority = render_email_sender_authority(&policy);
-        let attachments = render_inbound_attachments(&message.metadata);
+        let mut attachments = render_inbound_attachments(&message.metadata);
+        if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
+            attachments.push_str(&mail_order_records_block(root, &message.message_key));
+        }
         let communication_contract = render_email_context_contract(root, message);
         let reply_instruction = if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
             "Wenn eine Antwort sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle stattdessen nur den empfaengerorientierten Antwortentwurf auf Basis des gesamten Founder-/Owner-Kontexts; Founder-/Owner-Outbound darf nur ueber den dedizierten reviewed communication path rausgehen. Dein gesamter Assistenten-Output in diesem Run ist exakt der zu versendende Mailtext und sonst nichts: keine Analyse, keine Revalidierungsnotizen, keine Queue-/Review-/Runtime-Sprache, keine Host-Pfade, keine Tool-Evidenz. Beantworte die neueste Founder-/Owner-Nachricht direkt; wenn konkrete Deliverables oder Links bereits vorhanden sind, liefere sie unmittelbar in der Mail. Wenn ein konkreter Anhang verlangt ist (zum Beispiel QR-Code-PDF, Installationsdatei oder Mockup-Datei), darfst du ihn nicht durch einen oeffentlichen Link ersetzen. Wenn etwas objektiv noch fehlt, benenne nur den fehlenden Punkt kurz und klar statt internen Status zu berichten.".to_string()

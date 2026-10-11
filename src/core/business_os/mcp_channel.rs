@@ -8785,9 +8785,14 @@ fn execute_outbound_lead_import(
         "business_os.execute_action",
         &policy_arguments,
     )?;
-    let request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
+    let mut request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
         anyhow::Error::new(BusinessOsMcpError::validation("payload", error.to_string()))
     })?;
+    // A mail session binds the import to its own mail; the caller cannot
+    // point the records at another mail.
+    if let Some(mail) = context.request_id.strip_prefix("communication:") {
+        request.source_message_key = mail.to_string();
+    }
     let actor = resolved_mcp_actor_context(root, context)?;
     let client_context = serde_json::json!({
         "channel": &context.channel,
@@ -15473,6 +15478,55 @@ mod tests {
         // Starting again keeps the running research.
         let again = execute_outbound_lead_import(root, &context, &with_research)?;
         assert_eq!(again["leads"][0]["research"]["status"], "already_started");
+
+        // A mail turn reads back exactly the records of its own mail.
+        let mail = "email:crew@example.test::inbox::own-mail";
+        let other_mail = "email:crew@example.test::inbox::other-mail";
+        let for_mail = |campaign: &str, key: &str, name: &str| {
+            serde_json::json!({
+                "module_id": "outbound-lead-generation",
+                "action_id": super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+                "payload": {
+                    "campaign": campaign,
+                    "rows": [{ "name": name, "website": "example.test", "city": "Ulm" }],
+                    "start_research": false,
+                    "source_message_key": key
+                }
+            })
+        };
+        execute_outbound_lead_import(root, &context, &for_mail("Mail A", mail, "Eigene GmbH"))?;
+        execute_outbound_lead_import(
+            root,
+            &context,
+            &for_mail("Mail B", other_mail, "Fremde GmbH"),
+        )?;
+        // A mail session binds the import to its own mail whatever the
+        // caller names.
+        let mut session_context = test_context("business_os.execute_action");
+        session_context.request_id = format!("communication:{mail}");
+        execute_outbound_lead_import(
+            root,
+            &session_context,
+            &for_mail("Mail C", other_mail, "Sitzung GmbH"),
+        )?;
+        let own = super::super::outbound_lead_import::records_for_source_message(root, mail)?;
+        let mut names = own
+            .iter()
+            .map(|record| record["name"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["Eigene GmbH", "Sitzung GmbH"]);
+        // Negative: neither another mail's records nor unbound leads.
+        assert!(!names
+            .iter()
+            .any(|name| name == "Fremde GmbH" || name == "Hedinger GmbH & Co. KG"));
+        assert!(
+            super::super::outbound_lead_import::records_for_source_message(root, "queue:x")?
+                .is_empty()
+        );
+        let rendered = super::super::outbound_lead_import::render_records_for_mail(&own);
+        assert!(rendered.contains("Eigene GmbH") && rendered.contains("Recherche new"));
+        assert!(!rendered.contains("Fremde GmbH"));
         Ok(())
     }
 
