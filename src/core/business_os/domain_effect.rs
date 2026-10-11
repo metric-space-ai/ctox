@@ -42,7 +42,7 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
-pub(super) const COMMAND_TYPES: [&str; 26] = [
+pub(super) const COMMAND_TYPES: [&str; 28] = [
     "ctox.workjet.providers.adopt_native",
     "ctox.workjet.providers.observe_native",
     "ctox.workjet.providers.models.select",
@@ -64,6 +64,8 @@ pub(super) const COMMAND_TYPES: [&str; 26] = [
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.persistent_worker.bind",
+    "ctox.workjet.project.persistent_worker.revoke",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
     "ctox.workjet.project.chat.create",
