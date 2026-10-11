@@ -7174,27 +7174,28 @@ mod tests {
                 chrono::Utc::now().timestamp_millis(),
             )
             .unwrap();
-        let requesting_command = crate::business_os::store::accept_rxdb_business_command_with_origin(
-            &root,
-            serde_json::json!({
-                "id": "authz-user-a-auth-assist",
-                "command_id": "authz-user-a-auth-assist",
-                "module": "research",
-                "command_type": "business_os.chat.task",
-                "record_id": "appsec-auth-assist",
-                "payload": {
-                    "title": "AppSec authenticated scan",
-                    "instruction": "Authenticate the AppSec browser session",
-                    "writeback_contract": { "allowed_collections": [] }
-                },
-                "client_context": {
-                    "actor": { "id": "forged-worker" },
-                    "capability_token": capability_token
-                }
-            }),
-            crate::business_os::store::CommandOrigin::ReplicatedPeer,
-        )
-        .unwrap();
+        let requesting_command =
+            crate::business_os::store::accept_rxdb_business_command_with_origin(
+                &root,
+                serde_json::json!({
+                    "id": "authz-user-a-auth-assist",
+                    "command_id": "authz-user-a-auth-assist",
+                    "module": "research",
+                    "command_type": "business_os.chat.task",
+                    "record_id": "appsec-auth-assist",
+                    "payload": {
+                        "title": "AppSec authenticated scan",
+                        "instruction": "Authenticate the AppSec browser session",
+                        "writeback_contract": { "allowed_collections": [] }
+                    },
+                    "client_context": {
+                        "actor": { "id": "forged-worker" },
+                        "capability_token": capability_token
+                    }
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )
+            .unwrap();
         assert_eq!(requesting_command["status"], "accepted");
 
         let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
