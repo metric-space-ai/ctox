@@ -130,3 +130,38 @@ a persisted cursor/revision for resumption but create no browser history and no
 second projection writer. Readiness follows ctx.data and known/unknown/stale,
 never collection phase guessing. The RFC owner must validate this mapping
 before the S3 fixture PR and assign its sync-v3:S<n> label; no label is self-issued.
+
+## Admitted host pilot (vorgabe-38)
+
+`examples/workjet_host_pilot.rs` is a bounded operator pilot for running supplied
+PR snapshots through this engine inside `gpu-build-run.sh`. Its typed JSON
+manifest pins the project/core/engine commits, source/root/cache paths, installed
+Node binary and per-step timeout. It performs no action downloads and reads no
+operator credentials. It preserves native exit codes, step conditions,
+continue-on-error, environment/output/path files, bounded redacted logs and
+per-workflow/job/step JSON receipts. Worktrees and job temporary files are removed
+after completion, including preparation failures.
+
+Three explicit native adapters cover snapshot `actions/checkout`, verification
+of an already installed `actions/setup-node` toolchain and local file capture for
+`actions/upload-artifact`. They are **not** execution of the upstream JavaScript
+action at its pinned revision. Unsupported inputs/actions, services, containers,
+job conditions, needs/matrices and job outputs remain visible blockers. Only the
+standalone pilot resolves these adapter gaps; `HostWorkflow::require_no_gaps`
+continues to reject general action loading. Git metadata/generated caches and
+the unrelated captured browser profile in the supplied core contract snapshot
+are excluded; project sources are otherwise copied from the exact supplied head.
+Legacy literal `/tmp/` evidence paths are mapped to the job's own temporary root.
+
+The operator invokes the pilot within transient native cgroup scopes through the
+existing lane, with two CPU workers, bounded RAM, timeout and a bulk-disk check.
+Secrets are not resolved: requested secrets are reported unavailable. Live jobs
+without an isolated target and deployment/mutation commands are blocked. The
+local artifact shim records retention intent; periodic expiry, quotas and the
+native ledger still require the managed service. This pilot is not S3 and does
+not replace either admission wrapper or claim distributed-service acceptance.
+
+Source receipts must use the committed final engine head. The prototype's dirty
+hash includes untracked filenames but not their contents, so it is insufficient
+for reusing uncommitted pilot results by hash alone; the managed snapshot manifest
+must hash every submitted file's bytes.
