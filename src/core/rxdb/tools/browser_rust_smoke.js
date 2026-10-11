@@ -4764,6 +4764,7 @@ function ensureCtoxSmokeBinary() {
       }
       browserDiagnostics.smokeHookWaitMs = Date.now() - smokeHookWaitStartedAt;
       outerPhaseTimings.smokeHookWaitMs = browserDiagnostics.smokeHookWaitMs;
+      if (syncV3Probe) await page.evaluate(() => globalThis.__syncV3Trace.mark('smoke-hook'));
       if (startupState) {
         throw new Error(`Business OS smoke hook did not initialize: ${JSON.stringify(startupState, null, 2)}`);
       }
@@ -5454,6 +5455,7 @@ function ensureCtoxSmokeBinary() {
             requiredCollections: startupRequiredCollections,
           });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
+      if (syncV3Probe) await page.evaluate(() => globalThis.__syncV3Trace.mark('health-ready'));
       if (smokeMode !== 'business-os-sellify-scale-ui' && !advancedStatus?.ok) {
         throw new Error(`Business OS advanced status unhealthy after startup: ${JSON.stringify(advancedStatus, null, 2)}`);
       }

@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { analyzeCase, compareCases } from './sync-v3/phase-analysis.mjs';
 
 const values = new Map();
 for (let index = 2; index < process.argv.length; index += 2) {
@@ -57,11 +58,13 @@ try {
     if (measurement.selectedCandidatePairs.some(pair => !ports.has(pair.remotePort))) throw Error('Selected ICE pair bypassed impairment relay');
     if (rtt && relay.pairs.some(pair => pair.holdMinMs < rtt / 2 - 2)) throw Error('Datagram delay oracle below requested floor');
     report.cases.push({ ...measurement, nativeHarnessElapsedMs: Date.now() - start, relay,
+      phaseAnalysis: analyzeCase(measurement),
       nativeAckMedianMs: percentile(measurement.writes.map(sample => sample.nativeAckMs), .5),
       nativeAckP95Ms: percentile(measurement.writes.map(sample => sample.nativeAckMs), .95),
       criterion: 'complete visible native rows, five accepted ACKs with SQLite readback, real relay path and delay validated; RFC product budget is measured separately' });
   }
   report.pass = true;
+  report.phaseComparison = compareCases(report.cases);
 } catch (error) {
   report.error = error.message;
   process.exitCode = 1;
