@@ -448,6 +448,25 @@ fn validation_state_for_mail(record: &Value) -> String {
     }
 }
 
+/// A source as a short readable address: no query or map viewport, at most
+/// 90 characters. Map links and search URLs ran to 300 characters and used up
+/// the block's budget.
+fn short_source(source: &str) -> String {
+    let source = source.trim();
+    let end = source
+        .find(['?', '#'])
+        .into_iter()
+        .chain(source.find("/@"))
+        .min()
+        .unwrap_or(source.len());
+    let source = &source[..end];
+    if source.chars().count() <= 90 {
+        source.to_string()
+    } else {
+        format!("{}...", source.chars().take(87).collect::<String>())
+    }
+}
+
 /// The records as a bounded, quotable block for the mail prompt.
 pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
     if records.is_empty() {
@@ -458,9 +477,11 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
          Steht bei einem Datensatz \"Recherche: Lauf beendet\", liegen seine Ergebnisse vor: die Antwort nennt sie mit Quelle, benennt \
          die offenen Felder als offen und behauptet nicht, die Recherche laufe noch oder Ergebnisse kaemen spaeter.\n",
     );
+    let share = MAIL_RECORD_TEXT_LIMIT.saturating_sub(text.len()) / records.len().max(1);
     for record in records {
+        let mut part = String::new();
         let evidence = record["evidence"].as_array().map(Vec::len).unwrap_or(0);
-        text.push_str(&format!(
+        part.push_str(&format!(
             "- {} [{}], Kampagne \"{}\", Website {}, Ort {}: Recherche: {}, Pruefung: {}, {} Belege\n",
             record["name"].as_str().unwrap_or("?"),
             record["id"].as_str().unwrap_or("?"),
@@ -511,18 +532,37 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
             }
         }
         for ((field, value), sources) in &lines {
-            text.push_str(&format!(
+            part.push_str(&format!(
                 "    {field}: {value}{}\n",
                 if sources.is_empty() {
                     String::new()
                 } else {
-                    format!(" (Quelle: {})", sources.join(", "))
+                    format!(
+                        " (Quelle: {})",
+                        sources
+                            .iter()
+                            .map(|source| short_source(source))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 },
             ));
         }
-        if text.len() > MAIL_RECORD_TEXT_LIMIT {
-            break;
+        // Every record gets the same share of the budget, cut at a line, so a
+        // long first record cannot crowd out the next one (thesen 11.10.2026:
+        // the second lead ended before its management and revenue).
+        if part.len() > share {
+            let mut cut = 0;
+            for (index, _) in part.match_indices('\n') {
+                if index + 1 > share {
+                    break;
+                }
+                cut = index + 1;
+            }
+            part.truncate(cut);
+            part.push_str("    (weitere Felder gekuerzt)\n");
         }
+        text.push_str(&part);
     }
     let mut text: String = text.chars().take(MAIL_RECORD_TEXT_LIMIT).collect();
     text.push('\n');
@@ -580,6 +620,21 @@ mod tests {
         assert!(rendered.contains(
             "umsatz: 140,6 Mio. EUR (Quelle: https://northdata.example/h, https://register.example/h)"
         ));
+        // A long first record cannot crowd out the second one, and map links
+        // are shortened to their place.
+        let long_values: Vec<Value> = (0..200)
+            .map(|index| json!({"field_key": format!("feld_{index}"), "value": "x".repeat(60),
+                "source_url": format!("https://www.google.com/maps/place/A/@48.7,9.2,12z/data={}", "y".repeat(200))}))
+            .collect();
+        let two = render_records_for_mail(&[
+            json!({"name": "Erste GmbH", "research_status": "needs_review", "evidence": long_values}),
+            json!({"name": "Zweite GmbH", "research_status": "needs_review", "evidence": [
+                {"field_key": "umsatz", "value": "103,1 Mio.", "source_url": "https://register.example/z?x=1"}]}),
+        ]);
+        assert!(two.contains("umsatz: 103,1 Mio. (Quelle: https://register.example/z)"));
+        assert!(two.contains("(weitere Felder gekuerzt)"));
+        assert!(two.contains("(Quelle: https://www.google.com/maps/place/A)"));
+        assert!(two.len() <= MAIL_RECORD_TEXT_LIMIT + 1);
         let running = render_records_for_mail(&[json!({"name": "X", "research_status": "queued"})]);
         assert!(running.contains("Recherche: laeuft noch"));
     }
