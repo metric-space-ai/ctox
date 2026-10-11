@@ -12580,8 +12580,13 @@ fn mail_order_review_evidence(root: &Path, inbound_message_key: &str) -> Vec<Str
         .unwrap_or_default()
         .iter()
         .map(|record| {
+            let finished = if crate::business_os::outbound_lead_import::research_finished(record) {
+                " Its research is FINISHED and the results are in the record: a reply that says the research is still running or that results will follow later contradicts it and must be rejected; the reply must report the results."
+            } else {
+                ""
+            };
             format!(
-                "Order record for this mail: Outbound lead `{}` ({}), research_status `{}`, validation_status `{}`, {} evidence entries; command `{}`.",
+                "Order record for this mail: Outbound lead `{}` ({}), research_status `{}`, validation_status `{}`, {} evidence entries; command `{}`.{finished}",
                 record["name"].as_str().unwrap_or("?"),
                 record["id"].as_str().unwrap_or("?"),
                 record["research_status"].as_str().unwrap_or("-"),
