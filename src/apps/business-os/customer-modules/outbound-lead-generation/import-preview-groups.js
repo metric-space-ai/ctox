@@ -301,7 +301,7 @@ export function finalizeImportAnalysis(entries, meta, selectedGroups, grouped) {
     // A first preview carries no selection. A large catalog is narrowed by
     // list on purpose, but a small file that fits under the cap is imported
     // whole: showing it as "0 gültige Leads" read as a failed import
-    // (THESEN, 11.10.2026: two-company Excel looked unimportable).
+    // (customer instance, 11.10.2026: a two-company Excel looked unimportable).
     if (!Array.isArray(selectedGroups) && problemFree.length <= groupLimit) {
       selectedGroups = selectImportGroups(problemFree, sheet).groups.map((g) => g.id);
     }
