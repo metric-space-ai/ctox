@@ -209,17 +209,32 @@ impl AccountRouter {
             || crate::internal::api::account_selection::requested_account().is_some()
             || self.quotas.is_none()
         {
-            return self.scheduler.pick_single(provider, model, now_ms, candidates, cooldowns, options)
+            return self
+                .scheduler
+                .pick_single(provider, model, now_ms, candidates, cooldowns, options)
                 .map_err(AccountRoutingError::Selection);
         }
-        let ids = candidates.iter().filter(|candidate| candidate.provider.eq_ignore_ascii_case(provider))
-            .map(|candidate| candidate.auth_id.clone()).collect::<Vec<_>>();
-        let observations = self.quotas.as_ref().expect("quota store checked")
-            .load(provider, &ids).map_err(AccountRoutingError::Quota)?;
-        let expiries = observations.into_iter().filter_map(|(id, observation)| {
-            observation.usable_reset_at(now_ms).map(|reset| (id, reset))
-        }).collect();
-        self.scheduler.pick_standard(provider, model, now_ms, candidates, cooldowns, options, &expiries)
+        let ids = candidates
+            .iter()
+            .filter(|candidate| candidate.provider.trim().eq_ignore_ascii_case(provider.trim()))
+            .map(|candidate| candidate.auth_id.clone())
+            .collect::<Vec<_>>();
+        let observations = self
+            .quotas
+            .as_ref()
+            .expect("quota store checked")
+            .load(provider, &ids)
+            .map_err(AccountRoutingError::Quota)?;
+        let expiries = observations
+            .into_iter()
+            .filter_map(|(id, observation)| {
+                observation.usable_reset_at(now_ms).map(|reset| (id, reset))
+            })
+            .collect();
+        self.scheduler
+            .pick_standard(
+                provider, model, now_ms, candidates, cooldowns, options, &expiries,
+            )
             .map_err(AccountRoutingError::Selection)
     }
 
@@ -231,10 +246,16 @@ impl AccountRouter {
         headers: &crate::sdk::cliproxy::executor::Headers,
         observed_at_ms: i64,
     ) -> Result<(), AccountRoutingError> {
-        if let (Some(store), Some(snapshot)) = (&self.quotas,
-            crate::internal::runtime::executor::helps::claude_quota_observation(headers, observed_at_ms))
-        {
-            store.save("claude", auth_id, &snapshot).map_err(AccountRoutingError::Quota)?;
+        if let (Some(store), Some(snapshot)) = (
+            &self.quotas,
+            crate::internal::runtime::executor::helps::claude_quota_observation(
+                headers,
+                observed_at_ms,
+            ),
+        ) {
+            store
+                .save("claude", auth_id, &snapshot)
+                .map_err(AccountRoutingError::Quota)?;
         }
         Ok(())
     }
@@ -293,7 +314,8 @@ impl AccountRouter {
                     };
                     let candidate = match retained {
                         Some(candidate) => candidate,
-                        None => self.pick_fresh(provider, model, now_ms, candidates, &cooldowns, options)?,
+                        None => self
+                            .pick_fresh(provider, model, now_ms, candidates, &cooldowns, options)?,
                     };
                     let id = candidate.auth_id.clone();
                     selected = Some(candidate);

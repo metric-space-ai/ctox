@@ -1898,9 +1898,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
-                    self.router.observe_claude_quota(
-                        &selected.auth_id, outcome.response().headers(), self.clock.now_ms(),
-                    ).map_err(ClaudeAccountPoolError::Routing)?;
+                    self.router
+                        .observe_claude_quota(
+                            &selected.auth_id,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)
@@ -1997,9 +2001,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
-                    self.router.observe_claude_quota(
-                        &selected.auth_id, outcome.response().headers(), self.clock.now_ms(),
-                    ).map_err(ClaudeAccountPoolError::Routing)?;
+                    self.router
+                        .observe_claude_quota(
+                            &selected.auth_id,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)
