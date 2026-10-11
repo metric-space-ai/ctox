@@ -94,29 +94,63 @@ pub(crate) fn claude_quota_observation(
     headers: &Headers,
     observed_at_ms: i64,
 ) -> Option<crate::sdk::cliproxy::auth::ReportedQuotaSnapshot> {
-    use crate::sdk::cliproxy::auth::{QuotaWindowKind, ReportedQuotaSnapshot, ReportedQuotaStatus, ReportedQuotaWindow};
+    use crate::sdk::cliproxy::auth::{
+        QuotaWindowKind, ReportedQuotaSnapshot, ReportedQuotaStatus, ReportedQuotaWindow,
+    };
     let mut windows = Vec::new();
-    for (name, kind) in [("5h", QuotaWindowKind::FiveHour), ("7d", QuotaWindowKind::SevenDay)] {
+    for (name, kind) in [
+        ("5h", QuotaWindowKind::FiveHour),
+        ("7d", QuotaWindowKind::SevenDay),
+    ] {
         let state = match status(headers, &format!("{name}-Status")).as_str() {
             "allowed" | "allowed_warning" => ReportedQuotaStatus::Allowed,
             "rejected" => ReportedQuotaStatus::Rejected,
             _ => continue,
         };
-        let Some(reset_at_ms) = timestamp(header(headers, &format!("Anthropic-Ratelimit-Unified-{name}-Reset")))
-            .and_then(|when| when.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .and_then(|duration| i64::try_from(duration.as_millis()).ok()) else { continue; };
-        let raw = header(headers, &format!("Anthropic-Ratelimit-Unified-{name}-Utilization"));
-        let utilization = if raw.is_empty() { None } else {
-            let Ok(used) = raw.parse::<f64>() else { continue; };
-            if !used.is_finite() || !(0.0..=1.0).contains(&used) { continue; }
+        let Some(reset_at_ms) = timestamp(header(
+            headers,
+            &format!("Anthropic-Ratelimit-Unified-{name}-Reset"),
+        ))
+        .and_then(|when| when.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok()) else {
+            continue;
+        };
+        let raw = header(
+            headers,
+            &format!("Anthropic-Ratelimit-Unified-{name}-Utilization"),
+        );
+        let utilization = if raw.is_empty() {
+            None
+        } else {
+            let Ok(used) = raw.parse::<f64>() else {
+                continue;
+            };
+            if !used.is_finite() || !(0.0..=1.0).contains(&used) {
+                continue;
+            }
             Some(used)
         };
-        let window = ReportedQuotaWindow { kind, status: state, reset_at_ms, utilization };
-        let one = ReportedQuotaSnapshot { observed_at_ms, windows: vec![window.clone()] };
-        if one.validate().is_ok() { windows.push(window); }
+        let window = ReportedQuotaWindow {
+            kind,
+            status: state,
+            reset_at_ms,
+            utilization,
+        };
+        let one = ReportedQuotaSnapshot {
+            observed_at_ms,
+            windows: vec![window.clone()],
+        };
+        if one.validate().is_ok() {
+            windows.push(window);
+        }
     }
-    if windows.is_empty() { return None; }
-    Some(ReportedQuotaSnapshot { observed_at_ms, windows })
+    if windows.is_empty() {
+        return None;
+    }
+    Some(ReportedQuotaSnapshot {
+        observed_at_ms,
+        windows,
+    })
 }
 
 #[cfg(any(feature = "anthropic-fingerprint-transport", test))]

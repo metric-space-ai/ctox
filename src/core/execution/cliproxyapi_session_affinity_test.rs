@@ -44,6 +44,22 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
     }
 }
 
+impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
+    fn execute_stream<'a>(
+        &'a self,
+        request: &'a ClaudeMessagesRequest,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse, ClaudeMessagesTransportFailure>> + Send + 'a>> {
+        Box::pin(async move {
+            let buffered = self.execute(request, timeout).await?;
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tx.send(Ok(buffered.body().to_vec())).await.unwrap();
+            drop(tx);
+            Ok(ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse::new(200, None, rx).with_headers(self.headers.clone()))
+        })
+    }
+}
+
 async fn session_http_turn(
     root: &Path,
     config: CliproxyRuntimeConfig,
@@ -71,7 +87,7 @@ async fn session_http_turn_reported(
                 ClaudeAccountTransports {
                     refresh: Arc::new(UnusedRefreshTransport),
                     messages: Arc::new(SessionMessagesTransport { headers: reported.get(&entry.id).cloned().unwrap_or_default() }),
-                    messages_stream: None,
+                    messages_stream: Some(Arc::new(SessionMessagesTransport { headers: reported.get(&entry.id).cloned().unwrap_or_default() })),
                 },
             )
         })
@@ -94,7 +110,7 @@ async fn session_http_turn_reported(
         .await
         .unwrap();
     });
-    let body = serde_json::json!({"model":model,"input":"Hi","stream":false}).to_string();
+    let body = serde_json::json!({"model":model,"input":"Hi","stream":session.starts_with("stream-")}).to_string();
     let pin = account
         .map(|id| format!("X-CTOX-Account: {id}\r\n"))
         .unwrap_or_default();
@@ -195,15 +211,15 @@ async fn provider_quota_native_http_observations_rank_new_sessions_without_movin
     ]);
     let mut reported = HashMap::from([("account-a".into(),headers("40")),("account-b".into(),headers("20"))]);
     assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"ongoing-a",&reported).await,"account-a");
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,Some("account-b"),"ongoing-a",&reported).await,"account-b");
+    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,Some("account-b"),"stream-probe",&reported).await,"account-b");
     let saved = CtoxAccountQuotaStore::new(root.path()).load("claude", &["account-b".into()]).unwrap();
     assert_eq!(saved["account-b"].windows[0].reset_at_ms,20_000);
     assert_eq!(saved["account-b"].windows[0].utilization,Some(0.25));
-    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"new-b",&reported).await,"account-b");
+    assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"stream-new-b",&reported).await,"account-b");
     assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"ongoing-a",&reported).await,"account-a");
     reported.insert("account-a".into(),headers("15"));
     assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,Some("account-a"),"probe",&reported).await,"account-a");
     assert_eq!(session_http_turn_reported(root.path(),config.clone(),&model,None,"new-a",&reported).await,"account-a");
-    assert_eq!(session_http_turn_reported(root.path(),config,&model,None,"new-b",&reported).await,"account-b");
+    assert_eq!(session_http_turn_reported(root.path(),config,&model,None,"stream-new-b",&reported).await,"account-b");
 }
 

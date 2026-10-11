@@ -14,9 +14,9 @@ mod claude_diagnostics;
 mod claude_input_tokens;
 mod claude_mcp_alias;
 mod claude_ratelimit;
+pub(crate) use claude_ratelimit::claude_quota_observation;
 #[cfg(feature = "anthropic-fingerprint-transport")]
 pub(super) use claude_ratelimit::claude_retry_delay;
-pub(crate) use claude_ratelimit::claude_quota_observation;
 mod claude_upstream;
 mod cloak_obfuscate;
 mod cloak_utils;
