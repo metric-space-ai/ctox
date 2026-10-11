@@ -20,6 +20,12 @@ secrets remain untouched. Last-account removal clears only that provider's model
 selection. A committed holder mutation is recovered through its durable private
 proof, without repeating the mutation.
 
+OAuth refresh also captures a private encrypted-generation receipt before the
+network wait. The native store rejects a missing account after topology COMMIT,
+including before cleanup completes, and rotates the complete token tuple through
+a SQLite generation CAS. Late responses cannot recreate removed secrets or
+overwrite a re-login that happens to contain identical token bytes.
+
 This change does not add API-key account storage or Codex catalog/probe discovery.
 Those remain separate provider-parity work. Qualification uses isolated fixtures;
 installed Workjet acceptance and deployment belong to the existing release writer.
