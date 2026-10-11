@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::sdk::cliproxy::executor::Headers;
 
+#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 const MAX_WINDOW: Duration = Duration::from_secs(7 * 24 * 3600 + 3600);
 
 fn header<'a>(headers: &'a Headers, name: &str) -> &'a str {
@@ -23,16 +24,19 @@ fn status(headers: &Headers, window: &str) -> String {
     header(headers, &format!("Anthropic-Ratelimit-Unified-{window}")).to_ascii_lowercase()
 }
 
+#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 fn allowed(value: &str) -> bool {
     matches!(value, "allowed" | "allowed_warning")
 }
 
+#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 fn healthy(value: &str) -> bool {
     value
         .parse::<f64>()
         .is_ok_and(|value| value.is_finite() && (0.0..1.0).contains(&value))
 }
 
+#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 fn overage_only(headers: &Headers, unified: &str, five: &str, seven: &str, oi: &str) -> bool {
     if five == "rejected" || seven == "rejected" {
         return false;
@@ -84,6 +88,38 @@ fn timestamp(raw: &str) -> Option<SystemTime> {
     httpdate::parse_http_date(raw).ok()
 }
 
+/// Extract only the explicitly reported shared subscription windows. Unified
+/// and overage reset headers are billing/retry signals, not a capacity estimate.
+pub(crate) fn claude_quota_observation(
+    headers: &Headers,
+    observed_at_ms: i64,
+) -> Option<crate::sdk::cliproxy::auth::ReportedQuotaSnapshot> {
+    use crate::sdk::cliproxy::auth::{QuotaWindowKind, ReportedQuotaSnapshot, ReportedQuotaStatus, ReportedQuotaWindow};
+    let mut windows = Vec::new();
+    for (name, kind) in [("5h", QuotaWindowKind::FiveHour), ("7d", QuotaWindowKind::SevenDay)] {
+        let state = match status(headers, &format!("{name}-Status")).as_str() {
+            "allowed" | "allowed_warning" => ReportedQuotaStatus::Allowed,
+            "rejected" => ReportedQuotaStatus::Rejected,
+            _ => continue,
+        };
+        let Some(reset_at_ms) = timestamp(header(headers, &format!("Anthropic-Ratelimit-Unified-{name}-Reset")))
+            .and_then(|when| when.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok()) else { continue; };
+        let raw = header(headers, &format!("Anthropic-Ratelimit-Unified-{name}-Utilization"));
+        let utilization = if raw.is_empty() { None } else {
+            let Ok(used) = raw.parse::<f64>() else { continue; };
+            if !used.is_finite() || !(0.0..=1.0).contains(&used) { continue; }
+            Some(used)
+        };
+        let window = ReportedQuotaWindow { kind, status: state, reset_at_ms, utilization };
+        let one = ReportedQuotaSnapshot { observed_at_ms, windows: vec![window.clone()] };
+        if one.validate().is_ok() { windows.push(window); }
+    }
+    if windows.is_empty() { return None; }
+    Some(ReportedQuotaSnapshot { observed_at_ms, windows })
+}
+
+#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 pub(crate) fn claude_retry_delay(
     headers: &Headers,
     now: SystemTime,

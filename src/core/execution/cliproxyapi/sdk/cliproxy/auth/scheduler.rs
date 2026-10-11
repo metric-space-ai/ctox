@@ -102,6 +102,37 @@ impl AuthScheduler {
         self.pick_from_available(&key, &available)
     }
 
+    /// Fixed CTOX setup. Eligibility/cooldowns use the same canonical filter;
+    /// fresh requests consume the earliest reported usable window, then the
+    /// stable account ID. Portable manual strategies are unchanged.
+    pub fn pick_standard(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+        now_ms: i64,
+        candidates: &[AccountCandidate],
+        cooldowns: &[CooldownStateRecord],
+        options: &SchedulerPickOptions,
+        expiries: &std::collections::BTreeMap<String, i64>,
+    ) -> Result<AccountCandidate, AccountSelectionError> {
+        let provider = provider.trim().to_ascii_lowercase();
+        if provider.is_empty() { return Err(AccountSelectionError::NotFound); }
+        let mut available = available_candidates(
+            std::slice::from_ref(&provider), model, now_ms, candidates, cooldowns,
+            options, SchedulerStrategy::FillFirst,
+        )?;
+        if options.pinned_auth_id.is_none() && options.prefer_websocket
+            && matches!(provider.as_str(), "codex" | "xai")
+            && available.iter().any(|candidate| candidate.websocket_enabled)
+        { available.retain(|candidate| candidate.websocket_enabled); }
+        available.sort_by(|a, b| {
+            let rank = |id: &str| expiries.get(id).copied().filter(|reset| *reset > now_ms)
+                .map_or((true, 0), |reset| (false, reset));
+            rank(&a.auth_id).cmp(&rank(&b.auth_id)).then_with(|| a.auth_id.cmp(&b.auth_id))
+        });
+        available.into_iter().next().ok_or(AccountSelectionError::Unavailable)
+    }
+
     pub fn pick_mixed(
         &self,
         providers: &[String],

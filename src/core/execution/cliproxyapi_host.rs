@@ -74,6 +74,9 @@ use zeroize::Zeroizing;
 #[path = "cliproxyapi_account_sessions.rs"]
 mod account_sessions;
 use account_sessions::CtoxAccountSessionStore;
+#[path = "cliproxyapi_account_quotas.rs"]
+mod account_quotas;
+use account_quotas::CtoxAccountQuotaStore;
 
 const COOLDOWN_STATE_PAYLOAD_KEY: &str = "cliproxyapi.auth.cooldown-state.v1";
 const INSTANCE_CHATGPT_AUTH_SCOPE: &str = "ctox-auth";
@@ -2327,9 +2330,10 @@ fn build_ctox_codex_alpha_search_authority(
 ) -> anyhow::Result<Arc<CtoxCodexAlphaSearchAuthority>> {
     let cooldown_store = Arc::new(CtoxCooldownStateStore::new(root));
     Ok(Arc::new(CtoxCodexAlphaSearchAuthority {
-        router: Arc::new(AccountRouter::with_session_store(
+        router: Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store.clone(),
             Arc::new(CtoxAccountSessionStore::new(root)),
+            Arc::new(CtoxAccountQuotaStore::new(root)),
         )),
         conductor: Arc::new(CooldownConductor::new(cooldown_store)),
         candidates: config.codex_candidates(),
@@ -3701,9 +3705,10 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<ClaudeSubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_session_store(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let mut executors = HashMap::new();
         let mut targets = HashMap::new();
@@ -3804,9 +3809,10 @@ impl CtoxCliproxyRuntimeFactory {
     > {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_session_store(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let mut executors = HashMap::new();
         let mut targets = HashMap::new();
@@ -3865,9 +3871,10 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<AntigravitySubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_session_store(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let replay_cache = Arc::new(AntigravityReasoningReplayCache::new());
         let mut executors = HashMap::new();
