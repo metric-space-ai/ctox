@@ -1708,7 +1708,7 @@ async function seedBusinessOsThreadsScaleNativeSetup() {
   const fixtureCount = 10000;
   const now = Date.now() - 60000;
   const tables = {
-    commands: 'ctox_business_os__business_commands__v1',
+    commands: 'ctox_business_os__business_commands__v2',
     threads: 'ctox_business_os__user_threads__v1',
     messages: 'ctox_business_os__user_thread_messages__v1',
     notifications: 'ctox_business_os__user_notifications__v0',
