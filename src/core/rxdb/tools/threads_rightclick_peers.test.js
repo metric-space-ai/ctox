@@ -249,7 +249,7 @@ test('context target rejects missing, background, failed, minimized or hidden ap
 // Driver-contract tests only: actual shell/WebRTC behavior is tested by the
 // full native smoke mode. These guard credential routing and teardown.
 function driver({ wrongSecondActor = false, failReview = false, deliveredToken = null, hangRequester = false, hangClose = false,
-  cachedSync = null, requesterStatus = null, reviewerStatus = null, hangDiagnostic = false } = {}) {
+  cachedSync = null, requesterStatus = null, reviewerStatus = null, hangDiagnostic = false, pendingBootstrap = false } = {}) {
   const contexts = [];
   const chromium = {
     async launchPersistentContext(profile) {
@@ -259,6 +259,8 @@ function driver({ wrongSecondActor = false, failReview = false, deliveredToken =
       const state = {
         session: { authenticated: true, user: { id: wrongSecondActor && index ? 'local-dev' : actor, role } },
         db: { raw: { business_commands: {} } }, sync: {},
+        initialModuleOpened: !(pendingBootstrap && index === 0),
+        bootTimings: { shellVisibleMs: pendingBootstrap && index === 0 ? null : 10 },
       };
       const page = {
         listeners: {}, bindings: {}, calls: [],
@@ -272,9 +274,18 @@ function driver({ wrongSecondActor = false, failReview = false, deliveredToken =
         },
         async screenshot() {},
         async waitForFunction(predicate, args) {
-          const ready = vm.runInNewContext('(' + predicate.toString() + ')(args)', {
+          const check = () => vm.runInNewContext('(' + predicate.toString() + ')(args)', {
             args, CTOX_BUSINESS_OS_APP: state, CTOX_BUSINESS_OS_STATUS: {},
           });
+          if (pendingBootstrap && index === 0) {
+            assert.equal(check(), false, 'an authenticated database alone is not a ready shell');
+            await new Promise(resolve => { this.finishBootstrap = () => {
+              state.initialModuleOpened = true;
+              state.bootTimings.shellVisibleMs = 20;
+              resolve();
+            }; });
+          }
+          const ready = check();
           if (!ready) throw new Error('authenticated actor did not match');
         },
         async evaluate(fn, args) {
@@ -431,6 +442,19 @@ test('a server actor mismatch fails before review and closes both profiles', asy
     await assert.rejects(result, /authenticated actor did not match/);
     assert.ok(contexts.every((context) => context.closed));
     assert.equal(contexts[0].page.calls.includes('runRequesterInBrowser'), false);
+  });
+});
+
+test('an authenticated actor waits for shell bootstrap before starting the context workflow', async () => {
+  await run({ pendingBootstrap: true }, async (result, contexts) => {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(contexts.length, 1);
+    assert.equal(contexts[0].page.calls.includes('runRequesterInBrowser'), false);
+    assert.equal(typeof contexts[0].page.finishBootstrap, 'function');
+    contexts[0].page.finishBootstrap();
+    await result;
+    assert.ok(contexts[0].page.calls.includes('runRequesterInBrowser'));
+    assert.ok(contexts.every(context => context.closed));
   });
 });
 

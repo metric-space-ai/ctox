@@ -140,6 +140,12 @@ async function runThreadsRightClickPeers({
       return state?.session?.authenticated
         && state.session.user?.id === actor && state.session.user?.role === role
         && state.db?.raw?.business_commands && state.sync
+        // Session/database publication precedes the first shell mount and its
+        // deferred catalog flush. Start the user workflow after that signal.
+        && state.initialModuleOpened === true
+        && Number.isFinite(state.bootTimings?.shellVisibleMs)
+        && !state.catalogRefreshQueued && !state.catalogRefreshTimer
+        && !state.catalogRefreshRunning
         && globalThis.CTOX_BUSINESS_OS_STATUS;
     }, { actor, role }, { timeout: 60000 });
     const identity = await page.evaluate(() => {
