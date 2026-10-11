@@ -7152,18 +7152,64 @@ mod tests {
             }]
         });
 
+        // Auth assist requires the requesting command's native authorization,
+        // rather than trusting a task id or an actor supplied by the worker.
+        let unbound = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
+        assert_eq!(
+            unbound.pointer("/commands/0/ok"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            unbound
+                .pointer("/commands/0/error")
+                .and_then(serde_json::Value::as_str),
+            Some("auth assist owner unresolved (task=authz-user-a-auth-assist, source_module=ctox_web_auth_assist_request)")
+        );
+        let (capability_token, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                &root,
+                "user-a",
+                "AppSec user A",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        let requesting_command = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            &root,
+            serde_json::json!({
+                "id": "authz-user-a-auth-assist",
+                "command_id": "authz-user-a-auth-assist",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "appsec-auth-assist",
+                "payload": {
+                    "title": "AppSec authenticated scan",
+                    "instruction": "Authenticate the AppSec browser session",
+                    "writeback_contract": { "allowed_collections": [] }
+                },
+                "client_context": {
+                    "actor": { "id": "forged-worker" },
+                    "capability_token": capability_token
+                }
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )
+        .unwrap();
+        assert_eq!(requesting_command["status"], "accepted");
+
         let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
         assert_eq!(
             execution
                 .pointer("/commands/0/ok")
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            Some(true),
+            "{execution:#}"
         );
         assert_eq!(
             execution
                 .pointer("/commands/0/status")
                 .and_then(serde_json::Value::as_str),
-            Some("pending_sync")
+            Some("accepted")
         );
         assert_eq!(
             execution
@@ -7189,10 +7235,18 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("custom-web-app")
         );
-        assert!(execution
-            .pointer("/commands/0/output/session_id")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| value.contains("authz_user_a_auth_assist")));
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/owner_user_id")
+                .and_then(serde_json::Value::as_str),
+            Some("user-a")
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/session_id")
+                .and_then(serde_json::Value::as_str),
+            Some("browser_session_web_stack_auth_custom_web_app_user_a")
+        );
         let session_id = execution
             .pointer("/commands/0/output/session_id")
             .and_then(serde_json::Value::as_str)
@@ -7209,10 +7263,23 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some(session_id)
         );
-        assert!(execution
+        let command_id = execution
             .pointer("/commands/0/output/command_id")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.is_empty()));
+            .filter(|value| !value.is_empty())
+            .unwrap();
+        let command = channels::business_command_projection(&root, command_id).unwrap();
+        assert_eq!(command["status"], "accepted");
+        assert_eq!(
+            command.pointer("/payload/owner_user_id"),
+            Some(&serde_json::json!("user-a"))
+        );
+        assert_eq!(
+            command
+                .pointer("/payload/session_id")
+                .and_then(serde_json::Value::as_str),
+            Some(session_id)
+        );
 
         cleanup_test_dir(&root);
     }
