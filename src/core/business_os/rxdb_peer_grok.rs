@@ -358,7 +358,9 @@ async fn handle(
             crate::persistence::store_json_payload(
                 &authority.root,
                 CHECK_KEY,
-                Some(&json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":after,"check":check})),
+                Some(
+                    &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":after,"check":check}),
+                ),
             )?;
             returned_check = check;
         }
@@ -531,7 +533,9 @@ mod tests {
         crate::persistence::store_json_payload(
             root.path(),
             CHECK_KEY,
-            Some(&json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
+            Some(
+                &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}}),
+            ),
         )?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         xai::test_endpoint(
