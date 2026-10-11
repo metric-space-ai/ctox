@@ -40,6 +40,17 @@ try {
       });
     `], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     const stop = startNativeCpuProfile(child, { outputPath, intervalMs: 50, maxSamples: 300, phase: () => 'controlled-cpu-work' });
+    assert.equal(typeof stop.sample, 'function');
+    const beforeBoundary = Date.now();
+    stop.sample();
+    const afterBoundary = Date.now();
+    const boundaryRows = fs.readFileSync(outputPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const boundarySample = boundaryRows.at(-1);
+    assert.equal(boundarySample.kind, 'sample');
+    assert.equal(boundarySample.pid, child.pid);
+    assert.ok(boundarySample.atMs >= beforeBoundary && boundarySample.atMs <= afterBoundary);
+    assert.ok(boundarySample.processStartedTicks >= 0);
+    assert.equal(boundaryRows.filter(row => row.kind === 'sample').length, 2, 'explicit boundary sample precedes the first interval tick');
     child.send('start');
     let timer;
     try {
