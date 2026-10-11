@@ -293,6 +293,7 @@ pub(crate) fn issue(
         workjet_supervisor_epoch: trusted["workjet_supervisor_epoch"].as_i64(),
         workjet_supervisor_lease: Some(binding.lease.clone()),
         workjet_confirmed_plan: Some(binding),
+        communication_binding: None,
         issued_at_ms: issued,
         expires_at_ms: issued.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
