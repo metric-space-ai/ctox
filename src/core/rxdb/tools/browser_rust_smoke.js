@@ -5292,13 +5292,20 @@ function ensureCtoxSmokeBinary() {
               && !loading;
           }, null, { timeout: 60000 });
         } else {
-          await page.waitForFunction(() => {
+          await page.waitForFunction((mode) => {
             const state = globalThis.ctoxBusinessOsSmoke?.state;
             const modulesLoaded = Array.isArray(state?.modules) && state.modules.length > 0;
             const shellOpened = Boolean(document.body?.dataset?.moduleShell);
             const loading = Boolean(document.body?.dataset?.moduleLoading);
-            return modulesLoaded && shellOpened && !loading;
-          }, null, { timeout: 60000 });
+            // The Audience fixture replaces the actor and grants. A visible
+            // first module alone does not mean bootstrap's catalog flush ended.
+            const audienceReady = mode !== 'business-os-app-audience-ui'
+              || (state?.initialModuleOpened === true
+                && Number.isFinite(state.bootTimings?.shellVisibleMs)
+                && !state.catalogRefreshQueued && !state.catalogRefreshTimer
+                && !state.catalogRefreshRunning);
+            return modulesLoaded && shellOpened && !loading && audienceReady;
+          }, smokeMode, { timeout: 60000 });
         }
         outerPhaseTimings.shellReadyWaitMs = Date.now() - shellReadyWaitStartedAt;
         if (smokeMode === 'business-os-sellify-scale-ui') {
