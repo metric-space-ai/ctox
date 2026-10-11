@@ -2257,7 +2257,11 @@ fn effective_instance_proxy_config(
         .iter()
         .any(|account| !account.disabled);
     let xai_enabled = crate::execution::cliproxyapi_xai::subscription_installed(root);
-    let api_enabled = integration.config.api_key_accounts.iter().any(|a| !a.disabled && !a.models.is_empty());
+    let api_enabled = integration
+        .config
+        .api_key_accounts
+        .iter()
+        .any(|a| !a.disabled && !a.models.is_empty());
     let stored = load_instance_proxy_config(root)?;
     let automatic_codex = instance_codex_runtime_config(root)?;
     let portable = match (stored, automatic_codex) {
@@ -2314,7 +2318,13 @@ fn effective_instance_proxy_config(
                 } else if xai_enabled {
                     String::new()
                 } else {
-                    integration.config.api_key_accounts.iter().find(|a| !a.disabled && !a.models.is_empty()).map(|a| a.endpoint.provider().to_owned()).unwrap_or_default()
+                    integration
+                        .config
+                        .api_key_accounts
+                        .iter()
+                        .find(|a| !a.disabled && !a.models.is_empty())
+                        .map(|a| a.endpoint.provider().to_owned())
+                        .unwrap_or_default()
                 },
                 runtime,
             )
@@ -2638,9 +2648,16 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
         Box::pin(async move {
             let provider = provider.unwrap_or(&self.default_provider).trim();
             if let Some(handler) = self.api_keys.get(provider) {
-                let pinned = ctox_cliproxyapi::internal::api::account_selection::requested_account();
-                let legacy = (provider == "kimi" && self.kimi.is_some()) || (provider == "xai" && self.xai_root.as_ref().is_some_and(|r| crate::execution::cliproxyapi_xai::subscription_installed(r)));
-                if pinned.as_deref().is_some_and(|id| handler.contains(id)) || (pinned.is_none() && !legacy) {
+                let pinned =
+                    ctox_cliproxyapi::internal::api::account_selection::requested_account();
+                let legacy = (provider == "kimi" && self.kimi.is_some())
+                    || (provider == "xai"
+                        && self.xai_root.as_ref().is_some_and(|r| {
+                            crate::execution::cliproxyapi_xai::subscription_installed(r)
+                        }));
+                if pinned.as_deref().is_some_and(|id| handler.contains(id))
+                    || (pinned.is_none() && !legacy)
+                {
                     return handler.handle_route(body).await;
                 }
             }
@@ -2744,7 +2761,11 @@ fn build_provider_routes(
 ) -> anyhow::Result<InstanceProviderRoutes> {
     let factory = CtoxCliproxyRuntimeFactory::new(root);
     let account_clock: Arc<dyn AccountStateClock> = Arc::new(SystemCtoxAccountStateClock);
-    let api_keys = api_keys::build(root, &effective.integration, effective.runtime.request_timeout())?;
+    let api_keys = api_keys::build(
+        root,
+        &effective.integration,
+        effective.runtime.request_timeout(),
+    )?;
     let mut auxiliary_handlers: Vec<Arc<dyn AuxiliaryRouteHandler>> = Vec::new();
     let mut kimi_accounts = effective
         .integration

@@ -55,7 +55,13 @@ pub struct ApiKeyAccountConfig {
 }
 impl ApiKeyAccountConfig {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.id.is_empty() || self.id.len() > 128 || !self.id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-'|b'_'|b'.')) {
+        if self.id.is_empty()
+            || self.id.len() > 128
+            || !self
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        {
             return Err(Error::InvalidAccountId);
         }
         self.api_key_secret.validate()?;
@@ -63,7 +69,15 @@ impl ApiKeyAccountConfig {
             return Err(Error::InvalidSecretReference);
         }
         let mut unique = std::collections::HashSet::new();
-        if self.models.len() > 256 || self.models.iter().any(|m| m.trim()!=m || m.is_empty() || m.len()>256 || m.chars().any(char::is_control) || !unique.insert(m)) {
+        if self.models.len() > 256
+            || self.models.iter().any(|m| {
+                m.trim() != m
+                    || m.is_empty()
+                    || m.len() > 256
+                    || m.chars().any(char::is_control)
+                    || !unique.insert(m)
+            })
+        {
             return Err(Error::InvalidModel);
         }
         Ok(())
