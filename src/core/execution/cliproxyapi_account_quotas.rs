@@ -171,11 +171,15 @@ pub(super) fn with_public_snapshots<T>(
             if current.as_deref() != Some(*binding) {
                 return Ok(None);
             }
-            let Some(current) = generation(root, "claude", id)? else { return Ok(None) };
+            let Some(current) = generation(root, "claude", id)? else {
+                return Ok(None);
+            };
             read(&core, &key("claude", id)?, &current)
         })();
         let value = match observed {
-            Ok(Some(snapshot)) if snapshot.observed_at_ms <= chrono::Utc::now().timestamp_millis() => {
+            Ok(Some(snapshot))
+                if snapshot.observed_at_ms <= chrono::Utc::now().timestamp_millis() =>
+            {
                 let windows: Vec<_> = snapshot.windows.iter().map(|window| serde_json::json!({
                     "kind":window.kind,"status":window.status,"resetAtMs":window.reset_at_ms,
                     "utilization":window.utilization
@@ -193,7 +197,6 @@ pub(super) fn with_public_snapshots<T>(
 }
 
 impl AccountQuotaStore for CtoxAccountQuotaStore {
-
     fn load(
         &self,
         provider: &str,

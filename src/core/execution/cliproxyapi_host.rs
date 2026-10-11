@@ -101,7 +101,6 @@ pub(crate) fn save_reported_quota_for_test(
     Ok(())
 }
 
-
 const COOLDOWN_STATE_PAYLOAD_KEY: &str = "cliproxyapi.auth.cooldown-state.v1";
 const INSTANCE_CHATGPT_AUTH_SCOPE: &str = "ctox-auth";
 const INSTANCE_CHATGPT_AUTH_NAME: &str = "chatgpt_subscription_auth_json";
