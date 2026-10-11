@@ -17234,39 +17234,14 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let source_stamp = channel_router_source_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let unchanged_elapsed = {
-        let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(previous) = guard.as_ref() else {
-            return false;
-        };
-        if !channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now) {
-            return false;
-        }
-        now.duration_since(previous.last_idle_pass)
-    };
-    if unchanged_elapsed < Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS) {
-        return true;
-    }
-    if channels::pending_queue_task_count_uncached(root)
-        .map(|count| count > 0)
-        .unwrap_or(false)
-    {
-        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard
-            .as_ref()
-            .is_some_and(|previous| previous.root == root_path)
-        {
-            *guard = None;
-        }
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
         return false;
-    }
-    // Keep the expensive full router asleep while still bounding the cheap
-    // durable-queue safety check. This avoids an eight-second idle DB poll.
-    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(previous) = guard.as_mut().filter(|previous| previous.root == root_path) {
-        previous.last_idle_pass = now;
-    }
-    true
+    };
+    // Unchanged state expires after one hour in the gate matcher. A second
+    // durable-queue poll at that same deadline is unreachable and would reopen
+    // SQLite unnecessarily if moved back to the old 30-second interval.
+    channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now)
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
@@ -44185,7 +44160,7 @@ Use shell tools to create or update these files."
     #[test]
     fn idle_router_safety_poll_reopens_for_pending_durable_queue() {
         let root = temp_root("ctox-idle-router-pending-safety-poll");
-        channels::create_queue_task(
+        let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Pending safety-poll work".to_string(),
@@ -44202,23 +44177,54 @@ Use shell tools to create or update these files."
         .expect("create pending queue task");
         let settings = BTreeMap::new();
         mark_idle_channel_router_pass(&root, &settings);
-        {
-            let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.as_mut().expect("idle router gate").last_idle_pass = Instant::now()
-                - Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS + 1);
+        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+        let db_path = crate::paths::core_db(&root);
+
+        for idle_seconds in [31, 3599] {
+            {
+                let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                guard.as_mut().expect("idle router gate").last_idle_pass =
+                    Instant::now() - Duration::from_secs(idle_seconds);
+            }
+            channels::reset_channel_db_open_count_for_tests(&db_path);
+            assert!(
+                should_skip_idle_channel_router_tick(&root, &settings),
+                "unchanged state must stay asleep before the hourly safety deadline"
+            );
+            assert_eq!(
+                channels::channel_db_open_count_for_tests(&db_path),
+                0,
+                "unchanged idle checks must not reopen SQLite to poll durable work"
+            );
         }
 
+        {
+            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = guard.as_mut().expect("idle router gate");
+            let now = Instant::now();
+            previous.last_idle_pass = now - Duration::from_secs(3600);
+            assert!(
+                !channel_router_idle_gate_matches(
+                    previous,
+                    &root,
+                    &previous.source_stamp,
+                    &settings,
+                    now,
+                ),
+                "the unchanged gate must expire exactly at the hourly deadline"
+            );
+        }
         assert!(
             !should_skip_idle_channel_router_tick(&root, &settings),
-            "pending durable work must wake an unchanged idle router after the bounded safety poll"
+            "pending durable work must reopen the router at the hourly safety deadline"
         );
-        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-        assert!(
-            gate.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_none(),
-            "the stale idle gate must be cleared before durable dispatch"
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("expired idle gate must allow routing");
+        assert_eq!(
+            route_status_for(&root, &task.message_key),
+            "leased",
+            "the expired gate must allow real durable dispatch without a separate safety poll"
         );
 
         let _ = std::fs::remove_dir_all(root);
