@@ -23,6 +23,16 @@ fn parent_fixture(with_policy: bool) -> anyhow::Result<(tempfile::TempDir, Value
     crate::business_os::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
         root.path(),
     )?;
+    let projections = Connection::open(store::rxdb_store_path(root.path()))?;
+    let schemas: Value = serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+    let version = schemas["business_commands"]["version"]
+        .as_u64()
+        .context("canonical command projection fixture version")?;
+    projections.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS ctox_business_os__business_commands__v{version} (
+            id TEXT PRIMARY KEY NOT NULL, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0,
+            lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL);"
+    ))?;
     let reference = enrollment(
         root.path(),
         "parent-enroll",
