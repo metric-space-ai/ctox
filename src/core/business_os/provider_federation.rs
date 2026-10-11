@@ -220,14 +220,17 @@ pub(super) fn handle_command(
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
             for account in accounts
                 .iter_mut()
-                .filter(|account| account.provider == "claude")
+                .filter(|account| matches!(account.provider.as_str(), "claude" | "codex"))
             {
                 account.private_binding =
-                    crate::execution::cliproxyapi_claude_catalog::account_binding(
+                    crate::execution::cliproxyapi_host::account_controls::account_binding(
                         root,
+                        &account.provider,
                         &account.local_account_id,
                     )?;
-                account.credential_ready &= account.private_binding.is_some();
+                if account.provider == "claude" {
+                    account.credential_ready &= account.private_binding.is_some();
+                }
             }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
