@@ -164,7 +164,8 @@ mod tests {
             "surface":"workjet","actor":"owner","role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance",
             // Source registration needs a managed grant that allows writes and
             // this tool (#610); real supervisor grants carry both.
-            "managed_policy":{"allowWrites":true,"allowedTools":[workjet_worker_dispatch::TOOL]}});
+            "managed_policy":{"allowReads":false,"allowWrites":true,
+                "allowedCollections":["__ctox_no_access__"],"allowedTools":[workjet_worker_dispatch::TOOL]}});
         call_tool_audited_with_trusted_gateway_context(
             root.path(),
             workjet_worker_dispatch::TOOL,
