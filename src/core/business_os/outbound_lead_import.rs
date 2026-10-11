@@ -448,6 +448,36 @@ fn validation_state_for_mail(record: &Value) -> String {
     }
 }
 
+/// Order of the order-record fields in the mail block: what a reply names
+/// first. Unknown fields keep their research order after these.
+fn mail_field_rank(field: &str) -> usize {
+    const ORDER: [&str; 16] = [
+        "firma_name",
+        "firma_geschaeftsfuehrung",
+        "umsatz",
+        "mitarbeiter",
+        "firma_besucheranschrift",
+        "firma_anschrift",
+        "firma_plz",
+        "firma_ort",
+        "firma_telefon",
+        "firma_email",
+        "firma_domain",
+        "firma_geschaeftstaetigkeit",
+        "firma_prokura",
+        "person_vorname",
+        "person_nachname",
+        "person_funktion",
+    ];
+    match field {
+        "firma_homepage_fact_sheet" => ORDER.len() + 2,
+        _ => ORDER
+            .iter()
+            .position(|known| *known == field)
+            .unwrap_or(ORDER.len() + 1),
+    }
+}
+
 /// A source as a short readable address: no query or map viewport, at most
 /// 90 characters. Map links and search URLs ran to 300 characters and used up
 /// the block's budget.
@@ -518,7 +548,7 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
                 .filter(|source| !source.trim().is_empty());
             let index = match lines.iter().position(|(existing, _)| *existing == key) {
                 Some(index) => index,
-                None if lines.len() < 40 => {
+                None if lines.len() < 200 => {
                     lines.push((key, Vec::new()));
                     lines.len() - 1
                 }
@@ -531,6 +561,9 @@ pub(crate) fn render_records_for_mail(records: &[Value]) -> String {
                 }
             }
         }
+        // Key facts first, long free text last, so a cut drops the least
+        // useful lines (thesen 11.10.2026: revenue sat late and was cut).
+        lines.sort_by_key(|((field, _), _)| mail_field_rank(field));
         for ((field, value), sources) in &lines {
             part.push_str(&format!(
                 "    {field}: {value}{}\n",
@@ -632,6 +665,19 @@ mod tests {
                 {"field_key": "umsatz", "value": "103,1 Mio.", "source_url": "https://register.example/z?x=1"}]}),
         ]);
         assert!(two.contains("umsatz: 103,1 Mio. (Quelle: https://register.example/z)"));
+        // Revenue stored after many other fields still survives the cut.
+        let mut late = long_values_for_rank();
+        late.push(json!({"field_key": "umsatz", "value": "140,6 Mio.", "source_url": "https://n.example/h"}));
+        let ranked = render_records_for_mail(&[
+            json!({"name": "A", "research_status": "needs_review", "evidence": late.clone()}),
+            json!({"name": "B", "research_status": "needs_review", "evidence": late}),
+        ]);
+        assert_eq!(
+            ranked
+                .matches("umsatz: 140,6 Mio. (Quelle: https://n.example/h)")
+                .count(),
+            2
+        );
         assert!(two.contains("(weitere Felder gekuerzt)"));
         assert!(two.contains("(Quelle: https://www.google.com/maps/place/A)"));
         assert!(two.len() <= MAIL_RECORD_TEXT_LIMIT + 1);
@@ -768,5 +814,11 @@ mod tests {
         assert!(!serde_json::to_string(&payload)
             .unwrap()
             .contains("lead_old"));
+    }
+
+    fn long_values_for_rank() -> Vec<Value> {
+        (0..60)
+            .map(|index| json!({"field_key": format!("feld_{index}"), "value": "x".repeat(60)}))
+            .collect()
     }
 }
