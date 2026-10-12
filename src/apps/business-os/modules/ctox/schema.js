@@ -648,7 +648,7 @@ export const collections = {
   },
   workjet_projects: {
 
-    version: 3,
+    version: 4,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -658,6 +658,16 @@ export const collections = {
       repo_url: { type: 'string', maxLength: 2048 },
       public_url: { type: 'string', maxLength: 2048 },
       supervisor_luma_id: { type: 'string', minLength: 1, maxLength: 160 },
+      execution_policy: {
+        type: 'object',
+        properties: {
+          schema: { type: 'string', enum: ['ctox.workjet.project_execution_policy.v1'] },
+          mode: { type: 'string', enum: ['default', 'autonomous_worktree'] },
+          revision: { type: 'integer', minimum: 0, maximum: 9007199254740991 }
+        },
+        required: ['schema', 'mode', 'revision'],
+        additionalProperties: false
+      },
       info: {
         type: 'object',
         properties: {
@@ -897,7 +907,8 @@ export const migrationStrategies = {
   workjet_projects: {
     1: (oldDoc) => oldDoc,
     2: (oldDoc) => oldDoc,
-    3: (oldDoc) => oldDoc
+    3: (oldDoc) => oldDoc,
+    4: (oldDoc) => oldDoc
   },
   workjet_computers: {
     1: (oldDoc) => ({

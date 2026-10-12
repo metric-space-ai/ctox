@@ -5,7 +5,7 @@ import { applyDeclarativeMigration } from '../../shared/declarative-migrations.j
 
 const packaged = JSON.parse(readFileSync(new URL('../../modules/ctox/collections.schema.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
-assert.equal(collections.workjet_projects.version, 3);
+assert.equal(collections.workjet_projects.version, 4);
 for (const [name, schema] of Object.entries(collections).filter(([, schema]) => schema.version > 0)) {
   assert.deepEqual(packaged.collections[name], schema, `${name}: packaged/browser schema parity`);
   assert.deepEqual(contract[name], schema, `${name}: native/browser schema parity`);
@@ -26,7 +26,10 @@ const configured = {
   jour_fixe: { weekday: 1, time: '13:00', timezone: 'Europe/Berlin' },
 };
 const selected = { ...configured, supervisor_luma_id: 'project-supervisor-luma' };
-for (const original of [legacy, configured, selected, { ...selected, status: 'archived', archived_at_ms: 200, is_deleted: true, _deleted: true }]) {
+const optedIn = { ...selected, execution_policy: { schema: 'ctox.workjet.project_execution_policy.v1', mode: 'autonomous_worktree', revision: 3 } };
+const revoked = { ...selected, execution_policy: { schema: 'ctox.workjet.project_execution_policy.v1', mode: 'default', revision: 4 } };
+assert.equal(collections.workjet_projects.required.includes('execution_policy'), false);
+for (const original of [legacy, configured, selected, optedIn, revoked, { ...selected, status: 'archived', archived_at_ms: 200, is_deleted: true, _deleted: true }]) {
   const before = structuredClone(original);
   let js = original, native = original;
   for (let step = 1; step <= collections.workjet_projects.version; step += 1) {
@@ -38,4 +41,4 @@ for (const original of [legacy, configured, selected, { ...selected, status: 'ar
   assert.deepEqual(original, before, 'identity upgrade preserves ownership/configuration/revisions/tombstones');
   assert.deepEqual(applyDeclarativeMigration(native, packaged.migration_strategies.workjet_projects['1']), native);
 }
-console.log('All versioned cockpit schemas have complete matching migration chains; project identity/configuration/Luma selection survives v0->v3');
+console.log('All versioned cockpit schemas have complete matching migration chains; project identity/configuration/Luma selection/execution policy survives v0->v4');

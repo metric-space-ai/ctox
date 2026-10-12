@@ -66,6 +66,8 @@ pub(super) const COMMAND_TYPES: [&str; 28] = [
     "ctox.workjet.exit_model.submit",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.persistent_worker.bind",
+    "ctox.workjet.project.persistent_worker.revoke",
     "ctox.workjet.project.worker.add",
     "ctox.workjet.project.worker.remove",
     "ctox.workjet.project.chat.create",

@@ -1711,6 +1711,35 @@
           "maxLength": 4096,
           "type": "string"
         },
+        "execution_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "default",
+                "autonomous_worktree"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": {
+              "enum": [
+                "ctox.workjet.project_execution_policy.v1"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "mode",
+            "revision"
+          ],
+          "type": "object"
+        },
         "id": {
           "maxLength": 128,
           "type": "string"
@@ -1809,7 +1838,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 3
+      "version": 4
     },
     "workjet_provider_registry": {
       "additionalProperties": false,

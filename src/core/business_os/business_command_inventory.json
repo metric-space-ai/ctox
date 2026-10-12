@@ -106,6 +106,8 @@
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.kpis.read",
     "ctox.workjet.project.list",
+    "ctox.workjet.project.persistent_worker.bind",
+    "ctox.workjet.project.persistent_worker.revoke",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.route.capabilities.v1",
     "ctox.workjet.project.supervisor.route.capabilities.v2",
