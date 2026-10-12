@@ -55,9 +55,13 @@ fn current(
     context: &McpChannelRequestContext,
     trusted: &Value,
     r: &wire::NarrateRequest,
+    published: Option<&deck_narration::Job>,
 ) -> anyhow::Result<(wire::Meeting, String)> {
-    let meeting =
-        workjet_jour_fixe::current_meeting(core, policy, context, trusted, &r.meeting_id, true)?;
+    let meeting = if let Some(job) = published {
+        job.current(policy, context, r)?
+    } else {
+        workjet_jour_fixe::current_meeting(core, policy, context, trusted, &r.meeting_id, true)?
+    };
     anyhow::ensure!(
         meeting.deck_revision == r.deck_revision
             && matches!(
@@ -173,30 +177,65 @@ pub(super) fn execute(
     // a runtime only when this thread has none. Never nest a runtime or mistake
     // a missing executor for missing speech configuration.
     execute_with(root, context, args, trusted, |request| {
-        let gateway = SpeechGateway::from_root(root)?;
-        let synthesis = async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(90),
-                gateway.synthesize_verified_async(request),
-            )
-            .await
-            .map_err(|_| SpeechError::TimedOut)?
-        };
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(synthesis),
-            Err(_) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|_| SpeechError::ExecutionUnavailable)?
-                .block_on(synthesis),
-        }
+        synthesize(root, request)
     })
 }
+
+pub(super) fn synthesize(
+    root: &Path,
+    request: &SpeechRequest,
+) -> Result<VerifiedSpeechOutput, SpeechError> {
+    let gateway = SpeechGateway::from_root(root)?;
+    let synthesis = async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            gateway.synthesize_verified_async(request),
+        )
+        .await
+        .map_err(|_| SpeechError::TimedOut)?
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(synthesis),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| SpeechError::ExecutionUnavailable)?
+            .block_on(synthesis),
+    }
+}
+
+pub(super) fn execute_published_with<F>(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    args: &Value,
+    job: &deck_narration::Job,
+    producer: F,
+) -> anyhow::Result<Value>
+where
+    F: FnOnce(&SpeechRequest) -> Result<VerifiedSpeechOutput, SpeechError>,
+{
+    execute_authorized_with(root, context, args, &Value::Null, Some(job), producer)
+}
+
 fn execute_with<F>(
     root: &Path,
     context: &McpChannelRequestContext,
     args: &Value,
     trusted: &Value,
+    producer: F,
+) -> anyhow::Result<Value>
+where
+    F: FnOnce(&SpeechRequest) -> Result<VerifiedSpeechOutput, SpeechError>,
+{
+    execute_authorized_with(root, context, args, trusted, None, producer)
+}
+
+fn execute_authorized_with<F>(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    args: &Value,
+    trusted: &Value,
+    published: Option<&deck_narration::Job>,
     producer: F,
 ) -> anyhow::Result<Value>
 where
@@ -227,7 +266,7 @@ where
         let (mut core, mut policy) = writing(root)?;
         let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (meeting, text) = current(&core_tx, &tx, context, trusted, &r)?;
+        let (meeting, text) = current(&core_tx, &tx, context, trusted, &r, published)?;
         tx.execute_batch(SCHEMA)?;
         // The slide slot, not a caller's fresh operation ID, owns the retry
         // budget. An operation ID already used elsewhere still wins this lookup
@@ -342,7 +381,7 @@ where
         let (mut core, mut policy) = writing(root)?;
         let core_tx = core.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let tx = policy.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (mut meeting, current_text) = current(&core_tx, &tx, context, trusted, &r)?;
+        let (mut meeting, current_text) = current(&core_tx, &tx, context, trusted, &r, published)?;
         anyhow::ensure!(
             current_text == text
                 && meeting.revision == r.expected_revision

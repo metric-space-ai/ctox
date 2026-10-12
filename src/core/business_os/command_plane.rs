@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 138] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 141] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -374,6 +374,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 138] = [
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
     "ctox.workjet.project.kpis.read",
+    "ctox.workjet.exit_model.read",
+    "ctox.workjet.exit_model.refresh",
+    "ctox.workjet.exit_model.submit",
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
@@ -1314,6 +1317,7 @@ impl CentralCommandPolicyRequirement {
             command_type,
             "ctox.workjet.project.list"
                 | "ctox.workjet.project.kpis.read"
+                | "ctox.workjet.exit_model.read"
                 | "ctox.workjet.computer.list"
                 | "ctox.workjet.session.list"
         ) {
@@ -1341,6 +1345,8 @@ impl CentralCommandPolicyRequirement {
         } else if matches!(
             command_type,
             "ctox.workjet.project.upsert"
+                | "ctox.workjet.exit_model.refresh"
+                | "ctox.workjet.exit_model.submit"
                 | "ctox.workjet.working_copy.upsert"
                 | "ctox.workjet.computer.assign"
                 | "ctox.workjet.computer.unassign"
@@ -1899,6 +1905,26 @@ fn dispatch_business_command(
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
                     serde_json::json!({"ok": false, "error": error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.exit_model.read"
+        | "ctox.workjet.exit_model.refresh"
+        | "ctox.workjet.exit_model.submit" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor =
+                session_user_id(session).context("exit model requires authenticated user")?;
+            match super::workjet_exit_model::handle_command(
+                root,
+                command,
+                actor,
+                prepared.domain_effect_admission.as_ref(),
+            ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
                     error,
                 )),
             }
