@@ -1,3 +1,33 @@
+#[test]
+fn meeting_report_descriptor_exposes_the_exact_schema_and_local_references() {
+    let descriptor = write_descriptor().input_schema;
+    assert!(descriptor["$defs"]["evidence"].is_object());
+    let action = descriptor["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["properties"]["action"]["const"] == "save_report")
+        .unwrap();
+    let schema = &action["properties"]["request"]["properties"]["report"];
+    assert!(schema.get("$defs").is_none());
+    assert!(schema.get("$id").is_none());
+    assert_eq!(
+        schema["properties"]["schema"]["const"],
+        "ctox.workjet.meeting_report.v1"
+    );
+    assert_eq!(
+        schema["properties"]["overall"]["properties"]["status"]["$ref"],
+        "#/$defs/status"
+    );
+    assert!(allows(WRITE_TOOL, &report_args()));
+    assert!(allows(READ_TOOL, &read_args("read_report")));
+    let read = descriptor_schema(&[("read_meeting", "ReadMeetingRequest")]);
+    assert_eq!(
+        read["oneOf"][0]["properties"]["request"]["properties"]["section"]["const"],
+        "report"
+    );
+}
+
 // The supplied report is kept byte-for-byte as a native fixture. Only its scope
 // identifiers are rebound to this synthetic leased Supervisor for MCP tests.
 fn report_args() -> Value {

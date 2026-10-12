@@ -140,7 +140,11 @@ pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     ]);
     let mut report_schema = super::super::meeting_report::report_schema();
     // Local JSON-schema refs resolve within the tool's outer schema.
-    descriptor["$defs"] = report_schema["$defs"].take();
+    descriptor["$defs"] = report_schema
+        .as_object_mut()
+        .expect("report schema")
+        .remove("$defs")
+        .expect("report definitions");
     report_schema
         .as_object_mut()
         .expect("report schema")
