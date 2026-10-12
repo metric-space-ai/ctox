@@ -42,7 +42,7 @@ pub(super) struct DomainEffectAdmission {
     actor_user_id: String,
 }
 
-pub(super) const COMMAND_TYPES: [&str; 28] = [
+pub(super) const COMMAND_TYPES: [&str; 30] = [
     "ctox.workjet.providers.adopt_native",
     "ctox.workjet.providers.observe_native",
     "ctox.workjet.providers.models.select",
