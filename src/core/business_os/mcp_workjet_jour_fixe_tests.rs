@@ -1,3 +1,177 @@
+// The supplied report is kept byte-for-byte as a native fixture. Only its scope
+// identifiers are rebound to this synthetic leased Supervisor for MCP tests.
+fn report_args() -> Value {
+    let mut report: Value =
+        serde_json::from_str(include_str!("fixtures/meeting-report-example.json")).unwrap();
+    report["project"]["id"] = json!("project");
+    report["meeting"]["id"] = json!("meeting-1");
+    report["generated"]["by"] = json!(THREAD);
+    json!({"action":"save_report","request":{"operation_id":"report-op","meeting_id":"meeting-1","report":report}})
+}
+
+#[test]
+fn meeting_report_example_is_persisted_idempotently_and_read_by_section_and_cli(
+) -> anyhow::Result<()> {
+    let (root, trusted) = fixture("review")?;
+    let args = report_args();
+    let first = call(root.path(), &trusted, WRITE_TOOL, args.clone())?;
+    assert_eq!(first["report"]["report"], args["request"]["report"]);
+    assert_eq!(first["report"]["revision"], 1);
+    assert_eq!(
+        call(root.path(), &trusted, WRITE_TOOL, args.clone())?,
+        first
+    );
+    let read = call(root.path(), &trusted, READ_TOOL, read_args("read_report"))?;
+    assert_eq!(read["report"], first["report"]);
+    let mut section = read_args("read_meeting");
+    section["request"]["section"] = json!("report");
+    assert_eq!(call(root.path(), &trusted, READ_TOOL, section)?, read);
+    let cli = |args: &[&str]| {
+        super::super::super::meeting_report::cli(
+            root.path(),
+            &args.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        cli(&["report", "show", "--meeting-id", "meeting-1"])?,
+        first["report"]
+    );
+    assert_eq!(
+        cli(&["report", "list", "--project-id", "project", "--limit", "1"])?[0],
+        first["report"]
+    );
+    assert_eq!(
+        cli(&["report", "list", "--project-id", "foreign"])?,
+        json!([])
+    );
+    assert!(cli(&[
+        "report",
+        "list",
+        "--project-id",
+        "project",
+        "--limit",
+        "101"
+    ])
+    .is_err());
+    assert!(cli(&[
+        "report",
+        "show",
+        "--meeting-id",
+        "meeting-1",
+        "--project-id",
+        "project"
+    ])
+    .is_err());
+    assert!(cli(&[
+        "report",
+        "show",
+        "--meeting-id",
+        "meeting-1",
+        "--meeting-id",
+        "meeting-1"
+    ])
+    .is_err());
+    let mut changed = args.clone();
+    changed["request"]["report"]["overall"]["summary"] = json!("A different report");
+    assert!(call(root.path(), &trusted, WRITE_TOOL, changed.clone())
+        .unwrap_err()
+        .to_string()
+        .contains("conflicts"));
+    changed["request"]["operation_id"] = json!("report-op-2");
+    let second = call(root.path(), &trusted, WRITE_TOOL, changed)?;
+    assert_eq!(second["report"]["revision"], 2);
+    assert_eq!(
+        call(root.path(), &trusted, READ_TOOL, read_args("read_report"))?["report"],
+        second["report"]
+    );
+    assert_eq!(
+        saved(root.path())?["revision"],
+        0,
+        "report must not alter the deck or meeting revision"
+    );
+    let conn = store::open_store(root.path())?;
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM workjet_meeting_reports", [], |r| r
+            .get::<_, i64>(0))?,
+        2
+    );
+    let main_args = vec![
+        "jour-fixe".into(),
+        "report".into(),
+        "show".into(),
+        "--meeting-id".into(),
+        "meeting-1".into(),
+    ];
+    assert!(crate::skips_cli_startup_db(&main_args));
+    assert!(crate::skips_cli_turn_ledger(&main_args));
+    crate::dispatch_command(root.path(), &main_args)?;
+    Ok(())
+}
+
+#[test]
+fn meeting_report_rejects_invalid_schema_scope_and_foreign_supervisor_without_writing(
+) -> anyhow::Result<()> {
+    for change in ["schema", "project", "meeting", "supervisor", "unknown"] {
+        let (root, trusted) = fixture("review")?;
+        let mut args = report_args();
+        match change {
+            "schema" => args["request"]["report"]["period"]["from"] = json!("yesterday"),
+            "project" => args["request"]["report"]["project"]["id"] = json!("foreign"),
+            "meeting" => args["request"]["report"]["meeting"]["id"] = json!("foreign"),
+            "supervisor" => args["request"]["report"]["generated"]["by"] = json!("foreign"),
+            "unknown" => args["request"]["extra"] = json!(true),
+            _ => unreachable!(),
+        }
+        let error = call(root.path(), &trusted, WRITE_TOOL, args)
+            .unwrap_err()
+            .to_string();
+        if change == "schema" {
+            assert!(error.contains("/period/from"), "{error}");
+        }
+        assert_eq!(
+            store::open_store(root.path())?.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name='workjet_meeting_reports'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            0
+        );
+    }
+    let (root, trusted) = fixture("review")?;
+    let mut foreign = trusted.clone();
+    foreign["actor"] = json!("foreign");
+    assert!(call(root.path(), &foreign, WRITE_TOOL, report_args()).is_err());
+    assert!(call(root.path(), &foreign, READ_TOOL, read_args("read_report")).is_err());
+    store::open_store(root.path())?.execute(
+        "UPDATE workjet_supervisor_bindings SET thread_id='replacement' WHERE project_id='project'",
+        [],
+    )?;
+    assert!(call(root.path(), &trusted, WRITE_TOOL, report_args()).is_err());
+    Ok(())
+}
+
+#[test]
+fn meeting_report_read_before_first_save_is_null_and_does_not_create_schema() -> anyhow::Result<()>
+{
+    let (root, trusted) = fixture("review")?;
+    assert!(call(root.path(), &trusted, READ_TOOL, read_args("read_report"))?["report"].is_null());
+    assert_eq!(
+        store::open_store(root.path())?.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='workjet_meeting_reports'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        0
+    );
+    let args = vec![
+        "report".into(),
+        "show".into(),
+        "--meeting-id".into(),
+        "meeting-1".into(),
+    ];
+    assert!(super::super::super::meeting_report::cli(root.path(), &args)?.is_null());
+    Ok(())
+}
 // Origin: CTOX
 // License: AGPL-3.0-only
 use super::*;
