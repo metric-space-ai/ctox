@@ -686,7 +686,8 @@ test('execution policy generated native/browser fixtures agree and migration pre
   const { collections, migrationStrategies } = await import('../modules/ctox/schema.js');
   const old = { id: 'legacy', name: 'Old', owner_user_id: 'owner-1', status: 'active' };
   assert.deepEqual(migrationStrategies.workjet_projects[4](old), old);
-  assert.equal(collections.workjet_projects.version, 4);
+  assert.deepEqual(migrationStrategies.workjet_projects[5](old), old);
+  assert.equal(collections.workjet_projects.version, 5);
   assert.equal(collections.workjet_projects.required.includes('execution_policy'), false);
 });
 

@@ -37,6 +37,8 @@ struct ProjectUpsertPayload {
     #[serde(default)]
     repo_url: ProjectField<String>,
     #[serde(default)]
+    repository_url: ProjectField<String>,
+    #[serde(default)]
     public_url: ProjectField<String>,
     #[serde(default)]
     info: ProjectField<ProjectInfo>,
@@ -245,6 +247,9 @@ pub(super) fn handle_workjet_project_upsert_command(
         ))
     })?;
     let repo_url = project_field_value(payload.repo_url, |value| project_url(value, "repo_url"))?;
+    let repository_url = project_field_value(payload.repository_url, |value| {
+        project_url(value, "repository_url")
+    })?;
     let public_url =
         project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
     let info = project_field_value(payload.info, |mut info| {
@@ -343,6 +348,7 @@ pub(super) fn handle_workjet_project_upsert_command(
         for (field, patch) in [
             ("description", description),
             ("repo_url", repo_url),
+            ("repository_url", repository_url),
             ("public_url", public_url),
             ("info", info),
             ("jour_fixe", jour_fixe),
@@ -1069,6 +1075,7 @@ pub(crate) mod tests {
         create_workjet_rxdb_projection_tables(root.path())?;
         let request = json!({"project_id":"project-1","name":"Project One",
             "repo_url":"https://github.com/metric-space-ai/ctox",
+            "repository_url":"https://github.com/mkh-welsch/ctox-dev",
             "public_url":"https://ctox.dev",
             "info":{"description":"Work daemon","goal":"Usable projects\nPersist after reopening","phase":"delivery","status":"active"},
             "jour_fixe":{"weekday":1,"time":"09:30"}});
@@ -1094,7 +1101,13 @@ pub(crate) mod tests {
         drop(conn);
         let projected = load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?
             .context("project projected")?;
-        for field in ["repo_url", "public_url", "info", "jour_fixe"] {
+        for field in [
+            "repo_url",
+            "repository_url",
+            "public_url",
+            "info",
+            "jour_fixe",
+        ] {
             assert_eq!(persisted[field], projected[field]);
         }
         Ok(())
@@ -1104,7 +1117,7 @@ pub(crate) mod tests {
     fn project_configuration_partial_updates_preserve_and_null_clears() -> anyhow::Result<()> {
         let root = tempdir()?;
         let initial = json!({"project_id":"project-1","name":"Project One","description":"Original",
-            "repo_url":"https://github.com/metric-space-ai/ctox","public_url":"https://ctox.dev",
+            "repo_url":"https://github.com/metric-space-ai/ctox","repository_url":"https://github.com/mkh-welsch/ctox-dev","public_url":"https://ctox.dev",
             "info":{"goal":"Keep this"},"jour_fixe":{"weekday":7,"time":"23:59","timezone":"UTC"},"archived":true});
         let first = handle_workjet_project_upsert_command(
             root.path(),
@@ -1123,6 +1136,7 @@ pub(crate) mod tests {
         for field in [
             "description",
             "repo_url",
+            "repository_url",
             "public_url",
             "info",
             "jour_fixe",
@@ -1134,12 +1148,13 @@ pub(crate) mod tests {
             root.path(),
             &command(
                 "ctox.workjet.project.upsert",
-                json!({"project_id":"project-1","name":"Renamed","repo_url":null,"public_url":null,"info":null,"jour_fixe":null,"archived":false}),
+                json!({"project_id":"project-1","name":"Renamed","repo_url":null,"repository_url":null,"public_url":null,"info":null,"jour_fixe":null,"archived":false}),
             ),
             "owner-1",
         )?;
         for field in [
             "repo_url",
+            "repository_url",
             "public_url",
             "info",
             "jour_fixe",
@@ -1224,7 +1239,7 @@ pub(crate) mod tests {
     fn project_configuration_cannot_edit_another_owners_project() -> anyhow::Result<()> {
         let root = tempdir()?;
         create_project(root.path())?;
-        let payload = json!({"project_id":"project-1","name":"Forged","jour_fixe":{"weekday":2,"time":"09:30"},"info":{"goal":"Replace"}});
+        let payload = json!({"project_id":"project-1","name":"Forged","repository_url":"https://github.com/foreign/repo","jour_fixe":{"weekday":2,"time":"09:30"},"info":{"goal":"Replace"}});
         let error = handle_workjet_project_upsert_command(
             root.path(),
             &command("ctox.workjet.project.upsert", payload),

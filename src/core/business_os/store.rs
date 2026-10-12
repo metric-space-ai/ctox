@@ -25866,6 +25866,9 @@ fn business_command_prompt_enrichment(
     command: &BusinessCommand,
 ) -> anyhow::Result<Option<String>> {
     let mut blocks = Vec::new();
+    if let Some(block) = super::project_chats::jour_fixe_brief::prompt(root, command_id, command)? {
+        blocks.push(block);
+    }
     if let Some(block) = cv_print_pdf_text_prompt_enrichment(root, command_id, command)? {
         blocks.push(block);
     }

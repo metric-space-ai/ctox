@@ -79,6 +79,7 @@ pub(crate) fn resume_jour_fixe_narration(root: &Path) -> anyhow::Result<()> {
 mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
+pub(in crate::business_os) use workjet_worker_dispatch::outcomes_for_deck as workjet_outcomes_for_deck;
 
 #[cfg(test)]
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
