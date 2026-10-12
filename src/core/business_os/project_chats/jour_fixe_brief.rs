@@ -1,6 +1,9 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Native, owner-scoped preparation facts. Source diagnostics are not slide content.
+#[cfg(test)]
+#[path = "jour_fixe_repo_digest_brief_tests.rs"]
+mod repo_digest_tests;
 use super::super::workjet_jour_fixe_contract::Meeting;
 use super::*;
 use rusqlite::{params, OpenFlags, OptionalExtension};
@@ -170,6 +173,74 @@ fn github_with(
     json!({"status":"collected","repository":repo,"since_ms":since,
         "tags_window":"latest_tags_without_publication_dates","data":sources})
 }
+fn github_with_operator_digest(
+    api: Value,
+    digest: anyhow::Result<Option<super::super::jour_fixe_repo_digest::RepoDigest>>,
+    since: i64,
+    now: i64,
+) -> Value {
+    // A successful API list, even an empty one, is authoritative. The outer
+    // "collected" envelope alone does not establish a successful source.
+    if api["status"] == "collected"
+        && api["data"]
+            .as_object()
+            .is_some_and(|sources| sources.values().any(|source| source["status"] == "ok"))
+    {
+        return api;
+    }
+    if api["status"] == "unsupported_source" {
+        return api;
+    }
+    let digest = match digest {
+        Ok(Some(digest)) => digest,
+        Ok(None) => return api,
+        Err(_) => {
+            return json!({"status":"missing_source","reason_code":"operator_digest_invalid","data":null})
+        }
+    };
+    let collected = match super::super::jour_fixe_repo_digest::timestamp(&digest.collected_at) {
+        Ok(at) => at,
+        Err(_) => {
+            return json!({"status":"missing_source","reason_code":"operator_digest_invalid","data":null})
+        }
+    };
+    if now.saturating_sub(collected) >= super::super::jour_fixe_repo_digest::MAX_AGE_MS
+        || collected > now
+    {
+        return json!({"status":"missing_source","reason_code":"operator_digest_stale","data":null});
+    }
+    let digest_since =
+        super::super::jour_fixe_repo_digest::timestamp(&digest.since).expect("validated digest");
+    let effective_since = since.max(digest_since);
+    let after = |at: &str| {
+        super::super::jour_fixe_repo_digest::timestamp(at).is_ok_and(|at| at >= effective_since)
+    };
+    let commits: Vec<_> = digest
+        .commits
+        .iter()
+        .filter(|v| after(&v.date))
+        .map(|v| json!({"sha":v.sha,"author":v.author,"date":v.date,"message":v.message}))
+        .collect();
+    let merged: Vec<_> = digest.pulls.iter().filter(|v| v.merged_at.as_deref().is_some_and(after)).map(|v|
+        json!({"number":v.number,"title":v.title,"merged_at":v.merged_at,"author":v.author})).collect();
+    let open: Vec<_> = digest.pulls.iter().filter(|v| v.state == "open").map(|v|
+        json!({"number":v.number,"title":v.title,"updated_at":v.updated_at,"author":v.author})).collect();
+    let issues: Vec<_> = digest.issues.iter().filter(|v| after(&v.updated_at)).map(|v|
+        json!({"number":v.number,"title":v.title,"state":v.state,"updated_at":v.updated_at})).collect();
+    let list = |items: Vec<Value>, budget| {
+        section(
+            Ok(json!({"items":items,"list_limit_reached":false})),
+            budget,
+        )
+    };
+    json!({"status":"collected","source":"operator_digest","repository":digest.repository,
+        "collected_at":digest.collected_at,"since_ms":effective_since,"requested_since_ms":since,
+        "data":{"commits":list(commits,700),"merged_prs":list(merged,650),"open_prs":list(open,650),
+            "issues":list(issues,500),
+            "releases":{"status":"missing_source","reason_code":"not_in_operator_digest","data":null},
+            "tags":{"status":"missing_source","reason_code":"not_in_operator_digest","data":null}}})
+}
+
 fn github(root: &Path, repo: Option<&str>, since: i64) -> Value {
     if repo.is_none() || repo.is_some_and(|r| repository(r).is_err()) {
         return github_with(repo, since, |_| unreachable!());
@@ -294,6 +365,7 @@ fn prepare_with(
     let goal = section(goal, 3000);
     let workers = section(workers, 1800);
     let kpis = section(kpis, 1800);
+    let operator_digest = super::super::jour_fixe_repo_digest::load(&conn, &meeting.project_id);
     drop(core);
     drop(conn);
     // repository_url is the bound source; Workjet's project settings still write repo_url.
@@ -308,7 +380,7 @@ fn prepare_with(
         "window":{"since_ms":since,"until_ms":meeting.scheduled_at_ms},
         "confirmed_goal_and_progress":goal,"project_context":section(Ok(json!({"name":project["name"],"info":project["info"]})),1200),
         "worker_results":workers,"kpis":kpis,
-        "github":fetch(repo,since)});
+        "github":github_with_operator_digest(fetch(repo,since),operator_digest,since,(super::super::store::now_ms() as i64))});
     let raw = serde_json::to_string(&brief)?;
     ensure!(
         raw.len() <= MAX_BYTES,

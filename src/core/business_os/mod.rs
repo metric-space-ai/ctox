@@ -45,6 +45,7 @@ mod importer;
 mod inventory_drift_tests;
 mod invoices;
 mod iot_supervision;
+pub(crate) mod jour_fixe_repo_digest;
 pub mod mcp_channel;
 pub mod mobile_invites;
 mod module_lifecycle;

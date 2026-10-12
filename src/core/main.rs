@@ -135,6 +135,8 @@ EVERYDAY
   ctox start                     start the persistent mission loop (systemd service)
   ctox stop [--force]            stop the mission loop
   ctox status                    show service status (JSON)
+  ctox jour-fixe repo-digest put --project-id <id> --repository <owner/name> < digest.json
+  ctox jour-fixe repo-digest show --project-id <id>
   ctox crew list                 list durable crew members (read-only JSON)
   ctox crew show <id>            show one crew profile (read-only JSON)
   ctox work-hours set 08:00 18:00
@@ -425,6 +427,11 @@ fn skips_cli_startup_db(args: &[String]) -> bool {
 }
 
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
+    if args.first().map(String::as_str) == Some("jour-fixe")
+        && args.get(1).map(String::as_str) == Some("repo-digest")
+    {
+        return true;
+    }
     // Office file tools run within the caller's filesystem sandbox and do not
     // read or mutate daemon state. They must not wait on its SQLite ledger.
     if args.first().map(String::as_str) == Some("office") {
@@ -557,6 +564,17 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
 }
 
 fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if args.first().map(String::as_str) == Some("jour-fixe")
+        && args.get(1).map(String::as_str) == Some("repo-digest")
+    {
+        let result = business_os::jour_fixe_repo_digest::cli(
+            root,
+            &args[2..],
+            &mut std::io::stdin().lock(),
+        )?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     match args.first().map(String::as_str) {
         Some("sync") => sync_host::handle_command(root, &args[1..]),
         None => tui::run_tui(root),
