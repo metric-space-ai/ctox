@@ -61,6 +61,8 @@ pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_se
 mod supervisor_luma;
 pub(in crate::business_os) use supervisor_luma::read_computed_route as read_supervisor_computed_route;
 pub(in crate::business_os) use supervisor_luma::read_configured_route as read_supervisor_configured_route;
+#[path = "mcp_workjet_deck_narration.rs"]
+mod deck_narration;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
@@ -69,6 +71,10 @@ mod workjet_kpis;
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+
+pub(crate) fn resume_jour_fixe_narration(root: &Path) -> anyhow::Result<()> {
+    deck_narration::resume(root)
+}
 #[path = "mcp_workjet_presentation.rs"]
 mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]

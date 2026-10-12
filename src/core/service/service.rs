@@ -17531,6 +17531,15 @@ fn route_external_messages_with_priority_dispatch(
     // Keep it before every router early-return so an ongoing turn, a ready
     // prompt, idle preflight or queue pressure cannot starve the hourly refresh.
     // A maintenance failure must not suppress the existing communication path.
+    if let Err(error) = crate::business_os::mcp_channel::resume_jour_fixe_narration(root) {
+        push_event(
+            state,
+            format!(
+                "Jour fixe narration deferred: {}",
+                clip_text(&error.to_string(), 180)
+            ),
+        );
+    }
     if let Err(error) = crate::business_os::refresh_due_workjet_project_kpis(root) {
         push_event(
             state,
