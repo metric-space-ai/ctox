@@ -24,22 +24,9 @@ fn section(value: anyhow::Result<Value>, budget: usize) -> Value {
             let mut truncated = false;
             compact(&mut data, &mut truncated);
             while serde_json::to_vec(&data).map_or(usize::MAX, |v| v.len()) > budget {
-                match &mut data {
-                    Value::Array(items) if !items.is_empty() => {
-                        items.pop();
-                    }
-                    Value::Object(fields) if !fields.is_empty() => {
-                        let key = fields
-                            .iter()
-                            .max_by_key(|(_, v)| serde_json::to_vec(v).map_or(0, |b| b.len()))
-                            .map(|(k, _)| k.clone())
-                            .unwrap();
-                        fields.remove(&key);
-                    }
-                    _ => {
-                        data = Value::Null;
-                        break;
-                    }
+                if !shrink(&mut data) {
+                    data = Value::Null;
+                    break;
                 }
                 truncated = true;
             }
@@ -54,6 +41,31 @@ fn section(value: anyhow::Result<Value>, budget: usize) -> Value {
             };
             json!({"status":"unavailable","reason_code":reason,"data":null})
         }
+    }
+}
+fn shrink(value: &mut Value) -> bool {
+    match value {
+        Value::Array(items) if items.len() > 1 => {
+            items.pop();
+            true
+        }
+        Value::Array(items) if items.len() == 1 => shrink(&mut items[0]),
+        Value::Object(fields) if !fields.is_empty() => {
+            let key = fields
+                .iter()
+                .max_by_key(|(_, v)| serde_json::to_vec(v).map_or(0, |b| b.len()))
+                .map(|(k, _)| k.clone())
+                .unwrap();
+            if !shrink(fields.get_mut(&key).unwrap()) {
+                fields.remove(&key);
+            }
+            true
+        }
+        Value::String(text) if text.chars().count() > 32 => {
+            *text = text.chars().take(text.chars().count() / 2).collect();
+            true
+        }
+        _ => false,
     }
 }
 fn compact(value: &mut Value, truncated: &mut bool) {
@@ -467,6 +479,7 @@ mod tests {
         let value = section(Ok(json!({"items":vec!["Ä".repeat(4096);100]})), 2500);
         assert!(serde_json::to_vec(&value).unwrap().len() < 2600);
         assert_eq!(value["truncated"], true);
+        assert!(!value["data"]["items"].as_array().unwrap().is_empty());
         assert!(serde_json::from_slice::<Value>(&serde_json::to_vec(&value).unwrap()).is_ok());
     }
 
