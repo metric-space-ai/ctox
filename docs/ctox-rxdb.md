@@ -278,9 +278,10 @@ nor an isolated smoke certifies WELSCH latency.
 
 For a paired S0 regression measurement, `scripts/sync-v3/run-native-lane.sh`
 accepts archive, pinned Playwright module, bounded soak duration, archive SHA-256,
-and binary SHA-256. Omitted hashes retain the original pinned S0 artifact.
+binary SHA-256, and native source SHA (which may differ from the measurement
+harness head). Omitted hashes retain the original pinned S0 artifact.
 Use the same measurement overlay on both native revisions: after the first
-paint and five write ACKs, twenty disjoint native query windows supply query
+paint and five write ACKs, five disjoint native query windows supply query
 p95. Each window must issue a real `rxdb.query.fetch` and return twenty rows.
 These samples do not change the first-paint definition or write ACK oracle;
 they remain exploratory lane evidence, not installed product acceptance.
