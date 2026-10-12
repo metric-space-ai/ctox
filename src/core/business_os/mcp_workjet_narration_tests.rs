@@ -1,3 +1,245 @@
+#[test]
+fn native_timer_thread_produces_six_configured_http_audios_after_agent_exit() -> anyhow::Result<()>
+{
+    use crate::execution::speech::{MistralTestEndpoint, SpeechBackend, SpeechRuntimeConfig};
+    let (root, trusted) = fixture()?;
+    publish_six(root.path(), &trusted)?;
+    Connection::open(crate::paths::core_db(root.path()))?.execute(
+        "UPDATE communication_routing_state SET lease_expires_at='2000-01-01' WHERE route_status='leased'", [])?;
+    crate::secrets::set_credential(root.path(), "CTOX_MISTRAL_API_KEY", "fixture-mistral-key")?;
+    SpeechRuntimeConfig {
+        synthesis: SpeechBackend::Mistral,
+        transcription: SpeechBackend::Mistral,
+        voice_id: Some("fixture-saved-voice".into()),
+        rate: Default::default(),
+    }
+    .save(root.path())?;
+    let provider = tiny_http::Server::http("127.0.0.1:0")
+        .map_err(|error| anyhow::anyhow!("test speech listener: {error}"))?;
+    let address = provider
+        .server_addr()
+        .to_ip()
+        .context("speech listener address")?;
+    let _endpoint =
+        MistralTestEndpoint::new(root.path(), format!("http://{address}/v1/audio/speech"));
+    let server = std::thread::spawn(move || -> anyhow::Result<()> {
+        for i in 0..6 {
+            let mut request = provider
+                .recv_timeout(std::time::Duration::from_secs(15))?
+                .context("native speech request not received")?;
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body)?;
+            let body: Value = serde_json::from_str(&body)?;
+            assert_eq!(body["input"], format!("{TEXT} Slide {i}."));
+            assert_eq!(body["voice_id"], "fixture-saved-voice");
+            assert_eq!(body["response_format"], "wav");
+            request.respond(tiny_http::Response::from_string(
+                json!({"audio_data":base64::engine::general_purpose::STANDARD.encode(wav())})
+                    .to_string(),
+            ))?;
+        }
+        Ok(())
+    });
+    // Exercise the same timer entry point as the running daemon, off any Tokio
+    // context. No model turn, Supervisor token or per-slide tool call remains.
+    super::super::resume_jour_fixe_narration(root.path())?;
+    server.join().expect("speech fixture panicked")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let policy = store::open_store(root.path())?;
+        let state: String = policy.query_row(
+            "SELECT state FROM workjet_jour_fixe_deck_narration",
+            [],
+            |r| r.get(0),
+        )?;
+        if state == "complete" {
+            break;
+        }
+        anyhow::ensure!(
+            state != "blocked" && std::time::Instant::now() < deadline,
+            "native deck did not complete: {state}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let meeting = saved(root.path())?;
+    assert_eq!(meeting["state"], "ready");
+    assert_eq!(
+        meeting["slides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["audio"].is_object())
+            .count(),
+        6
+    );
+    Ok(())
+}
+
+#[test]
+fn published_six_slide_deck_narrates_without_agent_and_replays_once() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let draft = publish_six(root.path(), &trusted)?;
+    Connection::open(crate::paths::core_db(root.path()))?.execute(
+        "UPDATE communication_routing_state SET lease_expires_at='2000-01-01' WHERE route_status='leased'", [])?;
+    let mut calls = 0;
+    deck_narration::run_next_with(root.path(), |request| {
+        calls += 1;
+        output(request)
+    })?;
+    assert_eq!(calls, 6);
+    let meeting = saved(root.path())?;
+    assert_eq!(meeting["state"], "ready");
+    assert_eq!(meeting["revision"], 7);
+    assert!(meeting["slides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["audio"]["provenance"] == "native_gateway"));
+    let policy = store::open_store(root.path())?;
+    assert_eq!(
+        policy.query_row(
+            "SELECT count(*) FROM workjet_jour_fixe_native_narration WHERE state='complete'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        6
+    );
+    assert_eq!(
+        policy.query_row(
+            "SELECT count(*) FROM business_records WHERE collection='desktop_files'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )?,
+        6
+    );
+    // Simulate restart after the final WAV commit, before outbox completion.
+    policy.execute(
+        "UPDATE workjet_jour_fixe_deck_narration SET state='running'",
+        [],
+    )?;
+    deck_narration::run_next_with(root.path(), |_| {
+        panic!("completed deck must never resynthesize")
+    })?;
+    // Agent's original mutation is retained; it did not carry narration calls.
+    assert_eq!(draft["action"], "prepare_deck");
+    assert_eq!(
+        policy.query_row(
+            "SELECT state FROM workjet_jour_fixe_deck_narration",
+            [],
+            |r| r.get::<_, String>(0)
+        )?,
+        "complete"
+    );
+    Ok(())
+}
+
+fn publish_six(root: &Path, trusted: &Value) -> anyhow::Result<Value> {
+    let mut meeting = saved(root)?;
+    meeting["state"] = json!("planned");
+    meeting["deck_revision"] = json!(0);
+    meeting["slides"] = json!([]);
+    store::open_store(root)?.execute(
+        "UPDATE workjet_jour_fixe_meetings SET metadata_json=?1 WHERE meeting_id='meeting-1'",
+        [meeting.to_string()],
+    )?;
+    let draft = json!({"action":"prepare_deck","request":{"operation_id":"publish-six",
+        "meeting_id":"meeting-1","expected_revision":0,"deck_revision":1,
+        "slides":(0..6).map(|i| json!({"id":format!("slide-{i}"),"meeting_id":"meeting-1",
+            "position":i,"title":format!("Progress {i}"),"body_markdown":format!("{TEXT} Slide {i}.")})).collect::<Vec<_>>()}});
+    super::super::call_tool_inner(
+        root,
+        workjet_jour_fixe::WRITE_TOOL,
+        draft.clone(),
+        Some(trusted),
+    )?;
+    Ok(draft)
+}
+
+#[test]
+fn native_deck_retry_reuses_failed_operation_and_retained_audio() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let draft = publish_six(root.path(), &trusted)?;
+    let mut calls = 0;
+    assert!(deck_narration::run_next_with(root.path(), |request| {
+        calls += 1;
+        if calls == 2 {
+            Err(SpeechError::MissingVoice)
+        } else {
+            output(request)
+        }
+    })
+    .is_err());
+    assert_eq!(calls, 2);
+    let policy = store::open_store(root.path())?;
+    let failed_id: String = policy.query_row("SELECT operation_id FROM workjet_jour_fixe_native_narration WHERE state='failed_prerequisite'", [], |r|r.get(0))?;
+    assert_eq!(
+        saved(root.path())?["slides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["audio"].is_object())
+            .count(),
+        1
+    );
+    // Same publication receipt recovers after speech configuration becomes ready.
+    super::super::call_tool_inner(
+        root.path(),
+        workjet_jour_fixe::WRITE_TOOL,
+        draft,
+        Some(&trusted),
+    )?;
+    let mut resumed = 0;
+    deck_narration::run_next_with(root.path(), |request| {
+        resumed += 1;
+        output(request)
+    })?;
+    assert_eq!(resumed, 5);
+    assert_eq!(saved(root.path())?["state"], "ready");
+    assert_eq!(
+        policy.query_row(
+            "SELECT attempts FROM workjet_jour_fixe_native_narration WHERE operation_id=?1",
+            [&failed_id],
+            |r| r.get::<_, u64>(0)
+        )?,
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn native_deck_rechecks_owner_and_never_retries_uncertain_speech() -> anyhow::Result<()> {
+    let (root, trusted) = fixture()?;
+    let draft = publish_six(root.path(), &trusted)?;
+    assert!(deck_narration::run_next_with(root.path(), |_| Err(SpeechError::TimedOut)).is_err());
+    super::super::call_tool_inner(
+        root.path(),
+        workjet_jour_fixe::WRITE_TOOL,
+        draft,
+        Some(&trusted),
+    )?;
+    assert!(deck_narration::run_next_with(root.path(), |_| panic!(
+        "uncertain synthesis must not retry"
+    ))
+    .is_err());
+    assert_eq!(saved(root.path())?["state"], "preparing");
+    let (root, trusted) = fixture()?;
+    publish_six(root.path(), &trusted)?;
+    store::open_store(root.path())?.execute(
+        "UPDATE business_users SET active=0 WHERE user_id='owner'",
+        [],
+    )?;
+    assert!(deck_narration::run_next_with(root.path(), |_| panic!(
+        "revoked owner must not synthesize"
+    ))
+    .is_err());
+    assert!(saved(root.path())?["slides"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["audio"].is_null()));
+    Ok(())
+}
+
 // Origin: CTOX
 // License: AGPL-3.0-only
 
