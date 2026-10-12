@@ -838,7 +838,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime grok-login | ctox runtime grok-models | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
