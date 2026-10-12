@@ -474,6 +474,9 @@ export async function runAcceptance(browser, configPath) {
   const revisions = { workjet: config.workjetRevision ?? null, native: config.source,
     nativeBinarySha256: config.binarySha256, shell: config.source, contractHashes: config.contractHashes };
   try {
+    // Establish this fresh tenant's authority through the native product path
+    // before peer and static-server children can initialize it concurrently.
+    await native.invite('bootstrap');
     native.peer = native.start('isolated-native-peer', ['business-os', 'peer', 'start', '--root', config.root]);
     native.start('isolated-static-shell', ['business-os', 'serve', '--addr', `127.0.0.1:${config.port}`]);
     for (const goal of config.goals) {

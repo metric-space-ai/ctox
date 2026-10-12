@@ -6,7 +6,7 @@ export CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 UV_THREADPOOL_SIZE=2
 node --test scripts/installed-sync-acceptance-telemetry.test.mjs
 node --check scripts/run-installed-sync-browser.mjs
 python3 -c 'import ast,pathlib; ast.parse(pathlib.Path("scripts/prepare-installed-sync-tenant.py").read_text()); print("preparation syntax valid")'
-base=/mnt/nvme1/ctox-acceptance/devops-sync-c7-recheck-20261012-r3
+base=/mnt/nvme1/ctox-acceptance/devops-sync-c7-recheck-20261012-r4
 publication=/mnt/nvme1/ctox-acceptance/devops-published-c7-20261012
 mkdir -p "$publication"
 url=https://github.com/metric-space-ai/ctox/releases/download/native-main-c7ff9ac3af41
