@@ -10422,6 +10422,12 @@ pub fn complete_business_command_from_queue_reply(
         None,
         "command-specific writeback completed after review and validation",
     )?;
+    // Run after the canonical terminal commit. A concurrently admitted exit
+    // mapping can reconcile that same committed result without a lost wakeup.
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, reply_text)
+    {
+        eprintln!("[workjet-exit-model] reviewed research writeback refused: {error:#}");
+    }
     if is_business_chat_command(&command) {
         persist_terminal_business_chat_command_projection(
             root,
@@ -15083,6 +15089,9 @@ pub fn fail_business_command_from_queue_error(
         Some(error),
         "queue/harness execution failed",
     )?;
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, "{}") {
+        eprintln!("[workjet-exit-model] failed research writeback refused: {error:#}");
+    }
     conn.execute(
         "UPDATE business_commands
          SET status = 'failed', observed_at_ms = ?2
@@ -25857,6 +25866,9 @@ fn business_command_prompt_enrichment(
     command: &BusinessCommand,
 ) -> anyhow::Result<Option<String>> {
     let mut blocks = Vec::new();
+    if let Some(block) = super::project_chats::jour_fixe_brief::prompt(root, command_id, command)? {
+        blocks.push(block);
+    }
     if let Some(block) = cv_print_pdf_text_prompt_enrichment(root, command_id, command)? {
         blocks.push(block);
     }

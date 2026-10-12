@@ -1895,13 +1895,23 @@ pub(super) fn mark_founder_reply_review_sent(
     Ok(())
 }
 
+/// Whether the inbound founder mail is answered by a reviewed, sent reply.
+///
+/// A reply stops answering the mail once a review reopens the mail after it:
+/// when its route went to review rework later than the newest reviewed send.
+/// A return to pending or a failed route after a send does not count (a
+/// failed route after a confirmed send is recovered to handled), so neither a
+/// rejected outcome check nor a route failure can cause a second reply. That is how a wrong reply gets corrected (thesen,
+/// 11.10.2026: a sent reply said the research was still running; the review
+/// of the correction failed and every sweep then closed the rework because
+/// "a reviewed reply was already sent").
 pub(super) fn founder_reply_sent_after_review(
     conn: &Connection,
     inbound_message_key: &str,
 ) -> Result<bool> {
-    let count: i64 = conn.query_row(
+    let last_sent: Option<String> = conn.query_row(
         r#"
-        SELECT COUNT(*)
+        SELECT MAX(sent_at)
         FROM communication_founder_reply_reviews
         WHERE inbound_message_key = ?1
           AND sent_at IS NOT NULL
@@ -1911,7 +1921,57 @@ pub(super) fn founder_reply_sent_after_review(
         params![inbound_message_key],
         |row| row.get(0),
     )?;
-    Ok(count > 0)
+    let Some(last_sent) = last_sent else {
+        return Ok(false);
+    };
+    Ok(!founder_route_reopened_after(
+        conn,
+        inbound_message_key,
+        &last_sent,
+    )?)
+}
+
+/// Whether a review reopened the inbound founder mail after its own newest
+/// reviewed send (see `founder_reply_sent_after_review`).
+pub(super) fn founder_reply_reopened_by_review(
+    conn: &Connection,
+    inbound_message_key: &str,
+) -> Result<bool> {
+    let last_sent: Option<String> = conn.query_row(
+        "SELECT MAX(sent_at) FROM communication_founder_reply_reviews \
+         WHERE inbound_message_key = ?1 AND sent_at IS NOT NULL",
+        params![inbound_message_key],
+        |row| row.get(0),
+    )?;
+    match last_sent {
+        Some(last_sent) => founder_route_reopened_after(conn, inbound_message_key, &last_sent),
+        None => Ok(false),
+    }
+}
+
+fn founder_route_reopened_after(
+    conn: &Connection,
+    inbound_message_key: &str,
+    sent_at: &str,
+) -> Result<bool> {
+    let route: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT route_status, updated_at FROM communication_routing_state WHERE message_key = ?1",
+            params![inbound_message_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, Some(updated_at))) = route else {
+        return Ok(false);
+    };
+    if status != "review_rework" {
+        return Ok(false);
+    }
+    let parse = |value: &str| chrono::DateTime::parse_from_rfc3339(value.trim()).ok();
+    Ok(match (parse(&updated_at), parse(sent_at)) {
+        (Some(updated), Some(sent)) => updated > sent,
+        _ => false,
+    })
 }
 
 pub(super) fn protected_founder_inbound_message(

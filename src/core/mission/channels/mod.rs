@@ -82,10 +82,10 @@ use outbound_review::{
     empty_business_os_projection, enforce_external_chat_send_is_reviewed,
     enforce_external_work_ack_has_pipeline_backing,
     enforce_reviewed_communication_send_core_transition_if_approved,
-    external_chat_action_from_send_request, founder_reply_sent_after_review,
-    guard_founder_handled_ack, mark_founder_reply_review_sent, open_channel_db_read_only,
-    parse_send_request, parse_tui_ingest_request, queue_task_count_cache_key,
-    queue_task_list_cache_key, queue_task_list_cache_stamp,
+    external_chat_action_from_send_request, founder_reply_reopened_by_review,
+    founder_reply_sent_after_review, guard_founder_handled_ack, mark_founder_reply_review_sent,
+    open_channel_db_read_only, parse_send_request, parse_tui_ingest_request,
+    queue_task_count_cache_key, queue_task_list_cache_key, queue_task_list_cache_stamp,
     require_any_unconsumed_external_chat_review, resolve_outbound_subject, send_email_message,
     send_reviewed_email_communication_request, send_reviewed_founder_outbound_request, sha256_hex,
     store_queue_task_count_cache, store_queue_task_list_cache, test_channel,
@@ -2516,6 +2516,17 @@ pub fn founder_reply_sent_after_review_for_message(
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     founder_reply_sent_after_review(&conn, inbound_message_key)
+}
+
+/// Whether a review reopened this founder mail after its own newest reviewed
+/// send, i.e. that send is being corrected and must not count as an answer.
+pub fn founder_reply_reopened_by_review_for_message(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    founder_reply_reopened_by_review(&conn, inbound_message_key)
 }
 
 /// Close a stalled founder inbound only when its own reviewed reply has a

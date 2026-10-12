@@ -37,6 +37,8 @@ struct ProjectUpsertPayload {
     #[serde(default)]
     repo_url: ProjectField<String>,
     #[serde(default)]
+    repository_url: ProjectField<String>,
+    #[serde(default)]
     public_url: ProjectField<String>,
     #[serde(default)]
     info: ProjectField<ProjectInfo>,
@@ -44,6 +46,10 @@ struct ProjectUpsertPayload {
     jour_fixe: ProjectField<JourFixe>,
     #[serde(default)]
     supervisor_luma_id: ProjectField<String>,
+    #[serde(default)]
+    execution_policy: ProjectField<
+        super::workjet_project_execution_policy_contract::ProjectExecutionPolicyUpdate,
+    >,
     #[serde(default)]
     archived: Option<bool>,
 }
@@ -199,9 +205,19 @@ pub(super) fn handle_workjet_project_list_command(
                 .context("active Workjet project has no id")
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let exit_models = project_ids
+        .iter()
+        .map(|id| {
+            Ok((
+                (*id).to_owned(),
+                super::workjet_exit_model::read_state(&conn, id, &owner_user_id)?,
+            ))
+        })
+        .collect::<anyhow::Result<serde_json::Map<String, Value>>>()?;
     Ok(serde_json::json!({
         "ok": true,
         "collection": PROJECTS_COLLECTION,
+        "exit_models": exit_models,
         "owner_user_id": owner_user_id,
         "count": count,
         "project_ids": project_ids,
@@ -231,6 +247,9 @@ pub(super) fn handle_workjet_project_upsert_command(
         ))
     })?;
     let repo_url = project_field_value(payload.repo_url, |value| project_url(value, "repo_url"))?;
+    let repository_url = project_field_value(payload.repository_url, |value| {
+        project_url(value, "repository_url")
+    })?;
     let public_url =
         project_field_value(payload.public_url, |value| project_url(value, "public_url"))?;
     let info = project_field_value(payload.info, |mut info| {
@@ -274,6 +293,15 @@ pub(super) fn handle_workjet_project_upsert_command(
         )?))
     })?;
 
+    anyhow::ensure!(
+        !matches!(payload.execution_policy, ProjectField::Clear),
+        "execution_policy requires a typed default-mode patch with expected_revision, not null"
+    );
+    if let ProjectField::Set(requested) = &payload.execution_policy {
+        use super::workjet_project_execution_policy_contract::WireValidate;
+        requested.validate().map_err(anyhow::Error::msg)?;
+    }
+
     let mut conn = open_store(root)?;
     let applied = admission.apply(&mut conn, |transaction| {
         // Recheck identity inside the actual domain writer transaction, so an
@@ -316,9 +344,11 @@ pub(super) fn handle_workjet_project_upsert_command(
             "updated_at_ms": now,
             "is_deleted": false,
         });
+        // Exit assessment history remains in its owner-scoped core table, outside this projection.
         for (field, patch) in [
             ("description", description),
             ("repo_url", repo_url),
+            ("repository_url", repository_url),
             ("public_url", public_url),
             ("info", info),
             ("jour_fixe", jour_fixe),
@@ -333,6 +363,21 @@ pub(super) fn handle_workjet_project_upsert_command(
                 ProjectField::Clear => {}
                 ProjectField::Set(value) => project[field] = value,
             }
+        }
+        match &payload.execution_policy {
+            ProjectField::Keep => {
+                if let Some(value) = existing
+                    .as_ref()
+                    .and_then(|record| record.get("execution_policy"))
+                {
+                    project["execution_policy"] = value.clone();
+                }
+            }
+            ProjectField::Set(requested) => {
+                project["execution_policy"] =
+                    super::workjet_project_execution_policy::apply(existing.as_ref(), requested)?;
+            }
+            ProjectField::Clear => unreachable!("null policy was rejected before mutation"),
         }
         if archived {
             project["archived_at_ms"] = Value::from(archived_at_ms);
@@ -739,6 +784,166 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn execution_policy_contract_native_and_browser_corpus() -> anyhow::Result<()> {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-project-execution-policy-v1.json"
+        ))?;
+        for (group, valid) in [("valid_cases", true), ("invalid_cases", false)] {
+            for sample in corpus[group].as_array().unwrap() {
+                let result =
+                    super::super::workjet_project_execution_policy_contract::validate_fixture(
+                        sample["type"].as_str().unwrap(),
+                        sample["value"].clone(),
+                    );
+                assert_eq!(result.is_ok(), valid, "{sample}: {result:?}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn execution_policy_owner_cas_persists_projects_and_revokes_without_aba() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        create_workjet_rxdb_projection_tables(root.path())?;
+        let legacy = create_project(root.path())?;
+        assert!(legacy["project"].get("execution_policy").is_none());
+        let policy =
+            super::super::workjet_project_execution_policy::current(Some(&legacy["project"]))?;
+        assert_eq!(
+            serde_json::to_value(policy)?,
+            json!({
+                "schema":"ctox.workjet.project_execution_policy.v1","mode":"default","revision":0
+            })
+        );
+        let patch = |mode: &str, expected_revision: u64| {
+            command(
+                "ctox.workjet.project.upsert",
+                json!({
+                    "project_id":"project-1","name":"Project One","execution_policy":{
+                        "schema":"ctox.workjet.project_execution_policy.v1","mode":mode,"expected_revision":expected_revision
+                    }
+                }),
+            )
+        };
+        let request = patch("autonomous_worktree", 0);
+        let first = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        let replay = handle_workjet_project_upsert_command(root.path(), &request, "owner-1")?;
+        assert_eq!(
+            replay, first,
+            "original domain operation replays its durable receipt"
+        );
+        assert_eq!(first["project"]["execution_policy"]["revision"], 1);
+        let projected =
+            load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?.unwrap();
+        assert_eq!(
+            projected["execution_policy"],
+            first["project"]["execution_policy"]
+        );
+        let changed_name = handle_workjet_project_upsert_command(
+            root.path(),
+            &command(
+                "ctox.workjet.project.upsert",
+                json!({"project_id":"project-1","name":"Renamed"}),
+            ),
+            "owner-1",
+        )?;
+        assert_eq!(
+            changed_name["project"]["execution_policy"],
+            first["project"]["execution_policy"]
+        );
+        let revoked =
+            handle_workjet_project_upsert_command(root.path(), &patch("default", 1), "owner-1")?;
+        assert_eq!(revoked["project"]["execution_policy"]["revision"], 2);
+        assert_eq!(revoked["project"]["execution_policy"]["mode"], "default");
+        // A different command with stale approval cannot re-enable the same intent.
+        let mut stale = patch("autonomous_worktree", 0);
+        stale.payload["name"] = json!("Stale different operation");
+        assert!(format!(
+            "{:#}",
+            handle_workjet_project_upsert_command(root.path(), &stale, "owner-1").unwrap_err()
+        )
+        .contains("workjet_project_execution_policy_revision_conflict"));
+        let restored = handle_workjet_project_upsert_command(
+            root.path(),
+            &patch("autonomous_worktree", 2),
+            "owner-1",
+        )?;
+        assert_eq!(restored["project"]["execution_policy"]["revision"], 3);
+        let unchanged = handle_workjet_project_upsert_command(
+            root.path(),
+            &patch("autonomous_worktree", 3),
+            "owner-1",
+        )?;
+        assert_eq!(unchanged["project"]["execution_policy"]["revision"], 3);
+        let conn = open_store(root.path())?;
+        let stored = outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap();
+        assert_eq!(
+            stored["execution_policy"],
+            restored["project"]["execution_policy"]
+        );
+        assert_eq!(stored["owner_user_id"], "owner-1");
+        assert!(stored.get("workspace_root").is_none());
+        assert!(stored.get("runtimeMode").is_none());
+        let list = super::handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({})),
+            "owner-1",
+        )?;
+        assert_eq!(list["project_ids"], json!(["project-1"]));
+        let foreign = super::handle_workjet_project_list_command(
+            root.path(),
+            &command("ctox.workjet.project.list", json!({})),
+            "foreign-owner",
+        )?;
+        assert_eq!(foreign["count"], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn execution_policy_rejects_forged_stale_and_foreign_mutations_atomically() -> anyhow::Result<()>
+    {
+        let root = tempdir()?;
+        let before = create_project(root.path())?;
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../rxdb/tests/fixtures/workjet-project-execution-policy-v1.json"
+        ))?;
+        for sample in corpus["invalid_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["type"] == "ProjectExecutionPolicyUpdate")
+        {
+            let request = command(
+                "ctox.workjet.project.upsert",
+                json!({
+                    "project_id":"project-1","name":"Invalid","execution_policy":sample["value"]
+                }),
+            );
+            assert!(
+                handle_workjet_project_upsert_command(root.path(), &request, "owner-1").is_err()
+            );
+        }
+        let foreign = command(
+            "ctox.workjet.project.upsert",
+            json!({
+                "project_id":"project-1","name":"Foreign","execution_policy":{
+                    "schema":"ctox.workjet.project_execution_policy.v1","mode":"autonomous_worktree","expected_revision":0
+                }
+            }),
+        );
+        assert!(
+            handle_workjet_project_upsert_command(root.path(), &foreign, "foreign-owner").is_err()
+        );
+        let conn = open_store(root.path())?;
+        assert_eq!(
+            outbound_load_record(&conn, PROJECTS_COLLECTION, "project-1")?.unwrap(),
+            before["project"]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn supervisor_luma_wire_contract_matches_browser_fixture() -> anyhow::Result<()> {
         let corpus: Value = serde_json::from_str(include_str!(
             "../rxdb/tests/fixtures/workjet-supervisor-luma-v1.json"
@@ -870,6 +1075,7 @@ pub(crate) mod tests {
         create_workjet_rxdb_projection_tables(root.path())?;
         let request = json!({"project_id":"project-1","name":"Project One",
             "repo_url":"https://github.com/metric-space-ai/ctox",
+            "repository_url":"https://github.com/mkh-welsch/ctox-dev",
             "public_url":"https://ctox.dev",
             "info":{"description":"Work daemon","goal":"Usable projects\nPersist after reopening","phase":"delivery","status":"active"},
             "jour_fixe":{"weekday":1,"time":"09:30"}});
@@ -895,7 +1101,13 @@ pub(crate) mod tests {
         drop(conn);
         let projected = load_rxdb_collection_record(root.path(), PROJECTS_COLLECTION, "project-1")?
             .context("project projected")?;
-        for field in ["repo_url", "public_url", "info", "jour_fixe"] {
+        for field in [
+            "repo_url",
+            "repository_url",
+            "public_url",
+            "info",
+            "jour_fixe",
+        ] {
             assert_eq!(persisted[field], projected[field]);
         }
         Ok(())
@@ -905,7 +1117,7 @@ pub(crate) mod tests {
     fn project_configuration_partial_updates_preserve_and_null_clears() -> anyhow::Result<()> {
         let root = tempdir()?;
         let initial = json!({"project_id":"project-1","name":"Project One","description":"Original",
-            "repo_url":"https://github.com/metric-space-ai/ctox","public_url":"https://ctox.dev",
+            "repo_url":"https://github.com/metric-space-ai/ctox","repository_url":"https://github.com/mkh-welsch/ctox-dev","public_url":"https://ctox.dev",
             "info":{"goal":"Keep this"},"jour_fixe":{"weekday":7,"time":"23:59","timezone":"UTC"},"archived":true});
         let first = handle_workjet_project_upsert_command(
             root.path(),
@@ -924,6 +1136,7 @@ pub(crate) mod tests {
         for field in [
             "description",
             "repo_url",
+            "repository_url",
             "public_url",
             "info",
             "jour_fixe",
@@ -935,12 +1148,13 @@ pub(crate) mod tests {
             root.path(),
             &command(
                 "ctox.workjet.project.upsert",
-                json!({"project_id":"project-1","name":"Renamed","repo_url":null,"public_url":null,"info":null,"jour_fixe":null,"archived":false}),
+                json!({"project_id":"project-1","name":"Renamed","repo_url":null,"repository_url":null,"public_url":null,"info":null,"jour_fixe":null,"archived":false}),
             ),
             "owner-1",
         )?;
         for field in [
             "repo_url",
+            "repository_url",
             "public_url",
             "info",
             "jour_fixe",
@@ -1025,7 +1239,7 @@ pub(crate) mod tests {
     fn project_configuration_cannot_edit_another_owners_project() -> anyhow::Result<()> {
         let root = tempdir()?;
         create_project(root.path())?;
-        let payload = json!({"project_id":"project-1","name":"Forged","jour_fixe":{"weekday":2,"time":"09:30"},"info":{"goal":"Replace"}});
+        let payload = json!({"project_id":"project-1","name":"Forged","repository_url":"https://github.com/foreign/repo","jour_fixe":{"weekday":2,"time":"09:30"},"info":{"goal":"Replace"}});
         let error = handle_workjet_project_upsert_command(
             root.path(),
             &command("ctox.workjet.project.upsert", payload),

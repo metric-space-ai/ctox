@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const file = new URL('../../customer-modules/outbound-lead-generation/import-preview-groups.js', import.meta.url);
 const api = await import('data:text/javascript;base64,' + Buffer.from(readFileSync(file, 'utf8')).toString('base64'));
-const { normalizeWzDivision, buildWzMapping, selectImportGroups } = api;
+const { normalizeWzDivision, buildWzMapping, selectImportGroups, finalizeImportAnalysis } = api;
 let passed = 0;
 function test(name, run) { run(); console.log('PASS ' + name); passed++; }
 const sheet = Object.freeze([
@@ -151,5 +151,16 @@ test('Selection is required for workbooks; prepared rows retain deduplication an
   assert.equal(over.validRows.length,5001); assert.equal(over.canProceed,false); assert.match(over.message,/5000/);
 });
 
-console.log(passed + ' import grouping regressions passed');
+test('A small file is preselected on its first preview; a catalog over the cap is not; an explicit choice is kept', () => {
+  const entry = (row, i) => ({ row, rowNumber: i + 2, problems: [], hints: [] });
+  const small = [company('a',''), company('b','20 Chemie')].map(entry);
+  const first = finalizeImportAnalysis(small, { sheets: {} }, undefined, true);
+  assert.equal(first.validRows.length, 2); assert.equal(first.canProceed, true);
+  assert.ok(first.groups.every((g) => g.selected));
+  const none = finalizeImportAnalysis(small, { sheets: {} }, [], true);
+  assert.equal(none.validRows.length, 0); assert.equal(none.canProceed, false);
+  const big = finalizeImportAnalysis(fixtures.map(entry), { sheets: { 'WZ-Code': sheet } }, undefined, true);
+  assert.equal(big.selectedCount, 0); assert.equal(big.canProceed, false);
+});
 
+console.log(passed + ' import grouping regressions passed');
