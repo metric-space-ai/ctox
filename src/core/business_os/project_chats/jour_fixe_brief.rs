@@ -380,7 +380,7 @@ fn prepare_with(
         "window":{"since_ms":since,"until_ms":meeting.scheduled_at_ms},
         "confirmed_goal_and_progress":goal,"project_context":section(Ok(json!({"name":project["name"],"info":project["info"]})),1200),
         "worker_results":workers,"kpis":kpis,
-        "github":github_with_operator_digest(fetch(repo,since),operator_digest,since,(super::super::store::now_ms() as i64))});
+        "github":github_with_operator_digest(fetch(repo,since),operator_digest,since,super::super::store::now_ms() as i64)});
     let raw = serde_json::to_string(&brief)?;
     ensure!(
         raw.len() <= MAX_BYTES,
