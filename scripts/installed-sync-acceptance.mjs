@@ -10,6 +10,11 @@ import { browserTransportSnapshot } from './installed-sync-browser-transport.mjs
 
 const OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb';
 const EXPECTED_SOURCE = 'b48220db385d53f07c8414c21f7ce22cdd8ff44d';
+const CURRENT_SOURCE = 'c7ff9ac3af415d7007b1a9fde57ba274e4ee7f65';
+const CURRENT_BINARY = '3d0034fbf94447bfd65e3a4b68d34788fa7ca81914c7eb32e67d53855192155b';
+export function approvedAcceptanceArtifact(source, binarySha256) {
+  return source === EXPECTED_SOURCE || (source === CURRENT_SOURCE && binarySha256 === CURRENT_BINARY);
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const invariant = (value, reason) => { if (!value) {
   const error = new Error(reason); error.name = 'InstalledCriterionError'; throw error;
@@ -56,7 +61,7 @@ const inside = (parent, child) => {
 export function validateConfig(config, configPath) {
   invariant(process.platform === 'linux', 'Acceptance faults require the isolated Linux host');
   invariant(config.owner === OWNER && config.isolated === true, 'Explicit isolated owner binding required');
-  invariant(config.source === EXPECTED_SOURCE, 'Use the one approved shared acceptance source');
+  invariant(approvedAcceptanceArtifact(config.source, config.binarySha256), 'Use an approved source and its pinned installed binary');
   invariant(typeof config.actorId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.actorId),
     'Fresh preparation must provide a canonical synthetic actor UUID');
   const base = realpathSync(config.acceptanceBase);

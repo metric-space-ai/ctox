@@ -148,3 +148,28 @@ credentials and URL errors are excluded. Interrupted waits stop before another f
 Include installed revisions, host identity,
 steps, measured values, criterion and artifact references. A syntactically valid
 runner or successful unit test is never evidence that a goal was reached.
+
+## Current installed baseline recheck (12 October 2026)
+
+The approved additional baseline is WELSCH's actually loaded
+c7ff9ac3af415d7007b1a9fde57ba274e4ee7f65, binary SHA256
+3d0034fbf94447bfd65e3a4b68d34788fa7ca81914c7eb32e67d53855192155b.
+Use --source explicitly; the original b48220 default remains available for
+historical reproduction. Preparation accepts its published-release manifest
+only with the pinned archive and binary hashes. It records the real version
+string native-main-d33500fb4585-2452-gc7ff9ac3a and the separate published
+provenance sidecar; neither is relabeled as an embedded DevOps producer receipt.
+
+For goal 5 use the host runner's --sync-only mode. It exercises the same
+three-round fault criterion and retains the same cleanup and source guards.
+Goal 23's signed-shell rollback remains separately callable; it is not an
+additional prerequisite for a goal-5 measurement.
+
+scripts/devops-sync-current-recheck.sh is the bounded operator entrypoint for
+the 12 October recheck. Execute it through gpu-build-run.sh --jobs 2 wrapped
+in greppy bash-smart on the Mac. The remote host does not have greppy on its
+PATH; the outer wrapper retains the complete GPU log and exit code. This
+operator script downloads a published build for isolated installation, not
+a product runtime dependency, and builds no native artifact. Its package and
+publication evidence remain in the owned acceptance directory. The browser
+unit is bounded to 1200 seconds and stops owned native/browser groups.

@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticScalars, documentAudit, logExcerpt } from './installed-sync-acceptance.mjs';
+import { approvedAcceptanceArtifact, diagnosticScalars, documentAudit, logExcerpt } from './installed-sync-acceptance.mjs';
+
+test('current acceptance source requires its installed binary; arbitrary sources stay rejected', () => {
+  const source = 'c7ff9ac3af415d7007b1a9fde57ba274e4ee7f65';
+  const binary = '3d0034fbf94447bfd65e3a4b68d34788fa7ca81914c7eb32e67d53855192155b';
+  assert.equal(approvedAcceptanceArtifact(source, binary), true);
+  assert.equal(approvedAcceptanceArtifact(source, '0'.repeat(64)), false);
+  assert.equal(approvedAcceptanceArtifact('0'.repeat(40), binary), false);
+});
 
 test('failure telemetry retains diagnostic counts without exporting authority or records', () => {
   const secret = 'DO_NOT_EXPORT_THIS_AUTHORITY';

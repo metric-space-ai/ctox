@@ -8,8 +8,9 @@ import { createHash } from 'node:crypto';
 import { validateConfig, measureShellRollback, runAcceptance, stopOwnedAcceptance } from './installed-sync-acceptance.mjs';
 
 const [configPath, playwrightRoot, mode] = process.argv.slice(2);
-if (mode && mode !== '--check-browser') throw new Error('Unknown runner mode');
+if (mode && !['--check-browser', '--sync-only'].includes(mode)) throw new Error('Unknown runner mode');
 const browserCheckOnly = mode === '--check-browser';
+const syncOnly = mode === '--sync-only';
 if (!configPath || !playwrightRoot || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw new Error('Use the admitted GPU launcher with private config and the verified shared Playwright1.60.0/Chromium cache');
 process.umask(0o077); // All browser/profile/native child outputs remain owner-private.
@@ -52,7 +53,7 @@ process.once('SIGTERM', () => { receipt.interrupted = true; save(); void stop();
 save();
 try {
   // The startup diagnostic never starts native or contacts a tenant.
-  if (!browserCheckOnly) {
+  if (!browserCheckOnly && !syncOnly) {
     receipt.phase = 'component-rollback'; save();
     receipt.rollback = await measureShellRollback(configPath); save();
     if (!receipt.rollback.componentRollbackPassed) throw new Error('Component baseline was not restored; no browser faults allowed');
@@ -108,7 +109,7 @@ try {
   } else {
     receipt.phase = 'sync-measurement'; save();
     receipt.measurements = await runAcceptance(browser, configPath);
-    receipt.pass = receipt.rollback.componentRollbackPassed && receipt.measurements.goals.every(row => row.pass);
+    receipt.pass = (syncOnly || receipt.rollback.componentRollbackPassed) && receipt.measurements.goals.every(row => row.pass);
   }
 } catch (error) {
   receipt.failure = { name: error.name, message: 'Installed runner failed; native credentials and browser endpoint suppressed' };
