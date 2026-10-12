@@ -68,6 +68,7 @@ tmp_intersolar_*.js
 # the build (include_str!), CI contract scripts, and the release gate.
 /docs/*
 !/docs/domain-effect-recovery.md
+!/docs/workjet-exit-model.md
 !/docs/dev/
 /docs/dev/*
 !/docs/dev/REFACTORING-SYNC-PERFORMANCE-PLAN.md

@@ -2289,6 +2289,14 @@ fn create_ai_request_with_supervisor_turn(
     // Only the authenticated native Supervisor adapter supplies this provenance.
     // A generic Threads request cannot copy it from a caller-controlled payload.
     if let Some(supervisor_turn) = supervisor_turn {
+        if let Some(operation) = supervisor_turn["submit_command_id"].as_str() {
+            super::project_chats::jour_fixe_brief::attach(
+                root,
+                operation,
+                &thread_id,
+                &ai_command_id,
+            )?;
+        }
         ai_command["payload"]["supervisor_turn"] = supervisor_turn;
     }
     let accepted = store::accept_rxdb_business_command_with_origin(
