@@ -256,6 +256,19 @@ mod tests {
         let first = cli(root.path(), &put, &mut input)?;
         assert_eq!(first["digest"], example());
         assert_eq!(first["collector"], "ctox_operator_cli");
+        let main_args = [
+            "jour-fixe",
+            "repo-digest",
+            "show",
+            "--project-id",
+            "project",
+        ]
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>();
+        assert!(crate::skips_cli_startup_db(&main_args));
+        assert!(crate::skips_cli_turn_ledger(&main_args));
+        crate::dispatch_command(root.path(), &main_args)?;
         assert_eq!(
             cli(
                 root.path(),
