@@ -616,6 +616,7 @@ struct PeerSendQueue {
     queued_bytes: usize,
     schedule_cursor: usize,
     consecutive_browser_live: usize,
+    consecutive_command_responses: usize,
 }
 
 impl PeerSendQueue {
@@ -676,13 +677,34 @@ impl PeerSendQueue {
     /// channel would make their ACK/retry lifecycles contend. This mirrors the
     /// browser transport's `drainHighPriorityInlineFrames` behavior.
     fn pop_high_priority_inline(&mut self) -> Option<QueuedSend> {
+        let eligible = |item: &QueuedSend| item.text.len() <= MAX_INLINE_FRAME_BYTES;
         let index = self
             .high
             .iter()
-            .position(|item| item.text.len() <= MAX_INLINE_FRAME_BYTES)?;
+            .position(|item| {
+                eligible(item)
+                    && item.collection.as_deref() == Some(CTOX_BROWSER_INPUT_RESPONSE_COLLECTION)
+            })
+            .or_else(|| self.preferred_command_response_index(eligible))
+            .or_else(|| self.high.iter().position(eligible))?;
         let item = self.high.remove(index)?;
+        self.record_command_response_turn(&item);
         self.queued_bytes = self.queued_bytes.saturating_sub(item.text.len());
         Some(item)
+    }
+
+    fn preferred_command_response_index(
+        &self,
+        eligible: impl Fn(&QueuedSend) -> bool,
+    ) -> Option<usize> {
+        self.high.iter().position(|item| {
+            eligible(item)
+                && inline_command_response(item) == (self.consecutive_command_responses == 0)
+        })
+    }
+
+    fn record_command_response_turn(&mut self, item: &QueuedSend) {
+        self.consecutive_command_responses = if inline_command_response(item) { 1 } else { 0 };
     }
 
     fn pop_high_fair(&mut self) -> Option<QueuedSend> {
@@ -698,7 +720,15 @@ impl PeerSendQueue {
         let front_is_browser_live = self.high.front().is_some_and(|item| {
             item.collection.as_deref() == Some(CTOX_BROWSER_LIVE_RESPONSE_COLLECTION)
         });
-        let item = if front_is_browser_live && self.consecutive_browser_live > 0 {
+        let item = if !front_is_browser_live {
+            // All master responses are High. A cold collection snapshot can
+            // therefore fill this same bucket ahead of a completed command.
+            // Admit one small command response, then one other High frame;
+            // retain FIFO among command responses and the weighted lower lanes.
+            self.preferred_command_response_index(|_| true)
+                .and_then(|index| self.high.remove(index))
+                .or_else(|| self.high.pop_front())
+        } else if self.consecutive_browser_live > 0 {
             self.high
                 .iter()
                 .position(|item| {
@@ -715,6 +745,9 @@ impl PeerSendQueue {
             self.consecutive_browser_live = self.consecutive_browser_live.saturating_add(1);
         } else if item.is_some() {
             self.consecutive_browser_live = 0;
+        }
+        if let Some(item) = item.as_ref() {
+            self.record_command_response_turn(item);
         }
         item
     }
@@ -737,6 +770,14 @@ impl PeerSendQueue {
             self.push(item);
         }
     }
+}
+
+fn inline_command_response(item: &QueuedSend) -> bool {
+    item.intrinsic_high
+        && item.collection.as_deref().is_some_and(|collection| {
+            crate::collection_policy::collection_policy().prioritizes_inline_response(collection)
+        })
+        && item.text.len() <= MAX_INLINE_FRAME_BYTES
 }
 
 /// Cancellation guard for `drain_send_queue`: if the draining task is aborted
@@ -3126,6 +3167,8 @@ impl WebRTCRsConnectionHandler {
                 continue;
             }
             let transfer_guard = QueuedTransferGuard::new(&reset_guard.in_flight);
+            let command_probes = command_send_timing_probes(&item.text);
+            let queued_at_ms = item.queued_at_ms;
             self.refresh_send_queue_status();
             self.record_status(|status| {
                 status.sent_scheduled_frames = status.sent_scheduled_frames.saturating_add(1);
@@ -3158,6 +3201,9 @@ impl WebRTCRsConnectionHandler {
                 })
                 .await
             };
+            if result.is_ok() {
+                record_command_send_timing(&command_probes, queued_at_ms);
+            }
             let _ = item.result.send(result);
             drop(transfer_guard);
             // Let a sender consume its receipt before starting somebody else's
@@ -3473,6 +3519,7 @@ impl WebRTCRsConnectionHandler {
                 status.sent_scheduled_frames = status.sent_scheduled_frames.saturating_add(1);
                 status.last_send_priority = SendPriority::High.as_str();
             });
+            let command_probes = command_send_timing_probes(&item.text);
             let send_result = send_while_owned(&mut item.result, async {
                 wait_under_publication(
                     item.publication.as_ref(),
@@ -3500,6 +3547,9 @@ impl WebRTCRsConnectionHandler {
             } else {
                 send_result.as_ref().err().map(|error| error.to_string())
             };
+            if send_result.is_ok() {
+                record_command_send_timing(&command_probes, item.queued_at_ms);
+            }
             let _ = item.result.send(send_result);
             if let Some(message) = failure {
                 return Err(new_rx_error(
@@ -4776,6 +4826,58 @@ fn classify_send_frame(frame: &WebRTCWireFrame, text: &str) -> SendFrameClass {
                 oversized_write,
             }
         }
+    }
+}
+
+// Explicit timing probes only: no command payloads, actor credentials or
+// unrequested production documents are logged. Send completion means the
+// native DataChannel accepted this message, not that the browser observed it.
+fn command_send_timing_probes(text: &str) -> Vec<(String, i64, i64)> {
+    if !text.contains("command_timing") {
+        return Vec::new();
+    }
+    let Ok(response) = serde_json::from_str::<WebRTCResponse>(text) else {
+        return Vec::new();
+    };
+    if !response.collection.as_deref().is_some_and(|collection| {
+        crate::collection_policy::collection_policy().prioritizes_inline_response(collection)
+    }) {
+        return Vec::new();
+    }
+    response
+        .result
+        .get("documents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|doc| {
+            let timing = doc.pointer("/result/command_timing")?;
+            Some((
+                doc.get("command_id")
+                    .or_else(|| doc.get("id"))?
+                    .as_str()?
+                    .chars()
+                    .take(120)
+                    .collect(),
+                timing.get("native_handler_completed")?.as_i64()?,
+                timing.get("native_rxdb_projection_committed")?.as_i64()?,
+            ))
+        })
+        .collect()
+}
+
+fn record_command_send_timing(probes: &[(String, i64, i64)], queued_at_ms: u64) {
+    for (id, completed_ms, committed_ms) in probes {
+        eprintln!(
+            "command_native_send_sample={}",
+            serde_json::json!({
+                "command_id": id,
+                "native_handler_completed_ms": completed_ms,
+                "native_rxdb_projection_committed_ms": committed_ms,
+                "native_send_queued_ms": queued_at_ms,
+                "native_send_completed_ms": now_ms(),
+            })
+        );
     }
 }
 
@@ -7258,6 +7360,101 @@ mod tests {
         );
         let next = queue.pop_next().expect("waiting sync response");
         assert_eq!(next.collection.as_deref(), Some("business_commands"));
+    }
+
+    #[test]
+    fn command_responses_overtake_snapshot_backlog_with_bounded_fairness() {
+        let mut queue = PeerSendQueue::default();
+        let make = |collection: &str, text: String| {
+            let (tx, _rx) = tokio::sync::oneshot::channel();
+            QueuedSend {
+                text,
+                priority: SendPriority::High,
+                collection: Some(collection.to_owned()),
+                intrinsic_high: true,
+                oversized_write: false,
+                queued_at_ms: now_ms(),
+                publication: None,
+                result: tx,
+            }
+        };
+        for index in 0..64 {
+            queue.push(make("snapshot", format!("snapshot-{index}")));
+        }
+        queue.push(make("business_commands", "receipt-1".into()));
+        queue.push(make("business_commands", "receipt-2".into()));
+        queue.push(make(
+            "business_commands",
+            "x".repeat(MAX_INLINE_FRAME_BYTES + 1),
+        ));
+        assert_eq!(queue.pop_next().unwrap().text, "receipt-1");
+        assert_eq!(queue.pop_next().unwrap().text, "snapshot-0");
+        assert_eq!(queue.pop_next().unwrap().text, "receipt-2");
+        assert_eq!(queue.pop_next().unwrap().text, "snapshot-1");
+        assert_eq!(queue.high.len(), 63);
+        // A large result remains an ordinary framed transfer; it cannot nest
+        // its own ACK state machine inside another transfer.
+        let next = queue.pop_high_priority_inline().unwrap();
+        assert_eq!(next.text, "snapshot-2");
+    }
+
+    #[test]
+    fn command_response_preempts_small_snapshot_frames_between_chunk_windows() {
+        let mut queue = PeerSendQueue::default();
+        for collection in [
+            "snapshot-1",
+            "snapshot-2",
+            "business_commands",
+            "business_commands",
+        ] {
+            let (tx, _rx) = tokio::sync::oneshot::channel();
+            queue.push(QueuedSend {
+                text: "{}".into(),
+                priority: SendPriority::High,
+                collection: Some(collection.into()),
+                intrinsic_high: true,
+                oversized_write: false,
+                queued_at_ms: now_ms(),
+                publication: None,
+                result: tx,
+            });
+        }
+        for expected in [
+            "business_commands",
+            "snapshot-1",
+            "business_commands",
+            "snapshot-2",
+        ] {
+            assert_eq!(
+                queue
+                    .pop_high_priority_inline()
+                    .unwrap()
+                    .collection
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        assert_eq!(queue.queued_bytes, 0);
+    }
+
+    #[test]
+    fn command_send_probe_logs_only_requested_command_marks() {
+        let response = WebRTCResponse {
+            id: "masterChangeStream$:business_commands".into(),
+            collection: Some("business_commands".into()),
+            error: None,
+            result: serde_json::json!({"documents": [{"command_id": "probe", "result": {
+                "command_timing": {"native_handler_completed": 10, "native_rxdb_projection_committed": 11},
+                "payload": "never logged"
+            }}, {"command_id": "ordinary", "result": {"ok": true}}]}),
+        };
+        assert_eq!(
+            command_send_timing_probes(&serde_json::to_string(&response).unwrap()),
+            vec![("probe".into(), 10, 11)]
+        );
+        let mut foreign = response;
+        foreign.collection = Some("other".into());
+        assert!(command_send_timing_probes(&serde_json::to_string(&foreign).unwrap()).is_empty());
     }
 
     #[test]

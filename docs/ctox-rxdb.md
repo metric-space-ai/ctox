@@ -253,6 +253,26 @@ atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
 the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
+### Native command return scheduling
+
+Native command receipts share the single ACK-safe transport drainer with
+replication. The collection policy declares `business_commands` as eligible
+for inline response priority. One small command response may overtake older
+High-priority snapshot responses, followed by one other High frame; command
+FIFO and the existing weighted Normal/Low turns remain. The same bounded
+selection applies between chunk windows. Large command results still use the
+ordinary framed-transfer path. Policy filtering and publication fences apply
+before and during sending as before.
+
+Explicit command timing probes log only command ID and native completion,
+projection, queue-entry and DataChannel-send completion timestamps. A completed
+send is local transport acceptance, not browser observation; correlate it with
+the browser terminal mark. The canonical outbox polls at its one-second active
+cadence while idle, with its former roughly thirty-minute invariant sweep.
+Control commands also publish their first projection synchronously before
+canonical completion, so outbox polling alone does not explain their return
+latency. Neither these bounds nor an isolated smoke certifies WELSCH latency.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one
