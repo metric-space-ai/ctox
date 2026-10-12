@@ -8518,3 +8518,54 @@ fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn founder_reply_stops_answering_the_mail_once_a_review_reopens_it() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE communication_routing_state (message_key TEXT PRIMARY KEY, route_status TEXT NOT NULL, updated_at TEXT);
+         CREATE TABLE communication_founder_reply_reviews (inbound_message_key TEXT, sent_at TEXT, send_result_json TEXT);",
+    )
+    .unwrap();
+    let key = "email:lena@example.test::inbox::1";
+    let route = |status: &str, at: &str| {
+        conn.execute(
+            "INSERT INTO communication_routing_state VALUES (?1, ?2, ?3)
+             ON CONFLICT(message_key) DO UPDATE SET route_status = excluded.route_status, updated_at = excluded.updated_at",
+            params![key, status, at],
+        )
+        .unwrap();
+    };
+    route("leased", "2026-10-11T10:32:00Z");
+    assert!(!founder_reply_sent_after_review(&conn, key).unwrap());
+    conn.execute(
+        "INSERT INTO communication_founder_reply_reviews VALUES (?1, '2026-10-11T10:40:48Z', '{\"ok\":true}')",
+        params![key],
+    )
+    .unwrap();
+    route("handled", "2026-10-11T10:40:50Z");
+    assert!(founder_reply_sent_after_review(&conn, key).unwrap());
+    // A review that fails the correction reopens the mail after the send.
+    route("review_rework", "2026-10-11T13:12:15.586696300+00:00");
+    assert!(!founder_reply_sent_after_review(&conn, key).unwrap());
+    // A stale rework older than the send does not.
+    route("review_rework", "2026-10-11T10:39:00Z");
+    assert!(founder_reply_sent_after_review(&conn, key).unwrap());
+    // Neither a plain return to pending nor a failed route after a correct
+    // send can cause a second reply.
+    route("pending", "2026-10-11T13:00:00Z");
+    assert!(founder_reply_sent_after_review(&conn, key).unwrap());
+    route("failed", "2026-10-11T13:00:00Z");
+    assert!(founder_reply_sent_after_review(&conn, key).unwrap());
+    route("review_rework", "2026-10-11T13:12:15Z");
+    assert!(founder_reply_reopened_by_review(&conn, key).unwrap());
+    // The corrected reply answers it again.
+    route("review_rework", "2026-10-11T13:12:15Z");
+    conn.execute(
+        "INSERT INTO communication_founder_reply_reviews VALUES (?1, '2026-10-11T13:40:00Z', '{\"ok\":true}')",
+        params![key],
+    )
+    .unwrap();
+    assert!(founder_reply_sent_after_review(&conn, key).unwrap());
+    assert!(!founder_reply_reopened_by_review(&conn, key).unwrap());
+}

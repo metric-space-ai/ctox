@@ -1,50 +1,42 @@
-# Native Jour fixe narration
+# Native Jour fixe deck narration
 
-A current, leased, registered project Supervisor uses the existing
-`business_os.jour_fixe_update` tool with `action: narrate` and a generated
-`NarrateRequest`. The request supplies operation, meeting and slide IDs, deck and
-meeting revisions, and the SHA256 of the stored slide body. The native meeting read supplies eligible slide inputs and exact hashes, so the model does not have to calculate or guess a cryptographic hash. Owner, model, voice,
-text, audio, credentials and provider attestations cannot be supplied by the
-caller. The authenticated project/lease boundary remains the same as the existing
-JourFix read, draft-deck and todo-proposal tools.
+A signed Supervisor `prepare_deck` publication (including presentation
+`publish_deck`) commits a native narration outbox row in the same Policy
+transaction as the deck and publication receipt. The agent publishes its
+presentation; it no longer calls `narrate` once per slide.
 
-The native handler authorizes and reserves a single operation for that slide and
-deck. It drops both Core and Policy writer transactions before invoking the
-configured `SpeechGateway::synthesize_verified_async` on the existing MCP runtime,
-with a 90-second timeout, WAV output and no fallback or voice override. A slide
-body is bounded to 4096 UTF-8 bytes; output is bounded to 8 MiB and five minutes.
-The producer's branded result binds actual text and audio hashes, run and model.
-The physical WAV frames determine duration.
+One file-locked native producer per state root processes one bounded deck at
+a time. Publication kicks the producer immediately. The existing daemon
+router timer resumes queued/running jobs before its workload early returns,
+so closing Workjet or ending the Supervisor lease does not suppress speech.
+No speech request runs inside a writer transaction or a Supervisor turn.
 
-Before committing, the native handler revalidates the current leased Supervisor,
-Owner, project, file policies, deck, slide text and meeting revision. An immutable
-native `desktop_files` record and base64 chunks, the slide `AudioRef`, meeting
-revision and stable operation receipt commit together in the Policy database.
-Only a deck whose every slide has audio enters `ready`. The Core transaction
-fences lease changes; this is not a claim of a cross-database atomic commit.
-The existing RxDB projection transports file bytes; no HTTP business-data bridge
-is introduced. A projection failure replays the committed custody receipt without
-another speech request.
+Each slide is read from the current native `narration_input`. Its exact stored
+text is synthesized through the existing configured native speech gateway;
+the existing narration path freezes WAV files/chunks, hashes and provenance
+and sets the meeting to `ready` only when every slide retains audio.
 
-Known pre-provider configuration/credential/voice failures may retry the same
-intent at most three times. A timeout, transport error, uncertain producer result,
-invalid output or authority change after synthesis never automatically repeats
-synthesis. A different operation ID cannot bypass the one-operation-per-slide
-reservation. Replacing a deck is an explicit new revision; an old operation cannot
-publish into that revision. This prevents duplicate charges and stale audio.
+The publication captures canonical Owner, project, Supervisor and actor epoch.
+Fresh active actor, project ownership/binding, epoch and file-policy checks
+still run before synthesis and before the audio commit. A new deck revision
+invalidates the old job. This private native authority is not a caller-supplied
+MCP context and grants no extra tool or collection access.
 
-T-2h preparation remains the existing per-project calendar schedule and durable
-registered Supervisor turn. The embedded JourFix skill first reads the bounded
-KPI evidence, drafts slides, narrates each saved slide sequentially using current
-revisions, and reads the committed meeting before reporting readiness. Owner start,
-close and three-revision todo confirmation retain their existing native policy.
-The configured gateway and voice must be installed and accepted before the real
-Monday 12 October, 11:00 Europe/Berlin preparation run. A local Owner-uploaded WAV
-is a separate provenance and cannot stand in for provider narration.
+Native operation IDs are stable per meeting/deck/slide. Existing slide
+operations keep their IDs and retry budgets. Completed audio is retained;
+uncertain/reserved operations are never resynthesized automatically. A failure
+keeps the meeting preparing and blocks the outbox with a bounded diagnostic.
+After correcting a prerequisite, replay the original publication operation
+and request: the same publication receipt requeues the blocked deck, and the
+existing native narration path permits only safe failed attempts below its
+three-attempt limit. A daemon restart resumes an interrupted job but does not
+infer that a potentially in-flight provider request failed.
 
-The producer seam is test-only. Regression fixtures prove custody, revisions,
-policy/lease revocation during an unlocked synthesis, stable replay, bounded retry,
-uncertain-result suppression and rollback. They do not prove installed voice
-configuration, playable production speech, provider latency or the real calendar
-run. Those checks run after merge on the installed stack through the existing
-writer and Models owner.
+The six-slide regression publishes through the real meeting tool, expires the
+Supervisor lease, then drives native production with a verified WAV fixture.
+It checks six immutable audio records, ready state and replay without another
+producer call. Other regressions cover same-operation retry after missing
+voice, Owner revocation and uncertain provider results.
+
+WELSCH installation and real meeting/audio acceptance are performed by the
+Supervisor after merge. Unit results alone do not certify that acceptance.

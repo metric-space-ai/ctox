@@ -233,7 +233,7 @@ Emit one entry per finding under the `CATEGORIZED_FINDINGS:` block as a single l
 
 Return FAIL when any of these are true:
 
-- active vision or active mission is missing for strategic or owner-visible work
+- active vision or active mission is missing for strategic or launch work (a direct reply to an owner, founder or admin mail takes its direction from that mail and needs neither)
 - internal instruction text is visible
 - planning or operator text is visible
 - admin or backoffice surfaces leak into the buyer flow

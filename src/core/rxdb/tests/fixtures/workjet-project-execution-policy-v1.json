@@ -1,0 +1,153 @@
+{
+  "schema": "ctox.workjet.project_execution_policy.v1",
+  "contract_version": 1,
+  "types": {
+    "ProjectExecutionPolicyMode": {
+      "enum": [
+        "default",
+        "autonomous_worktree"
+      ]
+    },
+    "ProjectExecutionPolicySchema": {
+      "enum": [
+        "ctox.workjet.project_execution_policy.v1"
+      ]
+    },
+    "ProjectExecutionPolicyUpdate": {
+      "fields": {
+        "schema": {
+          "type": "ProjectExecutionPolicySchema"
+        },
+        "mode": {
+          "type": "ProjectExecutionPolicyMode"
+        },
+        "expected_revision": {
+          "type": "u64",
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "ProjectExecutionPolicy": {
+      "fields": {
+        "schema": {
+          "type": "ProjectExecutionPolicySchema"
+        },
+        "mode": {
+          "type": "ProjectExecutionPolicyMode"
+        },
+        "revision": {
+          "type": "u64",
+          "maximum": 9007199254740991
+        }
+      }
+    }
+  },
+  "commands": {
+    "ctox.workjet.project.upsert": "execution_policy: Owner intent only; omitted preserves. A typed default-mode CAS patch revokes opt-in. Null is rejected because it carries no expected_revision. Never grants tools/paths/host access."
+  },
+  "valid_cases": [
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "autonomous_worktree",
+        "expected_revision": 0
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "default",
+        "expected_revision": 1
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicy",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "default",
+        "revision": 0
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicy",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "autonomous_worktree",
+        "revision": 4
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": null
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "full-access",
+        "expected_revision": 0
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "wrong",
+        "mode": "default",
+        "expected_revision": 0
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "autonomous_worktree"
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "autonomous_worktree",
+        "expected_revision": -1
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicyUpdate",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "autonomous_worktree",
+        "expected_revision": 0,
+        "workspace_root": "/"
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicy",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "default",
+        "revision": 9007199254740992
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicy",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "default",
+        "revision": 0,
+        "granted": true
+      }
+    },
+    {
+      "type": "ProjectExecutionPolicy",
+      "value": {
+        "schema": "ctox.workjet.project_execution_policy.v1",
+        "mode": "default",
+        "revision": 0.5
+      }
+    }
+  ]
+}

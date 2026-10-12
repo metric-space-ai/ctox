@@ -165,12 +165,40 @@ pub(super) fn current_project(
     project: &str,
     thread: &str,
 ) -> anyhow::Result<i64> {
+    current_project_with_team_binding(policy, context, project, thread, None)
+}
+pub(super) fn current_project_with_team_binding(
+    policy: &Connection,
+    context: &McpChannelRequestContext,
+    project: &str,
+    thread: &str,
+    parent: Option<
+        &super::super::project_chats::persistent_worker_binding::PersistentWorkerBinding,
+    >,
+) -> anyhow::Result<i64> {
     let (role, epoch) = remote_worker::current_actor(policy, context)?;
     anyhow::ensure!(
         context.trusted_role.as_deref() == Some(role.as_str()),
         "dispatch role changed"
     );
     super::super::project_chats::owned_project(policy, project, &context.actor, true)?;
+    let parent = parent
+        .map(|expected| {
+            super::super::project_chats::persistent_worker_binding::require_active(
+                policy,
+                &context.actor,
+                project,
+                thread,
+                expected,
+            )
+        })
+        .transpose()?;
+    // Root identity verifies affiliation only. The consumer retains the actual
+    // calling worker UUID plus this exact revision-bound native reference.
+    let thread = parent
+        .as_ref()
+        .map(|binding| binding.supervisor_thread_id.as_str())
+        .unwrap_or(thread);
     let binding = super::super::project_chats::supervisor_binding::for_thread(
         policy,
         &context.actor,
@@ -1161,6 +1189,9 @@ pub(super) fn meeting_test_fixture() -> anyhow::Result<(tempfile::TempDir, Value
     Ok((root, trusted))
 }
 
+#[cfg(test)]
+#[path = "mcp_parent_team_admission_tests.rs"]
+mod parent_team_admission_tests;
 #[cfg(test)]
 #[path = "mcp_workjet_worker_dispatch_tests.rs"]
 mod tests;
