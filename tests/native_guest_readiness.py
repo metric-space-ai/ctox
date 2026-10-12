@@ -229,6 +229,7 @@ def run(args):
                              lambda *_: (_ for _ in ()).throw(InterruptedError("terminated")))
     try:
         require(digest(args.base) == args.base_sha256, "full base SHA256 mismatch")
+        receipt["base_hash_seconds"] = round(time.monotonic() - started, 3)
         receipt["steps"].append("full immutable RAW SHA256 verified")
         with tempfile.TemporaryDirectory(prefix="g19-", dir=args.work_parent) as temp:
             root = Path(temp)
@@ -264,6 +265,7 @@ def run(args):
                             require(monitor.call("query-status")["running"] is False,
                                     "QEMU did not start paused")
                             monitor.call("cont")
+                            boot_started = time.monotonic()
                             send(gs, {"kind": "probe", "id": 1}, deadline)
                             endpoint = reply(gs, "endpoint", 1, deadline)
                             require(endpoint["guest_id"] == guest_id, "guest assignment mismatch")
@@ -271,6 +273,7 @@ def run(args):
                             require(isinstance(session, str) and str(uuid.UUID(session)) == session,
                                     "guest service session is not canonical UUID")
                             receipt["ready_seconds"] = round(time.monotonic() - started, 3)
+                            receipt["guest_boot_seconds"] = round(time.monotonic() - boot_started, 3)
                             receipt["service_session_id"] = session
                             receipt["guest_id"] = guest_id
                             send(gs, {"kind": "observe_session", "id": 2, "session_id": session}, deadline)
