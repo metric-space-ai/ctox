@@ -2,6 +2,132 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+async fn route_preserves_only_received_upstream_http_status_and_stage() {
+    for (stage, status) in [
+        (UpstreamStage::Catalog, 401),
+        (UpstreamStage::Catalog, 404),
+        (UpstreamStage::Inference, 403),
+        (UpstreamStage::Inference, 404),
+        (UpstreamStage::Inference, 426),
+        (UpstreamStage::Inference, 429),
+        (UpstreamStage::Inference, 502),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        save_bundle(root.path(), &bundle()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        test_endpoint(
+            root.path(),
+            Some(format!("http://{}", listener.local_addr().unwrap())),
+        );
+        let server = tokio::spawn(async move {
+            let requests = if stage == UpstreamStage::Catalog {
+                1
+            } else {
+                2
+            };
+            for index in 0..requests {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 8192];
+                let read = socket.read(&mut data).await.unwrap();
+                assert!(data[..read].starts_with(if index == 0 {
+                    b"GET /models".as_slice()
+                } else {
+                    b"POST /responses".as_slice()
+                }));
+                let (code, body) = if index + 1 < requests {
+                    (
+                        200,
+                        serde_json::json!({"data":[{"id":"grok-4.7"}]}).to_string(),
+                    )
+                } else {
+                    (status, "private-upstream-body-token-and-url".to_owned())
+                };
+                socket.write_all(format!("HTTP/1.1 {code} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let response = handle_route(root.path(), br#"{"model":"grok-4.7","input":"Hi"}"#).await;
+        server.await.unwrap();
+        test_endpoint(root.path(), None);
+        let ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesRouteResponse::Buffered(response) = response else { panic!("buffered native response required") };
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            route_rejection(response.status(), response.body()),
+            Some(UpstreamHttpRejection { status, stage })
+        );
+        assert!(!String::from_utf8_lossy(response.body()).contains("private-"));
+        assert!(route_rejection(200, response.body()).is_none());
+    }
+}
+
+#[tokio::test]
+async fn local_transport_and_body_failures_have_no_upstream_rejection() {
+    let missing = tempfile::tempdir().unwrap();
+    let response = handle_route(missing.path(), br#"{"model":"grok-4.7","input":"Hi"}"#).await;
+    let ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesRouteResponse::Buffered(response) = response else { panic!("buffered native response required") };
+    assert_eq!(response.status(), 502);
+    assert!(route_rejection(response.status(), response.body()).is_none());
+
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    test_endpoint(
+        root.path(),
+        Some(format!("http://{}", listener.local_addr().unwrap())),
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut data = [0; 8192];
+        let _ = socket.read(&mut data).await.unwrap();
+        // An incomplete success body is a read failure, not a provider denial.
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}")
+            .await
+            .unwrap();
+    });
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        handle_route(root.path(), br#"{"model":"grok-4.7","input":"Hi"}"#),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    test_endpoint(root.path(), None);
+    let ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesRouteResponse::Buffered(response) = response else { panic!("buffered native response required") };
+    assert_eq!(response.status(), 502);
+    assert!(route_rejection(response.status(), response.body()).is_none());
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut data = [0; 8192];
+        let _ = socket.read(&mut data).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlong")
+            .await
+            .unwrap();
+    });
+    let response = native_http::Client::new().get(url).send().await.unwrap();
+    let error = bounded_response(response, 3, UpstreamStage::Catalog)
+        .await
+        .unwrap_err();
+    assert!(error.downcast_ref::<UpstreamHttpRejection>().is_none());
+    server.await.unwrap();
+}
+
+#[test]
+fn arbitrary_gateway_errors_cannot_claim_upstream_provenance() {
+    for body in [
+        br#"{"error":{"message":"401 Unauthorized"}}"#.as_slice(),
+        br#"{"error":{"type":"grok_upstream_http_error","upstream":{"status":401,"stage":"catalog"}}}"#,
+        br#"{"error":{"type":"grok_upstream_http_error","upstream":{"status":502,"stage":"unknown"}}}"#,
+    ] {
+        assert!(route_rejection(502, body).is_none());
+    }
+    assert!(route_rejection(502, b"invalid JSON").is_none());
+}
+
+#[tokio::test]
 async fn retired_creator_cancels_without_poll_and_never_commits() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let root = tempfile::tempdir().unwrap();

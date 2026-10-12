@@ -575,7 +575,8 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
             request = request.header(&key, value);
         }
     }
-    let bytes = bounded_response(request.send().await?, 1024 * 1024).await?;
+    let bytes =
+        bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await?;
     anyhow::ensure!(
         credential_binding(root)? == catalog_binding,
         "Grok credential changed during discovery"
@@ -605,7 +606,7 @@ pub async fn handle_route(root: &Path, body: &[u8]) -> ctox_cliproxyapi::sdk::ap
         } else {
             Response::json(200, data)
         }),
-        Err(_) => Route::Buffered(Response::error(502, "Grok subscription request failed")),
+        Err(error) => Route::Buffered(route_failure(&error)),
     }
 }
 async fn execute_route(root: &Path, body: &[u8]) -> anyhow::Result<(bool, Vec<u8>)> {
@@ -652,7 +653,12 @@ async fn execute_route_at(
             catalog_request = catalog_request.header(key, value);
         }
     }
-    let catalog = bounded_response(catalog_request.send().await?, 1024 * 1024).await?;
+    let catalog = bounded_response(
+        catalog_request.send().await?,
+        1024 * 1024,
+        UpstreamStage::Catalog,
+    )
+    .await?;
     let catalog: serde_json::Value = serde_json::from_slice(&catalog)?;
     anyhow::ensure!(
         catalog
@@ -692,7 +698,12 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let data = bounded_response(
+        upstream.send().await?,
+        32 * 1024 * 1024,
+        UpstreamStage::Inference,
+    )
+    .await?;
     let data = if stream {
         data
     } else {
@@ -718,14 +729,82 @@ fn completed_response(body: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
     anyhow::bail!("Grok response did not complete")
 }
+/// Created only after an actual HTTP response, never for credential loading,
+/// request construction, transport, body-limit or response decoding failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UpstreamStage {
+    Catalog,
+    Inference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpstreamHttpRejection {
+    pub(crate) status: u16,
+    pub(crate) stage: UpstreamStage,
+}
+
+impl std::fmt::Display for UpstreamHttpRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stage = match self.stage {
+            UpstreamStage::Catalog => "catalog",
+            UpstreamStage::Inference => "inference",
+        };
+        write!(
+            formatter,
+            "Grok {stage} request rejected: HTTP {}",
+            self.status
+        )
+    }
+}
+impl std::error::Error for UpstreamHttpRejection {}
+
+fn route_failure(
+    error: &anyhow::Error,
+) -> ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesHttpResponse{
+    use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesHttpResponse as Response;
+    if let Some(rejection) = error.downcast_ref::<UpstreamHttpRejection>() {
+        // Do not forward the provider body, URL or credentials. This envelope is
+        // produced here, rather than inferred from the generic gateway status.
+        Response::json(
+            rejection.status,
+            serde_json::json!({"error":{
+                "type":"grok_upstream_http_error",
+                "message":"Grok upstream rejected the request",
+                "upstream":rejection
+            }})
+            .to_string()
+            .into_bytes(),
+        )
+    } else {
+        Response::error(502, "Grok subscription request failed")
+    }
+}
+
+pub(crate) fn route_rejection(status: u16, body: &[u8]) -> Option<UpstreamHttpRejection> {
+    let envelope: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = envelope.get("error")?;
+    if error.get("type")?.as_str()? != "grok_upstream_http_error" {
+        return None;
+    }
+    let rejection: UpstreamHttpRejection =
+        serde_json::from_value(error.get("upstream")?.clone()).ok()?;
+    ((300..600).contains(&status) && rejection.status == status).then_some(rejection)
+}
+
 async fn bounded_response(
     response: native_http::Response,
     limit: usize,
+    stage: UpstreamStage,
 ) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(
-        response.status().is_success(),
-        "Grok upstream rejected request"
-    );
+    if !response.status().is_success() {
+        return Err(UpstreamHttpRejection {
+            status: response.status().as_u16(),
+            stage,
+        }
+        .into());
+    }
     use futures_util::StreamExt as _;
     let mut response = response.bytes_stream();
     let mut body = Vec::new();

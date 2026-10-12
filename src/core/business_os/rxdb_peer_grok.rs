@@ -185,7 +185,33 @@ fn genuine_text(body: &[u8], requested_model: &str) -> bool {
             })
         })
 }
-async fn probe(root: &Path, model: &str) -> Result<(), &'static str> {
+#[derive(Debug, Clone)]
+struct ProbeFailure {
+    code: &'static str,
+    upstream: Option<xai::UpstreamHttpRejection>,
+}
+impl From<&'static str> for ProbeFailure {
+    fn from(code: &'static str) -> Self {
+        Self {
+            code,
+            upstream: None,
+        }
+    }
+}
+impl ProbeFailure {
+    fn upstream(rejection: xai::UpstreamHttpRejection) -> Self {
+        let code = if rejection.stage == xai::UpstreamStage::Inference && rejection.status == 404 {
+            "model_unavailable"
+        } else {
+            "request_failed"
+        };
+        Self {
+            code,
+            upstream: Some(rejection),
+        }
+    }
+}
+async fn probe(root: &Path, model: &str) -> Result<(), ProbeFailure> {
     use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::{
         OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
     };
@@ -199,10 +225,15 @@ async fn probe(root: &Path, model: &str) -> Result<(), &'static str> {
             if genuine_text(response.body(), model) {
                 Ok(())
             } else {
-                Err("invalid_response")
+                Err("invalid_response".into())
             }
         }
-        _ => Err("request_failed"),
+        OpenAiResponsesRouteResponse::Buffered(response) => {
+            Err(xai::route_rejection(response.status(), response.body())
+                .map(ProbeFailure::upstream)
+                .unwrap_or_else(|| "request_failed".into()))
+        }
+        _ => Err("request_failed".into()),
     }
 }
 async fn bounded_current<T>(
@@ -254,8 +285,16 @@ async fn handle(
         .await?
         {
             Some(Ok(live)) => models = live,
-            Some(Err(_)) => catalog_error = Some("request_failed"),
-            None => catalog_error = Some("timeout"),
+            Some(Err(error)) => {
+                catalog_error = Some(
+                    error
+                        .downcast_ref::<xai::UpstreamHttpRejection>()
+                        .copied()
+                        .map(ProbeFailure::upstream)
+                        .unwrap_or_else(|| "request_failed".into()),
+                )
+            }
+            None => catalog_error = Some(ProbeFailure::from("timeout")),
         }
     }
     match request.action.as_str() {
@@ -335,11 +374,11 @@ async fn handle(
             let before = xai::credential_binding(&authority.root)?;
             let started = Instant::now();
             let result = if before.is_none() {
-                Err("missing_credential")
-            } else if let Some(error) = catalog_error {
+                Err(ProbeFailure::from("missing_credential"))
+            } else if let Some(error) = catalog_error.clone() {
                 Err(error)
             } else if !models.iter().any(|m| m == model) {
-                Err("model_unavailable")
+                Err(ProbeFailure::from("model_unavailable"))
             } else {
                 bounded_current(
                     &authority,
@@ -347,14 +386,15 @@ async fn handle(
                     deadline.saturating_duration_since(Instant::now()),
                 )
                 .await?
-                .unwrap_or(Err("timeout"))
+                .unwrap_or_else(|| Err(ProbeFailure::from("timeout")))
             };
             authority.check()?;
             let after = xai::credential_binding(&authority.root)?;
             // The shared route may refresh the credential. Bind to that accepted
             // post-route version, never a renderer-supplied fingerprint.
             ensure!(after.is_some() || before.is_none(), "credential_changed");
-            let check = json!({"modelId":model,"status":if result.is_ok(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if result.is_ok(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":result.err()});
+            let failure = result.err();
+            let check = json!({"modelId":model,"status":if failure.is_none(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if failure.is_none(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":failure.as_ref().map(|f| f.code),"upstream":failure.and_then(|f| f.upstream)});
             crate::persistence::store_json_payload(
                 &authority.root,
                 CHECK_KEY,
@@ -373,7 +413,7 @@ async fn handle(
         returned_check = saved_check(&authority.root)?;
     }
     Ok(GuardedAuxiliaryResponse {
-        result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"check":returned_check}),
+        result: json!({"version":1,"action":request.action,"operationId":request.operation_id,"installed":xai::subscription_installed(&authority.root),"accountLabel":"Grok Build subscription","login":controller.public_login(&authority)?,"models":models,"catalogError":catalog_error.as_ref().map(|failure|json!({"errorCode":failure.code,"upstream":failure.upstream})),"check":returned_check}),
         publication: authority,
     })
 }
@@ -424,6 +464,140 @@ mod tests {
     use super::*;
     fn completed_reply() -> Value {
         json!({"object":"response","status":"completed","model":"grok-4.7","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}]})
+    }
+    #[tokio::test]
+    async fn model_check_persists_real_http_stage_without_misclassifying_local_failure(
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (stage, status, malformed, expected_code) in [
+            ("catalog", 401, false, "request_failed"),
+            ("catalog", 404, false, "request_failed"),
+            ("inference", 401, false, "request_failed"),
+            ("inference", 404, false, "model_unavailable"),
+            ("inference", 429, false, "request_failed"),
+            ("inference", 502, false, "request_failed"),
+            ("catalog", 200, true, "request_failed"),
+        ] {
+            let root = tempfile::tempdir()?;
+            let record = json!({"access":"private-status-fixture","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+            crate::secrets::write_secret_record(
+                root.path(),
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &record.to_string(),
+                None,
+                json!({}),
+            )?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            xai::test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
+            let server = tokio::spawn(async move {
+                let requests = if stage == "catalog" { 1 } else { 3 };
+                for index in 0..requests {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut data = [0; 8192];
+                    let read = socket.read(&mut data).await.unwrap();
+                    assert!(data[..read].starts_with(if index < 2 {
+                        b"GET /models".as_slice()
+                    } else {
+                        b"POST /responses".as_slice()
+                    }));
+                    let (code, body) = if index + 1 < requests {
+                        (200, json!({"data":[{"id":"grok-4.7"}]}).to_string())
+                    } else if malformed {
+                        (200, "invalid catalog JSON".to_owned())
+                    } else {
+                        (status, "private-provider-error-body".to_owned())
+                    };
+                    socket.write_all(format!("HTTP/1.1 {code} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            let mut req = request("instance.grok.check");
+            req["modelId"] = json!("grok-4.7");
+            let response = handle(
+                Arc::new(Controller::new(root.path())?),
+                auth(root.path(), "chef", Arc::new(|| true))?,
+                vec![req],
+            )
+            .await?
+            .result;
+            server.await?;
+            xai::test_endpoint(root.path(), None);
+            let expected_upstream = if malformed {
+                Value::Null
+            } else {
+                json!({"status":status,"stage":stage})
+            };
+            assert_eq!(response["check"]["errorCode"], expected_code);
+            assert_eq!(response["check"]["upstream"], expected_upstream);
+            assert_eq!(saved_check(root.path())?, response["check"]);
+            assert!(!response.to_string().contains("private-"));
+            assert!(xai::subscription_installed(root.path()));
+        }
+        let root = tempfile::tempdir()?;
+        let mut req = request("instance.grok.check");
+        req["modelId"] = json!("grok-4.7");
+        let response = handle(
+            Arc::new(Controller::new(root.path())?),
+            auth(root.path(), "chef", Arc::new(|| true))?,
+            vec![req],
+        )
+        .await?
+        .result;
+        assert_eq!(response["check"]["errorCode"], "missing_credential");
+        assert!(response["check"]["upstream"].is_null());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn account_read_exposes_actual_catalog_rejection_without_fabricating_model_check(
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for status in [401, 404, 429] {
+            let root = tempfile::tempdir()?;
+            let record = json!({"access":"private-read-fixture","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+            crate::secrets::write_secret_record(
+                root.path(),
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &record.to_string(),
+                None,
+                json!({}),
+            )?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            xai::test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 8192];
+                let read = socket.read(&mut data).await.unwrap();
+                assert!(data[..read].starts_with(b"GET /models"));
+                let body = "private-rejected-provider-body";
+                socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let response = handle(
+                Arc::new(Controller::new(root.path())?),
+                auth(root.path(), "chef", Arc::new(|| true))?,
+                vec![request("instance.grok.read")],
+            )
+            .await?
+            .result;
+            server.await?;
+            xai::test_endpoint(root.path(), None);
+            assert_eq!(response["models"], json!([]));
+            assert!(response["check"].is_null());
+            assert!(saved_check(root.path())?.is_null());
+            assert_eq!(
+                response["catalogError"],
+                json!({"errorCode":"request_failed","upstream":{"status":status,"stage":"catalog"}})
+            );
+            assert!(response["installed"].as_bool().unwrap());
+            assert!(!response.to_string().contains("private-"));
+        }
+        Ok(())
     }
     #[tokio::test]
     async fn shared_route_requires_requested_model_assistant_text_and_reset_invalidates_check(
