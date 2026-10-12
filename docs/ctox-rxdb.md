@@ -253,7 +253,10 @@ atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
 the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
-### Native command return scheduling
+### Native command return scheduling — S5-Vorgriff
+
+This P0 S5-Vorgriff is temporary until S5 supplies separate transport lanes.
+It adds one declared collection rule and no further priority special cases.
 
 Native command receipts share the single ACK-safe transport drainer with
 replication. The collection policy declares `business_commands` as eligible
@@ -272,6 +275,15 @@ the browser terminal mark. Control commands publish their first projection
 synchronously before canonical completion, so the separate outbox idle cadence
 is not a demonstrated cause of their first response delay. Neither these bounds
 nor an isolated smoke certifies WELSCH latency.
+
+For a paired S0 regression measurement, `scripts/sync-v3/run-native-lane.sh`
+accepts archive, pinned Playwright module, bounded soak duration, archive SHA-256,
+and binary SHA-256. Omitted hashes retain the original pinned S0 artifact.
+Use the same measurement overlay on both native revisions: after the first
+paint and five write ACKs, twenty disjoint native query windows supply query
+p95. Each window must issue a real `rxdb.query.fetch` and return twenty rows.
+These samples do not change the first-paint definition or write ACK oracle;
+they remain exploratory lane evidence, not installed product acceptance.
 
 ### Browser live-query single-flight
 

@@ -694,6 +694,8 @@ impl PeerSendQueue {
         Some(item)
     }
 
+    // S5-Vorgriff (P0): bounded receipt turns until S5 separates transport lanes.
+    // Keep this one declared collection rule; do not add priority special cases.
     fn preferred_command_response_index(
         &self,
         eligible: impl Fn(&QueuedSend) -> bool,
