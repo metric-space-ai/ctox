@@ -105,6 +105,7 @@
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.kpis.read",
+    "ctox.workjet.project.kpis.refresh",
     "ctox.workjet.project.list",
     "ctox.workjet.project.persistent_worker.bind",
     "ctox.workjet.project.persistent_worker.revoke",
