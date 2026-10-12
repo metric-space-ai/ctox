@@ -644,12 +644,12 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
             request = request.header(&key, value);
         }
     }
-    let bytes =
-        bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await?;
+    let bytes = bounded_response(request.send().await?, 1024 * 1024, UpstreamStage::Catalog).await;
     anyhow::ensure!(
         credential_binding(root)?.as_deref() == Some(catalog_binding.as_str()),
         "Grok credential changed during discovery"
     );
+    let bytes = bytes?;
     let catalog: serde_json::Value = serde_json::from_slice(&bytes)?;
     let rows = catalog
         .get("data")
@@ -728,11 +728,12 @@ async fn execute_route_at(
         1024 * 1024,
         UpstreamStage::Catalog,
     )
-    .await?;
+    .await;
     anyhow::ensure!(
         credential_binding(root)?.as_deref() == Some(route_binding.as_str()),
         "Grok credential changed during route discovery"
     );
+    let catalog = catalog?;
     let catalog: serde_json::Value = serde_json::from_slice(&catalog)?;
     anyhow::ensure!(
         catalog

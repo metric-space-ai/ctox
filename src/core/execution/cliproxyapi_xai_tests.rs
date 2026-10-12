@@ -2,6 +2,79 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
+async fn replaced_catalog_credential_cannot_reject_the_new_account() {
+    for routing in [false, true] {
+        for status in [401, 403, 404, 429] {
+            let root = tempfile::tempdir().unwrap();
+            save_bundle(root.path(), &bundle()).unwrap();
+            let previous = credential_binding(root.path()).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            test_endpoint(root.path(), Some(endpoint.clone()));
+            let server_root = root.path().to_owned();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = [0; 8192];
+                let read = socket.read(&mut data).await.unwrap();
+                assert!(data[..read].starts_with(b"GET /models"));
+                assert!(String::from_utf8_lossy(&data[..read]).contains("fixture-access"));
+                // A separate controller installs a new credential while the old
+                // credential's catalog response is still in flight.
+                let mut replacement = stored_bundle(&bundle());
+                replacement.access = "private-catalog-replacement".into();
+                crate::secrets::write_secret_record(
+                    &server_root,
+                    SCOPE,
+                    NAME,
+                    &serde_json::to_string(&replacement).unwrap(),
+                    None,
+                    serde_json::json!({}),
+                )
+                .unwrap();
+                let body = "private-upstream-rejection-body";
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let result = if routing {
+                execute_route_at(
+                    root.path(),
+                    br#"{"model":"grok-4.7","input":"Hi"}"#,
+                    &endpoint,
+                )
+                .await
+                .map(|_| ())
+            } else {
+                discover_models(root.path()).await.map(|_| ())
+            };
+            server.await.unwrap();
+            test_endpoint(root.path(), None);
+            assert_ne!(previous, credential_binding(root.path()).unwrap());
+            let error = result.unwrap_err();
+            assert!(
+                error.downcast_ref::<UpstreamHttpRejection>().is_none(),
+                "a replaced credential's HTTP {status} must not reject the new account (routing={routing})"
+            );
+            assert!(error.to_string().contains("credential changed"));
+            let response = route_failure(&error);
+            assert_eq!(response.status(), 502);
+            assert!(route_rejection(response.status(), response.body()).is_none());
+            let public = String::from_utf8_lossy(response.body());
+            for private in [
+                "fixture-access",
+                "private-catalog-replacement",
+                "private-upstream-rejection-body",
+            ] {
+                assert!(!public.contains(private));
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn route_preserves_only_received_upstream_http_status_and_stage() {
     for (stage, status) in [
         (UpstreamStage::Catalog, 401),
