@@ -32,11 +32,11 @@ use webrtc::peer_connection::{
 };
 use webrtc::runtime::default_runtime;
 
+use crate::plugins::replication_webrtc::protocol_contract_generated::CTOX_QUERY_RPC_CHUNK;
 use crate::plugins::replication_webrtc::protocol_contract_generated::{
     CTOX_PRESENCE_MAX_ENTRIES_PER_PEER, CTOX_PRESENCE_RPC_UPDATE, CTOX_PRESENCE_STREAM_ID,
     CTOX_PRESENCE_TTL_MS,
 };
-use crate::plugins::replication_webrtc::query_contract_generated::CTOX_QUERY_RPC_CHUNK;
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::signaling_protocol::{PeerId, RoomId, ServerToClient};
 use crate::plugins::replication_webrtc::webrtc_types::{
