@@ -78,7 +78,8 @@ maximum increases and snapshots only load it. This bounds completed intake
 iterations; it excludes a 158-second synchronous authentication/handler wait
 inside those iterations, but does not distinguish guest push, incoming
 replication, idle notification or a gap before a new iteration starts.
-No other long-running aggregate overlapped the original burst.
+The completed aggregate spans returned by the overlap query do not show a long
+synchronous control execution; old nonterminal aggregates remain a separate finding.
 
 The same sample has two open data channels, but 47,902 queued native frames
 with oldestQueuedAgeMs=83,721. That is a measured transport backlog requiring
