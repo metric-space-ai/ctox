@@ -69,6 +69,12 @@ mod workjet_kpis;
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+#[path = "mcp_workjet_deck_narration.rs"]
+mod deck_narration;
+
+pub(crate) fn resume_jour_fixe_narration(root: &Path) -> anyhow::Result<()> {
+    deck_narration::resume(root)
+}
 #[path = "mcp_workjet_presentation.rs"]
 mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]
