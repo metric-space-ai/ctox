@@ -296,7 +296,12 @@ fn prepare_with(
     let kpis = section(kpis, 1800);
     drop(core);
     drop(conn);
-    let repo = project["repository_url"].as_str();
+    // repository_url is the bound source; Workjet's project settings still write repo_url.
+    // Until one field is canonical (Sync-v3 S4 note on #649) the older one is the fallback.
+    let repo = project["repository_url"]
+        .as_str()
+        .filter(|url| !url.is_empty())
+        .or_else(|| project["repo_url"].as_str().filter(|url| !url.is_empty()));
     let brief = json!({"schema":"ctox.workjet.jour_fixe_brief.v1",
         "meeting_id":meeting.id,"project_id":meeting.project_id,
         "previous_meeting":previous.map(|(id,at)| json!({"meeting_id":id,"scheduled_at_ms":at})),
@@ -481,6 +486,54 @@ mod tests {
         assert_eq!(value["truncated"], true);
         assert!(!value["data"]["items"].as_array().unwrap().is_empty());
         assert!(serde_json::from_slice::<Value>(&serde_json::to_vec(&value).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn workjet_brief_reads_repository_url_and_falls_back_to_repo_url() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let meeting = Meeting {
+            id: "meeting".into(),
+            project_id: "project".into(),
+            owner_user_id: "owner".into(),
+            supervisor: super::super::super::workjet_jour_fixe_contract::SupervisorRef {
+                workjet_thread_id: "thread".into(),
+                ctox_thread_key: "native-thread".into(),
+            },
+            scheduled_at_ms: 1791889200000,
+            prepare_at_ms: 1791882000000,
+            timezone: "Europe/Berlin".into(),
+            state: super::super::super::workjet_jour_fixe_contract::MeetingState::Planned,
+            revision: 0,
+            deck_revision: 0,
+            previous_goal: None,
+            slides: vec![],
+            comments: vec![],
+            transcript: vec![],
+            todos: None,
+            error: None,
+        };
+        let conn = open_store(root.path())?;
+        conn.execute_batch(super::super::jour_fixe_preparation::SCHEMA)?;
+        drop(conn);
+        for (operation, project, expected) in [
+            (
+                "legacy",
+                json!({"repo_url":"https://github.com/acme/legacy"}),
+                Some("https://github.com/acme/legacy"),
+            ),
+            (
+                "bound",
+                json!({"repository_url":"https://github.com/acme/bound","repo_url":"https://github.com/acme/legacy"}),
+                Some("https://github.com/acme/bound"),
+            ),
+            ("empty", json!({"repository_url":"","repo_url":""}), None),
+        ] {
+            prepare_with(root.path(), operation, &meeting, &project, |repo, since| {
+                assert_eq!(repo, expected);
+                github_with(None, since, |_| panic!("no external call"))
+            })?;
+        }
+        Ok(())
     }
 
     #[test]
