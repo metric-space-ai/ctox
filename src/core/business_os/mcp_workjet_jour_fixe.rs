@@ -124,7 +124,7 @@ pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(WRITE_TOOL,
-        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
+        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Publication queues native sequential narration outside the agent turn; drafts stay preparing until all audio is retained. Todos require an explicit owner and remain proposed. Compatibility action narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
         descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest"),("narrate","NarrateRequest")]))
 }
 
@@ -405,7 +405,29 @@ pub(super) fn execute(
             owner == meeting.owner_user_id && prior_meeting == meeting.id && intent == hash,
             "meeting operation intent conflicts"
         );
-        return Ok(serde_json::from_str(&raw)?);
+        let receipt = serde_json::from_str(&raw)?;
+        if let Update::PrepareDeck(request) = &update {
+            if meeting.deck_revision == request.deck_revision
+                && matches!(
+                    meeting.state,
+                    wire::MeetingState::Preparing | wire::MeetingState::Ready
+                )
+            {
+                // A pre-upgrade publication receipt can admit its native job
+                // on authenticated replay; existing authority remains pinned.
+                deck_narration::enqueue(&policy_tx, context, &meeting, operation)?;
+                deck_narration::retry_publication(&policy_tx, operation)?;
+            }
+        }
+        policy_tx.commit()?;
+        core_tx.commit()?;
+        #[cfg(not(test))]
+        if matches!(update, Update::PrepareDeck(_)) {
+            if let Err(error) = deck_narration::resume(root) {
+                eprintln!("[jour-fixe] native narration deferred: {error}");
+            }
+        }
+        return Ok(receipt);
     }
     anyhow::ensure!(
         meeting.revision == expected,
@@ -529,8 +551,17 @@ pub(super) fn execute(
     policy_tx.execute(
         "INSERT INTO workjet_jour_fixe_supervisor_operations(operation_id,owner_user_id,meeting_id,intent_hash,receipt_json,command_id) VALUES(?1,?2,?3,?4,?5,?6)",
         params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,execution_key(trusted)?])?;
+    if matches!(update, Update::PrepareDeck(_)) {
+        deck_narration::enqueue(&policy_tx, context, &meeting, operation)?;
+    }
     policy_tx.commit()?;
     core_tx.commit()?;
+    #[cfg(not(test))]
+    if matches!(update, Update::PrepareDeck(_)) {
+        if let Err(error) = deck_narration::resume(root) {
+            eprintln!("[jour-fixe] native narration deferred: {error}");
+        }
+    }
     Ok(receipt)
 }
 
