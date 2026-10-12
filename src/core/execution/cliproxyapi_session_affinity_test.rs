@@ -1,6 +1,10 @@
 // Origin: CTOX; License: AGPL-3.0-only
 // Included in the existing host tests; all credentials belong to a synthetic isolated root.
-struct SessionMessagesTransport;
+#[derive(Default)]
+struct SessionMessagesTransport {
+    headers: ctox_cliproxyapi::sdk::cliproxy::executor::Headers,
+    on_request: Option<Arc<dyn Fn() + Send + Sync>>,
+}
 impl ClaudeMessagesTransport for SessionMessagesTransport {
     fn execute<'a>(
         &'a self,
@@ -16,6 +20,9 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
         Box::pin(async move {
             let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
             assert_eq!(body["stream"], true);
+            if let Some(on_request) = &self.on_request {
+                on_request();
+            }
             let events = [
                 serde_json::json!({"type":"message_start","message":{
                     "id":"message-test","type":"message","role":"assistant",
@@ -38,8 +45,106 @@ impl ClaudeMessagesTransport for SessionMessagesTransport {
             }
             // Buffered Responses clients still request SSE upstream. The native
             // transport buffers that event stream before Responses aggregation.
-            Ok(ClaudeMessagesResponse::new(200, bytes))
+            Ok(ClaudeMessagesResponse::new(200, bytes).with_headers(self.headers.clone()))
         })
+    }
+}
+
+impl ClaudeMessagesStreamingTransport for SessionMessagesTransport {
+    fn execute_stream<'a>(
+        &'a self,
+        request: &'a ClaudeMessagesRequest,
+        timeout: Duration,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse,
+                        ClaudeMessagesTransportFailure,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let buffered = self.execute(request, timeout).await?;
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tx.send(Ok(buffered.body().to_vec())).await.unwrap();
+            drop(tx);
+            Ok(
+                ctox_cliproxyapi::internal::runtime::executor::ClaudeMessagesStreamResponse::new(
+                    200, None, rx,
+                )
+                .with_headers(self.headers.clone()),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn provider_quota_native_http_late_response_after_relogin_is_not_persisted() {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore;
+    for session in ["late-buffered", "stream-late-response"] {
+        let root = tempfile::tempdir().unwrap();
+        let config = stored_claude_runtime();
+        let account = config.claude_accounts[0].clone();
+        let model = account.models[0].clone();
+        CtoxClaudeSecretStore::new(root.path())
+            .store_credentials(
+                &account.credential_handles().unwrap(),
+                &credentials("before-access", "before-refresh"),
+            )
+            .unwrap();
+        let callback_root = root.path().to_owned();
+        let callback_id = account.id.clone();
+        let on_request: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            // Runs inside the actual buffered/streaming transport, after the
+            // pool captures its generation but before response headers arrive.
+            install_claude_subscription(
+                &callback_root,
+                &callback_id,
+                &credentials("after-access", "after-refresh"),
+            )
+            .unwrap();
+        });
+        let reported = HashMap::from([(
+            account.id.clone(),
+            BTreeMap::from([
+                (
+                    "Anthropic-Ratelimit-Unified-5h-Status".into(),
+                    vec!["allowed".into()],
+                ),
+                (
+                    "Anthropic-Ratelimit-Unified-5h-Reset".into(),
+                    vec!["40".into()],
+                ),
+                (
+                    "Anthropic-Ratelimit-Unified-5h-Utilization".into(),
+                    vec!["0.25".into()],
+                ),
+            ]),
+        )]);
+        assert_eq!(
+            session_http_turn_reported_during_transport(
+                root.path(),
+                config,
+                &model,
+                None,
+                session,
+                &reported,
+                Some(on_request)
+            )
+            .await,
+            account.id
+        );
+        let store = account_quotas::CtoxAccountQuotaStore::new(root.path());
+        assert!(store.load("claude", &[account.id]).unwrap().is_empty());
+        let conn = crate::persistence::open_sqlite(root.path()).unwrap();
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(
+            rows, 0,
+            "a late response cannot write quota into a different credential generation"
+        );
     }
 }
 
@@ -49,7 +154,40 @@ async fn session_http_turn(
     model: &str,
     account: Option<&str>,
 ) -> String {
+    session_http_turn_reported(
+        root,
+        config,
+        model,
+        account,
+        "private-native-session",
+        &HashMap::new(),
+    )
+    .await
+}
+async fn session_http_turn_reported(
+    root: &Path,
+    config: CliproxyRuntimeConfig,
+    model: &str,
+    account: Option<&str>,
+    session: &str,
+    reported: &HashMap<String, ctox_cliproxyapi::sdk::cliproxy::executor::Headers>,
+) -> String {
+    session_http_turn_reported_during_transport(
+        root, config, model, account, session, reported, None,
+    )
+    .await
+}
+async fn session_http_turn_reported_during_transport(
+    root: &Path,
+    config: CliproxyRuntimeConfig,
+    model: &str,
+    account: Option<&str>,
+    session: &str,
+    reported: &HashMap<String, ctox_cliproxyapi::sdk::cliproxy::executor::Headers>,
+    on_request: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    mutate_proxy_config(root, "claude", |runtime| *runtime = config.clone()).unwrap();
     let config = config.validate().unwrap();
     let transports = config
         .claude_accounts()
@@ -59,8 +197,14 @@ async fn session_http_turn(
                 entry.id.clone(),
                 ClaudeAccountTransports {
                     refresh: Arc::new(UnusedRefreshTransport),
-                    messages: Arc::new(SessionMessagesTransport),
-                    messages_stream: None,
+                    messages: Arc::new(SessionMessagesTransport {
+                        headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                        on_request: on_request.clone(),
+                    }),
+                    messages_stream: Some(Arc::new(SessionMessagesTransport {
+                        headers: reported.get(&entry.id).cloned().unwrap_or_default(),
+                        on_request: on_request.clone(),
+                    })),
                 },
             )
         })
@@ -83,11 +227,13 @@ async fn session_http_turn(
         .await
         .unwrap();
     });
-    let body = serde_json::json!({"model":model,"input":"Hi","stream":false}).to_string();
+    let body =
+        serde_json::json!({"model":model,"input":"Hi","stream":session.starts_with("stream-")})
+            .to_string();
     let pin = account
         .map(|id| format!("X-CTOX-Account: {id}\r\n"))
         .unwrap_or_default();
-    let request=format!("POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nX-Session-ID: private-native-session\r\n{pin}Content-Length: {}\r\n\r\n{body}",body.len());
+    let request=format!("POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nX-Session-ID: {session}\r\n{pin}Content-Length: {}\r\n\r\n{body}",body.len());
     let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
     client.write_all(request.as_bytes()).await.unwrap();
     let mut response = Vec::new();
@@ -158,6 +304,132 @@ async fn provider_session_native_http_continuation_survives_rebuild_failover_and
     );
     assert_eq!(
         session_http_turn(root.path(), config, &model, None).await,
+        "account-b"
+    );
+}
+
+#[tokio::test]
+async fn provider_quota_native_http_observations_rank_new_sessions_without_moving_continuations() {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore;
+    let root = tempfile::tempdir().unwrap();
+    let mut config = stored_claude_runtime();
+    let model = config.claude_accounts[0].models[0].clone();
+    let mut a = config.claude_accounts.remove(0);
+    a.id = "account-a".into();
+    let mut b = a.clone();
+    b.id = "account-b".into();
+    b.access_token_secret.name = "second-access".into();
+    b.refresh_token_secret.name = "second-refresh".into();
+    config.claude_accounts = vec![a, b];
+    for account in &config.claude_accounts {
+        CtoxClaudeSecretStore::new(root.path())
+            .store_credentials(
+                &account.credential_handles().unwrap(),
+                &credentials("synthetic-access", "synthetic-refresh"),
+            )
+            .unwrap();
+    }
+    let headers = |reset: &str| {
+        BTreeMap::from([
+            (
+                "Anthropic-Ratelimit-Unified-5h-Status".into(),
+                vec!["allowed".into()],
+            ),
+            (
+                "Anthropic-Ratelimit-Unified-5h-Reset".into(),
+                vec![reset.into()],
+            ),
+            (
+                "Anthropic-Ratelimit-Unified-5h-Utilization".into(),
+                vec!["0.25".into()],
+            ),
+        ])
+    };
+    let mut reported = HashMap::from([
+        ("account-a".into(), headers("40")),
+        ("account-b".into(), headers("20")),
+    ]);
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "ongoing-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            Some("account-b"),
+            "stream-probe",
+            &reported
+        )
+        .await,
+        "account-b"
+    );
+    let saved = CtoxAccountQuotaStore::new(root.path())
+        .load("claude", &["account-b".into()])
+        .unwrap();
+    assert_eq!(saved["account-b"].windows[0].reset_at_ms, 20_000);
+    assert_eq!(saved["account-b"].windows[0].utilization, Some(0.25));
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "stream-new-b",
+            &reported
+        )
+        .await,
+        "account-b"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "ongoing-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    reported.insert("account-a".into(), headers("15"));
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            Some("account-a"),
+            "probe",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(
+            root.path(),
+            config.clone(),
+            &model,
+            None,
+            "new-a",
+            &reported
+        )
+        .await,
+        "account-a"
+    );
+    assert_eq!(
+        session_http_turn_reported(root.path(), config, &model, None, "stream-new-b", &reported)
+            .await,
         "account-b"
     );
 }
