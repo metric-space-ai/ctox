@@ -12255,7 +12255,7 @@
     "additionalProperties": false
   },
   "workjet_projects": {
-    "version": 3,
+    "version": 4,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12283,6 +12283,35 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 160
+      },
+      "execution_policy": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "enum": [
+              "ctox.workjet.project_execution_policy.v1"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "autonomous_worktree"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "schema",
+          "mode",
+          "revision"
+        ],
+        "additionalProperties": false
       },
       "info": {
         "type": "object",

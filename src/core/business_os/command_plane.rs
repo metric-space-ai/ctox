@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 139] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 141] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -380,6 +380,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 139] = [
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.persistent_worker.bind",
+    "ctox.workjet.project.persistent_worker.revoke",
     "ctox.workjet.project.supervisor.turn.submit",
     "ctox.workjet.project.supervisor.turn.watch",
     "ctox.workjet.project.supervisor.turn.capabilities",
@@ -1880,6 +1882,8 @@ fn dispatch_business_command(
         }
         "ctox.workjet.project.chat.ensure"
         | "ctox.workjet.project.supervisor.bind"
+        | "ctox.workjet.project.persistent_worker.bind"
+        | "ctox.workjet.project.persistent_worker.revoke"
         | "ctox.workjet.project.chat.create"
         | "ctox.workjet.project.worker.add"
         | "ctox.workjet.project.worker.remove"
