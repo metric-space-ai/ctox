@@ -257,21 +257,21 @@ the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acc
 
 Native command receipts share the single ACK-safe transport drainer with
 replication. The collection policy declares `business_commands` as eligible
-for inline response priority. One small command response may overtake older
+for response priority. One command response may overtake older
 High-priority snapshot responses, followed by one other High frame; command
 FIFO and the existing weighted Normal/Low turns remain. The same bounded
-selection applies between chunk windows. Large command results still use the
-ordinary framed-transfer path. Policy filtering and publication fences apply
-before and during sending as before.
+selection applies to eligible small frames between chunk windows. Large
+command results receive priority at the next complete message boundary and
+still use the ordinary framed-transfer path; two framed transfers never nest.
+Policy filtering and publication fences apply before and during sending as before.
 
 Explicit command timing probes log only command ID and native completion,
 projection, queue-entry and DataChannel-send completion timestamps. A completed
 send is local transport acceptance, not browser observation; correlate it with
-the browser terminal mark. The canonical outbox polls at its one-second active
-cadence while idle, with its former roughly thirty-minute invariant sweep.
-Control commands also publish their first projection synchronously before
-canonical completion, so outbox polling alone does not explain their return
-latency. Neither these bounds nor an isolated smoke certifies WELSCH latency.
+the browser terminal mark. Control commands publish their first projection
+synchronously before canonical completion, so the separate outbox idle cadence
+is not a demonstrated cause of their first response delay. Neither these bounds
+nor an isolated smoke certifies WELSCH latency.
 
 ### Browser live-query single-flight
 

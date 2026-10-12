@@ -36,6 +36,7 @@ use crate::plugins::replication_webrtc::protocol_contract_generated::{
     CTOX_PRESENCE_MAX_ENTRIES_PER_PEER, CTOX_PRESENCE_RPC_UPDATE, CTOX_PRESENCE_STREAM_ID,
     CTOX_PRESENCE_TTL_MS,
 };
+use crate::plugins::replication_webrtc::query_contract_generated::CTOX_QUERY_RPC_CHUNK;
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::signaling_protocol::{PeerId, RoomId, ServerToClient};
 use crate::plugins::replication_webrtc::webrtc_types::{
@@ -699,12 +700,16 @@ impl PeerSendQueue {
     ) -> Option<usize> {
         self.high.iter().position(|item| {
             eligible(item)
-                && inline_command_response(item) == (self.consecutive_command_responses == 0)
+                && prioritized_command_response(item) == (self.consecutive_command_responses == 0)
         })
     }
 
     fn record_command_response_turn(&mut self, item: &QueuedSend) {
-        self.consecutive_command_responses = if inline_command_response(item) { 1 } else { 0 };
+        self.consecutive_command_responses = if prioritized_command_response(item) {
+            1
+        } else {
+            0
+        };
     }
 
     fn pop_high_fair(&mut self) -> Option<QueuedSend> {
@@ -723,7 +728,7 @@ impl PeerSendQueue {
         let item = if !front_is_browser_live {
             // All master responses are High. A cold collection snapshot can
             // therefore fill this same bucket ahead of a completed command.
-            // Admit one small command response, then one other High frame;
+            // Admit one command response, then one other High frame;
             // retain FIFO among command responses and the weighted lower lanes.
             self.preferred_command_response_index(|_| true)
                 .and_then(|index| self.high.remove(index))
@@ -772,12 +777,11 @@ impl PeerSendQueue {
     }
 }
 
-fn inline_command_response(item: &QueuedSend) -> bool {
+fn prioritized_command_response(item: &QueuedSend) -> bool {
     item.intrinsic_high
         && item.collection.as_deref().is_some_and(|collection| {
-            crate::collection_policy::collection_policy().prioritizes_inline_response(collection)
+            crate::collection_policy::collection_policy().prioritizes_response(collection)
         })
-        && item.text.len() <= MAX_INLINE_FRAME_BYTES
 }
 
 /// Cancellation guard for `drain_send_queue`: if the draining task is aborted
@@ -4816,7 +4820,12 @@ fn classify_send_frame(frame: &WebRTCWireFrame, text: &str) -> SendFrameClass {
             oversized_write: false,
         },
         WebRTCWireFrame::Message(message) => {
-            let intrinsic_high = matches!(message.method.as_str(), "ctoxProtocol" | "token");
+            let intrinsic_high = matches!(message.method.as_str(), "ctoxProtocol" | "token")
+                || (message.method == CTOX_QUERY_RPC_CHUNK
+                    && message.collection.as_deref().is_some_and(|collection| {
+                        crate::collection_policy::collection_policy()
+                            .prioritizes_response(collection)
+                    }));
             let oversized_write =
                 message.method == "masterWrite" && text.len() > MAX_INLINE_FRAME_BYTES;
             SendFrameClass {
@@ -4836,16 +4845,25 @@ fn command_send_timing_probes(text: &str) -> Vec<(String, i64, i64)> {
     if !text.contains("command_timing") {
         return Vec::new();
     }
-    let Ok(response) = serde_json::from_str::<WebRTCResponse>(text) else {
+    let Ok(frame) = serde_json::from_str::<WebRTCWireFrame>(text) else {
         return Vec::new();
     };
-    if !response.collection.as_deref().is_some_and(|collection| {
-        crate::collection_policy::collection_policy().prioritizes_inline_response(collection)
+    let (collection, payload) = match &frame {
+        WebRTCWireFrame::Response(response) => (&response.collection, &response.result),
+        WebRTCWireFrame::Message(message) if message.method == CTOX_QUERY_RPC_CHUNK => {
+            let Some(payload) = message.params.first() else {
+                return Vec::new();
+            };
+            (&message.collection, payload)
+        }
+        _ => return Vec::new(),
+    };
+    if !collection.as_deref().is_some_and(|collection| {
+        crate::collection_policy::collection_policy().prioritizes_response(collection)
     }) {
         return Vec::new();
     }
-    response
-        .result
+    payload
         .get("documents")
         .and_then(Value::as_array)
         .into_iter()
@@ -7392,10 +7410,14 @@ mod tests {
         assert_eq!(queue.pop_next().unwrap().text, "receipt-2");
         assert_eq!(queue.pop_next().unwrap().text, "snapshot-1");
         assert_eq!(queue.high.len(), 63);
-        // A large result remains an ordinary framed transfer; it cannot nest
-        // its own ACK state machine inside another transfer.
+        // A large result gets priority at a complete-message boundary, but
+        // cannot nest its ACK state machine inside another framed transfer.
         let next = queue.pop_high_priority_inline().unwrap();
         assert_eq!(next.text, "snapshot-2");
+        assert_eq!(
+            queue.pop_next().unwrap().text.len(),
+            MAX_INLINE_FRAME_BYTES + 1
+        );
     }
 
     #[test]
@@ -7455,6 +7477,29 @@ mod tests {
         let mut foreign = response;
         foreign.collection = Some("other".into());
         assert!(command_send_timing_probes(&serde_json::to_string(&foreign).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn command_query_chunks_use_the_same_priority_as_live_receipts() {
+        let make = |collection: &str| {
+            WebRTCWireFrame::Message(WebRTCMessage {
+                id: "query-chunk".into(),
+                method: CTOX_QUERY_RPC_CHUNK.into(),
+                params: vec![serde_json::json!({"documents": [], "complete": true})],
+                collection: Some(collection.into()),
+            })
+        };
+        let active = HashSet::new();
+        let command = make("business_commands");
+        assert_eq!(
+            classify_send_frame(&command, "{}").classify(&active),
+            SendPriority::High
+        );
+        let background = make("other");
+        assert_eq!(
+            classify_send_frame(&background, "{}").classify(&active),
+            SendPriority::Normal
+        );
     }
 
     #[test]
