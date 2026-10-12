@@ -1813,6 +1813,10 @@
           "maxLength": 2048,
           "type": "string"
         },
+        "repository_url": {
+          "maxLength": 2048,
+          "type": "string"
+        },
         "status": {
           "enum": [
             "active",
@@ -1838,7 +1842,7 @@
         "updated_at_ms"
       ],
       "type": "object",
-      "version": 4
+      "version": 5
     },
     "workjet_provider_registry": {
       "additionalProperties": false,
