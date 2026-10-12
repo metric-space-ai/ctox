@@ -1114,14 +1114,29 @@ export class CtoxIndexedDbCollection {
   }
 
   async replicationCheckpointStatus(schemaHash = null) {
-    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], 'readwrite');
-    const done = idbTransactionDone(tx);
-    done.catch(() => {});
-    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
-    const index = tx.objectStore(DOCUMENT_STORE).index('collectionLwtId');
-    const range = IDBKeyRange.bound([this.name, 0, ''], [this.name, Number.MAX_SAFE_INTEGER, '\uffff'], false, false);
-    const record = await firstCursorValue(index.openCursor(range, 'prev'));
-    await done;
+    // Keep the marker and document head in one snapshot without introducing
+    // a write barrier for every initialized checkpoint read. Only legacy/new
+    // collections need a second, atomic transaction to initialize their marker.
+    const readSnapshot = async (mode) => {
+      const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], mode);
+      const done = idbTransactionDone(tx);
+      done.catch(() => {});
+      const marker = await localCheckpointMarker(
+        tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name,
+        { initialize: mode === 'readwrite' },
+      );
+      let record = null;
+      if (marker) {
+        const index = tx.objectStore(DOCUMENT_STORE).index('collectionLwtId');
+        const range = IDBKeyRange.bound([this.name, 0, ''], [this.name, Number.MAX_SAFE_INTEGER, '\uffff'], false, false);
+        record = await firstCursorValue(index.openCursor(range, 'prev'));
+      }
+      await done;
+      return { marker, record };
+    };
+    let snapshot = await readSnapshot('readonly');
+    if (!snapshot.marker) snapshot = await readSnapshot('readwrite');
+    const { marker, record } = snapshot;
     if (!record) {
       return {
         source: 'browser',
@@ -2168,7 +2183,7 @@ export const ctoxIndexedDbStorageTestInternals = {
 // The marker shares the document transaction. A failed marker write aborts
 // eviction too, and a recreated database cannot match a former store's key.
 // Legacy v4 databases acquire a marker without deleting any existing rows.
-async function localCheckpointMarker(store, collection) {
+async function localCheckpointMarker(store, collection, { initialize = true } = {}) {
   const previous = await idbRequest(store.get(collection));
   if (previous?.localStoreGeneration !== undefined) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration)
@@ -2178,6 +2193,7 @@ async function localCheckpointMarker(store, collection) {
     }
     return previous;
   }
+  if (!initialize) return null;
   const marker = {
     ...previous,
     collection,

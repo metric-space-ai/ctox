@@ -926,6 +926,12 @@ transaction; a failed marker write rolls deletion back. Store recreation gets
 a new identity. Legacy checkpoints without that identity require one confirming
 pull before reuse; existing records and recovery journals are retained. Schema,
 permission and native-generation changes keep their existing invalidation rules.
+Initialized browser checkpoint queries read the marker and document head in one
+readonly IndexedDB snapshot. New or legacy collections without a store identity
+initialize it in a separate atomic readwrite transaction and then return that
+transaction's snapshot. Corrupt generations fail closed. Thus an ordinary
+checkpoint read does not become a write barrier for unrelated collection reads;
+eviction and hard deletion keep their existing atomic generation updates.
 
 Historical first-pull readiness survives valid checkpoint reuse so cached UI
 can still paint immediately. It does not certify the current connection's

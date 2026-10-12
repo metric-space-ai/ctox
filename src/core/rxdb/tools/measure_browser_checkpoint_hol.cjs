@@ -20,7 +20,7 @@ app.whenReady().then(async () => {
     const db = storage.db;
     const originalTransaction = db.transaction.bind(db);
     const trials = [];
-    for (const mode of ['readwrite', 'readonly-control']) {
+    for (const mode of ['current', 'write-control']) {
       for (let iteration = 0; iteration < 5; iteration++) {
         const order = [];
         const started = performance.now();
@@ -37,7 +37,7 @@ app.whenReady().then(async () => {
         };
         next();
         db.transaction = (stores, requestedMode, ...args) => originalTransaction(stores,
-          mode === 'readonly-control' && requestedMode === 'readwrite' ? 'readonly' : requestedMode, ...args);
+          mode === 'write-control' && requestedMode === 'readonly' ? 'readwrite' : requestedMode, ...args);
         const checkpoint = collection.replicationCheckpointStatus().then(value => {
           order.push('checkpoint-completed'); return { value, elapsedMs: performance.now() - started };
         });
@@ -51,13 +51,46 @@ app.whenReady().then(async () => {
         const [status, laterElapsedMs] = await Promise.all([checkpoint, laterRead, blockerDone]);
         db.transaction = originalTransaction;
         const blocked = order.indexOf('earlier-reader-completed') < order.indexOf('later-reader-completed');
-        if (blocked !== (mode === 'readwrite')) throw new Error('unexpected real IDB transaction ordering: ' + order.join(','));
+        if (blocked !== (mode === 'write-control')) throw new Error('unexpected real IDB transaction ordering: ' + order.join(','));
         trials.push({ mode, iteration, checkpointMs: status.elapsedMs, laterReaderMs: laterElapsedMs, order,
           generation: status.value.localStoreGeneration, evictionGeneration: status.value.evictionGeneration });
       }
     }
+    const legacy = storage.collection('legacy-without-generation');
+    const initialized = await Promise.all([legacy.replicationCheckpointStatus(), legacy.replicationCheckpointStatus()]);
+    if (!initialized[0].localStoreGeneration || initialized[0].localStoreGeneration !== initialized[1].localStoreGeneration)
+      throw new Error('concurrent legacy initialization replaced its generation');
+    const beforeEviction = await collection.replicationCheckpointStatus();
+    await storage.clearCachedCollections(['checkpoint-reader']);
+    const afterEviction = await collection.replicationCheckpointStatus();
+    if (afterEviction.localStoreGeneration !== beforeEviction.localStoreGeneration
+        || afterEviction.evictionGeneration !== beforeEviction.evictionGeneration + 1)
+      throw new Error('eviction generation changed incorrectly');
+    const corrupt = originalTransaction('collectionSchemaMarkers', 'readwrite');
+    const corruptDone = new Promise((resolve, reject) => {
+      corrupt.oncomplete = resolve; corrupt.onerror = () => reject(corrupt.error);
+    });
+    corrupt.objectStore('collectionSchemaMarkers').put({
+      collection: 'invalid-marker', localStoreGeneration: 'invalid', evictionGeneration: 0,
+    });
+    await corruptDone;
+    let rejected = false;
+    try { await storage.collection('invalid-marker').replicationCheckpointStatus(); }
+    catch (error) { rejected = error.message === 'Invalid local checkpoint generation'; }
+    if (!rejected) throw new Error('invalid marker was accepted');
+    const markerTx = originalTransaction('collectionSchemaMarkers', 'readonly');
+    const retained = await new Promise((resolve, reject) => {
+      const request = markerTx.objectStore('collectionSchemaMarkers').get('invalid-marker');
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    if (retained.localStoreGeneration !== 'invalid') throw new Error('invalid marker was silently overwritten');
+    const recreated = await openCtoxIndexedDbStorage({ databaseName: 'isolated-recreated-' + crypto.randomUUID() });
+    const recreatedStatus = await recreated.collection('checkpoint-reader').replicationCheckpointStatus();
+    if (recreatedStatus.localStoreGeneration === beforeEviction.localStoreGeneration)
+      throw new Error('new store reused original generation');
+    recreated.close();
     storage.close();
-    return { engine: navigator.userAgent, trials, pass: true,
+    return { engine: navigator.userAgent, trials, pass: true, legacyInitialization: true, evictionGeneration: true, invalidMarkerRejectedAndRetained: true, newStoreGeneration: true,
       limitation: 'Synthetic held transaction proves scheduling HOL; does not measure installed Welsch backlog or attribute its latency.' };
   })()`);
   fs.mkdirSync(path.dirname(output), { recursive: true });

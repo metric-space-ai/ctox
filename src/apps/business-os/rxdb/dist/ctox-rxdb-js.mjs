@@ -3658,15 +3658,28 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
-    const done = idbTransactionDone(tx);
-    done.catch(() => {
-    });
-    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
-    const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
-    const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
-    const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await done;
+    const readSnapshot = async (mode) => {
+      const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], mode);
+      const done = idbTransactionDone(tx);
+      done.catch(() => {
+      });
+      const marker2 = await localCheckpointMarker(
+        tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE),
+        this.name,
+        { initialize: mode === "readwrite" }
+      );
+      let record2 = null;
+      if (marker2) {
+        const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
+        const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
+        record2 = await firstCursorValue(index.openCursor(range, "prev"));
+      }
+      await done;
+      return { marker: marker2, record: record2 };
+    };
+    let snapshot = await readSnapshot("readonly");
+    if (!snapshot.marker) snapshot = await readSnapshot("readwrite");
+    const { marker, record } = snapshot;
     if (!record) {
       return {
         source: "browser",
@@ -4512,7 +4525,7 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
-async function localCheckpointMarker(store, collection) {
+async function localCheckpointMarker(store, collection, { initialize = true } = {}) {
   const previous = await idbRequest(store.get(collection));
   if (previous?.localStoreGeneration !== void 0) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
@@ -4520,6 +4533,7 @@ async function localCheckpointMarker(store, collection) {
     }
     return previous;
   }
+  if (!initialize) return null;
   const marker = {
     ...previous,
     collection,
