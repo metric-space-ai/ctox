@@ -60,3 +60,52 @@ These are the minimum missing observations to separate the pre-claim stages,
 not a new release gate. No historical root-cause or installed sync pass is
 claimed. The goal-5 runner separately reuses the exact published c7 binary
 in a fresh synthetic tenant with two real Chromium clients.
+
+## Current recheck and native timing bound
+
+The public 0.0.89 Desktop trace contains 47 completed WELSCH project.list
+requests and no failed list request in the measured window after 08:15 UTC.
+Nineteen meeting/KPI commands correlate exactly by ID with the native sample:
+start-to-claim is 93–1936 ms. The fresh native subset contains 27 list
+commands, all completed/count12; claim-to-terminal p50/p95 is 29/40 ms.
+The original 158-second delay was not reproduced in this window.
+
+At 10:12:08 UTC the same native PID255152 reports a process-cumulative
+business_commands loop maximum of 620 ms. The exact c7 source times and
+awaits the full source-stamp read, pending-document scan and native acceptance
+(including spawn_blocking scheduling/authentication). Its static atomic
+maximum increases and snapshots only load it. This bounds completed intake
+iterations; it excludes a 158-second synchronous authentication/handler wait
+inside those iterations, but does not distinguish guest push, incoming
+replication, idle notification or a gap before a new iteration starts.
+No other long-running aggregate overlapped the original burst.
+
+The same sample has two open data channels, but 47,902 queued native frames
+with oldestQueuedAgeMs=83,721. That is a measured transport backlog requiring
+Architecture's inspection, not a retrospective proof that this exact queue
+caused the two historical command delays. Per-command first-ingress and
+push/ACK observations are still missing.
+
+## Goal 5's fresh installed measurement
+
+09:55:09–09:56:11 UTC: the initial isolated startup hit a native key creation
+conflict. Sequential native invitation bootstrap before starting the peer
+and static server removes this startup failure in a new prefix.
+
+10:01:03–10:02:04 UTC: the second fresh prefix uses the exact c7 release
+binary and canonical packaged browser DB/sync modules in Chromium148.
+The peer is alive, signaling socket connected and join accepted, but
+peer_authenticated/data_channel_open/replicationUp are false.
+The browser sees no matching native descriptor, no RTC connection and no
+sent frame. Baseline A=1/1 exact (local write5.2ms), native=0/1, B=0/1 after
+60 seconds. The 200-write rounds were not run; goal5 is pass:false.
+
+A, B and the bootstrap invitation have identical fingerprints for instance,
+native peer ID, room and signaling URLs. No private invitation, secret key,
+cookie or app catalog is exported. The discovery/handshake boundary remains
+an owned Shell/Architecture dependency; native keys must not be rewritten
+to hide it. All browser/native groups were stopped. No production tenant
+was used as the fault fixture.
+
+Durable goal receipt:
+ /Users/michaelwelsch/.codex/task-evidence/teilziele/05-current-c7-native-discovery-20261012.json
