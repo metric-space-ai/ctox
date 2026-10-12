@@ -37,15 +37,11 @@ During the current leased Supervisor turn:
   denominators mean unavailable percentages, never invented zeros. Flag missing
   exit evidence. Save under this meeting/project via native tools and existing
   RxDB/WebRTC files, never HTTP. Saved decks do not prove rendered/ready audio.
-- For each saved slide missing audio, read narration_input; update action narrate,
-  NarrateRequest:
-  {operation_id,meeting_id,slide_id,deck_revision,expected_revision,narration_text_sha256}.
-  Copy native input/hash; no invented hash or text/model/voice/audio override.
-  Read the new revision before the next slide. Only the native gateway produces
-  WAV; custody binds bytes, duration and hashes.
-  Every slide needs retained audio before ready. Name missing configuration or
-  uncertain synthesis as readiness failure; no fallback or invented AudioRef.
-  Never automatically resynthesize uncertain operations.
+- Publishing queues native sequential narration of the stored deck. Do not call
+  narrate in the agent turn. CTOX uses each native narration_input, retains WAV
+  custody and sets ready only after every slide has audio. Saving is not proof
+  of ready audio; read the persisted meeting state. Never invent AudioRef or
+  automatically resynthesize uncertain operations.
 - In review, update action propose_todos, ProposeTodosRequest:
   {operation_id,meeting_id,expected_revision,proposal_revision,items}. Each item
   has {id,title,acceptance,priority,owner,evidence_ids,due_at_ms?}; owner is explicit,
