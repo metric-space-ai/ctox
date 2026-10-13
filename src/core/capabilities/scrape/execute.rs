@@ -919,7 +919,8 @@ pub(crate) fn execute_scrape_with_probe_grant(
                         .unwrap_or("provider_account_inactive"),
                 )
             }
-            ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty => {
+            ScrapeRunStatus::Succeeded => super::account_state::RunResult::Succeeded,
+            ScrapeRunStatus::CompletedEmpty if trigger_kind != "account_reprobe" => {
                 super::account_state::RunResult::Succeeded
             }
             _ => super::account_state::RunResult::OtherFailure,
