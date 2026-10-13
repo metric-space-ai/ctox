@@ -290,11 +290,20 @@ atomic primary transaction and journal-before-primary ordering.
 
 `command-persistence-browser-smoke.mjs` measures20 actual collection inserts
 during10,000 replication-origin upserts over a retained10,000-row browser store,
-requires nearest-rank local-persistence p95 below50ms, and verifies all commands,
+reports the unchanged nearest-rank product target p95 below50ms, and verifies all commands,
+
 their committed WAL entries and all replicated rows after reopening. It isolates
 the production storage path; it does not certify an installed Owner guest or
 the network transport. Its output attributes time to recovery, preparatory read,
-WAL append, primary write and WAL commit.
+WAL append, primary write and WAL commit. `--assert-product-budget` requires the
+50ms target on a dedicated measurement. The default shared-runner smoke instead
+requires p95 below1000ms: main2cbddfd2c reproduced16094.2ms, while the repair
+measured32.5ms on the lane and127.8ms on GitHub. This fixed regression boundary
+leaves more than7x headroom above the observed runner sample and remains more
+than16x below the original serialization defect. Every result records both
+budgets and whether the50ms product target was met; a green CI smoke alone does
+not establish that target or installed acceptance.
+
 Its20 samples span two seconds, including the periodic diagnostic refresh.
 It also checks exact unsynced counts and delivery of a small native receipt
 before the competing bulk replication finishes.
