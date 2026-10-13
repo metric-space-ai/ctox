@@ -2288,6 +2288,8 @@ fn shutdown_native_peer_runtime(runtime: tokio::runtime::Runtime, max_wait: Dura
 pub(super) enum TemporaryDatabaseLockScope {
     TemporaryOnly,
     EntireOperation,
+    /// Keep a private handle through projection even while a peer generation closes.
+    OwnedTemporary,
 }
 
 pub(super) fn with_business_os_database<T, F, Fut>(
@@ -2325,7 +2327,8 @@ where
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
-        TemporaryDatabaseLockScope::EntireOperation => TEMPORARY_RXDB_DATABASE_LOCK
+        TemporaryDatabaseLockScope::EntireOperation
+        | TemporaryDatabaseLockScope::OwnedTemporary => TEMPORARY_RXDB_DATABASE_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     };
@@ -2586,11 +2589,16 @@ fn sync_runtime_settings_if_changed(
 }
 
 pub(crate) fn sync_module_catalog(root: &Path) -> anyhow::Result<usize> {
+    // A release may overlap schema-triggered peer shutdown. The published peer
+    // remains observable while shutdown drains and closes its collection map;
+    // borrowing that generation across the catalog load can lose registration.
+    // Keep an independently owned handle instead. The existing write lock and
+    // canonical projection path still serialize the actual catalog write.
     with_business_os_database(
         root,
         "failed to create Business OS module catalog sync runtime",
         true,
-        TemporaryDatabaseLockScope::EntireOperation,
+        TemporaryDatabaseLockScope::OwnedTemporary,
         |_peer, database| async move { sync_module_catalog_with_database(root, &database).await },
     )
 }
@@ -15140,6 +15148,44 @@ pub(in crate::business_os) mod tests {
             second.close().await.expect("close second database");
             first.close().await.expect("close first database");
         });
+    }
+
+    #[test]
+    fn owned_module_catalog_projection_survives_peer_database_close() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let retiring_database = runtime.block_on(async {
+            let database = open_database(store::rxdb_store_path(root.path())).await?;
+            register_collections_tolerant(&database, collection_creators()).await?;
+            anyhow::Ok(database)
+        })?;
+        let old_handle = Arc::clone(&retiring_database);
+        let projection_root = root.path().to_path_buf();
+        with_business_os_database(
+            root.path(),
+            "owned catalog regression runtime",
+            true,
+            TemporaryDatabaseLockScope::OwnedTemporary,
+            |_peer, database| async move {
+                // Exact shutdown action after the projection factory opened.
+                old_handle.close().await?;
+                assert!(old_handle.collection("business_module_catalog").is_none());
+                let stale = sync_module_catalog_with_database(&projection_root, &old_handle)
+                    .await
+                    .expect_err("retired peer handle must not project");
+                assert!(format!("{stale:#}")
+                    .contains("business_module_catalog collection is not registered"));
+                assert!(
+                    !database.closed(),
+                    "retired generation cannot close the owner"
+                );
+                sync_module_catalog_with_database(&projection_root, &database).await
+            },
+        )?;
+        assert!(retiring_database.closed());
+        Ok(())
     }
 
     #[test]
