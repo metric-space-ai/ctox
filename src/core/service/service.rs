@@ -17549,6 +17549,17 @@ fn route_external_messages_with_priority_dispatch(
             ),
         );
     }
+    // Exit research admission also survives busy loops/queue pressure. Native
+    // project fencing and ordinary policy still decide whether one turn starts.
+    if let Err(error) = crate::business_os::refresh_due_workjet_exit_models(root) {
+        push_event(
+            state,
+            format!(
+                "Project exit refresh deferred: {}",
+                clip_text(&error.to_string(), 180)
+            ),
+        );
+    }
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
