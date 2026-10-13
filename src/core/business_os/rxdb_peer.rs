@@ -15153,6 +15153,13 @@ pub(in crate::business_os) mod tests {
     #[test]
     fn module_catalog_projection_survives_published_peer_database_close() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
+        let app_root = root.path().join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","collections":["ctox_queue_tasks"]}"#,
+        )?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -15213,7 +15220,15 @@ pub(in crate::business_os) mod tests {
             .database
             .collection("business_module_catalog")
             .is_none());
-        sync_module_catalog(root.path())?;
+        assert_eq!(sync_module_catalog(root.path())?, 1);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        let document: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+            [],
+            |row| row.get(0),
+        )?;
+        let catalog: Value = serde_json::from_str(&document)?;
+        assert_eq!(catalog["modules"][0]["id"], "ctox");
         Ok(())
     }
 
