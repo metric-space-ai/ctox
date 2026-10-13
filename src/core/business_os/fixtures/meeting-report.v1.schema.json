@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ctox.workjet.meeting_report.v1",
+  "title": "Bericht eines Regeltermins (Nachbereitung durch den Supervisor)",
+  "description": "Wird nach jedem Regeltermin vom Projekt-Supervisor erzeugt, nativ in CTOX am Projekt abgelegt und in Workjet einheitlich angezeigt. Grundlage: Statusmeeting-Vorlage (Projektstatus, Leistungsfortschritt, nächste Schritte, Entscheidungsbedarf, Abweichungen/Risiken/Maßnahmen, Ampeln, Protokoll). Keine erfundenen Daten: jeder Fortschritt braucht einen Beleg, leere Abschnitte sind leere Listen.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "report_id",
+    "project",
+    "meeting",
+    "period",
+    "generated",
+    "overall",
+    "dimensions",
+    "progress",
+    "next_steps",
+    "decisions",
+    "deviations",
+    "protocol"
+  ],
+  "properties": {
+    "schema": { "const": "ctox.workjet.meeting_report.v1" },
+    "report_id": { "type": "string", "minLength": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "repository_url": { "type": "string", "format": "uri" },
+        "public_url": { "type": "string", "format": "uri" }
+      }
+    },
+    "meeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "scheduled_at", "timezone"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["regeltermin", "sondertermin"] },
+        "scheduled_at": { "type": "string", "format": "date-time" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "ended_at": { "type": "string", "format": "date-time" },
+        "timezone": { "type": "string" },
+        "participants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "name"],
+            "properties": {
+              "role": { "enum": ["owner", "supervisor", "worker", "gast"] },
+              "name": { "type": "string" }
+            }
+          }
+        },
+        "deck_revision": { "type": "integer", "minimum": 1 },
+        "transcript_id": { "type": "string" }
+      }
+    },
+    "period": {
+      "description": "Berichtszeitraum: vom vorigen Regeltermin bis zu diesem.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string", "format": "date-time" },
+        "to": { "type": "string", "format": "date-time" }
+      }
+    },
+    "generated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "at"],
+      "properties": {
+        "by": { "type": "string", "description": "Supervisor-Thread-ID" },
+        "at": { "type": "string", "format": "date-time" },
+        "model": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "overall": {
+      "description": "Gesamtampel des Projekts mit Trend und einem Satz Zusammenfassung.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "trend", "summary"],
+      "properties": {
+        "status": { "$ref": "#/$defs/status" },
+        "trend": { "$ref": "#/$defs/trend" },
+        "summary": { "type": "string", "maxLength": 280 }
+      }
+    },
+    "dimensions": {
+      "description": "Ampeln je Dimension. Pflicht: schedule (Zeit/Termine), risks (Risiken), measures (Maßnahmen); optional budget, quality, scope.",
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "status", "trend"],
+        "properties": {
+          "key": { "enum": ["schedule", "risks", "measures", "budget", "quality", "scope"] },
+          "status": { "$ref": "#/$defs/status" },
+          "trend": { "$ref": "#/$defs/trend" },
+          "note": { "type": "string", "maxLength": 280 }
+        }
+      }
+    },
+    "progress": {
+      "description": "Leistungsfortschritt im Berichtszeitraum (Zwischenergebnisse). Jeder Eintrag mit mindestens einem Beleg.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "result", "evidence"],
+        "properties": {
+          "title": { "type": "string" },
+          "result": { "enum": ["abgeschlossen", "zwischenergebnis"] },
+          "detail": { "type": "string" },
+          "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } }
+        }
+      }
+    },
+    "next_steps": {
+      "description": "Plan der nächsten Schritte bis zum nächsten Termin. Bestätigte To-dos des Termins landen hier.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "owner", "acceptance"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "owner": { "type": "string" },
+          "due_at": { "type": "string", "format": "date-time" },
+          "acceptance": { "type": "string", "description": "Woran man erkennt, dass es erledigt ist." },
+          "priority": { "enum": ["hoch", "mittel", "niedrig"] },
+          "confirmed": { "type": "boolean", "description": "Im Termin vom Owner bestätigt." }
+        }
+      }
+    },
+    "decisions": {
+      "description": "Entscheidungsbedarf mit Empfehlung, und was im Termin entschieden wurde.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "question", "recommendation", "outcome"],
+        "properties": {
+          "id": { "type": "string" },
+          "question": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" } },
+          "recommendation": { "type": "string" },
+          "rationale": { "type": "string" },
+          "outcome": { "enum": ["offen", "entschieden", "vertagt"] },
+          "decision": { "type": "string" },
+          "decided_by": { "type": "string" },
+          "due_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "deviations": {
+      "description": "Abweichungen, Risiken und Maßnahmen (Termine, Verantwortung, Financials).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "description", "area", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "enum": ["abweichung", "risiko"] },
+          "description": { "type": "string" },
+          "area": { "enum": ["termine", "verantwortung", "financials", "umfang", "qualitaet"] },
+          "impact": { "type": "string" },
+          "status": { "$ref": "#/$defs/status" },
+          "measures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "owner"],
+              "properties": {
+                "title": { "type": "string" },
+                "owner": { "type": "string" },
+                "due_at": { "type": "string", "format": "date-time" }
+              }
+            }
+          },
+          "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+        }
+      }
+    },
+    "protocol": {
+      "description": "Protokoll und Notizen: Tagesordnung, freie Themen, Notizen.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agenda", "free_topics", "notes"],
+      "properties": {
+        "agenda": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["item", "summary"],
+            "properties": {
+              "item": { "type": "string" },
+              "summary": { "type": "string" },
+              "minutes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "free_topics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["topic", "summary"],
+            "properties": {
+              "topic": { "type": "string" },
+              "summary": { "type": "string" }
+            }
+          }
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "confirmed_goal": {
+      "description": "Verweis auf das im Termin bestätigte Supervisor-Ziel bis zum nächsten Termin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["confirmed_at", "next_step_ids"],
+      "properties": {
+        "confirmed_at": { "type": "string", "format": "date-time" },
+        "confirmed_by": { "type": "string" },
+        "next_step_ids": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "description": "Ampel: planmäßig (grün), teilweise kritisch (gelb), kritisch (rot).",
+      "enum": ["planmaessig", "teilweise_kritisch", "kritisch"]
+    },
+    "trend": {
+      "description": "Trend gegenüber dem vorigen Termin.",
+      "enum": ["gleichbleibend", "verbesserung", "verschlechterung"]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": { "enum": ["pull_request", "commit", "release", "deployment", "kpi", "dokument", "transkript", "kommentar"] },
+        "ref": { "type": "string", "description": "z. B. mkh-welsch/ctox-dev#51" },
+        "url": { "type": "string", "format": "uri" },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
