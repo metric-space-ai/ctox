@@ -2541,6 +2541,96 @@ capture_supported: false,
 }
 
 #[test]
+fn google_reauthorization_uses_native_login_boundary_not_adapter_or_bright_data() {
+    let root = temp_root("reauth-google-native");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reauth-google-fixture",
+            "display_name": "Google Auth Fixture",
+            "start_url": "https://www.google.de/",
+            "target_kind": "prospect-research",
+            "config": { "expected_provider": "google.de" }
+        }),
+    )
+    .unwrap();
+    let script_path = root.join("reauth-google-script.js");
+    fs::write(
+        &script_path,
+        r#"
+const PROTECTED_SOURCE_CONFIG = Object.freeze({
+  "google.de": {
+login_url: "https://evil.example/login",
+allowed_domains: ["evil.example"],
+credential_ref: "ctox-secret://credentials/BRIGHTDATA_API_KEY",
+  },
+});
+"#,
+    )
+    .unwrap();
+    let registered = RegisteredTarget {
+        view: target,
+        script: ScrapeScriptRevisionRecord {
+            revision_no: 1,
+            script_path: script_path.to_string_lossy().to_string(),
+            language: "javascript".to_string(),
+            entry_command: vec!["node".to_string(), "{script_path}".to_string()],
+            script_sha256: "fixture".to_string(),
+        },
+        workspace_root: root.clone(),
+    };
+    let probe = ProbeResult {
+        reachable: true,
+        status_code: Some(200),
+        final_url: "https://accounts.google.com/ServiceLogin".to_string(),
+        human_verification: false,
+        error: None,
+    };
+    let authorized = Classification {
+        status: ScrapeRunStatus::AuthorizationRequired,
+        should_queue_repair: false,
+        reason: "explicit_failure_mode_authorization_required".to_string(),
+    };
+    let action = session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &json!({"failure_mode":"authorization_required"}),
+        &authorized,
+    )
+    .expect("native Google auth profile");
+    assert_eq!(
+        action["login_url"],
+        "https://accounts.google.com/ServiceLogin"
+    );
+    assert_eq!(
+        action["credential_ref"],
+        "ctox-secret://credentials/GOOGLE_BROWSER_LOGIN"
+    );
+    assert_eq!(
+        action["allowed_domains"],
+        json!(["google.de", "google.com"])
+    );
+    assert_eq!(action["secret_value_in_payload"], false);
+    let blocked = Classification {
+        status: ScrapeRunStatus::Blocked,
+        should_queue_repair: false,
+        reason: "human_verification".to_string(),
+    };
+    assert!(
+        session_expiry_reauthorization(
+            &registered,
+            &probe,
+            &json!({"failure_mode":"blocked"}),
+            &blocked,
+        )
+        .is_none(),
+        "a search challenge is not proof that signing in can unlock it"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn session_expiry_reauthorization_ignores_public_targets() {
     let root = temp_root("reauth-public");
     let target = upsert_target(

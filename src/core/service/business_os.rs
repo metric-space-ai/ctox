@@ -21,6 +21,10 @@ use uuid::Uuid;
 use crate::mission::channels;
 use crate::persistence;
 use crate::skill_store;
+#[path = "web_stack_auth_profiles.rs"]
+mod auth_profiles;
+pub(crate) use auth_profiles::web_stack_auth_source_defaults;
+use auth_profiles::{email_otp_sender_matches, web_stack_email_otp_recipe, WebStackEmailOtpRecipe};
 // Von ausserhalb wird dieser Pfad weiter erwartet; der Umzug darf die
 // oeffentliche Flaeche des Moduls nicht veraendern.
 pub(crate) use super::business_os_app_testing::resolve_business_os_validator_node;
@@ -2909,24 +2913,6 @@ return {{
         serde_json::to_string(country)?,
         DNB_BROWSER_WZ_PARSER,
     ))
-}
-
-#[derive(Clone, Copy)]
-struct WebStackAuthSourceDefaults {
-    login_url: &'static str,
-    allowed_domains: &'static [&'static str],
-    secret_name: &'static str,
-}
-
-fn web_stack_auth_source_defaults(source_id: &str) -> Option<WebStackAuthSourceDefaults> {
-    match source_id.trim().to_ascii_lowercase().as_str() {
-        "rocketreach.com" => Some(WebStackAuthSourceDefaults {
-            login_url: "https://rocketreach.co/login",
-            allowed_domains: &["rocketreach.com", "rocketreach.co"],
-            secret_name: "ROCKETREACH_BROWSER_LOGIN",
-        }),
-        _ => None,
-    }
 }
 
 fn build_web_stack_rocketreach_source_capture(
@@ -5880,32 +5866,6 @@ fn run_browser_session_automation_value(
     }
 }
 
-/// Providers that send their second factor by e-mail. The code is read from a
-/// mailbox CTOX already syncs (communication_messages); nothing is typed by a
-/// human and the code never leaves the host.
-struct WebStackEmailOtpRecipe {
-    sender_domains: &'static [&'static str],
-}
-
-fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmailOtpRecipe> {
-    let sender_domains: &'static [&'static str] = match source_id.trim() {
-        // D&B signs in through Okta (sso.dnb.com); the code mail comes from Okta.
-        "dnbhoovers.com" | "app.dnbhoovers.com" => &[
-            "mail.dnb.com",
-            "dnb.com",
-            "hoovers.com",
-            "okta.com",
-            "okta-emea.com",
-        ],
-        "leadfeeder.com" | "app.leadfeeder.com" => &["leadfeeder.com", "dealfront.com"],
-        "xing.com" => &["xing.com"],
-        "linkedin.com" => &["linkedin.com"],
-        "rocketreach.com" | "rocketreach.co" => &["rocketreach.co", "rocketreach.com"],
-        _ => return None,
-    };
-    Some(WebStackEmailOtpRecipe { sender_domains })
-}
-
 /// Pull the one-time code out of a verification mail. Prefers a token that
 /// follows a code/PIN marker; falls back to "<code> is your …" and to a lone
 /// 6-digit number.
@@ -5939,15 +5899,6 @@ fn extract_email_otp_code(subject: &str, body: &str) -> Option<String> {
         .captures(&text)
         .and_then(|captures| captures.get(1))
         .map(|value| value.as_str().to_string())
-}
-
-fn email_otp_sender_matches(recipe: &WebStackEmailOtpRecipe, sender: &str) -> bool {
-    let sender = sender.trim().to_ascii_lowercase();
-    let sender_domain = sender.rsplit('@').next().unwrap_or("");
-    recipe
-        .sender_domains
-        .iter()
-        .any(|domain| sender_domain == *domain || sender_domain.ends_with(&format!(".{domain}")))
 }
 
 fn find_fresh_email_otp(
