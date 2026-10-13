@@ -31,7 +31,7 @@ fn exit_autostart_admits_exactly_one_turn_without_resources_and_retains_reasoned
     let conn = open_store(root.path())?;
     let proposal = exit::read_state(&conn, "project", "owner")?;
     assert_eq!(proposal["status"], "blocked");
-    assert_eq!(proposal["resource_proposal"]["monthly_budget_eur"], 300);
+    assert_eq!(proposal["resource_proposal"]["monthly_budget_eur"], 300.0);
     assert!(proposal["result"].is_null());
     assert_eq!(
         proposal["findings"][0]["code"],
@@ -84,7 +84,7 @@ fn exit_autostart_due_refresh_reuses_proposal_and_never_repeats_active_research(
     let conn = open_store(root.path())?;
     let state = exit::read_state(&conn, "project", "owner")?;
     assert_eq!(state["status"], "researching");
-    assert_eq!(state["resource_proposal"]["monthly_budget_eur"], 300);
+    assert_eq!(state["resource_proposal"]["monthly_budget_eur"], 300.0);
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
