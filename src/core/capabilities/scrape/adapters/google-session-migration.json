@@ -1,0 +1,23 @@
+{
+  "schema": "ctox.scrape.adapter_migration.v1",
+  "requires_pr": 643,
+  "automatic_install": false,
+  "updates": [
+    {
+      "target_key": "google-de",
+      "expected_current_revision": 25,
+      "expected_current_script_sha256": "5c39e1fbcf763e02d03b7c2703719af40255ef380bb0f1207fa8d83d03abb3e4",
+      "source_path": "src/core/capabilities/scrape/adapters/google-de-authenticated.js",
+      "script_sha256": "1d7f505a51da94ec157681fa787710161dc3253bd9eea4fcf4e3071c05c264c0",
+      "language": "javascript"
+    },
+    {
+      "target_key": "maps-google-com",
+      "expected_current_revision": 31,
+      "expected_current_script_sha256": "fb49fae926e20d9730fa61be46beff4d9a26cbd975b65c1da02031d961015cd6",
+      "source_path": "src/core/capabilities/scrape/adapters/google-maps-authenticated.js",
+      "script_sha256": "b4f393be07f4586c12e8239cc7b8787a9e70e70a6f2ec6dbbc9c2fac4d1c3ffa",
+      "language": "javascript"
+    }
+  ]
+}
