@@ -18,6 +18,7 @@ pub(in crate::business_os) fn is_command(kind: &str) -> bool {
         kind,
         "ctox.workjet.jour_fixe.todos.confirm"
             | "ctox.workjet.jour_fixe.meeting.start"
+            | "ctox.workjet.jour_fixe.meeting.reschedule"
             | "ctox.workjet.jour_fixe.meeting.end"
             | "ctox.workjet.jour_fixe.transcript.append"
             | "ctox.workjet.jour_fixe.narration.local_publish"
@@ -38,33 +39,35 @@ pub(in crate::business_os) fn is_reserved_command(kind: &str) -> bool {
 }
 enum Edit {
     Start(wire::MeetingTransitionRequest),
+    Reschedule(wire::RescheduleMeetingRequest),
     End(wire::MeetingTransitionRequest),
     Text(wire::AppendTranscriptRequest),
     Comment(wire::AddCommentRequest),
     Revise(wire::ProposeTodosRequest),
 }
 impl Edit {
-    fn identity(&self) -> (&str, &str, u64) {
+    fn identity(&self) -> (&str, &str, Option<u64>) {
         match self {
+            Self::Reschedule(v) => (&v.operation_id, &v.meeting_id, None),
             Self::Start(v) | Self::End(v) => (
                 v.operation_id.as_str(),
                 v.meeting_id.as_str(),
-                v.expected_revision,
+                Some(v.expected_revision),
             ),
             Self::Text(v) => (
                 v.operation_id.as_str(),
                 v.meeting_id.as_str(),
-                v.expected_revision,
+                Some(v.expected_revision),
             ),
             Self::Comment(v) => (
                 v.operation_id.as_str(),
                 v.meeting_id.as_str(),
-                v.expected_revision,
+                Some(v.expected_revision),
             ),
             Self::Revise(v) => (
                 v.operation_id.as_str(),
                 v.meeting_id.as_str(),
-                v.expected_revision,
+                Some(v.expected_revision),
             ),
         }
     }
@@ -86,6 +89,15 @@ fn parse(command: &BusinessCommand) -> anyhow::Result<(Edit, Value)> {
             let v: wire::MeetingTransitionRequest = serde_json::from_value(payload.clone())?;
             v.validate().map_err(anyhow::Error::msg)?;
             Edit::Start(v)
+        }
+        "ctox.workjet.jour_fixe.meeting.reschedule" => {
+            let v: wire::RescheduleMeetingRequest = serde_json::from_value(payload.clone())?;
+            v.validate().map_err(anyhow::Error::msg)?;
+            ensure!(
+                v.project_id.trim() == v.project_id,
+                "project identity must be canonical"
+            );
+            Edit::Reschedule(v)
         }
         "ctox.workjet.jour_fixe.meeting.end" => {
             let v: wire::MeetingTransitionRequest = serde_json::from_value(payload.clone())?;
@@ -295,6 +307,15 @@ pub(in crate::business_os) fn check_live_meeting_for_authenticated_actor(
     })
 }
 
+pub(super) fn check_start_time(meeting: &wire::Meeting, now_ms: i64) -> anyhow::Result<()> {
+    let starts_at = meeting.scheduled_at_ms.saturating_sub(5 * 60 * 1000);
+    ensure!(
+        now_ms >= starts_at,
+        "meeting_not_started: starts_at={starts_at}"
+    );
+    Ok(())
+}
+
 pub(in crate::business_os) fn handle(
     root: &Path,
     command: &BusinessCommand,
@@ -341,12 +362,19 @@ pub(in crate::business_os) fn handle(
             ensure!(owner==meeting.owner_user_id && hash==intent,"meeting operation intent conflicts");
             return Ok(AppliedDomainEffect{result:serde_json::from_str(&receipt)?,projections:vec![]});
         }
-        ensure!(meeting.revision==expected,"meeting revision changed; read the current meeting");
+        ensure!(expected.is_none_or(|revision|meeting.revision==revision),"meeting revision changed; read the current meeting");
         let mut changed_id=None;
         let mut todos_revision=None;
         match &edit {
+            Edit::Reschedule(request)=>{
+                ensure!(request.project_id==meeting.project_id,"meeting routing conflicts with project");
+                ensure!(matches!(meeting.state,wire::MeetingState::Planned|wire::MeetingState::Ready),
+                    "only a planned or ready meeting can be rescheduled");
+                meeting.scheduled_at_ms=request.scheduled_at_ms;
+            },
             Edit::Start(_)=>{
                 ensure!(meeting.state==wire::MeetingState::Ready,"only a ready meeting can start");
+                check_start_time(&meeting,chrono::Utc::now().timestamp_millis())?;
                 ensure!(meeting.deck_revision>0 && !meeting.slides.is_empty(),"meeting has no published deck");
                 ensure!(meeting.slides.iter().all(|s|s.meeting_id==meeting.id && s.audio.is_some()),
                     "meeting narration is not ready");
@@ -421,8 +449,11 @@ pub(in crate::business_os) fn handle(
             revision:meeting.revision,state:meeting.state.clone(),changed_id,todos_revision,
         };
         receipt.validate().map_err(anyhow::Error::msg)?;
-        let result=json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"mutation":receipt});
-        tx.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?2 WHERE meeting_id=?1",params![id,metadata])?;
+        let mut result=json!({"ok":true,"contract":wire::CONTRACT_SCHEMA,"mutation":receipt});
+        if matches!(edit,Edit::Reschedule(_)) {
+            result["meeting"]=serde_json::to_value(&meeting)?;
+        }
+        tx.execute("UPDATE workjet_jour_fixe_meetings SET metadata_json=?2,scheduled_at_ms=?3 WHERE meeting_id=?1",params![id,metadata,meeting.scheduled_at_ms])?;
         tx.execute("INSERT INTO workjet_jour_fixe_owner_operations VALUES (?1,?2,?3,?4)",params![operation,meeting.owner_user_id,intent,serde_json::to_string(&result)?])?;
         Ok(AppliedDomainEffect{result,projections:vec![]})
     })?;

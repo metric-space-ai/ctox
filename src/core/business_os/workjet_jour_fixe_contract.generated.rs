@@ -958,6 +958,57 @@ impl WireValidate for PublishDeckRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct RescheduleMeetingRequest {
+    pub(crate) project_id: String,
+    pub(crate) meeting_id: String,
+    pub(crate) scheduled_at_ms: i64,
+    pub(crate) operation_id: String,
+}
+impl WireValidate for RescheduleMeetingRequest {
+    fn validate(&self) -> Result<(), String> {
+        {
+            let value = &self.project_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("RescheduleMeetingRequest.project_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("RescheduleMeetingRequest.project_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.meeting_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("RescheduleMeetingRequest.meeting_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("RescheduleMeetingRequest.meeting_id violates max_chars".into());
+            }
+        }
+        {
+            let value = &self.scheduled_at_ms;
+            value.validate()?;
+            if *value < 0 {
+                return Err("RescheduleMeetingRequest.scheduled_at_ms violates minimum".into());
+            }
+        }
+        {
+            let value = &self.operation_id;
+            value.validate()?;
+            if value.chars().count() < 1 {
+                return Err("RescheduleMeetingRequest.operation_id violates min_chars".into());
+            }
+            if value.chars().count() > 128 {
+                return Err("RescheduleMeetingRequest.operation_id violates max_chars".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MeetingTransitionRequest {
     pub(crate) operation_id: String,
     pub(crate) meeting_id: String,
@@ -2190,6 +2241,9 @@ pub(crate) fn validate_fixture(kind: &str, value: serde_json::Value) -> Result<(
             .map_err(|e| e.to_string())?
             .validate(),
         "PublishDeckRequest" => serde_json::from_value::<PublishDeckRequest>(value)
+            .map_err(|e| e.to_string())?
+            .validate(),
+        "RescheduleMeetingRequest" => serde_json::from_value::<RescheduleMeetingRequest>(value)
             .map_err(|e| e.to_string())?
             .validate(),
         "MeetingTransitionRequest" => serde_json::from_value::<MeetingTransitionRequest>(value)

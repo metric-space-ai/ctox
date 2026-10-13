@@ -660,3 +660,156 @@ fn comment_rolls_back_with_failed_domain_receipt_and_retries_once() -> anyhow::R
     assert_eq!(saved(root.path())?["comments"].as_array().unwrap().len(), 1);
     Ok(())
 }
+
+fn move_request(op: &str, at: i64) -> Value {
+    json!({"project_id":"project","meeting_id":"meeting-1","scheduled_at_ms":at,"operation_id":op})
+}
+#[test]
+fn reschedule_updates_occurrence_read_and_index_but_keeps_weekly_rhythm_and_deck(
+) -> anyhow::Result<()> {
+    for state in ["planned", "ready"] {
+        let root = fixture(state)?;
+        let before = saved(root.path())?;
+        let project =
+            outbound_load_record(&open_store(root.path())?, "workjet_projects", "project")?;
+        let moved = send(
+            root.path(),
+            "move",
+            "meeting.reschedule",
+            "owner",
+            move_request("move-op", 1791453600000),
+        )?;
+        assert_eq!(moved["status"], "completed", "{moved}");
+        let after = saved(root.path())?;
+        assert_eq!(after["revision"], 1);
+        for key in [
+            "state",
+            "slides",
+            "deck_revision",
+            "prepare_at_ms",
+            "timezone",
+        ] {
+            assert_eq!(after[key], before[key], "{key}");
+        }
+        assert_eq!(
+            project,
+            outbound_load_record(&open_store(root.path())?, "workjet_projects", "project")?
+        );
+        let indexed: i64 = open_store(root.path())?.query_row(
+            "SELECT scheduled_at_ms FROM workjet_jour_fixe_meetings WHERE meeting_id='meeting-1'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(indexed, 1791453600000);
+        let read = send(
+            root.path(),
+            "read-moved",
+            "meeting.read",
+            "owner",
+            json!({"project_id":"project","meeting_id":"meeting-1"}),
+        )?;
+        assert_eq!(read["result"]["meeting"]["scheduled_at_ms"], indexed);
+        let replay = send(
+            root.path(),
+            "replay",
+            "meeting.reschedule",
+            "owner",
+            move_request("move-op", 1791453600000),
+        )?;
+        assert_eq!(moved["result"], replay["result"]);
+        rejected(send(
+            root.path(),
+            "conflict",
+            "meeting.reschedule",
+            "owner",
+            move_request("move-op", 1791457200000),
+        ));
+        assert_eq!(saved(root.path())?["revision"], 1);
+    }
+    Ok(())
+}
+#[test]
+fn reschedule_rejects_foreign_owner_project_live_and_finished_states() -> anyhow::Result<()> {
+    let root = fixture("ready")?;
+    rejected(send(
+        root.path(),
+        "foreign",
+        "meeting.reschedule",
+        "foreign",
+        move_request("foreign-op", 1791453600000),
+    ));
+    let mut wrong = move_request("wrong-op", 1791453600000);
+    wrong["project_id"] = json!("other");
+    rejected(send(
+        root.path(),
+        "wrong",
+        "meeting.reschedule",
+        "owner",
+        wrong,
+    ));
+    assert_eq!(saved(root.path())?["revision"], 0);
+    for state in [
+        "preparing",
+        "live",
+        "review",
+        "confirmed",
+        "cancelled",
+        "failed",
+    ] {
+        let root = fixture(state)?;
+        rejected(send(
+            root.path(),
+            "move",
+            "meeting.reschedule",
+            "owner",
+            move_request("move-op", 1791453600000),
+        ));
+        assert_eq!(saved(root.path())?["revision"], 0);
+    }
+    Ok(())
+}
+#[test]
+fn reschedule_start_gate_follows_new_time_at_exact_five_minute_boundary() -> anyhow::Result<()> {
+    let root = fixture("ready")?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let at = now + 3600000;
+    send(
+        root.path(),
+        "future",
+        "meeting.reschedule",
+        "owner",
+        move_request("future-op", at),
+    )?;
+    let early = send(
+        root.path(),
+        "early",
+        "meeting.start",
+        "owner",
+        request("early-op", 1),
+    )?;
+    assert_eq!(early["status"], "failed", "{early}");
+    assert!(early["error_message"]
+        .as_str()
+        .unwrap()
+        .contains("meeting_not_started"));
+    let meeting: super::super::workjet_jour_fixe_contract::Meeting =
+        serde_json::from_value(saved(root.path())?)?;
+    assert!(super::super::jour_fixe_owner::check_start_time(&meeting, at - 300001).is_err());
+    super::super::jour_fixe_owner::check_start_time(&meeting, at - 300000)?;
+    send(
+        root.path(),
+        "now",
+        "meeting.reschedule",
+        "owner",
+        move_request("now-op", now),
+    )?;
+    let started = send(
+        root.path(),
+        "start",
+        "meeting.start",
+        "owner",
+        request("start-op", 2),
+    )?;
+    assert_eq!(started["status"], "completed", "{started}");
+    Ok(())
+}

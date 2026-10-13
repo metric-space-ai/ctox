@@ -446,6 +446,29 @@ export const JOUR_FIXE_TYPES = deepFreeze({
       }
     }
   },
+  "RescheduleMeetingRequest": {
+    "fields": {
+      "project_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "meeting_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      },
+      "scheduled_at_ms": {
+        "type": "i64",
+        "minimum": 0
+      },
+      "operation_id": {
+        "type": "String",
+        "min_chars": 1,
+        "max_chars": 128
+      }
+    }
+  },
   "MeetingTransitionRequest": {
     "fields": {
       "operation_id": {
@@ -1000,6 +1023,10 @@ export const JOUR_FIXE_COMMANDS = deepFreeze({
   "ctox.workjet.jour_fixe.deck.publish": {
     "request_type": "PublishDeckRequest",
     "authorization": "bound_supervisor"
+  },
+  "ctox.workjet.jour_fixe.meeting.reschedule": {
+    "request_type": "RescheduleMeetingRequest",
+    "authorization": "owner"
   },
   "ctox.workjet.jour_fixe.meeting.start": {
     "request_type": "MeetingTransitionRequest",

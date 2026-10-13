@@ -137,13 +137,22 @@ pub(super) fn emit(
             && existing.owner_user_id == meeting.owner_user_id
             && existing.supervisor.workjet_thread_id == binding.thread_id
             && existing.supervisor.ctox_thread_key == binding.thread_key
-            && existing.scheduled_at_ms == scheduled_at
             && existing.prepare_at_ms == prepare_at
             && existing.timezone == calendar.timezone,
         "preparation occurrence conflicts with stored meeting"
     );
+    let retained: Option<String> = tx.query_row(
+        "SELECT preparation_task_id FROM workjet_jour_fixe_meetings WHERE meeting_id=?1",
+        [&meeting_id],
+        |row| row.get(0),
+    )?;
     tx.commit()?;
     drop(conn);
+    // A replay of the weekly occurrence keeps a one-off time override and its
+    // admitted preparation. In particular, a ready deck is never regenerated.
+    if let Some(key) = retained {
+        return Ok(Some((key, "emitted".to_owned())));
+    }
     super::super::workjet_project_kpis::resolver::refresh_project(root, &route.project_id, true)?;
     super::jour_fixe_brief::prepare(root, &operation, &existing, &project)?;
     // Supervisor goals are bounded single-line text; retain every embedded skill word.

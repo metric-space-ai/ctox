@@ -363,3 +363,38 @@ fn changing_calendar_rejects_old_route_and_preserves_operator_pause() -> anyhow:
     assert_eq!(count(root.path(), "user_thread_messages")?, 0);
     Ok(())
 }
+
+#[test]
+fn rescheduled_ready_occurrence_replay_keeps_preparation_and_weekly_rhythm() -> anyhow::Result<()> {
+    let root = fixture()?;
+    let task = task(root.path())?;
+    let due = task.next_run_at.as_deref().context("due")?;
+    let first =
+        super::super::jour_fixe_preparation::emit(root.path(), &task, due)?.context("emitted")?;
+    let mut meeting = latest(root.path())?["meeting"].clone();
+    let id = meeting["id"].as_str().unwrap().to_owned();
+    meeting["state"] = json!("ready");
+    open_store(root.path())?.execute(
+        "UPDATE workjet_jour_fixe_meetings SET metadata_json=?2 WHERE meeting_id=?1",
+        rusqlite::params![id, meeting.to_string()],
+    )?;
+    let at = meeting["scheduled_at_ms"].as_i64().unwrap() + 3600000;
+    let moved = store::accept_rxdb_business_command_with_origin(
+        root.path(),
+        json!({"id":"move-occurrence","module":"ctox","record_id":"project",
+        "command_type":"ctox.workjet.jour_fixe.meeting.reschedule","payload":{"project_id":"project","meeting_id":id,"scheduled_at_ms":at,"operation_id":"move-op"},
+        "client_context":{"actor":{"id":"owner","role":"admin"}}}),
+        store::CommandOrigin::TrustedLocal,
+    )?;
+    assert_eq!(moved["status"], "completed", "{moved}");
+    assert_eq!(
+        first,
+        super::super::jour_fixe_preparation::emit(root.path(), &task, due)?.unwrap()
+    );
+    let after = latest(root.path())?;
+    assert_eq!(after["meeting"]["state"], "ready");
+    assert_eq!(after["meeting"]["scheduled_at_ms"], at);
+    assert_eq!(after["preparation_task_id"], first.0);
+    assert_eq!(task.cron_expr, self::task(root.path())?.cron_expr);
+    Ok(())
+}
