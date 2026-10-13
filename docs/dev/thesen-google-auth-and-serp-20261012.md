@@ -54,8 +54,13 @@ Bright Data is separate: the LinkedIn target is revision 9, starts at
 `https://api.brightdata.com/`, and its script SHA256 is
 `a910e742d26f0abca1ab904c41ffa37ca05a8ed291f6147b8e450cfebe5e60d1`.
 The supervisor verified `HTTP 400: Customer is not active` since
-26 September 13:29 UTC (640 runs), with no SERP zone. These counts/account
-facts are supervisor evidence, not a new provider probe. A stored key is not
+26 September 13:29 UTC (640 runs), with no SERP zone. After the customer reported
+funding on 13 October, a normal reload of the authenticated provider dashboard
+showed Active, a positive cash balance and all 5,000 monthly credits remaining.
+That resolves the provider-account prerequisite, not a native LinkedIn run or
+the separate SERP-zone prerequisite. The historical failure counts and missing
+SERP-zone finding are supervisor evidence; the reactivation is a direct dashboard
+observation and not a native adapter probe. A stored key is not
 proof that the provider account or the separate SERP product is enabled.
 
 ## First slice
@@ -91,8 +96,8 @@ Google SERP works or that the access challenge has been cleared.
    owned mailbox path. Push/SMS/security-key factors or a surviving search
    challenge must expose the exact remaining operator step. Do not claim
    access merely because a password form disappeared.
-4. Michael must reactivate the Bright Data account and configure its SERP
-   zone. The native SERP adapter needs a typed zone setting and secret reference;
+4. Confirm the provider reactivation in a native LinkedIn run and configure
+   the separate SERP zone if it remains absent. The native SERP adapter needs a typed zone setting and secret reference;
    no guessed zone, no use of the LinkedIn dataset as search. For a browser
    challenge only, dispatch one bounded fallback through that separate target.
    Preserve the browser failure and actual fallback run/transport provenance;
