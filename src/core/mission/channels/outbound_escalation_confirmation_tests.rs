@@ -209,6 +209,24 @@ fn founder_escalation_never_self_approves_or_completes_request() {
         .unwrap();
     assert_eq!(confirmed["message_key"], receipt["message_key"]);
     assert_eq!(confirmed["delivery_confirmed"], true);
+    // Older versions could have handled the inbound from this policy receipt.
+    // It must remain visible to the existing unreviewed-handled repair sweep.
+    conn.execute(
+        "UPDATE communication_routing_state SET route_status='handled' WHERE message_key=?1",
+        [inbound_key],
+    )
+    .unwrap();
+    assert_eq!(
+        super::super::list_unreviewed_handled_inbound_messages(&root, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    conn.execute(
+        "UPDATE communication_routing_state SET route_status='leased' WHERE message_key=?1",
+        [inbound_key],
+    )
+    .unwrap();
     // Delivery of a self-approved notice still cannot complete the request.
     assert!(super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).is_err());
     conn.execute(
