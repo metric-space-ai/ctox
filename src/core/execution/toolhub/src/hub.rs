@@ -583,8 +583,14 @@ impl<B: SecretBackend> ToolHub<B> {
                 return Ok(self.credential_required(&toolkit, Some(account.id)));
             }
             if (200..300).contains(&response.status) {
-                return Ok(ToolOutcome::Success {
-                    data: adapter.parse_response(tool_slug, &response)?,
+                // Providers like Slack report errors as HTTP 200 + ok:false;
+                // adapters surface those as parse errors -> provider error.
+                return Ok(match adapter.parse_response(tool_slug, &response) {
+                    Ok(data) => ToolOutcome::Success { data },
+                    Err(e) => ToolOutcome::ProviderError {
+                        status: response.status,
+                        data: serde_json::json!({"error": e.to_string()}),
+                    },
                 });
             }
             return Ok(ToolOutcome::ProviderError {

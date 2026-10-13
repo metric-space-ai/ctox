@@ -138,7 +138,7 @@ pub fn start_refresh_loop(root: PathBuf) {
 }
 
 const USAGE: &str = "usage: ctox toolhub <command> [options]   (JSON on stdout, logs on stderr)
-  remote MCP connectors: mcp-servers | mcp-list | mcp-connect --server S [--project P] | mcp-complete --callback URL | mcp-handover (JSON stdin) | mcp-client-set --server S --client-id ID [--client-secret-stdin] | mcp-tools --server S | mcp-disconnect --server S | exec <server>.<tool> [--json ..] [--confirm]
+  remote MCP connectors: mcp-servers | mcp-list | mcp-connect --server S [--project P] | mcp-complete --callback URL | mcp-client-set --server S --client-id ID [--client-secret-stdin] | mcp-tools --server S | mcp-disconnect --server S | exec <server>.<tool> [--json ..] [--confirm]
   catalog [--json]                      toolkits, tools, input schemas
   list [--json]                         connected accounts (no secrets)
   configs                               auth configs (no secrets)
@@ -316,7 +316,7 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         Some("mcp-list") => print(&mcp(root)?.list()?),
         Some("mcp-connect") => {
             let resolver = store_project_resolver(root);
-            let project = resolve_project(rest, &resolver)?;
+            let project = mcp_project(rest, &resolver)?;
             let scopes: Vec<String> = rest
                 .windows(2)
                 .filter(|w| w[0] == "--scope")
@@ -331,14 +331,8 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         }
         Some("mcp-complete") => {
             let resolver = store_project_resolver(root);
-            let project = resolve_project(rest, &resolver)?;
+            let project = mcp_project(rest, &resolver)?;
             print(&mcp(root)?.complete(required(rest, "--callback")?, &project)?)
-        }
-        Some("mcp-handover") => {
-            let resolver = store_project_resolver(root);
-            let project = resolve_project(rest, &resolver)?;
-            let h: ctox_toolhub::remote_mcp::Handover = serde_json::from_str(&read_stdin()?)?;
-            print(&mcp(root)?.complete_handover(&project, &h)?)
         }
         Some("mcp-client-set") => {
             let secret = has(rest, "--client-secret-stdin")
@@ -353,12 +347,12 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         }
         Some("mcp-tools") => {
             let resolver = store_project_resolver(root);
-            let project = resolve_project(rest, &resolver)?;
+            let project = mcp_project(rest, &resolver)?;
             print(&mcp(root)?.list_tools(required(rest, "--server")?, &project)?)
         }
         Some("mcp-disconnect") => {
             let resolver = store_project_resolver(root);
-            let project = resolve_project(rest, &resolver)?;
+            let project = mcp_project(rest, &resolver)?;
             mcp(root)?.disconnect(required(rest, "--server")?, &project)?;
             print(&json!({"removed": true}))
         }
@@ -421,13 +415,6 @@ impl McpRef {
     fn complete(&self, cb: &str, p: &str) -> Result<ctox_toolhub::remote_mcp::ConnectionInfo> {
         self.0.client().complete(cb, p)
     }
-    fn complete_handover(
-        &self,
-        p: &str,
-        h: &ctox_toolhub::remote_mcp::Handover,
-    ) -> Result<ctox_toolhub::remote_mcp::ConnectionInfo> {
-        self.0.client().complete_handover(p, h)
-    }
     fn set_client(&self, s: &str, id: &str, sec: Option<&str>) -> Result<()> {
         self.0.client().set_client(s, id, sec)
     }
@@ -439,15 +426,314 @@ impl McpRef {
     }
 }
 
+/// Public HTTPS base URL of this instance (e.g. `https://welsch.ctox.dev`).
+/// Configured, never derived from request headers (Host is caller-controlled).
+pub const PUBLIC_BASE_URL_ENV: &str = "CTOX_PUBLIC_BASE_URL";
+/// Instance-hosted OAuth callback route for remote MCP connectors.
+pub const MCP_CALLBACK_PATH: &str = "/toolhub/oauth/callback";
+
+/// Redirect URI owned by the instance: DCR registration (one per instance and
+/// provider, reused), state, PKCE verifier and tokens all belong to the
+/// instance; any client only opens the authorize URL the instance hands out.
+/// Loopback is a local-dev fallback only (`CTOX_TOOLHUB_DEV_LOOPBACK=1`).
+pub fn mcp_redirect_uri() -> Result<String> {
+    if let Ok(base) = std::env::var(PUBLIC_BASE_URL_ENV) {
+        let base = base.trim().trim_end_matches('/');
+        let parsed = url::Url::parse(base).context("invalid CTOX_PUBLIC_BASE_URL")?;
+        if parsed.scheme() != "https" || parsed.host_str().is_none() {
+            bail!("CTOX_PUBLIC_BASE_URL must be an https origin");
+        }
+        return Ok(format!("{base}{MCP_CALLBACK_PATH}"));
+    }
+    if std::env::var("CTOX_TOOLHUB_DEV_LOOPBACK").is_ok_and(|v| v == "1") {
+        return Ok(RedirectTarget::Loopback {
+            port: loopback_port()?,
+        }
+        .redirect_uri());
+    }
+    bail!("Öffentliche Instanz-URL fehlt (CTOX_PUBLIC_BASE_URL) / instance public base URL not configured")
+}
+
 fn mcp(root: &Path) -> Result<McpRef> {
     Ok(McpRef(McpHost {
         backend: CtoxSecretBackend::new(root),
         transport: UreqTransport::default(),
-        redirect: RedirectTarget::Loopback {
-            port: loopback_port()?,
-        }
-        .redirect_uri(),
+        redirect: mcp_redirect_uri().unwrap_or_default(),
     }))
+}
+
+/// Instance-hosted OAuth callback: validates state, exchanges code + verifier
+/// on the instance and returns a small result page for the in-app window.
+pub fn handle_mcp_oauth_callback(root: &Path, url: &str) -> (u16, String) {
+    let page = |ok: bool, de: &str, en: &str| {
+        format!(
+            "<!doctype html><meta charset=utf-8><title>{}</title><body data-toolhub-result=\"{}\" style=\"font:15px system-ui;padding:2em\"><h1>{de}</h1><p>{en}</p></body>",
+            if ok { "CTOX Toolhub: verbunden" } else { "CTOX Toolhub: Fehler" },
+            if ok { "connected" } else { "failed" }
+        )
+    };
+    match mcp(root).and_then(|h| h.complete(url, INSTANCE_SCOPE)) {
+        Ok(_) => (
+            200,
+            page(
+                true,
+                "Verbunden. Dieses Fenster schließt sich.",
+                "Connected. This window will close.",
+            ),
+        ),
+        Err(e) => {
+            eprintln!("[toolhub] oauth callback failed: {e:#}");
+            (
+                400,
+                page(false, "Verbindung fehlgeschlagen.", "Connection failed."),
+            )
+        }
+    }
+}
+
+fn exec_via_proxy(
+    base: &str,
+    server: &str,
+    tool: &str,
+    args: &Value,
+    confirm: bool,
+) -> (i32, Value) {
+    let token = std::env::var("CTOX_TOOLHUB_PROXY_TOKEN").unwrap_or_default();
+    let url = format!(
+        "{}/api/business-os/toolhub/mcp/call",
+        base.trim_end_matches('/')
+    );
+    let resp = ureq::post(&url)
+        .set("authorization", &format!("Bearer {token}"))
+        .set("content-type", "application/json")
+        .send_string(
+            &json!({"server": server, "tool": tool, "arguments": args, "confirm": confirm})
+                .to_string(),
+        );
+    let v: Value = match resp {
+        Ok(r) => serde_json::from_reader(r.into_reader()).unwrap_or(Value::Null),
+        Err(ureq::Error::Status(code, _)) => {
+            return (
+                exit::UPSTREAM,
+                json!({"outcome": "provider_error", "message": format!("proxy HTTP {code}")}),
+            )
+        }
+        Err(e) => {
+            return (
+                exit::INTERNAL,
+                json!({"outcome": "error", "message": e.to_string()}),
+            )
+        }
+    };
+    let outcome = v.get("outcome").cloned().unwrap_or(Value::Null);
+    let code = match outcome.get("outcome").and_then(Value::as_str) {
+        Some("success") => exit::OK,
+        Some("credential_required") => exit::CREDENTIAL_REQUIRED,
+        Some("approval_required") => exit::APPROVAL_REQUIRED,
+        _ => exit::UPSTREAM,
+    };
+    (code, outcome)
+}
+
+fn hub_for_proxy(root: &Path) -> Result<ToolHub<CtoxSecretBackend>> {
+    hub(root)
+}
+
+/// Instance-wide connection scope used by the Workjet "Schnittstellen" store and
+/// the central proxy (shared by every harness/PC of the instance network).
+pub const INSTANCE_SCOPE: &str = "_instance";
+
+/// Project for MCP commands: explicit/env project (must exist) or the instance scope.
+fn mcp_project(args: &[String], resolver: ProjectResolver<'_>) -> Result<String> {
+    let explicit = flag(args, "--project").is_some()
+        || std::env::var(PROJECT_ENV).is_ok_and(|p| !p.trim().is_empty());
+    if explicit {
+        resolve_project(args, resolver)
+    } else {
+        Ok(INSTANCE_SCOPE.into())
+    }
+}
+
+/// Central toolhub proxy on the instance (`/api/business-os/toolhub/<route>`).
+/// Auth is done by the Business OS server (session cookie or capability bearer),
+/// so Workjet apps, harnesses and PCs in the instance network share connections
+/// without ever receiving provider tokens. Returns (HTTP status, JSON).
+pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) -> (u16, Value) {
+    use ctox_toolhub::remote_mcp::McpOutcome;
+    let err = |status: u16, m: String| (status, json!({"ok": false, "message": m}));
+    let hub = match mcp(root) {
+        Ok(h) => h,
+        Err(e) => return err(500, e.to_string()),
+    };
+    let s = |k: &str| body.get(k).and_then(Value::as_str).map(str::to_string);
+    let server = s("server").unwrap_or_default();
+    match route {
+        "connections" => {
+            let connections: Vec<_> = hub
+                .list()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|c| c.project == INSTANCE_SCOPE)
+                .collect();
+            (
+                200,
+                json!({"ok": true, "servers": ctox_toolhub::remote_mcp::registry(), "connections": connections}),
+            )
+        }
+        "connect" | "disconnect" if !admin => err(403, "chef or admin role required".into()),
+        "connect" => {
+            if hub.0.redirect.is_empty() {
+                return err(
+                    409,
+                    mcp_redirect_uri()
+                        .err()
+                        .map(|e| e.to_string())
+                        .unwrap_or_default(),
+                );
+            }
+            match hub.connect(&server, INSTANCE_SCOPE, None) {
+                Ok(req) => (
+                    200,
+                    json!({"ok": true, "server": req.server, "authorize_url": req.authorize_url, "redirect_uri": req.redirect_uri}),
+                ),
+                Err(e) => err(502, e.to_string()),
+            }
+        }
+        "disconnect" => {
+            if let Some(toolkit) = s("toolkit") {
+                let removed = hub_for_proxy(root).and_then(|h| {
+                    let mut n = 0;
+                    for a in h
+                        .store()
+                        .list()?
+                        .into_iter()
+                        .filter(|a| a.project == INSTANCE_SCOPE && a.toolkit == toolkit)
+                    {
+                        if h.disconnect(&a.id)? {
+                            n += 1;
+                        }
+                    }
+                    Ok(n)
+                });
+                return match removed {
+                    Ok(n) => (200, json!({"ok": true, "removed": n})),
+                    Err(e) => err(500, e.to_string()),
+                };
+            }
+            match hub.disconnect(&server, INSTANCE_SCOPE) {
+                Ok(()) => (200, json!({"ok": true})),
+                Err(e) => err(500, e.to_string()),
+            }
+        }
+        "mcp/tools" => match hub.list_tools(&server, INSTANCE_SCOPE) {
+            Ok(tools) => (200, json!({"ok": true, "server": server, "tools": tools})),
+            Err(_) => (
+                200,
+                json!({"ok": false, "outcome": serde_json::to_value(hub.0.client().credential_required(&server, INSTANCE_SCOPE)).unwrap_or(Value::Null)}),
+            ),
+        },
+        "mcp/call" => {
+            let tool = s("tool").unwrap_or_default();
+            let args = body.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let confirmed = body.get("confirm").and_then(Value::as_bool) == Some(true);
+            if !confirmed {
+                match hub.list_tools(&server, INSTANCE_SCOPE) {
+                    Ok(tools) => match tools.iter().find(|t| t.name == tool) {
+                        None => return err(404, format!("unknown tool `{tool}` on `{server}`")),
+                        Some(t) if t.mutating() => {
+                            return (
+                                200,
+                                json!({"ok": false, "outcome": {"outcome": "approval_required", "tool": format!("{server}.{tool}")}}),
+                            )
+                        }
+                        Some(_) => {}
+                    },
+                    Err(_) => {
+                        return (
+                            200,
+                            json!({"ok": false, "outcome": serde_json::to_value(hub.0.client().credential_required(&server, INSTANCE_SCOPE)).unwrap_or(Value::Null)}),
+                        )
+                    }
+                }
+            }
+            match hub
+                .0
+                .client()
+                .call_tool(&server, INSTANCE_SCOPE, &tool, &args)
+            {
+                Ok(o) => (
+                    200,
+                    json!({"ok": matches!(o, McpOutcome::Success { .. }), "outcome": o}),
+                ),
+                Err(e) => err(502, e.to_string()),
+            }
+        }
+        // Native adapters (Slack, Gmail, GitHub): catalog, token connect, call.
+        "catalog" => match hub_for_proxy(root) {
+            Ok(h) => {
+                let accounts: Vec<_> = h
+                    .store()
+                    .list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|a| a.project == INSTANCE_SCOPE)
+                    .collect();
+                (
+                    200,
+                    json!({"ok": true, "toolkits": h.catalog(), "accounts": accounts}),
+                )
+            }
+            Err(e) => err(500, e.to_string()),
+        },
+        "credential" if !admin => err(403, "chef or admin role required".into()),
+        "credential" => {
+            let (Some(toolkit), Some(credential)) = (s("toolkit"), s("credential")) else {
+                return err(400, "toolkit and credential required".into());
+            };
+            let result = hub_for_proxy(root).and_then(|h| {
+                let config = AuthConfig {
+                    id: format!("{toolkit}-token"),
+                    toolkit: toolkit.clone(),
+                    scheme: AuthSchemeKind::Bearer,
+                    source: ClientCredentialSource::None,
+                    client_id: None,
+                    scopes: vec![],
+                    enabled: true,
+                };
+                h.upsert_auth_config(&config, None)?;
+                h.connect_with_credential(&config.id, INSTANCE_SCOPE, "workjet", credential.trim())
+            });
+            match result {
+                Ok(account) => (200, json!({"ok": true, "account": account})),
+                Err(e) => err(400, e.to_string()),
+            }
+        }
+        "call" => {
+            let name = s("tool").unwrap_or_default();
+            let mut argv = vec![
+                name,
+                "--json".into(),
+                body.get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+                    .to_string(),
+            ];
+            if body.get("confirm").and_then(Value::as_bool) == Some(true) {
+                argv.push("--confirm".into());
+            }
+            match hub_for_proxy(root) {
+                Ok(h) => {
+                    let (code, value) = exec(&h, &argv, &|_| Ok(false));
+                    (
+                        200,
+                        json!({"ok": code == exit::OK, "exit_code": code, "outcome": value}),
+                    )
+                }
+                Err(e) => err(500, e.to_string()),
+            }
+        }
+        other => err(404, format!("unknown toolhub route `{other}`")),
+    }
 }
 
 /// `exec <server>.<tool>` against a connected remote MCP server.
@@ -470,10 +756,15 @@ fn exec_mcp(root: &Path, args: &[String], projects: ProjectResolver<'_>) -> (i32
         Ok(_) => return validation("tool arguments must be a JSON object"),
         Err(e) => return validation(format!("invalid JSON arguments: {e}")),
     };
-    let project = match resolve_project(args, projects) {
+    let project = match mcp_project(args, projects) {
         Ok(p) => p,
         Err(e) => return validation(e),
     };
+    // Network client mode: harnesses/PCs outside the instance call the central
+    // proxy instead of holding a local store (CTOX_TOOLHUB_PROXY_URL + capability token).
+    if let Ok(base) = std::env::var("CTOX_TOOLHUB_PROXY_URL") {
+        return exec_via_proxy(&base, server, tool, &tool_args, has(args, "--confirm"));
+    }
     let hub = match mcp(root) {
         Ok(h) => h,
         Err(e) => {
@@ -595,7 +886,7 @@ pub fn exec<B: SecretBackend>(
             }),
         );
     }
-    let project = match resolve_project(args, projects) {
+    let project = match mcp_project(args, projects) {
         Ok(p) => p,
         Err(e) => return validation(e),
     };
@@ -719,6 +1010,61 @@ mod tests {
             assert_eq!(c, exit::VALIDATION, "{v}");
         }
         assert!(resolve_project(&args(&["--project", "p"]), &known).is_ok());
+    }
+
+    #[test]
+    fn central_proxy_token_connect_catalog_and_approval_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Non-admins cannot store credentials.
+        let (code, _) = handle_toolhub_http(
+            root,
+            "credential",
+            false,
+            &json!({"toolkit": "slack", "credential": "xoxb-test-123"}),
+        );
+        assert_eq!(code, 403);
+        let (code, v) = handle_toolhub_http(
+            root,
+            "credential",
+            true,
+            &json!({"toolkit": "slack", "credential": "xoxb-test-123"}),
+        );
+        assert_eq!(code, 200, "{v}");
+        let (_, cat) = handle_toolhub_http(root, "catalog", false, &Value::Null);
+        assert!(cat["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["toolkit"] == "slack" && a["status"] == "ACTIVE"));
+        assert!(
+            !cat.to_string().contains("xoxb-test-123"),
+            "token must never leave the instance"
+        );
+        assert!(cat["toolkits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["slug"] == "gmail"));
+        // Mutating tool through the proxy without confirm -> approval_required, no provider call.
+        let (_, call) = handle_toolhub_http(
+            root,
+            "call",
+            false,
+            &json!({"tool": "slack.send_message", "arguments": {"channel": "C1", "text": "hi"}}),
+        );
+        assert_eq!(call["exit_code"], exit::APPROVAL_REQUIRED);
+        // Validation errors come back as exit 2.
+        let (_, bad) = handle_toolhub_http(
+            root,
+            "call",
+            false,
+            &json!({"tool": "slack.get_history", "arguments": {"channel": "C1&x"}}),
+        );
+        assert_eq!(bad["exit_code"], exit::VALIDATION);
+        let (_, gone) = handle_toolhub_http(root, "disconnect", true, &json!({"toolkit": "slack"}));
+        assert_eq!(gone["removed"], 1);
+        assert_eq!(handle_toolhub_http(root, "nope", true, &Value::Null).0, 404);
     }
 
     #[test]

@@ -83,6 +83,7 @@ impl GitHub {
                     scope_separator: " ".into(),
                     // GitHub Apps with expiring user tokens issue refresh tokens.
                     refreshable: true,
+                    extra_authorize_params: Vec::new(),
                 }),
                 // Fine-grained / classic personal access token.
                 AuthScheme::Bearer,

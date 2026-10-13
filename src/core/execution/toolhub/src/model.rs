@@ -33,6 +33,10 @@ pub struct OAuth2Scheme {
     /// Whether the provider issues refresh tokens.
     #[serde(default)]
     pub refreshable: bool,
+    /// Provider-specific extra authorize query parameters
+    /// (e.g. Google `access_type=offline`, `prompt=consent`).
+    #[serde(default)]
+    pub extra_authorize_params: Vec<(String, String)>,
 }
 
 fn default_scope_separator() -> String {

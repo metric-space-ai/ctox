@@ -55,6 +55,9 @@ pub fn authorize_url(scheme: &OAuth2Scheme, p: &AuthorizeParams<'_>) -> Result<S
             q.append_pair("code_challenge", challenge)
                 .append_pair("code_challenge_method", "S256");
         }
+        for (k, v) in &scheme.extra_authorize_params {
+            q.append_pair(k, v);
+        }
     }
     Ok(url.into())
 }
@@ -283,6 +286,7 @@ mod tests {
 
     fn scheme() -> OAuth2Scheme {
         OAuth2Scheme {
+            extra_authorize_params: Vec::new(),
             authorize_url: "https://idp.example/authorize?prompt=consent".into(),
             token_url: "https://idp.example/token".into(),
             default_scopes: vec![],

@@ -171,17 +171,6 @@ pub struct ClientInfo {
     pub redirect_uri: String,
 }
 
-/// Authorization result captured by the Workjet in-app window.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct Handover {
-    pub server: String,
-    pub code: String,
-    pub verifier: String,
-    pub client_id: String,
-    pub token_endpoint: String,
-    pub redirect_uri: String,
-}
-
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Pending {
     state: String,
@@ -642,57 +631,6 @@ impl<'a, B: SecretBackend> RemoteMcp<'a, B> {
         info.updated_at = now();
         info.tool_count = tools;
         info.reason = None;
-        self.save_info(&info)?;
-        Ok(info)
-    }
-
-    /// Handover from the Workjet in-app window: the desktop ran discovery, DCR
-    /// and PKCE and captured the redirect; the instance exchanges the code so
-    /// tokens are only ever stored here.
-    pub fn complete_handover(&self, project: &str, h: &Handover) -> Result<ConnectionInfo> {
-        let srv = server(&h.server)?;
-        let d = self.discover(&srv)?;
-        if d.auth.token_endpoint != h.token_endpoint {
-            bail!("token endpoint does not match server metadata");
-        }
-        let client = ClientInfo {
-            client_id: h.client_id.clone(),
-            client_secret: None,
-            redirect_uri: h.redirect_uri.clone(),
-        };
-        let form = vec![
-            ("grant_type", "authorization_code".to_string()),
-            ("code", h.code.clone()),
-            ("redirect_uri", h.redirect_uri.clone()),
-            ("client_id", h.client_id.clone()),
-            ("code_verifier", h.verifier.clone()),
-            ("resource", d.resource.clone()),
-        ];
-        let tokens = self.token_request(&d, &form)?;
-        let scope = scope_of(&h.server, project);
-        self.backend.put(
-            &client_scope(&h.server),
-            "client",
-            &serde_json::to_string(&client)?,
-            json!({"kind": "mcp-client", "server": h.server, "registration": "dynamic"}),
-        )?;
-        self.backend.put(
-            &scope,
-            "discovery",
-            &serde_json::to_string(&d)?,
-            json!({"kind": "mcp-discovery"}),
-        )?;
-        let tools = self.store_tokens_and_probe(&srv, project, &tokens)?;
-        let info = ConnectionInfo {
-            server: h.server.clone(),
-            project: project.into(),
-            status: "ACTIVE".into(),
-            scopes: vec![],
-            expires_at: tokens.expires_at,
-            updated_at: now(),
-            tool_count: tools,
-            reason: None,
-        };
         self.save_info(&info)?;
         Ok(info)
     }

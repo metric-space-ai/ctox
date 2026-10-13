@@ -6,7 +6,10 @@ use serde_json::Value;
 use crate::http::{HttpRequest, HttpResponse};
 use crate::model::ToolkitSpec;
 
+pub mod common;
 pub mod github;
+pub mod gmail;
+pub mod slack;
 
 pub trait ToolkitAdapter: Send + Sync {
     fn spec(&self) -> &ToolkitSpec;
@@ -21,7 +24,11 @@ pub trait ToolkitAdapter: Send + Sync {
 
 /// Built-in toolkits shipped with CTOX.
 pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
-    vec![Box::new(github::GitHub::default())]
+    vec![
+        Box::new(github::GitHub::default()),
+        Box::new(gmail::Gmail::default()),
+        Box::new(slack::Slack::default()),
+    ]
 }
 
 /// URL path segment guard (prevents path/query injection from tool args).

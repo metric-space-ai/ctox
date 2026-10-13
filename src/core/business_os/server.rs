@@ -415,6 +415,35 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 }
             }
         }
+        (_, _) if path.starts_with("/api/business-os/toolhub/") => {
+            let session = request_session(root, &request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let body = if method == Method::Post {
+                    read_json(&mut request)?
+                } else {
+                    Value::Null
+                };
+                let admin = store::session_can_manage_all(&session);
+                let (status, value) = crate::execution::toolhub_host::handle_toolhub_http(
+                    root,
+                    path.trim_start_matches("/api/business-os/toolhub/"),
+                    admin,
+                    &body,
+                );
+                if status == 200 {
+                    respond_json_value_no_store(request, value)?;
+                } else {
+                    let message = value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("toolhub request failed")
+                        .to_string();
+                    respond_status(request, status, &message)?;
+                }
+            }
+        }
         (Method::Get, "/api/business-os/mcp/connect-info") => {
             let session = request_session(root, &request);
             if !session.authenticated {
@@ -508,6 +537,25 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     store::provider_subscription_status_for_control_plane(root),
                 )?;
             }
+        }
+        (Method::Get, "/toolhub/oauth/callback") => {
+            // Public by design: the provider redirects the user's browser here.
+            // Authenticity comes from the single-use state + PKCE verifier kept
+            // on the instance, not from a session.
+            let url_raw = request.url().to_owned();
+            let (status, html) =
+                crate::execution::toolhub_host::handle_mcp_oauth_callback(root, &url_raw);
+            let response = tiny_http::Response::from_string(html)
+                .with_status_code(status)
+                .with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                        .expect("static header"),
+                )
+                .with_header(
+                    tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..])
+                        .expect("static header"),
+                );
+            request.respond(response)?;
         }
         (Method::Get, "/api/business-os/ctox/subscription-auth/callback") => {
             let url_raw = request.url().to_owned();
@@ -1160,6 +1208,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
 }
 
 fn is_business_os_control_plane_path(path: &str) -> bool {
+    // Toolhub connector control plane + central MCP proxy: carries connector
+    // status and remote tool results, never Business OS collection records.
+    if path.starts_with("/api/business-os/toolhub/") {
+        return true;
+    }
     matches!(
         path,
         // Static-shell bootstrap context: this is exactly the session, launch
