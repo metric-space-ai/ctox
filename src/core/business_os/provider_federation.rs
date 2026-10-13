@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_exclusions (
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
+#[path = "provider_quota_readback.rs"]
+mod quota_readback;
+
 #[path = "provider_account_controls.rs"]
 pub(in crate::business_os) mod account_controls;
 
@@ -203,10 +206,7 @@ pub(super) fn handle_command(
     match command.command_type.as_str() {
         "ctox.workjet.providers.list" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
-            let mut conn = store::open_store(root)?;
-            let snapshot = conn.transaction()?;
-            let owner = management_owner(&snapshot, actor)?;
-            list(&snapshot, &owner)
+            quota_readback::read(root, actor)
         }
         "ctox.workjet.providers.adopt_native" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
@@ -220,14 +220,17 @@ pub(super) fn handle_command(
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
             for account in accounts
                 .iter_mut()
-                .filter(|account| account.provider == "claude")
+                .filter(|account| matches!(account.provider.as_str(), "claude" | "codex"))
             {
                 account.private_binding =
-                    crate::execution::cliproxyapi_claude_catalog::account_binding(
+                    crate::execution::cliproxyapi_host::account_controls::account_binding(
                         root,
+                        &account.provider,
                         &account.local_account_id,
                     )?;
-                account.credential_ready &= account.private_binding.is_some();
+                if account.provider == "claude" {
+                    account.credential_ready &= account.private_binding.is_some();
+                }
             }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);

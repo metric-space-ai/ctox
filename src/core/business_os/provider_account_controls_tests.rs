@@ -5,6 +5,9 @@ use super::*;
 use crate::execution::{cliproxyapi_claude_catalog as catalog, cliproxyapi_host as proxy};
 use ctox_cliproxyapi::internal::auth::claude::{ClaudeStoredCredentials, SecretString};
 
+#[path = "provider_codex_account_controls_tests.rs"]
+mod codex;
+
 fn credentials(marker: &str) -> ClaudeStoredCredentials {
     ClaudeStoredCredentials::new(
         SecretString::new(format!("access-{marker}")).unwrap(),
