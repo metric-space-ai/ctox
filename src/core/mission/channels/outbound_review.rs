@@ -1929,15 +1929,13 @@ pub(super) fn founder_reply_sent_after_review(
     })?;
     for review in reviews {
         let (sent_at, reviewer, result_json) = review?;
-        // sent_at consumes the approval when the adapter accepts the send.
-        // An exhausted-rework escalation closes work only after delivery is
-        // confirmed, including a later Sent-copy reconciliation.
+        // Legacy automatic policy approvals did not perform regular content
+        // and recipient review. Even a delivered notice cannot complete the
+        // requested founder workflow.
         if reviewer == "policy-escalation" && inbound_message_key.starts_with("email:") {
-            let result: Value = serde_json::from_str(&result_json)?;
-            if !founder_escalation_delivery_confirmed(conn, &result)? {
-                continue;
-            }
+            continue;
         }
+        let _ = result_json;
         return Ok(!founder_route_reopened_after(
             conn,
             inbound_message_key,
@@ -2308,137 +2306,35 @@ pub(crate) fn send_reviewed_external_chat_action(
     )
 }
 
-/// Deterministic policy escalation for a founder/owner inbound email whose
-/// finite completion-review budget is exhausted: record a policy-authored
-/// approval for the exact escalation body and send it through the same gated
-/// reviewed-send sequence as `send_reviewed_founder_reply` (send lock,
-/// protected-recipient check, exact-digest approval match, body-clean gate,
-/// core transition, durable send artifact). The deliverables-presence gate is
-/// intentionally not applied: the escalation exists precisely because the
-/// requested deliverable could not be produced, and it must still reach the
-/// founder instead of the thread ending silently.
+/// Internal escalation boundary for an exhausted founder email workflow.
+/// Automatic policy may neither issue a send approval nor send customer mail.
+/// Existing consumed legacy receipts remain observable without resending;
+/// normal content/recipient review and send use send_reviewed_founder_reply.
 pub(crate) fn record_and_send_founder_escalation_reply(
     root: &Path,
     inbound_message_key: &str,
-    body: &str,
-    review_summary: &str,
+    _body: &str,
+    _review_summary: &str,
 ) -> Result<Value> {
-    let _send_guard = acquire_reviewed_founder_send_lock()?;
-    let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
-    let inbound = load_message_from_conn(&conn, inbound_message_key)?
-        .with_context(|| format!("missing inbound communication message {inbound_message_key}"))?;
-    anyhow::ensure!(
-        inbound.channel == "email" && inbound.direction == "inbound",
-        "founder escalation reply requires an inbound email message"
-    );
-    let addressing = load_message_addressing_from_conn(&conn, inbound_message_key)?
-        .with_context(|| format!("missing communication addressing for {inbound_message_key}"))?;
-    let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
-    let request = resolve_outbound_subject(
-        &conn,
-        ChannelSendRequest {
-            channel: "email".to_string(),
-            account_key: inbound.account_key.clone(),
-            thread_key: inbound.thread_key.clone(),
-            body: body.trim().to_string(),
-            subject: format!("Re: {}", inbound.subject.trim()),
-            to,
-            cc,
-            attachments: Vec::new(),
-            sender_display: None,
-            sender_address: None,
-            send_voice: false,
-            reviewed_founder_send: true,
-        },
-    )?;
-    let settings = runtime_settings_with_owner_profiles(
-        root,
-        communication_gateway::CommunicationAdapterKind::Email,
-    );
-    let protected = protected_recipient_policies(&settings, &request);
-    anyhow::ensure!(
-        !protected.is_empty(),
-        "founder escalation reply requires founder/owner/admin recipient"
-    );
-    let action = FounderReplyAction {
-        account_key: request.account_key.clone(),
-        thread_key: request.thread_key.clone(),
-        subject: request.subject.clone(),
-        to: request.to.clone(),
-        cc: request.cc.clone(),
-        attachments: Vec::new(),
-    };
-    let (action_digest, action_json, body_sha256) =
-        founder_reply_review_digest(&action, &request.body);
-    let approval_key = format!("founder-escalation:{inbound_message_key}:{action_digest}");
-    // A consumed escalation approval (sent_at set) must stay consumed: the
-    // conflict arm deliberately does not reset sent_at, so a retry after a
-    // accepted send reuses its receipt below instead of double-sending the
-    // notice, even while its delivery confirmation is still pending.
-    conn.execute(
-        r#"
-        INSERT INTO communication_founder_reply_reviews (
-            approval_key, inbound_message_key, action_digest, action_json,
-            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+    // This automatic path may observe an already consumed legacy receipt, but
+    // it cannot approve content or recipients and must never initiate a send.
+    let conn = open_channel_db_read_only(&resolve_db_path(root, None))?;
+    let approval_key: Option<String> = conn
+        .query_row(
+            "SELECT approval_key FROM communication_founder_reply_reviews
+         WHERE inbound_message_key=?1 AND reviewer='policy-escalation'
+           AND sent_at IS NOT NULL ORDER BY sent_at DESC LIMIT 1",
+            [inbound_message_key],
+            |row| row.get(0),
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, 'policy-escalation', ?6, ?7, NULL, '{}')
-        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
-            review_summary=excluded.review_summary
-        "#,
-        params![
-            approval_key,
-            inbound_message_key,
-            action_digest,
-            action_json,
-            body_sha256,
-            review_summary,
-            now_iso_string()
-        ],
-    )
-    .context("failed to record founder escalation approval")?;
-    if let Some(result) = consumed_founder_escalation_result(&conn, &approval_key)? {
-        return Ok(result);
+        .optional()?;
+    if let Some(approval_key) = approval_key {
+        return consumed_founder_escalation_result(&conn, &approval_key)?
+            .context("consumed founder escalation receipt disappeared");
     }
-    let approval_key = require_unconsumed_founder_reply_review(
-        &conn,
-        inbound_message_key,
-        &action,
-        &request.body,
-    )?;
-    ensure_founder_outbound_body_clean(&request)?;
-    let entity_id = format!("founder-reply:{inbound_message_key}");
-    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
-    let send_result = send_email_message(
-        root,
-        &conn,
-        &db_path,
-        &request,
-        Some(ReviewedFounderSendContext {
-            entity_id: &entity_id,
-            approval_key: &approval_key,
-        }),
-    )?;
-    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
-    record_harness_flow_event_lossy(
-        root,
-        RecordHarnessFlowEventRequest {
-            event_kind: "communication.escalated",
-            title: "Founder communication escalated after exhausted rework budget",
-            body_text: review_summary,
-            message_key: Some(inbound_message_key),
-            work_id: None,
-            ticket_key: None,
-            attempt_index: Some(1),
-            metadata: json!({
-                "approval_key": approval_key,
-                "body_sha256": body_sha256,
-                "action_digest": action_digest,
-                "escalation": true,
-            }),
-        },
-    );
-    Ok(send_result)
+    anyhow::bail!(
+        "founder communication requires internal escalation and regular content/recipient review; automatic policy approval and email sending are disabled for {inbound_message_key}"
+    )
 }
 
 /// A scheduled report whose recipients, sender mailbox and cadence an admin

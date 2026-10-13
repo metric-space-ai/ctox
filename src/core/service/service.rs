@@ -20222,18 +20222,16 @@ fn external_chat_escalation_body() -> String {
     "Kurzer Hinweis: Ich habe mehrfach versucht, hier eine saubere Antwort zu erstellen, aber sie hat meine interne Qualitätsprüfung wiederholt nicht bestanden. Ich stoppe die automatischen Anläufe für diese Nachricht. Wenn du das Thema weiter brauchst, schreib mir kurz Priorität oder zusätzlichen Kontext, dann setze ich es neu auf.".to_string()
 }
 
-/// Terminal path for a founder/owner communication whose finite rework budget
-/// is exhausted: send a deterministic, policy-authored escalation notice into
-/// the founder thread through the reviewed send machinery, then close the
-/// inbound and its rework backing after delivery confirmation. An accepted
-/// send keeps that backing open; sweeps reuse its consumed approval receipt
-/// until the existing Sent-copy reconciliation confirms delivery.
+/// Exhausted founder rework requires internal escalation and regular review.
+/// Automatic policy may not approve or send customer email. Legacy receipts
+/// remain observable, but only a regular reviewed reply can close the inbound
+/// and its backing work.
 fn escalate_exhausted_founder_communication(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     message: &channels::RoutedInboundMessage,
 ) -> Result<usize> {
-    let close_reason = "Founder communication was escalated in-thread after the finite rework budget was exhausted.";
+    let close_reason = "Founder communication completed after a regular reviewed outbound reply.";
     if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
         let mut repaired = channels::ack_leased_messages(
             root,
@@ -20255,7 +20253,7 @@ fn escalate_exhausted_founder_communication(
     }
     let body = founder_communication_escalation_body(message);
     let summary = format!(
-        "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped; the in-thread notice requires delivery confirmation.",
+        "Internal policy escalation: finite completion-rework budget exhausted for {}; regular content and recipient review is required; no automatic email.",
         message.message_key
     );
     match channels::record_and_send_founder_escalation_reply(
@@ -20276,7 +20274,7 @@ fn escalate_exhausted_founder_communication(
             push_event(
                 state,
                 format!(
-                    "Escalated exhausted founder communication {} to the founder in-thread",
+                    "Completed exhausted founder communication {} after a regular reviewed reply",
                     message.message_key
                 ),
             );

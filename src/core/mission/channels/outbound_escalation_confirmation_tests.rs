@@ -16,7 +16,7 @@ fn founder_escalation_chat_receipts_keep_their_existing_send_semantics() {
 }
 
 #[test]
-fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
+fn founder_escalation_never_self_approves_or_completes_request() {
     let root = std::env::temp_dir().join(format!(
         "ctox-escalation-confirmation-{}-{}",
         std::process::id(),
@@ -68,6 +68,24 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
         send_voice: false,
         reviewed_founder_send: true,
     };
+    let unreviewed = record_and_send_founder_escalation_reply(
+        &root,
+        inbound_key,
+        &request.body,
+        "Automatic escalation.",
+    )
+    .unwrap_err();
+    assert!(unreviewed
+        .to_string()
+        .contains("regular content/recipient review"));
+    let approvals: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM communication_founder_reply_reviews",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(approvals, 0);
     let reservation =
         record_outbound_pending_send(&conn, &request, "approval", "body-digest").unwrap();
     let message_key = reservation.message_key;
@@ -91,9 +109,13 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
     // Repeated sweeps retain exactly one consumed approval and send reservation.
     for _ in 0..3 {
         assert!(!founder_reply_sent_after_review(&conn, inbound_key).unwrap());
-        let reused = consumed_founder_escalation_result(&conn, "approval")
-            .unwrap()
-            .unwrap();
+        let reused = record_and_send_founder_escalation_reply(
+            &root,
+            inbound_key,
+            "A changed automatic draft.",
+            "No recipient approval.",
+        )
+        .unwrap();
         assert_eq!(reused, receipt);
         assert!(
             super::super::ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
@@ -150,12 +172,24 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
         [&message_key],
     )
     .unwrap();
-    assert!(founder_reply_sent_after_review(&conn, inbound_key).unwrap());
+    assert!(!founder_reply_sent_after_review(&conn, inbound_key).unwrap());
     let confirmed = consumed_founder_escalation_result(&conn, "approval")
         .unwrap()
         .unwrap();
     assert_eq!(confirmed["message_key"], receipt["message_key"]);
     assert_eq!(confirmed["delivery_confirmed"], true);
+    // Delivery of a self-approved notice still cannot complete the request.
+    assert!(super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).is_err());
+    conn.execute(
+        r#"INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json, body_sha256,
+            reviewer, review_summary, approved_at, sent_at, send_result_json)
+           VALUES ('regular-review', ?1, 'regular-digest', '{}', 'regular-body',
+            'external-review', 'Content and recipients reviewed', ?2, ?2,
+            '{"ok":true,"delivery_confirmed":true}')"#,
+        params![inbound_key, now_iso_string()],
+    )
+    .unwrap();
     assert_eq!(
         super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).unwrap(),
         1
