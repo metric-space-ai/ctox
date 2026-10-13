@@ -8524,7 +8524,7 @@ fn founder_reply_stops_answering_the_mail_once_a_review_reopens_it() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE communication_routing_state (message_key TEXT PRIMARY KEY, route_status TEXT NOT NULL, updated_at TEXT);
-         CREATE TABLE communication_founder_reply_reviews (inbound_message_key TEXT, sent_at TEXT, send_result_json TEXT);",
+         CREATE TABLE communication_founder_reply_reviews (inbound_message_key TEXT, sent_at TEXT, send_result_json TEXT, reviewer TEXT NOT NULL DEFAULT 'external-review');",
     )
     .unwrap();
     let key = "email:lena@example.test::inbox::1";
@@ -8539,7 +8539,7 @@ fn founder_reply_stops_answering_the_mail_once_a_review_reopens_it() {
     route("leased", "2026-10-11T10:32:00Z");
     assert!(!founder_reply_sent_after_review(&conn, key).unwrap());
     conn.execute(
-        "INSERT INTO communication_founder_reply_reviews VALUES (?1, '2026-10-11T10:40:48Z', '{\"ok\":true}')",
+        "INSERT INTO communication_founder_reply_reviews (inbound_message_key, sent_at, send_result_json) VALUES (?1, '2026-10-11T10:40:48Z', '{\"ok\":true}')",
         params![key],
     )
     .unwrap();
@@ -8562,7 +8562,7 @@ fn founder_reply_stops_answering_the_mail_once_a_review_reopens_it() {
     // The corrected reply answers it again.
     route("review_rework", "2026-10-11T13:12:15Z");
     conn.execute(
-        "INSERT INTO communication_founder_reply_reviews VALUES (?1, '2026-10-11T13:40:00Z', '{\"ok\":true}')",
+        "INSERT INTO communication_founder_reply_reviews (inbound_message_key, sent_at, send_result_json) VALUES (?1, '2026-10-11T13:40:00Z', '{\"ok\":true}')",
         params![key],
     )
     .unwrap();

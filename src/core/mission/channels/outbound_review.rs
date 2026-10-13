@@ -1909,26 +1909,92 @@ pub(super) fn founder_reply_sent_after_review(
     conn: &Connection,
     inbound_message_key: &str,
 ) -> Result<bool> {
-    let last_sent: Option<String> = conn.query_row(
+    let mut statement = conn.prepare(
         r#"
-        SELECT MAX(sent_at)
+        SELECT sent_at, reviewer, send_result_json
         FROM communication_founder_reply_reviews
         WHERE inbound_message_key = ?1
           AND sent_at IS NOT NULL
           AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
           AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
+        ORDER BY sent_at DESC
         "#,
-        params![inbound_message_key],
-        |row| row.get(0),
     )?;
-    let Some(last_sent) = last_sent else {
+    let reviews = statement.query_map(params![inbound_message_key], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    for review in reviews {
+        let (sent_at, reviewer, result_json) = review?;
+        // sent_at consumes the approval when the adapter accepts the send.
+        // An exhausted-rework escalation closes work only after delivery is
+        // confirmed, including a later Sent-copy reconciliation.
+        if reviewer == "policy-escalation" && inbound_message_key.starts_with("email:") {
+            let result: Value = serde_json::from_str(&result_json)?;
+            if !founder_escalation_delivery_confirmed(conn, &result)? {
+                continue;
+            }
+        }
+        return Ok(!founder_route_reopened_after(
+            conn,
+            inbound_message_key,
+            &sent_at,
+        )?);
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+#[path = "outbound_escalation_confirmation_tests.rs"]
+mod escalation_confirmation_tests;
+
+fn founder_escalation_delivery_confirmed(conn: &Connection, send_result: &Value) -> Result<bool> {
+    if send_result.get("ok").and_then(Value::as_bool) != Some(true)
+        || matches!(
+            send_result.get("status").and_then(Value::as_str),
+            Some("failed" | "send_failed" | "cancelled")
+        )
+    {
+        return Ok(false);
+    }
+    if send_result
+        .get("delivery_confirmed")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(true);
+    }
+    let Some(message_key) = send_result.get("message_key").and_then(Value::as_str) else {
         return Ok(false);
     };
-    Ok(!founder_route_reopened_after(
-        conn,
-        inbound_message_key,
-        &last_sent,
-    )?)
+    Ok(existing_durable_outbound_send_result(conn, message_key)?
+        .and_then(|result| result.get("delivery_confirmed").and_then(Value::as_bool))
+        == Some(true))
+}
+
+fn consumed_founder_escalation_result(
+    conn: &Connection,
+    approval_key: &str,
+) -> Result<Option<Value>> {
+    let result_json: Option<String> = conn
+        .query_row(
+            "SELECT send_result_json FROM communication_founder_reply_reviews \
+         WHERE approval_key = ?1 AND sent_at IS NOT NULL",
+            [approval_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(result_json) = result_json else {
+        return Ok(None);
+    };
+    let mut result: Value = serde_json::from_str(&result_json)?;
+    if founder_escalation_delivery_confirmed(conn, &result)? {
+        result["delivery_confirmed"] = json!(true);
+    }
+    Ok(Some(result))
 }
 
 /// Whether a review reopened the inbound founder mail after its own newest
@@ -2308,8 +2374,8 @@ pub(crate) fn record_and_send_founder_escalation_reply(
     let approval_key = format!("founder-escalation:{inbound_message_key}:{action_digest}");
     // A consumed escalation approval (sent_at set) must stay consumed: the
     // conflict arm deliberately does not reset sent_at, so a retry after a
-    // successful send fails the unconsumed-approval lookup below instead of
-    // double-sending the notice.
+    // accepted send reuses its receipt below instead of double-sending the
+    // notice, even while its delivery confirmation is still pending.
     conn.execute(
         r#"
         INSERT INTO communication_founder_reply_reviews (
@@ -2331,6 +2397,9 @@ pub(crate) fn record_and_send_founder_escalation_reply(
         ],
     )
     .context("failed to record founder escalation approval")?;
+    if let Some(result) = consumed_founder_escalation_result(&conn, &approval_key)? {
+        return Ok(result);
+    }
     let approval_key = require_unconsumed_founder_reply_review(
         &conn,
         inbound_message_key,

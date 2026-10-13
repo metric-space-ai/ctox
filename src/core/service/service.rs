@@ -20225,9 +20225,9 @@ fn external_chat_escalation_body() -> String {
 /// Terminal path for a founder/owner communication whose finite rework budget
 /// is exhausted: send a deterministic, policy-authored escalation notice into
 /// the founder thread through the reviewed send machinery, then close the
-/// inbound and its rework backing. A send failure leaves all state untouched
-/// so the next sweep retries; the consumed approval row makes a successful
-/// escalation idempotent across sweeps.
+/// inbound and its rework backing after delivery confirmation. An accepted
+/// send keeps that backing open; sweeps reuse its consumed approval receipt
+/// until the existing Sent-copy reconciliation confirms delivery.
 fn escalate_exhausted_founder_communication(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -20255,7 +20255,7 @@ fn escalate_exhausted_founder_communication(
     }
     let body = founder_communication_escalation_body(message);
     let summary = format!(
-        "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped and the founder was notified in-thread.",
+        "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped; the in-thread notice requires delivery confirmation.",
         message.message_key
     );
     match channels::record_and_send_founder_escalation_reply(
@@ -20264,6 +20264,14 @@ fn escalate_exhausted_founder_communication(
         &body,
         &summary,
     ) {
+        Ok(_)
+            if !channels::founder_reply_sent_after_review_for_message(
+                root,
+                &message.message_key,
+            )? =>
+        {
+            Ok(0)
+        }
         Ok(_) => {
             push_event(
                 state,
