@@ -792,7 +792,7 @@ fn reschedule_start_gate_follows_new_time_at_exact_five_minute_boundary() -> any
         .as_str()
         .unwrap()
         .contains("meeting_not_started"));
-    let meeting: super::super::workjet_jour_fixe_contract::Meeting =
+    let meeting: crate::business_os::workjet_jour_fixe_contract::Meeting =
         serde_json::from_value(saved(root.path())?)?;
     assert!(super::super::jour_fixe_owner::check_start_time(&meeting, at - 300001).is_err());
     super::super::jour_fixe_owner::check_start_time(&meeting, at - 300000)?;
