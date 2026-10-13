@@ -34,7 +34,7 @@ must publish them as new registered script revisions in the release bundle.
    auth-assist/session ownership and the same command. Successful mock tests do
    not prove Google accepted the login, nor that its access challenge is cleared.
 
-`node --test src/core/capabilities/scrape/adapters/google-session.test.cjs` exercises
+`node --test src/core/capabilities/scrape/adapters/*test.cjs` exercises
 both real adapter scripts through their child-command boundary. Provider calls
 are mocked: tests cover argument/session binding, blocked login, no anonymous
 fallback, missing-company isolation and empty-result handling. No production

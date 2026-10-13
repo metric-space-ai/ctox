@@ -2,8 +2,7 @@
 // google.de — prospect.v1 extractor (Phase B initial revision).
 //
 // Reads CTOX_SCRAPE_INPUT_JSON for the company + country, drives the
-// CTOX web stack (`ctox web search --source google.de` plus a
-// consent-aware browser pass over the live google.de SERP) to discover
+// owner-bound native login/capture over the live google.de SERP to discover
 // the company's own website, then parses that page for the field set
 // documented in `tools/web-stack/src/sources/EXCEL_MATRIX.md`.
 //
