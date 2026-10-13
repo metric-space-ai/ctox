@@ -1,3 +1,11 @@
+/// Native lease-time clarification, independent of old tenant/app prompt text.
+fn append_outbound_person_research_contract(command: &Value, prompt: &mut String) {
+    if command_targets_outbound_lead_writeback(command) {
+        prompt.push_str("\n\n");
+        prompt.push_str(include_str!("outbound-person-research-contract.md"));
+    }
+}
+
 fn command_targets_outbound_lead_writeback(command: &Value) -> bool {
     command.get("command_type").and_then(Value::as_str) == Some("business_os.chat.task")
         && command.get("module").and_then(Value::as_str) == Some("outbound-lead-generation")
@@ -496,6 +504,54 @@ mod command_writeback_tests {
     }
 
     #[test]
+    fn outbound_person_research_contract_is_bound_to_canonical_lead_research() {
+        let command = serde_json::json!({
+            "command_type": "business_os.chat.task", "module": "outbound-lead-generation",
+            "payload": {"mode": "data", "writeback_contract": {
+                "collection": "outbound_lead_generation_leads"
+            }}
+        });
+        let mut prompt = String::from("existing operator scope");
+        append_outbound_person_research_contract(&command, &mut prompt);
+        assert!(prompt.starts_with("existing operator scope"));
+        for role in [
+            "Gesamtverantwortung:",
+            "Finanzen:",
+            "Einkauf:",
+            "Supply Chain:",
+            "Operations:",
+            "Technik:",
+            "Entwicklung:",
+        ] {
+            assert!(prompt.contains(role), "missing responsibility {role}");
+        }
+        assert!(prompt.contains("site:linkedin.com/in/"));
+        assert!(prompt.contains("gap closure investigates only requested open"));
+        assert!(prompt.contains("catch-all, unknown and timeout"));
+        assert!(prompt.contains("Never send test emails"));
+        assert!(prompt.contains("not a successful persisted research"));
+        for (pointer, value) in [
+            ("/module", "mail"),
+            ("/payload/mode", "conversation"),
+            ("/command_type", "outbound.research_source.test"),
+            ("/payload/writeback_contract/collection", "other_records"),
+        ] {
+            let mut other = command.clone();
+            *other.pointer_mut(pointer).unwrap() = Value::String(value.to_owned());
+            let mut unchanged = String::from("ordinary chat");
+            append_outbound_person_research_contract(&other, &mut unchanged);
+            assert_eq!(unchanged, "ordinary chat", "must not expand {pointer}");
+        }
+        let mut allowed = command.clone();
+        allowed["payload"]["writeback_contract"] = serde_json::json!({
+            "allowed_collections": ["outbound_lead_generation_leads"]
+        });
+        let mut prompt = String::new();
+        append_outbound_person_research_contract(&allowed, &mut prompt);
+        assert!(prompt.contains("Outbound person research execution contract"));
+    }
+
+    #[test]
     fn incident_legacy_lead_contract_validation_preserves_other_data_chat_scopes() {
         let legacy_contract = serde_json::json!({
             "collection": "outbound_lead_generation_leads",
@@ -617,6 +673,58 @@ mod command_writeback_tests {
                 _ => panic!("resumed work must not complete with an incomplete writeback contract"),
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_person_research_contract_reaches_signed_lease_execution() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id": "role_contract_research", "command_id": "role_contract_research",
+                "module": "outbound-lead-generation", "command_type": "business_os.chat.task",
+                "record_id": "lead-role-contract",
+                "payload": {"title": "Research lead", "instruction": "Research requested contacts",
+                    "mode": "data", "writeback_contract": {
+                        "mechanism": "business_command", "command_type": "outbound.lead.research_writeback",
+                        "collection": "outbound_lead_generation_leads", "record_ids": ["lead-role-contract"]
+                    }},
+                "client_context": {"capability_token": capability}
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )?;
+        let key = accepted["task_id"]
+            .as_str()
+            .context("research queue task missing")?;
+        let job = queued_prompt_from_queue_task(channels::lease_queue_task(
+            root,
+            key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+        )?);
+        let execution_prompt = attach_typed_business_command_context(
+            root,
+            &job,
+            business_os_chat_execution_prompt(&job),
+            "role-contract-test-turn",
+            job.thread_key.as_deref(),
+        )?;
+        assert!(execution_prompt.contains("Canonical Business OS command binding"));
+        assert!(execution_prompt.contains("Outbound person research execution contract"));
+        assert!(execution_prompt.contains("Finance Director"));
+        assert!(execution_prompt.contains("concrete profile URL/name"));
+        let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
+        assert_eq!(context["command"]["command_id"], "role_contract_research");
+        assert!(command_writeback_failure(root, &job)?.is_some());
         Ok(())
     }
 
