@@ -1847,37 +1847,8 @@ fn execute_search(
     }
     let tool_request = &effective;
 
-    // A single explicit person-discovery pin owns the profile query. The
-    // generic keyword planner drops its Boolean role groups and profile paths;
-    // source shaping above otherwise contributes only domains, not query text.
-    let person_query = if tool_request.pinned_sources.len() == 1 {
-        crate::sources::find(&tool_request.pinned_sources[0])
-            .filter(|module| module.id() == "person-discovery")
-            .and_then(|module| {
-                module.shape_query(
-                    original_query,
-                    &crate::sources::SourceCtx {
-                        root,
-                        country: tool_request
-                            .user_location
-                            .country
-                            .as_deref()
-                            .and_then(crate::sources::Country::from_iso),
-                        mode: crate::sources::ResearchMode::NewRecord,
-                    },
-                )
-            })
-    } else {
-        None
-    };
-    let mut query = query.clone();
-    let planned_queries = if let Some(shaped) = person_query {
-        query.text = shaped.query;
-        vec![query.text.clone()]
-    } else {
-        plan_search_queries(original_query, &tool_request.allowed_domains)
-    };
-    let cache_key = build_cache_key(&query, tool_request, config.provider);
+    let planned_queries = plan_search_queries(original_query, &tool_request.allowed_domains);
+    let cache_key = build_cache_key(query, tool_request, config.provider);
     if tool_request.external_web_access == Some(false) {
         let cached = load_cached_search(root, config, &cache_key)?
             .context("cached web search was requested but no unexpired cached result exists")?;
@@ -1892,7 +1863,7 @@ fn execute_search(
         });
     }
 
-    let mut response = search_with_query_plan(root, config, &query, &planned_queries)?;
+    let mut response = search_with_query_plan(root, config, query, &planned_queries)?;
     response.hits = filter_hits_by_domain(response.hits, &tool_request.allowed_domains);
     response.hits = merge_pinned_hits(pinned_hits, response.hits);
     response.source_failures.extend(source_failures);
@@ -9340,39 +9311,6 @@ mod tests {
             payload["results"][0]["url"],
             "https://example.com/mock-result"
         );
-    }
-
-    #[test]
-    fn ctox_web_search_executes_pinned_person_role_query_without_keyword_rewrite() {
-        for source in ["person-discovery", "person-google"] {
-            let root = unique_test_root("ctox_web_search_person_role_query");
-            set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
-            let query = "\"Beispiel GmbH\" (CPO OR \"Procurement Team Lead\")";
-            let payload = run_ctox_web_search_tool(
-                &root,
-                &CanonicalWebSearchRequest {
-                    query: query.to_string(),
-                    external_web_access: Some(true),
-                    allowed_domains: Vec::new(),
-                    user_location: SearchUserLocation {
-                        country: Some("DE".to_string()),
-                        ..SearchUserLocation::default()
-                    },
-                    search_context_size: Some(ContextSize::Medium),
-                    search_content_types: Vec::new(),
-                    include_sources: true,
-                    pinned_sources: vec![source.to_string()],
-                },
-            )
-            .unwrap();
-            assert_eq!(
-                payload["executed_queries"],
-                json!([format!(
-                    "{query} (site:linkedin.com/in OR site:xing.com/profile)"
-                )])
-            );
-            assert_eq!(payload["query"], query);
-        }
     }
 
     #[test]
