@@ -22,9 +22,10 @@ async function run(source, index) {
       SMOKE_PROCESS_LIFECYCLE_PATH: lifecycle },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  let buffer = '', errors = [], timings = [], warnings = null, timedOut = false;
-  function data(chunk) {
-    buffer += chunk.toString();
+  const buffers = { stdout: '', stderr: '' };
+  let errors = [], timings = [], warnings = null, timedOut = false;
+  function data(stream, chunk) {
+    let buffer = buffers[stream] + chunk.toString();
     let pos;
     while ((pos = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, pos); buffer = buffer.slice(pos + 1);
@@ -37,9 +38,10 @@ async function run(source, index) {
       if (/collection is not registered/.test(line)) errors.push('unregistered-collection');
     }
     // Never persist arbitrary wire/bootstrap output or credentials.
-    if (buffer.length > 1024 * 1024) buffer = '';
+    buffers[stream] = buffer.length > 1024 * 1024 ? '' : buffer;
   }
-  child.stdout.on('data', data); child.stderr.on('data', data);
+  child.stdout.on('data', chunk => data('stdout', chunk));
+  child.stderr.on('data', chunk => data('stderr', chunk));
   const timeout = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, Math.min(65000, deadline - Date.now()));
   let force;
   child.on('exit', () => clearTimeout(force));
@@ -57,4 +59,4 @@ for (let index = 1; index <= 10; index++) {
   }
 }
 save();
-process.exitCode = rows.some(r => r.source === 'after' && r.code !== 0) ? 1 : 0;
+process.exitCode = rows.some(r => r.source === 'after' && (r.code !== 0 || !r.timings.length)) ? 1 : 0;
