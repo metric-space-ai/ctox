@@ -1,0 +1,88 @@
+{
+  "schema": "ctox.workjet.meeting_report.v1",
+  "report_id": "report_ctox-dev_2026-10-12",
+  "project": {
+    "id": "f791215c-e416-4205-8619-bbf82b999799",
+    "name": "ctox.dev",
+    "repository_url": "https://github.com/mkh-welsch/ctox-dev",
+    "public_url": "https://ctox.dev"
+  },
+  "meeting": {
+    "id": "workjet_meeting_0ac07f78f09ec759c4bd0b19265a74e1c24940b356210a2e071d9daea8399619",
+    "kind": "regeltermin",
+    "scheduled_at": "2026-10-12T13:00:00+02:00",
+    "timezone": "Europe/Berlin",
+    "participants": [
+      { "role": "owner", "name": "Michael Welsch" },
+      { "role": "supervisor", "name": "ctox.dev Supervisor" }
+    ],
+    "deck_revision": 1
+  },
+  "period": { "from": "2026-10-05T13:00:00+02:00", "to": "2026-10-12T13:00:00+02:00" },
+  "generated": { "by": "6f688cca-f01b-4e08-ac6e-d91c9c512d5b", "at": "2026-10-12T12:00:00+02:00", "revision": 1 },
+  "overall": {
+    "status": "teilweise_kritisch",
+    "trend": "verbesserung",
+    "summary": "Workjet ist über ctox.dev jetzt download- und updatebar vorbereitet; der Ausfall vom 11.10. durch eine fehlende Migration ist behoben, die CI des Repos startet aber wegen der GitHub-Abrechnung nicht."
+  },
+  "dimensions": [
+    { "key": "schedule", "status": "planmaessig", "trend": "verbesserung", "note": "Download- und Update-Routen am 12.10. live." },
+    { "key": "risks", "status": "teilweise_kritisch", "trend": "gleichbleibend", "note": "Merge auf main deployt sofort, Migrationen laufen nicht mit." },
+    { "key": "measures", "status": "teilweise_kritisch", "trend": "verbesserung", "note": "Migrationsprüfung vor jedem Merge ist Regel; CI-Abrechnung offen." }
+  ],
+  "progress": [
+    {
+      "title": "Workjet-Download und Update-Feed über ctox.dev",
+      "result": "abgeschlossen",
+      "detail": "/downloads/workjet/<plattform> und /updates/workjet/<kanal>/ sind live; liefern Dateien, sobald das erste Workjet-Release existiert.",
+      "evidence": [{ "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#51", "url": "https://github.com/mkh-welsch/ctox-dev/pull/51", "at": "2026-10-12T09:13:21Z" }]
+    },
+    {
+      "title": "Geräteschlüssel zur Wiederherstellung von Desktop-Instanzen",
+      "result": "abgeschlossen",
+      "evidence": [{ "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#49", "url": "https://github.com/mkh-welsch/ctox-dev/pull/49", "at": "2026-10-11T17:03:13Z" }]
+    },
+    {
+      "title": "LLM-Proxy: angefragtes Modell, GLM-Werkzeuge, Chat-Completions-Transport",
+      "result": "abgeschlossen",
+      "evidence": [
+        { "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#44", "url": "https://github.com/mkh-welsch/ctox-dev/pull/44" },
+        { "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#45", "url": "https://github.com/mkh-welsch/ctox-dev/pull/45" },
+        { "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#47", "url": "https://github.com/mkh-welsch/ctox-dev/pull/47" }
+      ]
+    }
+  ],
+  "next_steps": [
+    {
+      "id": "ns-1",
+      "title": "Erstes Workjet-Release über ctox.dev ausliefern und Update N-1 → N abnehmen",
+      "owner": "Supervisor",
+      "acceptance": "Frische Installation über ctox.dev/downloads/workjet auf macOS, Linux und Windows; Auto-Update von 0.0.89 auf 0.0.90 belegt.",
+      "priority": "hoch",
+      "confirmed": false
+    }
+  ],
+  "decisions": [
+    {
+      "id": "d-1",
+      "question": "GitHub-Actions für mkh-welsch/ctox-dev wieder starten?",
+      "options": ["Abrechnung/Ausgabenlimit erhöhen", "Repo in die Organisation metric-space-ai verschieben"],
+      "recommendation": "Ausgabenlimit erhöhen, damit Prüfungen vor dem Produktiv-Deploy wieder laufen.",
+      "rationale": "Ohne CI deployt ein Merge ungeprüft in Produktion.",
+      "outcome": "offen"
+    }
+  ],
+  "deviations": [
+    {
+      "id": "r-1",
+      "kind": "abweichung",
+      "description": "Merge von #49 ging am 11.10. ohne Migration 037 live; launch-token lieferte rund 12 h Fehler, alle Workjet-Instanzen fielen aus.",
+      "area": "termine",
+      "impact": "Ausfall aller verwalteten Instanzen bis 12.10. 07:55.",
+      "status": "planmaessig",
+      "measures": [{ "title": "Ausstehende Migrationen vor jedem Merge prüfen und anwenden", "owner": "Supervisor" }],
+      "evidence": [{ "kind": "pull_request", "ref": "mkh-welsch/ctox-dev#49", "url": "https://github.com/mkh-welsch/ctox-dev/pull/49" }]
+    }
+  ],
+  "protocol": { "agenda": [], "free_topics": [], "notes": [] }
+}
