@@ -12,6 +12,7 @@ use super::*;
 use crate::business_os::store;
 use rusqlite::OptionalExtension;
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::business_os) const COMMAND: &str = "ctox.workjet.project.init";
 const SKILL: &str =
     include_str!("../../../skills/system/mission_orchestration/project-init/SKILL.md");
