@@ -65,6 +65,8 @@ pub(in crate::business_os) use supervisor_luma::read_configured_route as read_su
 mod deck_narration;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
+#[path = "mcp_workjet_feed.rs"]
+mod workjet_feed;
 #[path = "mcp_workjet_kpis.rs"]
 mod workjet_kpis;
 #[path = "mcp_workjet_luma_config.rs"]
@@ -1051,6 +1053,7 @@ fn crew_only_session_allows_tool(tool_name: &str, context: Option<&Value>) -> bo
                 | workjet_presentation::READ_TOOL
                 | workjet_presentation::WRITE_TOOL
                 | workjet_kpis::TOOL
+                | workjet_feed::TOOL
         );
     }
     let restricted = context.is_some_and(|context| {
@@ -1674,6 +1677,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         workjet_luma_config::read_descriptor(),
         workjet_luma_config::write_descriptor(),
         workjet_kpis::descriptor(),
+        workjet_feed::descriptor(),
         workjet_calendar::descriptors().remove(0),
         workjet_calendar::descriptors().remove(1),
         read_tool(
@@ -3480,6 +3484,9 @@ fn call_tool_inner(
         }
         workjet_kpis::TOOL => {
             workjet_kpis::execute(root, &context, &arguments, trusted_gateway_context)?
+        }
+        workjet_feed::TOOL => {
+            workjet_feed::execute(root, &context, &arguments, trusted_gateway_context)?
         }
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
@@ -7336,6 +7343,7 @@ fn enforce_argument_scope_policy(
             enforce_collection_policy(root, "kundenpipeline_entscheidungen")?;
         }
         workjet_kpis::TOOL
+        | workjet_feed::TOOL
         | workjet_jour_fixe::READ_TOOL
         | workjet_jour_fixe::WRITE_TOOL
         | workjet_presentation::READ_TOOL
@@ -7513,6 +7521,7 @@ enum McpToolPolicyClass {
 
 fn tool_policy_class_for_call(tool_name: &str, arguments: &Value) -> McpToolPolicyClass {
     if (tool_name == workjet_kpis::TOOL && arguments["action"] == "read")
+        || (tool_name == workjet_feed::TOOL && arguments["action"] == "read")
         || (tool_name == workjet_worker_dispatch::TOOL && arguments["action"] == "observe")
     {
         McpToolPolicyClass::Read
@@ -7535,6 +7544,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         | workjet_presentation::WRITE_TOOL
         | workjet_luma_config::WRITE_TOOL
         | workjet_kpis::TOOL
+        | workjet_feed::TOOL
         | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
@@ -7885,7 +7895,8 @@ fn enforce_internal_command_session_scope(
                 && matches!(arguments["action"].as_str(), Some("dispatch" | "observe")))
                 || workjet_jour_fixe::allows(tool_name, arguments)
                 || workjet_presentation::allows(tool_name, arguments)
-                || workjet_kpis::allows(tool_name, arguments),
+                || workjet_kpis::allows(tool_name, arguments)
+                || workjet_feed::allows(tool_name, arguments),
             "tool/action is outside the restricted native supervisor session"
         );
         return Ok(());

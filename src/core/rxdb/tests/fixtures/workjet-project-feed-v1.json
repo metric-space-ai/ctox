@@ -1,6 +1,56 @@
 {
   "contract": "ctox.workjet.project_feed.v1",
-  "read_request": { "action": "project.feed.read", "projectId": "p-1", "limit": 30 },
+  "limits": {
+    "MAX_ID": 128,
+    "MAX_REF": 512,
+    "MAX_AUTHOR_LABEL": 64,
+    "MAX_HARNESS": 32,
+    "MAX_HEADLINE": 140,
+    "MAX_BODY": 600,
+    "MAX_OPEN_ITEMS": 5,
+    "MAX_SOURCES": 8,
+    "MAX_SOURCE_LABEL": 80,
+    "MAX_ACTION_LABEL": 40,
+    "MAX_PAGE": 50,
+    "DEFAULT_PAGE": 30,
+    "RETENTION": 500,
+    "MAX_FUTURE_MS": 300000
+  },
+  "enums": {
+    "KINDS": [
+      "pr_merged",
+      "session_completed",
+      "disruption",
+      "disruption_resolved",
+      "jour_fixe",
+      "goal_changed",
+      "owner_note"
+    ],
+    "AUTHOR_KINDS": [
+      "supervisor",
+      "worker",
+      "owner"
+    ],
+    "SOURCE_TYPES": [
+      "pr",
+      "commit",
+      "session",
+      "file",
+      "meeting",
+      "url"
+    ],
+    "ACTION_TYPES": [
+      "open_chat",
+      "open_pr",
+      "open_meeting",
+      "retry"
+    ]
+  },
+  "read_request": {
+    "action": "project.feed.read",
+    "projectId": "p-1",
+    "limit": 30
+  },
   "read_response": {
     "action": "project.feed.read",
     "projectId": "p-1",
@@ -17,12 +67,21 @@
         "headline": "#42 Fracture cases validated against lab data",
         "body": "Der Worker Measurements hat die Bruchfall-Validierung zusammengeführt. Die Abweichung zu den Labordaten liegt jetzt unter 3 %, damit ist das Ziel für den Regeltermin erreicht.",
         "open_items": [],
-        "sources": [{ "type": "pr", "label": "PR #42", "ref": "https://github.com/example/repo/pull/42" }],
-        "action": { "type": "open_pr", "label_de": "PR öffnen", "label_en": "Open PR", "ref": "https://github.com/example/repo/pull/42" },
+        "sources": [
+          {
+            "type": "pr",
+            "label": "PR #42",
+            "ref": "https://github.com/example/repo/pull/42"
+          }
+        ],
+        "action": {
+          "type": "open_pr",
+          "label_de": "PR öffnen",
+          "label_en": "Open PR",
+          "ref": "https://github.com/example/repo/pull/42"
+        },
         "thread_ref": "pr-42",
-        "occurred_at_ms": 1791900000000,
-        "created_at_ms": 1791900005000,
-        "authority_epoch": 3
+        "occurred_at_ms": 1791900000000
       },
       {
         "post_id": "0d9e8f7a-1b2c-4d3e-8f90-112233445566",
@@ -34,14 +93,26 @@
         "harness": "claude",
         "headline": "Supervisor hängt: Coding-Agent nicht angemeldet",
         "body": "Der Supervisor kann keine Turns starten, weil der Coding-Agent auf der Instanz nicht angemeldet ist. Michael muss sich einmal im Chat mit /login anmelden.",
-        "open_items": ["Anmeldung im Supervisor-Chat"],
-        "sources": [{ "type": "session", "label": "Supervisor-Chat", "ref": "t-sup" }],
-        "action": { "type": "open_chat", "label_de": "Chat öffnen", "label_en": "Open chat", "ref": "t-sup" },
+        "open_items": [
+          "Anmeldung im Supervisor-Chat"
+        ],
+        "sources": [
+          {
+            "type": "session",
+            "label": "Supervisor-Chat",
+            "ref": "t-sup"
+          }
+        ],
+        "action": {
+          "type": "open_chat",
+          "label_de": "Chat öffnen",
+          "label_en": "Open chat",
+          "ref": "t-sup"
+        },
         "thread_ref": "disruption-t-sup",
-        "occurred_at_ms": 1791910000000,
-        "created_at_ms": 1791910001000,
-        "authority_epoch": 3
+        "occurred_at_ms": 1791910000000
       }
-    ]
+    ],
+    "contract": "ctox.workjet.project_feed.v1"
   }
 }

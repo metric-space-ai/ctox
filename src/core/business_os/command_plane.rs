@@ -1931,6 +1931,19 @@ fn dispatch_business_command(
                 )),
             }
         }
+        "ctox.workjet.project.feed.read" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor =
+                session_user_id(session).context("feed read requires an authenticated user")?;
+            match super::workjet_project_feed::handle_command(root, command, actor) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
         "ctox.workjet.project.kpis.read"
         | "ctox.workjet.project.kpis.refresh"
         | "ctox.workjet.project.kpis.configure" => {

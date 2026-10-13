@@ -7,6 +7,7 @@ import { requestDictation } from './shared/speech-dictation.mjs?v=20261013-shell
 import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261013-shell-v2-bounded-write-admission';
 import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
 import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
+import { PROJECT_FEED_LIMITS, PROJECT_FEED_SCHEMA, validateProjectFeedPost } from './shared/workjet-project-feed-contract.generated.mjs?v=20261014-project-feed';
 import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
 import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
 import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
@@ -14046,7 +14047,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
-    'project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
+    'project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read', 'project.feed.read',
     'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
@@ -14235,6 +14236,48 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       ...(confirming ? { goal: JSON.parse(JSON.stringify(confirmedGoal)) } : {}),
       ...(localNarration ? { localNarration: JSON.parse(JSON.stringify(receipt.result.local_narration)) } : {}),
       ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
+  }
+
+  if (action === 'project.feed.read') {
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'before_ms', 'limit']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const payload = { project_id: projectId };
+    if (request.before_ms !== undefined) {
+      if (!Number.isSafeInteger(request.before_ms)) throw new TypeError('Workjet feed before_ms must be a safe integer.');
+      payload.before_ms = request.before_ms;
+    }
+    if (request.limit !== undefined) {
+      if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > PROJECT_FEED_LIMITS.MAX_PAGE) {
+        throw new TypeError('Workjet feed limit is out of range.');
+      }
+      payload.limit = request.limit;
+    }
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId) {
+      throw new Error('Die Projektsitzung hat sich vor der Antwort geändert.');
+    }
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox', record_id: projectId,
+      command_type: 'ctox.workjet.project.feed.read',
+      payload, client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId) {
+      throw new Error('Die Projektsitzung hat sich vor der Antwort geändert.');
+    }
+    if (receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.target_record_id !== projectId || receipt.result?.ok !== true
+      || receipt.result.contract !== PROJECT_FEED_SCHEMA || !Array.isArray(receipt.result.posts)) {
+      throw new Error('Für den Projektauftrag liegt keine passende Erfolgsbestätigung vor.');
+    }
+    const posts = receipt.result.posts;
+    for (const post of posts) {
+      const validation = validateProjectFeedPost(post);
+      if (validation.ok !== true) throw new TypeError(validation.error);
+      if (post.project_id !== projectId) throw new Error('Workjet feed post belongs to another project.');
+    }
+    const next = receipt.result.next_before_ms;
+    return { action, commandId, projectId, contract: PROJECT_FEED_SCHEMA,
+      posts: JSON.parse(JSON.stringify(posts)), next_before_ms: Number.isSafeInteger(next) ? next : null };
   }
 
   if (['project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {

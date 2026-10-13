@@ -141,6 +141,9 @@ pub(crate) mod workjet_presentation_contract;
 mod workjet_project_execution_policy;
 #[path = "workjet_project_execution_policy_contract.generated.rs"]
 pub(crate) mod workjet_project_execution_policy_contract;
+mod workjet_project_feed;
+#[path = "workjet_project_feed_contract.generated.rs"]
+pub(crate) mod workjet_project_feed_contract;
 mod workjet_project_kpis;
 #[path = "workjet_project_kpis_contract.generated.rs"]
 pub(crate) mod workjet_project_kpis_contract;

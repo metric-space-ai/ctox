@@ -43,7 +43,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 11);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 12);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -2048,4 +2048,14 @@ test('native KPI refresh maps per-KPI status and rejects malformed reports', asy
     receipt.result.refresh = { completed: true, items: [{ kpi_id: 'kpi-1', status: 'ready' }] };
   });
   await assert.rejects(broken.invoke({ action: 'project.kpis.refresh', commandId: 'r2', projectId: 'project-1' }));
+});
+
+test('project feed read dispatches the native read command and validates every post', async () => {
+  assert.match(controlSource, /command_type: 'ctox\.workjet\.project\.feed\.read'/);
+  assert.match(controlSource, /validateProjectFeedPost\(post\)/);
+  const { validateProjectFeedPost } = await import('./workjet-project-feed-contract.generated.mjs');
+  const fixture = JSON.parse(readFileSync(new URL('../../../core/rxdb/tests/fixtures/workjet-project-feed-v1.json', import.meta.url), 'utf8'));
+  for (const post of fixture.read_response.posts) assert.equal(validateProjectFeedPost(post).ok, true);
+  assert.equal(validateProjectFeedPost({ ...fixture.read_response.posts[0], body: 'x'.repeat(601) }).ok, false);
+  assert.equal(validateProjectFeedPost({ ...fixture.read_response.posts[0], extra: 1 }).ok, false);
 });
