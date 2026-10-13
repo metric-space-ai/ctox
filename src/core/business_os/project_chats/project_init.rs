@@ -25,6 +25,9 @@ pub(super) const DEFAULT_TIMEZONE: &str = "Europe/Berlin";
 #[serde(deny_unknown_fields)]
 struct Payload {
     project_id: String,
+    /// Stable per project onboarding; lets a client poll with fresh command ids.
+    #[serde(default)]
+    operation_id: Option<String>,
     #[serde(default)]
     as_of: Option<String>,
     #[serde(default)]
@@ -78,8 +81,12 @@ pub(in crate::business_os) fn handle(
 ) -> anyhow::Result<Value> {
     let payload: Payload = serde_json::from_value(command.payload.clone())?;
     let operation = required(
-        command.id.as_deref().context("command id is required")?,
-        "command id",
+        payload
+            .operation_id
+            .as_deref()
+            .or(command.id.as_deref())
+            .context("command id is required")?,
+        "operation_id",
         128,
     )?;
     let conn = open_store(root)?;
@@ -203,4 +210,3 @@ pub(in crate::business_os) fn handle(
     }
     Ok(json!({"ok":true,"project_id":project_id,"operation_id":operation,"steps":steps}))
 }
-

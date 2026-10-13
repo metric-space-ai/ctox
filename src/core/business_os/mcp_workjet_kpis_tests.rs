@@ -706,8 +706,15 @@ fn initialize(root: &Path, trusted: &Value, id: &str, revision: u64) -> anyhow::
 fn project_init_seeds_prompts_once_and_never_overwrites_owner_kpis() -> anyhow::Result<()> {
     let (root, trusted) = workjet_worker_dispatch::meeting_test_fixture()?;
     let seeded = initialize(root.path(), &trusted, "init-kpis", 0)?;
-    assert_eq!(seeded["kpis"]["items"].as_array().map(Vec::len), Some(3), "{seeded}");
-    assert_eq!(seeded["kpis"]["items"][0]["result"]["status"], "missing_source");
+    assert_eq!(
+        seeded["kpis"]["items"].as_array().map(Vec::len),
+        Some(3),
+        "{seeded}"
+    );
+    assert_eq!(
+        seeded["kpis"]["items"][0]["result"]["status"],
+        "missing_source"
+    );
     // Replay of the same operation is accepted and unchanged.
     assert_eq!(initialize(root.path(), &trusted, "init-kpis", 0)?, seeded);
     // A second seeding attempt cannot replace existing prompts.

@@ -14047,7 +14047,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
     'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
-    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit',
+    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit', 'project.init',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
     'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
@@ -14625,6 +14625,30 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       throw new Error('Workjet supervisor binding returned an uncorrelated or unsuccessful receipt.');
     }
     return { action, commandId, projectId, binding: { contract, projectId, threadId, threadKey } };
+  }
+
+  if (action === 'project.init') {
+    // One-click onboarding; a stable operationId makes polling idempotent.
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'operationId']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const operationId = boundedWorkjetProjectText(request.operationId, 'operationId', 128);
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox',
+      command_type: 'ctox.workjet.project.init', record_id: projectId,
+      payload: { project_id: projectId, operation_id: operationId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(state.session) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId
+      || receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.result?.ok !== true || receipt.result?.project_id !== projectId
+      || !Array.isArray(receipt.result?.steps)) {
+      throw new Error('Project init returned an uncorrelated or unsuccessful response.');
+    }
+    const steps = receipt.result.steps.slice(0, 12).map((step) => ({
+      id: String(step.id), state: String(step.state), detail: String(step.detail ?? '').slice(0, 256),
+    }));
+    return { action, commandId, projectId, operationId, steps };
   }
 
   if (['project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit'].includes(action)) {
