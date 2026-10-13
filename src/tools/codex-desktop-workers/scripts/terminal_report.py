@@ -513,6 +513,8 @@ def leaderboard_data(records):
         known_rework = [v for v in rework if v is not None]
         rework_prs = len({r["pr_url"] for r in rows})
         iteration_total = sum(known_rework) if rows and len(known_rework) == len(rows) else None
+        observed_rows = [r for r in independent_rows if any(score(r, s) is not None for s in (("parent_completion",) if historical_parent else ("first", "corrected")))]
+        observed_rework = [whole_pr_iterations(records, r["pr_url"]) if historical_parent else rework_iterations(r, model) for r in observed_rows]
         result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(independent_rows), comparison_excluded=len(independent_rows)-len(rows),
                            prs=len({r["pr_url"] for r in rows if any(score(r,s) is not None for s in (("parent_completion",) if role == "parent" and rubric == RUBRIC else ("first", "corrected")))}),
                            score=stats(completion),
@@ -520,12 +522,29 @@ def leaderboard_data(records):
                            observed_prs=len({r["pr_url"] for r in independent_rows if any(score(r,s) is not None for s in (("parent_completion",) if historical_parent else ("first", "corrected")))}),
                            observed_first=stats([None if historical_parent else score(r,"first") for r in independent_rows]),
                            observed_corrected=stats([None if historical_parent else score(r,"corrected") for r in independent_rows]),
+                           observed_rework=stats(observed_rework),
                            rework=dict(iterations=iteration_total,
                                        mean=iteration_total / rework_prs if iteration_total is not None else None,
                                        observed_iterations=sum(known_rework) if known_rework else None,
                                        known=len(known_rework), unknown=len(rows)-len(known_rework))))
     return result
 
+
+
+def coverage_data(prs, records):
+    """Count known role-specific stages without treating old parent stages as workers."""
+    stages = ("parent_completion", "first", "corrected")
+    scored = {r["pr_url"] for r in records if any((r.get(s) or {}).get("weighted_total") is not None for s in stages)}
+    roles = {}
+    for role in ("parent", "worker"):
+        rows = [r for r in records if r["role"] == role]
+        roles[role] = dict(records=len(rows), prs=len({r["pr_url"] for r in rows}),
+                          stages={s: stats([(r.get(s) or {}).get("weighted_total") for r in rows])
+                                  for s in (("parent_completion",) if role == "parent" else ("first", "corrected"))})
+    return dict(terminal_prs=len(prs), scored_prs=len(scored),
+                pending_prs=sum(p["url"] not in scored and not p.get("stop") for p in prs),
+                stopped_prs=sum(p["url"] not in scored and bool(p.get("stop")) for p in prs),
+                roles=roles)
 
 
 def parent_worker_pairs(records, prs):
@@ -631,6 +650,7 @@ def build(base):
             "PR evidence collected; assignment/actor review not yet completed")
     data = dict(schema=RUBRIC, generated_at=now(), snapshot_at=snapshot["collected_at"],
                 summary=summary, weights=WEIGHTS, prs=prs, assessments=records, legacy=legacy,
+                coverage=coverage_data(prs, records),
                 non_delivery_attempts=non_delivery_attempts, non_delivery_legacy=non_delivery_legacy,
                 historical_assessments=historical_assessments, historical_legacy=historical_legacy,
                 leaderboards=leaderboard_data(records + legacy), parent_worker_pairs=parent_worker_pairs(records, mapping), scope_repositories=list(REPOS))

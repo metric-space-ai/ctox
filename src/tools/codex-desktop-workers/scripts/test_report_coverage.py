@@ -30,6 +30,21 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(board["observed_first"]["mean"], 4)
         self.assertEqual(board["observed_corrected"]["mean"], 8)
 
+    def test_parent_history_is_not_counted_as_worker_coverage(self):
+        parent = dict(pr_url="parent", actor_id="parent", role="parent",
+                      first=dict(weighted_total=8), corrected=dict(weighted_total=8),
+                      parent_completion=dict(weighted_total=7))
+        rows = [parent, self.worker("worker", None, 6)]
+        coverage = report.coverage_data([
+            dict(url="parent"), dict(url="worker"), dict(url="pending"),
+            dict(url="stopped", stop=True)], rows)
+        self.assertEqual(coverage["scored_prs"], 2)
+        self.assertEqual(coverage["pending_prs"], 1)
+        self.assertEqual(coverage["stopped_prs"], 1)
+        self.assertEqual(coverage["roles"]["worker"]["stages"]["first"]["n"], 0)
+        self.assertEqual(coverage["roles"]["worker"]["stages"]["corrected"]["n"], 1)
+        self.assertEqual(coverage["roles"]["parent"]["stages"]["parent_completion"]["n"], 1)
+
 if __name__ == "__main__":
     unittest.main()
 

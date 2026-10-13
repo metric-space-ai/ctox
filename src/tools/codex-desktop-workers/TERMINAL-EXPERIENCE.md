@@ -61,13 +61,15 @@ worker first, worker final, corrections.
 
 Display identities use model (@codex). Observed harness metadata stays in the
 original records. All headers are clickable/keyboard accessible. Numeric sort
-is numeric; unknowns stay last both ways. Sort the full filtered list before
-pagination. Score bars use the0–10scale. Worker first/final means and PR count
-use the identical paired PR cohort and actual model. A reviewed assignment
-expansion sets `first_end_scope_comparable=false`: keep both historical
-scores in JSON/PR list and as individual chart points, but exclude the pair
-from first/final means and improvement arrows. Unpaired evidence stays
-in JSON/PR list with explicit comparison_excluded counts.
+is numeric; unknowns stay last both ways. Sort the full list before pagination.
+Score bars use the 0–10 scale. Worker leaderboards display all model-attributed
+individual observations through observed_prs/observed_first/observed_corrected.
+Each mean retains its actual sample count; an absent endpoint does not hide the
+other score. Existing prs/first/corrected fields retain the comparable paired
+cohort for change analysis. A reviewed scope expansion sets
+first_end_scope_comparable=false and cannot produce an improvement arrow.
+Role-specific coverage distinguishes Worker stages from historical Parent stages.
+Unscored PRs stay in the complete paginated list with one pending/STOP cell.
 
 Corrections are evidenced absolute delivered iterations after the first
 review-ready package through merge/close, including private corrections before
@@ -80,23 +82,28 @@ PR scope or deduplicated complete history; parent/worker counts can overlap.
 A sole actor count does not establish a whole-PR total. Actor event union is
 used only when the review explicitly attests complete PR correction history.
 
-Scatter X is parent completion, Y is worker. Switch first/final points/arrows.
-The global filter bar is removed. One compact combination dropdown and color field
-replace a repeated legend. All PRs displays every terminal PR. Selecting a combination filters to that
-proved pair; clearing it restores the complete dataset.
-Absent first/final model endpoints normalize to the same visible combination.
-The JSON contains computed pairs/record IDs/stage models and all PR assessments.
-Require a proved parent-child edge for two-axis points/arrows. Scores without a
-proved edge remain visible in separate Parent/Worker marginal lanes outside the
-other actor scale; PRs with no numeric result get a separate unscored lane.
-No invented Worker values or zero placeholders. The chart PR count always
-reports unique represented PRs, independent of pagination and score mode.
-Deterministic collision placement and exact-value leader lines/tooltips preserve
-coincident results instead of drawing them directly over each other.
+Compact distributions include every retained Parent completion and Worker
+first/final score independently, including deliveries without a matched edge.
+They count scores, not inventory PRs; missing scores never become zero.
+The bounded scatter uses X=Parent completion, Y=Worker first/final.
+Only source-proved Parent/Worker edges enter it. Its count is actual eligible
+pairs in the chosen mode, never the full terminal inventory.
+First/final/arrows modes and a normalized model/harness combination filter
+remain available. Selecting a combination hides the other pairs; clearing it
+restores all genuine pairs. Scope-incomparable stages remain individual
+observations and cannot enter the arrow comparison. The fixed chart extent
+does not grow with thousands of unpaired or unscored PRs.
 
 terminal_provenance.py reads candidates through Greppy/read-only Codex metadata.
 A PR/head mention or registry assignment is not authorship proof. Native actors
-do not become invented proxy jobs. Refresh at actual terminal disposition/review
+do not become invented proxy jobs. Public PR descriptions should identify the
+requested outcome, implementation scope, checked head and actual check results.
+Private lineage stays in the existing registry: PR/head, actor and parent IDs,
+role/package, actual authoring turn/model/harness/date, first review-ready head,
+and successful corrective push packages with their terminal cutoff. Current
+thread settings cannot replace historical turn evidence. Do not put private
+thread IDs, operator paths, credentials or model-learning notes into public PRs.
+A specialized proxy-job registry is not a fleet-wide Worker census. Refresh at actual terminal disposition/review
 using the existing lifecycle; no watcher/automation/extra acknowledgment gate.
 
 Run narrow checks through greppy bash-smart. Python unittest checks rubric,

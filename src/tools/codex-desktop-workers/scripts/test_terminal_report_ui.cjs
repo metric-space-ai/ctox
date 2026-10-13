@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict'),vm=require('node:vm'),cp=require('node:child_process');
 const report=process.argv[2]||'/Users/michaelwelsch/.codex/proxy-workers/MODEL-EXPERIENCE.html';
-const html=cp.execFileSync('greppy',['rg','--no-heading','--no-line-number','^',report],{encoding:'utf8',maxBuffer:32*1024*1024});
+const html=cp.execFileSync('greppy',['rg','--no-heading','--no-line-number','^',report],{encoding:'utf8',maxBuffer:128*1024*1024});
 const data=html.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1];
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 const elements=new Map(),headers={parent:[],worker:[],pr:[]},modes=[];
@@ -30,7 +30,7 @@ const document={
 document.getElementById('report-data').textContent=data;
 document.getElementById('size').value='25';
 const context=vm.createContext({document,console,Set,Map,JSON,Number,String,Math,Object,Blob,URL,setTimeout});
-const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,chartEntries,prKey,mergeTarget,parentScore,reworkCount,reworkLowerBound,reworkDisplay,current,actorCell,scoreCell,getAll:()=>all,getAssessments:()=>D.assessments,getPRs:()=>D.prs,getVisible:()=>visible,setVisible:rows=>{visible=rows;draw();},getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
+const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,drawDistributions,pairKey,prKey,mergeTarget,parentScore,reworkCount,reworkLowerBound,reworkDisplay,current,actorCell,scoreCell,getAll:()=>all,getAssessments:()=>D.assessments,getPRs:()=>D.prs,getVisible:()=>visible,setVisible:rows=>{visible=rows;draw();},getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
 vm.runInContext(scripts[0][1]+capture,context,{timeout:10000});
 const api=context.testAPI;
 assert.equal(headers.parent.length,4);assert.equal(headers.worker.length,5);assert.equal(headers.pr.length,7);
@@ -48,14 +48,17 @@ for(const name of ['parent','worker']){
  assert.equal(headers[name].find(h=>h.dataset.sort===key).attrs['aria-sort'],'ascending');
  click(name,key);assert.equal(headers[name].find(h=>h.dataset.sort===key).attrs['aria-sort'],'descending');
 }
-const expectedBoards=JSON.parse(data).leaderboards.filter(g=>g.rubric==='unified-actor-v1'&&g.prs>0);
+const expectedBoards=JSON.parse(data).leaderboards.filter(g=>g.rubric==='unified-actor-v1'&&(g.observed_prs??g.prs)>0);
 for(const role of ['parent','worker'])for(const actual of api.getBoards()[role]){
  const expected=expectedBoards.find(g=>g.role===role&&g.model+' (@'+(g.harness||'—')+')'===actual.label);
  assert.ok(expected,actual.label);
- assert.equal(actual.prs,expected.prs,'Same comparable PR cohort in Python and UI');
- if(role==='worker')for(const [key,stage] of [['first','first'],['end','corrected']])assert.ok(Math.abs(actual[key]-expected[stage].mean)<0.00051,'Scope expansion must not bias worker score means');
- assert.equal(actual.rework,expected.rework.mean,'Leaderboard must show average corrections per PR');
- if(actual.rework!=null){assert.equal(actual.rework,expected.rework.iterations/actual.prs);assert.ok(document.getElementById(role+'board').innerHTML.includes('>'+actual.rework.toFixed(1)+'</td>'));}
+ assert.equal(actual.prs,expected.observed_prs??expected.prs,'Individual observations share the exported cohort');
+ if(role==='worker')for(const [key,stage] of [['first','first'],['end','corrected']]){
+  const field=expected['observed_'+stage]||expected[stage];
+  assert.equal(actual[key],field.mean,'A valid unpaired endpoint must remain visible');
+ }
+ const rw=expected.observed_rework;
+ assert.equal(actual.rework,rw?(rw.n===rw.denominator?rw.mean:null):expected.rework.mean,'Incomplete correction histories cannot produce a complete average');
 }
 // One closing Parent label/score; earlier source actors remain in JSON and iteration evidence.
 const parentFixture={url:'fixture-parent-pr'};
@@ -94,7 +97,7 @@ assert.ok(document.getElementById('prlist').innerHTML.includes('gemergt → code
 assert.ok(!document.getElementById('prlist').innerHTML.includes('gemergt → main'));
 api.setVisible(savedList);
 // A worker's known count does not prove the whole PR correction history.
-const fixture={url:'fixture-pr'},actor={pr_url:'fixture-pr',role:'worker',actor_id:'fixture-worker',rubric:'unified-actor-v1',model:'m',rework_iterations:2,iteration_scope:'actor',iteration_evidence:[{kind:'correction',head:'one'},{kind:'correction',head:'two'}]};
+const fixture={url:'fixture-pr'},actor={pr_url:'fixture-pr',role:'worker',actor_id:'fixture-worker',rubric:'unified-actor-v1',model:'gpt-6.1-sol',rework_iterations:2,iteration_scope:'actor',iteration_evidence:[{kind:'correction',head:'one'},{kind:'correction',head:'two'}]};
 api.getAll().push(actor);
 assert.equal(api.reworkCount(fixture),null,'Actor-only counts must not masquerade as complete PR totals');
 assert.equal(api.reworkDisplay(fixture),'—','An incomplete actor count must not become an exact PR count');
@@ -116,92 +119,70 @@ const first=api.getVisible()[0];assert.ok(document.getElementById('prlist').inne
 click('pr','parent');numericOrder(api.getVisible().map(p=>api.prKey(p,'parent')),1);
 assert.equal(api.getVisible().length,JSON.parse(data).prs.length);
 const body=document.getElementById('prlist').innerHTML;
-for(const row of body.matchAll(/<tr>([\s\S]*?)<\/tr>/g))assert.equal((row[1].match(/<td\b/g)||[]).length,7);
-assert.ok((body.match(/<tr>/g)||[]).length<=25);
+for(const row of body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)){
+ const widths=[...row[1].matchAll(/<td\b([^>]*)>/g)].map(m=>Number(m[1].match(/colspan="(\d+)"/)?.[1]||1));
+ assert.equal(widths.reduce((s,n)=>s+n,0),7);
+}
+assert.ok((body.match(/<tr\b/g)||[]).length<=25);
 assert.equal(api.compare(null,9,1),1);assert.equal(api.compare(null,9,-1),1);
 assert.ok(api.compare('model 2','model 10',1)<0);
-assert.ok(html.includes('Parent Score'));assert.ok(!html.includes('<th>Parent Erst'));
-for(const mode of modes){mode.onclick();assert.equal(api.getMode(),mode.dataset.mode);assert.equal(mode.attrs['aria-pressed'],'true')}
-const svg=document.getElementById('scatter').innerHTML;
-assert.ok(svg.includes('Parent Score')&&svg.includes('Worker Score'));
-for(const p of api.getPairs()){
- assert.ok(p.parent_id&&p.worker_id&&p.parent_record_id&&p.worker_record_id);
- assert.ok(p.parent_score>=0&&p.parent_score<=10);
+const actualData=JSON.parse(data);
+const roleScores=(role,stage)=>actualData.assessments.filter(a=>a.role===role&&a[stage]?.weighted_total!=null);
+for(const [id,role,stages] of [['parent-distribution','parent',['parent_completion']],['worker-distribution','worker',['first','corrected']]]){
+ const expected=stages.reduce((n,s)=>n+roleScores(role,s).length,0),svg=document.getElementById(id);
+ assert.equal(Number(svg.dataset.total),expected,'Every retained score contributes exactly once to the distribution');
+ assert.equal([...svg.innerHTML.matchAll(/data-count="(\d+)"/g)].reduce((n,m)=>n+Number(m[1]),0),expected);
 }
-assert.ok(api.getPairs().length>0,'Actual report must exercise paired scores');
-const actualData=JSON.parse(data),allPRs=actualData.prs.map(p=>p.url).sort();
-const realPairs=api.getPairs().filter(p=>p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null);
+assert.equal(document.getElementById('coverage').textContent,actualData.coverage.terminal_prs+' PRs · '+actualData.coverage.scored_prs+' mit Scores · '+actualData.coverage.pending_prs+' Prüfungen offen · '+actualData.coverage.stopped_prs+' STOP');
 function markers(){
- return [...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="([^"]+)" data-kind="([^"]+)" data-stage="([^"]+)" data-score="([^"]*)" data-parent="([^"]*)"/g)].map(m=>({pr:m[1],kind:m[2],stage:m[3],score:m[4],parent:m[5]}));
+ return [...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="([^"]+)" data-stage="([^"]+)" data-score="([^"]*)" data-parent="([^"]*)"/g)].map(m=>({pr:m[1],stage:m[2],score:m[3],parent:m[4]}));
 }
+function eligible(p,mode){return mode==='arrows'?p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null:p['worker_'+mode]!=null}
 for(const name of ['first','end','arrows']){
  modes.find(m=>m.dataset.mode===name).onclick();
- const points=markers();
- assert.deepEqual([...new Set(points.map(p=>p.pr))].sort(),allPRs,'Every terminal PR must be represented, independent of mode and table pagination');
- assert.equal(document.getElementById('chart-count').textContent,allPRs.length+' / '+allPRs.length+' PRs');
+ const expected=api.getPairs().filter(p=>eligible(p,name)),points=markers();
+ assert.equal(points.length,expected.length*(name==='arrows'?2:1),'Scatter contains only genuine source-bound pairs');
+ assert.equal(document.getElementById('chart-count').textContent,expected.length+' belegte Paare');
+ assert.equal(document.getElementById('scatter').attrs.viewBox,undefined,'Density must not grow chart extent');
  for(const point of points){
-  if(point.kind==='missing'||point.kind==='pending'){assert.equal(point.score,'');assert.equal(point.parent,'');continue}
-  assert.ok(Number(point.score)>=0&&Number(point.score)<=10);
+  const p=expected.find(p=>p.pr_url===point.pr&&p.parent_score===Number(point.parent)&&p['worker_'+point.stage]===Number(point.score));
+  assert.ok(p,'Every displayed endpoint must match a retained joined assessment');
  }
- const expected=name==='arrows'?api.getPairs().reduce((n,p)=>n+Number(p.worker_first!=null)+Number(p.worker_end!=null),0):api.getPairs().filter(p=>(name==='first'?p.worker_first:p.worker_end)!=null).length;
- assert.equal(points.filter(p=>p.kind==='pair').length,expected);
- assert.equal((document.getElementById('scatter').innerHTML.match(/class="arrow"/g)||[]).length,name==='arrows'?realPairs.filter(p=>p.worker_first!==p.worker_end).length:0);
- assert.ok(points.filter(p=>p.kind==='parent').length>200,'Single-parent results must not disappear because there is no source-proved Worker edge');
- assert.equal(points.filter(p=>p.kind==='missing').length,allPRs.length-actualData.summary.unified_assessed_prs);
- // All displayed grades must match retained rubric results, not displaced SVG coordinates.
- for(const point of points.filter(p=>!['missing','pending'].includes(p.kind))){
-  const stages=actualData.assessments.filter(a=>a.pr_url===point.pr);
-  const score=Number(point.score);
-  assert.ok(stages.some(a=>point.stage==='parent'?a.parent_completion?.weighted_total===score:a[point.stage==='first'?'first':'corrected']?.weighted_total===score));
- }
+ assert.equal((document.getElementById('scatter').innerHTML.match(/class="arrow"/g)||[]).length,name==='arrows'?expected.filter(p=>p.worker_first!==p.worker_end).length:0);
 }
-const expandedPair={...realPairs[0],pr_url:'expanded-scope-fixture',worker_first:7.3,worker_end:7.8,first_end_scope_comparable:false};
+const expandedPair={...api.getPairs()[0],pr_url:'changed-scope-fixture',worker_first:4,worker_end:8,first_end_scope_comparable:false};
 api.getPairs().push(expandedPair);
 modes.find(m=>m.dataset.mode==='arrows').onclick();
-assert.equal(markers().filter(p=>p.pr===expandedPair.pr_url).length,2,'Assignment expansion retains both independent points');
-assert.equal((document.getElementById('scatter').innerHTML.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length,'Assignment expansion must never create an improvement arrow');
-api.getPairs().pop();api.drawChart();
-const svgCoverage=markers();
-const pendingFixture={url:'unpaired-stage-fixture',repository:'fixture/repo',number:1,title:'only one Worker endpoint'};
-api.getPRs().push(pendingFixture);
-api.getAssessments().push({pr_url:pendingFixture.url,record_id:'pending-record',actor_id:'pending-worker',role:'worker',first:null,corrected:{weighted_total:7,model:'m'}});
+assert.equal(markers().filter(p=>p.pr===expandedPair.pr_url).length,0,'Scope changes are not improvement arrows');
 modes.find(m=>m.dataset.mode==='first').onclick();
-assert.ok(markers().some(p=>p.pr===pendingFixture.url&&p.kind==='pending'&&p.score===''),'Absent selected endpoint stays visible without an invented grade');
-modes.find(m=>m.dataset.mode==='end').onclick();
-assert.ok(markers().some(p=>p.pr===pendingFixture.url&&p.kind==='worker'&&p.score==='7'));
-api.getAssessments().pop();api.getPRs().pop();modes.find(m=>m.dataset.mode==='arrows').onclick();
-for(const m of document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="[^"]+" data-kind="parent"[^>]* data-parent="([^"]+)" cx="([^"]+)"/g))assert.ok(Math.abs(Number(m[2])-(95+Number(m[1])*78))<1e-8,'Parent marginal X remains the exact score');
-
-for(const lane of ['pair','parent','worker']){
- const coords=[...document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint" data-pr="[^"]+" data-kind="([^"]+)"[^>]* cx="([^"]+)" cy="([^"]+)"/g)].filter(m=>m[1]===lane).map(m=>[Number(m[2]),Number(m[3])]);
- for(let i=0;i<coords.length;i++)for(let j=i+1;j<coords.length;j++)assert.ok(Math.hypot(coords[i][0]-coords[j][0],coords[i][1]-coords[j][1])>=(lane==='parent'?3.99:6.99),'Identical scores must not hide each other');
-}
-// Every terminal result remains inside the actual SVG extent at full report density.
-const extent=Number(document.getElementById('scatter').attrs.viewBox.split(' ')[3]);
-for(const point of document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint"[^>]* cx="([^"]+)" cy="([^"]+)" r="([^"]+)"/g)){
- const [x,y,r]=point.slice(1).map(Number);assert.ok(x-r>=0&&x+r<=930&&y-r>=0&&y+r<=extent,'A retained PR marker must not be cropped outside the SVG');
-}
+assert.equal(markers().filter(p=>p.pr===expandedPair.pr_url).length,1,'Independent first score remains observable');
+api.getPairs().pop();
+const firstOnly={pr_url:'partial-fixture',record_id:'partial',actor_id:'partial',role:'worker',schema:'unified-actor-v1',first:{weighted_total:4,model:'gpt-6.1-sol'},corrected:null};
+api.getAssessments().push(firstOnly);api.drawDistributions();
+assert.equal(Number(document.getElementById('worker-distribution').dataset.total),roleScores('worker','first').length+roleScores('worker','corrected').length+1,'An unpaired Worker score belongs in the distribution');
+api.getAssessments().pop();api.drawDistributions();
+api.setVisible([{url:'pending-fixture',repository:'fixture/repo',number:2,title:'review pending',state:'CLOSED',coverage_reason:'Independent review pending'}]);
+assert.match(document.getElementById('prlist').innerHTML,/colspan="5" class="review-pending"/);
+assert.ok(!document.getElementById('prlist').innerHTML.includes('actor'),'No repeated empty actor/score matrix for pending reviews');
+api.setVisible(savedList);
 const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
+modes.find(m=>m.dataset.mode==='end').onclick();
 const options=[...selector.innerHTML.matchAll(/<option value="[^"]*">([^<]+)<\/option>/g)].map(m=>m[1]);
-assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');
-assert.equal(options.length,api.getStyles().size+1);
-assert.equal(options[0],'Alle PRs');
+assert.equal(new Set(options).size,options.length,'Visible model/harness combinations cannot have duplicate classifications');
+assert.equal(options[0],'Alle Modellkombinationen');
 assert.equal(color.disabled,true);
-assert.ok(!html.includes('id="legend"'));
-assert.ok(options.slice(1).every(label=>(label.match(/\(@[^)]+\)/g)||[]).length===2));
-const nativeClaude=api.getAll().filter(a=>a.harness==='claude-desktop');
-if(nativeClaude.length){
- assert.ok([...api.getBoards().parent,...api.getBoards().worker].some(row=>row.label.includes('(@claude)')));
- for(const id of ['parentboard','workerboard','prlist'])assert.ok(!document.getElementById(id).innerHTML.includes('claude-desktop'));
-}
 if(options.length>1){
- selector.value=realPairs[0].combination;selector.onchange();
- assert.equal(color.disabled,false);assert.deepEqual([...new Set(markers().map(p=>p.pr))].sort(),[...new Set(api.getPairs().filter(p=>p.combination===selector.value).map(p=>p.pr_url))].sort());
+ selector.value=api.pairKey(api.getPairs()[0]);selector.onchange();
+ assert.equal(color.disabled,false);
+ const expected=api.getPairs().filter(p=>api.pairKey(p)===selector.value&&eligible(p,'end'));
+ assert.deepEqual([...new Set(markers().map(p=>p.pr))].sort(),[...new Set(expected.map(p=>p.pr_url))].sort(),'Selecting a combination hides all other pairs');
  color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'));
- selector.value='';selector.onchange();assert.equal(color.disabled,true);assert.deepEqual([...new Set(markers().map(p=>p.pr))].sort(),allPRs);
+ selector.value='';selector.onchange();assert.equal(color.disabled,true);
+}
+for(const point of document.getElementById('scatter').innerHTML.matchAll(/<circle class="plotpoint"[^>]* cx="([^"]+)" cy="([^"]+)" r="([^"]+)"/g)){
+ const [x,y,r]=point.slice(1).map(Number);assert.ok(x-r>=0&&x+r<=930&&y-r>=0&&y+r<=300,'Scores stay inside a fixed compact chart');
 }
 assert.ok(!document.getElementById('parentboard').innerHTML.includes('Codex Desktop'));
 assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desktop'));
-assert.ok(!document.getElementById('prlist').innerHTML.includes('Codex Desktop'));
 assert.ok(!html.includes('<div class="filters">'));
-console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, chart with real edges and first/end/arrows/color controls.');
+console.log('PASS: retained individual Worker scores; separate comparison cohorts; all role-specific distribution scores; genuine bounded pair plot; filtering, arrows, sorting, pagination and pending rows.');
