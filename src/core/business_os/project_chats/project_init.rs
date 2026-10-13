@@ -13,7 +13,8 @@ use crate::business_os::store;
 use rusqlite::OptionalExtension;
 
 pub(in crate::business_os) const COMMAND: &str = "ctox.workjet.project.init";
-const SKILL: &str = include_str!("../../../skills/system/mission_orchestration/project-init/SKILL.md");
+const SKILL: &str =
+    include_str!("../../../skills/system/mission_orchestration/project-init/SKILL.md");
 /// Monday 09:00 Europe/Berlin: German default week start and working hours.
 pub(super) const DEFAULT_WEEKDAY: u64 = 1;
 pub(super) const DEFAULT_TIME: &str = "09:00";
@@ -46,7 +47,11 @@ fn step(id: &str, state: &str, detail: impl Into<String>) -> Value {
     json!({"id":id,"state":state,"label":{"de":de,"en":en},"detail":detail.into()})
 }
 
-fn submit(root: &Path, session: &store::BusinessOsSession, command: Value) -> anyhow::Result<Value> {
+fn submit(
+    root: &Path,
+    session: &store::BusinessOsSession,
+    command: Value,
+) -> anyhow::Result<Value> {
     let mut command = command;
     command["client_context"] =
         json!({"actor":threads::actor_payload(session),"source":"native-workjet-project-init"});
@@ -58,7 +63,9 @@ fn submit(root: &Path, session: &store::BusinessOsSession, command: Value) -> an
     ensure!(
         accepted["status"] == "completed",
         "{}",
-        accepted["error_message"].as_str().unwrap_or("command was not completed")
+        accepted["error_message"]
+            .as_str()
+            .unwrap_or("command was not completed")
     );
     Ok(accepted)
 }
@@ -79,7 +86,10 @@ pub(in crate::business_os) fn handle(
     let project = owned_project(&conn, &payload.project_id, &owner, true)?;
     let project_id = text(&project, "id")?.to_owned();
     ensure!(
-        command.record_id.as_deref().is_none_or(|id| id == project_id),
+        command
+            .record_id
+            .as_deref()
+            .is_none_or(|id| id == project_id),
         "record_id must match project_id"
     );
     let bound: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_supervisor_bindings')", [], |r| r.get(0))?;
@@ -102,8 +112,16 @@ pub(in crate::business_os) fn handle(
         || project["info"]["local_path"].as_str().is_some();
     steps.push(step(
         "analysed",
-        if thread.is_some() { "queued" } else { "blocked" },
-        if has_source { "repository" } else { "project metadata" },
+        if thread.is_some() {
+            "queued"
+        } else {
+            "blocked"
+        },
+        if has_source {
+            "repository"
+        } else {
+            "project metadata"
+        },
     ));
 
     // Regeltermin: keep an owner-chosen slot; otherwise set the German default.
@@ -153,7 +171,9 @@ pub(in crate::business_os) fn handle(
         steps.push(step("supervisor", "blocked", "supervisor_not_bound"));
         steps.push(step("kpis", "blocked", "supervisor_not_bound"));
         steps.push(step("worker", "blocked", "supervisor_not_bound"));
-        return Ok(json!({"ok":true,"project_id":project_id,"operation_id":operation,"steps":steps}));
+        return Ok(
+            json!({"ok":true,"project_id":project_id,"operation_id":operation,"steps":steps}),
+        );
     };
     let goal = format!(
         "ProjectInit for project {project_id}, operation_id {operation}. {}",

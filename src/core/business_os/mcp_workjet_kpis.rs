@@ -21,7 +21,11 @@ enum Request {
     Initialize(wire::ConfigureKpisRequest),
 }
 pub(super) fn allows(tool: &str, args: &Value) -> bool {
-    tool == TOOL && matches!(args["action"].as_str(), Some("read" | "resolve" | "initialize"))
+    tool == TOOL
+        && matches!(
+            args["action"].as_str(),
+            Some("read" | "resolve" | "initialize")
+        )
 }
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -119,9 +123,7 @@ pub(super) fn execute(
             let current = kpis::read_state_with_schedule(&tx, &project, &owner, false)?;
             let replay = kpis::operation_exists(&tx, &query.operation_id)?;
             anyhow::ensure!(
-                replay
-                    || (query.expected_revision == 0
-                        && current.items.is_empty()),
+                replay || (query.expected_revision == 0 && current.items.is_empty()),
                 "project already has KPI prompts; only the owner may change them"
             );
             kpis::configure_for_init(&tx, &context.actor, &query)?

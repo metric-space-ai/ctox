@@ -27,7 +27,12 @@ fn states(result: &Value) -> Vec<(String, String)> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| (s["id"].as_str().unwrap().to_owned(), s["state"].as_str().unwrap().to_owned()))
+        .map(|s| {
+            (
+                s["id"].as_str().unwrap().to_owned(),
+                s["state"].as_str().unwrap().to_owned(),
+            )
+        })
         .collect()
 }
 
@@ -37,7 +42,17 @@ fn project_init_sets_default_regeltermin_and_queues_exit_and_supervisor() -> any
     let result = init(root.path(), "init-1")?;
     let steps = states(&result);
     let ids: Vec<_> = steps.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, ["analysed", "regeltermin", "exit", "supervisor", "kpis", "worker"]);
+    assert_eq!(
+        ids,
+        [
+            "analysed",
+            "regeltermin",
+            "exit",
+            "supervisor",
+            "kpis",
+            "worker"
+        ]
+    );
     assert!(steps.iter().all(|(_, s)| s != "failed"), "{result}");
     assert_eq!(result["steps"][1]["detail"], "created");
     assert_eq!(result["steps"][1]["label"]["de"], "Regeltermin angelegt");
