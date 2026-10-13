@@ -1,7 +1,7 @@
 # Owner-bound Google adapter revisions
 
 These are source artifacts for the registered adapters, not the excluded local
-web-stack crate. They are successors to the actual THESEN Google revision25 and
+web-stack crate. They are successors to the deployed Google revision25 and
 Maps revision31 inspected on 13 October. Their extraction logic stays intact;
 the Google provider leg now invokes native `business-os web-stack
 authenticated-automation` with GOOGLE_BROWSER_LOGIN's official secret reference
@@ -13,10 +13,10 @@ when the input lacks a company. Successful output retains the native session ID
 for acceptance correlation; it contains no password or token.
 
 Requires #643's Google/Maps login and email-code recipes. These files do not change
-an installed adapter merely by merging or installing a binary. The THESEN writer
+an installed adapter merely by merging or installing a binary. The customer-instance writer
 must publish them as new registered script revisions in the release bundle.
 
-## Installation by the existing THESEN writer
+## Installation by the existing customer-instance writer
 
 1. Confirm #643 is installed and the two current script revision/hash pairs equal
    `google-session-migration.json`. If either source has changed, reconcile its

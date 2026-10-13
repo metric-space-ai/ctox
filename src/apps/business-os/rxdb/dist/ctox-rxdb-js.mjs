@@ -999,6 +999,8 @@ var CtoxRecoveryJournal = class {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
     this.lastGcAtMs = 0;
+    this.statusTimer = null;
+    this.closed = false;
   }
   registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
@@ -1028,7 +1030,7 @@ var CtoxRecoveryJournal = class {
       masterAckedAtMs: 0
     };
     await this.withQuotaRecovery(() => putSequencedBatch(this.db, batch));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
     return batch.batchId;
   }
   async commitBatch(batchId, success = {}) {
@@ -1037,7 +1039,7 @@ var CtoxRecoveryJournal = class {
       committedDocs: structuredCloneSafe2(success),
       primaryCommittedAtMs: Date.now()
     }));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
   }
   async markMasterAcknowledged(collection, documents = {}) {
     const ids = Object.keys(documents).filter((id) => documents[id]);
@@ -1396,7 +1398,20 @@ var CtoxRecoveryJournal = class {
     }
     return pruned;
   }
+  scheduleStatusPublication() {
+    if (this.closed || this.statusTimer !== null) return;
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
+      if (!this.closed) void this.publishStatus();
+    }, 1e3);
+    this.statusTimer?.unref?.();
+  }
   async publishStatus() {
+    if (this.statusTimer !== null) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    if (this.closed) return;
     try {
       const status = await this.getStatus();
       globalThis.dispatchEvent?.(new CustomEvent("ctox-indexeddb-recovery-status", { detail: status }));
@@ -1424,6 +1439,9 @@ var CtoxRecoveryJournal = class {
     }
   }
   close() {
+    this.closed = true;
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
     this.db.close();
   }
 };
@@ -2675,6 +2693,38 @@ var REPLICATION_MIN_SCAN_LIMIT = 1;
 var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 var INDEX_HIGH_KEY = "\uFFFF";
 var unsyncedCountScheduled = /* @__PURE__ */ new WeakSet();
+var writeAdmissionByDatabase = /* @__PURE__ */ new WeakMap();
+var REPLICATION_WRITE_QUANTUM = 5;
+var LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_MS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_YIELDS = 8;
+function writeAdmission(db) {
+  let admission = writeAdmissionByDatabase.get(db);
+  if (!admission) {
+    admission = { localWrites: 0, completedLocalWrites: 0, background: Promise.resolve() };
+    writeAdmissionByDatabase.set(db, admission);
+  }
+  return admission;
+}
+function yieldWriteAdmission() {
+  return new Promise((done) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      done();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+async function waitForReplicationAdmission(admission) {
+  const deadline = performance.now() + LOCAL_WRITE_PRIORITY_MAX_MS;
+  const completedAtStart = admission.completedLocalWrites;
+  let yields = 0;
+  while (admission.localWrites && admission.completedLocalWrites - completedAtStart < LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS && performance.now() < deadline && yields++ < LOCAL_WRITE_PRIORITY_MAX_YIELDS) {
+    await yieldWriteAdmission();
+  }
+}
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -2950,7 +3000,10 @@ var CtoxIndexedDbCollection = class {
     const { success } = await this.bulkUpsert([doc]);
     return success[id] || null;
   }
-  async bulkUpsert(docs, {
+  async bulkUpsert(docs, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkUpsert(docs, options));
+  }
+  async _bulkUpsert(docs, {
     now = Date.now(),
     replicationOrigin = null,
     skipJournal = false,
@@ -2974,7 +3027,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validDocs, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
+        () => replicationOrigin?.role ? this.writeReplicationChunks(writeDocs, { now, replicationOrigin }, "_bulkUpsertOnce") : this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-upsert" }
       );
     } catch (error) {
@@ -2987,7 +3040,7 @@ var CtoxIndexedDbCollection = class {
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null, emitChange = true } = {}) {
     if (!Array.isArray(docs)) {
       throw new TypeError("bulkUpsert docs must be an array");
     }
@@ -3079,7 +3132,7 @@ var CtoxIndexedDbCollection = class {
       throw error2;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
         success,
@@ -3089,7 +3142,10 @@ var CtoxIndexedDbCollection = class {
     }
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
-  async bulkWrite(rows, {
+  async bulkWrite(rows, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkWrite(rows, options));
+  }
+  async _bulkWrite(rows, {
     now = Date.now(),
     replicationOrigin = null,
     baseById = null,
@@ -3116,7 +3172,7 @@ var CtoxIndexedDbCollection = class {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
+        () => replicationOrigin?.role ? this.writeReplicationChunks(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }, "_bulkWriteOnce") : this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? "recovery-replay" : "bulk-write" }
       );
     } catch (error) {
@@ -3129,7 +3185,7 @@ var CtoxIndexedDbCollection = class {
     if (replicationOrigin?.role) await this.recoveryJournal?.markMasterAcknowledged(this.name, result.success);
     return result;
   }
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false, emitChange = true } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError("bulkWrite rows must be an array");
     }
@@ -3225,7 +3281,7 @@ var CtoxIndexedDbCollection = class {
       throw error2;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
         success,
@@ -3234,6 +3290,52 @@ var CtoxIndexedDbCollection = class {
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
+  }
+  async withLocalWriteAdmission(options, operation) {
+    if (options.replicationOrigin?.role) return operation();
+    const admission = writeAdmission(this.db);
+    admission.localWrites += 1;
+    try {
+      return await operation();
+    } finally {
+      admission.localWrites -= 1;
+      admission.completedLocalWrites += 1;
+    }
+  }
+  async writeReplicationChunks(rows, options, method) {
+    if (!Array.isArray(rows)) throw new TypeError("replication rows must be an array");
+    const admission = writeAdmission(this.db);
+    const run = async () => {
+      const result = { success: {}, error: [], overwrittenLocalConflicts: [], structuredConflicts: [] };
+      try {
+        for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
+          const writeQuantum = async () => {
+            await waitForReplicationAdmission(admission);
+            return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+          };
+          const pending = admission.background.then(writeQuantum, writeQuantum);
+          admission.background = pending.catch(() => {
+          });
+          const chunk = await pending;
+          Object.assign(result.success, chunk.success);
+          result.error.push(...chunk.error);
+          result.overwrittenLocalConflicts.push(...chunk.overwrittenLocalConflicts);
+          result.structuredConflicts.push(...chunk.structuredConflicts);
+          await yieldWriteAdmission();
+        }
+      } catch (error) {
+        await this.persistOverwrittenLocalConflicts(result);
+        await this.persistStructuredConflictQuarantine(result);
+        throw error;
+      } finally {
+        if (Object.keys(result.success).length) {
+          this.events.emit("change", { collection: this.name, success: result.success, at: options.now });
+          dispatchStorageChange(this.db.name, this.name, result.success, options.replicationOrigin);
+        }
+      }
+      return result;
+    };
+    return run();
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -3868,20 +3970,26 @@ function schedulePersistUnsyncedWriteCount(db) {
 }
 async function countUnsyncedWrites(db) {
   const tx = db.transaction(DOCUMENT_STORE, "readonly");
+  const done = idbTransactionDone(tx);
   const store = tx.objectStore(DOCUMENT_STORE);
   const byCollection = {};
-  let total = 0;
-  await iterateCursor(store.openCursor(), (cursor) => {
-    if (!cursor) return false;
-    const record = cursor.value;
-    if (Number(record?.pushable || 0) === 1) {
-      total += 1;
-      const collection = String(record.collection || "unknown");
-      byCollection[collection] = (byCollection[collection] || 0) + 1;
-    }
+  const collections = [];
+  await iterateCursor(store.index("collection").openKeyCursor(null, "nextunique"), (cursor) => {
+    collections.push(String(cursor.key));
     return true;
   });
-  await idbTransactionDone(tx);
+  const pushable = store.index(PUSHABLE_LWT_INDEX);
+  const counts = await Promise.all(collections.map((collection) => idbRequest(pushable.count(
+    IDBKeyRange.bound([collection, 1, 0, ""], [collection, 1, Number.MAX_SAFE_INTEGER, INDEX_HIGH_KEY])
+  ))));
+  await done;
+  let total = 0;
+  for (let index = 0; index < collections.length; index += 1) {
+    const count = Number(counts[index] || 0);
+    if (!count) continue;
+    byCollection[collections[index]] = count;
+    total += count;
+  }
   return { total, byCollection };
 }
 function documentId2(doc) {
