@@ -4645,7 +4645,10 @@ mod tests {
     }
     #[test]
     fn control_http_rejects_foreign_browser_origins_without_a_cookie() {
-        for path in ["/api/business-os/users", "/api/business-os/ctox/update/apply"] {
+        for path in [
+            "/api/business-os/users",
+            "/api/business-os/ctox/update/apply",
+        ] {
             assert!(rejects_cross_origin_control_request(
                 path,
                 Some("https://attacker.example"),
