@@ -47,6 +47,7 @@ mod invoices;
 mod iot_supervision;
 pub(crate) mod jour_fixe_repo_digest;
 pub mod mcp_channel;
+pub(crate) mod meeting_report;
 pub mod mobile_invites;
 mod module_lifecycle;
 mod module_manifest_loader;
