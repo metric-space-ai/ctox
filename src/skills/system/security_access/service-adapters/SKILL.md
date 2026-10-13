@@ -55,5 +55,9 @@ ctox toolhub connect --auth-config gh-oauth     # prints redirect_url; local cal
 ctox toolhub complete --callback '<final redirect URL>'   # headless/remote instances
 ```
 
-Connections belong to the CTOX project (`--project`, default `$CTOX_PROJECT` or `default`);
+Connections belong to a real CTOX project: `--project <project_id>` (else `$CTOX_PROJECT`) must be the id of an active Workjet project (`workjet_projects`); unknown/archived ids fail with exit 2. There is no `default` project. / Verbindungen gehören zu einem echten, aktiven CTOX-Projekt (`--project <project_id>` oder `$CTOX_PROJECT`), sonst Exit 2;
 the creating actor is recorded. Tokens refresh automatically in the background.
+
+## Freigaben / Approvals
+DE: Schreibende Tools brauchen `--confirm` (sonst Exit 5). Die Ticket-`ControlApprovalMode` (Control-Bundles für Ticket-Automationen) und `outbound_approvals` (Freigabe ausgehender Nachrichten) sind bewusst nicht angebunden: beide sind an ihre Domäne gebunden (Ticket-Case bzw. Outbound-Message-Record) und nicht als allgemeine Tool-Freigabe ausgelegt.
+EN: Mutating tools require `--confirm` (else exit 5). Ticket `ControlApprovalMode` and `outbound_approvals` are intentionally not wired: both are domain-bound (ticket case / outbound message record), not a generic tool-approval API.

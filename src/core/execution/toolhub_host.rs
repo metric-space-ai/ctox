@@ -25,7 +25,7 @@ use crate::secrets;
 /// Loopback port of the local OAuth callback server.
 pub const LOOPBACK_PORT_ENV: &str = "CTOX_TOOLHUB_LOOPBACK_PORT";
 const DEFAULT_LOOPBACK_PORT: u16 = 8765;
-/// Default CTOX project for connections when `--project` is omitted.
+/// Fallback project id (a `workjet_projects` record id) when `--project` is omitted.
 pub const PROJECT_ENV: &str = "CTOX_PROJECT";
 /// Seconds between background refresh ticks.
 pub const REFRESH_TICK_SECS: u64 = 60;
@@ -142,10 +142,10 @@ const USAGE: &str = "usage: ctox toolhub <command> [options]   (JSON on stdout, 
   list [--json]                         connected accounts (no secrets)
   configs                               auth configs (no secrets)
   config-set --toolkit <slug> --id <id> --scheme <oauth2|bearer|api_key|basic> [--client-id <id>] [--client-secret-stdin] [--scope <s>]...
-  connect --auth-config <id> [--project <p>] [--actor <a>] [--credential-stdin] [--no-callback-server]
+  connect --auth-config <id> [--project <project_id>] [--actor <a>] [--credential-stdin] [--no-callback-server]
   complete --callback <redirect-url-or-query>
   status|refresh|disconnect --account <id>
-  exec <toolkit>.<action> [--json <args>|stdin] [--project <p>] [--account <id>] [--confirm]
+  exec <toolkit>.<action> [--json <args>|stdin] [--project <project_id>] [--account <id>] [--confirm]
 exit codes (exec): 0 ok, 2 validation, 3 credential_required, 4 upstream, 5 approval_required, 1 internal";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -174,11 +174,28 @@ fn print(value: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 
-fn project(args: &[String]) -> String {
-    flag(args, "--project")
+/// Checks whether a project id names an active CTOX (Workjet) project.
+pub type ProjectResolver<'a> = &'a dyn Fn(&str) -> Result<bool>;
+
+/// Real CTOX project identity: an active record in `workjet_projects`
+/// (Business OS store). Missing/archived/deleted projects are rejected.
+fn store_project_resolver(root: &Path) -> impl Fn(&str) -> Result<bool> + '_ {
+    move |id| Ok(crate::business_os::active_workjet_project_owner(root, id)?.is_some())
+}
+
+/// `--project`, else `$CTOX_PROJECT`; must be an existing active project.
+fn resolve_project(args: &[String], resolver: ProjectResolver<'_>) -> Result<String> {
+    let id = flag(args, "--project")
         .map(String::from)
-        .or_else(|| std::env::var(PROJECT_ENV).ok().filter(|p| !p.is_empty()))
-        .unwrap_or_else(|| "default".into())
+        .or_else(|| std::env::var(PROJECT_ENV).ok().filter(|p| !p.trim().is_empty()))
+        .context("Projekt fehlt: --project <id> oder CTOX_PROJECT setzen / missing project: pass --project <id> or set CTOX_PROJECT")?;
+    if !ctox_toolhub::store::valid_segment(&id) {
+        bail!("ungültige Projekt-ID / invalid project id `{id}`");
+    }
+    if !resolver(&id)? {
+        bail!("unbekanntes oder inaktives CTOX-Projekt / unknown or inactive CTOX project `{id}`");
+    }
+    Ok(id)
 }
 
 fn actor(args: &[String]) -> String {
@@ -251,7 +268,8 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         }
         Some("connect") => {
             let config = required(rest, "--auth-config")?;
-            let (project, actor) = (project(rest), actor(rest));
+            let resolver = store_project_resolver(root);
+            let (project, actor) = (resolve_project(rest, &resolver)?, actor(rest));
             if has(rest, "--credential-stdin") {
                 return print(&hub.connect_with_credential(
                     config,
@@ -293,7 +311,8 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         }
         Some("refresh") => print(&hub.refresh(required(rest, "--account")?)?),
         Some("exec") => {
-            let (code, value) = exec(&hub, rest);
+            let resolver = store_project_resolver(root);
+            let (code, value) = exec(&hub, rest, &resolver);
             println!("{}", serde_json::to_string_pretty(&value)?);
             if code != exit::OK {
                 std::process::exit(code);
@@ -333,7 +352,11 @@ fn validation(message: impl std::fmt::Display) -> (i32, Value) {
 }
 
 /// `exec` core: returns (exit code, stdout JSON). Never includes credentials.
-pub fn exec<B: SecretBackend>(hub: &ToolHub<B>, args: &[String]) -> (i32, Value) {
+pub fn exec<B: SecretBackend>(
+    hub: &ToolHub<B>,
+    args: &[String],
+    projects: ProjectResolver<'_>,
+) -> (i32, Value) {
     let Some(name) = args.first().filter(|a| !a.starts_with("--")) else {
         return validation("missing <toolkit>.<action>");
     };
@@ -371,12 +394,11 @@ pub fn exec<B: SecretBackend>(hub: &ToolHub<B>, args: &[String]) -> (i32, Value)
             }),
         );
     }
-    match hub.execute(
-        &project(args),
-        &spec.slug,
-        &tool_args,
-        flag(args, "--account"),
-    ) {
+    let project = match resolve_project(args, projects) {
+        Ok(p) => p,
+        Err(e) => return validation(e),
+    };
+    match hub.execute(&project, &spec.slug, &tool_args, flag(args, "--account")) {
         Ok(outcome) => {
             let code = match &outcome {
                 ToolOutcome::Success { .. } => exit::OK,
@@ -416,15 +438,19 @@ mod tests {
         )
     }
 
+    fn known(id: &str) -> Result<bool> {
+        Ok(id == "p")
+    }
+
     #[test]
     fn exec_exit_codes_are_stable() {
         let hub = mem_hub();
-        let (c, v) = exec(&hub, &args(&["github.nope", "--json", "{}"]));
+        let (c, v) = exec(&hub, &args(&["github.nope", "--json", "{}"]), &known);
         assert_eq!(
             (c, v["outcome"].as_str()),
             (exit::VALIDATION, Some("validation_error"))
         );
-        let (c, _) = exec(&hub, &args(&["github.get_repo", "--json", "[]"]));
+        let (c, _) = exec(&hub, &args(&["github.get_repo", "--json", "[]"]), &known);
         assert_eq!(c, exit::VALIDATION);
         let (c, v) = exec(
             &hub,
@@ -433,6 +459,7 @@ mod tests {
                 "--json",
                 r#"{"owner":"a","repo":"b","title":"t"}"#,
             ]),
+            &known,
         );
         assert_eq!(
             (c, v["outcome"].as_str()),
@@ -447,6 +474,7 @@ mod tests {
                 "--project",
                 "p",
             ]),
+            &known,
         );
         assert_eq!(c, exit::CREDENTIAL_REQUIRED);
         assert_eq!(v["auth_schemes"], json!(["oauth2", "bearer"]));
@@ -460,13 +488,36 @@ mod tests {
                 "github.get_repo",
                 "--json",
                 r#"{"owner":"a/..","repo":"b"}"#,
+                "--project",
+                "p",
             ]),
+            &known,
         );
         assert_eq!(
             c,
             exit::VALIDATION,
             "arguments are validated before credentials"
         );
+    }
+
+    #[test]
+    fn project_must_exist_and_be_valid() {
+        let hub = mem_hub();
+        for bad in ["unknown", "../x"] {
+            let (c, v) = exec(
+                &hub,
+                &args(&[
+                    "github.get_repo",
+                    "--json",
+                    r#"{"owner":"a","repo":"b"}"#,
+                    "--project",
+                    bad,
+                ]),
+                &known,
+            );
+            assert_eq!(c, exit::VALIDATION, "{v}");
+        }
+        assert!(resolve_project(&args(&["--project", "p"]), &known).is_ok());
     }
 
     #[test]

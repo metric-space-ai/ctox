@@ -673,6 +673,28 @@ fn validate_bounded(
     Ok(())
 }
 
+/// Resolve an active (not archived, not deleted) Workjet project by id for
+/// non-command readers such as `ctox toolhub`. Returns its owner user id.
+pub(crate) fn active_workjet_project_owner(
+    root: &Path,
+    project_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let conn = open_store(root)?;
+    let Some(project) = outbound_load_record(&conn, PROJECTS_COLLECTION, project_id)? else {
+        return Ok(None);
+    };
+    let active = project.get("is_deleted").and_then(Value::as_bool) != Some(true)
+        && project.get("_deleted").and_then(Value::as_bool) != Some(true)
+        && project.get("status").and_then(Value::as_str) == Some("active");
+    Ok(active.then(|| {
+        project
+            .get("owner_user_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
