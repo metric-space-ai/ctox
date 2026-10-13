@@ -267,7 +267,7 @@ fn cli_tool_names_and_credential_hint() {
         auth_schemes,
         vec![AuthSchemeKind::OAuth2, AuthSchemeKind::Bearer]
     );
-    assert!(connect_hint.contains("--toolkit github"));
+    assert!(connect_hint.starts_with("ctox toolhub connect --auth-config gh-"));
     let wire = serde_json::to_value(
         hub.execute(
             "proj",

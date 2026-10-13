@@ -506,7 +506,18 @@ impl<B: SecretBackend> ToolHub<B> {
             toolkit: toolkit.into(),
             account_id,
             auth_schemes,
-            connect_hint: format!("ctox toolhub connect --toolkit {toolkit}"),
+            connect_hint: match self
+                .store
+                .auth_configs()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|c| c.toolkit == toolkit && c.enabled)
+            {
+                Some(c) => format!("ctox toolhub connect --auth-config {}", c.id),
+                None => format!(
+                    "ctox toolhub config-set --toolkit {toolkit} --id <id> --scheme <oauth2|bearer> && ctox toolhub connect --auth-config <id>"
+                ),
+            },
             reason: LocalizedText::new(
                 format!("Für „{toolkit}“ ist eine (erneute) Verbindung nötig."),
                 format!("A (re)connection to \"{toolkit}\" is required."),
@@ -525,6 +536,8 @@ impl<B: SecretBackend> ToolHub<B> {
     ) -> Result<ToolOutcome> {
         let (adapter, spec) = self.tool(tool_slug)?;
         let tool_slug = spec.slug.as_str();
+        // Validate arguments before touching credentials.
+        let request = adapter.build_request(tool_slug, args)?;
         let toolkit = spec.toolkit.clone();
         let Some(mut account) = self.select_account(project, &toolkit, account_id)? else {
             return Ok(self.credential_required(&toolkit, None));
@@ -548,7 +561,6 @@ impl<B: SecretBackend> ToolHub<B> {
                 return Ok(self.credential_required(&toolkit, Some(account.id)));
             }
         }
-        let request = adapter.build_request(tool_slug, args)?;
         let mut refreshed = false;
         loop {
             let secret = self

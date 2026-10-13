@@ -199,6 +199,8 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
             })
             .expect("failed to start Business OS store warm-up thread");
     }
+    // Toolhub connections refresh in the long-running instance process.
+    crate::execution::toolhub_host::start_refresh_loop(root.to_path_buf());
     println!("CTOX Business OS listening on http://{}", options.addr);
     println!("Serving {}", app_root.display());
     let (request_tx, request_rx) = sync_channel(BUSINESS_OS_HTTP_QUEUE_CAPACITY);
