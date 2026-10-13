@@ -2628,6 +2628,12 @@ pub(crate) fn sync_module_catalog(root: &Path) -> anyhow::Result<usize> {
         "[business-os] retrying module catalog projection once on replacement peer {}",
         peer.peer_session_id,
     );
+    // Match the first attempt: blocking catalog triggers share EntireOperation
+    // serialization. The replacement wait has already released the lifecycle
+    // mutex, so restart can publish its peer while this writer waits its turn.
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -15304,7 +15310,14 @@ pub(in crate::business_os) mod tests {
         // original peer before the test closes it. No timing-based source delay.
         let write_barrier = runtime.block_on(NATIVE_RXDB_WRITE_LOCK.lock());
         let projection_root = root.path().to_path_buf();
-        let projection = std::thread::spawn(move || sync_module_catalog(&projection_root));
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let projection = std::thread::spawn(move || {
+            let result = sync_module_catalog(&projection_root);
+            finished_tx
+                .send(())
+                .expect("projection completion receiver");
+            result
+        });
         let deadline = Instant::now() + Duration::from_secs(3);
         while Arc::strong_count(&old_peer) < 3 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(1));
@@ -15313,8 +15326,12 @@ pub(in crate::business_os) mod tests {
             Arc::strong_count(&old_peer) >= 3,
             "factory must borrow published peer"
         );
+        let shutdown_started = Instant::now();
         with_native_peer_lifecycle_mut(NativePeerLifecycle::begin_stopping)?;
-        runtime.block_on(old_peer.database.close())?;
+        // Exercise production shutdown while the catalog trigger is in flight.
+        // The restart driver and catalog caller are deliberately distinct threads.
+        runtime.block_on(old_peer.shutdown());
+        assert!(old_peer.database.closed());
         with_native_peer_lifecycle_mut(|state| {
             state.run_cleanup_finished()?;
             state.foreground_run_exited()
@@ -15334,6 +15351,11 @@ pub(in crate::business_os) mod tests {
             );
             std::thread::sleep(Duration::from_millis(1));
         };
+        // Represent another EntireOperation catalog writer holding its turn.
+        // Replacement publication itself must not need this projection mutex.
+        let serialized_writer = TEMPORARY_RXDB_DATABASE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let new_peer = runtime.block_on(async {
             let database = open_database(store::rxdb_store_path(root.path())).await?;
             register_collections_tolerant(&database, collection_creators()).await?;
@@ -15353,7 +15375,20 @@ pub(in crate::business_os) mod tests {
             state.begin_run(false)?;
             state.bring_up_succeeded(Some(Arc::clone(&new_peer)), true, true, true)
         })?;
+        assert!(is_native_peer_running_for_root(root.path()));
+        let waits_for_writer = matches!(
+            finished_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        drop(serialized_writer);
+        if waits_for_writer {
+            finished_rx.recv_timeout(Duration::from_secs(3))?;
+        }
         let result = projection.join().expect("projection thread");
+        assert!(
+            shutdown_started.elapsed() < Duration::from_secs(NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS),
+            "schema shutdown, replacement and catalog trigger must finish before the shutdown bound"
+        );
         if result.is_ok() {
             use futures_util::StreamExt;
             let bulk = runtime
@@ -15375,6 +15410,10 @@ pub(in crate::business_os) mod tests {
             assert_eq!(document[0]["modules"][0]["id"], "ctox");
         }
         runtime.block_on(new_peer.database.close())?;
+        assert!(
+            waits_for_writer,
+            "catalog retry must honor EntireOperation serialization"
+        );
         assert_eq!(result?, 1);
         Ok(())
     }

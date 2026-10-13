@@ -12,8 +12,16 @@ its peer guard even after releasing the SQLite transaction.
 S4 catalog publication retains one writer. If the database borrowed from a
 published peer closes during projection, the helper releases that peer and its
 process lock before waiting up to the native shutdown bound for a different
-running generation. It retries once directly on the new peer's database; a
-missing replacement or another failure remains an error. The retry never opens
+running generation. It retries once directly on the new peer's database under
+`TEMPORARY_RXDB_DATABASE_LOCK`, matching the first attempt's `EntireOperation`
+serialization. The generation wait holds neither this projection lock nor the
+lifecycle mutex during projection. Module-lifecycle callers trigger publication;
+the native supervisor independently observes schema changes and drives shutdown
+and restart, without calling the blocking catalog trigger. The regression starts
+a trigger during production `NativePeer::shutdown`, publishes the replacement
+while another serialized writer holds its turn, and requires bounded completion
+plus a catalog event from the replacement. A missing replacement or another
+failure remains an error. The retry never opens
 a temporary database. The ordinary temporary path remains available only when
 no peer serves the root. The release fixture requires the exact released catalog
 document over native WebRTC before its explicit catalog refresh: a live master
