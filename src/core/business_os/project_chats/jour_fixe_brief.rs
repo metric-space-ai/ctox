@@ -215,8 +215,9 @@ pub(super) fn prepare(
     operation: &str,
     meeting: &Meeting,
     project: &Value,
+    evaluations: &Value,
 ) -> anyhow::Result<()> {
-    prepare_with(root, operation, meeting, project, |repo, since| {
+    prepare_with(root, operation, meeting, project, evaluations, |repo, since| {
         github(root, repo, since)
     })
 }
@@ -225,6 +226,7 @@ fn prepare_with(
     operation: &str,
     meeting: &Meeting,
     project: &Value,
+    evaluations: &Value,
     fetch: impl FnOnce(Option<&str>, i64) -> Value,
 ) -> anyhow::Result<()> {
     let conn = open_store(root)?;
@@ -290,8 +292,30 @@ fn prepare_with(
             )
             .and_then(|v| Ok(serde_json::to_value(v)?))
         });
+    let exit_model = super::super::workjet_exit_model::read_state(
+        &conn,
+        &meeting.project_id,
+        &meeting.owner_user_id,
+    );
+    let today = chrono::DateTime::from_timestamp_millis(meeting.prepare_at_ms)
+        .map(|at| at.date_naive().to_string())
+        .unwrap_or_default();
+    let kpi_state = kpis.as_ref().ok().cloned();
+    let evaluation_status = evaluation_status(
+        evaluations,
+        kpi_state.as_ref(),
+        exit_model.as_ref().ok(),
+        &today,
+    );
     // Release SQLite readers before any external request.
     let goal = section(goal, 3000);
+    let exit_model = section(
+        exit_model.map(|state| {
+            json!({"status":state["status"],"as_of":state["as_of"],"exit_date":state["exit_date"],
+              "result":state["result"],"missing_inputs":state["missing_inputs"]})
+        }),
+        1800,
+    );
     let workers = section(workers, 1800);
     let kpis = section(kpis, 1800);
     drop(core);
@@ -307,7 +331,8 @@ fn prepare_with(
         "previous_meeting":previous.map(|(id,at)| json!({"meeting_id":id,"scheduled_at_ms":at})),
         "window":{"since_ms":since,"until_ms":meeting.scheduled_at_ms},
         "confirmed_goal_and_progress":goal,"project_context":section(Ok(json!({"name":project["name"],"info":project["info"]})),1200),
-        "worker_results":workers,"kpis":kpis,
+        "worker_results":workers,"kpis":kpis,"exit_model":exit_model,
+        "evaluation_status":evaluation_status,
         "github":fetch(repo,since)});
     let raw = serde_json::to_string(&brief)?;
     ensure!(
@@ -336,6 +361,65 @@ fn prepare_with(
     .context("brief persistence failed")?;
     Ok(())
 }
+/// Freshness per evaluation: `fresh`, `stale` (with `as_of`), `blocked` (with
+/// `reason`) or `missing`. Open items list everything that is not fresh so the
+/// supervisor puts them in the protocol instead of inventing values.
+pub(super) fn evaluation_status(
+    evaluations: &Value,
+    kpis: Option<&Value>,
+    exit_model: Option<&Value>,
+    today: &str,
+) -> Value {
+    fn with_reason(mut value: Value, outcome: &Value) -> Value {
+        if outcome["refresh"] == "blocked" {
+            if value["status"] == "missing" {
+                value["status"] = json!("blocked");
+            }
+            value["reason"] = outcome["reason"].clone();
+        }
+        value
+    }
+    let items = kpis
+        .and_then(|state| state["items"].as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let ready = items
+        .iter()
+        .filter(|item| item["result"]["status"] == "ready")
+        .count();
+    let valued = items
+        .iter()
+        .filter(|item| matches!(item["result"]["status"].as_str(), Some("ready" | "stale")))
+        .count();
+    let kpi = with_reason(
+        if !items.is_empty() && ready == items.len() {
+            json!({"status":"fresh"})
+        } else if valued > 0 {
+            json!({"status":"stale","ready":ready,"total":items.len()})
+        } else {
+            json!({"status":"missing"})
+        },
+        &evaluations["kpis"],
+    );
+    let exit_as_of = exit_model.and_then(|state| state["as_of"].as_str());
+    let exit = with_reason(
+        match exit_model.filter(|state| !state["result"].is_null()) {
+            None => json!({"status":"missing"}),
+            Some(_) if exit_as_of == Some(today) => json!({"status":"fresh"}),
+            Some(_) => json!({"status":"stale","as_of":exit_as_of}),
+        },
+        &evaluations["exit_model"],
+    );
+    let open_items: Vec<Value> = [("kpis", &kpi), ("exit_model", &exit)]
+        .into_iter()
+        .filter(|(_, state)| state["status"] != "fresh" || state.get("reason").is_some())
+        .map(|(name, state)| {
+            json!({"evaluation":name,"status":state["status"],"reason":state.get("reason")})
+        })
+        .collect();
+    json!({"kpis":kpi,"exit_model":exit,"open_items":open_items})
+}
+
 fn read(
     conn: &Connection,
     operation: &str,
@@ -480,6 +564,45 @@ mod tests {
         }
     }
     #[test]
+    fn workjet_brief_evaluation_status_lists_every_gap_as_open_item() {
+        let ready = json!({"result":{"status":"ready"}});
+        let stale = json!({"result":{"status":"stale"}});
+        let refreshed = json!({"kpis":{"refresh":"refreshed"},"exit_model":{"refresh":"refreshed"}});
+        let fresh = evaluation_status(
+            &refreshed,
+            Some(&json!({"items":[ready, ready, ready]})),
+            Some(&json!({"as_of":"2026-10-13","result":{"e5_eur":1}})),
+            "2026-10-13",
+        );
+        assert_eq!(fresh["kpis"]["status"], "fresh");
+        assert_eq!(fresh["exit_model"]["status"], "fresh");
+        assert_eq!(fresh["open_items"], json!([]));
+
+        let blocked = json!({"kpis":{"refresh":"blocked","reason":"kpi_refresh_timeout"},
+            "exit_model":{"refresh":"blocked","reason":"model account missing"}});
+        let partial = evaluation_status(
+            &blocked,
+            Some(&json!({"items":[ready, stale, {"result":{"status":"failed"}}]})),
+            Some(&json!({"as_of":null,"result":null})),
+            "2026-10-13",
+        );
+        assert_eq!(partial["kpis"]["status"], "stale");
+        assert_eq!(partial["kpis"]["ready"], 1);
+        assert_eq!(partial["kpis"]["reason"], "kpi_refresh_timeout");
+        assert_eq!(partial["exit_model"]["status"], "blocked");
+        assert_eq!(partial["open_items"].as_array().map(Vec::len), Some(2));
+
+        let old = evaluation_status(
+            &refreshed,
+            None,
+            Some(&json!({"as_of":"2026-09-01","result":{"e5_eur":1}})),
+            "2026-10-13",
+        );
+        assert_eq!(old["kpis"]["status"], "missing");
+        assert_eq!(old["exit_model"], json!({"status":"stale","as_of":"2026-09-01"}));
+    }
+
+    #[test]
     fn workjet_brief_sections_are_complete_bounded_json() {
         let value = section(Ok(json!({"items":vec!["Ä".repeat(4096);100]})), 2500);
         assert!(serde_json::to_vec(&value).unwrap().len() < 2600);
@@ -528,7 +651,7 @@ mod tests {
             ),
             ("empty", json!({"repository_url":"","repo_url":""}), None),
         ] {
-            prepare_with(root.path(), operation, &meeting, &project, |repo, since| {
+            prepare_with(root.path(), operation, &meeting, &project, &json!({}), |repo, since| {
                 assert_eq!(repo, expected);
                 github_with(None, since, |_| panic!("no external call"))
             })?;
@@ -570,13 +693,14 @@ mod tests {
             "prepare",
             &meeting,
             &json!({}),
+            &json!({}),
             |repo, since| {
                 assert!(repo.is_none());
                 assert_eq!(since, meeting.scheduled_at_ms - 604800000);
                 github_with(repo, since, |_| panic!("no external call"))
             },
         )?;
-        prepare_with(root.path(), "prepare", &meeting, &json!({}), |_, _| {
+        prepare_with(root.path(), "prepare", &meeting, &json!({}), &json!({}), |_, _| {
             panic!("replay must not refetch")
         })?;
         let conn = open_store(root.path())?;
