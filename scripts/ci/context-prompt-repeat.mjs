@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 const [baseline, binary, output] = process.argv.slice(2);
 if (!baseline || !binary || !output) throw Error('baseline source root, immutable native binary, output directory required');
@@ -15,6 +15,13 @@ const save = () => writeFileSync(path.join(output, 'summary.json'), JSON.stringi
 async function run(source, index) {
   const root = source === 'before' ? baseline : after;
   const lifecycle = path.join(output, `${source}-${index}-processes.json`);
+  // Error labels come only from checked-in smoke source, never from arbitrary
+  // browser/wire text. This identifies the failed phase without logging payloads.
+  const smokeSource = readFileSync(path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js'), 'utf8');
+  const sourceLabels = [...new Set([...smokeSource.matchAll(/(['"])([A-Za-z][A-Za-z0-9 _-]{7,95})\1/g)]
+    .map(match => match[2]))].filter(label => !/token|secret|credential|password|bearer/i.test(label))
+    .sort((a, b) => b.length - a.length);
+  const failedPhaseLabels = new Set();
   const startedAt = new Date().toISOString();
   const child = spawn(process.execPath, [path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js')], {
     cwd: root, detached: true,
@@ -44,7 +51,13 @@ async function run(source, index) {
           if (line.includes(key)) failedEvidenceKeys.add(key);
         }
       }
-      if (/page\.evaluate: Error:/.test(line)) errors.push('browser-evaluate');
+      if (/page\.evaluate: Error:/.test(line)) {
+        errors.push('browser-evaluate');
+        for (const label of sourceLabels) {
+          if (line.includes(label)) failedPhaseLabels.add(label);
+          if (failedPhaseLabels.size >= 4) break;
+        }
+      }
       if (/Context prompt .*exceeded 150ms/.test(line)) errors.push('prompt-budget');
       if (/STREAM_LIMIT_EXCEEDED/.test(line)) errors.push('stream-limit');
       if (/collection is not registered/.test(line)) errors.push('unregistered-collection');
@@ -62,7 +75,7 @@ async function run(source, index) {
   clearTimeout(timeout); clearTimeout(force);
   rows.push({ source, index, startedAt, endedAt: new Date().toISOString(), pid: child.pid,
     ...result, timedOut, timings, errorCategories: [...new Set(errors)], warnings, browserErrors,
-    failedEvidenceKeys: [...failedEvidenceKeys], lifecycle });
+    failedEvidenceKeys: [...failedEvidenceKeys], failedPhaseLabels: [...failedPhaseLabels], lifecycle });
   save(); console.log(JSON.stringify(rows.at(-1)));
 }
 for (let index = 1; index <= 10; index++) {
