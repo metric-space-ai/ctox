@@ -43,7 +43,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 11);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 12);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -2034,4 +2034,10 @@ test('same-task input capability is opt-in and comes from the actual scoped nati
   const invalid = supervisorCapabilitiesFixture();
   await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
   assert.equal(invalid.commands.length, 0);
+});
+
+test('project.init dispatches the native onboarding command with a stable operation id', () => {
+  assert.match(controlSource, /action === 'project\.init'/);
+  assert.match(controlSource, /command_type: 'ctox\.workjet\.project\.init'/);
+  assert.match(controlSource, /payload: \{ project_id: projectId, operation_id: operationId \}/);
 });
