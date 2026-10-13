@@ -1526,3 +1526,49 @@ test('command timing probe records seven correlated marks only when requested', 
   assert.ok(metrics.some((metric) => metric.name === 'roundtrip_total'));
   assert.ok(!JSON.stringify(sample).includes('capability_token'));
 });
+
+for (const outcome of ['completed', 'failed', 'missing']) {
+  test(`a pending ordinary demand read cannot hold terminal revalidation: ${outcome}`, async () => {
+    const id = `cmd-retained-demand-${outcome}`;
+    let ordinaryReads = 0;
+    let strictReads = 0;
+    let activeSubscriptions = 0;
+    const commands = {
+      demandLoader: {},
+      storageCollection: { async findDocumentsById() { return {}; } },
+      findOne(selector) {
+        return {
+          $: { subscribe() {
+            activeSubscriptions++;
+            let released = false;
+            return { unsubscribe() { if (!released) { released = true; activeSubscriptions--; } } };
+          } },
+          exec() {
+            if (!selector?.requireRevision) {
+              ordinaryReads++;
+              // A retained query window can still have a request in flight.
+              return new Promise(() => {});
+            }
+            strictReads++;
+            assert.equal(selector.selector.id, id);
+            if (outcome === 'missing') return Promise.resolve(null);
+            return Promise.resolve({ id, status: outcome,
+              replication_phase: 'native_observed',
+              execution_phase: 'terminal', terminal_status: outcome,
+              ...(outcome === 'failed' ? { error_code: 'permission_denied',
+                error_message: 'native denial is retained' } : {}),
+            });
+          },
+        };
+      },
+    };
+    const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+    const waiting = bus.waitForTerminal(id, { timeoutMs: 1000, sync_queue_tasks: false });
+    if (outcome === 'completed') assert.equal((await waiting).status, 'completed');
+    else await assert.rejects(waiting, { code: outcome === 'failed'
+      ? 'permission_denied' : 'projection_delayed' });
+    assert.equal(ordinaryReads, 0, 'tracking cannot join an old ordinary read');
+    assert.ok(strictReads >= 1 && strictReads <= 10, 'fresh exact-ID reads stay bounded');
+    assert.equal(activeSubscriptions, 0, 'the tracking subscription is released');
+  });
+}
