@@ -1,8 +1,11 @@
 # THESEN Google authentication and independent SERP fallback
 
 Scope: native source/auth repair; production is read-only during diagnosis.
-No source test, login, provider call, script registration, deployment, restart,
-queue change, secret read or mailbox read was performed.
+The 12 October diagnosis performed no source test, login, provider call,
+script registration, deployment, restart, queue change, secret read or mailbox
+read. On 13 October, the supplied Google credentials were verified by normal
+login in the Codex browser as lena thesen. That separate browser session is not
+proof of a CTOX server auth session or a successful Google/Maps adapter run.
 
 ## Evidence and cause
 
@@ -62,8 +65,14 @@ Compiled native profiles now bind Google's account login to
 and only the `GOOGLE_BROWSER_LOGIN` secret reference. Existing RocketReach
 behavior is retained. Reauthorization and manual auth assist share that native
 profile; a hot-revised adapter cannot select a Bright Data key or foreign host.
-Google joins the existing provider-domain-restricted email OTP path. Its
-mailbox ownership, freshness, recipient and ambiguity checks remain unchanged.
+Google and the actual Outbound Google Maps source ID `maps.google.com` share
+this compiled Google login/credential boundary. Google Maps previously had no
+native default when the app omitted its credential reference. Both source IDs
+join the existing provider-domain-restricted email OTP path; source identity
+normalization is consistent with the native login profile, including case and
+surrounding whitespace. Foreign lookalike source/sender domains and Bright Data
+remain excluded. The existing mailbox ownership, freshness, recipient and
+ambiguity checks remain unchanged.
 A search challenge remains blocked. This is auth plumbing, not proof that
 Google SERP works or that the access challenge has been cleared.
 
