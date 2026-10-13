@@ -223,6 +223,7 @@
     "outbound.research_source.auth_assist",
     "outbound.research_source.generate_adapter",
     "outbound.research_source.registry_read",
+    "outbound.research_source.reprobe",
     "outbound.research_source.test",
     "outbound.research_source.upsert",
     "outbound.scheduler.tick",

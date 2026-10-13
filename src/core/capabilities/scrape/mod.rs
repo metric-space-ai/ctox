@@ -7,7 +7,8 @@ use registry::{
 mod execute;
 use execute::{execute_scrape, CommandExecution, ProbeResult};
 pub(crate) use execute::{
-    execute_scrape_with_outcome, execute_scrape_with_probe_grant, AccountProbeGrant,
+    execute_scrape_with_outcome, execute_scrape_with_probe_grant,
+    reprobe_registered_account_keep_script, AccountProbeGrant,
 };
 mod semantic_enrichment;
 pub(crate) use semantic_enrichment::service_semantic_search;

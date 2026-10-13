@@ -374,6 +374,71 @@ pub(super) fn account_probe_authorized(
     grant.is_some() && session_owner_user_id.is_none()
 }
 
+pub(crate) fn reprobe_registered_account_keep_script(
+    root: &Path,
+    target_key: &str,
+    input: &Value,
+    timeout_seconds: u64,
+    grant: Option<&AccountProbeGrant>,
+) -> Result<Value> {
+    anyhow::ensure!(
+        grant.is_some(),
+        "account reprobe requires a policy-granted operator request"
+    );
+    anyhow::ensure!(input.is_object(), "account reprobe input must be an object");
+    anyhow::ensure!(
+        (1..=300).contains(&timeout_seconds),
+        "invalid account reprobe timeout"
+    );
+    let before = super::registry::target_script_registration(root, target_key)?
+        .context("account reprobe target is not registered")?;
+    anyhow::ensure!(
+        before["script_registered"].as_bool() == Some(true),
+        "account reprobe requires an existing unchanged registered script"
+    );
+    let target = load_registered_target(root, &open_db(root)?, target_key)?
+        .context("account reprobe target script missing")?;
+    let path = PathBuf::from(&target.script.script_path);
+    let hash_before = super::compute_sha256_bytes(&fs::read(&path)?);
+    // No register-script, upsert-target, override, allow-heal or state deletion.
+    // The existing executor owns the atomic probe lease and clears only a
+    // successfully probed generation of this exact target.
+    let outcome = execute_scrape_with_probe_grant(
+        root,
+        &[
+            "--target-key".to_string(),
+            target_key.to_string(),
+            "--trigger-kind".to_string(),
+            "account_reprobe".to_string(),
+            "--timeout-seconds".to_string(),
+            timeout_seconds.to_string(),
+            "--input-json".to_string(),
+            input.to_string(),
+            "--probe-account".to_string(),
+        ],
+        grant,
+    )?;
+    let after = super::registry::target_script_registration(root, target_key)?
+        .context("account reprobe target disappeared")?;
+    let hash_after = super::compute_sha256_bytes(&fs::read(&path)?);
+    anyhow::ensure!(
+        before["revision_no"] == after["revision_no"]
+            && before["script_sha256"] == after["script_sha256"]
+            && hash_before == hash_after
+            && after["script_registered"].as_bool() == Some(true),
+        "account reprobe detected a changed registered script"
+    );
+    Ok(json!({
+        "ok": outcome.status == ScrapeRunStatus::Succeeded,
+        "target_key": target_key,
+        "keep_script": true,
+        "script_revision": after["revision_no"],
+        "script_sha256_before": hash_before,
+        "script_sha256_after": hash_after,
+        "outcome": outcome,
+    }))
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
@@ -722,7 +787,9 @@ pub(crate) fn execute_scrape_with_probe_grant(
     // ungated when they detect the auth wall themselves).
     // CTOX first signs in itself with the stored credential; only when that
     // is impossible or fails does the run hand the login wall to a human.
-    let auto_reauthorization = if classification.status == ScrapeRunStatus::AuthorizationRequired {
+    let auto_reauthorization = if classification.status == ScrapeRunStatus::AuthorizationRequired
+        && trigger_kind != "account_reprobe"
+    {
         reauthorization.as_ref().and_then(|action| {
             super::reauth::attempt_automatic_reauthorization(
                 root,

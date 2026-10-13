@@ -5423,6 +5423,10 @@ pub fn list_module_actions(
             ),
         ],
         "outbound-lead-generation" => vec![
+            action_descriptor("outbound.research_source.reprobe", &module.id,
+                "Reprobe provider account",
+                "Policy-granted provider check using the existing registered script unchanged. Payload: target_key, keep_script=true, probe_input.",
+                "write", false, false),
             person_research_action_descriptor(&module.id),
             outbound_lead_import_action_descriptor(&module.id),
         ],
@@ -5928,6 +5932,7 @@ fn is_native_mcp_control_action(module_id: &str, action_id: &str) -> bool {
             "external_sql.sync.refresh"
                 | "external_sql.write"
                 | "web_stack.person_research"
+                | "outbound.research_source.reprobe"
                 | "ctox.coding.models"
                 | "ctox.coding.turn"
                 | "ctox.app_store.install"
