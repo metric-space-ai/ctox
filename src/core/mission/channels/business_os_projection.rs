@@ -527,12 +527,16 @@ pub(super) fn communication_account_business_os_document(
 /// page cannot establish that a missing account was disconnected.
 pub(crate) fn snapshot_communication_accounts_for_business_os(root: &Path) -> Result<Vec<Value>> {
     let db_path = resolve_db_path(root, None);
-    let Some(conn) = open_channel_db_read_only(&db_path)? else {
-        return Ok(Vec::new());
-    };
-    if !channel_projection_tables_exist(&conn, &["communication_accounts"])? {
-        return Ok(Vec::new());
-    }
+    let conn = open_channel_db_read_only(&db_path)?.with_context(|| {
+        format!(
+            "communication account snapshot unavailable: channel database missing at {}",
+            db_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        channel_projection_tables_exist(&conn, &["communication_accounts"])?,
+        "communication account snapshot unavailable: communication_accounts table missing"
+    );
     let mut stmt = conn.prepare(
         r#"
         SELECT
