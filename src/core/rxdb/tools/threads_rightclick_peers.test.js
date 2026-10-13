@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { runThreadsRightClickPeers, runRequesterInBrowser, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
+const { contextPromptPaintBudgetMs, runThreadsRightClickPeers, runRequesterInBrowser, openContextTargetInBrowser } = require('./threads_rightclick_peers.js');
 
 function paintDriver() {
   const source = runRequesterInBrowser.toString();
@@ -52,12 +52,12 @@ function paintDriver() {
   });
   return {
     measure: submit => measure(submit, 'fixture prompt'),
-    guard(submit) {
+    guard(submit, paintBudgetMs = 150) {
       const start = source.indexOf('    const submit = () => form.dispatchEvent(');
       const end = source.indexOf('    await waitFor(() => ({', start);
       assert.ok(start >= 0 && end > start);
       return vm.runInNewContext('(async () => {' + source.slice(start, end) + '})()', {
-        measureContextPrompt: measure, message: 'fixture prompt', mode: 'ask', needsApproval: false,
+        measureContextPrompt: measure, message: 'fixture prompt', mode: 'ask', needsApproval: false, paintBudgetMs,
         form: { dispatchEvent: submit }, Event: class {}, console: { log() {} },
       });
     },
@@ -143,6 +143,18 @@ test('actual submit guard accepts 149 ms and still rejects exactly 150 ms', asyn
   slow.frame(150);
   await assert.rejects(rejected, /Context prompt first paint exceeded 150ms: 150.0ms/);
   slow.assertClean();
+});
+
+test('CI runners get a wider paint ceiling; an explicit budget wins', async () => {
+  assert.equal(contextPromptPaintBudgetMs({}), 150);
+  assert.equal(contextPromptPaintBudgetMs({ CI: 'true' }), 600);
+  assert.equal(contextPromptPaintBudgetMs({ CI: 'true', CTOX_CONTEXT_PAINT_BUDGET_MS: '250' }), 250);
+  const ci = paintDriver();
+  const accepted = ci.guard(() => ci.show(0), 600);
+  ci.frame(190);
+  ci.frame(204);
+  await accepted;
+  ci.assertClean();
 });
 
 test('missing prompt and submit exceptions release frame, timer and performance observers', async () => {
