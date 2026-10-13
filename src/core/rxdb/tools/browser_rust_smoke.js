@@ -13343,7 +13343,31 @@ function ensureCtoxSmokeBinary() {
         setValue('.app-release-dialog [name="target_version"]', '1.0.0', 'target version input');
         setValue('.app-release-dialog [name="release_channel"]', 'team', 'release channel select');
         setValue('.app-release-dialog [name="notes"]', 'Browser/Rust release smoke: Team-Freigabe 1.0.0', 'release notes');
+        // S4 publication proof: listen to the actual shared WebRTC master
+        // change stream before dispatch. Query refreshes and a page reload
+        // cannot satisfy this event boundary.
+        const liveCatalogBridge = await state.sync.startCollection('business_module_catalog');
+        const masterChanges = liveCatalogBridge?.state?.masterChange$;
+        if (!masterChanges?.subscribe) throw new Error('catalog master change stream unavailable');
+        let catalogMasterPush = null;
+        let releaseSubmitted = false;
+        const catalogPushSubscription = masterChanges.subscribe((detail) => {
+          if (!releaseSubmitted || !detail) return;
+          const documents = Array.isArray(detail.result?.documents) ? detail.result.documents : [];
+          const projected = documents.find((doc) => String(doc?.id || '') === 'module-catalog'
+            && String(moduleFromCatalog(doc)?.version || '') === '1.0.0');
+          if (projected || detail.result === 'RESYNC') {
+            catalogMasterPush = { directDocument: Boolean(projected), resync: detail.result === 'RESYNC' };
+          }
+        });
+        releaseSubmitted = true;
         click('.app-release-dialog button[type="submit"]', 'release submit');
+        try {
+          await waitFor(() => ({ ok: Boolean(catalogMasterPush), catalogMasterPush }),
+            30000, 'release catalog native WebRTC master push');
+        } finally {
+          catalogPushSubscription.unsubscribe();
+        }
 
         const releaseProjection = await waitFor(async () => {
           await syncBusinessCollections(5000);
@@ -13556,6 +13580,7 @@ function ensureCtoxSmokeBinary() {
         const checks = {
           privateBeforeRelease,
           publishSucceeded: releaseProjection.releaseCommandStatus === 'completed',
+          catalogMasterPushObserved: Boolean(catalogMasterPush),
           teamVisibleAfterRelease,
           versionBadgeVisible: versionBadgeVisible.ok === true,
           dataReviewVisible: dataReviewVisible.ok === true && dataReviewDialog.ok === true,
@@ -13590,6 +13615,8 @@ function ensureCtoxSmokeBinary() {
           tenantScope: 'local-workspace',
           privateBeforeRelease,
           publishSucceeded: true,
+          catalogMasterPushObserved: Boolean(catalogMasterPush),
+          catalogMasterPush,
           teamVisibleAfterRelease,
           versionBadgeVisible: true,
           dataReviewVisible: true,
@@ -17266,6 +17293,7 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_app_release_private_before_release=${result.privateBeforeRelease ? 1 : 0}`);
       console.log(`business_os_app_release_publish_succeeded=${result.publishSucceeded ? 1 : 0}`);
       console.log(`business_os_app_release_team_visible_after_release=${result.teamVisibleAfterRelease ? 1 : 0}`);
+      console.log(`business_os_app_release_catalog_master_push_observed=${result.catalogMasterPushObserved ? 1 : 0}`);
       console.log(`business_os_app_release_version_badge_visible=${result.versionBadgeVisible ? 1 : 0}`);
       console.log(`business_os_app_release_data_review_visible=${result.dataReviewVisible ? 1 : 0}`);
       console.log(`business_os_app_release_rollback_succeeded=${result.rollbackSucceeded ? 1 : 0}`);
