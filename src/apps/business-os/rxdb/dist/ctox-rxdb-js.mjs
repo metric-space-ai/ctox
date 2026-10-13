@@ -999,6 +999,8 @@ var CtoxRecoveryJournal = class {
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
     this.lastGcAtMs = 0;
+    this.statusTimer = null;
+    this.closed = false;
   }
   registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
@@ -1028,7 +1030,7 @@ var CtoxRecoveryJournal = class {
       masterAckedAtMs: 0
     };
     await this.withQuotaRecovery(() => putSequencedBatch(this.db, batch));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
     return batch.batchId;
   }
   async commitBatch(batchId, success = {}) {
@@ -1037,7 +1039,7 @@ var CtoxRecoveryJournal = class {
       committedDocs: structuredCloneSafe2(success),
       primaryCommittedAtMs: Date.now()
     }));
-    await this.publishStatus();
+    this.scheduleStatusPublication();
   }
   async markMasterAcknowledged(collection, documents = {}) {
     const ids = Object.keys(documents).filter((id) => documents[id]);
@@ -1396,7 +1398,20 @@ var CtoxRecoveryJournal = class {
     }
     return pruned;
   }
+  scheduleStatusPublication() {
+    if (this.closed || this.statusTimer !== null) return;
+    this.statusTimer = setTimeout(() => {
+      this.statusTimer = null;
+      if (!this.closed) void this.publishStatus();
+    }, 1e3);
+    this.statusTimer?.unref?.();
+  }
   async publishStatus() {
+    if (this.statusTimer !== null) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    if (this.closed) return;
     try {
       const status = await this.getStatus();
       globalThis.dispatchEvent?.(new CustomEvent("ctox-indexeddb-recovery-status", { detail: status }));
@@ -1424,6 +1439,9 @@ var CtoxRecoveryJournal = class {
     }
   }
   close() {
+    this.closed = true;
+    if (this.statusTimer !== null) clearTimeout(this.statusTimer);
+    this.statusTimer = null;
     this.db.close();
   }
 };
@@ -2677,10 +2695,13 @@ var INDEX_HIGH_KEY = "\uFFFF";
 var unsyncedCountScheduled = /* @__PURE__ */ new WeakSet();
 var writeAdmissionByDatabase = /* @__PURE__ */ new WeakMap();
 var REPLICATION_WRITE_QUANTUM = 5;
+var LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_MS = 8;
+var LOCAL_WRITE_PRIORITY_MAX_YIELDS = 8;
 function writeAdmission(db) {
   let admission = writeAdmissionByDatabase.get(db);
   if (!admission) {
-    admission = { localWrites: 0, background: Promise.resolve(), localDrained: [] };
+    admission = { localWrites: 0, completedLocalWrites: 0, background: Promise.resolve() };
     writeAdmissionByDatabase.set(db, admission);
   }
   return admission;
@@ -2695,6 +2716,14 @@ function yieldWriteAdmission() {
     };
     channel.port2.postMessage(null);
   });
+}
+async function waitForReplicationAdmission(admission) {
+  const deadline = performance.now() + LOCAL_WRITE_PRIORITY_MAX_MS;
+  const completedAtStart = admission.completedLocalWrites;
+  let yields = 0;
+  while (admission.localWrites && admission.completedLocalWrites - completedAtStart < LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS && performance.now() < deadline && yields++ < LOCAL_WRITE_PRIORITY_MAX_YIELDS) {
+    await yieldWriteAdmission();
+  }
 }
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
@@ -3270,9 +3299,7 @@ var CtoxIndexedDbCollection = class {
       return await operation();
     } finally {
       admission.localWrites -= 1;
-      if (!admission.localWrites) {
-        for (const done of admission.localDrained.splice(0)) done();
-      }
+      admission.completedLocalWrites += 1;
     }
   }
   async writeReplicationChunks(rows, options, method) {
@@ -3283,9 +3310,7 @@ var CtoxIndexedDbCollection = class {
       try {
         for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
           const writeQuantum = async () => {
-            while (admission.localWrites) {
-              await new Promise((done) => admission.localDrained.push(done));
-            }
+            await waitForReplicationAdmission(admission);
             return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
           };
           const pending = admission.background.then(writeQuantum, writeQuantum);

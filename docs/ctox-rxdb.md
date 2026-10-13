@@ -259,9 +259,16 @@ Every collection shares IndexedDB's `documents` object store. A replication
 batch formerly retained its writer transaction through every sequential get/put;
 even a command's preparatory read waited behind the whole batch, before WAL
 append. This P0 S5-Vorgriff bounds replication-origin transactions to5 rows,
-serializes background writers per database handle, and admits local writes
-through their existing recovery-journal and primary commits before admitting
-the next replication quantum. It applies to local writes without collection
+serializes background writers per database handle, and gives local writes
+bounded preference through their existing recovery-journal and primary path.
+At the front of the background transaction queue, admission waits for at most
+eight completed local write attempts or eight milliseconds, then admits one
+replication quantum even while local writes remain active. Posted tasks make
+the scheduling deadline observable without hidden-guest timer clamping;
+the preference also ends after at most eight posted tasks, bounding scheduler
+work when local I/O stalls instead of polling until a wall-clock deadline.
+event-loop stalls or already active IndexedDB transactions can still delay I/O.
+It applies to local writes without collection
 special cases; transport and command authority are unchanged.
 Admission serializes individual background transactions, not whole batches,
 so small incoming receipts also progress between bulk replication quanta.
@@ -269,6 +276,11 @@ so small incoming receipts also progress between bulk replication quanta.
 The periodic unsynced diagnostic uses distinct collection keys and indexed
 pushable counts. It must not hold a readonly document-store transaction while
 cloning every replicated row, which would also block local writer transactions.
+Local WAL append and primary-commit marking still await their durable IndexedDB
+transactions. Their diagnostic status publication is coalesced after the commits
+with a one-second timer, rather than rescanning all pending WAL payloads twice
+on each command's critical path. Explicit status reads and native-ACK publication
+remain fresh; closing the journal cancels its pending diagnostic timer.
 
 The caller still awaits the entire replication batch before advancing its pull
 checkpoint. A failed batch may have a committed prefix; replay retains the
@@ -286,6 +298,10 @@ WAL append, primary write and WAL commit.
 Its20 samples span two seconds, including the periodic diagnostic refresh.
 It also checks exact unsynced counts and delivery of a small native receipt
 before the competing bulk replication finishes.
+`write-admission-fairness-browser-smoke.mjs` continuously inserts local writes
+from three producers while one real WAL-committed operation remains in flight.
+All100 native rows must commit before the pressure is released; the test also
+verifies that every completed local write retains its committed journal entry.
 
 ### Native command return scheduling — S5-Vorgriff
 

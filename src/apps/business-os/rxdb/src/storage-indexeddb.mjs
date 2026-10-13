@@ -29,11 +29,14 @@ const INDEX_HIGH_KEY = '\uffff';
 const unsyncedCountScheduled = new WeakSet();
 const writeAdmissionByDatabase = new WeakMap();
 const REPLICATION_WRITE_QUANTUM = 5;
+const LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS = 8;
+const LOCAL_WRITE_PRIORITY_MAX_MS = 8;
+const LOCAL_WRITE_PRIORITY_MAX_YIELDS = 8;
 
 function writeAdmission(db) {
   let admission = writeAdmissionByDatabase.get(db);
   if (!admission) {
-    admission = { localWrites: 0, background: Promise.resolve(), localDrained: [] };
+    admission = { localWrites: 0, completedLocalWrites: 0, background: Promise.resolve() };
     writeAdmissionByDatabase.set(db, admission);
   }
   return admission;
@@ -51,6 +54,23 @@ function yieldWriteAdmission() {
     };
     channel.port2.postMessage(null);
   });
+}
+
+async function waitForReplicationAdmission(admission) {
+  const deadline = performance.now() + LOCAL_WRITE_PRIORITY_MAX_MS;
+  const completedAtStart = admission.completedLocalWrites;
+  let yields = 0;
+  // S5 P0 advance: local durability gets a bounded preference, never an
+  // indefinite lease. Admit one background quantum after eight completed
+  // local attempts or eight milliseconds even if local writes remain active.
+  // Posted tasks keep the deadline observable in hidden guests without
+  // relying on a clamped timer; an occupied event loop can still delay all I/O.
+  while (admission.localWrites
+    && admission.completedLocalWrites - completedAtStart < LOCAL_WRITE_PRIORITY_MAX_COMPLETIONS
+    && performance.now() < deadline
+    && yields++ < LOCAL_WRITE_PRIORITY_MAX_YIELDS) {
+    await yieldWriteAdmission();
+  }
 }
 
 export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_os_js_v1' } = {}) {
@@ -710,9 +730,7 @@ export class CtoxIndexedDbCollection {
       return await operation();
     } finally {
       admission.localWrites -= 1;
-      if (!admission.localWrites) {
-        for (const done of admission.localDrained.splice(0)) done();
-      }
+      admission.completedLocalWrites += 1;
     }
   }
 
@@ -729,9 +747,7 @@ export class CtoxIndexedDbCollection {
       try {
       for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
         const writeQuantum = async () => {
-          while (admission.localWrites) {
-            await new Promise((done) => admission.localDrained.push(done));
-          }
+          await waitForReplicationAdmission(admission);
           return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
         };
         // Serialize transactions, not whole replication batches. A small
