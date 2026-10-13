@@ -708,7 +708,7 @@ mod command_writeback_tests {
         let key = accepted["task_id"]
             .as_str()
             .context("test research queue task missing")?;
-        let task = channels::load_queue_task(root, key)?.context("test queue task missing")?;
+        let task = channels::lease_queue_task(root, key, CHANNEL_ROUTER_LEASE_OWNER)?;
         let job = queued_prompt_from_queue_task(task);
         let mut options = chat_turn_session_options_for_queue_job(&job);
         assert!(configure_business_os_mcp_session_for_queue_job(
