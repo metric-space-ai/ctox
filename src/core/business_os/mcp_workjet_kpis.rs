@@ -18,19 +18,20 @@ pub(super) const TOOL: &str = "business_os.project_kpi";
 enum Request {
     Read(wire::ReadKpisRequest),
     Resolve(wire::BindKpiRequest),
+    Initialize(wire::ConfigureKpisRequest),
 }
 pub(super) fn allows(tool: &str, args: &Value) -> bool {
-    tool == TOOL && matches!(args["action"].as_str(), Some("read" | "resolve"))
+    tool == TOOL && matches!(args["action"].as_str(), Some("read" | "resolve" | "initialize"))
 }
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     let fixture: Value = serde_json::from_str(include_str!(
         "../rxdb/tests/fixtures/workjet-project-kpis-v1.json"
     ))
     .expect("shared KPI fixture");
-    write_tool(TOOL,"Read prompted KPIs and the registered recipe catalogue, or resolve one prompt by binding a matching recipe and rolling window_days (1..365). Restricted to the current native registered project Supervisor. Native receipts calculate values; no caller values, SQL, URLs or cross-project source. expected_revision and prompt_revision fence stale results. Stable operation_id replays once; definitions refresh hourly and before JourFix. Unsupported GitHub/connected sources remain missing_source, never estimated.",
+    write_tool(TOOL,"Read prompted KPIs and the registered recipe catalogue, initialize the first prompts of a project that has none (project-init onboarding only, expected_revision 0), or resolve one prompt by binding a matching recipe and rolling window_days (1..365). Restricted to the current native registered project Supervisor. Native receipts calculate values; no caller values, SQL, URLs or cross-project source. expected_revision and prompt_revision fence stale results. Stable operation_id replays once; definitions refresh hourly and before JourFix. Unsupported GitHub/connected sources remain missing_source, never estimated.",
       json!({"type":"object","additionalProperties":false,"required":["action","request"],
-      "properties":{"action":{"type":"string","enum":["read","resolve"]},"request":{"type":"object"}},
-      "oneOf":([("read","ReadKpisRequest"),("resolve","BindKpiRequest")].iter().map(|(action,kind)| json!({"type":"object","additionalProperties":false,"required":["action","request"],
+      "properties":{"action":{"type":"string","enum":["read","resolve","initialize"]},"request":{"type":"object"}},
+      "oneOf":([("read","ReadKpisRequest"),("resolve","BindKpiRequest"),("initialize","ConfigureKpisRequest")].iter().map(|(action,kind)| json!({"type":"object","additionalProperties":false,"required":["action","request"],
         "properties":{"action":{"const":action,"type":"string"},"request":workjet_jour_fixe::schema(&fixture,kind)}} )).collect::<Vec<_>>())}))
 }
 pub(super) fn execute(
@@ -45,7 +46,7 @@ pub(super) fn execute(
         "KPI request exceeds native budget"
     );
     let request: Request = serde_json::from_value(args.clone())?;
-    let writing = matches!(request, Request::Resolve(_));
+    let writing = matches!(request, Request::Resolve(_) | Request::Initialize(_));
     let flags = if writing {
         OpenFlags::SQLITE_OPEN_READ_WRITE
     } else {
@@ -108,6 +109,23 @@ pub(super) fn execute(
             &query,
             store::now_ms() as i64,
         )?,
+        Request::Initialize(query) => {
+            query.validate().map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                query.project_id == project,
+                "KPI initialize project differs"
+            );
+            // Onboarding may seed prompts exactly once; later edits stay owner-only.
+            let current = kpis::read_state_with_schedule(&tx, &project, &owner, false)?;
+            let replay = kpis::operation_exists(&tx, &query.operation_id)?;
+            anyhow::ensure!(
+                replay
+                    || (query.expected_revision == 0
+                        && current.items.is_empty()),
+                "project already has KPI prompts; only the owner may change them"
+            );
+            kpis::configure_for_init(&tx, &context.actor, &query)?
+        }
     };
     tx.commit()?;
     core_tx.commit()?;

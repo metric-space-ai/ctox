@@ -20,6 +20,7 @@ pub(in crate::business_os) mod jour_fixe_local_candidate;
 pub(in crate::business_os) mod jour_fixe_local_narration;
 pub(in crate::business_os) mod jour_fixe_owner;
 pub(in crate::business_os) mod jour_fixe_preparation;
+pub(in crate::business_os) mod project_init;
 pub(in crate::business_os) mod jour_fixe_speech;
 pub(in crate::business_os) mod persistent_worker_binding;
 pub(in crate::business_os) mod presentation;

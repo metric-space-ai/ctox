@@ -306,6 +306,39 @@ fn configure(
     })
 }
 
+/// Project-init seeding through the registered Supervisor tool. The caller
+/// checks that the project has no prompts yet; replay uses the operation id.
+pub(in crate::business_os) fn configure_for_init(
+    conn: &Connection,
+    actor: &str,
+    request: &ConfigureKpisRequest,
+) -> anyhow::Result<Value> {
+    ensure!(
+        request.prompts.len() <= 3,
+        "project-init seeds at most three KPI prompts"
+    );
+    Ok(configure(conn, actor, request)?.result)
+}
+
+pub(in crate::business_os) fn operation_exists(
+    conn: &Connection,
+    operation_id: &str,
+) -> anyhow::Result<bool> {
+    let table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_project_kpi_operations')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table {
+        return Ok(false);
+    }
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workjet_project_kpi_operations WHERE operation_id=?1)",
+        [operation_id],
+        |row| row.get(0),
+    )?)
+}
+
 pub(in crate::business_os) mod resolver;
 
 #[cfg(test)]
