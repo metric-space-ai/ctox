@@ -20180,10 +20180,14 @@ fn communication_review_budget_exhausted_for_message_key(
 
 /// Whether the finite rework budget for this founder/owner inbound is
 /// exhausted on any of its durable tracks: direct review checkpoints on the
-/// inbound message itself, a founder-rework work item parked `blocked` by the
-/// thread circuit-breaker, or a founder-rework work item terminally `failed`
+/// inbound message itself, a blocked founder-rework work item with durable
+/// attempts at the circuit-breaker threshold, or a work item terminally `failed`
 /// by the review-loop threshold. A crash-`failed` rework without the loop
 /// note keeps the existing restore path instead of escalating.
+#[cfg(test)]
+#[path = "founder_escalation_tests.rs"]
+mod founder_escalation_tests;
+
 fn founder_communication_review_budget_exhausted(
     root: &Path,
     message: &channels::RoutedInboundMessage,
@@ -20192,7 +20196,10 @@ fn founder_communication_review_budget_exhausted(
         return Ok(true);
     }
     if let Some(item) = find_founder_communication_rework_self_work(root, &message.message_key)? {
-        if item.state == "blocked" {
+        if item.state == "blocked"
+            && founder_rework_queue_attempt_count(root, &item.work_id)?
+                >= FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD
+        {
             return Ok(true);
         }
         if item.state == "failed"
@@ -20222,18 +20229,16 @@ fn external_chat_escalation_body() -> String {
     "Kurzer Hinweis: Ich habe mehrfach versucht, hier eine saubere Antwort zu erstellen, aber sie hat meine interne Qualitätsprüfung wiederholt nicht bestanden. Ich stoppe die automatischen Anläufe für diese Nachricht. Wenn du das Thema weiter brauchst, schreib mir kurz Priorität oder zusätzlichen Kontext, dann setze ich es neu auf.".to_string()
 }
 
-/// Terminal path for a founder/owner communication whose finite rework budget
-/// is exhausted: send a deterministic, policy-authored escalation notice into
-/// the founder thread through the reviewed send machinery, then close the
-/// inbound and its rework backing. A send failure leaves all state untouched
-/// so the next sweep retries; the consumed approval row makes a successful
-/// escalation idempotent across sweeps.
+/// Exhausted founder rework requires internal escalation and regular review.
+/// Automatic policy may not approve or send customer email. Legacy receipts
+/// remain observable, but only a regular reviewed reply can close the inbound
+/// and its backing work.
 fn escalate_exhausted_founder_communication(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     message: &channels::RoutedInboundMessage,
 ) -> Result<usize> {
-    let close_reason = "Founder communication was escalated in-thread after the finite rework budget was exhausted.";
+    let close_reason = "Founder communication completed after a regular reviewed outbound reply.";
     if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
         let mut repaired = channels::ack_leased_messages(
             root,
@@ -20255,7 +20260,7 @@ fn escalate_exhausted_founder_communication(
     }
     let body = founder_communication_escalation_body(message);
     let summary = format!(
-        "Deterministic policy escalation: finite completion-rework budget exhausted for {}; automatic drafting stopped and the founder was notified in-thread.",
+        "Internal policy escalation: finite completion-rework budget exhausted for {}; regular content and recipient review is required; no automatic email.",
         message.message_key
     );
     match channels::record_and_send_founder_escalation_reply(
@@ -20264,11 +20269,19 @@ fn escalate_exhausted_founder_communication(
         &body,
         &summary,
     ) {
+        Ok(_)
+            if !channels::founder_reply_sent_after_review_for_message(
+                root,
+                &message.message_key,
+            )? =>
+        {
+            Ok(0)
+        }
         Ok(_) => {
             push_event(
                 state,
                 format!(
-                    "Escalated exhausted founder communication {} to the founder in-thread",
+                    "Completed exhausted founder communication {} after a regular reviewed reply",
                     message.message_key
                 ),
             );
@@ -20437,6 +20450,7 @@ fn founder_thread_has_later_reviewed_send(
             SELECT 1
             FROM communication_founder_reply_reviews
         WHERE sent_at IS NOT NULL
+          AND reviewer != 'policy-escalation'
           AND sent_at > ?2
           AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
           AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
@@ -20481,6 +20495,7 @@ fn founder_subject_has_later_reviewed_send_to_sender(
             SELECT 1
             FROM communication_founder_reply_reviews
             WHERE sent_at IS NOT NULL
+              AND reviewer != 'policy-escalation'
               AND sent_at > ?1
               AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
               AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
@@ -20615,6 +20630,29 @@ fn cancel_open_founder_communication_rework_queue_for_inbound(
     Ok(updated)
 }
 
+fn finish_answered_founder_communication_self_work(
+    root: &Path,
+    work_id: &str,
+    note: &str,
+) -> Result<()> {
+    // A reply from another completed slice makes queued rework obsolete. Do
+    // not manufacture execution/review/verification for this work item.
+    let target = if tickets::ticket_self_work_has_terminal_success_proof(root, work_id)? {
+        "closed"
+    } else {
+        "superseded"
+    };
+    tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        target,
+        "ctox-service-reviewed-founder-reply",
+        Some(note),
+        "internal",
+    )?;
+    Ok(())
+}
+
 fn close_stale_founder_communication_self_work_after_reviewed_reply(root: &Path) -> Result<usize> {
     let items = tickets::list_ticket_self_work_items(root, Some("local"), None, 512)?;
     let mut closed = 0usize;
@@ -20637,11 +20675,11 @@ fn close_stale_founder_communication_self_work_after_reviewed_reply(root: &Path)
         if !channels::founder_reply_sent_after_review_for_message(root, &parent_key)? {
             continue;
         }
-        close_ticket_self_work_item(
+        finish_answered_founder_communication_self_work(
             root,
             &item.work_id,
-            "Founder communication already has a reviewed sent reply; closing stale internal work.",
-        );
+            "Founder communication already has a regular reviewed reply; retiring stale internal work.",
+        )?;
         closed += 1;
     }
     Ok(closed)
@@ -20671,7 +20709,7 @@ fn close_open_founder_communication_self_work_for_inbound(
         if !matches_parent {
             continue;
         }
-        close_ticket_self_work_item(root, &item.work_id, note);
+        finish_answered_founder_communication_self_work(root, &item.work_id, note)?;
         closed += 1;
     }
     Ok(closed)
@@ -46218,7 +46256,7 @@ Use shell tools to create or update these files."
     }
 
     #[test]
-    fn reviewed_founder_reply_closes_stale_rework_item() {
+    fn reviewed_founder_reply_supersedes_stale_rework_item() {
         let root = temp_root("ctox-stale-founder-rework-close");
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -46289,16 +46327,9 @@ Use shell tools to create or update these files."
         )
         .expect("failed to seed queued rework");
 
-        // Red since before the A-grade campaign. Ruled out so far, so nobody
-        // repeats the search: the route is seeded 'handled'; the reply review
-        // carries a non-synthetic sent_at, so founder_reply_sent_after_review
-        // is satisfied; the item seeds parent_message_key, which is the key
-        // close_stale_founder_communication_self_work_after_reviewed_reply
-        // reads; and its kind and state are both inside the accepted sets.
-        // The close therefore ought to run — where it does not is still open.
-        // Note while looking: that state filter is a raw string set for a
-        // vocabulary WorkItemStatus already types, and its membership matches
-        // none of the existing predicates, so it wants its own.
+        // Another reviewed reply makes queued rework obsolete. Retire it
+        // through Superseded; do not invent execution/verification to force
+        // a Planned -> Closed transition for this unexecuted work item.
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired = repair_stalled_founder_communications(&root, &state, &settings)
             .expect("stale founder cleanup should succeed");
@@ -46306,7 +46337,10 @@ Use shell tools to create or update these files."
         let item = tickets::load_ticket_self_work_item(&root, &item.work_id)
             .expect("failed to reload internal work")
             .expect("internal work should exist");
-        assert_eq!(item.state, "closed");
+        assert_eq!(item.state, "superseded");
+        assert!(
+            !tickets::ticket_self_work_has_terminal_success_proof(&root, &item.work_id).unwrap()
+        );
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
