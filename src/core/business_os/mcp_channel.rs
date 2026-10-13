@@ -13239,6 +13239,68 @@ mod tests {
     }
 
     #[test]
+    fn mcp_outbound_source_reprobe_without_data_write_is_denied() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound",
+            &["outbound_lead_generation_sources"],
+        )?;
+        seed_business_user(root, "chatgpt:reprobe-reader", "user")?;
+        seed_business_permission_grant(
+            root,
+            "reprobe_reader_data_read",
+            "user",
+            "chatgpt:reprobe-reader",
+            BusinessOsPermission::DataRead,
+            "module",
+            "outbound-lead-generation",
+        )?;
+        for confirmation in ["pending", "approved"] {
+            let request = json!({
+                "module_id": "outbound-lead-generation",
+                "action_id": "outbound.research_source.reprobe",
+                "payload": {
+                    "target_key": "linkedin-com", "keep_script": true,
+                    "probe_input": {"person_linkedin": "https://www.linkedin.com/in/test-person"},
+                    "authorization": {"allowed": true, "permission": "data.write"}
+                },
+                "_context": {
+                    "actor": "chatgpt:reprobe-reader", "workspace": "test",
+                    "confirmation_state": confirmation
+                }
+            });
+            let decision = business_os_mcp_policy_decision(
+                root,
+                &context_from_arguments_with_trusted_gateway_context(
+                    "business_os.execute_action",
+                    &request,
+                    None,
+                )?,
+                "business_os.execute_action",
+                &request,
+            )?
+            .expect("module policy decision");
+            assert_eq!(
+                decision.permission,
+                BusinessOsPermission::DataWrite.as_str()
+            );
+            assert!(!decision.allowed);
+            let error = call_tool(root, "business_os.execute_action", request)
+                .expect_err("read-only MCP caller must not reach provider reprobe");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .expect("typed policy error");
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::PermissionDenied);
+            assert_eq!(typed.field.as_deref(), Some("business_os_policy"));
+        }
+        assert!(!root.join("runtime/scraping/targets/linkedin-com").exists());
+        Ok(())
+    }
+
+    #[test]
     fn mcp_business_os_policy_allows_explicit_module_data_write_grant() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
