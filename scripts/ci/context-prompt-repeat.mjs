@@ -9,7 +9,8 @@ const deadline = Number(process.env.CONTEXT_PROOF_DEADLINE_MS || 0);
 if (!Number.isFinite(deadline) || deadline <= Date.now()) throw Error('Explicit bounded proof deadline required');
 const save = () => writeFileSync(path.join(output, 'summary.json'), JSON.stringify({
   baseline, after, binary, requiredRunsPerSource: 10, rows,
-  complete: rows.filter(r => r.source === 'before').length === 10 && rows.filter(r => r.source === 'after').length === 10,
+  complete: rows.filter(r => r.source === 'before' && r.timings.length).length === 10
+    && rows.filter(r => r.source === 'after' && r.timings.length).length === 10,
 }, null, 2) + '\n');
 async function run(source, index) {
   const root = source === 'before' ? baseline : after;
@@ -56,6 +57,7 @@ for (let index = 1; index <= 10; index++) {
   for (const source of ['before', 'after']) {
     if (Date.now() + 70000 >= deadline) { save(); process.exit(2); }
     await run(source, index);
+    if (!rows.at(-1).timings.length) { save(); process.exit(3); }
   }
 }
 save();
