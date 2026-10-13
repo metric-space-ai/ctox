@@ -2118,6 +2118,12 @@ than mapping errors ad hoc at each `map_err`:
 | `REMOTE_TIMEOUT` | yes | Deadline hit. |
 | `QUERY_NOT_SUPPORTED`, `SCHEMA_MISMATCH`, `FEATURE_DISABLED` | no | Terminal until config/schema changes. |
 
+Native query RPC response errors carry a scalar string; asynchronous
+`rxdb.query.error` frames become `Error` objects in the browser collector.
+Demand retries recognize the existing `STREAM_LIMIT_EXCEEDED` and `RATE_LIMITED`
+code prefixes in either representation. Admission, retry counts and delays are
+unchanged; permission denials remain terminal and no browser warning is hidden.
+
 Demand-query admission distinguishes a verified collection-policy denial from
 an unavailable authority lookup. Only `COLLECTION_AUTHORITY_UNAVAILABLE` is
 retried inside that bounded admission window; invalid credentials and replaced
