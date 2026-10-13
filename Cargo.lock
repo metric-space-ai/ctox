@@ -2470,6 +2470,7 @@ dependencies = [
  "ctox-rxdb",
  "ctox-sqlserver-adapter",
  "ctox-sync",
+ "ctox-toolhub",
  "ctox-transfers",
  "ctox-utils-absolute-path",
  "ctox-voxtral-4b-tts-2603",
@@ -3407,6 +3408,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "url",
+]
+
+[[package]]
+name = "ctox-toolhub"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq 2.12.1",
  "url",
 ]
 

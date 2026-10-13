@@ -32,6 +32,7 @@ futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
 ctox-doc-stack = { path = "src/tools/doc-stack" }
+ctox-toolhub = { path = "src/core/execution/toolhub" }
 ctox-cliproxyapi = { path = "src/core/execution/cliproxyapi", default-features = false, features = ["anthropic-fingerprint-transport", "codex-http-transport", "antigravity-http-transport"] }
 ctox-appsec-pentest = { path = "src/tools/appsec-pentest" }
 ctox-pdf-parse = { path = "src/tools/pdf-parse" }
@@ -138,6 +139,7 @@ tempfile = "3"
 [workspace]
 members = [
     "src/core/execution/cliproxyapi",
+    "src/core/execution/toolhub",
     "src/tools/postgres-adapter",
 ]
 exclude = [
