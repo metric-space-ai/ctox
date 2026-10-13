@@ -3429,7 +3429,8 @@ fn file_modified_label(path: &Path) -> String {
 fn unsafe_static_relative_path(rel: &str) -> bool {
     // Reject Windows separators and drive prefixes on every host so a URL cannot
     // acquire a different filesystem meaning when this server runs on Windows.
-    rel.contains('\\') || rel.contains(':')
+    rel.contains('\\')
+        || rel.contains(':')
         || rel
             .split('/')
             .any(|part| part == ".." || part.starts_with('.'))
@@ -5276,8 +5277,12 @@ mod http_lane_tests {
     #[test]
     fn static_paths_reject_windows_navigation_on_every_host() {
         assert!(!unsafe_static_relative_path("shared/sync.js"));
-        assert!(unsafe_static_relative_path(r"modules\..\..\runtime\secrets"));
-        assert!(unsafe_static_relative_path(r"modules/..\../runtime/secrets"));
+        assert!(unsafe_static_relative_path(
+            r"modules\..\..\runtime\secrets"
+        ));
+        assert!(unsafe_static_relative_path(
+            r"modules/..\../runtime/secrets"
+        ));
         assert!(unsafe_static_relative_path("C:/runtime/secrets"));
         assert!(unsafe_static_relative_path("../runtime/secrets"));
     }
