@@ -309,6 +309,19 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     let method = request.method().clone();
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/");
+    let origin = header_value(&request, "Origin");
+    let host = header_value(&request, "Host");
+    let forwarded_proto = header_value(&request, "X-Forwarded-Proto");
+    if rejects_cross_origin_control_request(
+        path,
+        origin.as_deref(),
+        host.as_deref(),
+        forwarded_proto.as_deref(),
+        header_value(&request, "Sec-Fetch-Site").as_deref(),
+    ) {
+        respond_status(request, 403, "cross-origin control request rejected")?;
+        return Ok(());
+    }
     if method == Method::Options {
         respond_options(request)?;
         return Ok(());
@@ -317,9 +330,9 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         &method,
         path,
         business_os_session_cookie_value(&request).as_deref(),
-        header_value(&request, "Origin").as_deref(),
-        header_value(&request, "Host").as_deref(),
-        header_value(&request, "X-Forwarded-Proto").as_deref(),
+        origin.as_deref(),
+        host.as_deref(),
+        forwarded_proto.as_deref(),
     ) {
         respond_status(request, 403, "cross-origin session mutation rejected")?;
         return Ok(());
@@ -2199,6 +2212,35 @@ fn rejects_cross_origin_browser_mutation(
     if !mutation || (path != "/login" && session_cookie.is_none()) {
         return false;
     }
+    request_origin_differs(origin, host, forwarded_proto)
+}
+
+/// Control-plane HTTP requests from a browser need their own origin fence:
+/// the local-dev session has no cookie, but it otherwise has admin authority.
+fn rejects_cross_origin_control_request(
+    path: &str,
+    origin: Option<&str>,
+    host: Option<&str>,
+    forwarded_proto: Option<&str>,
+    fetch_site: Option<&str>,
+) -> bool {
+    if path != "/login" && !path.starts_with("/api/business-os/") {
+        return false;
+    }
+    if fetch_site.is_some_and(|site| {
+        site.trim().eq_ignore_ascii_case("cross-site")
+            || site.trim().eq_ignore_ascii_case("same-site")
+    }) {
+        return true;
+    }
+    request_origin_differs(origin, host, forwarded_proto)
+}
+
+fn request_origin_differs(
+    origin: Option<&str>,
+    host: Option<&str>,
+    forwarded_proto: Option<&str>,
+) -> bool {
     let Some(origin) = origin.map(str::trim) else {
         return false;
     };
@@ -4599,6 +4641,54 @@ mod tests {
             None,
             Some("tenant.ctox.dev"),
             Some("https"),
+        ));
+    }
+    #[test]
+    fn control_http_rejects_foreign_browser_origins_without_a_cookie() {
+        for path in ["/api/business-os/users", "/api/business-os/ctox/update/apply"] {
+            assert!(rejects_cross_origin_control_request(
+                path,
+                Some("https://attacker.example"),
+                Some("127.0.0.1:8765"),
+                None,
+                Some("cross-site"),
+            ));
+            assert!(rejects_cross_origin_control_request(
+                path,
+                Some("null"),
+                Some("127.0.0.1:8765"),
+                None,
+                None,
+            ));
+            assert!(rejects_cross_origin_control_request(
+                path,
+                None,
+                Some("127.0.0.1:8765"),
+                None,
+                Some("same-site"),
+            ));
+            assert!(!rejects_cross_origin_control_request(
+                path,
+                Some("http://127.0.0.1:8765"),
+                Some("127.0.0.1:8765"),
+                None,
+                Some("same-origin"),
+            ));
+            // Native clients do not carry browser origin/fetch metadata.
+            assert!(!rejects_cross_origin_control_request(
+                path,
+                None,
+                Some("127.0.0.1:8765"),
+                None,
+                None,
+            ));
+        }
+        assert!(!rejects_cross_origin_control_request(
+            "/",
+            Some("https://attacker.example"),
+            Some("127.0.0.1:8765"),
+            None,
+            Some("cross-site"),
         ));
     }
 
