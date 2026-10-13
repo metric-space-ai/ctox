@@ -516,7 +516,7 @@ pub(in crate::business_os) fn prompt(
             && raw.len() <= MAX_BYTES,
         "native preparation command binding conflicts"
     );
-    Ok(Some(format!("\nNative JourFix preparation brief JSON (verified facts only; source status/error diagnostics are for preparation, NEVER publish them on slides. Exception: evaluation_status. Show each KPI value and the 5-year exit value in EUR with its freshness: fresh, stale with its as_of date, blocked, or missing. Never estimate a missing or blocked value. Put every evaluation_status.open_items entry in the protocol as an open item. The meeting runs regardless):\n{raw}\n")))
+    Ok(Some(format!("\nNative JourFix preparation brief JSON (verified facts only; evaluation_status is the exception: show each KPI value and the 5-year exit value in EUR with its freshness (fresh, stale with its as_of date, blocked, or missing), never estimate a missing or blocked value, and put every evaluation_status.open_items entry in the protocol as an open item; all other source status/error diagnostics are for preparation, NEVER publish them on slides):\n{raw}\n")))
 }
 #[cfg(test)]
 mod tests {
