@@ -3297,18 +3297,28 @@ CTOX_ACCOUNT_FIXTURE
             let fx = Fixture::new("keep-script-reprobe");
             fx.mode("inactive");
             fx.execute(&[]);
+            let foreign = upsert_target(
+                &fx.root,
+                DEFAULT_RUNTIME_ROOT,
+                json!({
+                    "target_key":"untouched-source","display_name":"Other Provider",
+                    "start_url":"https://other.test/api","target_kind":"person",
+                    "config":{"skip_probe":true},"output_schema":{}
+                }),
+            )
+            .unwrap();
             let conn = open_db(&fx.root).unwrap();
             conn.execute(
                 "INSERT INTO scrape_account_state
-                SELECT 'untouched-source', generation, reason, causal_run_id, last_probe_run_id,
+                SELECT ?2, generation, reason, causal_run_id, last_probe_run_id,
                 credential_ref, credential_version, failed_probes, next_probe_at_ms,
                 probe_lease_owner, probe_lease_until_ms, updated_at_ms
                 FROM scrape_account_state WHERE target_id=?1",
-                params![fx.target.target_id],
+                params![fx.target.target_id, foreign.target_id],
             )
             .unwrap();
             let foreign_before =
-                super::super::account_state::load(&conn, "untouched-source").unwrap();
+                super::super::account_state::load(&conn, &foreign.target_id).unwrap();
             drop(conn);
             let before = target_script_registration(&fx.root, "account-provider")
                 .unwrap()
@@ -3347,7 +3357,7 @@ CTOX_ACCOUNT_FIXTURE
                 succeeds
             );
             assert_eq!(
-                super::super::account_state::load(&conn, "untouched-source").unwrap(),
+                super::super::account_state::load(&conn, &foreign.target_id).unwrap(),
                 foreign_before
             );
             drop(conn);
