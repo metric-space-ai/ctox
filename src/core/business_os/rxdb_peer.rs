@@ -126,6 +126,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -478,6 +479,7 @@ impl NativePeerLifecycle {
 }
 
 static NATIVE_PEER_LIFECYCLE: Mutex<NativePeerLifecycle> = Mutex::new(NativePeerLifecycle::new());
+static NATIVE_PEER_GENERATION_CHANGED: Condvar = Condvar::new();
 
 fn with_native_peer_lifecycle<T>(operation: impl FnOnce(&NativePeerLifecycle) -> T) -> T {
     let lifecycle = NATIVE_PEER_LIFECYCLE
@@ -490,7 +492,10 @@ fn with_native_peer_lifecycle_mut<T>(operation: impl FnOnce(&mut NativePeerLifec
     let mut lifecycle = NATIVE_PEER_LIFECYCLE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    operation(&mut lifecycle)
+    let output = operation(&mut lifecycle);
+    drop(lifecycle);
+    NATIVE_PEER_GENERATION_CHANGED.notify_all();
+    output
 }
 
 fn native_peer_lifecycle_snapshot() -> NativePeerLifecycleSnapshot {
@@ -2288,8 +2293,6 @@ fn shutdown_native_peer_runtime(runtime: tokio::runtime::Runtime, max_wait: Dura
 pub(super) enum TemporaryDatabaseLockScope {
     TemporaryOnly,
     EntireOperation,
-    /// Keep a private handle through projection even while a peer generation closes.
-    OwnedTemporary,
 }
 
 pub(super) fn with_business_os_database<T, F, Fut>(
@@ -2327,8 +2330,7 @@ where
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
-        TemporaryDatabaseLockScope::EntireOperation
-        | TemporaryDatabaseLockScope::OwnedTemporary => TEMPORARY_RXDB_DATABASE_LOCK
+        TemporaryDatabaseLockScope::EntireOperation => TEMPORARY_RXDB_DATABASE_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     };
@@ -2589,18 +2591,76 @@ fn sync_runtime_settings_if_changed(
 }
 
 pub(crate) fn sync_module_catalog(root: &Path) -> anyhow::Result<usize> {
-    // A release may overlap schema-triggered peer shutdown. The published peer
-    // remains observable while shutdown drains and closes its collection map;
-    // borrowing that generation across the catalog load can lose registration.
-    // Keep an independently owned handle instead. The existing write lock and
-    // canonical projection path still serialize the actual catalog write.
-    with_business_os_database(
+    // S4: one projection writer. A schema-driven shutdown can close the borrowed
+    // generation during source loading. Retry once on its replacement, never
+    // open another database while a peer serves this root.
+    let (output, retired_generation) = with_business_os_database(
         root,
         "failed to create Business OS module catalog sync runtime",
         true,
-        TemporaryDatabaseLockScope::OwnedTemporary,
-        |_peer, database| async move { sync_module_catalog_with_database(root, &database).await },
+        TemporaryDatabaseLockScope::EntireOperation,
+        |peer, database| async move {
+            let output = sync_module_catalog_with_database(root, &database).await;
+            let retired_generation = if output.is_err() && database.closed() {
+                peer.as_ref().map(|peer| peer.peer_session_id.clone())
+            } else {
+                None
+            };
+            anyhow::Ok((output, retired_generation))
+        },
+    )?;
+    let Some(retired_generation) = retired_generation else {
+        return output;
+    };
+    // The first factory call has returned: no Arc<NativePeer> from that borrow
+    // can retain the old generation's process lock and block its replacement.
+    let peer = wait_for_module_catalog_replacement(
+        root,
+        &retired_generation,
+        Duration::from_secs(NATIVE_PEER_SHUTDOWN_TIMEOUT_SECS),
     )
+    .with_context(|| {
+        format!(
+            "catalog projection generation `{retired_generation}` closed; replacement unavailable"
+        )
+    })?;
+    eprintln!(
+        "[business-os] retrying module catalog projection once on replacement peer {}",
+        peer.peer_session_id,
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create replacement catalog projection runtime")?;
+    runtime
+        .block_on(sync_module_catalog_with_database(root, &peer.database))
+        .context("catalog projection on replacement peer failed; retry budget exhausted")
+}
+
+fn wait_for_module_catalog_replacement(
+    root: &Path,
+    retired_generation: &str,
+    max_wait: Duration,
+) -> anyhow::Result<Arc<NativePeer>> {
+    let ready = |lifecycle: &NativePeerLifecycle| {
+        matches!(lifecycle.state, NativePeerLifecycleState::Running { .. })
+            && lifecycle.peer.as_ref().is_some_and(|peer| {
+                peer.serves_root(root)
+                    && peer.peer_session_id != retired_generation
+                    && !peer.database.closed()
+            })
+    };
+    let lifecycle = NATIVE_PEER_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (lifecycle, _) = NATIVE_PEER_GENERATION_CHANGED
+        .wait_timeout_while(lifecycle, max_wait, |state| !ready(state))
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    anyhow::ensure!(
+        ready(&lifecycle),
+        "new native peer generation did not become ready within {max_wait:?}"
+    );
+    Ok(Arc::clone(lifecycle.peer.as_ref().expect("ready peer")))
 }
 
 #[cfg(test)]
@@ -15148,88 +15208,6 @@ pub(in crate::business_os) mod tests {
             second.close().await.expect("close second database");
             first.close().await.expect("close first database");
         });
-    }
-
-    #[test]
-    fn module_catalog_projection_survives_published_peer_database_close() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        let app_root = root.path().join("src/apps/business-os");
-        fs::create_dir_all(app_root.join("modules/ctox"))?;
-        fs::write(app_root.join("index.html"), "<!doctype html>")?;
-        fs::write(
-            app_root.join("modules/ctox/module.json"),
-            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","collections":["ctox_queue_tasks"]}"#,
-        )?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let peer = runtime.block_on(async {
-            let database = open_database(store::rxdb_store_path(root.path())).await?;
-            register_collections_tolerant(&database, collection_creators()).await?;
-            // Inert workers: exercise the real published peer/database boundary,
-            // without a signaling server or unrelated background projections.
-            let idle = || tokio::spawn(std::future::pending::<()>());
-            anyhow::Ok(Arc::new(NativePeer {
-                root: root.path().to_path_buf(),
-                database,
-                peer_session_id: "catalog-retiring-peer".into(),
-                shutdown_tx: Mutex::new(None),
-                _process_lock: acquire_native_peer_process_lock(root.path())?
-                    .expect("fixture owns peer process lock"),
-                _pools: Vec::new(),
-                business_data_sources: Vec::new(),
-                _command_consumer: idle(),
-                _command_outbox: idle(),
-                _notes_sync: idle(),
-                _file_index_sync: idle(),
-                _channel_state_sync: idle(),
-                _business_users_sync: idle(),
-                _runtime_settings_sync: idle(),
-                _workspace_branding_sync: idle(),
-                _module_catalog_sync: idle(),
-                _ticket_state_sync: idle(),
-                _knowledge_tables_sync: idle(),
-                _business_record_projection_sync: idle(),
-                _iot_agent_supervisors: Vec::new(),
-                _browser_runtime_maintenance: idle(),
-                pending_outbox: AtomicU64::new(0),
-                _status_heartbeat: Mutex::new(None),
-            }))
-        })?;
-        with_native_peer_lifecycle_mut(|lifecycle| {
-            lifecycle.begin_run(false)?;
-            lifecycle.bring_up_succeeded(Some(Arc::clone(&peer)), true, true, true)?;
-            lifecycle.begin_stopping()
-        })?;
-        // Always unpublish this fixture, including when the projection fails.
-        struct Cleanup;
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                with_native_peer_lifecycle_mut(|lifecycle| {
-                    lifecycle.run_cleanup_finished().expect("fixture cleanup");
-                    lifecycle.foreground_run_exited().expect("fixture exit");
-                });
-            }
-        }
-        let _cleanup = Cleanup;
-        // Shutdown closes the database before run_cleanup_finished removes the
-        // published peer. Reproduce that exact window deterministically.
-        runtime.block_on(peer.database.close())?;
-        assert!(current_peer().is_some_and(|current| Arc::ptr_eq(&current, &peer)));
-        assert!(peer
-            .database
-            .collection("business_module_catalog")
-            .is_none());
-        assert_eq!(sync_module_catalog(root.path())?, 1);
-        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
-        let document: String = conn.query_row(
-            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
-            [],
-            |row| row.get(0),
-        )?;
-        let catalog: Value = serde_json::from_str(&document)?;
-        assert_eq!(catalog["modules"][0]["id"], "ctox");
-        Ok(())
     }
 
     #[test]
