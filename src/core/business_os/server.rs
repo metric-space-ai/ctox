@@ -3426,6 +3426,15 @@ fn file_modified_label(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+fn unsafe_static_relative_path(rel: &str) -> bool {
+    // Reject Windows separators and drive prefixes on every host so a URL cannot
+    // acquire a different filesystem meaning when this server runs on Windows.
+    rel.contains('\\') || rel.contains(':')
+        || rel
+            .split('/')
+            .any(|part| part == ".." || part.starts_with('.'))
+}
+
 fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
     let raw_rel = if matches!(path, "/" | "/business-os" | "/business-os/") {
         "index.html"
@@ -3436,10 +3445,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         .strip_prefix("business-os/")
         .or_else(|| (raw_rel == "business-os").then_some("index.html"))
         .unwrap_or(raw_rel);
-    if rel
-        .split('/')
-        .any(|part| part == ".." || part.starts_with('.'))
-    {
+    if unsafe_static_relative_path(rel) {
         return respond_status(request, 403, "forbidden");
     }
     let release_request = match super::shell_assets::parse_request(rel) {
@@ -5264,8 +5270,17 @@ mod tests {
 
 #[cfg(test)]
 mod http_lane_tests {
-    use super::is_static_asset_request;
+    use super::{is_static_asset_request, unsafe_static_relative_path};
     use tiny_http::Method;
+
+    #[test]
+    fn static_paths_reject_windows_navigation_on_every_host() {
+        assert!(!unsafe_static_relative_path("shared/sync.js"));
+        assert!(unsafe_static_relative_path(r"modules\..\..\runtime\secrets"));
+        assert!(unsafe_static_relative_path(r"modules/..\../runtime/secrets"));
+        assert!(unsafe_static_relative_path("C:/runtime/secrets"));
+        assert!(unsafe_static_relative_path("../runtime/secrets"));
+    }
 
     #[test]
     fn shell_assets_take_the_static_lane_and_everything_dynamic_does_not() {
