@@ -448,6 +448,52 @@ fn revoked_native_owner_or_changed_supervisor_history_cannot_prepare_or_read() -
 }
 
 #[test]
+fn existing_autostart_research_does_not_block_or_duplicate_preparation() -> anyhow::Result<()> {
+    let root = fixture()?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let research: String = open_store(root.path())?.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |row| row.get(0),
+    )?;
+    let first = task(root.path())?;
+    let due = first.next_run_at.as_deref().unwrap();
+    let emitted = crate::business_os::emit_project_report(root.path(), &first, due)?;
+    let meeting = latest(root.path())?;
+    assert_eq!(meeting["meeting"]["state"], "planned");
+    assert_ne!(
+        meeting["preparation_task_id"],
+        channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("existing Exit queue")?
+            .message_key
+    );
+    assert_eq!(
+        channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("existing Exit queue")?
+            .route_status,
+        "pending"
+    );
+    assert_eq!(
+        emitted,
+        crate::business_os::emit_project_report(root.path(), &first, due)?
+    );
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let (runs, retained): (i64, String) = conn.query_row(
+        "SELECT count(*), research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(retained, research);
+    assert_eq!(runs, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 2);
+    assert_eq!(
+        latest(root.path())?["preparation_task_id"],
+        meeting["preparation_task_id"]
+    );
+    Ok(())
+}
+
+#[test]
 fn changing_calendar_rejects_old_route_and_preserves_operator_pause() -> anyhow::Result<()> {
     let root = fixture()?;
     let first = task(root.path())?;
