@@ -27,6 +27,31 @@ const REPLICATION_MIN_SCAN_LIMIT = 1;
 const REPLICATION_MAX_SCAN_LIMIT = 5000;
 const INDEX_HIGH_KEY = '\uffff';
 const unsyncedCountScheduled = new WeakSet();
+const writeAdmissionByDatabase = new WeakMap();
+const REPLICATION_WRITE_QUANTUM = 25;
+
+function writeAdmission(db) {
+  let admission = writeAdmissionByDatabase.get(db);
+  if (!admission) {
+    admission = { localWrites: 0, background: Promise.resolve(), localDrained: [] };
+    writeAdmissionByDatabase.set(db, admission);
+  }
+  return admission;
+}
+
+function yieldWriteAdmission() {
+  // Timer-based yields are clamped in hidden desktop guests. A posted task
+  // admits their command messages without adding a timer delay per quantum.
+  return new Promise((done) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      channel.port2.close();
+      done();
+    };
+    channel.port2.postMessage(null);
+  });
+}
 
 export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_os_js_v1' } = {}) {
   if (!globalThis.indexedDB) {
@@ -347,7 +372,11 @@ export class CtoxIndexedDbCollection {
     return success[id] || null;
   }
 
-  async bulkUpsert(docs, {
+  async bulkUpsert(docs, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkUpsert(docs, options));
+  }
+
+  async _bulkUpsert(docs, {
     now = Date.now(),
     replicationOrigin = null,
     skipJournal = false,
@@ -374,7 +403,9 @@ export class CtoxIndexedDbCollection {
     try {
       await this.persistDeleteUpdateConflicts(validDocs, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
+        () => replicationOrigin?.role
+          ? this.writeReplicationChunks(writeDocs, { now, replicationOrigin }, '_bulkUpsertOnce')
+          : this._bulkUpsertOnce(writeDocs, { now, replicationOrigin }),
         { source: recoveryReplay ? 'recovery-replay' : 'bulk-upsert' },
       );
     } catch (error) {
@@ -388,7 +419,7 @@ export class CtoxIndexedDbCollection {
     return result;
   }
 
-  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null } = {}) {
+  async _bulkUpsertOnce(docs, { now = Date.now(), replicationOrigin = null, emitChange = true } = {}) {
     if (!Array.isArray(docs)) {
       throw new TypeError('bulkUpsert docs must be an array');
     }
@@ -481,7 +512,7 @@ export class CtoxIndexedDbCollection {
       throw error;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit('change', {
         collection: this.name,
         success,
@@ -492,7 +523,11 @@ export class CtoxIndexedDbCollection {
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
   }
 
-  async bulkWrite(rows, {
+  async bulkWrite(rows, options = {}) {
+    return this.withLocalWriteAdmission(options, () => this._bulkWrite(rows, options));
+  }
+
+  async _bulkWrite(rows, {
     now = Date.now(),
     replicationOrigin = null,
     baseById = null,
@@ -524,7 +559,9 @@ export class CtoxIndexedDbCollection {
     try {
       await this.persistDeleteUpdateConflicts(validRows, replicationOrigin);
       result = await this.runWithQuotaRecovery(
-        () => this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
+        () => replicationOrigin?.role
+          ? this.writeReplicationChunks(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }, '_bulkWriteOnce')
+          : this._bulkWriteOnce(writeRows, { now, replicationOrigin, baseById: journalBaseById, force, authoritativeMaster }),
         { source: recoveryReplay ? 'recovery-replay' : 'bulk-write' },
       );
     } catch (error) {
@@ -538,7 +575,7 @@ export class CtoxIndexedDbCollection {
     return result;
   }
 
-  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false } = {}) {
+  async _bulkWriteOnce(rows, { now = Date.now(), replicationOrigin = null, baseById = null, force = false, authoritativeMaster = false, emitChange = true } = {}) {
     if (!Array.isArray(rows)) {
       throw new TypeError('bulkWrite rows must be an array');
     }
@@ -654,7 +691,7 @@ export class CtoxIndexedDbCollection {
       throw error;
     }
     schedulePersistUnsyncedWriteCount(this.db);
-    if (Object.keys(success).length) {
+    if (emitChange && Object.keys(success).length) {
       this.events.emit('change', {
         collection: this.name,
         success,
@@ -663,6 +700,64 @@ export class CtoxIndexedDbCollection {
       dispatchStorageChange(this.db.name, this.name, success, replicationOrigin);
     }
     return { success, error, overwrittenLocalConflicts, structuredConflicts };
+  }
+
+  async withLocalWriteAdmission(options, operation) {
+    if (options.replicationOrigin?.role) return operation();
+    const admission = writeAdmission(this.db);
+    admission.localWrites += 1;
+    try {
+      return await operation();
+    } finally {
+      admission.localWrites -= 1;
+      if (!admission.localWrites) {
+        for (const done of admission.localDrained.splice(0)) done();
+      }
+    }
+  }
+
+  async writeReplicationChunks(rows, options, method) {
+    if (!Array.isArray(rows)) throw new TypeError('replication rows must be an array');
+    const admission = writeAdmission(this.db);
+    const run = async () => {
+      const result = { success: {}, error: [], overwrittenLocalConflicts: [], structuredConflicts: [] };
+      // S5 P0 advance: all collections share the documents object store.
+      // Yield its writer after a bounded quantum and admit local durable writes
+      // before the next quantum, including their WAL/primary commit. The pull
+      // caller still awaits every quantum before advancing its checkpoint;
+      // failed partial batches are safely redelivered by the existing LWW path.
+      try {
+      for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
+        while (admission.localWrites) {
+          await new Promise((done) => admission.localDrained.push(done));
+        }
+        const chunk = await this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+        Object.assign(result.success, chunk.success);
+        result.error.push(...chunk.error);
+        result.overwrittenLocalConflicts.push(...chunk.overwrittenLocalConflicts);
+        result.structuredConflicts.push(...chunk.structuredConflicts);
+        // Let newly arriving command inserts register before another writer
+        // transaction is queued. No local journal or primary commit is skipped.
+        await yieldWriteAdmission();
+      }
+      } catch (error) {
+        // Already committed quanta cannot roll back with a later failed
+        // transaction. Preserve their displaced local versions/quarantines
+        // before retry or teardown; redelivery will see master-origin rows.
+        await this.persistOverwrittenLocalConflicts(result);
+        await this.persistStructuredConflictQuarantine(result);
+        throw error;
+      } finally {
+      if (Object.keys(result.success).length) {
+        this.events.emit('change', { collection: this.name, success: result.success, at: options.now });
+        dispatchStorageChange(this.db.name, this.name, result.success, options.replicationOrigin);
+      }
+      }
+      return result;
+    };
+    const pending = admission.background.then(run, run);
+    admission.background = pending.catch(() => {});
+    return pending;
   }
 
   async runWithQuotaRecovery(operation, context = {}) {

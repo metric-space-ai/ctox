@@ -253,6 +253,31 @@ atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
 the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
+### Local durable write admission — S5-Vorgriff
+
+Every collection shares IndexedDB's `documents` object store. A replication
+batch formerly retained its writer transaction through every sequential get/put;
+even a command's preparatory read waited behind the whole batch, before WAL
+append. This P0 S5-Vorgriff bounds replication-origin transactions to25 rows,
+serializes background writers per database handle, and admits local writes
+through their existing recovery-journal and primary commits before admitting
+the next replication quantum. It applies to local writes without collection
+special cases; transport and command authority are unchanged.
+
+The caller still awaits the entire replication batch before advancing its pull
+checkpoint. A failed batch may have a committed prefix; replay retains the
+existing per-document LWW/conflict checks. Successful batches publish one change
+notification, rather than one per quantum. Local batches retain their existing
+atomic primary transaction and journal-before-primary ordering.
+
+`command-persistence-browser-smoke.mjs` measures20 actual collection inserts
+during10,000 replication-origin upserts over a retained10,000-row browser store,
+requires nearest-rank local-persistence p95 below50ms, and verifies all commands,
+their committed WAL entries and all replicated rows after reopening. It isolates
+the production storage path; it does not certify an installed Owner guest or
+the network transport. Its output attributes time to recovery, preparatory read,
+WAL append, primary write and WAL commit.
+
 ### Native command return scheduling — S5-Vorgriff
 
 This P0 S5-Vorgriff is temporary until S5 supplies separate transport lanes.

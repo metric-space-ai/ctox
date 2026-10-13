@@ -4,8 +4,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
-const root = resolve(testDir, '..');
-const { chromium } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href);
+const root = resolve(process.env.COMMAND_PERSISTENCE_RUNTIME_ROOT || resolve(testDir, '..'));
+const playwrightModule = process.env.PLAYWRIGHT_MODULE_PATH
+  ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE_PATH, 'index.mjs')).href
+  : '../../node_modules/playwright/index.mjs';
+const { chromium } = await import(playwrightModule);
 const server = http.createServer((request, response) => {
   try {
     const path = resolve(root, `.${new URL(request.url, 'http://localhost').pathname}`);
@@ -31,7 +34,7 @@ try {
     };
     const name = `command-persistence-${crypto.randomUUID()}`;
     const db = await createRxDatabase({ name });
-    await db.addCollections({ business_commands: { schema }, fixture_leads: { schema } });
+    await db.addCollections({ business_commands: { schema }, fixture_leads: { schema }, fixture_fault: { schema } });
     const commands = db.business_commands;
     const leads = db.fixture_leads.storageCollection;
     await Promise.all([commands.storageCollection.initializeRecovery(), leads.initializeRecovery()]);
@@ -52,6 +55,8 @@ try {
       };
     }
     const times = [];
+    let replicationChanges = 0;
+    const unsubscribe = leads.observe(() => { replicationChanges += 1; });
     let replicationDone = false;
     const replicationStarted = performance.now();
     const replication = leads.bulkWrite(docs.map((doc) => ({ ...doc, payload: `${doc.payload}updated` })), {
@@ -68,11 +73,47 @@ try {
       times.push(performance.now() - start);
     }));
     await replication;
+    unsubscribe();
     const replicationMs = performance.now() - replicationStarted;
     const batches = await db.storage.recoveryJournal.listBatches('pending', 'business_commands');
     if (batches.length !== 20 || batches.some((batch) => !batch.primaryCommittedAtMs)) {
       throw new Error('insert resolved without a committed recovery journal entry');
     }
+    if (replicationChanges !== 1) throw new Error('transaction slicing amplified replication change notifications');
+    // A rejected local operation must release its admission, so subsequent
+    // replication and commands cannot remain behind a leaked priority lease.
+    let rejected = false;
+    try { await commands.storageCollection.bulkWrite(null); }
+    catch { rejected = true; }
+    if (!rejected) throw new Error('invalid local write was accepted');
+    await leads.bulkUpsert([{ ...docs[0], payload: `${docs[0].payload}updated` }], { replicationOrigin: origin });
+    // A later failed quantum must not discard recoverable local versions
+    // displaced by the already committed prefix. It also releases the
+    // background queue so redelivery can finish the original batch.
+    const fault = db.fixture_fault.storageCollection;
+    await fault.bulkWrite([{ id: 'fault-0', payload: 'offline local edit' }]);
+    const incoming = Array.from({ length: 55 }, (_, index) => ({
+      id: `fault-${index}`, payload: 'master state', _meta: { lwt: Date.now() + 1000 },
+    }));
+    const originalOnce = fault._bulkWriteOnce.bind(fault);
+    let chunkCalls = 0;
+    let prefixEvents = 0;
+    const stopFault = fault.observe(() => { prefixEvents += 1; });
+    fault._bulkWriteOnce = async (...args) => {
+      if (++chunkCalls === 2) throw new Error('injected later replication transaction failure');
+      return originalOnce(...args);
+    };
+    let injectedFailure = false;
+    try { await fault.bulkWrite(incoming, { replicationOrigin: origin }); }
+    catch (error) { injectedFailure = error.message.includes('injected later'); }
+    finally { fault._bulkWriteOnce = originalOnce; }
+    const preserved = await db.storage.recoveryJournal.listConflicts();
+    if (!injectedFailure || prefixEvents !== 1 || !preserved.some((entry) => entry.local?.payload === 'offline local edit')) {
+      throw new Error('failed replication prefix lost its change notification or recoverable local version');
+    }
+    await fault.bulkWrite(incoming, { replicationOrigin: origin });
+    if ((await fault.allDocuments()).length !== 55) throw new Error('replication queue did not recover after failure');
+    stopFault();
     await db.close();
     const reopened = await createRxDatabase({ name });
     await reopened.addCollections({ business_commands: { schema }, fixture_leads: { schema } });
@@ -89,7 +130,8 @@ try {
     return { n: times.length, localPersistenceMs: times, p95Ms: p95(times), phases,
       phaseP95Ms: Object.fromEntries(Object.entries(phases).map(([key, values]) => [key, p95(values)])),
       writesDuringReplication: writesDuringReplication.filter(Boolean).length, replicationMs,
-      durableAfterReopen: persisted.length, replicatedAfterReopen: replicated.length };
+      durableAfterReopen: persisted.length, replicatedAfterReopen: replicated.length,
+      failedPrefixPreserved: injectedFailure && prefixEvents >= 1 };
   });
   console.log(JSON.stringify(result));
   if (process.env.COMMAND_PERSISTENCE_EVIDENCE) writeFileSync(process.env.COMMAND_PERSISTENCE_EVIDENCE, JSON.stringify(result, null, 2));
