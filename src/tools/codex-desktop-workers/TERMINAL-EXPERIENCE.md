@@ -74,9 +74,11 @@ Unscored PRs stay in the complete paginated list with one pending/STOP cell.
 Corrections are evidenced absolute delivered iterations after the first
 review-ready package through merge/close, including private corrections before
 publication and Draft PRs, not percentages or inferred commit/test/rerating/
-score-difference counts. Leaderboards show the mean absolute iteration count over the same PR cohort
-used for scores (11 iterations across 2 PRs = 5.5); the PR list retains each
-individual absolute count. JSON preserves both mean and raw iteration total.
+score-difference counts. Leaderboards show the mean absolute iteration count
+per observed PR (11 iterations across 2 PRs = 5.5). Repeated actor packages on
+one PR require deduplicated correction heads; they cannot inflate its count.
+The PR list retains individual counts. Existing comparative totals remain in
+JSON; observed_rework retains the per-PR sample count and mean.
 Unknown is not zero. Whole-PR totals require explicit
 PR scope or deduplicated complete history; parent/worker counts can overlap.
 A sole actor count does not establish a whole-PR total. Actor event union is

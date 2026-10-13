@@ -481,6 +481,38 @@ def partition_deliveries(records):
     return deliveries, attempts
 
 
+def cohort_iteration_values(records, rows, role, model):
+    """One correction count per PR; overlapping actor packages must not double count."""
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["pr_url"], []).append(row)
+    result = []
+    for url, group in groups.items():
+        if role == "parent":
+            result.append(whole_pr_iterations(records, url))
+            continue
+        counts = [rework_iterations(row, model) for row in group]
+        if len(group) == 1:
+            result.append(counts[0])
+            continue
+        if any(n is None for n in counts):
+            result.append(None)
+            continue
+        heads = set()
+        complete = True
+        for row, count in zip(group, counts):
+            if count == 0:
+                continue
+            events = [e for e in row.get("iteration_evidence", [])
+                      if e.get("kind") == "correction" and e.get("model", model) == model]
+            if len(events) != count or any(not e.get("head") for e in events):
+                complete = False
+                break
+            heads.update(e["head"] for e in events)
+        result.append(len(heads) if complete else None)
+    return result
+
+
 def leaderboard_data(records):
     groups = {}
     seen = set()
@@ -514,7 +546,7 @@ def leaderboard_data(records):
         rework_prs = len({r["pr_url"] for r in rows})
         iteration_total = sum(known_rework) if rows and len(known_rework) == len(rows) else None
         observed_rows = [r for r in independent_rows if any(score(r, s) is not None for s in (("parent_completion",) if historical_parent else ("first", "corrected")))]
-        observed_rework = [whole_pr_iterations(records, r["pr_url"]) if historical_parent else rework_iterations(r, model) for r in observed_rows]
+        observed_rework = cohort_iteration_values(records, observed_rows, role, model)
         result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(independent_rows), comparison_excluded=len(independent_rows)-len(rows),
                            prs=len({r["pr_url"] for r in rows if any(score(r,s) is not None for s in (("parent_completion",) if role == "parent" and rubric == RUBRIC else ("first", "corrected")))}),
                            score=stats(completion),

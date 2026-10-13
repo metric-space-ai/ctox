@@ -45,6 +45,26 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(coverage["roles"]["worker"]["stages"]["corrected"]["n"], 1)
         self.assertEqual(coverage["roles"]["parent"]["stages"]["parent_completion"]["n"], 1)
 
+    def test_overlapping_worker_packages_count_each_correction_once_per_pr(self):
+        a = self.worker("same-pr", 4, 8)
+        b = self.worker("same-pr", 5, 8)
+        a["actor_id"], b["actor_id"] = "one", "two"
+        for row in (a, b):
+            row["rework_iterations"] = 1
+            row["iteration_evidence"] = [dict(kind="correction", head="same-push")]
+        board = report.leaderboard_data([a, b])[0]
+        self.assertEqual(board["observed_prs"], 1)
+        self.assertEqual(board["observed_rework"]["denominator"], 1)
+        self.assertEqual(board["observed_rework"]["mean"], 1)
+
+    def test_overlapping_counts_without_event_proof_do_not_create_a_mean(self):
+        a = self.worker("same-pr", 4, 8)
+        b = self.worker("same-pr", 5, 8)
+        a["actor_id"], b["actor_id"] = "one", "two"
+        a["rework_iterations"] = b["rework_iterations"] = 1
+        board = report.leaderboard_data([a, b])[0]
+        self.assertIsNone(board["observed_rework"]["mean"])
+
 if __name__ == "__main__":
     unittest.main()
 
