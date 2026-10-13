@@ -170,6 +170,9 @@ fn maybe_lease_next_durable_queue_prompt(
         if app_queue_lease_active && business_os_queue_task_is_app_module(&task) {
             continue;
         }
+        if serial_slot_leaves_task_to_business_pool(root, &task) {
+            continue;
+        }
         if appsec_pipeline_queue_task_state_dir(root, &task)?.is_some() {
             continue;
         }

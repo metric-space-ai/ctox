@@ -102,13 +102,19 @@ pub(super) fn execute(
             "Luma operation is outside this managed client scope"
         );
     }
+    // Gateway metadata is already resolved in context; it is not a Luma field.
+    // Keep deny_unknown_fields for every other caller-supplied property.
+    let mut request_args = args.clone();
+    if let Some(object) = request_args.as_object_mut() {
+        object.remove("_context");
+    }
     match tool_name {
         READ_TOOL => {
-            let _: ReadRequest = serde_json::from_value(args.clone())
+            let _: ReadRequest = serde_json::from_value(request_args.clone())
                 .context("invalid Luma configuration read request")?;
             read(root, context)
         }
-        WRITE_TOOL => save(root, context, args),
+        WRITE_TOOL => save(root, context, &request_args),
         _ => anyhow::bail!("unsupported Luma configuration tool"),
     }
 }
@@ -297,6 +303,93 @@ mod tests {
         assert_eq!(
             call_tool_inner(root.path(), READ_TOOL, json!({}), Some(&gateway))?["revision"],
             0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_gateway_luma_frames_keep_strict_arguments_and_scope() -> anyhow::Result<()> {
+        let root = fixture()?;
+        let gateway = json!({
+            "auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
+            "surface":"workjet","actor":"owner","role":"chef","workspace":"tenant:instance",
+            "instance_id":"source-instance",
+            "managed_policy":{"allowReads":true,"allowWrites":true,
+                "allowedCollections":[COLLECTION],"allowedTools":[READ_TOOL,WRITE_TOOL]}
+        });
+        let invoke = |tool: &str, arguments: Value, context: &Value| -> Value {
+            let envelope = json!({
+                "type":"mcp_request","request_id":"luma-gateway",
+                "context":context,"body":json!({
+                    "jsonrpc":"2.0","id":1,"method":"tools/call",
+                    "params":{"name":tool,"arguments":arguments}
+                }).to_string()
+            });
+            let response: Value =
+                serde_json::from_str(&handle_gateway_message(root.path(), &envelope.to_string()))
+                    .unwrap();
+            serde_json::from_str(response["body"].as_str().unwrap()).unwrap()
+        };
+        let decode = |response: Value| -> anyhow::Result<Value> {
+            anyhow::ensure!(
+                response.get("error").is_none(),
+                "gateway Luma failed: {response}"
+            );
+            Ok(serde_json::from_str(
+                response["result"]["content"][0]["text"].as_str().unwrap(),
+            )?)
+        };
+        assert_eq!(
+            decode(invoke(READ_TOOL, json!({}), &gateway))?["revision"],
+            0
+        );
+        let saved = decode(invoke(
+            WRITE_TOOL,
+            json!({
+                "expected_revision":0,"configuration":{"managedSystemPrompt":"Instance instructions"}
+            }),
+            &gateway,
+        ))?;
+        assert_eq!(saved["revision"], 1);
+        assert_eq!(
+            decode(invoke(
+                READ_TOOL,
+                json!({
+                    "_context":{"actor":"foreign","role":"chef"}
+                }),
+                &gateway
+            ))?["configuration"]["managedSystemPrompt"],
+            "Instance instructions"
+        );
+        assert!(invoke(READ_TOOL, json!({"unexpected":true}), &gateway)
+            .get("error")
+            .is_some());
+        assert!(invoke(
+            WRITE_TOOL,
+            json!({
+                "expected_revision":1,"configuration":{},"unexpected":true
+            }),
+            &gateway
+        )
+        .get("error")
+        .is_some());
+        let mut denied = gateway.clone();
+        denied["managed_policy"]["allowedCollections"] = json!(["__ctox_no_access__"]);
+        assert!(invoke(READ_TOOL, json!({}), &denied).get("error").is_some());
+        let mut readonly = gateway.clone();
+        readonly["managed_policy"]["allowWrites"] = json!(false);
+        assert!(invoke(
+            WRITE_TOOL,
+            json!({
+                "expected_revision":1,"configuration":{}
+            }),
+            &readonly
+        )
+        .get("error")
+        .is_some());
+        assert_eq!(
+            decode(invoke(READ_TOOL, json!({}), &gateway))?["revision"],
+            1
         );
         Ok(())
     }

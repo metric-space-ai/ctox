@@ -196,6 +196,12 @@ const nativeBusinessOsSqlitePath = path.join(runtimeRoot, 'runtime/business-os.s
 // it produced a silent 404 boot and a misleading timeout 30s later.
 const pagePath = process.env.SMOKE_PAGE_PATH || '/index.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
+const syncV3Rtt = process.argv.find(arg => arg.startsWith('--sync-v3-relay-rtt='));
+const syncV3Probe = smokeMode === 'sync-v3-scale-relay'
+  ? require('../../../../scripts/sync-v3/native-scale-probe.cjs') : null;
+if (syncV3Probe && (!syncV3Rtt || ![0, 300, 600].includes(Number(syncV3Rtt.split('=')[1])))) {
+  throw new Error('S0 scale mode requires --sync-v3-relay-rtt=0|300|600');
+}
 const nativeSymbolPerf = process.argv.find(arg => arg.startsWith('--native-symbol-perf='))?.slice('--native-symbol-perf='.length) || '';
 if (nativeSymbolPerf && (smokeMode !== 'business-os-threads-rightclick-ui' || !smokeProcessLifecyclePath)) {
   throw new Error('native symbol profiling requires the isolated context fixture and a process evidence path');
@@ -331,6 +337,7 @@ function createCodingAgentSmokeConfig(mode) {
 }
 
 const supportedSmokeModes = [
+  'sync-v3-scale-relay',
   'browser-to-rust',
   'rust-to-browser',
   'presence-merge-two-browsers',
@@ -395,6 +402,7 @@ if (!supportedSmokeModes.includes(smokeMode)) {
   throw new Error(`Unsupported SMOKE_MODE=${smokeMode}`);
 }
 if ([
+  'sync-v3-scale-relay',
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
@@ -2190,7 +2198,9 @@ async function startExternalSignalingServer() {
   setSmokeStartupPhase('signaling-start');
   const script = path.join(root, 'src/core/rxdb/tools/local_signaling_server.js');
   const startupWaitMs = Number(process.env.SMOKE_SIGNALING_START_WAIT_MS || '20000');
-  const child = trackSmokeChild(spawn(process.execPath, [script, String(signalingPort)], {
+  const relayArgs = syncV3Probe ? [syncV3Rtt,
+    `--sync-v3-relay-evidence=${path.join(runtimeRoot, 'sync-v3-relay.json')}`] : [];
+  const child = trackSmokeChild(spawn(process.execPath, [script, String(signalingPort), ...relayArgs], {
     cwd: root,
     env: {
       ...process.env,
@@ -4148,7 +4158,12 @@ function staleRustSeedChunkGeneration(seed) {
 }
 
 async function stopChild(child) {
-  if (child?.__ctoxNativeSymbolProfile) await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+  if (child?.__ctoxNativeSymbolProfile) {
+    await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
+    // Retain an observation after perf closed, while the owned native child
+    // is still alive. The periodic tick alone may miss this short interval.
+    child.__ctoxNativeCpuProfile?.sample?.();
+  }
   if (!child || child.exitCode !== null) return;
   terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
@@ -4162,6 +4177,21 @@ async function stopChild(child) {
       clearTimeout(timer);
       resolve();
     });
+  });
+}
+
+function startReadyCtoxSymbolProfile(child) {
+  if (!nativeSymbolPerf) return;
+  // --no-inherit samples only threads present at attachment. Native peer
+  // readiness must precede this call so its worker pools are included.
+  child.__ctoxNativeCpuProfile?.sample?.();
+  child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
+    outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
+    perfExecutable: nativeSymbolPerf,
+    delayMs: 0,
+  }, {
+    spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
+    signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
   });
 }
 
@@ -4188,18 +4218,9 @@ function startCtoxServer() {
     stdio: ['ignore', 'pipe', 'pipe'],
   }), 'ctox-business-os');
   if (smokeProcessLifecyclePath) {
-    startNativeCpuProfile(child, {
+    child.__ctoxNativeCpuProfile = startNativeCpuProfile(child, {
       outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
       phase: () => smokeProcessLifecycle.startupPhase,
-    });
-  }
-  if (nativeSymbolPerf) {
-    child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
-      outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
-      perfExecutable: nativeSymbolPerf,
-    }, {
-      spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
-      signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
     });
   }
   let resolveListening;
@@ -4389,6 +4410,7 @@ function ensureCtoxSmokeBinary() {
   const uiCatalogFixture = smokeMode === 'business-os-ui-regression'
     ? require('./business_os_ui_catalog_fixture.js').prepareUiCatalogFixture(root, runtimeRoot)
     : null;
+  const syncV3Fixture = syncV3Probe ? await syncV3Probe.seed(runtimeRoot, sqlite) : null;
   let ctox = startCtoxServer();
   const browserDiagnostics = {
     warnings: 0,
@@ -4456,6 +4478,7 @@ function ensureCtoxSmokeBinary() {
     if (!config.native_rxdb_peer_available) {
       throw new Error(`native peer unavailable: ${JSON.stringify(config)}`);
     }
+    startReadyCtoxSymbolProfile(ctox);
     if (smokeMode === 'business-os-sellify-scale-ui') {
       outerPhaseTimings.sellifyScaleSeedMs = sellifyScaleSeedMs;
     }
@@ -4479,6 +4502,7 @@ function ensureCtoxSmokeBinary() {
       };
     }
     browser = await chromium.launchPersistentContext(browserUserDataDir, chromiumLaunchOptions());
+    if (syncV3Probe) await syncV3Probe.install(browser);
     if (smokeMode === 'business-os-client-lifecycle-ui') {
       await browser.addInitScript(() => {
         const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
@@ -4520,6 +4544,7 @@ function ensureCtoxSmokeBinary() {
       });
     }
     const page = await browser.newPage();
+    if (syncV3Probe) await syncV3Probe.observe(page, globalThis.__ctoxProcess.pid, `http://127.0.0.1:${businessPort}`);
     if (
       smokeMode === 'business-os-app-release-ui'
       || smokeMode === 'business-os-agent-scope-ui'
@@ -4752,6 +4777,7 @@ function ensureCtoxSmokeBinary() {
       }
       browserDiagnostics.smokeHookWaitMs = Date.now() - smokeHookWaitStartedAt;
       outerPhaseTimings.smokeHookWaitMs = browserDiagnostics.smokeHookWaitMs;
+      if (syncV3Probe) await page.evaluate(() => globalThis.__syncV3Trace.mark('smoke-hook'));
       if (startupState) {
         throw new Error(`Business OS smoke hook did not initialize: ${JSON.stringify(startupState, null, 2)}`);
       }
@@ -5442,6 +5468,7 @@ function ensureCtoxSmokeBinary() {
             requiredCollections: startupRequiredCollections,
           });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
+      if (syncV3Probe) await page.evaluate(() => globalThis.__syncV3Trace.mark('health-ready'));
       if (smokeMode !== 'business-os-sellify-scale-ui' && !advancedStatus?.ok) {
         throw new Error(`Business OS advanced status unhealthy after startup: ${JSON.stringify(advancedStatus, null, 2)}`);
       }
@@ -7750,7 +7777,9 @@ function ensureCtoxSmokeBinary() {
     const browserEvaluationTarget = smokeMode === 'business-os-sellify-scale-ui'
       ? sellifyScaleStateHandle
       : page;
-    const result = smokeMode === 'presence-merge-two-browsers'
+    const result = syncV3Probe
+      ? await syncV3Probe.run(page, sqlite, runtimeRoot, Number(syncV3Rtt.split('=')[1]), syncV3Fixture)
+      : smokeMode === 'presence-merge-two-browsers'
       ? await runPresenceMergeTwoBrowsersMode(page)
       : smokeMode === 'concurrent-writers-convergence-browser-to-rust'
       ? await runConcurrentWritersConvergenceMode(page)
@@ -8476,7 +8505,7 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
               }
               if (payload === null || payload !== expectedContent || !metadataFresh) {
                 mismatched.push({
@@ -16981,7 +17010,9 @@ function ensureCtoxSmokeBinary() {
       result.screenshotEvidence = await captureBusinessOsVisualScreenshotEvidence(page);
     }
 
-    if (result.mode === 'critical-browser-reload-timing') {
+    if (result.mode === 'sync-v3-scale-relay') {
+      console.log(`sync_v3_scale_result=${JSON.stringify(result)}`);
+    } else if (result.mode === 'critical-browser-reload-timing') {
       console.log(`critical_browser_reload_passed=${result.report.sampleCount}`);
     } else if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-stress-rust-to-browser'

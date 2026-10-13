@@ -7642,7 +7642,11 @@ fn start_prompt_worker(
                             && business_os_app_validation_may_own_completion(&job);
                         app_validation_rework = false;
                         app_validation_terminal_failure = false;
-                        let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
+                        let expected_artifact_refs = resolve_founder_execution_thread_refs(
+                            &root,
+                            &job,
+                            expected_outcome_artifacts_for_job(&job),
+                        );
                         let gap_closure_witness_feedback =
                             match person_research_gap_closure_witness_feedback(&root, &job) {
                                 Ok(feedback) => feedback,
@@ -11983,6 +11987,13 @@ fn configure_business_os_mcp_session_for_queue_job(
 ) -> Result<bool> {
     let Some(command_id) = metadata_string(&job.queue_task_metadata, "business_os_command_id")
     else {
+        if let Some(token) = issue_communication_session_for_mail_job(root, job)? {
+            options.disable_mcp_servers = false;
+            options.enable_business_os_mcp = true;
+            options.business_os_mcp_command_session = Some(token);
+            options.force_isolated_session = true;
+            return Ok(true);
+        }
         if job.leased_message_keys.len() != 1
             || !job.leased_message_keys[0].starts_with("plan:system::")
         {
@@ -12132,6 +12143,92 @@ fn configure_business_os_mcp_session_for_queue_job(
     options.business_os_mcp_command_session = Some(token);
     options.force_isolated_session = true;
     Ok(true)
+}
+
+/// A mail turn from the owner, a founder or an admin acts as the sender's
+/// Business OS user for the few actions a mail may start (lead import).
+/// The sender role comes from the From address, which anyone can forge, so a
+/// session also needs the receiving server's own DMARC/DKIM pass for the From
+/// domain (`communication::sender_authentication`, security review
+/// 10.10.2026). Ordinary mail, unauthenticated mail and mails without an
+/// active Business OS user get no session.
+fn issue_communication_session_for_mail_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    let Some(sender_role) = job
+        .source_label
+        .strip_prefix("email:")
+        .filter(|role| matches!(*role, "owner" | "founder" | "admin"))
+    else {
+        return Ok(None);
+    };
+    let (Some(inbound_key), Some(lease_key)) = (
+        inbound_email_reply_message_key(job),
+        job.leased_message_keys.first(),
+    ) else {
+        return Ok(None);
+    };
+    let Some((sender_address, authentication_results)) =
+        inbound_email_sender_authentication(root, inbound_key)?
+    else {
+        return Ok(None);
+    };
+    let trusted_authserv_ids = crate::communication::sender_authentication::trusted_authserv_ids(
+        &runtime_env::env_or_config(
+            root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+        )
+        .unwrap_or_default(),
+    );
+    if !crate::communication::sender_authentication::sender_domain_authenticated(
+        &authentication_results,
+        &trusted_authserv_ids,
+        &sender_address,
+    ) {
+        return Ok(None);
+    }
+    let workspace = job
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("communication");
+    crate::business_os::mcp_channel::issue_internal_communication_session_token(
+        root,
+        inbound_key,
+        lease_key,
+        sender_role,
+        &sender_address,
+        workspace,
+    )
+}
+
+/// Sender address and the `Authentication-Results` headers stored at intake.
+fn inbound_email_sender_authentication(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<Option<(String, Vec<String>)>> {
+    let conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+    let Some((address, metadata_json)) = conn
+        .query_row(
+            "SELECT sender_address, metadata_json FROM communication_messages WHERE message_key = ?1 AND channel = 'email' AND direction = 'inbound' LIMIT 1",
+            params![inbound_message_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let address = address.trim().to_ascii_lowercase();
+    if address.is_empty() {
+        return Ok(None);
+    }
+    let results = serde_json::from_str::<Value>(&metadata_json)
+        .ok()
+        .and_then(|metadata| metadata.get("authenticationResults").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    Ok(Some((address, results)))
 }
 
 fn queue_job_reuses_persistent_session(options: &turn_loop::ChatTurnSessionOptions) -> bool {
@@ -12474,6 +12571,37 @@ struct SpreadsheetAttachmentEvidence {
 const REVIEW_ATTACHMENT_PREVIEW_ROWS: usize = 25;
 const REVIEW_ATTACHMENT_PREVIEW_CHARS: usize = 3000;
 
+/// Records created for exactly this mail (lead import with its key). They let
+/// a mail turn state started work and results, and let the review check them.
+fn mail_order_records_block(root: &Path, inbound_message_key: &str) -> String {
+    crate::business_os::outbound_lead_import::records_for_source_message(root, inbound_message_key)
+        .map(|records| crate::business_os::outbound_lead_import::render_records_for_mail(&records))
+        .unwrap_or_default()
+}
+
+fn mail_order_review_evidence(root: &Path, inbound_message_key: &str) -> Vec<String> {
+    crate::business_os::outbound_lead_import::records_for_source_message(root, inbound_message_key)
+        .unwrap_or_default()
+        .iter()
+        .map(|record| {
+            let finished = if crate::business_os::outbound_lead_import::research_finished(record) {
+                " Its research run has ENDED and its results are in the record (some fields may be open): a reply that says the research is still running or that results will follow later contradicts it and must be rejected; the reply must report the results and name open fields as open."
+            } else {
+                ""
+            };
+            format!(
+                "Order record for this mail: Outbound lead `{}` ({}), research_status `{}`, validation_status `{}`, {} evidence entries; command `{}`.{finished}",
+                record["name"].as_str().unwrap_or("?"),
+                record["id"].as_str().unwrap_or("?"),
+                record["research_status"].as_str().unwrap_or("-"),
+                record["validation_status"].as_str().unwrap_or("-"),
+                record["evidence"].as_array().map(Vec::len).unwrap_or(0),
+                record["command_id"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect()
+}
+
 /// The files of the mail a reply answers. Same-thread evidence shows only
 /// subject and preview, so a review approved a reply to an Excel request that
 /// named three unrelated companies (10.10.2026). Spreadsheets and text files
@@ -12658,6 +12786,11 @@ fn collect_review_evidence_summaries(
     }
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
     evidence.extend(inbound_attachment_review_evidence(root, job));
+    if let Some(inbound_key) = inbound_email_reply_message_key(job)
+        .or_else(|| founder_communication_rework_inbound_key(job))
+    {
+        evidence.extend(mail_order_review_evidence(root, inbound_key));
+    }
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
     evidence.extend(review_external_work_backing_evidence_summaries(root, job));
@@ -13989,6 +14122,7 @@ fn delivered_outcome_artifacts_for_job(
     }
     let conn = channels::open_channel_db(&crate::paths::core_db(&root))?;
     let fresh_cutoff = workspace_artifact_fresh_cutoff_for_job(root, job);
+    let email_lease_cutoff = inbound_email_lease_cutoff(&conn, job)?;
     let mut delivered = Vec::new();
     for expected in expected_artifact_refs {
         if expected.kind == ArtifactKind::WorkspaceFile {
@@ -14049,36 +14183,19 @@ fn delivered_outcome_artifacts_for_job(
             continue;
         }
         let message_key = if let Some(thread_key) = expected.primary_key.strip_prefix("thread:") {
-            conn.query_row(
-                r#"
-                SELECT message_key
-                FROM communication_messages
-                WHERE channel = 'email'
-                  AND direction = 'outbound'
-                  AND thread_key = ?1
-                  AND status = ?2
-                ORDER BY observed_at DESC
-                LIMIT 1
-                "#,
-                params![thread_key, expected.expected_terminal_state.as_str()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
+            newest_outbound_email_since(
+                &conn,
+                Some(thread_key),
+                expected.expected_terminal_state.as_str(),
+                email_lease_cutoff,
+            )?
         } else if expected.primary_key == "*" {
-            conn.query_row(
-                r#"
-                SELECT message_key
-                FROM communication_messages
-                WHERE channel = 'email'
-                  AND direction = 'outbound'
-                  AND status = ?1
-                ORDER BY observed_at DESC
-                LIMIT 1
-                "#,
-                params![expected.expected_terminal_state.as_str()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
+            newest_outbound_email_since(
+                &conn,
+                None,
+                expected.expected_terminal_state.as_str(),
+                email_lease_cutoff,
+            )?
         } else {
             conn.query_row(
                 r#"
@@ -14107,8 +14224,73 @@ fn delivered_outcome_artifacts_for_job(
     Ok(delivered)
 }
 
+/// When the job's leased inbound mails were leased for this attempt. A reply
+/// in their thread only proves this attempt's outcome when it was recorded
+/// after that lease: a mail thread can already hold earlier replies (thesen
+/// 11.10.2026: four), and an earlier reply must not close a new attempt whose
+/// own reply never went out.
+fn inbound_email_lease_cutoff(conn: &Connection, job: &QueuedPrompt) -> Result<Option<SystemTime>> {
+    let mut cutoff: Option<SystemTime> = None;
+    for message_key in job
+        .leased_message_keys
+        .iter()
+        .filter(|key| key.starts_with("email:"))
+    {
+        let leased_at: Option<String> = conn
+            .query_row(
+                "SELECT leased_at FROM communication_routing_state WHERE message_key = ?1",
+                params![message_key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(time) = leased_at.as_deref().and_then(parse_rfc3339_system_time) {
+            if cutoff.map_or(true, |current| time > current) {
+                cutoff = Some(time);
+            }
+        }
+    }
+    Ok(cutoff)
+}
+
+/// The newest outbound email in `status` (optionally in one thread) recorded
+/// at or after `since`.
+fn newest_outbound_email_since(
+    conn: &Connection,
+    thread_key: Option<&str>,
+    status: &str,
+    since: Option<SystemTime>,
+) -> Result<Option<String>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT message_key, observed_at
+        FROM communication_messages
+        WHERE channel = 'email'
+          AND direction = 'outbound'
+          AND (?1 IS NULL OR thread_key = ?1)
+          AND status = ?2
+        ORDER BY observed_at DESC
+        LIMIT 50
+        "#,
+    )?;
+    let rows = statement.query_map(params![thread_key, status], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (message_key, observed_at) = row?;
+        let recent_enough = since.map_or(true, |since| {
+            parse_rfc3339_system_time(&observed_at).is_some_and(|observed| observed >= since)
+        });
+        if recent_enough {
+            return Ok(Some(message_key));
+        }
+    }
+    Ok(None)
+}
+
 fn worker_attempt_artifact_recheck_details(root: &Path, job: &QueuedPrompt) -> String {
-    let expected = expected_outcome_artifacts_for_job(job);
+    let expected =
+        resolve_founder_execution_thread_refs(root, job, expected_outcome_artifacts_for_job(job));
     match delivered_outcome_artifacts_for_job(root, job, &expected) {
         Ok(delivered) => serde_json::json!({
             "expected_count": expected.len(),
@@ -14732,6 +14914,61 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
 
 fn outcome_thread_artifact_key(thread_key: &str) -> String {
     format!("thread:{}", thread_key.trim())
+}
+
+/// Owner, founder and admin mail jobs run under an isolated execution thread
+/// (`email-review:<role>:<digest>`, see `isolated_founder_email_thread_key`),
+/// but their reviewed reply goes to the mail's own thread. The outcome witness
+/// looked for the reply in the execution thread, never found it, and failed
+/// every such reply after it was sent; the route then fell back to pending
+/// (thesen 11.10.2026, three times). An expected reply in that execution
+/// thread is mapped to the leased inbound mail's thread, but only when the
+/// execution thread was derived from exactly that mail thread.
+fn resolve_founder_execution_thread_refs(
+    root: &Path,
+    job: &QueuedPrompt,
+    refs: Vec<ArtifactRef>,
+) -> Vec<ArtifactRef> {
+    let Some(inbound_key) = inbound_email_reply_message_key(job) else {
+        return refs;
+    };
+    let mail_thread = channels::open_channel_db(&crate::paths::core_db(root))
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT thread_key FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+                params![inbound_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+        })
+        .filter(|thread| !thread.trim().is_empty());
+    let Some(mail_thread) = mail_thread else {
+        return refs;
+    };
+    refs.into_iter()
+        .map(|mut artifact| {
+            let derived_from_mail_thread = artifact.kind == ArtifactKind::OutboundEmail
+                && artifact
+                    .primary_key
+                    .strip_prefix("thread:")
+                    .and_then(|thread| thread.strip_prefix("email-review:"))
+                    .and_then(|rest| rest.split_once(':'))
+                    .is_some_and(|(role, _)| {
+                        artifact.primary_key
+                            == outcome_thread_artifact_key(&isolated_founder_email_thread_key(
+                                &mail_thread,
+                                role,
+                            ))
+                    });
+            if derived_from_mail_thread {
+                artifact.primary_key = outcome_thread_artifact_key(&mail_thread);
+            }
+            artifact
+        })
+        .collect()
 }
 
 fn prompt_declares_reviewed_founder_send(prompt: &str) -> bool {
@@ -17141,39 +17378,14 @@ fn should_skip_idle_channel_router_tick(root: &Path, settings: &BTreeMap<String,
     let source_stamp = channel_router_source_stamp(root);
     let now = Instant::now();
     let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-    let unchanged_elapsed = {
-        let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(previous) = guard.as_ref() else {
-            return false;
-        };
-        if !channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now) {
-            return false;
-        }
-        now.duration_since(previous.last_idle_pass)
-    };
-    if unchanged_elapsed < Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS) {
-        return true;
-    }
-    if channels::pending_queue_task_count_uncached(root)
-        .map(|count| count > 0)
-        .unwrap_or(false)
-    {
-        let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if guard
-            .as_ref()
-            .is_some_and(|previous| previous.root == root_path)
-        {
-            *guard = None;
-        }
+    let guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(previous) = guard.as_ref() else {
         return false;
-    }
-    // Keep the expensive full router asleep while still bounding the cheap
-    // durable-queue safety check. This avoids an eight-second idle DB poll.
-    let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(previous) = guard.as_mut().filter(|previous| previous.root == root_path) {
-        previous.last_idle_pass = now;
-    }
-    true
+    };
+    // Unchanged state expires after one hour in the gate matcher. A second
+    // durable-queue poll at that same deadline is unreachable and would reopen
+    // SQLite unnecessarily if moved back to the old 30-second interval.
+    channel_router_idle_gate_matches(previous, &root_path, &source_stamp, settings, now)
 }
 
 fn mark_idle_channel_router_pass(root: &Path, settings: &BTreeMap<String, String>) {
@@ -17319,6 +17531,15 @@ fn route_external_messages_with_priority_dispatch(
     // Keep it before every router early-return so an ongoing turn, a ready
     // prompt, idle preflight or queue pressure cannot starve the hourly refresh.
     // A maintenance failure must not suppress the existing communication path.
+    if let Err(error) = crate::business_os::mcp_channel::resume_jour_fixe_narration(root) {
+        push_event(
+            state,
+            format!(
+                "Jour fixe narration deferred: {}",
+                clip_text(&error.to_string(), 180)
+            ),
+        );
+    }
     if let Err(error) = crate::business_os::refresh_due_workjet_project_kpis(root) {
         push_event(
             state,
@@ -19480,6 +19701,10 @@ fn render_founder_rework_prompt(
     let attachments = load_inbound_email_metadata(root, inbound_message_key)
         .map(|metadata| render_inbound_attachments(&metadata))
         .unwrap_or_default();
+    let attachments = format!(
+        "{attachments}{}",
+        mail_order_records_block(root, inbound_message_key)
+    );
     let title = subject.trim();
     let title_line = if title.is_empty() {
         String::new()
@@ -20195,6 +20420,12 @@ fn founder_thread_has_later_reviewed_send(
     root: &Path,
     message: &channels::RoutedInboundMessage,
 ) -> Result<bool> {
+    // A review that reopened this mail after its own reply asks for a
+    // correction of that reply; the reply must not supersede the mail it
+    // answered (thesen 11.10.2026).
+    if channels::founder_reply_reopened_by_review_for_message(root, &message.message_key)? {
+        return Ok(false);
+    }
     if message.thread_key.trim().is_empty() || message.external_created_at.trim().is_empty() {
         return Ok(false);
     }
@@ -20223,6 +20454,12 @@ fn founder_subject_has_later_reviewed_send_to_sender(
     root: &Path,
     message: &channels::RoutedInboundMessage,
 ) -> Result<bool> {
+    // A review that reopened this mail after its own reply asks for a
+    // correction of that reply; the reply must not supersede the mail it
+    // answered (thesen 11.10.2026).
+    if channels::founder_reply_reopened_by_review_for_message(root, &message.message_key)? {
+        return Ok(false);
+    }
     let sender = message.sender_address.trim().to_ascii_lowercase();
     if sender.is_empty()
         || message.subject.trim().is_empty()
@@ -23450,7 +23687,10 @@ fn enrich_inbound_prompt(
             message.sender_address.trim()
         };
         let authority = render_email_sender_authority(&policy);
-        let attachments = render_inbound_attachments(&message.metadata);
+        let mut attachments = render_inbound_attachments(&message.metadata);
+        if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
+            attachments.push_str(&mail_order_records_block(root, &message.message_key));
+        }
         let communication_contract = render_email_context_contract(root, message);
         let reply_instruction = if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
             "Wenn eine Antwort sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle stattdessen nur den empfaengerorientierten Antwortentwurf auf Basis des gesamten Founder-/Owner-Kontexts; Founder-/Owner-Outbound darf nur ueber den dedizierten reviewed communication path rausgehen. Dein gesamter Assistenten-Output in diesem Run ist exakt der zu versendende Mailtext und sonst nichts: keine Analyse, keine Revalidierungsnotizen, keine Queue-/Review-/Runtime-Sprache, keine Host-Pfade, keine Tool-Evidenz. Beantworte die neueste Founder-/Owner-Nachricht direkt; wenn konkrete Deliverables oder Links bereits vorhanden sind, liefere sie unmittelbar in der Mail. Wenn ein konkreter Anhang verlangt ist (zum Beispiel QR-Code-PDF, Installationsdatei oder Mockup-Datei), darfst du ihn nicht durch einen oeffentlichen Link ersetzen. Wenn etwas objektiv noch fehlt, benenne nur den fehlenden Punkt kurz und klar statt internen Status zu berichten.".to_string()
@@ -38277,6 +38517,71 @@ Business OS command:
             inbound_attachment_readable_roots(&leased.queue_task_metadata),
             vec![attachment_path.parent().unwrap().to_path_buf()]
         );
+
+        // The rework may act on Business OS as the sender (lead import from
+        // the Excel); a sender without a Business OS user gets no session.
+        let mut options = chat_turn_session_options_for_queue_job(&leased);
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure without business user")
+        );
+        assert!(options.business_os_mcp_command_session.is_none());
+        crate::business_os::store::open_store(&root)
+            .expect("open business store")
+            .execute(
+                "INSERT INTO business_users (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+                 VALUES ('owner@example.test', 'Owner', 'founder', 1, 1, 1)",
+                [],
+            )
+            .expect("seed sender");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "INSERT INTO communication_routing_state (message_key, route_status, updated_at)
+                 VALUES (?1, 'review_rework', '2026-10-10T00:00:00Z')
+                 ON CONFLICT(message_key) DO UPDATE SET route_status = 'review_rework'",
+                [inbound_key],
+            )
+            .expect("mail waits in rework");
+        // The From address alone is forgeable: without the receiving
+        // server's own pass for the From domain there is no session.
+        assert!(
+            !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure unauthenticated mail")
+        );
+        runtime_env::set_runtime_env_value(
+            &root,
+            crate::communication::sender_authentication::TRUSTED_AUTHSERV_IDS_KEY,
+            "mx.example.test",
+        )
+        .expect("trust the receiving server");
+        channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("open channel db")
+            .execute(
+                "UPDATE communication_messages
+                 SET metadata_json = json_set(metadata_json, '$.authenticationResults',
+                     json_array('mx.example.test; dkim=pass header.d=example.test; dmarc=pass action=none header.from=example.test'))
+                 WHERE message_key = ?1",
+                [inbound_key],
+            )
+            .expect("store the server's pass");
+        assert!(
+            configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
+                .expect("configure mail session")
+        );
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let trusted = crate::business_os::mcp_channel::verify_internal_command_session_token(
+            &root,
+            options
+                .business_os_mcp_command_session
+                .as_deref()
+                .expect("mail session token"),
+        )
+        .expect("live mail session");
+        assert_eq!(trusted["actor"], "owner@example.test");
+        assert_eq!(trusted["role"], "founder");
+        assert_eq!(trusted["communication_session"], true);
     }
 
     #[test]
@@ -44027,7 +44332,7 @@ Use shell tools to create or update these files."
     #[test]
     fn idle_router_safety_poll_reopens_for_pending_durable_queue() {
         let root = temp_root("ctox-idle-router-pending-safety-poll");
-        channels::create_queue_task(
+        let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Pending safety-poll work".to_string(),
@@ -44044,23 +44349,54 @@ Use shell tools to create or update these files."
         .expect("create pending queue task");
         let settings = BTreeMap::new();
         mark_idle_channel_router_pass(&root, &settings);
-        {
-            let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.as_mut().expect("idle router gate").last_idle_pass = Instant::now()
-                - Duration::from_secs(CHANNEL_ROUTER_DURABLE_QUEUE_SAFETY_POLL_SECS + 1);
+        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
+        let db_path = crate::paths::core_db(&root);
+
+        for idle_seconds in [31, 3599] {
+            {
+                let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                guard.as_mut().expect("idle router gate").last_idle_pass =
+                    Instant::now() - Duration::from_secs(idle_seconds);
+            }
+            channels::reset_channel_db_open_count_for_tests(&db_path);
+            assert!(
+                should_skip_idle_channel_router_tick(&root, &settings),
+                "unchanged state must stay asleep before the hourly safety deadline"
+            );
+            assert_eq!(
+                channels::channel_db_open_count_for_tests(&db_path),
+                0,
+                "unchanged idle checks must not reopen SQLite to poll durable work"
+            );
         }
 
+        {
+            let mut guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let previous = guard.as_mut().expect("idle router gate");
+            let now = Instant::now();
+            previous.last_idle_pass = now - Duration::from_secs(3600);
+            assert!(
+                !channel_router_idle_gate_matches(
+                    previous,
+                    &root,
+                    &previous.source_stamp,
+                    &settings,
+                    now,
+                ),
+                "the unchanged gate must expire exactly at the hourly deadline"
+            );
+        }
         assert!(
             !should_skip_idle_channel_router_tick(&root, &settings),
-            "pending durable work must wake an unchanged idle router after the bounded safety poll"
+            "pending durable work must reopen the router at the hourly safety deadline"
         );
-        let gate = CHANNEL_ROUTER_IDLE_GATE.get_or_init(|| Mutex::new(None));
-        assert!(
-            gate.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_none(),
-            "the stale idle gate must be cleared before durable dispatch"
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("expired idle gate must allow routing");
+        assert_eq!(
+            route_status_for(&root, &task.message_key),
+            "leased",
+            "the expired gate must allow real durable dispatch without a separate safety poll"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -47469,6 +47805,129 @@ Was jetzt zu tun ist:\n\
         assert_eq!(refs[0].kind, ArtifactKind::OutboundEmail);
         assert_eq!(refs[0].primary_key, "thread:thread:julia");
         assert_eq!(refs[0].expected_terminal_state, "accepted");
+    }
+
+    #[test]
+    fn reviewed_owner_reply_in_the_mail_thread_satisfies_the_outcome_witness() {
+        // thesen 11.10.2026: the owner-mail job ran under its isolated
+        // execution thread; the witness looked for the sent reply there and
+        // failed three reviewed, sent replies, so the route fell back to
+        // pending and the mail risked a second reply.
+        let root = temp_root("owner-reply-execution-thread");
+        let inbound_key = "email:lena@example.test::inbox::recherche";
+        let mail_thread = "AAQkRecherche=";
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open channel db");
+        for (key, direction, status, at) in [
+            (inbound_key, "inbound", "received", "2026-10-10T10:17:33Z"),
+            (
+                "email:lena@example.test::sent::<reply@example.test>",
+                "outbound",
+                "accepted",
+                "2026-10-11T14:18:16Z",
+            ),
+        ] {
+            conn.execute(
+                r#"INSERT INTO communication_messages (
+                    message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                    sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                    bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                    trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                    metadata_json
+                ) VALUES (
+                    ?1, 'email', 'email:lena@example.test', ?2, ?1, ?3, 'INBOX', 'Michael',
+                    'michael@example.test', '[]', '[]', '[]', 'Re: Recherche', '', '', '', '',
+                    'normal', ?4, 0, 0, ?5, ?5, '{}'
+                )"#,
+                rusqlite::params![key, mail_thread, direction, status, at],
+            )
+            .expect("failed to insert mail");
+        }
+        let job = QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: "Beantworte die Owner-Mail.".to_string(),
+            goal: "owner reply".to_string(),
+            preview: "owner reply".to_string(),
+            source_label: "email:owner".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![inbound_key.to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(isolated_founder_email_thread_key(mail_thread, "owner")),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        // The attempt was leased after an earlier reply: only a reply recorded
+        // after this lease proves this attempt's outcome.
+        conn.execute(
+            "INSERT INTO communication_routing_state (message_key, route_status, leased_at, updated_at)
+             VALUES (?1, 'leased', '2026-10-11T14:02:12Z', '2026-10-11T14:02:12Z')",
+            rusqlite::params![inbound_key],
+        )
+        .expect("lease route");
+
+        // The unmapped expectation names the execution thread and finds nothing.
+        let unmapped = expected_outcome_artifacts_for_job(&job);
+        assert!(unmapped[0]
+            .primary_key
+            .starts_with("thread:email-review:owner:"));
+        assert!(delivered_outcome_artifacts_for_job(&root, &job, &unmapped)
+            .expect("delivered lookup")
+            .is_empty());
+
+        let expected = resolve_founder_execution_thread_refs(&root, &job, unmapped);
+        assert_eq!(expected[0].primary_key, format!("thread:{mail_thread}"));
+        let delivered =
+            delivered_outcome_artifacts_for_job(&root, &job, &expected).expect("delivered lookup");
+        assert_eq!(delivered.len(), 1);
+        enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("the sent reply in the mail thread is the outcome");
+
+        // With the accepted Completed proof the route may become handled: no
+        // fallback to pending, so no second lease and no second reply.
+        channels::ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
+            .expect("a proven reply closes the mail");
+        let route: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| row.get(0),
+            )
+            .expect("route row");
+        assert_eq!(route, "handled");
+
+        // Negative: an attempt leased after the newest reply in the mail
+        // thread is not satisfied by that earlier reply.
+        conn.execute(
+            "UPDATE communication_routing_state SET route_status = 'leased', leased_at = '2026-10-11T15:00:00Z' WHERE message_key = ?1",
+            rusqlite::params![inbound_key],
+        )
+        .expect("re-lease");
+        let expected = resolve_founder_execution_thread_refs(
+            &root,
+            &job,
+            expected_outcome_artifacts_for_job(&job),
+        );
+        assert!(
+            delivered_outcome_artifacts_for_job(&root, &job, &expected)
+                .expect("delivered lookup")
+                .is_empty(),
+            "an earlier reply in the same mail thread must not satisfy a later attempt"
+        );
+
+        // A foreign isolated thread is never remapped onto this mail.
+        let mut foreign = job.clone();
+        foreign.thread_key = Some(isolated_founder_email_thread_key("other-thread", "owner"));
+        let refs = resolve_founder_execution_thread_refs(
+            &root,
+            &foreign,
+            expected_outcome_artifacts_for_job(&foreign),
+        );
+        assert!(refs[0]
+            .primary_key
+            .starts_with("thread:email-review:owner:"));
     }
 
     #[test]

@@ -137,6 +137,8 @@ EVERYDAY
   ctox status                    show service status (JSON)
   ctox crew list                 list durable crew members (read-only JSON)
   ctox crew show <id>            show one crew profile (read-only JSON)
+  ctox jour-fixe report show --meeting-id <id>
+  ctox jour-fixe report list --project-id <id> [--limit n]
   ctox work-hours set 08:00 18:00
                                  restrict CTOX work loop to local hours
   ctox work-hours off            disable working-hours restriction
@@ -427,7 +429,10 @@ fn skips_cli_startup_db(args: &[String]) -> bool {
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
     // Office file tools run within the caller's filesystem sandbox and do not
     // read or mutate daemon state. They must not wait on its SQLite ledger.
-    if args.first().map(String::as_str) == Some("office") {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("office" | "jour-fixe")
+    ) {
         return true;
     }
     if matches!(
@@ -838,7 +843,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime grok-login | ctox runtime grok-models | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
@@ -965,6 +970,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("tui") => tui::run_tui(root),
         Some("business-os") | Some("business") => {
             service::business_os::handle_business_os_command(root, &args[1..])
+        }
+        Some("jour-fixe") => {
+            let report = business_os::meeting_report::cli(root, &args[1..])?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
         }
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
@@ -7152,18 +7162,65 @@ mod tests {
             }]
         });
 
+        // Auth assist requires the requesting command's native authorization,
+        // rather than trusting a task id or an actor supplied by the worker.
+        let unbound = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
+        assert_eq!(
+            unbound.pointer("/commands/0/ok"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            unbound
+                .pointer("/commands/0/error")
+                .and_then(serde_json::Value::as_str),
+            Some("auth assist owner unresolved (task=authz-user-a-auth-assist, source_module=ctox_web_auth_assist_request)")
+        );
+        let (capability_token, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                &root,
+                "user-a",
+                "AppSec user A",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        let requesting_command =
+            crate::business_os::store::accept_rxdb_business_command_with_origin(
+                &root,
+                serde_json::json!({
+                    "id": "authz-user-a-auth-assist",
+                    "command_id": "authz-user-a-auth-assist",
+                    "module": "research",
+                    "command_type": "business_os.chat.task",
+                    "record_id": "appsec-auth-assist",
+                    "payload": {
+                        "title": "AppSec authenticated scan",
+                        "instruction": "Authenticate the AppSec browser session",
+                        "writeback_contract": { "allowed_collections": [] }
+                    },
+                    "client_context": {
+                        "actor": { "id": "forged-worker" },
+                        "capability_token": capability_token
+                    }
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )
+            .unwrap();
+        assert_eq!(requesting_command["status"], "accepted");
+
         let execution = execute_appsec_stage_commands(&root, &state, &stage).unwrap();
         assert_eq!(
             execution
                 .pointer("/commands/0/ok")
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            Some(true),
+            "{execution:#}"
         );
         assert_eq!(
             execution
                 .pointer("/commands/0/status")
                 .and_then(serde_json::Value::as_str),
-            Some("pending_sync")
+            Some("accepted")
         );
         assert_eq!(
             execution
@@ -7189,10 +7246,18 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("custom-web-app")
         );
-        assert!(execution
-            .pointer("/commands/0/output/session_id")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| value.contains("authz_user_a_auth_assist")));
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/owner_user_id")
+                .and_then(serde_json::Value::as_str),
+            Some("user-a")
+        );
+        assert_eq!(
+            execution
+                .pointer("/commands/0/output/session_id")
+                .and_then(serde_json::Value::as_str),
+            Some("browser_session_web_stack_auth_custom_web_app_user_a")
+        );
         let session_id = execution
             .pointer("/commands/0/output/session_id")
             .and_then(serde_json::Value::as_str)
@@ -7209,10 +7274,24 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some(session_id)
         );
-        assert!(execution
+        let command_id = execution
             .pointer("/commands/0/output/command_id")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|value| !value.is_empty()));
+            .filter(|value| !value.is_empty())
+            .unwrap();
+        let command =
+            crate::mission::channels::business_command_projection(&root, command_id).unwrap();
+        assert_eq!(command["status"], "accepted");
+        assert_eq!(
+            command.pointer("/payload/owner_user_id"),
+            Some(&serde_json::json!("user-a"))
+        );
+        assert_eq!(
+            command
+                .pointer("/payload/session_id")
+                .and_then(serde_json::Value::as_str),
+            Some(session_id)
+        );
 
         cleanup_test_dir(&root);
     }

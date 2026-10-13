@@ -12293,16 +12293,16 @@ pub(in crate::business_os) mod tests {
     #[test]
     fn workjet_project_schema_migration_preserves_populated_v0_v1_v2_identity_and_history(
     ) -> anyhow::Result<()> {
-        for source_version in [0, 1, 2] {
+        for source_version in [0, 1, 2, 3, 4] {
             let root = tempfile::tempdir()?;
             std::fs::create_dir_all(root.path().join("runtime"))?;
             let collection = "workjet_projects";
-            assert_eq!(expected_rxdb_collection_version(collection), 3);
-            for version in [0, 1, 2, 3] {
+            assert_eq!(expected_rxdb_collection_version(collection), 5);
+            for version in [0, 1, 2, 3, 4, 5] {
                 create_runtime_migration_source_table(root.path(), collection, version)?;
             }
             let source = rxdb_collection_version_table_name(collection, source_version);
-            let target = rxdb_collection_version_table_name(collection, 3);
+            let target = rxdb_collection_version_table_name(collection, 5);
             let read_rows = || -> anyhow::Result<Vec<(String, String, i64, f64, Value)>> {
                 let conn = Connection::open(store::rxdb_store_path(root.path()))?;
                 let mut statement = conn.prepare(&format!(
@@ -12352,6 +12352,7 @@ pub(in crate::business_os) mod tests {
             assert_eq!(read_rows()?, expected);
             let mut newer = expected[0].4.clone();
             newer["repo_url"] = json!("https://github.com/metric-space-ai/ctox");
+            newer["repository_url"] = json!("https://github.com/mkh-welsch/ctox-dev");
             newer["public_url"] = json!("https://ctox.dev");
             newer["info"] = json!({"goal":"Retained current goal"});
             newer["jour_fixe"] = json!({"weekday":1,"time":"13:00","timezone":"Europe/Berlin"});

@@ -933,7 +933,7 @@ async function ensureShelf() {
 
 async function buildShelf(owner, hosts) {
   try {
-    const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261010-shell-v2-native-provider-model-check');
+    const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261013-shell-v2-grok-exact-model-main609');
     if (!owner?.active || state.mountOwner !== owner) return null;
     const shelf = mod.createStoreShelf(hosts.canvas, {
       apps: [],

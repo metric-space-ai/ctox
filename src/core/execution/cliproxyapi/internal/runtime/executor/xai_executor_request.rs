@@ -12,7 +12,7 @@ use crate::sdk::cliproxy::executor::Headers;
 use super::xai_executor::{
     header_set, XAI_AUTHENTICATE_RESPONSE_HEADER, XAI_AUTHENTICATE_RESPONSE_VALUE,
     XAI_CLIENT_IDENTIFIER_HEADER, XAI_CLIENT_IDENTIFIER_VALUE, XAI_CLIENT_VERSION_HEADER,
-    XAI_CLIENT_VERSION_VALUE, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE,
+    XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE,
 };
 
 pub const XAI_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
@@ -222,17 +222,29 @@ pub fn apply_xai_chat_headers(
     stream: bool,
     session_id: &str,
 ) {
+    let version = super::helps::xai_client_version::get_xai_client_version();
+    apply_xai_chat_headers_with_version(headers, auth, token, stream, session_id, &version);
+}
+
+pub(crate) fn apply_xai_chat_headers_with_version(
+    headers: &mut Headers,
+    auth: Option<&Auth>,
+    token: &str,
+    stream: bool,
+    session_id: &str,
+    version: &str,
+) {
     apply_xai_default_headers(headers, token, stream, session_id);
     // ref: internal/runtime/executor/xai_executor_request.go:356-365 @ e2bff010
     if !xai_credentials(auth).using_api
         && xai_chat_base_url(auth) == super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL
     {
         header_set(headers, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE);
-        header_set(headers, XAI_CLIENT_VERSION_HEADER, XAI_CLIENT_VERSION_VALUE);
+        header_set(headers, XAI_CLIENT_VERSION_HEADER, version);
         header_set(
             headers,
             "User-Agent",
-            format!("xai-grok-workspace/{XAI_CLIENT_VERSION_VALUE}"),
+            format!("xai-grok-workspace/{version}"),
         );
         header_set(
             headers,

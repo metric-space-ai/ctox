@@ -6,7 +6,9 @@ use serde_json::json;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 fn gateway(actor: &str) -> Value {
     json!({"auth_source":"ctox_dev_managed_mcp_token","channel":"ctox_dev_managed_mcp",
-        "surface":"workjet","actor":actor,"role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance"})
+        "surface":"workjet","actor":actor,"role":"chef","workspace":"tenant:source-owner","instance_id":"source-instance",
+        "managed_policy":{"allowReads":false,"allowWrites":true,
+            "allowedCollections":["__ctox_no_access__"],"allowedTools":[TOOL]}})
 }
 fn call(root: &Path, actor: &str, args: Value) -> anyhow::Result<Value> {
     super::super::call_tool_inner(root, TOOL, args, Some(&gateway(actor)))
@@ -143,6 +145,95 @@ fn success(intent: &Value) -> Value {
         "worktreePath":"/private/worktrees/worker","parent":{"environmentId":"source-env","threadId":THREAD},
         "modelSelection":{"instanceId":"source-env","model":"claude-opus-5-5","options":[{"id":"reasoning","value":"high"}]},
         "enabledCapabilityIds":["repository_read","run_checks"]})
+}
+
+#[test]
+fn managed_gateway_worker_source_frames_keep_strict_arguments_and_authority() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let mut owner = gateway("owner");
+    owner["managed_policy"] = json!({
+        "allowReads":true,"allowWrites":true,
+        "allowedCollections":["workjet_luma_configuration"],"allowedTools":[TOOL]
+    });
+    let invoke = |arguments: Value, context: &Value| -> Value {
+        let envelope = json!({
+            "type":"mcp_request","request_id":"worker-source-gateway","context":context,
+            "body":json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":TOOL,"arguments":arguments}
+            }).to_string()
+        });
+        let response: Value = serde_json::from_str(&super::super::handle_gateway_message(
+            root.path(),
+            &envelope.to_string(),
+        ))
+        .unwrap();
+        serde_json::from_str(response["body"].as_str().unwrap()).unwrap()
+    };
+    let decode = |response: Value| -> anyhow::Result<Value> {
+        anyhow::ensure!(
+            response.get("error").is_none(),
+            "gateway worker source failed: {response}"
+        );
+        Ok(serde_json::from_str(
+            response["result"]["content"][0]["text"].as_str().unwrap(),
+        )?)
+    };
+    let args = json!({
+        "action":"register_source","source_environment_id":"source-env",
+        "source_supervisor_thread_id":THREAD,"project_id":"project"
+    });
+    // This is the pre-repair parser: transport context cannot be a Request field.
+    let mut transport_frame = args.clone();
+    transport_frame["_context"] = owner.clone();
+    assert!(serde_json::from_value::<Request>(transport_frame).is_err());
+    let registration = decode(invoke(args.clone(), &owner))?;
+    assert_eq!(registration["ownerUserId"], "owner");
+    assert_eq!(registration["state"], "active");
+    assert_eq!(registration["revision"], 1);
+    let mut forged = args.clone();
+    forged["_context"] = json!({"actor":"foreign","role":"chef"});
+    assert_eq!(decode(invoke(forged, &owner))?, registration);
+    assert_eq!(
+        decode(invoke(
+            json!({"action":"poll","source_environment_id":"source-env"}),
+            &owner
+        ))?["intents"],
+        json!([])
+    );
+    let mut unknown = args.clone();
+    unknown["unexpected"] = json!(true);
+    assert!(invoke(unknown, &owner).get("error").is_some());
+    let mut foreign = owner.clone();
+    foreign["actor"] = json!("foreign");
+    assert!(invoke(args.clone(), &foreign).get("error").is_some());
+    let mut readonly = owner.clone();
+    readonly["managed_policy"]["allowWrites"] = json!(false);
+    assert!(invoke(args.clone(), &readonly).get("error").is_some());
+    let mut escalation = args.clone();
+    escalation["_context"] = owner.clone();
+    assert!(invoke(escalation, &readonly).get("error").is_some());
+    let mut missing = owner.clone();
+    missing.as_object_mut().unwrap().remove("managed_policy");
+    assert!(invoke(args.clone(), &missing).get("error").is_some());
+    let mut denied = owner.clone();
+    denied["managed_policy"]["allowedTools"] = json!(["business_os.luma_configuration_read"]);
+    assert!(invoke(args.clone(), &denied).get("error").is_some());
+    denied["managed_policy"]["allowedTools"] = json!("invalid");
+    assert!(invoke(args.clone(), &denied).get("error").is_some());
+    // Managed source credentials never become a native supervisor session.
+    assert!(invoke(
+        json!({"action":"dispatch","dispatch_key":"forged-dispatch","task":"Make a tested change"}),
+        &owner
+    )
+    .get("error")
+    .is_some());
+    assert!(invoke(json!({"action":"observe","limit":1}), &owner)
+        .get("error")
+        .is_some());
+    assert_eq!(decode(invoke(args, &owner))?, registration);
+    Ok(())
 }
 
 #[test]

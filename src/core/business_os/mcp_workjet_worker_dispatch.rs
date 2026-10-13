@@ -165,12 +165,40 @@ pub(super) fn current_project(
     project: &str,
     thread: &str,
 ) -> anyhow::Result<i64> {
+    current_project_with_team_binding(policy, context, project, thread, None)
+}
+pub(super) fn current_project_with_team_binding(
+    policy: &Connection,
+    context: &McpChannelRequestContext,
+    project: &str,
+    thread: &str,
+    parent: Option<
+        &super::super::project_chats::persistent_worker_binding::PersistentWorkerBinding,
+    >,
+) -> anyhow::Result<i64> {
     let (role, epoch) = remote_worker::current_actor(policy, context)?;
     anyhow::ensure!(
         context.trusted_role.as_deref() == Some(role.as_str()),
         "dispatch role changed"
     );
     super::super::project_chats::owned_project(policy, project, &context.actor, true)?;
+    let parent = parent
+        .map(|expected| {
+            super::super::project_chats::persistent_worker_binding::require_active(
+                policy,
+                &context.actor,
+                project,
+                thread,
+                expected,
+            )
+        })
+        .transpose()?;
+    // Root identity verifies affiliation only. The consumer retains the actual
+    // calling worker UUID plus this exact revision-bound native reference.
+    let thread = parent
+        .as_ref()
+        .map(|binding| binding.supervisor_thread_id.as_str())
+        .unwrap_or(thread);
     let binding = super::super::project_chats::supervisor_binding::for_thread(
         policy,
         &context.actor,
@@ -298,7 +326,13 @@ pub(super) fn execute(
     arguments: &Value,
     trusted: Option<&Value>,
 ) -> anyhow::Result<Value> {
-    let request: Request = serde_json::from_value(arguments.clone())?;
+    // Gateway transport metadata is already bound to the trusted request
+    // context. It is not an application argument or a source of authority.
+    let mut payload = arguments.clone();
+    if let Some(object) = payload.as_object_mut() {
+        object.remove("_context");
+    }
+    let request: Request = serde_json::from_value(payload)?;
     let internal = context.trusted_role_source.as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE);
     if matches!(&request, Request::Dispatch { .. } | Request::Observe { .. }) {
         anyhow::ensure!(
@@ -312,6 +346,21 @@ pub(super) fn execute(
                 && context.channel == "ctox_dev_managed_mcp",
             "source controls require authenticated managed Owner/Admin MCP"
         );
+        anyhow::ensure!(
+            trusted.is_some_and(|gateway| gateway["managed_policy"]["allowWrites"] == true),
+            "worker source operation is outside this managed client write scope"
+        );
+        if let Some(tools) =
+            trusted.and_then(|gateway| gateway["managed_policy"].get("allowedTools"))
+        {
+            let tools = tools
+                .as_array()
+                .context("invalid managed worker source tool scope")?;
+            anyhow::ensure!(
+                tools.is_empty() || tools.iter().any(|tool| tool.as_str() == Some(TOOL)),
+                "worker source tool is outside this managed client scope"
+            );
+        }
     }
     if let Request::Observe { limit } = &request {
         return observe(
@@ -1140,6 +1189,9 @@ pub(super) fn meeting_test_fixture() -> anyhow::Result<(tempfile::TempDir, Value
     Ok((root, trusted))
 }
 
+#[cfg(test)]
+#[path = "mcp_parent_team_admission_tests.rs"]
+mod parent_team_admission_tests;
 #[cfg(test)]
 #[path = "mcp_workjet_worker_dispatch_tests.rs"]
 mod tests;

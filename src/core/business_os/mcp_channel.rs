@@ -61,6 +61,8 @@ pub(crate) use workjet_confirmed_plan::issue as issue_internal_confirmed_plan_se
 mod supervisor_luma;
 pub(in crate::business_os) use supervisor_luma::read_computed_route as read_supervisor_computed_route;
 pub(in crate::business_os) use supervisor_luma::read_configured_route as read_supervisor_configured_route;
+#[path = "mcp_workjet_deck_narration.rs"]
+mod deck_narration;
 #[path = "mcp_workjet_jour_fixe.rs"]
 mod workjet_jour_fixe;
 #[path = "mcp_workjet_kpis.rs"]
@@ -69,10 +71,15 @@ mod workjet_kpis;
 mod workjet_luma_config;
 #[path = "mcp_workjet_narration.rs"]
 mod workjet_narration;
+
+pub(crate) fn resume_jour_fixe_narration(root: &Path) -> anyhow::Result<()> {
+    deck_narration::resume(root)
+}
 #[path = "mcp_workjet_presentation.rs"]
 mod workjet_presentation;
 #[path = "mcp_workjet_worker_dispatch.rs"]
 mod workjet_worker_dispatch;
+pub(in crate::business_os) use workjet_worker_dispatch::outcomes_for_deck as workjet_outcomes_for_deck;
 
 #[cfg(test)]
 pub(crate) fn workjet_dispatch_service_test_fixture() -> anyhow::Result<(tempfile::TempDir, String)>
@@ -621,9 +628,34 @@ struct BusinessOsMcpInternalSessionClaims {
     workjet_supervisor_lease: Option<workjet_worker_dispatch::SupervisorLease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workjet_confirmed_plan: Option<workjet_confirmed_plan::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    communication_binding: Option<CommunicationSessionBinding>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
+
+/// A mail turn's session is bound to the one inbound mail it handles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CommunicationSessionBinding {
+    inbound_message_key: String,
+    /// The turn's own queue lease: the mail itself, or the founder rework
+    /// task that answers it.
+    lease_message_key: String,
+    /// `leased_at` of that lease when the session was issued: a later lease
+    /// of the same key must not revive the session.
+    #[serde(default)]
+    lease_started_at: Option<String>,
+    sender_role: String,
+}
+
+/// Actions a mail from the owner, a founder or an admin may trigger through
+/// its turn. Internal effects only; each still passes the sender's Business OS
+/// policy decision.
+const COMMUNICATION_SESSION_ACTIONS: &[(&str, &str)] = &[(
+    super::outbound_lead_import::MODULE_ID,
+    super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+)];
+const COMMUNICATION_SESSION_TTL_MS: i64 = 2 * 60 * 60 * 1000;
 
 /// Per-instance bearer token that an inbound MCP client must present on `/mcp`.
 /// Auto-generated and persisted in the CTOX secret store on first use; the
@@ -797,10 +829,144 @@ pub(crate) fn issue_internal_command_session_token(
         workjet_supervisor_epoch: None,
         workjet_supervisor_lease: None,
         workjet_confirmed_plan: None,
+        communication_binding: None,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
     sign_internal_command_session_claims(root, &claims)
+}
+
+/// Session for a mail turn from the owner, a founder or an admin
+/// (10.10.2026: an owner mail asked to research the companies of an Excel and
+/// the turn had no way to act on Business OS). It acts as the sender's active
+/// Business OS user, is bound to the leased inbound mail, may execute only
+/// COMMUNICATION_SESSION_ACTIONS and expires after two hours. `None` when the
+/// sender is not an active Business OS user.
+pub(crate) fn issue_internal_communication_session_token(
+    root: &Path,
+    inbound_message_key: &str,
+    lease_message_key: &str,
+    sender_role: &str,
+    sender_address: &str,
+    workspace: &str,
+) -> anyhow::Result<Option<String>> {
+    let inbound_message_key = inbound_message_key.trim();
+    let lease_message_key = lease_message_key.trim();
+    anyhow::ensure!(
+        !lease_message_key.is_empty(),
+        "communication session needs the turn's queue lease"
+    );
+    anyhow::ensure!(
+        inbound_message_key.starts_with("email:"),
+        "communication session needs an inbound mail"
+    );
+    anyhow::ensure!(
+        matches!(sender_role, "owner" | "founder" | "admin"),
+        "communication session needs an owner, founder or admin sender"
+    );
+    let user_id = sender_address.trim().to_ascii_lowercase();
+    let Some(role) = store::active_business_user_role(root, &user_id)? else {
+        return Ok(None);
+    };
+    let role = normalize_role(&role);
+    anyhow::ensure!(
+        matches!(role.as_str(), "chef" | "admin" | "founder" | "user"),
+        "Business OS user role is invalid"
+    );
+    let Some((lease_status, lease_started_at)) =
+        crate::mission::channels::inbound_route_state(root, lease_message_key)?
+    else {
+        anyhow::bail!("communication session turn has no queue lease");
+    };
+    anyhow::ensure!(
+        matches!(lease_status.as_str(), "leased" | "running") && lease_started_at.is_some(),
+        "communication session turn is not leased"
+    );
+    let issued_at_ms = now_ms();
+    let claims = BusinessOsMcpInternalSessionClaims {
+        schema: "ctox.business_os.mcp_command_session.v1".to_string(),
+        actor: user_id,
+        role,
+        workspace: workspace.trim().to_string(),
+        command_id: format!("communication:{inbound_message_key}"),
+        payload_hash: super::hashing::hex_sha256(inbound_message_key.as_bytes()),
+        allowed_actions: COMMUNICATION_SESSION_ACTIONS
+            .iter()
+            .map(|(module_id, action_id)| BusinessOsMcpAllowedAction {
+                module_id: (*module_id).to_string(),
+                action_id: (*action_id).to_string(),
+                operation_ids: Vec::new(),
+            })
+            .collect(),
+        allowed_collections: Vec::new(),
+        metadata_read_contract: None,
+        crew_binding: None,
+        crew_work_key: None,
+        crew_only: false,
+        workjet_supervisor_only: false,
+        workjet_supervisor_epoch: None,
+        workjet_supervisor_lease: None,
+        workjet_confirmed_plan: None,
+        communication_binding: Some(CommunicationSessionBinding {
+            inbound_message_key: inbound_message_key.to_string(),
+            lease_message_key: lease_message_key.to_string(),
+            lease_started_at,
+            sender_role: sender_role.to_string(),
+        }),
+        issued_at_ms,
+        expires_at_ms: issued_at_ms.saturating_add(COMMUNICATION_SESSION_TTL_MS),
+    };
+    sign_internal_command_session_claims(root, &claims).map(Some)
+}
+
+/// The mail is still being handled (leased) and the sender is still the same
+/// active Business OS user with the same role.
+fn verify_communication_session(
+    root: &Path,
+    claims: &BusinessOsMcpInternalSessionClaims,
+    binding: &CommunicationSessionBinding,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        claims.command_id == format!("communication:{}", binding.inbound_message_key)
+            && claims.allowed_collections.is_empty()
+            && claims.metadata_read_contract.is_none()
+            && claims.allowed_actions.iter().all(|action| {
+                COMMUNICATION_SESSION_ACTIONS
+                    .iter()
+                    .any(|(module_id, action_id)| {
+                        action.module_id == *module_id && action.action_id == *action_id
+                    })
+            }),
+        "communication session grant changed"
+    );
+    let lease = crate::mission::channels::inbound_route_state(root, &binding.lease_message_key)?;
+    anyhow::ensure!(
+        lease.as_ref().is_some_and(|(status, started_at)| {
+            matches!(status.as_str(), "leased" | "running")
+                && started_at.is_some()
+                && started_at == &binding.lease_started_at
+        }),
+        "communication session turn is no longer leased"
+    );
+    if binding.lease_message_key != binding.inbound_message_key {
+        let mail_status =
+            crate::mission::channels::inbound_route_state(root, &binding.inbound_message_key)?
+                .map(|(status, _)| status);
+        anyhow::ensure!(
+            matches!(
+                mail_status.as_deref(),
+                Some("leased" | "running" | "review_rework")
+            ),
+            "communication session mail is no longer open"
+        );
+    }
+    let role = store::active_business_user_role(root, &claims.actor)?
+        .context("communication session user is no longer active")?;
+    anyhow::ensure!(
+        normalize_role(&role) == claims.role,
+        "communication session user role changed"
+    );
+    Ok(())
 }
 
 fn sign_internal_command_session_claims(
@@ -929,7 +1095,9 @@ pub(crate) fn verify_internal_command_session_token(
     token: &str,
 ) -> anyhow::Result<Value> {
     let claims = decode_internal_command_session_token(root, token)?;
-    if claims.workjet_confirmed_plan.is_some() {
+    if let Some(binding) = claims.communication_binding.as_ref() {
+        verify_communication_session(root, &claims, binding)?;
+    } else if claims.workjet_confirmed_plan.is_some() {
         workjet_confirmed_plan::verify(root, &claims)?;
     } else {
         let command = crate::mission::channels::inspect_business_command(root, &claims.command_id)?
@@ -977,6 +1145,7 @@ pub(crate) fn verify_internal_command_session_token(
     }
     Ok(serde_json::json!({
         "workjet_confirmed_plan": claims.workjet_confirmed_plan,
+        "communication_session": claims.communication_binding.is_some(),
         "crew_binding": claims.crew_binding,
         "crew_work_key": claims.crew_work_key,
         "crew_only": claims.crew_only,
@@ -7716,6 +7885,18 @@ fn enforce_internal_command_session_scope(
         );
         return Ok(());
     }
+    if context["communication_session"] == true {
+        anyhow::ensure!(
+            matches!(
+                tool_name,
+                "business_os.get_module"
+                    | "business_os.list_module_actions"
+                    | "business_os.propose_action"
+                    | "business_os.execute_action"
+            ),
+            "tool is outside this mail session"
+        );
+    }
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)
@@ -8611,9 +8792,21 @@ fn execute_outbound_lead_import(
         "business_os.execute_action",
         &policy_arguments,
     )?;
-    let request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
+    let mut request = super::outbound_lead_import::parse_request(arguments).map_err(|error| {
         anyhow::Error::new(BusinessOsMcpError::validation("payload", error.to_string()))
     })?;
+    // Only a mail session binds an import to a mail, and only to its own:
+    // any other caller naming a mail key could slip records into a mail turn.
+    match context.request_id.strip_prefix("communication:") {
+        Some(mail) => request.source_message_key = mail.to_string(),
+        None if !request.source_message_key.is_empty() => {
+            return Err(anyhow::Error::new(BusinessOsMcpError::validation(
+                "payload.source_message_key",
+                "only the mail session of that mail may bind an import to it",
+            )));
+        }
+        None => {}
+    }
     let actor = resolved_mcp_actor_context(root, context)?;
     let client_context = serde_json::json!({
         "channel": &context.channel,
@@ -15052,6 +15245,130 @@ mod tests {
     }
 
     #[test]
+    fn mail_session_acts_as_the_sender_only_for_lead_import_while_the_mail_is_open(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "owner@example.test", "admin")?;
+        let mail = "email:crew@example.test::INBOX::42";
+        let rework = "queue:founder-rework-42";
+        let core = crate::mission::channels::open_channel_db(&crate::paths::core_db(root))?;
+        for key in [mail, rework] {
+            core.execute(
+                "INSERT INTO communication_routing_state (message_key, route_status, leased_at, updated_at)
+                 VALUES (?1, 'leased', '2026-10-10T08:00:00Z', '2026-10-10T00:00:00Z')",
+                [key],
+            )?;
+        }
+        let issue = |lease: &str, address: &str| {
+            issue_internal_communication_session_token(
+                root,
+                mail,
+                lease,
+                "admin",
+                address,
+                "communication",
+            )
+        };
+        // An unknown sender gets no session; a non-mail key none at all.
+        assert!(issue(mail, "stranger@example.test")?.is_none());
+        assert!(issue_internal_communication_session_token(
+            root,
+            "queue:x",
+            mail,
+            "admin",
+            "owner@example.test",
+            "communication"
+        )
+        .is_err());
+
+        let token = issue(mail, "Owner@Example.test")?.context("missing mail session")?;
+        let trusted = verify_internal_command_session_token(root, &token)?;
+        assert_eq!(trusted["actor"], "owner@example.test");
+        assert_eq!(trusted["role"], "admin");
+        assert_eq!(trusted["communication_session"], true);
+        let import = serde_json::json!({
+            "module_id": super::super::outbound_lead_import::MODULE_ID,
+            "action_id": super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+            "payload": { "rows": [] }
+        });
+        enforce_internal_command_session_scope(
+            "business_os.execute_action",
+            &import,
+            Some(&trusted),
+        )?;
+        let mut other_action = import.clone();
+        other_action["action_id"] = serde_json::json!("outbound.leads.delete");
+        assert!(enforce_internal_command_session_scope(
+            "business_os.execute_action",
+            &other_action,
+            Some(&trusted)
+        )
+        .is_err());
+        for tool in [
+            "business_os.query_records",
+            "business_os.create_app",
+            "business_os.start_project_task",
+        ] {
+            assert!(
+                enforce_internal_command_session_scope(tool, &import, Some(&trusted)).is_err(),
+                "{tool} must stay outside the mail session"
+            );
+        }
+
+        // A tampered grant fails the signature.
+        let (payload, signature) = token.split_once('.').context("token shape")?;
+        let mut claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload)?)?;
+        claims["allowed_actions"][0]["action_id"] = serde_json::json!("outbound.leads.delete");
+        let forged = format!(
+            "{}.{signature}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?)
+        );
+        assert!(verify_internal_command_session_token(root, &forged).is_err());
+
+        // A rework turn holds its own lease while the mail waits in rework.
+        let rework_token =
+            issue(rework, "owner@example.test")?.context("missing rework session")?;
+        core.execute(
+            "UPDATE communication_routing_state SET route_status = 'review_rework' WHERE message_key = ?1",
+            [mail],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
+        assert!(verify_internal_command_session_token(root, &token).is_err());
+
+        // A new lease of the same key does not revive an older session.
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = '2026-10-10T09:00:00Z' WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        // A lease without a start time never validates a session.
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = NULL WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        assert!(issue(rework, "owner@example.test").is_err());
+        core.execute(
+            "UPDATE communication_routing_state SET leased_at = '2026-10-10T08:00:00Z' WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
+
+        // A demoted sender or a finished turn loses the session.
+        seed_business_user(root, "owner@example.test", "user")?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        seed_business_user(root, "owner@example.test", "admin")?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_ok());
+        core.execute(
+            "UPDATE communication_routing_state SET route_status = 'handled' WHERE message_key = ?1",
+            [rework],
+        )?;
+        assert!(verify_internal_command_session_token(root, &rework_token).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn outbound_lead_import_creates_campaign_leads_once_and_needs_an_app_template_for_research(
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -15175,6 +15492,74 @@ mod tests {
         // Starting again keeps the running research.
         let again = execute_outbound_lead_import(root, &context, &with_research)?;
         assert_eq!(again["leads"][0]["research"]["status"], "already_started");
+
+        // A mail turn reads back exactly the records of its own mail.
+        let mail = "email:crew@example.test::inbox::own-mail";
+        let other_mail = "email:crew@example.test::inbox::other-mail";
+        let for_mail = |campaign: &str, key: &str, name: &str| {
+            serde_json::json!({
+                "module_id": "outbound-lead-generation",
+                "action_id": super::super::outbound_lead_import::IMPORT_AND_RESEARCH_ACTION,
+                "payload": {
+                    "campaign": campaign,
+                    "rows": [{ "name": name, "website": "example.test", "city": "Ulm" }],
+                    "start_research": false,
+                    "source_message_key": key
+                }
+            })
+        };
+        let session = |key: &str| {
+            let mut session_context = test_context("business_os.execute_action");
+            session_context.request_id = format!("communication:{key}");
+            session_context
+        };
+        // Outside a mail session no caller may bind records to a mail.
+        let foreign = execute_outbound_lead_import(
+            root,
+            &context,
+            &for_mail("Unterschoben", mail, "Untergeschoben GmbH"),
+        )
+        .expect_err("a non-mail caller must not bind records to a mail");
+        assert!(foreign
+            .to_string()
+            .contains("only the mail session of that mail"));
+        execute_outbound_lead_import(
+            root,
+            &session(mail),
+            &for_mail("Mail A", mail, "Eigene GmbH"),
+        )?;
+        execute_outbound_lead_import(
+            root,
+            &session(other_mail),
+            &for_mail("Mail B", other_mail, "Fremde GmbH"),
+        )?;
+        // A mail session binds the import to its own mail whatever the
+        // caller names.
+        execute_outbound_lead_import(
+            root,
+            &session(mail),
+            &for_mail("Mail C", other_mail, "Sitzung GmbH"),
+        )?;
+        let own = super::super::outbound_lead_import::records_for_source_message(root, mail)?;
+        let mut names = own
+            .iter()
+            .map(|record| record["name"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["Eigene GmbH", "Sitzung GmbH"]);
+        // Negative: neither another mail's records nor unbound leads.
+        assert!(!names.iter().any(|name| name == "Fremde GmbH"
+            || name == "Hedinger GmbH & Co. KG"
+            || name == "Untergeschoben GmbH"));
+        assert!(
+            super::super::outbound_lead_import::records_for_source_message(root, "queue:x")?
+                .is_empty()
+        );
+        let rendered = super::super::outbound_lead_import::render_records_for_mail(&own);
+        assert!(
+            rendered.contains("Eigene GmbH") && rendered.contains("Recherche: nicht gestartet")
+        );
+        assert!(!rendered.contains("Fremde GmbH"));
         Ok(())
     }
 

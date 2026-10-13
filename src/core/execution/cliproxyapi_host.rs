@@ -3000,6 +3000,15 @@ fn routes_for_connection_admission(
 }
 
 async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
+    use ctox_cliproxyapi::internal::runtime::executor::helps::xai_client_version::{
+        start_xai_version_updater, HttpXaiVersionFetcher,
+    };
+    // The native xAI path uses a direct host-owned HTTP client. The same
+    // process-wide version reader also supplies its catalog and inference headers.
+    // Keeping the guard here ties refresh cancellation to this existing runtime.
+    let _xai_version_updater = HttpXaiVersionFetcher::new(None)
+        .ok()
+        .map(|fetcher| start_xai_version_updater(Arc::new(fetcher)));
     use ctox_cliproxyapi::internal::api::server::serve_provider_connection_with_auxiliary_logging;
     use ctox_cliproxyapi::internal::api::server_middleware::{
         RequestLoggingMetricsRegistry, RequestLoggingPolicy,

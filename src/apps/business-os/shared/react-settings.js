@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261010-shell-v2-native-provider-model-check';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261013-shell-v2-grok-exact-model-main609';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

@@ -10422,6 +10422,12 @@ pub fn complete_business_command_from_queue_reply(
         None,
         "command-specific writeback completed after review and validation",
     )?;
+    // Run after the canonical terminal commit. A concurrently admitted exit
+    // mapping can reconcile that same committed result without a lost wakeup.
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, reply_text)
+    {
+        eprintln!("[workjet-exit-model] reviewed research writeback refused: {error:#}");
+    }
     if is_business_chat_command(&command) {
         persist_terminal_business_chat_command_projection(
             root,
@@ -13970,6 +13976,35 @@ pub(super) fn read_rxdb_collection_record(
         .filter(|value| !is_rxdb_deleted_document(value)))
 }
 
+/// Outbound leads an import created for exactly this inbound mail key.
+pub(crate) fn outbound_leads_for_source_message(
+    root: &Path,
+    message_key: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let Some(reader) = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")? else {
+        return Ok(Vec::new());
+    };
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| reader.columns.contains(*column))
+        .unwrap_or("0");
+    let mut statement = reader.conn.prepare(&format!(
+        "SELECT data FROM {} WHERE {deleted_expression} = 0 \
+           AND json_extract(data, '$.payload.source_message_key') = ?1 \
+         ORDER BY id LIMIT 50",
+        reader.table
+    ))?;
+    let rows = statement.query_map([message_key], |row| row.get::<_, String>(0))?;
+    let mut records = Vec::new();
+    for raw in rows {
+        let document: Value = serde_json::from_str(&raw?)?;
+        if !is_rxdb_deleted_document(&document) {
+            records.push(document);
+        }
+    }
+    Ok(records)
+}
+
 /// Payload of the newest Outbound lead research task the app started (not a
 /// gap-closing continuation). The native import action reuses its research
 /// policy for imported leads; see outbound_lead_import.rs.
@@ -15054,6 +15089,9 @@ pub fn fail_business_command_from_queue_error(
         Some(error),
         "queue/harness execution failed",
     )?;
+    if let Err(error) = super::workjet_exit_model::complete_research(root, &command_id, "{}") {
+        eprintln!("[workjet-exit-model] failed research writeback refused: {error:#}");
+    }
     conn.execute(
         "UPDATE business_commands
          SET status = 'failed', observed_at_ms = ?2
@@ -20062,6 +20100,16 @@ fn trusted_rxdb_command_user(
         created_at_ms: 0,
         updated_at_ms: 0,
     })
+}
+
+/// Role of an active Business OS user, or `None` when the user is unknown or
+/// inactive.
+pub(crate) fn active_business_user_role(
+    root: &Path,
+    user_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let conn = open_store(root)?;
+    Ok(active_business_user(&conn, user_id)?.map(|user| user.role))
 }
 
 fn active_business_user(
@@ -25818,6 +25866,9 @@ fn business_command_prompt_enrichment(
     command: &BusinessCommand,
 ) -> anyhow::Result<Option<String>> {
     let mut blocks = Vec::new();
+    if let Some(block) = super::project_chats::jour_fixe_brief::prompt(root, command_id, command)? {
+        blocks.push(block);
+    }
     if let Some(block) = cv_print_pdf_text_prompt_enrichment(root, command_id, command)? {
         blocks.push(block);
     }
