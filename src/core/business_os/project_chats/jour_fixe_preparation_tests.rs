@@ -235,13 +235,13 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
     assert!(queue
         .prompt
         .contains(meeting["meeting"]["id"].as_str().unwrap()));
-    let admitted = admitted_preparation_and_exit(root.path(), &first, due, &meeting)?;
+    let admitted = admitted_preparation_and_exit(root.path(), &first, &due.to_rfc3339(), &meeting)?;
     assert_eq!(
         schedule::emit_due_task_at(root.path(), &first.task_id, due)?.emitted_count,
         0
     );
     assert_eq!(
-        admitted_preparation_and_exit(root.path(), &first, due, &meeting)?,
+        admitted_preparation_and_exit(root.path(), &first, &due.to_rfc3339(), &meeting)?,
         admitted
     );
     Ok(())
