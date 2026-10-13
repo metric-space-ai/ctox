@@ -514,8 +514,15 @@ mod command_writeback_tests {
         let mut prompt = String::from("existing operator scope");
         append_outbound_person_research_contract(&command, &mut prompt);
         assert!(prompt.starts_with("existing operator scope"));
-        for role in ["Gesamtverantwortung:", "Finanzen:", "Einkauf:", "Supply Chain:",
-                     "Operations:", "Technik:", "Entwicklung:"] {
+        for role in [
+            "Gesamtverantwortung:",
+            "Finanzen:",
+            "Einkauf:",
+            "Supply Chain:",
+            "Operations:",
+            "Technik:",
+            "Entwicklung:",
+        ] {
             assert!(prompt.contains(role), "missing responsibility {role}");
         }
         assert!(prompt.contains("site:linkedin.com/in/"));
@@ -523,9 +530,12 @@ mod command_writeback_tests {
         assert!(prompt.contains("catch-all, unknown and timeout"));
         assert!(prompt.contains("Never send test emails"));
         assert!(prompt.contains("not a successful persisted research"));
-        for (pointer, value) in [("/module", "mail"), ("/payload/mode", "conversation"),
-                                 ("/command_type", "outbound.research_source.test"),
-                                 ("/payload/writeback_contract/collection", "other_records")] {
+        for (pointer, value) in [
+            ("/module", "mail"),
+            ("/payload/mode", "conversation"),
+            ("/command_type", "outbound.research_source.test"),
+            ("/payload/writeback_contract/collection", "other_records"),
+        ] {
             let mut other = command.clone();
             *other.pointer_mut(pointer).unwrap() = Value::String(value.to_owned());
             let mut unchanged = String::from("ordinary chat");
@@ -709,6 +719,17 @@ mod command_writeback_tests {
         assert!(options.enable_business_os_mcp);
         assert!(options.business_os_mcp_command_session.is_some());
         assert!(options.force_isolated_session);
+        let execution_prompt = attach_typed_business_command_context(
+            root,
+            &job,
+            business_os_chat_execution_prompt(&job),
+            "role-contract-test-turn",
+            job.thread_key.as_deref(),
+        )?;
+        assert!(execution_prompt.contains("Canonical Business OS command binding"));
+        assert!(execution_prompt.contains("Outbound person research execution contract"));
+        assert!(execution_prompt.contains("Finance Director"));
+        assert!(execution_prompt.contains("concrete profile URL/name"));
         let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
         assert!(completion_review_scope_from_command_context(&context).is_none());
         let state = Arc::new(Mutex::new(SharedState::default()));
