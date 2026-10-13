@@ -94,17 +94,22 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
     try {
       const names = Object.keys(schemas);
       const collectionReadyAt = performance.now();
-      const bridges = await Promise.all(names.map(async name => {
+      globalThis.__syncV3BootstrapDiagnostic = {};
+      const bridges = await withDeadline(Promise.all(names.map(async name => {
+        globalThis.__syncV3BootstrapDiagnostic[name] = 'lease';
         leases.push(await state.sync.leaseCollection(name, 'sync-v3-s0-measurement', { forceDirect: true }));
+        globalThis.__syncV3BootstrapDiagnostic[name] = 'startCollection';
         let bridge = await state.sync.startCollection(name, { pin: false, forceDirect: true, requireOwner: true });
         if (!bridge?.state && bridge?.ready) bridge = await withDeadline(bridge.ready, 60000, 'Scale bridge setup timeout');
+        globalThis.__syncV3BootstrapDiagnostic[name] = 'initialReplication';
         if (typeof bridge?.state?.awaitInitialReplication !== 'function') throw Error('Scale initial replication seam missing');
         // startCollection can resolve before onPeerReady attaches the demand loader.
         // Await the production readiness contract, not an empty local query or a retry.
         await withDeadline(bridge.state.awaitInitialReplication(), 60000, 'Scale collection readiness timeout');
         if (!bridge.state.demandLoaderActive || bridge.state.cancelled) throw Error('Scale demand loader not ready');
+        globalThis.__syncV3BootstrapDiagnostic[name] = 'ready';
         return bridge;
-      }));
+      })), 60000, 'Scale lease/bridge bootstrap timeout');
       const leadName = names[0];
       const queryStarted = performance.now();
       trace.mark('fixture-query');
@@ -202,6 +207,27 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
       if (requestProofs.length !== samples.reduce((count, sample) => count + sample.attempts.length, 0)
         || requestProofs.some(proof => proof.channelState !== 'open' || !proof.pairs.length)) throw Error('Actual write request relay proof incomplete');
       if (!pairs.length || pairs.some(pair => pair.remoteAddress !== '127.0.0.1' || !Number.isInteger(pair.remotePort))) throw Error('No selected loopback relay candidate proof');
+      // Post-visible, disjoint windows: keep cold visibility and write ACK probes unchanged.
+      // The wire observer counts the actual query connection, not the write peer facade.
+      const queries = [];
+      const queryRequests = () => trace.events.filter(event => event.kind === 'logical'
+        && event.direction === 'out' && event.method === 'rxdb.query.fetch'
+        && event.collection === leadName).length;
+      for (let index = 0; index < 5; index++) {
+        const ordinal = (index + 1) * 20;
+        await trace.drain();
+        const before = queryRequests();
+        const started = performance.now();
+        const window = await withDeadline(raw[leadName].find({ selector: { ordinal: { $gte: ordinal } },
+          sort: [{ ordinal: 'asc' }], limit: 20 }).exec(), 60000, 'Scale query sample timeout');
+        const durationMs = performance.now() - started;
+        await trace.drain();
+        const nativeRequests = queryRequests() - before;
+        if (window.length !== 20 || window[0].ordinal !== ordinal || nativeRequests <= 0) {
+          throw Error(`Query sample ${index} incomplete: rows=${window.length}, first=${window[0]?.ordinal}, nativeRequests=${nativeRequests}`);
+        }
+        queries.push({ sample: index, ordinal, durationMs, nativeRequests, rows: window.length });
+      }
       for (let interval = 1; interval <= 2; interval++) {
         await wait(10000); trace.mark(`idle-${interval * 10}s`);
       }
@@ -211,7 +237,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
         coldPageToVisibleMs: visibleAt - globalThis.__syncV3BootAt,
         collectionSetupToVisibleMs: visibleAt - collectionReadyAt,
         queryToVisibleMs: visibleAt - queryStarted, visibleRows: rows.length,
-        writes: samples, selectedCandidatePairs: pairs, requestConnectionProofs: requestProofs, installedAcceptance: false,
+        queries, writes: samples, selectedCandidatePairs: pairs, requestConnectionProofs: requestProofs, installedAcceptance: false,
         phaseTrace: { version: trace.version, bootAt: trace.bootAt, marks: trace.marks, events: trace.events, errors: trace.errors },
         visibleDefinition: '20 native demand-query rows painted in isolated shell overlay',
         writeDefinition: 'local upsert to exact native masterWrite ACK, independently verified in SQLite' };
@@ -220,6 +246,7 @@ async function run(page, sqlite, runtimeRoot, rttMs, fixture) {
     const partial = await page.evaluate(async () => {
       const trace = globalThis.__syncV3Trace; await trace?.drain?.();
       return { marks: trace?.marks || {}, events: trace?.events || [], errors: trace?.errors || [],
+        bootstrap: globalThis.__syncV3BootstrapDiagnostic || null,
         queryWindow: globalThis.__syncV3WindowDiagnostic || null, requestProofs: globalThis.__syncV3RequestProofDiagnostic || null };
     }).catch(() => ({ unavailable: true }));
     fs.writeFileSync(path.join(runtimeRoot, 'sync-v3-phase-failure.json'), JSON.stringify({ error: error.message, ...partial }, null, 2) + '\n');

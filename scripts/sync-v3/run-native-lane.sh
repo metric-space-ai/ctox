@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reuse the shared published native artifact; never compile a duplicate baseline.
+# Use an immutable artifact. Explicit digests support an authorized paired PR/base measurement.
 set -euo pipefail
 : "${TMPDIR:?normal lane required}"
 : "${BUILD_LANE_BIN:?normal lane required}"
@@ -10,6 +10,11 @@ package=${1:?shared native archive required}
 playwright_module=${2:?pinned Playwright required}
 evidence="$BUILD_LANE_BIN/../evidence/architecture/sync-v3-s0-resources/$(basename "$TMPDIR")"
 soak=${3:-20}
+archive_sha=${4:-98d8c153022eeb83bc6f84a5fade2d838f7bf3749a19b051ba6fe36adb56e64a}
+binary_sha=${5:-741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba}
+[[ "$archive_sha" =~ ^[a-f0-9]{64}$ && "$binary_sha" =~ ^[a-f0-9]{64}$ ]] || exit 64
+export BUILD_LANE_NATIVE_HEAD=${6:-}
+[[ -z "$BUILD_LANE_NATIVE_HEAD" || "$BUILD_LANE_NATIVE_HEAD" =~ ^[a-f0-9]{40}$ ]] || exit 64
 [[ "$soak" = 20 || "$soak" = 86400 ]] || exit 64
 mkdir -p "$evidence"
 # Preserve only bounded evidence, not databases, caches, fixture copies or secrets.
@@ -26,10 +31,10 @@ retain() {
   printf 'sync_v3_evidence=%s\n' "$evidence"
 }
 trap retain EXIT
-printf '%s  %s\n' 98d8c153022eeb83bc6f84a5fade2d838f7bf3749a19b051ba6fe36adb56e64a "$package" | sha256sum -c -
+printf '%s  %s\n' "$archive_sha" "$package" | sha256sum -c -
 mkdir "$TMPDIR/native"
 tar -xzf "$package" -C "$TMPDIR/native" ./bin/ctox
-printf '%s  %s\n' 741b7260925c1e27b11cc8100d7877f1f582325523f6d31d1a69e4dac4c4f8ba "$TMPDIR/native/bin/ctox" | sha256sum -c -
+printf '%s  %s\n' "$binary_sha" "$TMPDIR/native/bin/ctox" | sha256sum -c -
 node -e 'const p=require(process.argv[1]+"/package.json");if(p.version!=="1.60.0")throw Error("Pinned Playwright mismatch")' "$playwright_module"
 node --test --test-concurrency=2 scripts/sync-v3/relay.test.mjs scripts/sync-v3/measurement.test.mjs scripts/sync-v3/phase-analysis.test.mjs scripts/sync-v3/resource-observer.test.mjs
 python3 scripts/sync-v3/sqlite-lock-probe.py --self-test
@@ -44,6 +49,7 @@ if [[ "$soak" = 86400 ]]; then
     --property=MemorySwapMax=0 --property="WorkingDirectory=$(pwd)" \
     --setenv="PATH=$PATH" --setenv="TMPDIR=$TMPDIR" --setenv="BUILD_LANE_HEAD=$BUILD_LANE_HEAD" \
     --setenv="CARGO_TARGET_DIR=$CARGO_TARGET_DIR" --setenv="PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" \
+    --setenv="BUILD_LANE_NATIVE_HEAD=$BUILD_LANE_NATIVE_HEAD" \
     "$(command -v node)" scripts/measure-sync-v3-native.mjs --binary "$TMPDIR/native/bin/ctox" \
     --playwright "$playwright_module" --output "$TMPDIR/sync-v3-native-evidence" \
     --soak-seconds 86400 --soak-status "$status"
