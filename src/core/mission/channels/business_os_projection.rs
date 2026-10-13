@@ -523,6 +523,34 @@ pub(super) fn communication_account_business_os_document(
     }))
 }
 
+/// Complete source snapshot for native account reconciliation. A bounded pull
+/// page cannot establish that a missing account was disconnected.
+pub(crate) fn snapshot_communication_accounts_for_business_os(root: &Path) -> Result<Vec<Value>> {
+    let db_path = resolve_db_path(root, None);
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(Vec::new());
+    };
+    if !channel_projection_tables_exist(&conn, &["communication_accounts"])? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            account_key, channel, address, provider, profile_json,
+            created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
+            CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
+        FROM communication_accounts
+        ORDER BY account_key ASC
+        "#,
+    )?;
+    // A single SQLite statement keeps membership consistent for this snapshot;
+    // read failures propagate before the native peer mutates any projection.
+    let documents = stmt
+        .query_map([], communication_account_business_os_document)?
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    Ok(documents)
+}
+
 pub fn pull_communication_accounts_for_business_os(
     root: &Path,
     since_ms: Option<i64>,
