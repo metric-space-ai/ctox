@@ -39,6 +39,8 @@ impl HttpRequest {
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
+    /// `Mcp-Session-Id` response header (streamable HTTP MCP sessions).
+    pub session_id: Option<String>,
 }
 
 impl HttpResponse {
@@ -88,12 +90,17 @@ impl HttpTransport for UreqTransport {
             Err(e) => return Err(anyhow::anyhow!("http transport error: {e}")),
         };
         let status = response.status();
+        let session_id = response.header("mcp-session-id").map(String::from);
         let mut body = Vec::new();
         std::io::Read::read_to_end(
             &mut response.into_reader().take(16 * 1024 * 1024),
             &mut body,
         )?;
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            session_id,
+        })
     }
 }
 

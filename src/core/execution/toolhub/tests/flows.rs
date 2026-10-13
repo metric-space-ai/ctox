@@ -30,6 +30,7 @@ impl HttpTransport for Provider {
             Ok(HttpResponse {
                 status: 200,
                 body: serde_json::to_vec(&v).unwrap(),
+                session_id: None,
             })
         };
         if r.url.ends_with("/login/oauth/access_token") {
@@ -40,6 +41,7 @@ impl HttpTransport for Provider {
             return Ok(HttpResponse {
                 status: 401,
                 body: br#"{"message":"Bad credentials"}"#.to_vec(),
+                session_id: None,
             });
         }
         if r.url.contains("/issues") {

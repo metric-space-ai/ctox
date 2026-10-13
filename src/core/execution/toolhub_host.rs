@@ -138,6 +138,7 @@ pub fn start_refresh_loop(root: PathBuf) {
 }
 
 const USAGE: &str = "usage: ctox toolhub <command> [options]   (JSON on stdout, logs on stderr)
+  remote MCP connectors: mcp-servers | mcp-list | mcp-connect --server S [--project P] | mcp-complete --callback URL | mcp-handover (JSON stdin) | mcp-client-set --server S --client-id ID [--client-secret-stdin] | mcp-tools --server S | mcp-disconnect --server S | exec <server>.<tool> [--json ..] [--confirm]
   catalog [--json]                      toolkits, tools, input schemas
   list [--json]                         connected accounts (no secrets)
   configs                               auth configs (no secrets)
@@ -310,6 +311,71 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
             print(&json!({"removed": hub.disconnect(required(rest, "--account")?)?}))
         }
         Some("refresh") => print(&hub.refresh(required(rest, "--account")?)?),
+        // Remote MCP connectors (official provider MCP servers, MCP OAuth + DCR).
+        Some("mcp-servers") => print(&ctox_toolhub::remote_mcp::registry()),
+        Some("mcp-list") => print(&mcp(root)?.list()?),
+        Some("mcp-connect") => {
+            let resolver = store_project_resolver(root);
+            let project = resolve_project(rest, &resolver)?;
+            let scopes: Vec<String> = rest
+                .windows(2)
+                .filter(|w| w[0] == "--scope")
+                .map(|w| w[1].clone())
+                .collect();
+            let req = mcp(root)?.connect(
+                required(rest, "--server")?,
+                &project,
+                (!scopes.is_empty()).then_some(scopes),
+            )?;
+            print(&req)
+        }
+        Some("mcp-complete") => {
+            let resolver = store_project_resolver(root);
+            let project = resolve_project(rest, &resolver)?;
+            print(&mcp(root)?.complete(required(rest, "--callback")?, &project)?)
+        }
+        Some("mcp-handover") => {
+            let resolver = store_project_resolver(root);
+            let project = resolve_project(rest, &resolver)?;
+            let h: ctox_toolhub::remote_mcp::Handover = serde_json::from_str(&read_stdin()?)?;
+            print(&mcp(root)?.complete_handover(&project, &h)?)
+        }
+        Some("mcp-client-set") => {
+            let secret = has(rest, "--client-secret-stdin")
+                .then(read_stdin)
+                .transpose()?;
+            mcp(root)?.set_client(
+                required(rest, "--server")?,
+                required(rest, "--client-id")?,
+                secret.as_deref().map(str::trim),
+            )?;
+            print(&json!({"configured": true}))
+        }
+        Some("mcp-tools") => {
+            let resolver = store_project_resolver(root);
+            let project = resolve_project(rest, &resolver)?;
+            print(&mcp(root)?.list_tools(required(rest, "--server")?, &project)?)
+        }
+        Some("mcp-disconnect") => {
+            let resolver = store_project_resolver(root);
+            let project = resolve_project(rest, &resolver)?;
+            mcp(root)?.disconnect(required(rest, "--server")?, &project)?;
+            print(&json!({"removed": true}))
+        }
+        Some("exec")
+            if rest
+                .first()
+                .and_then(|n| n.split_once('.'))
+                .is_some_and(|(s, _)| ctox_toolhub::remote_mcp::server(s).is_ok()) =>
+        {
+            let resolver = store_project_resolver(root);
+            let (code, value) = exec_mcp(root, rest, &resolver);
+            println!("{}", serde_json::to_string_pretty(&value)?);
+            if code != exit::OK {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Some("exec") => {
             let resolver = store_project_resolver(root);
             let (code, value) = exec(&hub, rest, &resolver);
@@ -320,6 +386,141 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         _ => bail!("{USAGE}"),
+    }
+}
+
+struct McpHost {
+    backend: CtoxSecretBackend,
+    transport: UreqTransport,
+    redirect: String,
+}
+
+impl McpHost {
+    fn client(&self) -> ctox_toolhub::remote_mcp::RemoteMcp<'_, CtoxSecretBackend> {
+        ctox_toolhub::remote_mcp::RemoteMcp {
+            backend: &self.backend,
+            transport: &self.transport,
+            redirect_uri: self.redirect.clone(),
+        }
+    }
+}
+
+struct McpRef(McpHost);
+impl McpRef {
+    fn list(&self) -> Result<Vec<ctox_toolhub::remote_mcp::ConnectionInfo>> {
+        self.0.client().list()
+    }
+    fn connect(
+        &self,
+        s: &str,
+        p: &str,
+        sc: Option<Vec<String>>,
+    ) -> Result<ctox_toolhub::remote_mcp::McpConnectRequest> {
+        self.0.client().connect(s, p, sc)
+    }
+    fn complete(&self, cb: &str, p: &str) -> Result<ctox_toolhub::remote_mcp::ConnectionInfo> {
+        self.0.client().complete(cb, p)
+    }
+    fn complete_handover(
+        &self,
+        p: &str,
+        h: &ctox_toolhub::remote_mcp::Handover,
+    ) -> Result<ctox_toolhub::remote_mcp::ConnectionInfo> {
+        self.0.client().complete_handover(p, h)
+    }
+    fn set_client(&self, s: &str, id: &str, sec: Option<&str>) -> Result<()> {
+        self.0.client().set_client(s, id, sec)
+    }
+    fn list_tools(&self, s: &str, p: &str) -> Result<Vec<ctox_toolhub::remote_mcp::RemoteTool>> {
+        self.0.client().list_tools(s, p)
+    }
+    fn disconnect(&self, s: &str, p: &str) -> Result<()> {
+        self.0.client().disconnect(s, p)
+    }
+}
+
+fn mcp(root: &Path) -> Result<McpRef> {
+    Ok(McpRef(McpHost {
+        backend: CtoxSecretBackend::new(root),
+        transport: UreqTransport::default(),
+        redirect: RedirectTarget::Loopback {
+            port: loopback_port()?,
+        }
+        .redirect_uri(),
+    }))
+}
+
+/// `exec <server>.<tool>` against a connected remote MCP server.
+fn exec_mcp(root: &Path, args: &[String], projects: ProjectResolver<'_>) -> (i32, Value) {
+    use ctox_toolhub::remote_mcp::McpOutcome;
+    let Some((server, tool)) = args.first().and_then(|n| n.split_once('.')) else {
+        return validation("missing <server>.<tool>");
+    };
+    let raw = match flag(args, "--json") {
+        Some(j) => j.to_string(),
+        None if std::io::IsTerminal::is_terminal(&std::io::stdin()) => "{}".into(),
+        None => match read_stdin() {
+            Ok(s) if s.trim().is_empty() => "{}".into(),
+            Ok(s) => s,
+            Err(e) => return validation(e),
+        },
+    };
+    let tool_args: Value = match serde_json::from_str(&raw) {
+        Ok(v @ Value::Object(_)) => v,
+        Ok(_) => return validation("tool arguments must be a JSON object"),
+        Err(e) => return validation(format!("invalid JSON arguments: {e}")),
+    };
+    let project = match resolve_project(args, projects) {
+        Ok(p) => p,
+        Err(e) => return validation(e),
+    };
+    let hub = match mcp(root) {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                exit::INTERNAL,
+                json!({"outcome": "error", "message": e.to_string()}),
+            )
+        }
+    };
+    // Approval gate: tools without MCP readOnlyHint need --confirm.
+    if !has(args, "--confirm") {
+        match hub.list_tools(server, &project) {
+            Ok(tools) => match tools.iter().find(|t| t.name == tool) {
+                None => return validation(format!("unknown tool `{tool}` on `{server}`")),
+                Some(t) if t.mutating() => {
+                    return (
+                        exit::APPROVAL_REQUIRED,
+                        json!({"outcome": "approval_required", "tool": format!("{server}.{tool}"),
+                        "reason": {"de": "Dieses Tool kann Daten beim Anbieter ändern und braucht eine Freigabe.",
+                                   "en": "This tool may change data at the provider and needs approval."},
+                        "confirm_hint": "re-run the same command with --confirm after approval"}),
+                    );
+                }
+                Some(_) => {}
+            },
+            Err(_) => {
+                let v = hub.0.client().credential_required(server, &project);
+                return (
+                    exit::CREDENTIAL_REQUIRED,
+                    serde_json::to_value(v).unwrap_or(Value::Null),
+                );
+            }
+        }
+    }
+    match hub.0.client().call_tool(server, &project, tool, &tool_args) {
+        Ok(o) => {
+            let code = match &o {
+                McpOutcome::Success { .. } => exit::OK,
+                McpOutcome::ToolError { .. } => exit::UPSTREAM,
+                McpOutcome::CredentialRequired { .. } => exit::CREDENTIAL_REQUIRED,
+            };
+            (code, serde_json::to_value(&o).unwrap_or(Value::Null))
+        }
+        Err(e) => (
+            exit::UPSTREAM,
+            json!({"outcome": "provider_error", "message": e.to_string()}),
+        ),
     }
 }
 

@@ -276,6 +276,7 @@ mod tests {
             Ok(HttpResponse {
                 status: 200,
                 body: serde_json::to_vec(&self.reply).unwrap(),
+                session_id: None,
             })
         }
     }

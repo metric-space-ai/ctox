@@ -16,6 +16,7 @@ pub mod model;
 pub mod oauth2;
 pub mod pkce;
 pub mod refresh;
+pub mod remote_mcp;
 pub mod store;
 pub mod toolkits;
 
