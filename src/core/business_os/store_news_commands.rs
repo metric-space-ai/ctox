@@ -291,7 +291,7 @@ fn handle_source_auth_assist(
         &source_id,
         now_ms() as i64,
         json!({
-            "status": "needs_auth",
+            "status": "auth_requested",
             "account_handle": source.get("account_handle").cloned().unwrap_or(json!("")),
             "payload": Value::Object(payload),
         }),
@@ -638,6 +638,23 @@ fn apply_issue_reply(
         object.insert("updated_at_ms".to_string(), json!(now));
     }
     write_record(root, conn, "news_issues", &issue_id, now, issue)?;
+    // Only sources of this topic may be touched by its issue run.
+    for (source_id, status, note) in &parsed.source_report {
+        let belongs =
+            load_rxdb_collection_record(root, "news_sources", source_id)?.is_some_and(|source| {
+                source.get("topic_id").and_then(Value::as_str) == Some(topic_id.as_str())
+            });
+        if belongs {
+            patch_record(
+                root,
+                conn,
+                "news_sources",
+                source_id,
+                now,
+                json!({ "status": status, "last_error": note, "last_run_at_ms": now }),
+            )?;
+        }
+    }
     patch_record(
         root,
         conn,
@@ -705,6 +722,7 @@ pub(super) fn mark_news_command_failed(
 struct ParsedIssue {
     posts: Vec<Value>,
     trends: Vec<Value>,
+    source_report: Vec<(String, String, String)>,
     summary: String,
     dropped: usize,
 }
@@ -792,9 +810,27 @@ fn parse_issue_reply(reply_text: &str) -> anyhow::Result<ParsedIssue> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let source_report = value
+        .get("source_report")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(200)
+                .filter_map(|item| {
+                    let source_id = clip(item.get("source_id"), 220);
+                    let status = clip(item.get("status"), 20);
+                    (valid_record_id(&source_id)
+                        && matches!(status.as_str(), "ok" | "needs_auth" | "failed"))
+                    .then(|| (source_id, status, clip(item.get("note"), 300)))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     Ok(ParsedIssue {
         posts,
         trends,
+        source_report,
         summary: clip(value.get("summary"), 1_000),
         dropped,
     })
@@ -909,7 +945,8 @@ mod tests {
   {"category":"weird","intro":"Ohne Quelle","sources":[]},
   {"intro":"","sources":[{"url":"https://a.example"}]}
  ],
- "trends":[{"title":"Agent-Sandboxing","discussion_count":860},{"title":""}]}
+ "trends":[{"title":"Agent-Sandboxing","discussion_count":860},{"title":""}],
+ "source_report":[{"source_id":"source_x","status":"needs_auth","note":"login wall"},{"source_id":"../x","status":"ok"},{"source_id":"source_y","status":"great"}]}
 ```"#;
         let parsed = parse_issue_reply(reply).expect("parses");
         assert_eq!(parsed.posts.len(), 1);
@@ -922,6 +959,14 @@ mod tests {
         assert_eq!(post["published_at_ms"], json!(1_791_867_600_000_i64));
         assert_eq!(parsed.trends.len(), 1);
         assert_eq!(parsed.summary, "Zwei Releases");
+        assert_eq!(
+            parsed.source_report,
+            vec![(
+                "source_x".to_string(),
+                "needs_auth".to_string(),
+                "login wall".to_string()
+            )]
+        );
     }
 
     #[test]

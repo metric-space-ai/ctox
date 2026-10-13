@@ -62,5 +62,6 @@
   "daily": "Daily {0}",
   "weekly": "{1} {0}",
   "deadline": "Deadline {0}",
-  "manual": "Manual"
+  "manual": "Manual",
+  "statusAuthRequested": "sign-in open"
 }

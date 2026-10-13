@@ -90,6 +90,7 @@ const labels = {
     statusFailed: 'Fehler',
     statusRepairing: 'wird repariert',
     statusPending: 'in Arbeit',
+    statusAuthRequested: 'Anmeldung offen',
     saveTopicFirst: 'Speichere das Thema, bevor du Quellen einrichtest.',
     placeholderLab: 'https://www.example.com/blog',
     placeholderX: 'Liste, Suche oder @account',
@@ -156,6 +157,7 @@ const labels = {
     statusFailed: 'Error',
     statusRepairing: 'repairing',
     statusPending: 'in progress',
+    statusAuthRequested: 'sign-in open',
     saveTopicFirst: 'Save the topic before setting up sources.',
     placeholderLab: 'https://www.example.com/blog',
     placeholderX: 'List, search, or @account',
@@ -939,10 +941,10 @@ function syncSourcePlaceholder() {
 }
 
 function sourceStatusPill(source) {
-  const map = { needs_auth: 'statusNeedsAuth', failed: 'statusFailed', repairing: 'statusRepairing', pending: 'statusPending' };
+  const map = { needs_auth: 'statusNeedsAuth', auth_requested: 'statusAuthRequested', failed: 'statusFailed', repairing: 'statusRepairing', pending: 'statusPending' };
   const key = map[source.status];
   if (!key) return '';
-  const tone = source.status === 'failed' ? 'is-danger' : source.status === 'pending' ? '' : 'is-warning';
+  const tone = source.status === 'failed' ? 'is-danger' : source.status === 'pending' || source.status === 'auth_requested' ? '' : 'is-warning';
   return `<span class="news-pill ${tone}" title="${esc(source.last_error || '')}">${esc(t(key))}</span>`;
 }
 

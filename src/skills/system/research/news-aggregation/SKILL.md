@@ -91,17 +91,23 @@ dropped by the writeback; a reply with no valid post fails the issue.
   ],
   "trends": [
     { "title": "Agent-Sandboxing", "category": "tool", "discussion_count": 860, "post_index": 1 }
+  ],
+  "source_report": [
+    { "source_id": "source_…", "status": "ok" },
+    { "source_id": "source_…", "status": "needs_auth", "note": "X shows the login wall" }
   ]
 }
 ```
 
 `author_kind` is `lab`, `community`, `media` or `person`. `trends` lists the
 three to five most discussed themes of the issue; `post_index` is the 0-based
-index of the post that covers it.
+index of the post that covers it. `source_report` gives every configured
+source (`record_snapshot.sources[].id`) one status — `ok`, `needs_auth` or
+`failed` with a short `note`; the News app shows it on the source row.
 
 ## Done when
 
-- Every configured source was read or its failure is named in `summary`.
+- Every configured source was read or its failure is named in `source_report`.
 - Every post links its primary source.
 - The reply is the JSON object above and nothing the writeback would drop
   silently.

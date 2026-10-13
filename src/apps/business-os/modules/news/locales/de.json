@@ -62,5 +62,6 @@
   "daily": "Täglich {0}",
   "weekly": "{1} {0}",
   "deadline": "Stichtag {0}",
-  "manual": "Manuell"
+  "manual": "Manuell",
+  "statusAuthRequested": "Anmeldung offen"
 }
