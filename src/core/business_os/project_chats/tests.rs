@@ -22,6 +22,8 @@ mod jour_fixe_speech;
 mod persistent_worker_binding;
 #[path = "presentation_tests.rs"]
 mod presentation;
+#[path = "project_init_tests.rs"]
+mod project_init_flow;
 #[path = "recovery_tests.rs"]
 mod recovery;
 #[path = "supervisor_tests.rs"]

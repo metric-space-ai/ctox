@@ -203,6 +203,3 @@ pub(in crate::business_os) fn handle(
     Ok(json!({"ok":true,"project_id":project_id,"operation_id":operation,"steps":steps}))
 }
 
-#[cfg(test)]
-#[path = "project_init_tests.rs"]
-mod tests;

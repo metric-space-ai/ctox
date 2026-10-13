@@ -3,7 +3,7 @@
 use super::*;
 
 fn fixture(jour_fixe: Value) -> anyhow::Result<tempfile::TempDir> {
-    let root = super::super::weekly_reports::fixture()?;
+    let root = super::weekly_reports::fixture()?;
     let conn = open_store(root.path())?;
     let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
     project["jour_fixe"] = jour_fixe;
@@ -14,7 +14,7 @@ fn fixture(jour_fixe: Value) -> anyhow::Result<tempfile::TempDir> {
 fn init(root: &Path, id: &str) -> anyhow::Result<Value> {
     let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
         root,
-        json!({"id":id,"module":"ctox","command_type":COMMAND,"record_id":"project",
+        json!({"id":id,"module":"ctox","command_type":super::project_init::COMMAND,"record_id":"project",
           "payload":{"project_id":"project","as_of":"2026-10-13"},
           "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
     )?;
