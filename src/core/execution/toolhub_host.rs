@@ -450,7 +450,10 @@ mod tests {
         );
         assert_eq!(c, exit::CREDENTIAL_REQUIRED);
         assert_eq!(v["auth_schemes"], json!(["oauth2", "bearer"]));
-        assert!(v["connect_hint"].as_str().unwrap().contains("config-set --toolkit github"));
+        assert!(v["connect_hint"]
+            .as_str()
+            .unwrap()
+            .contains("config-set --toolkit github"));
         let (c, _) = exec(
             &hub,
             &args(&[
