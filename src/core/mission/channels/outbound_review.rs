@@ -1807,6 +1807,7 @@ pub(super) fn require_unconsumed_founder_reply_review(
             WHERE inbound_message_key = ?1
               AND action_digest = ?2
               AND sent_at IS NULL
+              AND reviewer != 'policy-escalation'
             LIMIT 1
             "#,
             params![inbound_message_key, action_digest],
@@ -1834,6 +1835,7 @@ pub(super) fn require_any_unconsumed_founder_outbound_review(
             WHERE action_digest = ?1
               AND sent_at IS NULL
               AND terminal_no_send = 0
+              AND reviewer != 'policy-escalation'
             ORDER BY approved_at DESC
             LIMIT 1
             "#,
@@ -2318,7 +2320,8 @@ pub(crate) fn record_and_send_founder_escalation_reply(
 ) -> Result<Value> {
     // This automatic path may observe an already consumed legacy receipt, but
     // it cannot approve content or recipients and must never initiate a send.
-    let conn = open_channel_db_read_only(&resolve_db_path(root, None))?;
+    let conn = open_channel_db_read_only(&resolve_db_path(root, None))?
+        .context("native communication store unavailable for internal escalation")?;
     let approval_key: Option<String> = conn
         .query_row(
             "SELECT approval_key FROM communication_founder_reply_reviews

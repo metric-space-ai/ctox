@@ -1,5 +1,36 @@
 use super::*;
 #[test]
+fn founder_escalation_policy_cannot_authorize_a_regular_reply() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE communication_founder_reply_reviews (
+        approval_key TEXT, inbound_message_key TEXT, action_digest TEXT,
+        reviewer TEXT, sent_at TEXT);",
+    )
+    .unwrap();
+    let action = FounderReplyAction::default();
+    let body = "An automatic failure notice.";
+    let (digest, _, _) = founder_reply_review_digest(&action, body);
+    conn.execute(
+        "INSERT INTO communication_founder_reply_reviews
+        VALUES ('policy', 'email:inbound', ?1, 'policy-escalation', NULL)",
+        [digest],
+    )
+    .unwrap();
+    assert!(
+        require_unconsumed_founder_reply_review(&conn, "email:inbound", &action, body).is_err()
+    );
+    conn.execute(
+        "UPDATE communication_founder_reply_reviews SET reviewer='external-review'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        require_unconsumed_founder_reply_review(&conn, "email:inbound", &action, body).unwrap(),
+        "policy"
+    );
+}
+#[test]
 fn founder_escalation_chat_receipts_keep_their_existing_send_semantics() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
