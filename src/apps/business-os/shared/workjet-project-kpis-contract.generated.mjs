@@ -362,6 +362,10 @@ export const PROJECT_KPIS_COMMANDS = deepFreeze({
     "request_type": "ReadKpisRequest",
     "authorization": "owner"
   },
+  "ctox.workjet.project.kpis.refresh": {
+    "request_type": "ReadKpisRequest",
+    "authorization": "owner"
+  },
   "ctox.workjet.project.kpis.configure": {
     "request_type": "ConfigureKpisRequest",
     "authorization": "owner"
