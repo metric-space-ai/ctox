@@ -253,6 +253,65 @@ atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish
 the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acceptance.
 
+### Local durable write admission — S5-Vorgriff
+
+Every collection shares IndexedDB's `documents` object store. A replication
+batch formerly retained its writer transaction through every sequential get/put;
+even a command's preparatory read waited behind the whole batch, before WAL
+append. This P0 S5-Vorgriff bounds replication-origin transactions to5 rows,
+serializes background writers per database handle, and gives local writes
+bounded preference through their existing recovery-journal and primary path.
+At the front of the background transaction queue, admission waits for at most
+eight completed local write attempts or eight milliseconds, then admits one
+replication quantum even while local writes remain active. Posted tasks make
+the scheduling deadline observable without hidden-guest timer clamping;
+the preference also ends after at most eight posted tasks, bounding scheduler
+work when local I/O stalls instead of polling until a wall-clock deadline.
+event-loop stalls or already active IndexedDB transactions can still delay I/O.
+It applies to local writes without collection
+special cases; transport and command authority are unchanged.
+Admission serializes individual background transactions, not whole batches,
+so small incoming receipts also progress between bulk replication quanta.
+
+The periodic unsynced diagnostic uses distinct collection keys and indexed
+pushable counts. It must not hold a readonly document-store transaction while
+cloning every replicated row, which would also block local writer transactions.
+Local WAL append and primary-commit marking still await their durable IndexedDB
+transactions. Their diagnostic status publication is coalesced after the commits
+with a one-second timer, rather than rescanning all pending WAL payloads twice
+on each command's critical path. Explicit status reads and native-ACK publication
+remain fresh; closing the journal cancels its pending diagnostic timer.
+
+The caller still awaits the entire replication batch before advancing its pull
+checkpoint. A failed batch may have a committed prefix; replay retains the
+existing per-document LWW/conflict checks. Successful batches publish one change
+notification, rather than one per quantum. Local batches retain their existing
+atomic primary transaction and journal-before-primary ordering.
+
+`command-persistence-browser-smoke.mjs` measures20 actual collection inserts
+during10,000 replication-origin upserts over a retained10,000-row browser store,
+reports the unchanged nearest-rank product target p95 below50ms, and verifies all commands,
+
+their committed WAL entries and all replicated rows after reopening. It isolates
+the production storage path; it does not certify an installed Owner guest or
+the network transport. Its output attributes time to recovery, preparatory read,
+WAL append, primary write and WAL commit. `--assert-product-budget` requires the
+50ms target on a dedicated measurement. The default shared-runner smoke instead
+requires p95 below1000ms: main2cbddfd2c reproduced16094.2ms, while the repair
+measured32.5ms on the lane and127.8ms on GitHub. This fixed regression boundary
+leaves more than7x headroom above the observed runner sample and remains more
+than16x below the original serialization defect. Every result records both
+budgets and whether the50ms product target was met; a green CI smoke alone does
+not establish that target or installed acceptance.
+
+Its20 samples span two seconds, including the periodic diagnostic refresh.
+It also checks exact unsynced counts and delivery of a small native receipt
+before the competing bulk replication finishes.
+`write-admission-fairness-browser-smoke.mjs` continuously inserts local writes
+from three producers while one real WAL-committed operation remains in flight.
+All100 native rows must commit before the pressure is released; the test also
+verifies that every completed local write retains its committed journal entry.
+
 ### Native command return scheduling — S5-Vorgriff
 
 This P0 S5-Vorgriff is temporary until S5 supplies separate transport lanes.
