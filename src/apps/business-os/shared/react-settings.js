@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261012-shell-v2-command-timing-rebase623';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261013-shell-v2-checkpoint-readonly-rebase642';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
