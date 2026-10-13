@@ -15370,7 +15370,9 @@ pub(in crate::business_os) mod tests {
                     .storage_instance
                     .find_documents_by_id(&["module-catalog".to_string()], false),
             )?;
-            assert_eq!(document["module-catalog"]["modules"][0]["id"], "ctox");
+            assert_eq!(document.len(), 1);
+            assert_eq!(document[0]["id"], "module-catalog");
+            assert_eq!(document[0]["modules"][0]["id"], "ctox");
         }
         runtime.block_on(new_peer.database.close())?;
         assert_eq!(result?, 1);
