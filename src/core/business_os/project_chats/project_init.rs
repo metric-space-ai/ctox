@@ -6,7 +6,9 @@
 //! refresh (5-year research turn) and one registered Supervisor turn running
 //! the project-init skill (KPIs, first parent worker). Every step derives its
 //! command id from the init operation, so a replay returns current progress
-//! instead of creating new work. A failed step never aborts later steps.
+//! instead of creating new work. Exit and Supervisor ids also include the
+//! bound thread, so a poll after the Supervisor is bound admits them then.
+//! A failed step never aborts later steps.
 use super::super::{threads, workjet_identity};
 use super::*;
 use crate::business_os::store;
@@ -161,7 +163,7 @@ pub(in crate::business_os) fn handle(
     let exit = submit(
         root,
         &session,
-        json!({"id":stable_id("workjet_project_init_exit",&[&operation]),"module":"ctox",
+        json!({"id":stable_id("workjet_project_init_exit",&[&operation,thread.as_deref().unwrap_or("unbound")]),"module":"ctox",
           "command_type":"ctox.workjet.exit_model.refresh","record_id":project_id,
           "payload":{"project_id":project_id,"as_of":as_of,"resources":{
             "hours_per_week":payload.hours_per_week.unwrap_or(20.0),
@@ -190,7 +192,7 @@ pub(in crate::business_os) fn handle(
     let turn = submit(
         root,
         &session,
-        json!({"id":stable_id("workjet_project_init_turn",&[&operation]),"module":"ctox",
+        json!({"id":stable_id("workjet_project_init_turn",&[&operation,&thread]),"module":"ctox",
           "command_type":"ctox.workjet.project.supervisor.turn.submit","record_id":project_id,
           "payload":{"project_id":project_id,"thread_id":thread,"goal":goal}}),
     );
