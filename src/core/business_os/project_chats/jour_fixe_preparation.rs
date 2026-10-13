@@ -145,6 +145,7 @@ pub(super) fn emit(
     tx.commit()?;
     drop(conn);
     super::super::workjet_project_kpis::resolver::refresh_project(root, &route.project_id, true)?;
+    super::jour_fixe_brief::prepare(root, &operation, &existing, &project)?;
     // Supervisor goals are bounded single-line text; retain every embedded skill word.
     let accepted = super::super::store::accept_rxdb_business_command_with_origin(
         root,

@@ -12255,7 +12255,7 @@
     "additionalProperties": false
   },
   "workjet_projects": {
-    "version": 4,
+    "version": 5,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -12272,6 +12272,10 @@
         "maxLength": 4096
       },
       "repo_url": {
+        "type": "string",
+        "maxLength": 2048
+      },
+      "repository_url": {
         "type": "string",
         "maxLength": 2048
       },
