@@ -13,34 +13,20 @@ use crate::model::OAuth2Scheme;
 
 pub const CALLBACK_PATH: &str = "/toolhub/oauth/callback";
 
-/// Where the provider redirects after consent.
+/// Where the provider redirects after consent. Like the cliproxyapi OAuth
+/// servers (`internal/auth/*/oauth_server.rs`), the callback is always served
+/// locally by the CTOX instance itself; there is no central OAuth service.
+/// Headless/remote instances: open the URL anywhere, then paste the final
+/// redirect URL (or `code=..&state=..`) into `ctox toolhub complete`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RedirectTarget {
-    /// Public instance callback, e.g. `https://<instance>.ctox.dev/toolhub/oauth/callback`.
-    Instance { base_url: String },
-    /// Local loopback (desktop / dev), RFC 8252 section 7.3.
+    /// Local loopback (RFC 8252 section 7.3).
     Loopback { port: u16 },
 }
 
 impl RedirectTarget {
-    pub fn for_instance_name(instance: &str) -> Result<Self> {
-        if instance.is_empty()
-            || !instance
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            bail!("invalid CTOX instance name");
-        }
-        Ok(Self::Instance {
-            base_url: format!("https://{instance}.ctox.dev"),
-        })
-    }
-
     pub fn redirect_uri(&self) -> String {
         match self {
-            Self::Instance { base_url } => {
-                format!("{}{CALLBACK_PATH}", base_url.trim_end_matches('/'))
-            }
             Self::Loopback { port } => format!("http://127.0.0.1:{port}{CALLBACK_PATH}"),
         }
     }
@@ -311,7 +297,7 @@ mod tests {
             &scheme(),
             &AuthorizeParams {
                 client_id: "cid",
-                redirect_uri: "https://m.ctox.dev/toolhub/oauth/callback",
+                redirect_uri: "http://127.0.0.1:1/toolhub/oauth/callback",
                 scopes: &["repo".into(), "read:org".into()],
                 state: "st",
                 code_challenge: Some("ch"),
@@ -325,7 +311,7 @@ mod tests {
         assert_eq!(q["code_challenge_method"], "S256");
         assert_eq!(
             q["redirect_uri"],
-            "https://m.ctox.dev/toolhub/oauth/callback"
+            "http://127.0.0.1:1/toolhub/oauth/callback"
         );
     }
 
@@ -395,12 +381,9 @@ mod tests {
         );
         assert!(parse_callback("code=a").is_err());
         assert_eq!(
-            RedirectTarget::for_instance_name("welsch")
-                .unwrap()
-                .redirect_uri(),
-            "https://welsch.ctox.dev/toolhub/oauth/callback"
+            RedirectTarget::Loopback { port: 1 }.redirect_uri(),
+            "http://127.0.0.1:1/toolhub/oauth/callback"
         );
-        assert!(RedirectTarget::for_instance_name("evil.com/").is_err());
     }
 
     #[test]

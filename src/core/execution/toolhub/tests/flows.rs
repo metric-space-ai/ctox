@@ -57,7 +57,7 @@ fn hub(provider: Arc<Provider>, now: Arc<AtomicU64>) -> ToolHub<MemorySecretBack
     let hub = ToolHub::new(
         MemorySecretBackend::default(),
         provider,
-        RedirectTarget::for_instance_name("welsch").unwrap(),
+        RedirectTarget::Loopback { port: 54599 },
     )
     .with_clock(Arc::new(move || clock.load(Ordering::SeqCst)));
     hub.upsert_auth_config(
@@ -95,14 +95,14 @@ fn oauth_connect_execute_refresh_on_401_once() {
     let now = Arc::new(AtomicU64::new(1_000));
     let hub = hub(provider.clone(), now.clone());
 
-    let req = hub.connect_oauth("gh-oauth", "michael").unwrap();
+    let req = hub.connect_oauth("gh-oauth", "proj", "michael").unwrap();
     assert!(req
         .redirect_url
         .starts_with("https://github.com/login/oauth/authorize?"));
     assert!(req.redirect_url.contains("code_challenge="));
     assert!(req
         .redirect_url
-        .contains("welsch.ctox.dev%2Ftoolhub%2Foauth%2Fcallback"));
+        .contains("127.0.0.1%3A54599%2Ftoolhub%2Foauth%2Fcallback"));
     assert_eq!(
         hub.status(&req.account_id).unwrap().unwrap().status,
         ConnectionStatus::Initializing
@@ -112,7 +112,7 @@ fn oauth_connect_execute_refresh_on_401_once() {
     assert!(hub.complete_oauth("code=x&state=forged").is_err());
     let account = hub
         .complete_oauth(&format!(
-            "https://welsch.ctox.dev/toolhub/oauth/callback?code=c1&state={}",
+            "http://127.0.0.1:54599/toolhub/oauth/callback?code=c1&state={}",
             req.state
         ))
         .unwrap();
@@ -130,7 +130,7 @@ fn oauth_connect_execute_refresh_on_401_once() {
 
     let out = hub
         .execute(
-            "michael",
+            "proj",
             "GITHUB_LIST_ISSUES",
             &json!({"owner": "metric-space-ai", "repo": "ctox"}),
             None,
@@ -148,7 +148,7 @@ fn oauth_connect_execute_refresh_on_401_once() {
     let before = provider.log.lock().unwrap().len();
     let out = hub
         .execute(
-            "michael",
+            "proj",
             "GITHUB_GET_REPO",
             &json!({"owner": "metric-space-ai", "repo": "ctox"}),
             None,
@@ -164,7 +164,7 @@ fn oauth_connect_execute_refresh_on_401_once() {
     // Other owners never see this account.
     assert!(matches!(
         hub.execute(
-            "someone-else",
+            "other-project",
             "GITHUB_GET_REPO",
             &json!({"owner": "a", "repo": "b"}),
             None
@@ -190,11 +190,11 @@ fn bearer_401_without_refresh_marks_expired_and_requires_credential() {
     let hub = hub(provider.clone(), Arc::new(AtomicU64::new(1)));
     *provider.valid_token.lock().unwrap() = "ghp_good".into();
     let acc = hub
-        .connect_with_credential("gh-pat", "michael", "ghp_good")
+        .connect_with_credential("gh-pat", "proj", "michael", "ghp_good")
         .unwrap();
     assert!(matches!(
         hub.execute(
-            "michael",
+            "proj",
             "GITHUB_GET_REPO",
             &json!({"owner": "a", "repo": "b"}),
             None
@@ -205,7 +205,7 @@ fn bearer_401_without_refresh_marks_expired_and_requires_credential() {
     *provider.valid_token.lock().unwrap() = "revoked".into();
     let out = hub
         .execute(
-            "michael",
+            "proj",
             "GITHUB_GET_REPO",
             &json!({"owner": "a", "repo": "b"}),
             None,
@@ -224,12 +224,12 @@ fn bearer_401_without_refresh_marks_expired_and_requires_credential() {
 fn denied_and_stale_callbacks_fail_the_account() {
     let now = Arc::new(AtomicU64::new(10));
     let hub = hub(Arc::new(Provider::default()), now.clone());
-    let req = hub.connect_oauth("gh-oauth", "michael").unwrap();
+    let req = hub.connect_oauth("gh-oauth", "proj", "michael").unwrap();
     let acc = hub
         .complete_oauth(&format!("error=access_denied&state={}", req.state))
         .unwrap();
     assert_eq!(acc.status, ConnectionStatus::Failed);
-    let req = hub.connect_oauth("gh-oauth", "michael").unwrap();
+    let req = hub.connect_oauth("gh-oauth", "proj", "michael").unwrap();
     now.store(10 + 901, Ordering::SeqCst);
     assert_eq!(
         hub.complete_oauth(&format!("code=c&state={}", req.state))
@@ -240,18 +240,44 @@ fn denied_and_stale_callbacks_fail_the_account() {
 }
 
 #[test]
-fn mcp_tool_list_is_bilingual_and_schema_bearing() {
+fn cli_tool_names_and_credential_hint() {
     let hub = hub(Arc::new(Provider::default()), Arc::new(AtomicU64::new(1)));
-    let tools = hub.mcp_tools();
-    assert_eq!(tools.len(), 3);
-    let create = tools
-        .iter()
-        .find(|t| t["name"] == "GITHUB_CREATE_ISSUE")
-        .unwrap();
-    assert_eq!(create["annotations"]["destructiveHint"], true);
     assert_eq!(
-        create["inputSchema"]["required"],
-        json!(["owner", "repo", "title"])
+        hub.tool("github.create_issue").unwrap().1.slug,
+        "GITHUB_CREATE_ISSUE"
     );
-    assert!(create["description"].as_str().unwrap().contains(" / "));
+    assert!(hub.tool("github.nope").is_err());
+    let out = hub
+        .execute(
+            "proj",
+            "github.get_repo",
+            &json!({"owner": "a", "repo": "b"}),
+            None,
+        )
+        .unwrap();
+    let ToolOutcome::CredentialRequired {
+        auth_schemes,
+        connect_hint,
+        ..
+    } = out
+    else {
+        panic!()
+    };
+    assert_eq!(
+        auth_schemes,
+        vec![AuthSchemeKind::OAuth2, AuthSchemeKind::Bearer]
+    );
+    assert!(connect_hint.contains("--toolkit github"));
+    let wire = serde_json::to_value(
+        hub.execute(
+            "proj",
+            "github.get_repo",
+            &json!({"owner": "a", "repo": "b"}),
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wire["outcome"], "credential_required");
+    assert_eq!(wire["auth_schemes"], json!(["oauth2", "bearer"]));
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::http::{HttpRequest, HttpTransport};
 use crate::model::*;
@@ -30,7 +30,11 @@ pub enum ToolOutcome {
     CredentialRequired {
         toolkit: String,
         account_id: Option<String>,
+        /// Auth schemes the toolkit supports (for the connect element).
+        auth_schemes: Vec<AuthSchemeKind>,
         reason: LocalizedText,
+        /// Hint for agents/humans how to connect (CLI command).
+        connect_hint: String,
     },
 }
 
@@ -101,7 +105,13 @@ impl<B: SecretBackend> ToolHub<B> {
             .ok_or_else(|| anyhow!("unknown toolkit `{slug}`"))
     }
 
-    fn tool(&self, slug: &str) -> Result<(&dyn ToolkitAdapter, &ToolSpec)> {
+    /// Resolve `GITHUB_GET_REPO` or the CLI form `github.get_repo`.
+    pub fn tool(&self, name: &str) -> Result<(&dyn ToolkitAdapter, &ToolSpec)> {
+        let slug = match name.split_once('.') {
+            Some((toolkit, action)) => format!("{}_{}", toolkit, action).to_ascii_uppercase(),
+            None => name.to_string(),
+        };
+        let slug = slug.as_str();
         for t in self.toolkits.values() {
             if let Some(spec) = t.spec().tools.iter().find(|s| s.slug == slug) {
                 return Ok((t.as_ref(), spec));
@@ -155,7 +165,8 @@ impl<B: SecretBackend> ToolHub<B> {
     fn new_account(
         &self,
         config: &AuthConfig,
-        owner: &str,
+        project: &str,
+        actor: &str,
         status: ConnectionStatus,
     ) -> ConnectedAccount {
         let now = self.now();
@@ -163,7 +174,8 @@ impl<B: SecretBackend> ToolHub<B> {
             id: format!("ca_{}", pkce::random_token(12)),
             toolkit: config.toolkit.clone(),
             auth_config_id: config.id.clone(),
-            owner: owner.into(),
+            project: project.into(),
+            created_by: actor.into(),
             status,
             scopes: config.scopes.clone(),
             expires_at: None,
@@ -186,13 +198,18 @@ impl<B: SecretBackend> ToolHub<B> {
     }
 
     /// Start an interactive OAuth2 connection; returns the consent URL.
-    pub fn connect_oauth(&self, auth_config_id: &str, owner: &str) -> Result<ConnectionRequest> {
+    pub fn connect_oauth(
+        &self,
+        auth_config_id: &str,
+        project: &str,
+        actor: &str,
+    ) -> Result<ConnectionRequest> {
         let cfg = self.enabled_config(auth_config_id)?;
         if cfg.scheme != AuthSchemeKind::OAuth2 {
             bail!("auth config is not OAuth2");
         }
         let scheme = self.oauth_scheme(&cfg.toolkit)?;
-        let account = self.new_account(&cfg, owner, ConnectionStatus::Initializing);
+        let account = self.new_account(&cfg, project, actor, ConnectionStatus::Initializing);
         let state = pkce::random_token(24);
         let pkce = scheme.pkce.then(pkce::generate);
         let redirect_uri = self.redirect.redirect_uri();
@@ -334,7 +351,8 @@ impl<B: SecretBackend> ToolHub<B> {
     pub fn connect_with_credential(
         &self,
         auth_config_id: &str,
-        owner: &str,
+        project: &str,
+        actor: &str,
         credential: &str,
     ) -> Result<ConnectedAccount> {
         let cfg = self.enabled_config(auth_config_id)?;
@@ -344,7 +362,7 @@ impl<B: SecretBackend> ToolHub<B> {
         if credential.trim().is_empty() {
             bail!("empty credential");
         }
-        let mut account = self.new_account(&cfg, owner, ConnectionStatus::Active);
+        let mut account = self.new_account(&cfg, project, actor, ConnectionStatus::Active);
         account.status = ConnectionStatus::Active;
         self.store.save(
             &account,
@@ -424,13 +442,13 @@ impl<B: SecretBackend> ToolHub<B> {
 
     fn select_account(
         &self,
-        owner: &str,
+        project: &str,
         toolkit: &str,
         account_id: Option<&str>,
     ) -> Result<Option<ConnectedAccount>> {
         let accounts = self.store.list()?;
         Ok(accounts.into_iter().find(|a| {
-            a.owner == owner
+            a.project == project
                 && a.toolkit == toolkit
                 && account_id.is_none_or(|id| a.id == id)
                 && matches!(
@@ -480,9 +498,15 @@ impl<B: SecretBackend> ToolHub<B> {
     }
 
     fn credential_required(&self, toolkit: &str, account_id: Option<String>) -> ToolOutcome {
+        let auth_schemes = self
+            .toolkit(toolkit)
+            .map(|t| t.spec().auth_schemes.iter().map(AuthScheme::kind).collect())
+            .unwrap_or_default();
         ToolOutcome::CredentialRequired {
             toolkit: toolkit.into(),
             account_id,
+            auth_schemes,
+            connect_hint: format!("ctox toolhub connect --toolkit {toolkit}"),
             reason: LocalizedText::new(
                 format!("Für „{toolkit}“ ist eine (erneute) Verbindung nötig."),
                 format!("A (re)connection to \"{toolkit}\" is required."),
@@ -490,18 +514,19 @@ impl<B: SecretBackend> ToolHub<B> {
         }
     }
 
-    /// Execute a tool for `owner`. Tokens are injected here and never returned.
+    /// Execute a tool within `project`. Tokens are injected here and never returned.
     /// On HTTP 401 the token is refreshed once and the call replayed once.
     pub fn execute(
         &self,
-        owner: &str,
+        project: &str,
         tool_slug: &str,
         args: &Value,
         account_id: Option<&str>,
     ) -> Result<ToolOutcome> {
         let (adapter, spec) = self.tool(tool_slug)?;
+        let tool_slug = spec.slug.as_str();
         let toolkit = spec.toolkit.clone();
-        let Some(mut account) = self.select_account(owner, &toolkit, account_id)? else {
+        let Some(mut account) = self.select_account(project, &toolkit, account_id)? else {
             return Ok(self.credential_required(&toolkit, None));
         };
         let refreshable = |a: &ConnectedAccount| {
@@ -555,23 +580,6 @@ impl<B: SecretBackend> ToolHub<B> {
                 data: response.json().unwrap_or(Value::Null),
             });
         }
-    }
-
-    /// MCP `tools/list` entries for all toolkits (names = tool slugs).
-    pub fn mcp_tools(&self) -> Vec<Value> {
-        self.catalog()
-            .into_iter()
-            .flat_map(|t| t.tools.iter())
-            .map(|t| {
-                json!({
-                    "name": t.slug,
-                    "title": t.title.en,
-                    "description": format!("{} / {}", t.description.en, t.description.de),
-                    "inputSchema": t.input_schema,
-                    "annotations": {"readOnlyHint": !t.mutating, "destructiveHint": t.mutating},
-                })
-            })
-            .collect()
     }
 }
 

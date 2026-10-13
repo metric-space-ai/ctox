@@ -29,8 +29,18 @@ host. Workjet and models never see credentials.
 
 ## OAuth
 
-Callback: `https://<instance>.ctox.dev/toolhub/oauth/callback` (`CTOX_TOOLHUB_INSTANCE`) or
-loopback `http://127.0.0.1:<port>/toolhub/oauth/callback` (`CTOX_TOOLHUB_LOOPBACK_PORT`, default 8765).
+**DE** · Wie im cliproxyapi-Port läuft OAuth direkt auf der CTOX-Instanz: lokaler
+Callback-Server `http://127.0.0.1:<port>/toolhub/oauth/callback`
+(`CTOX_TOOLHUB_LOOPBACK_PORT`, Standard 8765), PKCE (S256), Tokens nur in `secrets.rs`.
+Es gibt keinen zentralen OAuth-Dienst. Headless/entfernt: URL in einem beliebigen Browser
+öffnen, danach die finale Redirect-URL (auch wenn die Seite nicht lädt) mit
+`ctox toolhub complete --callback '<url>'` einfügen.
+
+**EN** · Like the cliproxyapi port, OAuth runs on the CTOX instance itself: local callback
+server, PKCE (S256), tokens only in `secrets.rs`; no central OAuth service. Headless/remote:
+open the URL in any browser, then paste the final redirect URL (even if the page fails to
+load) into `ctox toolhub complete --callback '<url>'`.
+
 Refresh: `next_refresh_after = expires_at - 300s`; on HTTP 401 one refresh + one replay,
 otherwise the account becomes `EXPIRED` and the tool returns `credential_required`.
 

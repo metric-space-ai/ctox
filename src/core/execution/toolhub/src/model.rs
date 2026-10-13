@@ -145,8 +145,10 @@ pub struct ConnectedAccount {
     pub id: String,
     pub toolkit: String,
     pub auth_config_id: String,
-    /// CTOX actor/workspace owning the connection.
-    pub owner: String,
+    /// CTOX project owning the connection (connections are shared within a project).
+    pub project: String,
+    /// Actor that created the connection (audit only, not an access key).
+    pub created_by: String,
     pub status: ConnectionStatus,
     #[serde(default)]
     pub scopes: Vec<String>,
