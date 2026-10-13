@@ -12553,8 +12553,8 @@ fn no_cascade_review_block(
     Some(CompletionReviewDisposition::RequeueInternalWork {
         work_id: target_work_id,
         summary: format!(
-            "Review failed for durable internal work kind `{}`. Core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework: {}",
-            kind, checkpoint_proof, outcome.summary
+            "Review failed: {}. Durable internal work kind `{}`; core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework.",
+            outcome.summary, kind, checkpoint_proof
         ),
     })
 }
@@ -50769,17 +50769,19 @@ Those are not durable artifact requirements."
         .expect("failed to create self-work");
         let mut job = self_work_job();
         job.ticket_self_work_id = Some(item.work_id.clone());
-        let mut outcome = review::ReviewOutcome::skipped("still insufficient");
+        let mut outcome = review::ReviewOutcome::skipped("Required provider evidence is missing");
         outcome.verdict = review::ReviewVerdict::Fail;
         outcome.required = true;
 
         let disposition = no_cascade_review_block(&root, &job, &outcome)
             .expect("self-work review failure should be fed back into main work");
 
-        assert!(matches!(
-            disposition,
-            CompletionReviewDisposition::RequeueInternalWork { .. }
-        ));
+        let CompletionReviewDisposition::RequeueInternalWork { summary, .. } = disposition else {
+            panic!("failed review must requeue the same durable work");
+        };
+        // Ticket/queue repair notes clip summaries to 180 characters. The
+        // actionable verdict must survive that real feedback boundary.
+        assert!(clip_text(&summary, 180).contains(&outcome.summary));
 
         let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open channel db");
