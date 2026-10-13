@@ -350,7 +350,9 @@ fn refresh_evaluations(
         ensure!(
             accepted["status"] == "completed",
             "{}",
-            accepted["error_message"].as_str().unwrap_or("exit_model_refresh_not_completed")
+            accepted["error_message"]
+                .as_str()
+                .unwrap_or("exit_model_refresh_not_completed")
         );
         Ok(())
     });

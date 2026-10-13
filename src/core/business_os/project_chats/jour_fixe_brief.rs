@@ -217,9 +217,14 @@ pub(super) fn prepare(
     project: &Value,
     evaluations: &Value,
 ) -> anyhow::Result<()> {
-    prepare_with(root, operation, meeting, project, evaluations, |repo, since| {
-        github(root, repo, since)
-    })
+    prepare_with(
+        root,
+        operation,
+        meeting,
+        project,
+        evaluations,
+        |repo, since| github(root, repo, since),
+    )
 }
 fn prepare_with(
     root: &Path,
@@ -567,7 +572,8 @@ mod tests {
     fn workjet_brief_evaluation_status_lists_every_gap_as_open_item() {
         let ready = json!({"result":{"status":"ready"}});
         let stale = json!({"result":{"status":"stale"}});
-        let refreshed = json!({"kpis":{"refresh":"refreshed"},"exit_model":{"refresh":"refreshed"}});
+        let refreshed =
+            json!({"kpis":{"refresh":"refreshed"},"exit_model":{"refresh":"refreshed"}});
         let fresh = evaluation_status(
             &refreshed,
             Some(&json!({"items":[ready, ready, ready]})),
@@ -599,7 +605,10 @@ mod tests {
             "2026-10-13",
         );
         assert_eq!(old["kpis"]["status"], "missing");
-        assert_eq!(old["exit_model"], json!({"status":"stale","as_of":"2026-09-01"}));
+        assert_eq!(
+            old["exit_model"],
+            json!({"status":"stale","as_of":"2026-09-01"})
+        );
     }
 
     #[test]
@@ -651,10 +660,17 @@ mod tests {
             ),
             ("empty", json!({"repository_url":"","repo_url":""}), None),
         ] {
-            prepare_with(root.path(), operation, &meeting, &project, &json!({}), |repo, since| {
-                assert_eq!(repo, expected);
-                github_with(None, since, |_| panic!("no external call"))
-            })?;
+            prepare_with(
+                root.path(),
+                operation,
+                &meeting,
+                &project,
+                &json!({}),
+                |repo, since| {
+                    assert_eq!(repo, expected);
+                    github_with(None, since, |_| panic!("no external call"))
+                },
+            )?;
         }
         Ok(())
     }
@@ -700,9 +716,14 @@ mod tests {
                 github_with(repo, since, |_| panic!("no external call"))
             },
         )?;
-        prepare_with(root.path(), "prepare", &meeting, &json!({}), &json!({}), |_, _| {
-            panic!("replay must not refetch")
-        })?;
+        prepare_with(
+            root.path(),
+            "prepare",
+            &meeting,
+            &json!({}),
+            &json!({}),
+            |_, _| panic!("replay must not refetch"),
+        )?;
         let conn = open_store(root.path())?;
         let raw = read(&conn, "prepare", "owner", "project", "thread")?.unwrap();
         assert!(raw.len() <= MAX_BYTES);
