@@ -605,7 +605,25 @@ fn apply_issue_reply(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    payload.insert("trends".to_string(), Value::Array(parsed.trends.clone()));
+    // Trends point at posts by index in the reply; the app links by post id.
+    let trends: Vec<Value> = parsed
+        .trends
+        .iter()
+        .map(|trend| {
+            let mut trend = trend.clone();
+            let index = trend.get("post_index").and_then(Value::as_u64);
+            if let Some(object) = trend.as_object_mut() {
+                object.remove("post_index");
+                let post_id = index
+                    .filter(|index| (*index as usize) < parsed.posts.len())
+                    .map(|index| format!("{issue_id}_p{:02}", index + 1))
+                    .unwrap_or_default();
+                object.insert("post_id".to_string(), json!(post_id));
+            }
+            trend
+        })
+        .collect();
+    payload.insert("trends".to_string(), Value::Array(trends));
     if !parsed.summary.is_empty() {
         payload.insert("summary".to_string(), json!(parsed.summary));
     }
