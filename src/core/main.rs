@@ -1025,6 +1025,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("schedule") => schedule::handle_schedule_command(&root, &args[1..]),
         Some("strategy") => strategy::handle_strategy_command(&root, &args[1..]),
         Some("ticket") => tickets::handle_ticket_command(&root, &args[1..]),
+        Some("toolhub") => execution::toolhub_host::handle_toolhub_command(&root, &args[1..]),
         Some("web") => web::handle_web_command(&root, &args[1..]),
         Some("verification") => verification::handle_verification_command(&root, &args[1..]),
         Some("state-invariants") => {

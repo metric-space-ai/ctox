@@ -11,3 +11,4 @@ pub mod cliproxyapi_xai;
 pub mod models;
 pub mod responses;
 pub mod speech;
+pub mod toolhub_host;
