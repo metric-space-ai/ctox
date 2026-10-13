@@ -46,7 +46,7 @@ export function loadBusinessOsAppInventory() {
   // the same change that adds or removes an app. They stood at 36/18 while the
   // tree carried 39/21 (explorer, file-viewer and appsec-pentest had landed),
   // which left CI red on main for every commit (found 09.09.2026).
-  const EXPECTED_SOURCE_APPS = 39;
+  const EXPECTED_SOURCE_APPS = 40;
   const EXPECTED_CORE_APPS = 21;
   if (sourceApps.length !== EXPECTED_SOURCE_APPS) {
     throw new Error(`Business OS source inventory must contain exactly ${EXPECTED_SOURCE_APPS} apps; found ${sourceApps.length}`);

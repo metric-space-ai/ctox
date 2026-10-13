@@ -10356,6 +10356,16 @@ pub fn complete_business_command_from_queue_reply(
             queue_task.as_ref(),
             Some(reply_text),
         )?
+    } else if super::store_news_commands::is_news_queue_command(&command) {
+        process_news_queue_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            task_id,
+            reply_text,
+        )?
     } else if super::store_outbound_commands::is_outbound_adapter_reconciliation_command(&command) {
         let task_id = queue_task
             .as_ref()
@@ -15078,6 +15088,13 @@ pub fn fail_business_command_from_queue_error(
     {
         eprintln!(
             "[business-os] failed to project adapter reconciliation queue error for `{command_id}`: {writeback_error:#}"
+        );
+    }
+    if let Err(writeback_error) =
+        super::store_news_commands::mark_news_command_failed(root, &conn, &command, error)
+    {
+        eprintln!(
+            "[business-os] failed to project news queue error for `{command_id}`: {writeback_error:#}"
         );
     }
     channels::transition_business_command_for_task(
@@ -23645,7 +23662,7 @@ fn is_cv_print_parse_command(command: &BusinessCommand) -> bool {
 /// Extract the first complete JSON object from a skill reply. The skill is
 /// instructed to return only the profile JSON, but tolerate stray prose or a
 /// code fence around it.
-fn extract_json_object(text: &str) -> Option<Value> {
+pub(super) fn extract_json_object(text: &str) -> Option<Value> {
     let trimmed = text.trim();
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         if value.is_object() {
@@ -24034,6 +24051,87 @@ fn process_cv_print_parse_command(
                 failed_at_ms,
             )?;
             Err(err)
+        }
+    }
+}
+
+/// News app queue commands (`news.issue.generate`, `news.source.adapter`):
+/// typed writeback into the news collections plus the canonical command and
+/// queue projections, mirroring the CV-print parse path.
+fn process_news_queue_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    task_id: &str,
+    reply_text: &str,
+) -> anyhow::Result<CommandAccepted> {
+    let task_key = queue_task
+        .map(|task| task.message_key.as_str())
+        .unwrap_or(task_id);
+    let outcome = super::store_news_commands::apply_news_queue_reply(
+        root, conn, command_id, command, task_key, reply_text,
+    );
+    let observed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status = 'accepted', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, observed_at_ms],
+    )?;
+    let mut record = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "accepted",
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": queue_task.map(|task| task.message_key.clone()),
+        "task_status": queue_task.map(|task| normalize_queue_status(&task.route_status)),
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "updated_at_ms": observed_at_ms
+    });
+    match &outcome {
+        Ok(result) => record["result"] = result.clone(),
+        Err(error) => record["error"] = Value::String(error.to_string()),
+    }
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        observed_at_ms,
+        record,
+    )?;
+    refresh_queue_task_projection(
+        root,
+        conn,
+        None,
+        command_id,
+        command,
+        queue_task,
+        observed_at_ms,
+    )?;
+    match outcome {
+        Ok(result) => Ok(CommandAccepted {
+            ok: true,
+            command_id: command_id.to_string(),
+            status: "completed",
+            task_id: queue_task.map(|task| task.message_key.clone()),
+            task_status: Some("completed".to_string()),
+            result: Some(result),
+            ..CommandAccepted::default()
+        }),
+        Err(error) => {
+            if let Err(mark_error) = super::store_news_commands::mark_news_command_failed(
+                root,
+                conn,
+                command,
+                &error.to_string(),
+            ) {
+                eprintln!("[business-os] news failure projection for `{command_id}` failed: {mark_error:#}");
+            }
+            Err(error)
         }
     }
 }
