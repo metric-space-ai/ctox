@@ -690,3 +690,29 @@ fn real_supervisor_intake_counts_redacted_receipts_for_verified_alias_only() -> 
     }
     Ok(())
 }
+
+fn initialize(root: &Path, trusted: &Value, id: &str, revision: u64) -> anyhow::Result<Value> {
+    call(
+        root,
+        trusted,
+        json!({"action":"initialize","request":{"operation_id":id,"project_id":"project","expected_revision":revision,
+          "prompts":[{"kpi_id":"merged","prompt":"Gemergte Pull Requests der letzten 7 Tage"},
+                     {"kpi_id":"tasks","prompt":"Erledigte Projektaufgaben der letzten 7 Tage"},
+                     {"kpi_id":"users","prompt":"Aktive Nutzer der letzten 30 Tage"}]}}),
+    )
+}
+
+#[test]
+fn project_init_seeds_prompts_once_and_never_overwrites_owner_kpis() -> anyhow::Result<()> {
+    let (root, trusted) = workjet_worker_dispatch::meeting_test_fixture()?;
+    let seeded = initialize(root.path(), &trusted, "init-kpis", 0)?;
+    assert_eq!(seeded["kpis"]["items"].as_array().map(Vec::len), Some(3), "{seeded}");
+    assert_eq!(seeded["kpis"]["items"][0]["result"]["status"], "missing_source");
+    // Replay of the same operation is accepted and unchanged.
+    assert_eq!(initialize(root.path(), &trusted, "init-kpis", 0)?, seeded);
+    // A second seeding attempt cannot replace existing prompts.
+    assert!(initialize(root.path(), &trusted, "init-kpis-again", 1).is_err());
+    let (owned, trusted) = fixture()?;
+    assert!(initialize(owned.path(), &trusted, "init-owned", 0).is_err());
+    Ok(())
+}
