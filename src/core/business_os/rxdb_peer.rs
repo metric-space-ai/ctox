@@ -15434,11 +15434,15 @@ pub(in crate::business_os) mod tests {
             assert_eq!(document[0]["modules"][0]["id"], "ctox");
         }
         runtime.block_on(new_peer.database.close())?;
+        // Report the projection failure itself on the unchanged main control;
+        // serialization remains mandatory for every successful projection.
+        let projected = result?;
         assert!(
             waits_for_writer,
             "catalog retry must honor EntireOperation serialization"
         );
-        assert_eq!(result?, 1);
+        assert_eq!(projected, 1);
+
         Ok(())
     }
 
