@@ -9,6 +9,15 @@ cannot establish that the retired owner released its flock. Status probes that
 successfully acquire the lock use the same explicit release. Recovery retains
 its peer guard even after releasing the SQLite transaction.
 
+S4 catalog publication retains one writer. If the database borrowed from a
+published peer closes during projection, the helper releases that peer and its
+process lock before waiting up to the native shutdown bound for a different
+running generation. It retries once directly on the new peer's database; a
+missing replacement or another failure remains an error. The retry never opens
+a temporary database. The ordinary temporary path remains available only when
+no peer serves the root. The release fixture requires a live WebRTC master-change
+event before its explicit catalog refresh, in addition to the projected result.
+
 Private BusinessData pumps subscribe to the exact connection before the remote
 request and release events only after the complete local ACK. An event received
 while that release races the receive joins the same FIFO as the pre-ACK snapshot;

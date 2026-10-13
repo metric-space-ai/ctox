@@ -13346,7 +13346,18 @@ function ensureCtoxSmokeBinary() {
         // S4 publication proof: listen to the actual shared WebRTC master
         // change stream before dispatch. Query refreshes and a page reload
         // cannot satisfy this event boundary.
-        const liveCatalogBridge = await state.sync.startCollection('business_module_catalog');
+        const acquiredCatalogBridge = await state.sync.startCollection('business_module_catalog');
+        let readyTimer;
+        let liveCatalogBridge;
+        try {
+          liveCatalogBridge = acquiredCatalogBridge?.state ? acquiredCatalogBridge
+            : await Promise.race([
+              acquiredCatalogBridge?.ready || Promise.reject(new Error('catalog pending bridge has no ready promise')),
+              new Promise((_, reject) => { readyTimer = setTimeout(() => reject(new Error('catalog bridge readiness timed out')), 30000); }),
+            ]);
+        } finally {
+          clearTimeout(readyTimer);
+        }
         const masterChanges = liveCatalogBridge?.state?.masterChange$;
         if (!masterChanges?.subscribe) throw new Error('catalog master change stream unavailable');
         let catalogMasterPush = null;
