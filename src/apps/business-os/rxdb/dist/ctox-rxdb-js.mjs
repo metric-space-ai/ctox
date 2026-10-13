@@ -2676,7 +2676,7 @@ var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 var INDEX_HIGH_KEY = "\uFFFF";
 var unsyncedCountScheduled = /* @__PURE__ */ new WeakSet();
 var writeAdmissionByDatabase = /* @__PURE__ */ new WeakMap();
-var REPLICATION_WRITE_QUANTUM = 25;
+var REPLICATION_WRITE_QUANTUM = 5;
 function writeAdmission(db) {
   let admission = writeAdmissionByDatabase.get(db);
   if (!admission) {
@@ -3282,10 +3282,16 @@ var CtoxIndexedDbCollection = class {
       const result = { success: {}, error: [], overwrittenLocalConflicts: [], structuredConflicts: [] };
       try {
         for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
-          while (admission.localWrites) {
-            await new Promise((done) => admission.localDrained.push(done));
-          }
-          const chunk = await this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+          const writeQuantum = async () => {
+            while (admission.localWrites) {
+              await new Promise((done) => admission.localDrained.push(done));
+            }
+            return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+          };
+          const pending = admission.background.then(writeQuantum, writeQuantum);
+          admission.background = pending.catch(() => {
+          });
+          const chunk = await pending;
           Object.assign(result.success, chunk.success);
           result.error.push(...chunk.error);
           result.overwrittenLocalConflicts.push(...chunk.overwrittenLocalConflicts);
@@ -3304,10 +3310,7 @@ var CtoxIndexedDbCollection = class {
       }
       return result;
     };
-    const pending = admission.background.then(run, run);
-    admission.background = pending.catch(() => {
-    });
-    return pending;
+    return run();
   }
   async runWithQuotaRecovery(operation, context = {}) {
     try {
@@ -3942,20 +3945,26 @@ function schedulePersistUnsyncedWriteCount(db) {
 }
 async function countUnsyncedWrites(db) {
   const tx = db.transaction(DOCUMENT_STORE, "readonly");
+  const done = idbTransactionDone(tx);
   const store = tx.objectStore(DOCUMENT_STORE);
   const byCollection = {};
-  let total = 0;
-  await iterateCursor(store.openCursor(), (cursor) => {
-    if (!cursor) return false;
-    const record = cursor.value;
-    if (Number(record?.pushable || 0) === 1) {
-      total += 1;
-      const collection = String(record.collection || "unknown");
-      byCollection[collection] = (byCollection[collection] || 0) + 1;
-    }
+  const collections = [];
+  await iterateCursor(store.index("collection").openKeyCursor(null, "nextunique"), (cursor) => {
+    collections.push(String(cursor.key));
     return true;
   });
-  await idbTransactionDone(tx);
+  const pushable = store.index(PUSHABLE_LWT_INDEX);
+  const counts = await Promise.all(collections.map((collection) => idbRequest(pushable.count(
+    IDBKeyRange.bound([collection, 1, 0, ""], [collection, 1, Number.MAX_SAFE_INTEGER, INDEX_HIGH_KEY])
+  ))));
+  await done;
+  let total = 0;
+  for (let index = 0; index < collections.length; index += 1) {
+    const count = Number(counts[index] || 0);
+    if (!count) continue;
+    byCollection[collections[index]] = count;
+    total += count;
+  }
   return { total, byCollection };
 }
 function documentId2(doc) {

@@ -258,11 +258,17 @@ the an on-prem deployment renderer-crash cause or actual Windows8GiB startup acc
 Every collection shares IndexedDB's `documents` object store. A replication
 batch formerly retained its writer transaction through every sequential get/put;
 even a command's preparatory read waited behind the whole batch, before WAL
-append. This P0 S5-Vorgriff bounds replication-origin transactions to25 rows,
+append. This P0 S5-Vorgriff bounds replication-origin transactions to5 rows,
 serializes background writers per database handle, and admits local writes
 through their existing recovery-journal and primary commits before admitting
 the next replication quantum. It applies to local writes without collection
 special cases; transport and command authority are unchanged.
+Admission serializes individual background transactions, not whole batches,
+so small incoming receipts also progress between bulk replication quanta.
+
+The periodic unsynced diagnostic uses distinct collection keys and indexed
+pushable counts. It must not hold a readonly document-store transaction while
+cloning every replicated row, which would also block local writer transactions.
 
 The caller still awaits the entire replication batch before advancing its pull
 checkpoint. A failed batch may have a committed prefix; replay retains the
@@ -277,6 +283,9 @@ their committed WAL entries and all replicated rows after reopening. It isolates
 the production storage path; it does not certify an installed Owner guest or
 the network transport. Its output attributes time to recovery, preparatory read,
 WAL append, primary write and WAL commit.
+Its20 samples span two seconds, including the periodic diagnostic refresh.
+It also checks exact unsynced counts and delivery of a small native receipt
+before the competing bulk replication finishes.
 
 ### Native command return scheduling — S5-Vorgriff
 

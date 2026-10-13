@@ -28,7 +28,7 @@ const REPLICATION_MAX_SCAN_LIMIT = 5000;
 const INDEX_HIGH_KEY = '\uffff';
 const unsyncedCountScheduled = new WeakSet();
 const writeAdmissionByDatabase = new WeakMap();
-const REPLICATION_WRITE_QUANTUM = 25;
+const REPLICATION_WRITE_QUANTUM = 5;
 
 function writeAdmission(db) {
   let admission = writeAdmissionByDatabase.get(db);
@@ -728,10 +728,17 @@ export class CtoxIndexedDbCollection {
       // failed partial batches are safely redelivered by the existing LWW path.
       try {
       for (let offset = 0; offset < rows.length; offset += REPLICATION_WRITE_QUANTUM) {
-        while (admission.localWrites) {
-          await new Promise((done) => admission.localDrained.push(done));
-        }
-        const chunk = await this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+        const writeQuantum = async () => {
+          while (admission.localWrites) {
+            await new Promise((done) => admission.localDrained.push(done));
+          }
+          return this[method](rows.slice(offset, offset + REPLICATION_WRITE_QUANTUM), { ...options, emitChange: false });
+        };
+        // Serialize transactions, not whole replication batches. A small
+        // incoming receipt must also get a turn before a bulk pull finishes.
+        const pending = admission.background.then(writeQuantum, writeQuantum);
+        admission.background = pending.catch(() => {});
+        const chunk = await pending;
         Object.assign(result.success, chunk.success);
         result.error.push(...chunk.error);
         result.overwrittenLocalConflicts.push(...chunk.overwrittenLocalConflicts);
@@ -755,9 +762,7 @@ export class CtoxIndexedDbCollection {
       }
       return result;
     };
-    const pending = admission.background.then(run, run);
-    admission.background = pending.catch(() => {});
-    return pending;
+    return run();
   }
 
   async runWithQuotaRecovery(operation, context = {}) {
@@ -1438,20 +1443,29 @@ function schedulePersistUnsyncedWriteCount(db) {
 
 async function countUnsyncedWrites(db) {
   const tx = db.transaction(DOCUMENT_STORE, 'readonly');
+  const done = idbTransactionDone(tx);
   const store = tx.objectStore(DOCUMENT_STORE);
   const byCollection = {};
-  let total = 0;
-  await iterateCursor(store.openCursor(), (cursor) => {
-    if (!cursor) return false;
-    const record = cursor.value;
-    if (Number(record?.pushable || 0) === 1) {
-      total += 1;
-      const collection = String(record.collection || 'unknown');
-      byCollection[collection] = (byCollection[collection] || 0) + 1;
-    }
+  const collections = [];
+  // This diagnostic read also shares the documents store with command writes.
+  // Walk distinct collection keys and count the pushable index, rather than
+  // pinning a readonly transaction while cloning every replicated document.
+  await iterateCursor(store.index('collection').openKeyCursor(null, 'nextunique'), (cursor) => {
+    collections.push(String(cursor.key));
     return true;
   });
-  await idbTransactionDone(tx);
+  const pushable = store.index(PUSHABLE_LWT_INDEX);
+  const counts = await Promise.all(collections.map((collection) => idbRequest(pushable.count(
+    IDBKeyRange.bound([collection, 1, 0, ''], [collection, 1, Number.MAX_SAFE_INTEGER, INDEX_HIGH_KEY]),
+  ))));
+  await done;
+  let total = 0;
+  for (let index = 0; index < collections.length; index += 1) {
+    const count = Number(counts[index] || 0);
+    if (!count) continue;
+    byCollection[collections[index]] = count;
+    total += count;
+  }
   return { total, byCollection };
 }
 

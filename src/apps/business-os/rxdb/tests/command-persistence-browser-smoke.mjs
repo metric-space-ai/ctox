@@ -25,7 +25,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async (baselineOnly) => {
     const { createRxDatabase } = await import('/src/index.mjs');
     const schema = {
       version: 0, type: 'object', primaryKey: 'id',
@@ -51,7 +51,11 @@ try {
       owner[method] = async (...args) => {
         const start = performance.now();
         try { return await original(...args); }
-        finally { (phases[method] ||= []).push(performance.now() - start); }
+        finally {
+          if (method !== '_bulkWriteOnce' || !args[1]?.replicationOrigin?.role) {
+            (phases[method] ||= []).push(performance.now() - start);
+          }
+        }
       };
     }
     const times = [];
@@ -65,13 +69,28 @@ try {
     // Let the actual replication-origin storage call open its first transaction.
     await new Promise((done) => setTimeout(done, 20));
     const writesDuringReplication = [];
+    let receiptMs = null;
+    let receiptDuringReplication = null;
+    const receipt = baselineOnly ? Promise.resolve() : (async () => {
+      await new Promise((done) => setTimeout(done, 500));
+      const start = performance.now();
+      await commands.storageCollection.bulkWrite([{ id: 'native-receipt', payload: 'native receipt' }], { replicationOrigin: origin });
+      receiptMs = performance.now() - start;
+      receiptDuringReplication = !replicationDone;
+    })();
     await Promise.all(Array.from({ length: 20 }, async (_, index) => {
-      await new Promise((done) => setTimeout(done, index * 10));
+      // Spread samples across the run, including the one-second diagnostic
+      // refresh. An initial 200ms burst would miss that second store blocker.
+      await new Promise((done) => setTimeout(done, index * 100));
       writesDuringReplication.push(!replicationDone);
       const start = performance.now();
       await commands.insert({ id: `command-${index}`, payload: 'durable command' });
       times.push(performance.now() - start);
     }));
+    await receipt;
+    if (!baselineOnly && (!receiptDuringReplication || receiptMs >= 3000)) {
+      throw new Error('a small incoming receipt waited behind the whole bulk replication batch');
+    }
     await replication;
     unsubscribe();
     const replicationMs = performance.now() - replicationStarted;
@@ -80,6 +99,11 @@ try {
       throw new Error('insert resolved without a committed recovery journal entry');
     }
     if (replicationChanges !== 1) throw new Error('transaction slicing amplified replication change notifications');
+    const unsynced = await db.storage.unsyncedWriteSummary();
+    if (unsynced.total !== 20 || unsynced.byCollection.business_commands !== 20) {
+      throw new Error('indexed diagnostics did not count exactly the pending local commands');
+    }
+    const measuredPhases = Object.fromEntries(Object.entries(phases).map(([key, values]) => [key, values.slice(0, 20)]));
     // A rejected local operation must release its admission, so subsequent
     // replication and commands cannot remain behind a leaked priority lease.
     let rejected = false;
@@ -104,6 +128,7 @@ try {
       return originalOnce(...args);
     };
     let injectedFailure = false;
+    if (!baselineOnly) {
     try { await fault.bulkWrite(incoming, { replicationOrigin: origin }); }
     catch (error) { injectedFailure = error.message.includes('injected later'); }
     finally { fault._bulkWriteOnce = originalOnce; }
@@ -113,6 +138,7 @@ try {
     }
     await fault.bulkWrite(incoming, { replicationOrigin: origin });
     if ((await fault.allDocuments()).length !== 55) throw new Error('replication queue did not recover after failure');
+    }
     stopFault();
     await db.close();
     const reopened = await createRxDatabase({ name });
@@ -120,19 +146,24 @@ try {
     await reopened.business_commands.storageCollection.initializeRecovery();
     const persisted = await reopened.business_commands.storageCollection.allDocuments();
     const replicated = await reopened.fixture_leads.storageCollection.allDocuments();
-    if (persisted.length !== 20 || replicated.length !== 10_000 || replicated.some((doc) => !doc.payload.endsWith('updated'))) {
+    const persistedCommands = persisted.filter((doc) => doc.id.startsWith('command-'));
+    if (!baselineOnly && !persisted.some((doc) => doc.id === 'native-receipt' && doc.payload === 'native receipt')) {
+      throw new Error('incoming receipt did not survive reopen');
+    }
+    if (persistedCommands.length !== 20 || replicated.length !== 10_000 || replicated.some((doc) => !doc.payload.endsWith('updated'))) {
       throw new Error('concurrent writes did not survive reopen with all replicated documents');
     }
     await reopened.close();
     indexedDB.deleteDatabase(name);
     indexedDB.deleteDatabase(`${name}__recovery_v2`);
     const p95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
-    return { n: times.length, localPersistenceMs: times, p95Ms: p95(times), phases,
-      phaseP95Ms: Object.fromEntries(Object.entries(phases).map(([key, values]) => [key, p95(values)])),
+    return { n: times.length, localPersistenceMs: times, p95Ms: p95(times), phases: measuredPhases,
+      phaseP95Ms: Object.fromEntries(Object.entries(measuredPhases).map(([key, values]) => [key, p95(values)])),
       writesDuringReplication: writesDuringReplication.filter(Boolean).length, replicationMs,
-      durableAfterReopen: persisted.length, replicatedAfterReopen: replicated.length,
+      durableAfterReopen: persistedCommands.length, replicatedAfterReopen: replicated.length,
+      receiptMs, receiptDuringReplication,
       failedPrefixPreserved: injectedFailure && prefixEvents >= 1 };
-  });
+  }, process.argv.includes('--baseline'));
   console.log(JSON.stringify(result));
   if (process.env.COMMAND_PERSISTENCE_EVIDENCE) writeFileSync(process.env.COMMAND_PERSISTENCE_EVIDENCE, JSON.stringify(result, null, 2));
   if (result.writesDuringReplication !== 20) throw new Error('fixture failed to overlap every command with replication');
