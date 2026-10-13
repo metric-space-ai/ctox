@@ -15,8 +15,10 @@ process lock before waiting up to the native shutdown bound for a different
 running generation. It retries once directly on the new peer's database; a
 missing replacement or another failure remains an error. The retry never opens
 a temporary database. The ordinary temporary path remains available only when
-no peer serves the root. The release fixture requires a live WebRTC master-change
-event before its explicit catalog refresh, in addition to the projected result.
+no peer serves the root. The release fixture requires the exact released catalog
+document over native WebRTC before its explicit catalog refresh: a live master
+push or the replacement generation's initial masterChangesSince response. A
+RESYNC hint or a local query result alone cannot satisfy this publication proof.
 
 Private BusinessData pumps subscribe to the exact connection before the remote
 request and release events only after the complete local ACK. An event received

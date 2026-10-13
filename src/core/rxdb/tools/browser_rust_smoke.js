@@ -13363,27 +13363,39 @@ function ensureCtoxSmokeBinary() {
         // rather than retaining a subscription to the cancelled generation.
         const catalogReplicationPrototype = Object.getPrototypeOf(liveCatalogBridge?.state);
         const originalOnMasterChange = catalogReplicationPrototype?.onMasterChange;
-        if (typeof originalOnMasterChange !== 'function') throw new Error('catalog master change handler unavailable');
+        const originalRequestMasterChangesSince = catalogReplicationPrototype?.requestMasterChangesSince;
+        if (typeof originalOnMasterChange !== 'function' || typeof originalRequestMasterChangesSince !== 'function') {
+          throw new Error('catalog native replication handlers unavailable');
+        }
         let catalogMasterPush = null;
         let releaseSubmitted = false;
+        const observeCatalogDocuments = (state, result, mode) => {
+          if (!releaseSubmitted || state.collection?.name !== 'business_module_catalog') return;
+          const documents = Array.isArray(result?.documents) ? result.documents : [];
+          const projected = documents.find((doc) => String(doc?.id || '') === 'module-catalog'
+            && String(moduleFromCatalog(doc)?.version || '') === '1.0.0');
+          if (projected) catalogMasterPush = { directDocument: true, mode };
+        };
         catalogReplicationPrototype.onMasterChange = function(detail) {
-          if (releaseSubmitted && this.collection?.name === 'business_module_catalog' && detail) {
-            const documents = Array.isArray(detail.result?.documents) ? detail.result.documents : [];
-            const projected = documents.find((doc) => String(doc?.id || '') === 'module-catalog'
-              && String(moduleFromCatalog(doc)?.version || '') === '1.0.0');
-            if (projected || detail.result === 'RESYNC') {
-              catalogMasterPush = { directDocument: Boolean(projected), resync: detail.result === 'RESYNC' };
-            }
-          }
+          observeCatalogDocuments(this, detail?.result, 'master-push');
           return originalOnMasterChange.call(this, detail);
         };
-        releaseSubmitted = true;
-        click('.app-release-dialog button[type="submit"]', 'release submit');
+        // A replacement generation first transfers its snapshot via
+        // masterChangesSince; that response is replication, not a query refresh.
+        // Require the exact released document over either native transfer path.
+        catalogReplicationPrototype.requestMasterChangesSince = async function(...args) {
+          const response = await originalRequestMasterChangesSince.apply(this, args);
+          observeCatalogDocuments(this, response?.result, 'master-pull');
+          return response;
+        };
         try {
+          releaseSubmitted = true;
+          click('.app-release-dialog button[type="submit"]', 'release submit');
           await waitFor(() => ({ ok: Boolean(catalogMasterPush), catalogMasterPush }),
-            30000, 'release catalog native WebRTC master push');
+            30000, 'release catalog native WebRTC publication');
         } finally {
           catalogReplicationPrototype.onMasterChange = originalOnMasterChange;
+          catalogReplicationPrototype.requestMasterChangesSince = originalRequestMasterChangesSince;
         }
 
         const releaseProjection = await waitFor(async () => {
@@ -13597,7 +13609,7 @@ function ensureCtoxSmokeBinary() {
         const checks = {
           privateBeforeRelease,
           publishSucceeded: releaseProjection.releaseCommandStatus === 'completed',
-          catalogMasterPushObserved: Boolean(catalogMasterPush),
+          catalogNativePublicationObserved: Boolean(catalogMasterPush),
           teamVisibleAfterRelease,
           versionBadgeVisible: versionBadgeVisible.ok === true,
           dataReviewVisible: dataReviewVisible.ok === true && dataReviewDialog.ok === true,
@@ -13632,7 +13644,7 @@ function ensureCtoxSmokeBinary() {
           tenantScope: 'local-workspace',
           privateBeforeRelease,
           publishSucceeded: true,
-          catalogMasterPushObserved: Boolean(catalogMasterPush),
+          catalogNativePublicationObserved: Boolean(catalogMasterPush),
           catalogMasterPush,
           teamVisibleAfterRelease,
           versionBadgeVisible: true,
@@ -17310,7 +17322,7 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_app_release_private_before_release=${result.privateBeforeRelease ? 1 : 0}`);
       console.log(`business_os_app_release_publish_succeeded=${result.publishSucceeded ? 1 : 0}`);
       console.log(`business_os_app_release_team_visible_after_release=${result.teamVisibleAfterRelease ? 1 : 0}`);
-      console.log(`business_os_app_release_catalog_master_push_observed=${result.catalogMasterPushObserved ? 1 : 0}`);
+      console.log(`business_os_app_release_catalog_native_publication_observed=${result.catalogNativePublicationObserved ? 1 : 0}`);
       console.log(`business_os_app_release_version_badge_visible=${result.versionBadgeVisible ? 1 : 0}`);
       console.log(`business_os_app_release_data_review_visible=${result.dataReviewVisible ? 1 : 0}`);
       console.log(`business_os_app_release_rollback_succeeded=${result.rollbackSucceeded ? 1 : 0}`);
