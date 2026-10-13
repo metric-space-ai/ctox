@@ -172,7 +172,13 @@
       "schemaHash": "string",
       "nativeVersion": "string",
       "apps": "list:AppRelease"
-    }
+    },
+    "ToolhubLocalizedText": { "de": "string", "en": "string" },
+    "ToolhubToolSummary": { "slug": "string", "title": "ToolhubLocalizedText", "description": "ToolhubLocalizedText", "inputSchema": "json", "mutating": "bool" },
+    "ToolhubToolkitSummary": { "slug": "string", "name": "string", "description": "ToolhubLocalizedText", "authSchemes": "list:ToolhubAuthSchemeKind", "tools": "list:ToolhubToolSummary" },
+    "ToolhubConnectionView": { "accountId": "string", "toolkit": "string", "authConfigId": "string", "status": "ToolhubConnectionStatus", "scopes": "list:string", "expiresAt": "optional:u64", "reason": "optional:string" },
+    "ToolhubConnectRequest": { "toolkit": "string", "authConfigId": "string", "owner": "string" },
+    "ToolhubConnectReply": { "accountId": "string", "status": "ToolhubConnectionStatus", "redirectUrl": "optional:string" }
   },
   "unions": {
     "SessionHandoffWireRequest": {
@@ -217,6 +223,11 @@
       "replayed": { "spec": "ExecutionSpec", "ownership": "ExecutionOwnership" },
       "rejected": { "reason": "string" },
       "unavailable": { "reason": "string" }
+    },
+    "ToolhubEvent": {
+      "catalog": { "toolkits": "list:ToolhubToolkitSummary" },
+      "connectionStatus": { "connection": "ToolhubConnectionView" },
+      "credentialRequired": { "toolkit": "string", "sessionId": "string", "callId": "string", "reason": "ToolhubLocalizedText", "accountId": "optional:string" }
     }
   },
   "enums": {
@@ -228,6 +239,8 @@
       "disclose",
       "receive",
       "resume"
-    ]
+    ],
+    "ToolhubConnectionStatus": ["initializing", "active", "expired", "failed"],
+    "ToolhubAuthSchemeKind": ["oauth2", "apiKey", "basic", "bearer"]
   }
 }
