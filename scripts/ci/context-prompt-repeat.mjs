@@ -19,7 +19,8 @@ async function run(source, index) {
   const child = spawn(process.execPath, [path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js')], {
     cwd: root, detached: true,
     env: { ...process.env, CTOX_BIN: binary, SMOKE_MODE: 'business-os-threads-rightclick-ui',
-      SMOKE_PAGE_PATH: '/index.html', BUSINESS_PORT: '19179', SIGNALING_PORT: '19178',
+      SMOKE_PAGE_PATH: '/index.html', BUSINESS_PORT: process.env.BUSINESS_PORT || '19179',
+      SIGNALING_PORT: process.env.SIGNALING_PORT || '19178',
       SMOKE_PROCESS_LIFECYCLE_PATH: lifecycle },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
