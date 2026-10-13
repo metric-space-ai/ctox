@@ -826,6 +826,25 @@
         "uses_cached_db_handle": false
       },
       "notes": "Decision Hub reads its three kundenpipeline collections through state.ctx.db.collection(name) and uses shell commands for actions. No raw/property/proxy/global database access found; runtime isolation acceptance remains separate."
+    },
+    "news": {
+      "title": "News",
+      "manifest_path": "src/apps/business-os/modules/news/module.json",
+      "source_path": "src/apps/business-os/modules/news",
+      "install_scope": "store",
+      "distribution": "catalog-module",
+      "default_installed": false,
+      "classification": "catalog-user-module",
+      "isolation_status": "guarded-facade-migrated",
+      "owner": "business-os-platform",
+      "review_by": "2027-01-31",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "News resolves news_topics, news_sources, news_issues and news_posts only through ctx.db.collection(name) and dispatches automation through ctx.commandBus.dispatch; no raw DB, collection-property or cached-handle access."
     }
   },
   "desktop_apps": {

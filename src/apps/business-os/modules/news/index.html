@@ -1,0 +1,203 @@
+<!-- This file is a SHELL FRAGMENT: styles and mount(ctx) come from the
+     Business OS shell. index.js fetches it with its own cache-buster. -->
+<main class="news-module" data-news-root data-resize-frame>
+  <!-- LEFT: topics, each with its recent issues as tree nodes. The pane chrome
+       is the canonical data-pg-* grammar wired by the shell. -->
+  <section class="ctox-pane news-pane news-left" aria-label="Themen" data-left-content data-pg-default-view="cards">
+    <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <h2 class="ctox-pane-title" data-label="topicsTitle">Themen</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-action="create-topic" aria-label="Thema anlegen" title="Thema anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="import-topics" aria-label="Themen importieren" title="Themen importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="export-topics" aria-label="Themen exportieren" title="Themen exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-filterbar" data-shell-v2-header-row="2">
+      <input class="ctox-pane-search" type="search" data-pg-search placeholder="Suchen…" aria-label="Themen suchen" />
+      <button class="ctox-pane-icon news-view-toggle" type="button" data-news-view-toggle="left" data-news-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg data-view-glyph="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><svg data-view-glyph="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+      <button class="ctox-pane-icon news-filter-toggle" type="button" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+    </div>
+    <div class="ctox-filter-tray" data-pg-tray data-shell-v2-header-row="3" hidden>
+      <div class="ctox-filter-row">
+        <select class="ctox-select" data-pg-filter data-pg-name="cadence" data-pg-default="all" aria-label="Rhythmus">
+          <option value="all">Jeder Rhythmus</option>
+          <option value="daily">Täglich</option>
+          <option value="weekly">Wöchentlich</option>
+          <option value="deadline">Stichtag</option>
+          <option value="manual">Manuell</option>
+        </select>
+        <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="recent" aria-label="Sortieren nach">
+          <option value="recent">Letzte Ausgabe</option>
+          <option value="title">Name</option>
+        </select>
+        <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+      </div>
+    </div>
+    <nav class="ctox-view-switch" aria-label="Themen-Ansichten">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="active" aria-selected="true">Aktiv<span class="view-count" data-pg-count="active"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="paused" aria-selected="false">Pausiert<span class="view-count" data-pg-count="paused"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well news-scroll" data-topic-list tabindex="-1"></div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </section>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--news-left-width" data-resizer-min="240" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- CENTER: the synthesized X-style feed of the selected issue. -->
+  <section class="ctox-pane news-pane news-center" aria-label="Feed" data-pg-default-view="cards">
+    <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
+      <div class="ctox-pane-title-row">
+        <button class="ctox-pane-icon news-mobile-back" type="button" data-action="mobile-back" aria-label="Zurück zu den Themen" title="Zurück zu den Themen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <div class="ctox-pane-titles">
+          <h2 class="ctox-pane-title" data-feed-title>Kein Thema ausgewählt</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" type="button" data-action="open-issue-task" aria-label="Auftrag in CTOX öffnen" title="Auftrag in CTOX öffnen" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="generate-issue" aria-label="Ausgabe jetzt erzeugen" title="Ausgabe jetzt erzeugen" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg></button>
+          <button class="ctox-pane-icon" type="button" data-action="configure-topic" aria-label="Thema konfigurieren" title="Thema konfigurieren" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-filterbar" data-shell-v2-header-row="2">
+      <input class="ctox-pane-search" type="search" data-pg-search placeholder="Beiträge suchen…" aria-label="Beiträge suchen" />
+      <button class="ctox-pane-icon news-view-toggle" type="button" data-news-view-toggle="center" data-news-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg data-view-glyph="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><svg data-view-glyph="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
+      <button class="ctox-pane-icon news-filter-toggle" type="button" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+    </div>
+    <div class="ctox-filter-tray" data-pg-tray data-shell-v2-header-row="3" hidden>
+      <div class="ctox-filter-row">
+        <select class="ctox-select" data-pg-filter data-pg-name="sort" data-pg-default="rank" aria-label="Sortieren nach">
+          <option value="rank">Relevanz</option>
+          <option value="hype">Hype</option>
+          <option value="time">Zeit</option>
+        </select>
+        <select class="ctox-select" data-pg-filter data-pg-name="saved" data-pg-default="all" aria-label="Gemerkt">
+          <option value="all">Alle Beiträge</option>
+          <option value="saved">Nur gemerkte</option>
+        </select>
+        <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+      </div>
+    </div>
+    <nav class="ctox-view-switch" aria-label="Feed-Ansichten">
+      <div class="ctox-pane-tabs" role="tablist" data-feed-band>
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="model" aria-selected="false">Modelle<span class="view-count" data-pg-count="model"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="tool" aria-selected="false">Tools<span class="view-count" data-pg-count="tool"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="research" aria-selected="false">Forschung<span class="view-count" data-pg-count="research"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="debate" aria-selected="false">Debatten<span class="view-count" data-pg-count="debate"></span></button>
+      </div>
+    </nav>
+    <div class="ctox-pane-body ctox-well news-scroll news-feed-scroll" data-feed tabindex="-1"></div>
+    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
+  </section>
+
+  <button class="ctox-column-resizer news-right-resizer" type="button" data-resizer="right" data-resizer-var="--news-right-width" data-resizer-min="220" data-resizer-max="420" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- RIGHT: what is discussed most in the selected issue. -->
+  <aside class="ctox-pane news-pane news-right" aria-label="Im Trend" data-right-content>
+    <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <h2 class="ctox-pane-title" data-label="trendTitle">Im Trend</h2>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-pane-body news-scroll" data-trends></div>
+  </aside>
+
+  <!-- Topic configuration drawer (module-owned, inside ctx.host). -->
+  <div class="news-drawer-scrim" data-drawer-scrim hidden></div>
+  <section class="news-drawer" data-topic-drawer aria-label="Thema konfigurieren" hidden>
+    <header class="news-drawer-head">
+      <div class="ctox-pane-titles">
+        <h3 class="ctox-pane-title" data-drawer-title>Neues Thema</h3>
+      </div>
+      <div class="ctox-pane-actions">
+        <button class="ctox-pane-icon" type="button" data-action="delete-topic" aria-label="Thema löschen" title="Thema löschen" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        <button class="ctox-pane-icon" type="button" data-action="close-drawer" aria-label="Schließen" title="Schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+    </header>
+    <div class="news-drawer-tabs">
+      <div class="ctox-pane-tabs" role="tablist">
+        <button type="button" class="ctox-pane-tab" role="tab" data-action="drawer-tab" data-tab="topic" aria-selected="true">Thema &amp; Rhythmus</button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-action="drawer-tab" data-tab="sources" aria-selected="false">Quellen &amp; Accounts</button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-action="drawer-tab" data-tab="editorial" aria-selected="false">Redaktion</button>
+      </div>
+    </div>
+    <form class="news-drawer-body" data-topic-form autocomplete="off">
+      <div class="news-drawer-panel" data-panel="topic">
+        <label class="ctox-field-label" for="news-topic-title">Name</label>
+        <input class="ctox-input" id="news-topic-title" name="title" required placeholder="Lab-Releases" />
+        <label class="ctox-field-label" for="news-topic-prompt">Worum geht es?</label>
+        <textarea class="ctox-textarea" id="news-topic-prompt" name="prompt" rows="5" placeholder="Welche neuen Modelle und Tools haben die KI-Labs veröffentlicht, und worüber wird im Netz am meisten diskutiert?"></textarea>
+        <div class="news-field-grid">
+          <div>
+            <label class="ctox-field-label" for="news-topic-cadence">Rhythmus</label>
+            <select class="ctox-select" id="news-topic-cadence" name="cadence">
+              <option value="daily">Täglich</option>
+              <option value="weekly">Wöchentlich</option>
+              <option value="deadline">Zum Stichtag</option>
+              <option value="manual">Nur manuell</option>
+            </select>
+          </div>
+          <div data-cadence-field="time">
+            <label class="ctox-field-label" for="news-topic-time">Uhrzeit</label>
+            <input class="ctox-input" id="news-topic-time" name="run_time" type="time" value="07:00" />
+          </div>
+          <div data-cadence-field="weekday">
+            <label class="ctox-field-label" for="news-topic-weekday">Wochentag</label>
+            <select class="ctox-select" id="news-topic-weekday" name="weekday">
+              <option value="1">Montag</option><option value="2">Dienstag</option><option value="3">Mittwoch</option><option value="4">Donnerstag</option><option value="5">Freitag</option><option value="6">Samstag</option><option value="0">Sonntag</option>
+            </select>
+          </div>
+          <div data-cadence-field="deadline">
+            <label class="ctox-field-label" for="news-topic-deadline">Stichtag</label>
+            <input class="ctox-input" id="news-topic-deadline" name="deadline_date" type="date" />
+          </div>
+        </div>
+        <label class="news-check"><input type="checkbox" name="enabled" checked /> <span>Aktiv</span></label>
+      </div>
+
+      <div class="news-drawer-panel" data-panel="sources" hidden>
+        <div data-source-groups></div>
+        <div class="news-source-add">
+          <select class="ctox-select" data-new-source-kind aria-label="Quellenart">
+            <option value="lab">Webseite / Lab</option>
+            <option value="x">X-Feed</option>
+            <option value="youtube">YouTube-Kanal</option>
+            <option value="newsletter">Newsletter-Absender</option>
+            <option value="community">Community</option>
+          </select>
+          <input class="ctox-input" data-new-source-value placeholder="https://www.example.com/blog" aria-label="Adresse" />
+          <button class="ctox-pane-icon" type="button" data-action="add-source" aria-label="Quelle hinzufügen" title="Quelle hinzufügen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+      </div>
+
+      <div class="news-drawer-panel" data-panel="editorial" hidden>
+        <label class="ctox-field-label" for="news-topic-language">Sprache</label>
+        <select class="ctox-select" id="news-topic-language" name="language">
+          <option value="de">Deutsch</option>
+          <option value="en">Englisch</option>
+        </select>
+        <label class="ctox-field-label" for="news-topic-max">Beiträge je Ausgabe</label>
+        <input class="ctox-input" id="news-topic-max" name="max_posts" type="number" min="3" max="40" value="12" />
+        <span class="ctox-field-label">Kategorien</span>
+        <div class="news-chip-row" data-category-chips>
+          <button type="button" class="ctox-chip" data-category="model" aria-pressed="true">Modelle</button>
+          <button type="button" class="ctox-chip" data-category="tool" aria-pressed="true">Tools</button>
+          <button type="button" class="ctox-chip" data-category="research" aria-pressed="true">Forschung</button>
+          <button type="button" class="ctox-chip" data-category="debate" aria-pressed="true">Debatten</button>
+        </div>
+      </div>
+    </form>
+    <footer class="news-drawer-foot">
+      <button class="ctox-button" type="button" data-action="close-drawer">Abbrechen</button>
+      <button class="ctox-button is-primary" type="button" data-action="save-topic">Speichern</button>
+    </footer>
+  </section>
+</main>
