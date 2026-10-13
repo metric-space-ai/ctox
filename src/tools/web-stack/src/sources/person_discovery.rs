@@ -6,7 +6,7 @@
 //!
 //! Sister adapter to the Tier-C [`linkedin`](super::linkedin) and
 //! [`xing`](super::xing) modules — those rely on credentialed APIs and are
-//! opt-in via `--include-private`. This one is always-on and exclusively
+//! opt-in via `--include-private`. This one is also opt-in and exclusively
 //! uses public search-engine snippets, so the underlying profile pages
 //! never need to be fetched (they would be blocked by login walls
 //! anyway). Evidence comes out of [`SourceModule::extract_from_hits`]
@@ -45,6 +45,7 @@ use super::{
 };
 
 const ID: &str = "person-discovery";
+const PROFILE_FILTER: &str = "(site:linkedin.com/in OR site:xing.com/profile)";
 
 struct PersonDiscovery;
 
@@ -95,15 +96,15 @@ impl SourceModule for PersonDiscovery {
         }
         // Inline `site:` path filters force Google to return profile pages
         // (`/in/<slug>`, `/profile/<slug>`) rather than the company /
-        // jobs / pages roots that match the bare domain. The role hint
-        // biases ranking toward decision-makers — without it Google
-        // prefers the company root for a bare company-name query.
-        let q = format!(
-            "{trimmed} (CEO OR CFO OR COO OR CTO OR Vorstand OR \
-             Geschäftsführer OR Gründer OR Founder OR Director OR \
-             \"Head of\" OR Leiter OR Bereichsleiter) \
-             (site:linkedin.com/in OR site:xing.com/profile)"
-        );
+        // jobs / pages roots that match the bare domain. Preserve the
+        // caller's role terms: another AND-ed executive group would exclude
+        // requested titles such as CPO, VP SCM or Procurement Team Lead.
+        // Person research and pinned-source search can both shape a query.
+        let q = if trimmed.ends_with(PROFILE_FILTER) {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed} {PROFILE_FILTER}")
+        };
         Some(ShapedQuery {
             query: q,
             domains: vec!["linkedin.com".to_string(), "xing.com".to_string()],
@@ -564,12 +565,34 @@ mod tests {
         assert!(shaped.query.contains("DO & Co. AG"));
         assert!(shaped.query.contains("site:linkedin.com/in"));
         assert!(shaped.query.contains("site:xing.com/profile"));
-        // Role-bias keywords are present so Google ranks executive profiles
-        // higher than the company root.
-        assert!(shaped.query.contains("CEO"));
-        assert!(shaped.query.contains("Vorstand"));
+        assert_eq!(
+            shaped.query,
+            "DO & Co. AG (site:linkedin.com/in OR site:xing.com/profile)"
+        );
         assert!(shaped.domains.iter().any(|d| d == "linkedin.com"));
         assert!(shaped.domains.iter().any(|d| d == "xing.com"));
+    }
+
+    #[test]
+    fn shape_query_preserves_all_requested_responsibility_queries() {
+        for roles in [
+            "(CEO OR \"Country Manager\")",
+            "(CFO OR \"Finance Executive\")",
+            "(CPO OR \"Procurement Team Lead\")",
+            "(\"VP SCM\" OR \"VP Supply Chain Management\")",
+            "(COO OR \"Operations Lead\")",
+            "(CTO OR \"Technischer Geschäftsführer\")",
+            "(\"VP R&D\" OR Konstruktionsleiter)",
+        ] {
+            let query = format!("\"Beispiel GmbH\" {roles} site:linkedin.com/in/");
+            let shaped = module().shape_query(&query, &ctx_de()).expect("shape");
+            assert_eq!(shaped.query, format!("{query} {PROFILE_FILTER}"));
+            let reshaped = module()
+                .shape_query(&shaped.query, &ctx_de())
+                .expect("second shape");
+            assert_eq!(reshaped.query, shaped.query);
+            assert_eq!(reshaped.domains, shaped.domains);
+        }
     }
 
     #[test]
