@@ -6897,6 +6897,10 @@ mod projection_schema_union_tests {
 #[path = "rxdb_peer_projection_tombstone_tests.rs"]
 mod projection_tombstone_tests;
 
+#[cfg(test)]
+#[path = "rxdb_peer_communication_account_snapshot_tests.rs"]
+mod communication_account_snapshot_tests;
+
 #[derive(Debug)]
 struct ChannelStateProjection {
     accounts: Vec<Value>,
@@ -7197,19 +7201,44 @@ pub(super) async fn sync_channel_state_with_database(
         }
     }
 
-    let existing_accounts = accounts
-        .find(Some(MangoQuery {
-            limit: Some(2_000),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query communication account tombstones: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec communication account tombstone query: {err}"))?;
-    let existing_account_rows = existing_accounts
-        .as_array()
-        .cloned()
-        .unwrap_or_else(Vec::new);
+    let mut existing_account_rows = Vec::new();
+    let mut after_id = String::new();
+    loop {
+        let existing_accounts = accounts
+            .find(Some(MangoQuery {
+                selector: Some(json!({ "id": { "$gt": after_id } })),
+                sort: Some(vec![std::collections::HashMap::from([(
+                    "id".to_string(),
+                    "asc".to_string(),
+                )])]),
+                limit: Some(2_000),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query communication account tombstones: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec communication account tombstone query: {err}"))?;
+        let page = existing_accounts
+            .as_array()
+            .context("communication account tombstone query did not return an array")?;
+        if page.is_empty() {
+            break;
+        }
+        let next_id = page
+            .last()
+            .and_then(|row| row.get("id"))
+            .and_then(Value::as_str)
+            .context("communication account tombstone page has no primary key")?;
+        anyhow::ensure!(
+            next_id > after_id.as_str(),
+            "communication account tombstone cursor did not advance"
+        );
+        after_id = next_id.to_string();
+        existing_account_rows.extend(page.iter().cloned());
+        if page.len() < 2_000 {
+            break;
+        }
+    }
     for mut document in existing_account_rows {
         let Some(account_key) = document
             .get("account_key")
@@ -7344,13 +7373,8 @@ fn remove_projection_compare_metadata(value: &mut Value) {
 }
 
 fn load_channel_state_projection(root: &Path) -> anyhow::Result<ChannelStateProjection> {
-    let pulled = channels::pull_communication_accounts_for_business_os(root, Some(0), Some(2_000))
-        .context("pull communication account projection")?;
-    let accounts = pulled
-        .get("documents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let accounts = channels::snapshot_communication_accounts_for_business_os(root)
+        .context("snapshot communication account projection")?;
     let mut channel_ids: HashSet<String> = BUSINESS_OS_CHANNEL_IDS
         .iter()
         .map(|channel| (*channel).to_string())

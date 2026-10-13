@@ -163,6 +163,7 @@ pub(crate) use route_status::QueueRouteStatus;
 mod business_os_projection;
 pub(crate) use business_os_projection::communication_intake_source_stamp;
 use business_os_projection::non_negative_i64_to_usize;
+pub(crate) use business_os_projection::snapshot_communication_accounts_for_business_os;
 pub use business_os_projection::{
     disconnect_communication_account_for_business_os, export_jami_archive_for_business_os,
     list_communication_accounts_for_business_os, pull_communication_accounts_for_business_os,
@@ -2493,6 +2494,7 @@ pub fn list_unreviewed_handled_inbound_messages(
               FROM communication_founder_reply_reviews review
               WHERE review.inbound_message_key = m.message_key
                 AND review.sent_at IS NOT NULL
+                AND (m.channel != 'email' OR review.reviewer != 'policy-escalation')
           )
         ORDER BY m.external_created_at DESC, m.observed_at DESC
         LIMIT ?1

@@ -144,8 +144,16 @@ pub(super) fn emit(
     );
     tx.commit()?;
     drop(conn);
-    super::super::workjet_project_kpis::resolver::refresh_project(root, &route.project_id, true)?;
-    super::jour_fixe_brief::prepare(root, &operation, &existing, &project)?;
+    // Every Regeltermin re-evaluates KPIs and the 5-year exit model. Neither may
+    // stop the meeting: a failure or timeout is recorded as an open item.
+    let evaluations = refresh_evaluations(
+        root,
+        &route,
+        threads::actor_payload(&session),
+        &task.task_id,
+        scheduled_for,
+    );
+    super::jour_fixe_brief::prepare(root, &operation, &existing, &project, &evaluations)?;
     // Supervisor goals are bounded single-line text; retain every embedded skill word.
     let accepted = super::super::store::accept_rxdb_business_command_with_origin(
         root,
@@ -280,4 +288,73 @@ pub(in crate::business_os) fn read(
         json!({"ok":true,"meeting":meeting,"preparation_task_id":key,"current_goal":current_goal,
         "previous_goal_definition":previous_goal_definition}),
     )
+}
+
+/// Upper bound for the synchronous KPI refresh during preparation.
+const KPI_REFRESH_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Outcome of one evaluation step: `refreshed` or `blocked` with a reason.
+/// Freshness of the stored values (fresh/stale/missing) is derived in the brief.
+pub(super) fn evaluation_outcome(result: anyhow::Result<()>) -> Value {
+    match result {
+        Ok(()) => json!({"refresh":"refreshed"}),
+        Err(error) => {
+            let reason: String = format!("{error:#}").chars().take(240).collect();
+            json!({"refresh":"blocked","reason":reason})
+        }
+    }
+}
+
+fn refresh_evaluations(
+    root: &Path,
+    route: &ReportRoute,
+    actor: Value,
+    task_id: &str,
+    scheduled_for: &str,
+) -> Value {
+    let kpis = {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let kpi_root = root.to_path_buf();
+        let project_id = route.project_id.clone();
+        let spawned = std::thread::Builder::new()
+            .name("jf-kpi-refresh".to_owned())
+            .spawn(move || {
+                let _ = sender.send(
+                    super::super::workjet_project_kpis::resolver::refresh_project(
+                        &kpi_root,
+                        &project_id,
+                        true,
+                    ),
+                );
+            });
+        match spawned {
+            Err(error) => evaluation_outcome(Err(error.into())),
+            Ok(_) => match receiver.recv_timeout(KPI_REFRESH_LIMIT) {
+                Ok(result) => evaluation_outcome(result),
+                // The refresh keeps running and lands later; the meeting does not wait.
+                Err(_) => json!({"refresh":"blocked","reason":"kpi_refresh_timeout"}),
+            },
+        }
+    };
+    let exit_command_id = stable_id("jf_exit", &[task_id, scheduled_for]);
+    let exit = super::super::store::accept_rxdb_business_command_with_origin(
+        root,
+        json!({
+            "id":exit_command_id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh",
+            "record_id":route.project_id,"payload":{"project_id":route.project_id},
+            "client_context":{"actor":actor,"source":"native-workjet-jour-fixe-schedule"}
+        }),
+        super::super::store::CommandOrigin::TrustedLocal,
+    )
+    .and_then(|accepted| {
+        ensure!(
+            accepted["status"] == "completed",
+            "{}",
+            accepted["error_message"]
+                .as_str()
+                .unwrap_or("exit_model_refresh_not_completed")
+        );
+        Ok(())
+    });
+    json!({"kpis":kpis,"exit_model":evaluation_outcome(exit)})
 }

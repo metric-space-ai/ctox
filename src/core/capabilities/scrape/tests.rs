@@ -2541,6 +2541,96 @@ capture_supported: false,
 }
 
 #[test]
+fn google_reauthorization_uses_native_login_boundary_not_adapter_or_bright_data() {
+    let root = temp_root("reauth-google-native");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reauth-google-fixture",
+            "display_name": "Google Auth Fixture",
+            "start_url": "https://www.google.de/",
+            "target_kind": "prospect-research",
+            "config": { "expected_provider": "google.de" }
+        }),
+    )
+    .unwrap();
+    let script_path = root.join("reauth-google-script.js");
+    fs::write(
+        &script_path,
+        r#"
+const PROTECTED_SOURCE_CONFIG = Object.freeze({
+  "google.de": {
+login_url: "https://evil.example/login",
+allowed_domains: ["evil.example"],
+credential_ref: "ctox-secret://credentials/BRIGHTDATA_API_KEY",
+  },
+});
+"#,
+    )
+    .unwrap();
+    let registered = RegisteredTarget {
+        view: target,
+        script: ScrapeScriptRevisionRecord {
+            revision_no: 1,
+            script_path: script_path.to_string_lossy().to_string(),
+            language: "javascript".to_string(),
+            entry_command: vec!["node".to_string(), "{script_path}".to_string()],
+            script_sha256: "fixture".to_string(),
+        },
+        workspace_root: root.clone(),
+    };
+    let probe = ProbeResult {
+        reachable: true,
+        status_code: Some(200),
+        final_url: "https://accounts.google.com/ServiceLogin".to_string(),
+        human_verification: false,
+        error: None,
+    };
+    let authorized = Classification {
+        status: ScrapeRunStatus::AuthorizationRequired,
+        should_queue_repair: false,
+        reason: "explicit_failure_mode_authorization_required".to_string(),
+    };
+    let action = session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &json!({"failure_mode":"authorization_required"}),
+        &authorized,
+    )
+    .expect("native Google auth profile");
+    assert_eq!(
+        action["login_url"],
+        "https://accounts.google.com/ServiceLogin"
+    );
+    assert_eq!(
+        action["credential_ref"],
+        "ctox-secret://credentials/GOOGLE_BROWSER_LOGIN"
+    );
+    assert_eq!(
+        action["allowed_domains"],
+        json!(["google.de", "google.com"])
+    );
+    assert_eq!(action["secret_value_in_payload"], false);
+    let blocked = Classification {
+        status: ScrapeRunStatus::Blocked,
+        should_queue_repair: false,
+        reason: "human_verification".to_string(),
+    };
+    assert!(
+        session_expiry_reauthorization(
+            &registered,
+            &probe,
+            &json!({"failure_mode":"blocked"}),
+            &blocked,
+        )
+        .is_none(),
+        "a search challenge is not proof that signing in can unlock it"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn session_expiry_reauthorization_ignores_public_targets() {
     let root = temp_root("reauth-public");
     let target = upsert_target(
@@ -3288,6 +3378,112 @@ CTOX_ACCOUNT_FIXTURE
             "allowed": allowed,
             "permission": "data.write",
         })
+    }
+
+    #[test]
+    fn source_reprobe_keeps_script_and_only_clears_successful_target() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        for (mode, succeeds) in [("inactive", false), ("invalid_input", false), ("ok", true)] {
+            let fx = Fixture::new("keep-script-reprobe");
+            fx.mode("inactive");
+            fx.execute(&[]);
+            let foreign = upsert_target(
+                &fx.root,
+                DEFAULT_RUNTIME_ROOT,
+                json!({
+                    "target_key":"untouched-source","display_name":"Other Provider",
+                    "start_url":"https://other.test/api","target_kind":"person",
+                    "config":{"skip_probe":true},"output_schema":{}
+                }),
+            )
+            .unwrap();
+            let conn = open_db(&fx.root).unwrap();
+            conn.execute(
+                "INSERT INTO scrape_account_state
+                SELECT ?2, generation, reason, causal_run_id, last_probe_run_id,
+                credential_ref, credential_version, failed_probes, next_probe_at_ms,
+                probe_lease_owner, probe_lease_until_ms, updated_at_ms
+                FROM scrape_account_state WHERE target_id=?1",
+                params![fx.target.target_id, foreign.target_id],
+            )
+            .unwrap();
+            let foreign_before =
+                super::super::account_state::load(&conn, &foreign.target_id).unwrap();
+            drop(conn);
+            let before = target_script_registration(&fx.root, "account-provider")
+                .unwrap()
+                .unwrap();
+            fx.mode(mode);
+            let grant = AccountProbeGrant::from_command_authorization(
+                "cmd-source-reprobe",
+                &operator_authorization(true, true),
+            )
+            .unwrap();
+            let result = super::super::execute::reprobe_registered_account_keep_script(
+                &fx.root,
+                "account-provider",
+                &json!({"calls":fx.root.join("calls.txt"),"mode_file":fx.root.join("mode.txt")}),
+                10,
+                Some(&grant),
+            )
+            .unwrap();
+            assert_eq!(result["ok"], succeeds, "{result}");
+            assert_eq!(fx.calls(), 2, "one actual provider call after inactivity");
+            assert_eq!(
+                result["script_sha256_before"],
+                result["script_sha256_after"]
+            );
+            assert_eq!(
+                target_script_registration(&fx.root, "account-provider")
+                    .unwrap()
+                    .unwrap(),
+                before
+            );
+            let conn = open_db(&fx.root).unwrap();
+            assert_eq!(
+                super::super::account_state::load(&conn, &fx.target.target_id)
+                    .unwrap()
+                    .is_none(),
+                succeeds
+            );
+            assert_eq!(
+                super::super::account_state::load(&conn, &foreign.target_id).unwrap(),
+                foreign_before
+            );
+            drop(conn);
+            fs::remove_dir_all(fx.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn source_reprobe_without_grant_never_calls_provider_or_clears_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("keep-script-no-grant");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let before = target_script_registration(&fx.root, "account-provider").unwrap();
+        fx.mode("ok");
+        let error = super::super::execute::reprobe_registered_account_keep_script(
+            &fx.root,
+            "account-provider",
+            &json!({}),
+            10,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("policy-granted"));
+        assert_eq!(fx.calls(), 1);
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_some());
+        assert_eq!(
+            target_script_registration(&fx.root, "account-provider").unwrap(),
+            before
+        );
+        fs::remove_dir_all(fx.root).unwrap();
     }
 
     #[test]

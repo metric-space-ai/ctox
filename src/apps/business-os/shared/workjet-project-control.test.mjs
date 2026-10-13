@@ -2035,3 +2035,17 @@ test('same-task input capability is opt-in and comes from the actual scoped nati
   await assert.rejects(invalid.invoke({ ...supervisorCapabilitiesRequest, includeInput: 'yes' }));
   assert.equal(invalid.commands.length, 0);
 });
+
+test('native KPI refresh maps per-KPI status and rejects malformed reports', async () => {
+  const report = { completed: false, reason_code: 'time_limit',
+    items: [{ kpi_id: 'kpi-1', status: 'blocked', reason_code: 'resolving' }] };
+  const fixture = nativeProjectDetailsFixture(receipt => { receipt.result.refresh = report; });
+  const refreshed = await fixture.invoke({ action: 'project.kpis.refresh', commandId: 'r1', projectId: 'project-1' });
+  assert.equal(fixture.commands[0].command_type, 'ctox.workjet.project.kpis.refresh');
+  assert.deepEqual(refreshed.refresh, { completed: false, reasonCode: 'time_limit',
+    items: [{ kpiId: 'kpi-1', status: 'blocked', reasonCode: 'resolving' }] });
+  const broken = nativeProjectDetailsFixture(receipt => {
+    receipt.result.refresh = { completed: true, items: [{ kpi_id: 'kpi-1', status: 'ready' }] };
+  });
+  await assert.rejects(broken.invoke({ action: 'project.kpis.refresh', commandId: 'r2', projectId: 'project-1' }));
+});

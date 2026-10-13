@@ -24,14 +24,19 @@ await mkdir(output, { mode: 0o700 });
 const hash = createHash('sha256');
 for await (const chunk of createReadStream(values.get('--binary'))) hash.update(chunk);
 const report = { version: 1, stage: 'sync-v3:S0', sourceHead: process.env.BUILD_LANE_HEAD || null,
+  nativeSourceHead: process.env.BUILD_LANE_NATIVE_HEAD || null,
   binarySha256: hash.digest('hex'), installedAcceptance: false,
   relayDefinition: 'real loopback UDP datagram relay; requested RTT split equally by direction; not a TURN deployment',
-  repetitions: 'one fresh isolated browser/native prefix per RTT, five sequential write samples; exploratory baseline, not statistical acceptance',
+  repetitions: 'one fresh isolated browser/native prefix per RTT, five sequential write samples then five disjoint native query windows; exploratory baseline, not statistical acceptance',
   cases: [], pass: false };
 const percentile = (numbers, quantile) => [...numbers].sort((a, b) => a - b)[Math.ceil(numbers.length * quantile) - 1];
 try {
+  // Five post-visible probes each retain their existing 60s deadline. This
+  // extends cleanup bounds only; first-paint and RFC performance gates do not move.
+  const queryProbeAllowanceSeconds = 5 * 60;
   for (const [index, rtt] of (soakSeconds === 86400 ? [0] : [0, 300, 600]).entries()) {
     const runtimeRoot = join(output, `rtt-${rtt}`);
+    try {
     await mkdir(runtimeRoot, { mode: 0o700 });
     const log = createWriteStream(join(output, `rtt-${rtt}.log`), { flags: 'wx', mode: 0o600 });
     const start = Date.now();
@@ -44,11 +49,11 @@ try {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await writeFile(join(runtimeRoot, 'runner-owner.json'), JSON.stringify({ owner: '01a0879f-d2e0-72c3-9353-4ef802b2998b',
-      pidPgid: child.pid, purpose: `isolated S0 ${rtt}ms RTT`, output: runtimeRoot, stopCondition: `terminal exit or ${240 + (rtt === 0 ? soakSeconds : 0)}s deadline, own group TERM then KILL after10s` }));
+      pidPgid: child.pid, purpose: `isolated S0 ${rtt}ms RTT`, output: runtimeRoot, stopCondition: `terminal exit or ${240 + queryProbeAllowanceSeconds + (rtt === 0 ? soakSeconds : 0)}s deadline, own group TERM then KILL after10s` }));
     child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false });
     const signal = value => { try { process.kill(-child.pid, value); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
     let killTimer;
-    const deadline = setTimeout(() => { signal('SIGTERM'); killTimer = setTimeout(() => signal('SIGKILL'), 10000); }, 240000 + (rtt === 0 ? soakSeconds * 1000 : 0));
+    const deadline = setTimeout(() => { signal('SIGTERM'); killTimer = setTimeout(() => signal('SIGKILL'), 10000); }, (240 + queryProbeAllowanceSeconds) * 1000 + (rtt === 0 ? soakSeconds * 1000 : 0));
     const exit = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolveExit({ code, signal })); });
     clearTimeout(deadline); clearTimeout(killTimer);
     await new Promise(resolveLog => log.end(resolveLog));
@@ -62,16 +67,27 @@ try {
     if (rtt && relay.pairs.some(pair => pair.holdMinMs < rtt / 2 - 2)) throw Error('Datagram delay oracle below requested floor');
     report.cases.push({ ...measurement, nativeHarnessElapsedMs: Date.now() - start, relay,
       phaseAnalysis: analyzeCase(measurement),
+      queryP95Ms: percentile(measurement.queries.map(sample => sample.durationMs), .95),
       nativeAckMedianMs: percentile(measurement.writes.map(sample => sample.nativeAckMs), .5),
       nativeAckP95Ms: percentile(measurement.writes.map(sample => sample.nativeAckMs), .95),
       criterion: 'complete visible native rows, five accepted ACKs with SQLite readback, real relay path and delay validated; RFC product budget is measured separately' });
+    } catch (error) {
+      let partial = null;
+      try { partial = JSON.parse(await readFile(join(runtimeRoot, 'sync-v3-scale-partial.json'))); }
+      catch (readError) { if (readError.code !== 'ENOENT') throw readError; }
+      report.cases.push({ requestedRttMs: rtt, pass: false, error: error.message, partial });
+      process.exitCode = 1;
+    }
   }
-  report.pass = true;
-  if (soakSeconds !== 86400) report.phaseComparison = compareCases(report.cases);
+  report.pass = report.cases.every(measurement => !measurement.error);
+  if (report.pass && soakSeconds !== 86400) report.phaseComparison = compareCases(report.cases);
 } catch (error) {
   report.error = error.message;
   process.exitCode = 1;
 } finally {
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
-  console.log(JSON.stringify(report));
+  console.log(JSON.stringify({ ...report, phaseComparison: undefined,
+    cases: report.cases.map(item => ({ requestedRttMs: item.requestedRttMs,
+      visibleMs: item.coldPageToVisibleMs, queryP95Ms: item.queryP95Ms,
+      ackP95Ms: item.nativeAckP95Ms, error: item.error })) }));
 }

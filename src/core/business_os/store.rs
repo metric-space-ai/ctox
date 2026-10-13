@@ -15544,6 +15544,7 @@ pub(crate) fn is_recoverable_background_control_command_type(command_type: &str)
             command_type,
             "outbound.research_source.generate_adapter"
                 | "outbound.research_source.test"
+                | "outbound.research_source.reprobe"
                 | "outbound.research_source.auth_assist"
                 | "outbound.research_source.registry_read"
                 | "outbound.sellify.lookup"
@@ -15591,6 +15592,7 @@ fn recoverable_background_control_permission(command_type: &str) -> Option<Busin
         command_type,
         "outbound.research_source.generate_adapter"
             | "outbound.research_source.test"
+            | "outbound.research_source.reprobe"
             | "outbound.research_source.auth_assist"
     ) {
         Some(BusinessOsPermission::DataWrite)
@@ -18247,6 +18249,7 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.research_source.upsert"
             | "outbound.research_source.generate_adapter"
             | "outbound.research_source.test"
+                | "outbound.research_source.reprobe"
             | "outbound.research_source.auth_assist"
             | "outbound.sellify.lookup"
             // Has a native handler. Without this entry the command fell
