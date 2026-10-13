@@ -26,8 +26,34 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let conn = open_channel_db(&root.join("channels.sqlite3")).unwrap();
+    let db_path = resolve_db_path(&root, None);
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let conn = open_channel_db(&db_path).unwrap();
     let inbound_key = "email:lena@example.test::inbox::1";
+    let settings = std::collections::BTreeMap::from([(
+        "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+        "founder@example.test".to_string(),
+    )]);
+    crate::inference::runtime_env::save_runtime_env_map(&root, &settings).unwrap();
+    conn.execute(
+        "INSERT INTO communication_messages (
+            message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+            sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+            bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+            trust_level, status, seen, has_attachments, external_created_at, observed_at, metadata_json
+         ) VALUES (?1, 'email', 'email:lena@example.test', 'email:lena@example.test::thread::1',
+            'inbound-1', 'inbound', 'inbox', 'Founder', 'founder@example.test', '[]', '[]',
+            '[]', 'Example', 'Example', 'Example', '', '', 'normal', 'received', 0, 0,
+            '2026-10-13T11:39:00Z', '2026-10-13T11:39:00Z', '{}')",
+        [inbound_key]
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO communication_routing_state (
+            message_key, route_status, lease_owner, leased_at, updated_at)
+         VALUES (?1, 'leased', 'ctox-service', '2026-10-13T11:39:00Z', '2026-10-13T11:39:00Z')",
+        [inbound_key],
+    )
+    .unwrap();
     let request = ChannelSendRequest {
         channel: "email".to_string(),
         account_key: "email:lena@example.test".to_string(),
@@ -70,6 +96,21 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
             .unwrap();
         assert_eq!(reused, receipt);
         assert!(
+            super::super::ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
+                .is_err()
+        );
+        assert!(
+            super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).is_err()
+        );
+        let route: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key=?1",
+                [inbound_key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(route, "leased");
+        assert!(
             record_outbound_pending_send(&conn, &request, "approval", "body-digest")
                 .unwrap()
                 .existing_result
@@ -81,12 +122,12 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
                 (SELECT COUNT(*) FROM communication_founder_reply_reviews WHERE sent_at IS NOT NULL)",
         [], |row| Ok((row.get(0)?, row.get(1)?))
     ).unwrap();
-    assert_eq!(counts, (1, 1));
+    assert_eq!(counts, (2, 1));
 
     // An unrelated Sent copy cannot prove this notice was delivered.
     let other = ChannelSendRequest {
         body: "A different notice.".to_string(),
-        ..request.clone()
+        ..request
     };
     let other_key = record_outbound_pending_send(&conn, &other, "other-approval", "other-body")
         .unwrap()
@@ -115,6 +156,22 @@ fn founder_escalation_acceptance_waits_for_its_own_sent_copy() {
         .unwrap();
     assert_eq!(confirmed["message_key"], receipt["message_key"]);
     assert_eq!(confirmed["delivery_confirmed"], true);
+    assert_eq!(
+        super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).unwrap(),
+        1
+    );
+    assert_eq!(
+        super::super::handle_inbound_after_reviewed_founder_reply(&root, inbound_key).unwrap(),
+        0
+    );
+    let route: String = conn
+        .query_row(
+            "SELECT route_status FROM communication_routing_state WHERE message_key=?1",
+            [inbound_key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(route, "handled");
     let stored: String = conn.query_row(
         "SELECT send_result_json FROM communication_founder_reply_reviews WHERE approval_key='approval'",
         [], |row| row.get(0)
