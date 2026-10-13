@@ -46,6 +46,7 @@ mod inventory_drift_tests;
 mod invoices;
 mod iot_supervision;
 pub mod mcp_channel;
+pub(crate) mod meeting_report;
 pub mod mobile_invites;
 mod module_lifecycle;
 mod module_manifest_loader;
@@ -72,6 +73,8 @@ pub(crate) fn refresh_due_workjet_project_kpis(root: &std::path::Path) -> anyhow
 }
 
 mod project_crew;
+mod workjet_exit_model;
+mod workjet_exit_model_engine;
 mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;
 pub mod build_delivery;

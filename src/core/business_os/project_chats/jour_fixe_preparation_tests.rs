@@ -104,6 +104,17 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
             .unwrap()
     );
     assert!(queue.prompt.contains("JourFix"));
+    let block = queue
+        .prompt
+        .split("NEVER publish them on slides):\n")
+        .nth(1)
+        .context("native brief block")?;
+    let brief: Value = serde_json::from_str(block.lines().next().context("brief JSON")?)?;
+    assert_eq!(brief["schema"], "ctox.workjet.jour_fixe_brief.v1");
+    assert_eq!(brief["meeting_id"], meeting["meeting"]["id"]);
+    assert_eq!(brief["project_id"], "project");
+    assert_eq!(brief["github"]["status"], "missing_source");
+    assert!(serde_json::to_vec(&brief)?.len() <= 12 * 1024);
     assert!(queue
         .prompt
         .contains("Only the owner's explicit confirmation"));

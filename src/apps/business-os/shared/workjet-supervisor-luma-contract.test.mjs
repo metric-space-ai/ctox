@@ -20,14 +20,15 @@ test('project migration preserves every existing project without inventing a Sup
   const legacy = { id: 'project-legacy', name: 'Legacy', status: 'active', owner_user_id: 'owner-1',
     created_at_ms: 1, updated_at_ms: 2, info: { goal: 'Keep the existing work' },
     jour_fixe: { weekday: 1, time: '13:00', timezone: 'Europe/Berlin' } };
-  for (const version of [1, 2, 3, 4]) {
+  for (const version of [1, 2, 3, 4, 5]) {
     const migrated = migrationStrategies.workjet_projects[version](legacy);
     assert.deepEqual(migrated, legacy);
     assert.equal(Object.hasOwn(migrated, 'supervisor_luma_id'), false);
   }
   const schema = collections.workjet_projects;
-  // Version 4 adds optional Owner execution policy; legacy projects retain their data.
-  assert.equal(schema.version, 4);
+  // Version 4 adds optional Owner execution policy and version 5 an optional repository URL;
+  // legacy projects retain their data.
+  assert.equal(schema.version, 5);
   assert.equal(schema.required.includes('supervisor_luma_id'), false);
   assert.deepEqual(schema.properties.supervisor_luma_id, { type: 'string', minLength: 1, maxLength: 160 });
 });

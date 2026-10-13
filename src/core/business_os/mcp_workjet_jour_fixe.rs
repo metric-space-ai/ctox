@@ -38,6 +38,7 @@ enum Read {
     ReadMeeting(wire::ReadMeetingRequest),
     ReadComments(wire::ReadMeetingRequest),
     ReadTranscript(wire::ReadMeetingRequest),
+    ReadReport(wire::ReadMeetingRequest),
     ReadConfirmedGoal(wire::ReadConfirmedGoalRequest),
 }
 
@@ -46,10 +47,16 @@ pub(super) fn allows(tool: &str, args: &Value) -> bool {
         (tool, args["action"].as_str()),
         (
             READ_TOOL,
-            Some("read_meeting" | "read_comments" | "read_transcript" | "read_confirmed_goal")
+            Some(
+                "read_meeting"
+                    | "read_comments"
+                    | "read_transcript"
+                    | "read_confirmed_goal"
+                    | "read_report"
+            )
         ) | (
             WRITE_TOOL,
-            Some("prepare_deck" | "propose_todos" | "narrate")
+            Some("prepare_deck" | "propose_todos" | "narrate" | "save_report")
         )
     )
 }
@@ -113,19 +120,45 @@ fn descriptor_schema(actions: &[(&str, &str)]) -> Value {
             request["required"] = json!(["project_id","meeting_id"]);
             request["properties"]["meeting_id"] = json!({"type":"string","minLength":1,"maxLength":128});
         }
+        if *action == "read_meeting" {
+            request["properties"]["section"] = json!({"const":"report"});
+        }
         json!({"type":"object","additionalProperties":false,"required":["action","request"],
             "properties":{"action":{"type":"string","const":action},"request":request}})
     }).collect::<Vec<_>>()})
 }
 pub(super) fn read_descriptor() -> BusinessOsMcpToolDescriptor {
     read_tool(READ_TOOL,
-        "Read this registered Supervisor's current meeting plus bounded project configuration, or retained comments/final transcript only. Requires its signed, current native execution session and an explicit meeting_id for meeting sections; read_confirmed_goal takes an empty request and returns the actual current confirmed plan/progress or null. Returns stored evidence, never inferred speech or cross-project data.",
-        descriptor_schema(&[("read_meeting","ReadMeetingRequest"),("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest"),("read_confirmed_goal","ReadConfirmedGoalRequest")]))
+        "Read this registered Supervisor's current meeting plus bounded project configuration, retained comments/final transcript, or latest stored report (read_report; also read_meeting request section=report). Requires its signed, current native execution session and an explicit meeting_id for meeting sections; read_confirmed_goal takes an empty request and returns the actual current confirmed plan/progress or null. Returns stored evidence, never inferred speech or cross-project data.",
+        descriptor_schema(&[("read_meeting","ReadMeetingRequest"),("read_comments","ReadMeetingRequest"),("read_transcript","ReadMeetingRequest"),("read_confirmed_goal","ReadConfirmedGoalRequest"),("read_report","ReadMeetingRequest")]))
 }
 pub(super) fn write_descriptor() -> BusinessOsMcpToolDescriptor {
+    let mut descriptor = descriptor_schema(&[
+        ("prepare_deck", "PublishDeckRequest"),
+        ("propose_todos", "ProposeTodosRequest"),
+        ("narrate", "NarrateRequest"),
+    ]);
+    let mut report_schema = super::super::meeting_report::report_schema();
+    // Local JSON-schema refs resolve within the tool's outer schema.
+    descriptor["$defs"] = report_schema
+        .as_object_mut()
+        .expect("report schema")
+        .remove("$defs")
+        .expect("report definitions");
+    report_schema
+        .as_object_mut()
+        .expect("report schema")
+        .remove("$id");
+    descriptor["oneOf"].as_array_mut().expect("actions").push(json!({
+        "type":"object","additionalProperties":false,"required":["action","request"],
+        "properties":{"action":{"const":"save_report"},"request":{
+            "type":"object","additionalProperties":false,"required":["operation_id","meeting_id","report"],
+            "properties":{"operation_id":{"type":"string","minLength":1,"maxLength":128},
+                "meeting_id":{"type":"string","minLength":1,"maxLength":128},"report":report_schema}}}
+    }));
     write_tool(WRITE_TOOL,
-        "Persist a deck draft (prepare_deck, PublishDeckRequest without audio) or a review todo proposal (propose_todos). Requires this registered Supervisor's signed current execution, exact meeting revision and stable operation_id. Drafts remain preparing; todos require an explicit owner and remain proposed. narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
-        descriptor_schema(&[("prepare_deck","PublishDeckRequest"),("propose_todos","ProposeTodosRequest"),("narrate","NarrateRequest")]))
+        "Persist a deck draft (prepare_deck), review todo proposal (propose_todos), or schema-validated status report (save_report with request operation_id, meeting_id, report; schema ctox.workjet.meeting_report.v1). Reports retain independent revisions and idempotent receipts. Requires this registered Supervisor's signed current execution and stable operation_id. Deck/todo mutations require the exact meeting revision; reports have their own revision. Publication queues native sequential narration outside the agent turn; drafts stay preparing until all audio is retained. Todos require an explicit owner and remain proposed. Compatibility action narrate synthesizes the exact stored slide via the configured native gateway and freezes authorized WAV bytes, hashes and native provenance before setting ready. No caller text/audio/model, goal confirmation, SQL or independent work admission.",
+        descriptor)
 }
 
 /// Durable source identity, never a synthetic business command.
@@ -327,11 +360,22 @@ pub(super) fn execute(
     let core_tx = core.transaction_with_behavior(behavior)?;
     let policy_tx = policy.transaction_with_behavior(behavior)?;
     if !writing {
-        let read: Read = serde_json::from_value(arguments.clone())?;
+        let mut read_arguments = arguments.clone();
+        if read_arguments["action"] == "read_meeting" {
+            if let Some(section) = read_arguments["request"]
+                .as_object_mut()
+                .and_then(|v| v.remove("section"))
+            {
+                anyhow::ensure!(section == "report", "unsupported meeting read section");
+                read_arguments["action"] = json!("read_report");
+            }
+        }
+        let read: Read = serde_json::from_value(read_arguments)?;
         let (request, section) = match read {
             Read::ReadMeeting(v) => (v, "meeting"),
             Read::ReadComments(v) => (v, "comments"),
             Read::ReadTranscript(v) => (v, "transcript"),
+            Read::ReadReport(v) => (v, "report"),
             Read::ReadConfirmedGoal(v) => {
                 v.validate().map_err(anyhow::Error::msg)?;
                 return read_confirmed_goal_in_native_scope(&core_tx, &policy_tx, context, trusted);
@@ -347,6 +391,11 @@ pub(super) fn execute(
             request.project_id == meeting.project_id,
             "meeting read project differs"
         );
+        if section == "report" {
+            return Ok(json!({"contract":super::super::meeting_report::SCHEMA,
+                "meeting_id":meeting.id,"project_id":meeting.project_id,
+                "report":super::super::meeting_report::latest(&policy_tx, &meeting.id)?}));
+        }
         if section == "meeting" {
             let record =
                 store::outbound_load_record(&policy_tx, "workjet_projects", &meeting.project_id)?
@@ -379,6 +428,36 @@ pub(super) fn execute(
                 "revision":meeting.revision,"state":meeting.state,"transcript":meeting.transcript})
         });
     }
+    if arguments["action"] == "save_report" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            action: String,
+            request: super::super::meeting_report::SaveReport,
+        }
+        let input: Input = serde_json::from_value(arguments.clone())?;
+        anyhow::ensure!(input.action == "save_report", "unsupported report action");
+        let meeting = current_meeting(
+            &core_tx,
+            &policy_tx,
+            context,
+            trusted,
+            &input.request.meeting_id,
+            true,
+        )?;
+        let report = super::super::meeting_report::save(
+            &policy_tx,
+            &input.request,
+            &meeting.id,
+            &meeting.project_id,
+            &meeting.supervisor.workjet_thread_id,
+        )?;
+        policy_tx.commit()?;
+        core_tx.commit()?;
+        return Ok(
+            json!({"ok":true,"contract":super::super::meeting_report::SCHEMA,"report":report}),
+        );
+    }
     let update: Update = serde_json::from_value(arguments.clone())?;
     let (operation, id, expected) = match &update {
         Update::PrepareDeck(v) => {
@@ -405,7 +484,29 @@ pub(super) fn execute(
             owner == meeting.owner_user_id && prior_meeting == meeting.id && intent == hash,
             "meeting operation intent conflicts"
         );
-        return Ok(serde_json::from_str(&raw)?);
+        let receipt = serde_json::from_str(&raw)?;
+        if let Update::PrepareDeck(request) = &update {
+            if meeting.deck_revision == request.deck_revision
+                && matches!(
+                    meeting.state,
+                    wire::MeetingState::Preparing | wire::MeetingState::Ready
+                )
+            {
+                // A pre-upgrade publication receipt can admit its native job
+                // on authenticated replay; existing authority remains pinned.
+                deck_narration::enqueue(&policy_tx, context, &meeting, operation)?;
+                deck_narration::retry_publication(&policy_tx, operation)?;
+            }
+        }
+        policy_tx.commit()?;
+        core_tx.commit()?;
+        #[cfg(not(test))]
+        if matches!(update, Update::PrepareDeck(_)) {
+            if let Err(error) = deck_narration::resume(root) {
+                eprintln!("[jour-fixe] native narration deferred: {error}");
+            }
+        }
+        return Ok(receipt);
     }
     anyhow::ensure!(
         meeting.revision == expected,
@@ -529,8 +630,17 @@ pub(super) fn execute(
     policy_tx.execute(
         "INSERT INTO workjet_jour_fixe_supervisor_operations(operation_id,owner_user_id,meeting_id,intent_hash,receipt_json,command_id) VALUES(?1,?2,?3,?4,?5,?6)",
         params![operation,meeting.owner_user_id,meeting.id,hash,serde_json::to_string(&receipt)?,execution_key(trusted)?])?;
+    if matches!(update, Update::PrepareDeck(_)) {
+        deck_narration::enqueue(&policy_tx, context, &meeting, operation)?;
+    }
     policy_tx.commit()?;
     core_tx.commit()?;
+    #[cfg(not(test))]
+    if matches!(update, Update::PrepareDeck(_)) {
+        if let Err(error) = deck_narration::resume(root) {
+            eprintln!("[jour-fixe] native narration deferred: {error}");
+        }
+    }
     Ok(receipt)
 }
 

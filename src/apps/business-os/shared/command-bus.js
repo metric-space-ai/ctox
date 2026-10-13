@@ -1425,7 +1425,12 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
             recordCommandMetric(sync, 'watcher_started', commandId);
           }
           // Close the subscribe/read race and every data-plane rebind window.
-          const requireRevision = authoritative
+          // A retained ordinary demand read may still be in flight. Joining it
+          // here holds rebindInFlight and queues every fresh terminal retry
+          // behind that old request. Start with a new revision on demand
+          // collections, using the existing generation and authority fences.
+          // Collections without a demand loader retain their local read path.
+          const requireRevision = authoritative || commands.demandLoader
             ? `command-terminal:${commandId}:${++authoritativeRevision}`
             : '';
           inspect(await findDoc(commands, commandId, {
