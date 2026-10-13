@@ -425,6 +425,7 @@
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.unassign",
+    "ctox.workjet.project.init",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
     "ctox.workjet.project.supervisor.turn.history",
