@@ -407,6 +407,14 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue) {
   });
 }
 
+function localTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Berlin';
+  } catch {
+    return 'Europe/Berlin';
+  }
+}
+
 export function buildScheduleCommand(topic, { deleted = false } = {}) {
   return commandEnvelope({
     command_type: NEWS_TOPIC_SCHEDULE,
@@ -418,6 +426,8 @@ export function buildScheduleCommand(topic, { deleted = false } = {}) {
     cron_expr: deleted ? '' : topic.cron_expr,
     enabled: deleted ? false : topic.enabled !== false && Boolean(topic.cron_expr),
     deleted,
+    deadline_date: topic.deadline_date || '',
+    timezone: localTimezone(),
     record_snapshot: { topic: topicSnapshot(topic) },
   },
     sync_collections: ['news_topics'],

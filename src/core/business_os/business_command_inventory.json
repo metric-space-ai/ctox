@@ -146,6 +146,8 @@
     "ctox.workjet.worker_profile.unbind",
     "ctox.workjet.working_copy.upsert",
     "knowledge.command",
+    "news.source.auth_assist",
+    "news.topic.schedule",
     "outbound.lead.research_writeback",
     "web_stack.person_research"
   ],
