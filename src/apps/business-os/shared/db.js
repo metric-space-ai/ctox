@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261012-shell-v2-jour-fixe-native-brief';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261012-shell-v2-command-timing-rebase623';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
