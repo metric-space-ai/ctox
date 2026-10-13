@@ -15151,40 +15151,69 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
-    fn owned_module_catalog_projection_survives_peer_database_close() -> anyhow::Result<()> {
+    fn module_catalog_projection_survives_published_peer_database_close() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        let retiring_database = runtime.block_on(async {
+        let peer = runtime.block_on(async {
             let database = open_database(store::rxdb_store_path(root.path())).await?;
             register_collections_tolerant(&database, collection_creators()).await?;
-            anyhow::Ok(database)
+            // Inert workers: exercise the real published peer/database boundary,
+            // without a signaling server or unrelated background projections.
+            let idle = || tokio::spawn(std::future::pending::<()>());
+            anyhow::Ok(Arc::new(NativePeer {
+                root: root.path().to_path_buf(),
+                database,
+                peer_session_id: "catalog-retiring-peer".into(),
+                shutdown_tx: Mutex::new(None),
+                _process_lock: acquire_native_peer_process_lock(root.path())?
+                    .expect("fixture owns peer process lock"),
+                _pools: Vec::new(),
+                business_data_sources: Vec::new(),
+                _command_consumer: idle(),
+                _command_outbox: idle(),
+                _notes_sync: idle(),
+                _file_index_sync: idle(),
+                _channel_state_sync: idle(),
+                _business_users_sync: idle(),
+                _runtime_settings_sync: idle(),
+                _workspace_branding_sync: idle(),
+                _module_catalog_sync: idle(),
+                _ticket_state_sync: idle(),
+                _knowledge_tables_sync: idle(),
+                _business_record_projection_sync: idle(),
+                _iot_agent_supervisors: Vec::new(),
+                _browser_runtime_maintenance: idle(),
+                pending_outbox: AtomicU64::new(0),
+                _status_heartbeat: Mutex::new(None),
+            }))
         })?;
-        let old_handle = Arc::clone(&retiring_database);
-        let projection_root = root.path().to_path_buf();
-        with_business_os_database(
-            root.path(),
-            "owned catalog regression runtime",
-            true,
-            TemporaryDatabaseLockScope::OwnedTemporary,
-            |_peer, database| async move {
-                // Exact shutdown action after the projection factory opened.
-                old_handle.close().await?;
-                assert!(old_handle.collection("business_module_catalog").is_none());
-                let stale = sync_module_catalog_with_database(&projection_root, &old_handle)
-                    .await
-                    .expect_err("retired peer handle must not project");
-                assert!(format!("{stale:#}")
-                    .contains("business_module_catalog collection is not registered"));
-                assert!(
-                    !database.closed(),
-                    "retired generation cannot close the owner"
-                );
-                sync_module_catalog_with_database(&projection_root, &database).await
-            },
-        )?;
-        assert!(retiring_database.closed());
+        with_native_peer_lifecycle_mut(|lifecycle| {
+            lifecycle.begin_run(false)?;
+            lifecycle.bring_up_succeeded(Some(Arc::clone(&peer)), true, true, true)?;
+            lifecycle.begin_stopping()
+        })?;
+        // Always unpublish this fixture, including when the projection fails.
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                with_native_peer_lifecycle_mut(|lifecycle| {
+                    lifecycle.run_cleanup_finished().expect("fixture cleanup");
+                    lifecycle.foreground_run_exited().expect("fixture exit");
+                });
+            }
+        }
+        let _cleanup = Cleanup;
+        // Shutdown closes the database before run_cleanup_finished removes the
+        // published peer. Reproduce that exact window deterministically.
+        runtime.block_on(peer.database.close())?;
+        assert!(current_peer().is_some_and(|current| Arc::ptr_eq(&current, &peer)));
+        assert!(peer
+            .database
+            .collection("business_module_catalog")
+            .is_none());
+        sync_module_catalog(root.path())?;
         Ok(())
     }
 
