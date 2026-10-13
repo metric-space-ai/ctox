@@ -13358,26 +13358,32 @@ function ensureCtoxSmokeBinary() {
         } finally {
           clearTimeout(readyTimer);
         }
-        const masterChanges = liveCatalogBridge?.state?.masterChange$;
-        if (!masterChanges?.subscribe) throw new Error('catalog master change stream unavailable');
+        // Release can replace the peer generation and its replication state.
+        // Observe the shared state class so the replacement stream is covered,
+        // rather than retaining a subscription to the cancelled generation.
+        const catalogReplicationPrototype = Object.getPrototypeOf(liveCatalogBridge?.state);
+        const originalOnMasterChange = catalogReplicationPrototype?.onMasterChange;
+        if (typeof originalOnMasterChange !== 'function') throw new Error('catalog master change handler unavailable');
         let catalogMasterPush = null;
         let releaseSubmitted = false;
-        const catalogPushSubscription = masterChanges.subscribe((detail) => {
-          if (!releaseSubmitted || !detail) return;
-          const documents = Array.isArray(detail.result?.documents) ? detail.result.documents : [];
-          const projected = documents.find((doc) => String(doc?.id || '') === 'module-catalog'
-            && String(moduleFromCatalog(doc)?.version || '') === '1.0.0');
-          if (projected || detail.result === 'RESYNC') {
-            catalogMasterPush = { directDocument: Boolean(projected), resync: detail.result === 'RESYNC' };
+        catalogReplicationPrototype.onMasterChange = function(detail) {
+          if (releaseSubmitted && this.collection?.name === 'business_module_catalog' && detail) {
+            const documents = Array.isArray(detail.result?.documents) ? detail.result.documents : [];
+            const projected = documents.find((doc) => String(doc?.id || '') === 'module-catalog'
+              && String(moduleFromCatalog(doc)?.version || '') === '1.0.0');
+            if (projected || detail.result === 'RESYNC') {
+              catalogMasterPush = { directDocument: Boolean(projected), resync: detail.result === 'RESYNC' };
+            }
           }
-        });
+          return originalOnMasterChange.call(this, detail);
+        };
         releaseSubmitted = true;
         click('.app-release-dialog button[type="submit"]', 'release submit');
         try {
           await waitFor(() => ({ ok: Boolean(catalogMasterPush), catalogMasterPush }),
             30000, 'release catalog native WebRTC master push');
         } finally {
-          catalogPushSubscription.unsubscribe();
+          catalogReplicationPrototype.onMasterChange = originalOnMasterChange;
         }
 
         const releaseProjection = await waitFor(async () => {
