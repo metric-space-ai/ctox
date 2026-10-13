@@ -15211,6 +15211,173 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
+    fn catalog_generation_wait_is_bounded_and_never_opens_a_temporary_writer() {
+        let root = tempfile::tempdir().expect("isolated root");
+        assert!(wait_for_module_catalog_replacement(
+            root.path(),
+            "retired-generation",
+            Duration::ZERO,
+        )
+        .is_err());
+        assert!(
+            !store::rxdb_store_path(root.path()).exists(),
+            "replacement wait cannot create a fallback writer"
+        );
+    }
+
+    #[test]
+    fn module_catalog_retry_writes_replacement_peer_change_stream() -> anyhow::Result<()> {
+        fn fixture_peer(
+            root: &Path,
+            database: Arc<RxDatabase>,
+            process_lock: NativePeerProcessLock,
+            session: &str,
+        ) -> Arc<NativePeer> {
+            let idle = || tokio::spawn(std::future::pending::<()>());
+            Arc::new(NativePeer {
+                root: root.to_path_buf(),
+                database,
+                peer_session_id: session.into(),
+                shutdown_tx: Mutex::new(None),
+                _process_lock: process_lock,
+                _pools: Vec::new(),
+                business_data_sources: Vec::new(),
+                _command_consumer: idle(),
+                _command_outbox: idle(),
+                _notes_sync: idle(),
+                _file_index_sync: idle(),
+                _channel_state_sync: idle(),
+                _business_users_sync: idle(),
+                _runtime_settings_sync: idle(),
+                _workspace_branding_sync: idle(),
+                _module_catalog_sync: idle(),
+                _ticket_state_sync: idle(),
+                _knowledge_tables_sync: idle(),
+                _business_record_projection_sync: idle(),
+                _iot_agent_supervisors: Vec::new(),
+                _browser_runtime_maintenance: idle(),
+                pending_outbox: AtomicU64::new(0),
+                _status_heartbeat: Mutex::new(None),
+            })
+        }
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                with_native_peer_lifecycle_mut(|state| {
+                    if matches!(state.state, NativePeerLifecycleState::Running { .. }) {
+                        state.begin_stopping().expect("fixture stops");
+                    }
+                    if matches!(state.state, NativePeerLifecycleState::Stopping { .. }) {
+                        state.run_cleanup_finished().expect("fixture cleanup");
+                        state.foreground_run_exited().expect("fixture exits");
+                    }
+                });
+            }
+        }
+        let root = tempfile::tempdir()?;
+        let app_root = root.path().join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","collections":["ctox_queue_tasks"]}"#,
+        )?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let old_peer = runtime.block_on(async {
+            let database = open_database(store::rxdb_store_path(root.path())).await?;
+            register_collections_tolerant(&database, collection_creators()).await?;
+            anyhow::Ok(fixture_peer(
+                root.path(),
+                database,
+                acquire_native_peer_process_lock(root.path())?.expect("first process lock"),
+                "catalog-old-generation",
+            ))
+        })?;
+        with_native_peer_lifecycle_mut(|state| {
+            state.begin_run(false)?;
+            state.bring_up_succeeded(Some(Arc::clone(&old_peer)), true, true, true)
+        })?;
+        let _cleanup = Cleanup;
+        // Hold the real write boundary so the first factory must borrow the
+        // original peer before the test closes it. No timing-based source delay.
+        let write_barrier = runtime.block_on(NATIVE_RXDB_WRITE_LOCK.lock());
+        let projection_root = root.path().to_path_buf();
+        let projection = std::thread::spawn(move || sync_module_catalog(&projection_root));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Arc::strong_count(&old_peer) < 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            Arc::strong_count(&old_peer) >= 3,
+            "factory must borrow published peer"
+        );
+        with_native_peer_lifecycle_mut(NativePeerLifecycle::begin_stopping)?;
+        runtime.block_on(old_peer.database.close())?;
+        with_native_peer_lifecycle_mut(|state| {
+            state.run_cleanup_finished()?;
+            state.foreground_run_exited()
+        })?;
+        drop(old_peer);
+        drop(write_barrier);
+        // A retained Arc<NativePeer> would retain its real process lock and
+        // prevent production bring-up. Prove the failed borrow releases it.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let process_lock = loop {
+            if let Some(lock) = acquire_native_peer_process_lock(root.path())? {
+                break lock;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "retired projection retained peer process lock"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let new_peer = runtime.block_on(async {
+            let database = open_database(store::rxdb_store_path(root.path())).await?;
+            register_collections_tolerant(&database, collection_creators()).await?;
+            anyhow::Ok(fixture_peer(
+                root.path(),
+                database,
+                process_lock,
+                "catalog-new-generation",
+            ))
+        })?;
+        let catalog = new_peer
+            .database
+            .collection("business_module_catalog")
+            .expect("live catalog");
+        let mut changes = catalog.event_bulks();
+        with_native_peer_lifecycle_mut(|state| {
+            state.begin_run(false)?;
+            state.bring_up_succeeded(Some(Arc::clone(&new_peer)), true, true, true)
+        })?;
+        let result = projection.join().expect("projection thread");
+        if result.is_ok() {
+            use futures_util::StreamExt;
+            let bulk = runtime
+                .block_on(async {
+                    tokio::time::timeout(Duration::from_secs(2), changes.next()).await
+                })?
+                .expect("live peer emits catalog change");
+            assert!(bulk
+                .events
+                .iter()
+                .any(|event| event.document_id == "module-catalog"));
+            let document = runtime.block_on(
+                catalog
+                    .storage_instance
+                    .find_documents_by_id(&["module-catalog".to_string()], false),
+            )?;
+            assert_eq!(document["module-catalog"]["modules"][0]["id"], "ctox");
+        }
+        runtime.block_on(new_peer.database.close())?;
+        assert_eq!(result?, 1);
+        Ok(())
+    }
+
+    #[test]
     fn sync_desktop_file_from_path_writes_sqlite_records_without_running_peer() {
         let root = tempfile::tempdir().expect("temp root");
         let file_path = root.path().join("artifact.md");
