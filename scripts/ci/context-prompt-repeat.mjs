@@ -25,7 +25,8 @@ async function run(source, index) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const buffers = { stdout: '', stderr: '' };
-  let errors = [], timings = [], warnings = null, timedOut = false;
+  let errors = [], timings = [], warnings = null, browserErrors = null, timedOut = false;
+  const failedEvidenceKeys = new Set();
   function data(stream, chunk) {
     let buffer = buffers[stream] + chunk.toString();
     let pos;
@@ -35,6 +36,15 @@ async function run(source, index) {
       const start = line.indexOf(key);
       if (start >= 0) { try { timings.push(JSON.parse(line.slice(start + key.length))); } catch {} }
       if (/^browser_warning_count=/.test(line)) warnings = Number(line.split('=')[1]);
+      if (/^browser_error_count=/.test(line)) browserErrors = Number(line.split('=')[1]);
+      if (/missing required evidence:/.test(line)) {
+        errors.push('missing-required-evidence');
+        // Persist only guard names, never the arbitrary browser/wire error body.
+        for (const key of ['browser_warning_count', 'browser_error_count', 'context_prompt_first_paint', 'authorized_native_command']) {
+          if (line.includes(key)) failedEvidenceKeys.add(key);
+        }
+      }
+      if (/page\.evaluate: Error:/.test(line)) errors.push('browser-evaluate');
       if (/Context prompt .*exceeded 150ms/.test(line)) errors.push('prompt-budget');
       if (/STREAM_LIMIT_EXCEEDED/.test(line)) errors.push('stream-limit');
       if (/collection is not registered/.test(line)) errors.push('unregistered-collection');
@@ -51,7 +61,8 @@ async function run(source, index) {
   const result = await new Promise(resolve => child.on('close', (code, signal) => resolve({ code, signal })));
   clearTimeout(timeout); clearTimeout(force);
   rows.push({ source, index, startedAt, endedAt: new Date().toISOString(), pid: child.pid,
-    ...result, timedOut, timings, errorCategories: [...new Set(errors)], warnings, lifecycle });
+    ...result, timedOut, timings, errorCategories: [...new Set(errors)], warnings, browserErrors,
+    failedEvidenceKeys: [...failedEvidenceKeys], lifecycle });
   save(); console.log(JSON.stringify(rows.at(-1)));
 }
 for (let index = 1; index <= 10; index++) {
