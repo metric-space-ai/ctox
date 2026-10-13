@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS workjet_project_kpi_operations (
 pub(super) fn is_command(kind: &str) -> bool {
     matches!(
         kind,
-        "ctox.workjet.project.kpis.configure" | "ctox.workjet.project.kpis.read"
+        "ctox.workjet.project.kpis.configure"
+            | "ctox.workjet.project.kpis.read"
+            | "ctox.workjet.project.kpis.refresh"
     )
 }
 
@@ -174,6 +176,11 @@ pub(super) fn handle_command(
         );
     }
     match command.command_type.as_str() {
+        "ctox.workjet.project.kpis.refresh" => {
+            let request: ReadKpisRequest = serde_json::from_value(payload(command)?)?;
+            request.validate().map_err(anyhow::Error::msg)?;
+            refresh(root, actor, &request, REFRESH_TIME_LIMIT)
+        }
         "ctox.workjet.project.kpis.read" => {
             let request: ReadKpisRequest = serde_json::from_value(payload(command)?)?;
             request.validate().map_err(anyhow::Error::msg)?;
@@ -206,6 +213,80 @@ pub(super) fn handle_command(
         }
         _ => anyhow::bail!("unsupported project KPI command"),
     }
+}
+
+/// Upper bound for one manual recalculation (#502). The resolver keeps running
+/// after the limit; the caller gets the state as it is now.
+pub(super) const REFRESH_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn read_snapshot(
+    root: &Path,
+    actor: &str,
+    project_id: &str,
+    include_refresh_schedule: bool,
+) -> anyhow::Result<ProjectKpis> {
+    let mut reader = Connection::open_with_flags(
+        super::store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    reader.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let snapshot = reader.transaction()?;
+    let owner = require_project(&snapshot, actor, project_id)?;
+    read_state_with_schedule(&snapshot, project_id, &owner, include_refresh_schedule)
+}
+
+/// Manual recalculation of one project. Authorization fails hard; resolver
+/// errors and the time limit do not: they are reported per KPI.
+pub(super) fn refresh(
+    root: &Path,
+    actor: &str,
+    request: &ReadKpisRequest,
+    limit: std::time::Duration,
+) -> anyhow::Result<Value> {
+    let include = request.include_refresh_schedule.unwrap_or(false);
+    // Ownership check before any resolver work.
+    read_snapshot(root, actor, &request.project_id, include)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread_root = root.to_path_buf();
+    let project = request.project_id.clone();
+    std::thread::spawn(move || {
+        let outcome = resolver::refresh_project(&thread_root, &project, true);
+        let _ = tx.send(outcome.map_err(|error| format!("{error:#}")));
+    });
+    let (completed, reason) = match rx.recv_timeout(limit) {
+        Ok(Ok(())) => (true, None),
+        Ok(Err(error)) => (false, Some(("refresh_failed", error))),
+        Err(_) => (false, Some(("time_limit", format!("{}s", limit.as_secs())))),
+    };
+    let state = read_snapshot(root, actor, &request.project_id, include)?;
+    let mut refresh = json!({"completed":completed,"items":refresh_items(&state)});
+    if let Some((code, detail)) = reason {
+        refresh["reason_code"] = json!(code);
+        refresh["message"] = json!(detail.chars().take(512).collect::<String>());
+    }
+    Ok(json!({"ok":true,"kpis":state,"refresh":refresh}))
+}
+
+/// Per KPI: fresh | stale | missing | blocked (+ reason_code).
+pub(super) fn refresh_items(state: &ProjectKpis) -> Vec<Value> {
+    state
+        .items
+        .iter()
+        .map(|item| {
+            let (status, default_reason) = match item.result.status {
+                KpiState::Ready => ("fresh", None),
+                KpiState::Stale => ("stale", None),
+                KpiState::MissingSource => ("missing", None),
+                KpiState::Failed => ("blocked", Some("failed")),
+                KpiState::Resolving => ("blocked", Some("resolving")),
+            };
+            let mut entry = json!({"kpi_id":item.prompt.kpi_id,"status":status});
+            if let Some(reason) = item.result.reason_code.as_deref().or(default_reason) {
+                entry["reason_code"] = json!(reason);
+            }
+            entry
+        })
+        .collect()
 }
 
 fn configure(

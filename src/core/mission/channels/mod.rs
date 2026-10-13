@@ -2493,6 +2493,7 @@ pub fn list_unreviewed_handled_inbound_messages(
               FROM communication_founder_reply_reviews review
               WHERE review.inbound_message_key = m.message_key
                 AND review.sent_at IS NOT NULL
+                AND (m.channel != 'email' OR review.reviewer != 'policy-escalation')
           )
         ORDER BY m.external_created_at DESC, m.observed_at DESC
         LIMIT ?1

@@ -14046,7 +14046,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
-    'project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
+    'project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
     'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit', 'project.init',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
@@ -14237,7 +14237,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       ...(localCandidate ? { localCandidate: JSON.parse(JSON.stringify(receipt.result.local_candidate)) } : {}) };
   }
 
-  if (['project.kpis.read', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
+  if (['project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read'].includes(action)) {
     const meetingRead = action === 'project.jour_fixe.meeting.read';
     const configuring = action === 'project.kpis.configure';
     const allowedKeys = new Set(['action', 'commandId', 'projectId']);
@@ -14295,7 +14295,22 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       if (kpis.project_id !== projectId || !Number.isSafeInteger(kpis.revision)) {
         throw new Error('Workjet KPI result belongs to another project or revision.');
       }
-      return { action, commandId, projectId, contract: PROJECT_KPIS_SCHEMA, kpis: JSON.parse(JSON.stringify(kpis)) };
+      const result = { action, commandId, projectId, contract: PROJECT_KPIS_SCHEMA, kpis: JSON.parse(JSON.stringify(kpis)) };
+      if (action === 'project.kpis.refresh') {
+        const refresh = receipt.result.refresh;
+        const statuses = new Set(['fresh', 'stale', 'blocked', 'missing']);
+        if (!refresh || typeof refresh.completed !== 'boolean' || !Array.isArray(refresh.items)
+          || refresh.items.some(item => typeof item?.kpi_id !== 'string' || !statuses.has(item.status))) {
+          throw new TypeError('Workjet KPI refresh result is malformed.');
+        }
+        result.refresh = {
+          completed: refresh.completed,
+          ...(typeof refresh.reason_code === 'string' ? { reasonCode: refresh.reason_code } : {}),
+          items: refresh.items.map(item => ({ kpiId: item.kpi_id, status: item.status,
+            ...(typeof item.reason_code === 'string' ? { reasonCode: item.reason_code } : {}) })),
+        };
+      }
+      return result;
     }
     const meeting = receipt.result.meeting;
     if (meeting === null && payload.meeting_id !== undefined) {

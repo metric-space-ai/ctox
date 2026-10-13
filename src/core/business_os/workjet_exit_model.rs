@@ -2,7 +2,8 @@
 // License: AGPL-3.0-only
 
 //! Owner-gated immutable assessments. Refresh uses one existing durable
-//! supervisor turn per explicit refresh; queue admission is never E5.
+//! supervisor turn per refresh. Native maintenance starts missing/due runs;
+//! queue admission is never E5.
 use super::domain_effect::{AppliedDomainEffect, DomainEffectAdmission, DomainRecordRef};
 use super::store::{
     self, open_store, outbound_load_record, upsert_business_record, BusinessCommand, CommandOrigin,
@@ -242,9 +243,7 @@ fn admit_research(
     request: &Request,
     refresh_id: &str,
 ) -> anyhow::Result<Option<(String, String)>> {
-    let Some(resources) = request.resources.as_ref() else {
-        return Ok(None);
-    };
+    let resources = request.resources.as_ref();
     let conn = reader(root)?;
     let owner = super::workjet_project_kpis::require_project(&conn, actor, &request.project_id)?;
     let bound:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_supervisor_bindings')",[],|r|r.get(0))?;
@@ -292,7 +291,10 @@ fn admit_research(
         .allowed,
         "exit research owner may not create CTOX tasks"
     );
-    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Resource PROPOSAL only: {}. No hidden budget allocations; obtain a confirmed 60-month committed_plan, transferable rights and source-backed conditional scenarios. Do not make up numbers or sources, contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,serde_json::to_string(resources)?);
+    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Resource PROPOSAL only: {}. No hidden budget allocations; obtain a confirmed 60-month committed_plan, transferable rights and source-backed conditional scenarios. Do not make up numbers or sources, contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,serde_json::to_string(&resources)?);
+    if resources.is_none() {
+        goal.push_str(" No resource plan or proposal is recorded. Research a reasoned resource proposal from this project\'s real goal, phase, team and budget evidence; do not insert generic example numbers. Return resource_proposal {hours_per_week,monthly_budget_eur,comparison_mode} and resource_proposal_reason (nonempty, <=2048 chars) alongside exit_model_blocked. This is a proposal, never owner confirmation; if evidence is absent name the missing inputs instead. The native store retains the proposal for an owner correction/confirmation and a later refresh.");
+    }
     goal.push_str(" Research relevant project factors: addressable/servable market, demand and willingness to pay, competitors and defensible moat, acquisition/distribution access and conversion, retention, brand white space and trust, technical feasibility and milestones, team/development/sales/onboarding/service capacity, costs and committed financing, transferable IP/data/licence rights, founder replacement, buyer classes, comparable control-sale prices and sale probability including failed/unsold peers. Translate evidence into explicit operating assumptions, not a score-to-Euro multiplier. Distinguish observations, derivations, priors and unknowns. Keep alternative buyer routes exclusive and avoid double-counting cash, brand, technology or synergy.");
     goal.push_str(" Plan fields: version,mode=committed_plan,comparison_mode,confirmed,hours_per_week,assumptions:string[],source_ids:string[],opening_customers,opening_cash,paid_marketing,brand_budget,cash_opex,equity_funding,capex,sales_capacity,onboarding_capacity,service_capacity,reserve_months,tax_proxy. All eight monthly arrays require 60 finite nonnegative values. Sources: id,reference,observed_at,valid_until,kind=observed|derived|assumed. Inputs fields: adapter,sale_perimeter=100_percent_equity_before_fees_and_personal_tax,rights_confirmed,perimeter_source_ids,sources,plan,scenarios,outcomes,build_probability,technical_failure_sale_probability,technical_failure_equity_price,probability_source_ids. SaaS scenarios: name,source_ids,weight_given_build,launch_month,sales_lag,sam0,sam_annual_growth,cpl,conversion,organic_leads0,organic_annual_growth,logo_churn,arpa0,arpa_annual_growth,gross_margin,brand0,brand_ceiling,brand_speed,brand_reference_budget,brand_organic_lift,brand_price_lift,multiple_basis=ARR|LTM_REVENUE|EBITDA,multiple,sale_probability,debt_like_exit,wc_adjustment,failure_sale_probability,failure_equity_price. Grid outcomes: state,probability,sale_probability,equity_price_eur,source_ids; no additional build risk. Never claim owner confirmation from your own proposal.");
     let accepted = store::accept_rxdb_business_command_with_origin(
@@ -311,6 +313,83 @@ fn admit_research(
         .context("research has no durable command receipt")?
         .to_owned();
     Ok(Some((stable_id("exit_run", &[&operation]), research)))
+}
+
+const AUTOSTART_SOURCE: &str = "native-workjet-exit-autostart";
+
+fn due(state: &Value, today: &str) -> anyhow::Result<bool> {
+    if state["status"] == "not_started" {
+        return Ok(true);
+    }
+    let Some(deadline) = state["refresh_due"].as_str() else {
+        return Ok(false);
+    };
+    Ok(engine::date(deadline)? <= engine::date(today)?)
+}
+
+/// Runs before router early-returns. It uses the existing command plane and
+/// project fence, never a second writer or a browser-driven refresh.
+pub(crate) fn refresh_due(root: &Path) -> anyhow::Result<()> {
+    if !store::business_os_store_path(root).exists() {
+        return Ok(());
+    }
+    let conn = reader(root)?;
+    let ids = conn.prepare("SELECT record_id FROM business_records WHERE collection='workjet_projects' AND deleted=0 AND json_extract(payload_json,'$.status')='active' ORDER BY record_id LIMIT 101")?
+        .query_map([], |r| r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    ensure!(
+        ids.len() <= 100,
+        "exit autostart exceeds native project budget"
+    );
+    let today = chrono::Utc::now().date_naive().to_string();
+    let mut pending = Vec::new();
+    for id in ids {
+        let project =
+            outbound_load_record(&conn, "workjet_projects", &id)?.context("project disappeared")?;
+        if project["is_deleted"] == true || project["_deleted"] == true {
+            continue;
+        }
+        let owner = project["owner_user_id"]
+            .as_str()
+            .context("project owner missing")?
+            .to_owned();
+        let state = read_state(&conn, &id, &owner)?;
+        if due(&state, &today)? {
+            let anchor = state["refresh_due"].as_str().unwrap_or("initial");
+            pending.push((
+                id.clone(),
+                owner.clone(),
+                stable_id("exit_autostart", &[&owner, &id, anchor]),
+            ));
+        }
+    }
+    drop(conn);
+    let mut failures = Vec::new();
+    for (project, owner, operation) in pending {
+        let result = (|| -> anyhow::Result<()> {
+            let session = store::active_domain_recovery_session(root, &owner)?;
+            let accepted = store::accept_rxdb_business_command_with_origin(
+                root,
+                json!({"id":operation,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":project,
+                    "payload":{"project_id":project},"client_context":{"actor":super::threads::actor_payload(&session),"source":AUTOSTART_SOURCE}}),
+                CommandOrigin::TrustedLocal,
+            )?;
+            ensure!(
+                accepted["status"] == "completed",
+                "exit refresh rejected: {}",
+                accepted["error_message"]
+            );
+            Ok(())
+        })();
+        if let Err(error) = result {
+            failures.push(format!("{project}: {error}"));
+        }
+    }
+    ensure!(
+        failures.is_empty(),
+        "exit autostart deferred: {}",
+        failures.join("; ")
+    );
+    Ok(())
 }
 
 pub(super) fn handle_command(
@@ -383,6 +462,22 @@ pub(super) fn handle_command(
     } else {
         None
     };
+    if kind.ends_with(".refresh")
+        && command.origin == CommandOrigin::TrustedLocal
+        && command.client_context["source"] == AUTOSTART_SOURCE
+        && !due(
+            &read_state(&conn, &request.project_id, &owner)?,
+            request.as_of.as_deref().unwrap(),
+        )?
+    {
+        let applied = admitted.apply(&mut conn, |tx| {
+            Ok(AppliedDomainEffect {
+                result: json!({"ok":true,"assessment":read_state(tx,&request.project_id,&owner)?}),
+                projections: vec![],
+            })
+        })?;
+        return Ok(applied.result);
+    }
     if kind.ends_with(".refresh") && request.resources.is_none() {
         request.resources = read_state(&conn, &request.project_id, &owner)?
             .get("resource_proposal")
@@ -533,7 +628,27 @@ pub(super) fn complete_research(
     value["missing_inputs"] = gaps
         .map(|v| json!(v))
         .unwrap_or_else(|| json!(["valid_source_backed_research_inputs"]));
-    value["findings"] = json!([{"code":"research_did_not_supply_valid_inputs","message":"The bounded research turn did not supply admissible, source-backed inputs. No numeric valuation was created."}]);
+    if original.get("resource_proposal").is_none() {
+        if let Some((proposal, reason)) = parsed.as_ref().and_then(|reply| {
+            let proposal: Resources =
+                serde_json::from_value(reply.get("resource_proposal")?.clone()).ok()?;
+            proposal.validate().ok()?;
+            let reason = reply.get("resource_proposal_reason")?.as_str()?;
+            if reason.trim().is_empty() || reason.chars().count() > 2048 {
+                return None;
+            }
+            Some((proposal, reason))
+        }) {
+            value["resource_proposal"] = serde_json::to_value(proposal)?;
+            value["missing_inputs"] =
+                json!(["confirmed_60_month_resource_plan", "researched_inputs"]);
+            value["findings"] =
+                json!([{ "code":"resource_proposal_requires_confirmation", "message":reason }]);
+        }
+    }
+    if value["findings"] == original["findings"] {
+        value["findings"] = json!([{"code":"research_did_not_supply_valid_inputs","message":"The bounded research turn did not supply admissible, source-backed inputs. No numeric valuation was created."}]);
+    }
     tx.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json) VALUES(?1,?2,?3,?4)",params![next,project,owner,serde_json::to_string(&value)?])?;
     let mut record = outbound_load_record(&tx, "workjet_projects", project)?
         .context("research project disappeared")?;

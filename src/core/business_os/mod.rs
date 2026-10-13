@@ -74,6 +74,7 @@ pub(crate) fn refresh_due_workjet_project_kpis(root: &std::path::Path) -> anyhow
 
 mod project_crew;
 mod workjet_exit_model;
+pub(crate) use workjet_exit_model::refresh_due as refresh_due_workjet_exit_models;
 mod workjet_exit_model_engine;
 mod workjet_identity;
 pub(crate) use project_crew::project_crew_member_for_task;

@@ -33,6 +33,20 @@ Research may propose explicit allocations with documented assumptions, but
 cannot exceed these hours or any month's expense budget. Additional sources,
 rights and a confirmed 60-month plan are still required before calculation.
 
+Native maintenance automatically refreshes every active project with no assessment
+or a reached `refresh_due` date, before router busy/queue-pressure early returns.
+It submits the existing `.refresh` command as the current registered owner and
+retains the existing project admission fence. A stable command ID per project
+and due assessment makes repeated ticks replay the same admission. Archived,
+deleted or revoked-owner projects cannot obtain autonomous research authority.
+
+When no proposal exists, the registered supervisor researches a reasoned
+`resource_proposal` and returns its nonempty `resource_proposal_reason` alongside
+`exit_model_blocked`. The native store validates and retains this proposal and
+its reason as a finding. It is never a confirmed plan or numeric valuation;
+unsupported or missing evidence remains explicitly blocked. Later refreshes use
+the retained proposal with the existing resource bounds and confirmation checks.
+
 Native response: `{ok:true, assessment}`. Assessment's required fields are:
 
 ```json

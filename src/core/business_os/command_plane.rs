@@ -374,6 +374,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 142] = [
     "ctox.workjet.computer.unassign",
     "ctox.workjet.project.list",
     "ctox.workjet.project.kpis.read",
+    "ctox.workjet.project.kpis.refresh",
     "ctox.workjet.exit_model.read",
     "ctox.workjet.exit_model.refresh",
     "ctox.workjet.exit_model.submit",
@@ -1347,6 +1348,7 @@ impl CentralCommandPolicyRequirement {
             command_type,
             "ctox.workjet.project.upsert"
                 | "ctox.workjet.project.init"
+                | "ctox.workjet.project.kpis.refresh"
                 | "ctox.workjet.exit_model.refresh"
                 | "ctox.workjet.exit_model.submit"
                 | "ctox.workjet.working_copy.upsert"
@@ -1944,7 +1946,9 @@ fn dispatch_business_command(
                 )),
             }
         }
-        "ctox.workjet.project.kpis.read" | "ctox.workjet.project.kpis.configure" => {
+        "ctox.workjet.project.kpis.read"
+        | "ctox.workjet.project.kpis.refresh"
+        | "ctox.workjet.project.kpis.configure" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             let actor =
                 session_user_id(session).context("KPI command requires an authenticated user")?;
