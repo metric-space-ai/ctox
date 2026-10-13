@@ -17,7 +17,8 @@ async function run(source, index) {
   const lifecycle = path.join(output, `${source}-${index}-processes.json`);
   // Error labels come only from checked-in smoke source, never from arbitrary
   // browser/wire text. This identifies the failed phase without logging payloads.
-  const smokeSource = readFileSync(path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js'), 'utf8');
+  const smokeSource = ['browser_rust_smoke.js', 'threads_rightclick_peers.js']
+    .map(file => readFileSync(path.join(root, 'src/core/rxdb/tools', file), 'utf8')).join('\n');
   const sourceLabels = [...new Set([...smokeSource.matchAll(/(['"])([A-Za-z][A-Za-z0-9 _-]{7,95})\1/g)]
     .map(match => match[2]))].filter(label => !/token|secret|credential|password|bearer/i.test(label))
     .sort((a, b) => b.length - a.length);
