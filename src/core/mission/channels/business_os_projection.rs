@@ -527,8 +527,8 @@ pub(super) fn communication_account_business_os_document(
 /// page cannot establish that a missing account was disconnected.
 pub(crate) fn snapshot_communication_accounts_for_business_os(root: &Path) -> Result<Vec<Value>> {
     let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db_read_only(&db_path)?.with_context(|| {
-        format!(
+    let conn = open_channel_db_read_only(&db_path)?.ok_or_else(|| {
+        anyhow::anyhow!(
             "communication account snapshot unavailable: channel database missing at {}",
             db_path.display()
         )
