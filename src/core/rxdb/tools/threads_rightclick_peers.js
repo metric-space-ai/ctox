@@ -238,10 +238,22 @@ async function runThreadsRightClickPeers({
 
 function readCachedThreadFailureState() {
   const state = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state;
+  const menu = globalThis.document?.querySelector?.(".ctox-global-context-menu:not([hidden])");
+  const datalist = menu?.querySelector?.("[data-ctox-context-user-options]");
+  const options = [...(datalist?.querySelectorAll?.("option") || [])];
+  const hasOption = (id, label) => options.some(option => option.getAttribute("value") === id
+    && (!label || label.test(option.getAttribute("label") || "")));
+  // Persist fixture-owned presence checks, never directory labels or other users.
+  const contextDirectory = {
+    menuAttached: Boolean(menu), datalistAttached: Boolean(datalist), optionCount: options.length,
+    reviewerPresent: hasOption("threads-reviewer"), requesterPresent: hasOption("threads-requester"),
+    reviewerLabelMatches: hasOption("threads-reviewer", /Threads Reviewer/),
+    requesterLabelMatches: hasOption("threads-requester", /Threads Requester/),
+  };
   // Read already-published diagnostics only. No query, repair or new status
   // snapshot may perturb the failed transport while collecting its evidence.
   return {
-    capturedAtMs: Date.now(),
+    capturedAtMs: Date.now(), contextDirectory,
     actorId: state?.session?.user?.id || null,
     role: state?.session?.user?.role || null,
     sync: globalThis.ctoxBusinessOsSyncDiagnostics || null,

@@ -74,7 +74,19 @@ async function run(source, index) {
   force = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL'); }, Math.min(70000, deadline - Date.now() + 5000));
   const result = await new Promise(resolve => child.on('close', (code, signal) => resolve({ code, signal })));
   clearTimeout(timeout); clearTimeout(force);
-  rows.push({ source, index, startedAt, endedAt: new Date().toISOString(), pid: child.pid,
+  let reviewerDirectory = null;
+  try {
+    const captured = JSON.parse(readFileSync(path.join(output, "threads-reviewer-failure-state.json"), "utf8"));
+    const evidence = captured.evidence;
+    if (captured.atMs >= Date.parse(startedAt) && evidence?.contextDirectory) {
+      const probe = evidence.contextDirectory;
+      reviewerDirectory = Object.fromEntries(["menuAttached", "datalistAttached", "reviewerPresent",
+        "requesterPresent", "reviewerLabelMatches", "requesterLabelMatches"]
+        .map(key => [key, probe[key] === true]));
+      reviewerDirectory.optionCount = Number.isSafeInteger(probe.optionCount) ? probe.optionCount : null;
+    }
+  } catch {}
+  rows.push({ source, index, startedAt, endedAt: new Date().toISOString(), pid: child.pid, reviewerDirectory,
     ...result, timedOut, timings, errorCategories: [...new Set(errors)], warnings, browserErrors,
     failedEvidenceKeys: [...failedEvidenceKeys], failedPhaseLabels: [...failedPhaseLabels], lifecycle });
   save(); console.log(JSON.stringify(rows.at(-1)));
