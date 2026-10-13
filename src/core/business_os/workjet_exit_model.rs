@@ -501,7 +501,7 @@ pub(super) fn handle_command(
     // Cross-process project admission fence covers active-turn inspection,
     // durable queue admission and mapping commit. It never holds a SQLite
     // transaction while the nested producer writes to the same store.
-    let _research_fence = if kind.ends_with(".refresh") {
+    let _research_fence = if kind.ends_with(".refresh") || request.confirm_run_id.is_some() {
         let directory = root.join("state/workjet-exit-model-admission");
         std::fs::create_dir_all(&directory)?;
         let file = std::fs::OpenOptions::new()
