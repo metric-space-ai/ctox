@@ -313,6 +313,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     let host = header_value(&request, "Host");
     let forwarded_proto = header_value(&request, "X-Forwarded-Proto");
     if rejects_cross_origin_control_request(
+        &method,
         path,
         origin.as_deref(),
         host.as_deref(),
@@ -2218,13 +2219,19 @@ fn rejects_cross_origin_browser_mutation(
 /// Control-plane HTTP requests from a browser need their own origin fence:
 /// the local-dev session has no cookie, but it otherwise has admin authority.
 fn rejects_cross_origin_control_request(
+    method: &Method,
     path: &str,
     origin: Option<&str>,
     host: Option<&str>,
     forwarded_proto: Option<&str>,
     fetch_site: Option<&str>,
 ) -> bool {
-    if path != "/login" && !path.starts_with("/api/business-os/") {
+    // OAuth returns from a different site as a top-level GET. Its one-time
+    // state and PKCE verifier are checked by the callback handler.
+    if (path == "/login" && method != &Method::Post)
+        || (path == "/api/business-os/ctox/subscription-auth/callback" && method == &Method::Get)
+        || (path != "/login" && !path.starts_with("/api/business-os/"))
+    {
         return false;
     }
     if fetch_site.is_some_and(|site| {
@@ -4650,6 +4657,7 @@ mod tests {
             "/api/business-os/ctox/update/apply",
         ] {
             assert!(rejects_cross_origin_control_request(
+                &Method::Get,
                 path,
                 Some("https://attacker.example"),
                 Some("127.0.0.1:8765"),
@@ -4657,6 +4665,7 @@ mod tests {
                 Some("cross-site"),
             ));
             assert!(rejects_cross_origin_control_request(
+                &Method::Post,
                 path,
                 Some("null"),
                 Some("127.0.0.1:8765"),
@@ -4664,6 +4673,7 @@ mod tests {
                 None,
             ));
             assert!(rejects_cross_origin_control_request(
+                &Method::Get,
                 path,
                 None,
                 Some("127.0.0.1:8765"),
@@ -4671,6 +4681,7 @@ mod tests {
                 Some("same-site"),
             ));
             assert!(!rejects_cross_origin_control_request(
+                &Method::Get,
                 path,
                 Some("http://127.0.0.1:8765"),
                 Some("127.0.0.1:8765"),
@@ -4679,6 +4690,7 @@ mod tests {
             ));
             // Native clients do not carry browser origin/fetch metadata.
             assert!(!rejects_cross_origin_control_request(
+                &Method::Post,
                 path,
                 None,
                 Some("127.0.0.1:8765"),
@@ -4687,8 +4699,33 @@ mod tests {
             ));
         }
         assert!(!rejects_cross_origin_control_request(
+            &Method::Get,
             "/",
             Some("https://attacker.example"),
+            Some("127.0.0.1:8765"),
+            None,
+            Some("cross-site"),
+        ));
+        assert!(!rejects_cross_origin_control_request(
+            &Method::Get,
+            "/api/business-os/ctox/subscription-auth/callback",
+            Some("https://accounts.example"),
+            Some("127.0.0.1:8765"),
+            None,
+            Some("cross-site"),
+        ));
+        assert!(rejects_cross_origin_control_request(
+            &Method::Post,
+            "/login",
+            Some("https://attacker.example"),
+            Some("127.0.0.1:8765"),
+            None,
+            Some("cross-site"),
+        ));
+        assert!(!rejects_cross_origin_control_request(
+            &Method::Get,
+            "/login",
+            Some("https://accounts.example"),
             Some("127.0.0.1:8765"),
             None,
             Some("cross-site"),
