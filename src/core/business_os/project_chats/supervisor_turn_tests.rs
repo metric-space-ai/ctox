@@ -165,7 +165,26 @@ fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Resu
     )?;
     let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
     ensure!(state["status"] == "completed", "read failed: {state}");
-    assert_eq!(state["result"]["assessment"]["status"], "provisional");
+    assert_eq!(state["result"]["assessment"]["status"], "blocked");
+    assert_eq!(
+        state["result"]["assessment"]["plan_summary"]["confirmed"],
+        false
+    );
+    assert!(state["result"]["assessment"]["result"].is_null());
+    let confirmation =
+        json!({"project_id":"project","confirm_run_id":state["result"]["assessment"]["run_id"]});
+    let confirmed = exit("exit-confirm", "submit", confirmation.clone())?;
+    assert_eq!(confirmed["status"], "completed", "{confirmed}");
+    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        exit("exit-confirm", "submit", confirmation)?["result"],
+        confirmed["result"]
+    );
+    let state = exit(
+        "exit-confirmed-read",
+        "read",
+        json!({"project_id":"project"}),
+    )?;
     assert_eq!(
         state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
         8050.0
