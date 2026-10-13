@@ -43,7 +43,7 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
   assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
-  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 10);
+  assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 11);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
   assert.match(controlSource, /rawProject\?\.status === 'active'/);
@@ -686,7 +686,8 @@ test('execution policy generated native/browser fixtures agree and migration pre
   const { collections, migrationStrategies } = await import('../modules/ctox/schema.js');
   const old = { id: 'legacy', name: 'Old', owner_user_id: 'owner-1', status: 'active' };
   assert.deepEqual(migrationStrategies.workjet_projects[4](old), old);
-  assert.equal(collections.workjet_projects.version, 4);
+  assert.deepEqual(migrationStrategies.workjet_projects[5](old), old);
+  assert.equal(collections.workjet_projects.version, 5);
   assert.equal(collections.workjet_projects.required.includes('execution_policy'), false);
 });
 

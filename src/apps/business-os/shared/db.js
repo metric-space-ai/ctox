@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261011-shell-v2-native-model-check-rebase594';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261013-shell-v2-native-model-check-main594';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

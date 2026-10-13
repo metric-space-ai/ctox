@@ -137,6 +137,8 @@ EVERYDAY
   ctox status                    show service status (JSON)
   ctox crew list                 list durable crew members (read-only JSON)
   ctox crew show <id>            show one crew profile (read-only JSON)
+  ctox jour-fixe report show --meeting-id <id>
+  ctox jour-fixe report list --project-id <id> [--limit n]
   ctox work-hours set 08:00 18:00
                                  restrict CTOX work loop to local hours
   ctox work-hours off            disable working-hours restriction
@@ -427,7 +429,10 @@ fn skips_cli_startup_db(args: &[String]) -> bool {
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
     // Office file tools run within the caller's filesystem sandbox and do not
     // read or mutate daemon state. They must not wait on its SQLite ledger.
-    if args.first().map(String::as_str) == Some("office") {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("office" | "jour-fixe")
+    ) {
         return true;
     }
     if matches!(
@@ -965,6 +970,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("tui") => tui::run_tui(root),
         Some("business-os") | Some("business") => {
             service::business_os::handle_business_os_command(root, &args[1..])
+        }
+        Some("jour-fixe") => {
+            let report = business_os::meeting_report::cli(root, &args[1..])?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
         }
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),

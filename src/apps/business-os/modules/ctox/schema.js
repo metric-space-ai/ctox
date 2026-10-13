@@ -648,7 +648,7 @@ export const collections = {
   },
   workjet_projects: {
 
-    version: 4,
+    version: 5,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -656,6 +656,7 @@ export const collections = {
       name: { type: 'string', maxLength: 256 },
       description: { type: 'string', maxLength: 4096 },
       repo_url: { type: 'string', maxLength: 2048 },
+      repository_url: { type: 'string', maxLength: 2048 },
       public_url: { type: 'string', maxLength: 2048 },
       supervisor_luma_id: { type: 'string', minLength: 1, maxLength: 160 },
       execution_policy: {
@@ -908,7 +909,8 @@ export const migrationStrategies = {
     1: (oldDoc) => oldDoc,
     2: (oldDoc) => oldDoc,
     3: (oldDoc) => oldDoc,
-    4: (oldDoc) => oldDoc
+    4: (oldDoc) => oldDoc,
+    5: (oldDoc) => oldDoc
   },
   workjet_computers: {
     1: (oldDoc) => ({
