@@ -677,6 +677,58 @@ mod command_writeback_tests {
     }
 
     #[test]
+    fn outbound_person_research_contract_reaches_signed_lease_execution() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id": "role_contract_research", "command_id": "role_contract_research",
+                "module": "outbound-lead-generation", "command_type": "business_os.chat.task",
+                "record_id": "lead-role-contract",
+                "payload": {"title": "Research lead", "instruction": "Research requested contacts",
+                    "mode": "data", "writeback_contract": {
+                        "mechanism": "business_command", "command_type": "outbound.lead.research_writeback",
+                        "collection": "outbound_lead_generation_leads", "record_ids": ["lead-role-contract"]
+                    }},
+                "client_context": {"capability_token": capability}
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )?;
+        let key = accepted["task_id"]
+            .as_str()
+            .context("research queue task missing")?;
+        let job = queued_prompt_from_queue_task(channels::lease_queue_task(
+            root,
+            key,
+            CHANNEL_ROUTER_LEASE_OWNER,
+        )?);
+        let execution_prompt = attach_typed_business_command_context(
+            root,
+            &job,
+            business_os_chat_execution_prompt(&job),
+            "role-contract-test-turn",
+            job.thread_key.as_deref(),
+        )?;
+        assert!(execution_prompt.contains("Canonical Business OS command binding"));
+        assert!(execution_prompt.contains("Outbound person research execution contract"));
+        assert!(execution_prompt.contains("Finance Director"));
+        assert!(execution_prompt.contains("concrete profile URL/name"));
+        let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
+        assert_eq!(context["command"]["command_id"], "role_contract_research");
+        assert!(command_writeback_failure(root, &job)?.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn incident_command_only_contract_enables_mcp_and_requires_successful_correlated_writeback(
     ) -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -708,7 +760,7 @@ mod command_writeback_tests {
         let key = accepted["task_id"]
             .as_str()
             .context("test research queue task missing")?;
-        let task = channels::lease_queue_task(root, key, CHANNEL_ROUTER_LEASE_OWNER)?;
+        let task = channels::load_queue_task(root, key)?.context("test queue task missing")?;
         let job = queued_prompt_from_queue_task(task);
         let mut options = chat_turn_session_options_for_queue_job(&job);
         assert!(configure_business_os_mcp_session_for_queue_job(
@@ -719,17 +771,6 @@ mod command_writeback_tests {
         assert!(options.enable_business_os_mcp);
         assert!(options.business_os_mcp_command_session.is_some());
         assert!(options.force_isolated_session);
-        let execution_prompt = attach_typed_business_command_context(
-            root,
-            &job,
-            business_os_chat_execution_prompt(&job),
-            "role-contract-test-turn",
-            job.thread_key.as_deref(),
-        )?;
-        assert!(execution_prompt.contains("Canonical Business OS command binding"));
-        assert!(execution_prompt.contains("Outbound person research execution contract"));
-        assert!(execution_prompt.contains("Finance Director"));
-        assert!(execution_prompt.contains("concrete profile URL/name"));
         let context = channels::inspect_business_command_for_task(root, key)?.unwrap();
         assert!(completion_review_scope_from_command_context(&context).is_none());
         let state = Arc::new(Mutex::new(SharedState::default()));
