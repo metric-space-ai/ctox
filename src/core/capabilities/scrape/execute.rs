@@ -809,6 +809,7 @@ pub(crate) fn execute_scrape_with_probe_grant(
         == Some(true);
     let auth_assist_handoff = if classification.status == ScrapeRunStatus::AuthorizationRequired
         && !signed_in_automatically
+        && trigger_kind != "account_reprobe"
     {
         reauthorization.as_ref().and_then(|action| {
             emit_reauthorization_handoff(
