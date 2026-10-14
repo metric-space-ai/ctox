@@ -48,9 +48,9 @@ pub const SLUG: &str = "github";
 const REPO: &str = "repo";
 const GIST: &str = "gist";
 
-/// GitHub issue/PR numbers are positive integers; the upper bound only guards
-/// against absurd values reaching the URL.
-const MAX_NUMBER: u64 = 1_000_000_000;
+/// GitHub numbers/ids are positive integers; workflow run ids already exceed
+/// 10^10, so the bound is the JSON-safe integer range.
+const MAX_NUMBER: u64 = 9_007_199_254_740_991;
 
 // ---------------------------------------------------------------- schema helpers
 
@@ -578,8 +578,8 @@ impl GitHub {
                     "GITHUB_LIST_ISSUES",
                     ("Issues auflisten", "List issues"),
                     (
-                        "Listet die Issues eines Repositorys (ohne Pull Requests), wie die Issue-Auswahl der Piece.",
-                        "Lists a repository's issues (excluding pull requests), like the piece's issue dropdown.",
+                        "Listet die Issues eines Repositorys; Pull Requests sind mit is_pull_request markiert.",
+                        "Lists a repository's issues; pull requests are flagged with is_pull_request.",
                     ),
                     &with_repo_page(vec![(
                         "state",
@@ -1156,9 +1156,12 @@ impl ToolkitAdapter for GitHub {
                     .cloned()
                     .unwrap_or_default()
                     .iter()
-                    .filter(|i| i.get("pull_request").is_none())
+                    // GitHub's issues endpoint also returns pull requests. Filtering
+                    // them out (as the piece does) made whole pages look empty in
+                    // live tests, so they stay in the list, flagged.
                     .map(|i| {
                         json!({"number": i["number"], "title": i["title"], "state": i["state"],
+                            "is_pull_request": i.get("pull_request").is_some(),
                             "html_url": i["html_url"], "user": i["user"]["login"], "labels":
                             i["labels"].as_array().map(|l| l.iter().map(|x| x["name"].clone()).collect::<Vec<_>>())})
                     })
@@ -1201,7 +1204,8 @@ impl ToolkitAdapter for GitHub {
                 }
                 let raw = v["content"].as_str().unwrap_or_default();
                 let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(raw.trim())
+                    // GitHub wraps base64 at 60 columns with `\n`.
+                    .decode(raw.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>())
                     .map_err(|e| anyhow!("GitHub returned undecodable base64 content: {e}"))?;
                 json!({
                     "path": v["path"], "name": v["name"], "sha": v["sha"], "size": v["size"],

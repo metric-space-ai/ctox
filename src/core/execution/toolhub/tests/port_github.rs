@@ -439,6 +439,8 @@ fn github_actions_are_ported() {
                 ("/0/number", json!(42)),
                 ("/0/user", json!("ada")),
                 ("/0/labels/0", json!("bug")),
+                ("/0/is_pull_request", json!(false)),
+                ("/1/is_pull_request", json!(true)),
             ]),
         },
         // ------------------------------------------------------------ writes

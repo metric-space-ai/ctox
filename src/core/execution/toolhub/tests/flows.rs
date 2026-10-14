@@ -141,7 +141,9 @@ fn oauth_connect_execute_refresh_on_401_once() {
     let ToolOutcome::Success { data } = out else {
         panic!("{out:?}")
     };
-    assert_eq!(data.as_array().unwrap().len(), 1, "pull requests filtered");
+    let items = data.as_array().unwrap();
+    assert_eq!(items.len(), 2, "pull requests kept and flagged");
+    assert_eq!(items.iter().filter(|i| i["is_pull_request"] == true).count(), 1);
     assert!(!data.to_string().contains("at-1"));
 
     // Provider revokes the token -> exactly one refresh + replay.
