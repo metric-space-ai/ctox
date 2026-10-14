@@ -168,7 +168,7 @@ impl Slack {
                         "Lists public/private channels of the workspace.",
                     ),
                     &[
-                        ("types", s("public_channel,private_channel,mpim,im")),
+                        ("types", s("Default public_channel (needs channels:read). Add private_channel (groups:read), mpim, im as granted.")),
                         ("limit", int("1-1000", 1, 1000, 200)),
                         ("cursor", s("Pagination cursor")),
                         ("exclude_archived", json!({"type": "boolean", "default": true})),
@@ -264,7 +264,7 @@ impl Slack {
                     ),
                     &[
                         ("user", s("User-ID (U…); leer = eigener / user ID, empty = self")),
-                        ("types", s("public_channel,private_channel,mpim,im")),
+                        ("types", s("Default public_channel (needs channels:read). Add private_channel (groups:read), mpim, im as granted.")),
                         ("limit", int("1-1000", 1, 1000, 200)),
                         ("cursor", s("Pagination cursor")),
                         ("exclude_archived", json!({"type": "boolean", "default": true})),
@@ -709,7 +709,7 @@ impl ToolkitAdapter for Slack {
                 query(&[
                     (
                         "types",
-                        Some(o("types").unwrap_or_else(|| "public_channel,private_channel".into())),
+                        Some(o("types").unwrap_or_else(|| "public_channel".into())),
                     ),
                     ("limit", Some(opt_u64(a, "limit", 200, 1, 1000).to_string())),
                     ("cursor", o("cursor")),
@@ -765,7 +765,7 @@ impl ToolkitAdapter for Slack {
                     ("user", o("user")),
                     (
                         "types",
-                        Some(o("types").unwrap_or_else(|| "public_channel,private_channel".into())),
+                        Some(o("types").unwrap_or_else(|| "public_channel".into())),
                     ),
                     ("limit", Some(opt_u64(a, "limit", 200, 1, 1000).to_string())),
                     ("cursor", o("cursor")),

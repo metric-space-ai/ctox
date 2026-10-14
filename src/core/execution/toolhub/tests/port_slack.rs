@@ -28,7 +28,7 @@ fn cases() -> Vec<Case<'static>> {
             method: "GET",
             url_contains: st([
                 "/conversations.list",
-                "types=public_channel%2Cprivate_channel",
+                "types=public_channel&",
                 "limit=200",
                 "exclude_archived=true",
             ]),
