@@ -64,7 +64,8 @@ const labels = {
     import_empty: 'Keine gültigen Zugangsdaten (Name + Wert) in der Datei.',
     value_required: 'Bitte einen Wert eingeben.',
     key_invalid: 'Ungültiger Schlüssel: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
-    save_failed: 'Speichern fehlgeschlagen.',
+    save_failed: 'Speichern hat nicht geklappt.',
+    delete_failed: 'Löschen hat nicht geklappt.',
     load_failed: 'Laden fehlgeschlagen.',
     no_permission: 'Du hast keine Berechtigung, Zugangsdaten zu verwalten (Rolle Chef oder Admin erforderlich).',
   },
@@ -117,7 +118,8 @@ const labels = {
     import_empty: 'No valid credentials (name + value) in the file.',
     value_required: 'Please enter a value.',
     key_invalid: 'Invalid key: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
-    save_failed: 'Save failed.',
+    save_failed: 'Save did not work.',
+    delete_failed: 'Delete did not work.',
     load_failed: 'Load failed.',
     no_permission: 'You do not have permission to manage credentials (Chef or Admin role required).',
   },
@@ -365,6 +367,18 @@ export async function mount(ctx) {
   let userCollapsed = false;
   let refreshing = false;
   let refreshQueued = false;
+  let disposed = false;
+  let loadRetryTimer = 0;
+  let loadRetryMs = 2000;
+  function scheduleLoadRetry() {
+    if (disposed || loadRetryTimer) return;
+    loadRetryTimer = window.setTimeout(() => {
+      loadRetryTimer = 0;
+      if (disposed) return;
+      loadRetryMs = Math.min(loadRetryMs * 2, 60_000);
+      refresh();
+    }, loadRetryMs);
+  }
   // Canonical collection readiness for the module's backing collection. The
   // credential list is a command-bus round trip, but the command docs live in
   // (and the outcome arrives over) the replicated business_commands bridge —
@@ -484,15 +498,20 @@ export async function mount(ctx) {
     // Single-flight: a subscription burst must not fan out into parallel lists.
     if (refreshing) { refreshQueued = true; return; }
     refreshing = true;
+    if (loadRetryTimer) {
+      window.clearTimeout(loadRetryTimer);
+      loadRetryTimer = 0;
+    }
     try {
       do {
         refreshQueued = false;
         try {
           const { outcome } = await sendCommand(LIST_COMMAND, {});
           rowsCache = mergeEntries(outcome?.catalog, outcome?.extra);
+          loadRetryMs = 2000;
         } catch (error) {
-          toast(error?.message || t('load_failed'), true);
-          rowsCache = [];
+          console.warn('[credentials] list failed', error);
+          scheduleLoadRetry();
         }
       } while (refreshQueued);
     } finally {
@@ -577,7 +596,8 @@ export async function mount(ctx) {
       selectedName = name;
       toast(t('saved').replace('{name}', name));
     } catch (error) {
-      toast(error?.message || t('save_failed'), true);
+      console.warn('[credentials] save failed', error);
+      toast(t('save_failed'), true);
     } finally {
       await redactLocalCommand(commandId, name);
       await refresh();
@@ -591,7 +611,8 @@ export async function mount(ctx) {
       await sendCommand(DELETE_COMMAND, { name });
       toast(t('deleted').replace('{name}', name));
     } catch (error) {
-      toast(error?.message || t('save_failed'), true);
+      console.warn('[credentials] delete failed', error);
+      toast(t('delete_failed'), true);
     }
     if (selectedName === name) startNew();
     await refresh();
@@ -742,6 +763,8 @@ export async function mount(ctx) {
   }
 
   return () => {
+    disposed = true;
+    if (loadRetryTimer) window.clearTimeout(loadRetryTimer);
     try { subscription?.unsubscribe?.(); } catch {}
     try { readinessUnsubscribe?.(); } catch {}
     listEl?.removeEventListener('click', onListClick);
