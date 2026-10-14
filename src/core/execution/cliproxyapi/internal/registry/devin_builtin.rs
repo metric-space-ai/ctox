@@ -23,8 +23,10 @@ pub(super) fn devin_builtin_swe16_slow() -> RegistryModelInfo {
     }
 }
 
+type DevinBuiltinDefinition<'a> = (&'a str, &'a str, &'a str, usize, usize, &'a [&'a str]);
+
 pub(super) fn static_devin_models() -> Vec<RegistryModelInfo> {
-    let definitions: &[(&str, &str, &str, usize, usize, &[&str])] = &[
+    let definitions: &[DevinBuiltinDefinition<'_>] = &[
         (
             "devin/swe-2",
             "cognition",

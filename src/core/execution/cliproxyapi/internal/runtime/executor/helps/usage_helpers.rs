@@ -451,10 +451,7 @@ pub fn parse_plugin_executor_response_usage(protocol: &str, payload: &[u8]) -> D
 
 fn parse_responses_plugin_executor_usage(payload: &[u8]) -> Detail {
     let parsed = parse_codex_usage(payload);
-    if parsed
-        .as_ref()
-        .is_some_and(|detail| has_nonzero_token_usage(detail))
-    {
+    if parsed.as_ref().is_some_and(has_nonzero_token_usage) {
         return parsed.unwrap_or_default();
     }
     let mut openai = parse_openai_usage(payload);

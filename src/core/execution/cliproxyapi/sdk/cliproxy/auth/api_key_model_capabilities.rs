@@ -437,7 +437,7 @@ fn resolve_api_key_config<'a, T: ApiKeyConfigEntry>(
     entries
         .iter()
         .find(|entry| {
-            matches_credentials(*entry)
+            matches_credentials(entry)
                 && entry
                     .prefix()
                     .trim()
@@ -447,7 +447,7 @@ fn resolve_api_key_config<'a, T: ApiKeyConfigEntry>(
                     .trim()
                     .eq_ignore_ascii_case(auth.proxy_url.trim())
         })
-        .or_else(|| entries.iter().find(|entry| matches_credentials(*entry)))
+        .or_else(|| entries.iter().find(|entry| matches_credentials(entry)))
         .or_else(|| {
             (!attr_key.is_empty())
                 .then(|| {

@@ -325,7 +325,7 @@ fn normalize_claude_codex_integer_schemas(
     let Some(context) = context else {
         return body.to_vec();
     };
-    normalize_codex_tool_integer_types_for_executor(&body, &context.headers, "claude")
+    normalize_codex_tool_integer_types_for_executor(body, &context.headers, "claude")
 }
 
 /// Bounded Claude subscription execution path with exactly one unauthorized

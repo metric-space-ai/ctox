@@ -133,8 +133,10 @@ pub fn parse_devin_interactions_payload(
     let original = String::from_utf8_lossy(original_request);
     let root = gjson::parse(&payload);
     let original_root = gjson::parse(&original);
-    let mut result = DevinPreparedHistory::default();
-    result.system_prompt = string(&root, "system_instruction").trim().to_owned();
+    let mut result = DevinPreparedHistory {
+        system_prompt: string(&root, "system_instruction").trim().to_owned(),
+        ..DevinPreparedHistory::default()
+    };
     if result.system_prompt.is_empty() {
         result.system_prompt = string(&root, "systemInstruction").trim().to_owned();
     }

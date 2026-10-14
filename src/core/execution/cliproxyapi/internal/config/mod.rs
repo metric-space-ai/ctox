@@ -59,7 +59,10 @@ mod xai_api_key_test;
 
 pub use codex_live::{CodexLiveIceServer, CodexLiveMediaRelayConfig};
 pub use config::*;
-pub use config_defaults::{DEFAULT_AUTH_DIR, DEFAULT_PANEL_GITHUB_REPOSITORY, DEFAULT_PPROF_ADDR};
+pub use config_defaults::{
+    DEFAULT_AUTH_DIR, DEFAULT_DISCOVERY_SERVICE_TYPE, DEFAULT_PANEL_GITHUB_REPOSITORY,
+    DEFAULT_PPROF_ADDR,
+};
 pub use config_load::{
     load_config, FileConfigDocument, FileConfigSource, TypedConfigSink, TypedConfigSource,
 };

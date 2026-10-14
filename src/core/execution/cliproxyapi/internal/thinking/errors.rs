@@ -57,7 +57,7 @@ pub struct ThinkingError {
     pub message: String,
     pub model: String,
     pub details: Option<BTreeMap<String, Value>>,
-    target_body: Option<Vec<u8>>,
+    target_body: Option<Box<[u8]>>,
 }
 
 impl ThinkingError {
@@ -94,7 +94,7 @@ impl ThinkingError {
 
     pub fn with_target_body(mut self, body: &[u8]) -> Self {
         if self.target_body.is_none() {
-            self.target_body = Some(body.to_vec());
+            self.target_body = Some(body.to_vec().into_boxed_slice());
         }
         self
     }
@@ -115,7 +115,7 @@ impl fmt::Debug for ThinkingError {
             .field("details", &self.details)
             .field(
                 "target_body_bytes",
-                &self.target_body.as_ref().map(Vec::len),
+                &self.target_body.as_ref().map(|body| body.len()),
             )
             .finish()
     }

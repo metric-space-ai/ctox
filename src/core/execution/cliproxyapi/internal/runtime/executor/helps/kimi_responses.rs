@@ -35,7 +35,7 @@ pub fn normalize_kimi_responses_input(body: &[u8]) -> Vec<u8> {
     let mut failed = false;
     input.each(|_, item| {
         let raw = item.json();
-        if raw.as_bytes().is_empty() {
+        if raw.is_empty() {
             failed = true;
             return false;
         }
