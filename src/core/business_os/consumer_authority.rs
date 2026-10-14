@@ -54,12 +54,11 @@ pub(crate) struct AdmittedConsumerAuthority {
 impl AdmittedConsumerAuthority {
     /// Native-only store location captured from the admitted host, never a
     /// path supplied by an account/configuration request.
-    pub(crate) fn native_host_instance_id(&self)->Result<String> {
+    pub(crate) fn native_host_instance_id(&self) -> Result<String> {
         store::existing_instance_id(&self.root)
     }
 
     pub(crate) fn native_host_root(&self) -> &Path {
-
         &self.root
     }
 

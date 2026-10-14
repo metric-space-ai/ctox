@@ -2,8 +2,8 @@
 // License: AGPL-3.0-only
 //! Standalone, admitted native Settings probes. No project or meeting lease.
 use super::consumer_authority::{AdmittedConsumerAuthority, NativeConsumerCorePublication};
-use crate::execution::{
-    cliproxyapi_model_probe::{check_model, NativeModelProbe, ModelReservation, ModelPublicationCheck},
+use crate::execution::cliproxyapi_model_probe::{
+    check_model, ModelPublicationCheck, ModelReservation, NativeModelProbe,
 };
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection};
@@ -93,12 +93,7 @@ pub(super) fn register(
                 // This retained reservation pins the original private generation
                 // through persistence and physical publication. The IO adapter also
                 // checks its current authority during the bounded network request.
-                let probe = check_model(
-                    &authority,
-                    &reservation,
-                    &request.model_id,
-                )
-                .await;
+                let probe = check_model(&authority, &reservation, &request.model_id).await;
                 tokio::task::spawn_blocking(move || {
                     let private = ModelPublicationCheck::prepare(&reservation)?;
                     let consumer = authority.prepare_core_publication(&authority)?;

@@ -406,19 +406,15 @@ fn supported_boost_model_choices(
     root: &Path,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    if infer_api_provider(env_map).eq_ignore_ascii_case("azure_foundry") {
-        return Vec::new();
-    }
-    let mut choices = supported_local_chat_model_choices(root, env_map);
-    for model in supported_api_chat_model_choices(env_map) {
-        if !choices
-            .iter()
-            .any(|existing| existing.eq_ignore_ascii_case(model))
-        {
-            choices.push(model);
-        }
-    }
-    choices
+    supported_boost_model_choices_with_gpu(root, env_map, local_gpu_available(root))
+}
+
+fn supported_boost_model_choices_with_gpu(
+    root: &Path,
+    env_map: &BTreeMap<String, String>,
+    gpu_available: bool,
+) -> Vec<&'static str> {
+    supported_chat_model_choices_with_gpu(root, env_map, gpu_available)
 }
 
 fn choice_contains(choices: &[&'static str], value: &str) -> bool {
@@ -6312,7 +6308,7 @@ mod tests {
     #[test]
     fn supported_boost_models_include_api_models_when_key_is_present() {
         let root = temp_root("supported-boost-models");
-        let without_key = supported_boost_model_choices(&root, &BTreeMap::new());
+        let without_key = supported_boost_model_choices_with_gpu(&root, &BTreeMap::new(), false);
         assert!(without_key.is_empty());
         assert!(!without_key.contains(&"Qwen/Qwen3.5-4B"));
         assert!(!without_key.contains(&"nvidia/Nemotron-Cascade-2-30B-A3B"));
@@ -6321,7 +6317,7 @@ mod tests {
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
         env_map.insert("OPENAI_API_KEY".to_string(), "sk-test".to_string());
-        let with_key = supported_boost_model_choices(&root, &env_map);
+        let with_key = supported_boost_model_choices_with_gpu(&root, &env_map, false);
         assert!(!with_key.contains(&"openai/gpt-oss-120b"));
         assert!(with_key.contains(&"gpt-5.4"));
         assert!(with_key.contains(&"gpt-5.4-mini"));

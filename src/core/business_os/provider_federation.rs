@@ -88,7 +88,6 @@ CREATE TABLE IF NOT EXISTS business_provider_federation_model_checks (
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id) ON DELETE CASCADE
 );";
 
-
 #[path = "provider_quota_readback.rs"]
 mod quota_readback;
 

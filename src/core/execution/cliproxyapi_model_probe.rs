@@ -31,25 +31,84 @@ pub(crate) enum ModelPublicationCheck {
     Api(super::cliproxyapi_api_model::NativeApiPublicationCheck),
 }
 impl ModelReservation {
-    pub(crate) fn prepare_model_check(authority:&AdmittedConsumerAuthority,id:&str,revision:i64,model:&str)->anyhow::Result<Self> {
-        let selected=crate::business_os::provider_federation::capture_consumable_model(authority,id,revision,model)?;
+    pub(crate) fn prepare_model_check(
+        authority: &AdmittedConsumerAuthority,
+        id: &str,
+        revision: i64,
+        model: &str,
+    ) -> anyhow::Result<Self> {
+        let selected = crate::business_os::provider_federation::capture_consumable_model(
+            authority, id, revision, model,
+        )?;
         match selected.account().provider.as_str() {
-            "claude"=>NativeClaudeSdkAccountReservation::prepare_model_check(authority,id,revision,model).map(Self::Claude),
-            "zai"|"minimax"|"xai"|"kimi"=>super::cliproxyapi_api_model::NativeApiModelReservation::prepare_model_check(authority,id,revision,model).map(Self::Api),
-            _=>anyhow::bail!("model check provider unsupported"),
+            "claude" => NativeClaudeSdkAccountReservation::prepare_model_check(
+                authority, id, revision, model,
+            )
+            .map(Self::Claude),
+            "zai" | "minimax" | "xai" | "kimi" => {
+                super::cliproxyapi_api_model::NativeApiModelReservation::prepare_model_check(
+                    authority, id, revision, model,
+                )
+                .map(Self::Api)
+            }
+            _ => anyhow::bail!("model check provider unsupported"),
         }
     }
-    fn selected(&self)->&crate::business_os::provider_federation::ConsumableModel {match self {Self::Claude(r)=>&r.selected,Self::Api(r)=>&r.selected}}
-    fn with_current<T>(&self,authority:&AdmittedConsumerAuthority,publish:impl FnOnce()->anyhow::Result<T>)->anyhow::Result<T> {match self{Self::Claude(r)=>r.with_current_configuration(authority,|_|publish()),Self::Api(r)=>r.with_current(authority,publish)}}
-    pub(crate) fn release(&self) {match self{Self::Claude(r)=>r.release(),Self::Api(r)=>r.release()}}
+    fn selected(&self) -> &crate::business_os::provider_federation::ConsumableModel {
+        match self {
+            Self::Claude(r) => &r.selected,
+            Self::Api(r) => &r.selected,
+        }
+    }
+    fn with_current<T>(
+        &self,
+        authority: &AdmittedConsumerAuthority,
+        publish: impl FnOnce() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        match self {
+            Self::Claude(r) => r.with_current_configuration(authority, |_| publish()),
+            Self::Api(r) => r.with_current(authority, publish),
+        }
+    }
+    pub(crate) fn release(&self) {
+        match self {
+            Self::Claude(r) => r.release(),
+            Self::Api(r) => r.release(),
+        }
+    }
 }
 impl ModelPublicationCheck {
-    pub(crate) fn prepare(reservation:&ModelReservation)->anyhow::Result<Self> {match reservation {ModelReservation::Claude(r)=>super::cliproxyapi_claude_sdk::NativeClaudeSdkPublicationCheck::prepare(r).map(Self::Claude),ModelReservation::Api(r)=>super::cliproxyapi_api_model::NativeApiPublicationCheck::prepare(r).map(Self::Api)}}
-    pub(crate) fn with_current_in_held_policy<T>(&self,reservation:&ModelReservation,facts:&crate::business_os::consumer_authority::ConsumerFacts,policy:&rusqlite::Connection,publish:impl FnOnce()->anyhow::Result<T>)->anyhow::Result<T> {match (self,reservation) {(Self::Claude(c),ModelReservation::Claude(r))=>c.with_current_in_held_policy(r,facts,policy,publish),(Self::Api(c),ModelReservation::Api(r))=>c.with_current_in_held_policy(r,facts,policy,publish),_=>anyhow::bail!("model check reservation type changed")}}
+    pub(crate) fn prepare(reservation: &ModelReservation) -> anyhow::Result<Self> {
+        match reservation {
+            ModelReservation::Claude(r) => {
+                super::cliproxyapi_claude_sdk::NativeClaudeSdkPublicationCheck::prepare(r)
+                    .map(Self::Claude)
+            }
+            ModelReservation::Api(r) => {
+                super::cliproxyapi_api_model::NativeApiPublicationCheck::prepare(r).map(Self::Api)
+            }
+        }
+    }
+    pub(crate) fn with_current_in_held_policy<T>(
+        &self,
+        reservation: &ModelReservation,
+        facts: &crate::business_os::consumer_authority::ConsumerFacts,
+        policy: &rusqlite::Connection,
+        publish: impl FnOnce() -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        match (self, reservation) {
+            (Self::Claude(c), ModelReservation::Claude(r)) => {
+                c.with_current_in_held_policy(r, facts, policy, publish)
+            }
+            (Self::Api(c), ModelReservation::Api(r)) => {
+                c.with_current_in_held_policy(r, facts, policy, publish)
+            }
+            _ => anyhow::bail!("model check reservation type changed"),
+        }
+    }
 }
 
-const DEADLINE: Duration
- = Duration::from_secs(20);
+const DEADLINE: Duration = Duration::from_secs(20);
 const CURRENT_POLL: Duration = Duration::from_millis(250);
 const MAX_BODY: usize = 131_072;
 static SLOTS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(2));
@@ -263,7 +322,9 @@ pub(crate) async fn check_model(
     model: &str,
 ) -> NativeModelProbe {
     let started = Instant::now();
-    if reservation.selected().model()!=model {return NativeModelProbe::unavailable(model,ProbeFailure::AccountUnavailable,started);}
+    if reservation.selected().model() != model {
+        return NativeModelProbe::unavailable(model, ProbeFailure::AccountUnavailable, started);
+    }
     if instance_codex_proxy_status(authority.native_host_root()).phase
         != InstanceCodexProxyPhase::Ready
     {
@@ -297,7 +358,10 @@ pub(crate) async fn check_model(
         let response = client
             .post(format!("{}/responses", instance_codex_proxy_base_url()))
             .header("X-CTOX-Account", &account)
-            .header("X-CTOX-Provider", &reservation.selected().account().provider)
+            .header(
+                "X-CTOX-Provider",
+                &reservation.selected().account().provider,
+            )
             .header("X-CTOX-Purpose", "model-check")
             .header("Content-Type", "application/json")
             .body(body.to_string())
