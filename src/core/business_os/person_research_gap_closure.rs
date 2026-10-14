@@ -1862,11 +1862,35 @@ pub(super) fn handle_research_writeback(
     );
     // The worker can still report the old "daemon will check this" placeholder
     // after experte.de has already returned. Restore only a native verdict for
-    // the same person and unchanged address before computing open fields.
-    super::contact_email_validation::restore_native_email_verdicts(
+    // the same person and unchanged address before computing open fields. A
+    // status this writeback delivered and the restore replaced is reported as
+    // a rejection; it must never read as stored (thesen lead_srkgbn,
+    // 14.10.2026: five corrections "completed", none stored).
+    let restored = super::contact_email_validation::restore_native_email_verdicts(
         &mut lead,
         &previous_person_statuses,
     );
+    let lead_level_person = request
+        .field_status
+        .get("person_email_validation")
+        .and_then(|status| status.extra.get("person_key"))
+        .and_then(Value::as_str)
+        .map(str::trim);
+    for person_key in restored {
+        let delivered = request
+            .result
+            .person_field_status
+            .get(&person_key)
+            .and_then(|fields| fields.get("person_email_validation"))
+            .is_some()
+            || lead_level_person == Some(person_key.as_str());
+        if delivered {
+            rejections.push(format!(
+                "person_field_status[{person_key}].person_email_validation: nicht gespeichert; der native experte.de-Befund fuer die aktuelle Adresse bleibt, weil die Lieferung diesen Befund nicht zitiert oder ihm widerspricht"
+            ));
+        }
+    }
+    super::contact_email_validation::align_lead_email_validation(&mut lead);
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
@@ -5116,6 +5140,265 @@ mod tests {
         assert!(
             emails.contains(&serde_json::json!("bernd.beta@firma.test")),
             "{lead}"
+        );
+        Ok(())
+    }
+
+    fn email_check_writeback(
+        record_id: &str,
+        research_command_id: &str,
+        person_status: Value,
+    ) -> BusinessCommand {
+        writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {},
+                "result": {"person_field_status": person_status}
+            }),
+        )
+    }
+
+    // thesen lead_srkgbn, 14.10.2026: the daemon stored "EXPERTE.de verdict:
+    // m.grabbe@kiesow.org | Unbekannt" as verified/invalid for p-grabbe-michael.
+    // Five worker writebacks corrected that person's status to
+    // action_required while citing the same verdict; every one ended
+    // "completed", and the restore of the native verdict silently put
+    // verified/invalid back. A correction citing the verdict is stored; a
+    // delivered status that is replaced anyway is a visible rejection.
+    #[test]
+    fn a_person_email_check_correction_citing_the_native_verdict_is_stored() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let (record_id, research_command_id) =
+            ("lead-email-correction", "research-email-correction");
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["person_email", "person_email_validation"],
+        )?;
+        let address = "m.grabbe@kiesow.org";
+        let person = "p-grabbe-michael";
+        let first = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {},
+                "result": {
+                    "person_records": [{"person_key": person, "person_vorname": "Michael",
+                        "person_nachname": "Grabbe", "person_email": address}],
+                    "person_field_status": {person: {"person_email": {"status": "verified",
+                        "value": address, "sources": [email_source(person, address)]}}}
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &first)?;
+        assert_eq!(result["ok"], true, "{result}");
+
+        // The daemon's own pass, as stored on thesen.
+        let note = format!("EXPERTE.de verdict: {address} | Unbekannt");
+        let verdict = super::super::contact_email_validation::EmailVerdict {
+            email: address.to_string(),
+            kind: super::super::contact_email_validation::VerdictKind::Inconclusive,
+            note: note.clone(),
+            source_url: "https://www.experte.de/email-pruefen".to_string(),
+            run_id: "scrape_run-774ef37ca16c820c".to_string(),
+        };
+        let mut lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        assert_eq!(
+            super::super::contact_email_validation::apply_email_verdicts(&mut lead, &[verdict]),
+            1,
+            "{lead}"
+        );
+        lead["payload"]["email_validation_receipts"] = serde_json::json!({address: {
+            "email": address, "valid": false, "verdict": "unknown_catch_all",
+            "run_id": "scrape_run-774ef37ca16c820c"}});
+        lead["payload"]["email_validation_pass"] = serde_json::json!({"checked": [{
+            "email": address, "valid": false, "verdict": "unknown_catch_all",
+            "run_id": "scrape_run-774ef37ca16c820c"}]});
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 2, lead)?;
+        let stored = |root: &Path| -> anyhow::Result<Value> {
+            store::load_rxdb_collection_record(root, LEAD_COLLECTION, record_id)?.context("lead")
+        };
+        // "Unbekannt" is stored as checked but inconclusive, not as invalid.
+        let native =
+            stored(temp.path())?["person_field_status"][person]["person_email_validation"].clone();
+        assert_eq!(native["status"], "action_required", "{native}");
+        assert_eq!(native["verdict"], "unknown_catch_all", "{native}");
+
+        // A bare placeholder that does not cite the verdict keeps the native
+        // verdict, and the worker is told so.
+        let placeholder = email_check_writeback(
+            record_id,
+            research_command_id,
+            serde_json::json!({person: {"person_email_validation": {
+                "status": "action_required",
+                "sources": [{"source_id": "experte.de", "url": "https://www.experte.de/email-pruefen",
+                    "quote": format!("Daemon validiert {address} nachgelagert ueber experte.de."),
+                    "person_key": person}]
+            }}}),
+        );
+        let result = handle_research_writeback(temp.path(), &placeholder)?;
+        assert!(
+            result["rejections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|entry| entry
+                    .as_str()
+                    .is_some_and(|entry| entry.starts_with(&format!(
+                        "person_field_status[{person}].person_email_validation:"
+                    )))),
+            "a replaced delivery must be reported: {result}"
+        );
+        let lead = stored(temp.path())?;
+        assert_eq!(
+            lead["person_field_status"][person]["person_email_validation"]["via"],
+            "native_email_validation",
+            "{lead}"
+        );
+
+        // The correction shaped like writeback_gHW1qxq_d6g4… is stored.
+        let correction = email_check_writeback(
+            record_id,
+            research_command_id,
+            serde_json::json!({person: {"person_email_validation": {
+                "status": "action_required",
+                "reason": "EXPERTE.de meldet Unbekannt; Catch-all-Domain.",
+                "attempts": [{"kind": "scrape", "query_or_url": "experte.de", "result": note}]
+            }}}),
+        );
+        let result = handle_research_writeback(temp.path(), &correction)?;
+        assert!(
+            !result["rejections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|entry| entry
+                    .as_str()
+                    .is_some_and(|entry| entry.contains("person_email_validation"))),
+            "{result}"
+        );
+        let lead = stored(temp.path())?;
+        let canonical = &lead["person_field_status"][person]["person_email_validation"];
+        assert_eq!(canonical["status"], "action_required", "{lead}");
+        assert!(canonical.get("via").is_none(), "{lead}");
+        assert_eq!(
+            canonical["revision"]["writeback_id"], result["writeback_id"],
+            "{lead}"
+        );
+        let contact = lead["contacts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|contact| contact["person_key"] == person)
+            .cloned()
+            .context("contact")?;
+        assert_eq!(
+            contact["field_status"]["person_email_validation"]["status"], "action_required",
+            "{lead}"
+        );
+
+        Ok(())
+    }
+
+    // thesen lead_srkgbn, 14.10.2026: the lead-level person fields named one
+    // contact, the lead-level e-mail check carried another person's verdict
+    // (m.grabbe@kiesow.org), and the review gate rejected the closing report.
+    #[test]
+    fn the_lead_level_email_check_follows_the_lead_contact_after_a_writeback() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let (record_id, research_command_id) = ("lead-two-checks", "research-two-checks");
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["person_email", "person_email_validation"],
+        )?;
+        let (grabbe, wallbaum) = ("p-grabbe-michael", "p-wallbaum-katja");
+        let (grabbe_mail, wallbaum_mail) = ("m.grabbe@kiesow.org", "k.wallbaum@kiesow.org");
+        let first = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {},
+                "result": {
+                    "person_records": [
+                        {"person_key": grabbe, "person_vorname": "Michael",
+                            "person_nachname": "Grabbe", "person_email": grabbe_mail},
+                        {"person_key": wallbaum, "person_vorname": "Katja",
+                            "person_nachname": "Wallbaum", "person_email": wallbaum_mail}
+                    ],
+                    "person_field_status": {
+                        grabbe: {"person_email": {"status": "verified", "value": grabbe_mail,
+                            "sources": [email_source(grabbe, grabbe_mail)]}},
+                        wallbaum: {"person_email": {"status": "verified", "value": wallbaum_mail,
+                            "sources": [email_source(wallbaum, wallbaum_mail)]}}
+                    }
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &first)?;
+        assert_eq!(result["ok"], true, "{result}");
+
+        // Only Grabbe's address has been checked so far, with a definitive
+        // negative verdict; the old roll-up put it on the lead.
+        let mut lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        let negative = super::super::contact_email_validation::EmailVerdict {
+            email: grabbe_mail.to_string(),
+            kind: super::super::contact_email_validation::VerdictKind::Invalid,
+            note: format!("EXPERTE.de verdict: {grabbe_mail} | Ungültig"),
+            source_url: "https://www.experte.de/email-pruefen".to_string(),
+            run_id: "scrape_run-grabbe".to_string(),
+        };
+        super::super::contact_email_validation::apply_email_verdicts(&mut lead, &[negative]);
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["validated_email"],
+            grabbe_mail
+        );
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 2, lead)?;
+
+        // The writeback names Wallbaum as the lead contact and sends no
+        // lead-level e-mail check.
+        let second = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {"person_email": {"status": "verified", "value": wallbaum_mail,
+                    "person_key": wallbaum, "sources": [email_source(wallbaum, wallbaum_mail)]}},
+                "result": {}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &second)?;
+        assert_eq!(result["ok"], true, "{result}");
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        assert_eq!(
+            lead["field_status"]["person_email"]["person_key"], wallbaum,
+            "{lead}"
+        );
+        let lead_level = lead["field_status"].get("person_email_validation");
+        assert!(
+            lead_level.is_none_or(|status| status["person_key"] == wallbaum
+                && status["validated_email"] != grabbe_mail),
+            "lead-level check shows another person's verdict: {lead}"
+        );
+        // Grabbe's own verdict stays with Grabbe.
+        assert_eq!(
+            lead["person_field_status"][grabbe]["person_email_validation"]["value"],
+            "invalid"
         );
         Ok(())
     }
