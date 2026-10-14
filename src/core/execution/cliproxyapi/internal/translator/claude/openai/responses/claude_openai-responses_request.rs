@@ -727,7 +727,7 @@ fn function_tool(tool: &Value, name: &str) -> Option<Value> {
     Some(value)
 }
 
-fn normalize_schema(schema: Option<&Value>) -> Value {
+pub(super) fn normalize_schema(schema: Option<&Value>) -> Value {
     let mut object = schema
         .and_then(Value::as_object)
         .cloned()
