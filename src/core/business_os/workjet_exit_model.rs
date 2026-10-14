@@ -174,11 +174,11 @@ fn assessment(
     } else {
         value["status"] = json!(if research { "researching" } else { "blocked" });
         value["missing_inputs"] = json!(if resources.is_some() {
-            vec!["confirmed_60_month_resource_plan", "researched_inputs"]
+            vec!["researched_60_month_resource_plan", "researched_inputs"]
         } else {
             vec![
                 "resource_proposal",
-                "confirmed_60_month_resource_plan",
+                "researched_60_month_resource_plan",
                 "researched_inputs",
             ]
         });
@@ -292,6 +292,24 @@ fn admit_research(
     let resources = request.resources.as_ref();
     let conn = reader(root)?;
     let owner = super::workjet_project_kpis::require_project(&conn, actor, &request.project_id)?;
+    let project = outbound_load_record(&conn, "workjet_projects", &request.project_id)?
+        .context("research project disappeared")?;
+    let brief = |value: &Value| {
+        value
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(512)
+            .collect::<String>()
+    };
+    let project_context = json!({
+        "name": brief(&project["name"]),
+        "public_url": brief(&project["public_url"]),
+        "repository_url": brief(&project["repository_url"]),
+        "summary": brief(&project["info"]["summary"]),
+        "goal": brief(&project["info"]["goal"]),
+        "phase": brief(&project["info"]["phase"]),
+    });
     let bound:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workjet_supervisor_bindings')",[],|r|r.get(0))?;
     if !bound {
         return Ok(None);
@@ -337,7 +355,7 @@ fn admit_research(
         .allowed,
         "exit research owner may not create CTOX tasks"
     );
-    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Resource PROPOSAL only: {}. No hidden budget allocations; propose a complete 60-month committed_plan with confirmed=false, transferable rights and source-backed conditional scenarios. Do not make up numbers or sources, contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,serde_json::to_string(&resources)?);
+    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Owner project context (not itself valuation evidence): {}. Resource PROPOSAL only: {}. The Owner has NOT confirmed a plan yet: your task is to PROPOSE a complete 60-month committed_plan with confirmed=false, not to wait for owner confirmation before researching. Ground every numeric assumption in identified evidence or label it as a reasoned prior; never invent observations or sources. Transferable rights and conditional scenarios must be supported. Do not contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. If you propose resources, resource_proposal.comparison_mode MUST be equal_resources or project_specific. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,project_context,serde_json::to_string(&resources)?);
     if resources.is_none() {
         goal.push_str(" No resource plan or proposal is recorded. Research a reasoned resource proposal from this project\'s real goal, phase, team and budget evidence; do not insert generic example numbers. Return resource_proposal {hours_per_week,monthly_budget_eur,comparison_mode} and resource_proposal_reason (nonempty, <=2048 chars) alongside exit_model_inputs with a complete researched plan (confirmed=false) and sourced scenarios; use exit_model_blocked only if real evidence is missing. This is a proposal, never owner confirmation; if evidence is absent name the missing inputs instead. The native store retains the proposal for an owner correction/confirmation and a later refresh.");
     }
@@ -602,6 +620,38 @@ pub(super) fn reconcile_research(root: &Path, research: &str) -> anyhow::Result<
     complete_research(root, research, reply)
 }
 
+/// Accept a single JSON object even when the model wraps it in a JSON fence
+/// or a short, non-JSON footer. The typed inputs and source checks remain the
+/// authority; a second JSON payload is never silently selected.
+fn parse_research_reply(reply: &str) -> Option<Value> {
+    if reply.len() > 512 * 1024 {
+        return None;
+    }
+    let body = reply.trim();
+    let body = if let Some(fenced) = body
+        .strip_prefix("```json\n")
+        .or_else(|| body.strip_prefix("```\n"))
+    {
+        fenced.strip_suffix("```")?.trim()
+    } else {
+        body
+    };
+    let mut stream = serde_json::Deserializer::from_str(body).into_iter::<Value>();
+    let parsed = stream.next()?.ok()?;
+    if !parsed.is_object() {
+        return None;
+    }
+    let trailing = body.get(stream.byte_offset()..)?.trim();
+    if trailing.len() > 256
+        || trailing.starts_with('{')
+        || trailing.starts_with('[')
+        || trailing.contains("```")
+    {
+        return None;
+    }
+    Some(parsed)
+}
+
 /// Called only after the existing native terminal review gate has admitted a
 /// queue reply. It never trusts a chat message as a valuation or bypasses the
 /// current owner/policy check when submitting compiled research inputs.
@@ -620,7 +670,7 @@ pub(super) fn complete_research(
     };
     let original: Value = serde_json::from_str(&raw)?;
     drop(conn);
-    let parsed = serde_json::from_str::<Value>(reply).ok();
+    let parsed = parse_research_reply(reply);
     let inputs = parsed.as_ref().and_then(|v| v.get("exit_model_inputs"));
     let valid_inputs = inputs
         .and_then(|raw| serde_json::from_value::<Inputs>(raw.clone()).ok())
@@ -706,13 +756,26 @@ pub(super) fn complete_research(
         }) {
             value["resource_proposal"] = serde_json::to_value(proposal)?;
             value["missing_inputs"] =
-                json!(["confirmed_60_month_resource_plan", "researched_inputs"]);
-            value["findings"] =
-                json!([{ "code":"resource_proposal_requires_confirmation", "message":reason }]);
+                json!(["researched_60_month_resource_plan", "researched_inputs"]);
+            value["findings"] = json!([{ "code":"resource_proposal_recorded", "message":reason }]);
         }
     }
     if value["findings"] == original["findings"] {
-        value["findings"] = json!([{"code":"research_did_not_supply_valid_inputs","message":"The bounded research turn did not supply admissible, source-backed inputs. No numeric valuation was created."}]);
+        let (code, message) = if parsed.is_none() {
+            (
+                "research_reply_invalid_json",
+                "The bounded research turn did not return one parseable JSON object.",
+            )
+        } else if parsed
+            .as_ref()
+            .and_then(|v| v.get("resource_proposal"))
+            .is_some()
+        {
+            ("resource_proposal_invalid", "The resource proposal does not match the typed bounds or comparison_mode. No numeric valuation was created.")
+        } else {
+            ("research_did_not_supply_valid_inputs", "The bounded research turn did not supply admissible, source-backed inputs. No numeric valuation was created.")
+        };
+        value["findings"] = json!([{"code":code,"message":message}]);
     }
     tx.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json) VALUES(?1,?2,?3,?4)",params![next,project,owner,serde_json::to_string(&value)?])?;
     let mut record = outbound_load_record(&tx, "workjet_projects", project)?

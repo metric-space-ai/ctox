@@ -135,6 +135,90 @@ fn proposal_is_retained_without_imaginary_allocations() -> anyhow::Result<()> {
 }
 
 #[test]
+fn research_reply_parsing_keeps_one_object_without_trusting_a_second() {
+    let blocked = json!({"exit_model_blocked":{"missing_inputs":["source:prices"]}});
+    let raw = blocked.to_string();
+    assert_eq!(parse_research_reply(&raw), Some(blocked.clone()));
+    assert_eq!(
+        parse_research_reply(&format!("```json\n{raw}\n```")),
+        Some(blocked.clone())
+    );
+    assert_eq!(
+        parse_research_reply(&format!("{raw}\n\nThe files are available in the app.")),
+        Some(blocked)
+    );
+    assert!(parse_research_reply(&format!("{raw}\n{raw}")).is_none());
+}
+
+#[test]
+fn terminal_research_retains_a_valid_resource_proposal_without_claiming_it_is_adoptable(
+) -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let root = dir.path();
+    project(root)?;
+    let conn = open_store(root)?;
+    conn.execute_batch(SCHEMA)?;
+    let original = assessment("project-1", "research-run", "2026-10-08", None, None, true)?;
+    conn.execute(
+        "INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,?2,?3,?4,?5)",
+        params!["research-run", "project-1", "owner-1", original.to_string(), "research-cmd"],
+    )?;
+    drop(conn);
+    let reply = json!({
+        "exit_model_blocked":{"missing_inputs":["source:terminal_equity_prices"]},
+        "resource_proposal":{"hours_per_week":7,"monthly_budget_eur":0,"comparison_mode":"project_specific"},
+        "resource_proposal_reason":"Observed owner time only; prices are missing."
+    });
+    complete_research(root, "research-cmd", &format!("```json\n{reply}\n```"))?;
+    let conn = reader(root)?;
+    let state = read_state(&conn, "project-1", "owner-1")?;
+    assert_eq!(state["resource_proposal"], reply["resource_proposal"]);
+    assert_eq!(state["findings"][0]["code"], "resource_proposal_recorded");
+    assert_eq!(state["status"], "blocked");
+    assert!(state["plan_summary"].is_null());
+    assert_eq!(
+        conn.query_row(
+            "SELECT inputs_json FROM workjet_exit_model_runs WHERE run_id=?1",
+            [state["run_id"].as_str().unwrap()],
+            |row| row.get::<_, Option<String>>(0)
+        )?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn terminal_research_names_invalid_resource_mode_and_preserves_evidence_gaps() -> anyhow::Result<()>
+{
+    let dir = tempdir()?;
+    let root = dir.path();
+    project(root)?;
+    let conn = open_store(root)?;
+    conn.execute_batch(SCHEMA)?;
+    let original = assessment("project-1", "research-run", "2026-10-08", None, None, true)?;
+    conn.execute(
+        "INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,?2,?3,?4,?5)",
+        params!["research-run", "project-1", "owner-1", original.to_string(), "research-cmd"],
+    )?;
+    drop(conn);
+    let reply = json!({
+        "exit_model_blocked":{"missing_inputs":["source:terminal_equity_prices"]},
+        "resource_proposal":{"hours_per_week":7,"monthly_budget_eur":0,"comparison_mode":"status_quo"},
+        "resource_proposal_reason":"Observed owner time only; prices are missing."
+    });
+    complete_research(root, "research-cmd", &reply.to_string())?;
+    let conn = reader(root)?;
+    let state = read_state(&conn, "project-1", "owner-1")?;
+    assert_eq!(state["findings"][0]["code"], "resource_proposal_invalid");
+    assert_eq!(
+        state["missing_inputs"],
+        json!(["source:terminal_equity_prices"])
+    );
+    assert!(state.get("resource_proposal").is_none());
+    Ok(())
+}
+
+#[test]
 fn stored_plan_confirmation_is_one_owner_operation_with_a_revision_fence() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let root = dir.path();
