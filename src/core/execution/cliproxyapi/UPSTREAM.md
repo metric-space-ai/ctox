@@ -108,8 +108,16 @@ validation, then atomically sets the three completion fields true. Any failure
 restores project state, strict audit and dashboard. Thus neither the ten
 pre-promotion gates nor promotion alone can make the dashboard claim completion.
 
-New strict umbrella runs emit `strict-umbrella-receipt.v2`. Unlike historical
-v1 receipts, v2 contains only portable-crate sources and gates: it deliberately
+New strict umbrella runs emit `strict-umbrella-receipt.v3`. Its hash-bound Go
+module inventory comes from the immutable accepted Git tree. Hydration and
+offline test entries must match that inventory exactly, as must the hydrated
+source manifest. Added modules cannot disappear behind a fixed module count;
+missing, duplicate and substituted module identities fail validation.
+Historical v1/v2 receipts retain their original 23-module validation.
+Every version also matches its executed module identities to the hash-bound
+hydrated source manifest; changing the schema cannot hide an omitted module.
+
+Like v2, v3 contains only portable-crate sources and gates: it deliberately
 does not compile or hash `cliproxyapi_host.rs`. The outer CTOX host, secrets,
 Business OS and Pi routing are independently evidenced by the Track-B provider
 integration ledger.

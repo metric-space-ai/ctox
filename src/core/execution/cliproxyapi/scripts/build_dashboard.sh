@@ -59,6 +59,7 @@ jq -e --slurpfile state "$state_file" '
             (($evidence.receipt_schema // "") as $schema |
               $schema == "ctox.cliproxyapi.strict-umbrella-receipt.v1" or
               $schema == "ctox.cliproxyapi.strict-umbrella-receipt.v2" or
+              $schema == "ctox.cliproxyapi.strict-umbrella-receipt.v3" or
               $schema == "ctox.cliproxyapi.track-b-receipt.v1") and
             ($evidence.valid_gates | type) == "array" and
             ($evidence.valid_gates | length) > 0 and
@@ -140,7 +141,8 @@ while IFS=$'\t' read -r evidence_id receipt_path expected_sha receipt_schema; do
             exit 1
         }
     elif [ "$receipt_schema" = "ctox.cliproxyapi.strict-umbrella-receipt.v1" ] ||
-         [ "$receipt_schema" = "ctox.cliproxyapi.strict-umbrella-receipt.v2" ]; then
+         [ "$receipt_schema" = "ctox.cliproxyapi.strict-umbrella-receipt.v2" ] ||
+         [ "$receipt_schema" = "ctox.cliproxyapi.strict-umbrella-receipt.v3" ]; then
         "$crate_dir/scripts/check_strict_umbrella_receipt.sh" \
             "$receipt" "$(jq -r .accepted_upstream_commit "$integration_file")" >/dev/null
     fi
