@@ -625,9 +625,11 @@ function focusRequestedTicket() {
   const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
     || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
   if (!ticket) {
-    setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
-    if (['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
-      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true)) {
+    const ready = ['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
+      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true);
+    if (ready) {
+      console.warn('[tickets] linked ticket unavailable', recordId);
+      setCommandStatus(state.t('ticketOpenFailed', 'Ticket konnte nicht geöffnet werden.'), true);
       reportTicketFocus('unavailable', recordId);
     }
     return;
