@@ -2,6 +2,18 @@
 
 ## State
 
+- Candidate upstream `02fc76b149a917d07db6c1f588f47341bb29c7be` adds request-local
+  recovery of declared caller-owned MCP tools wrapped in the actual virtual server,
+  including full `mcp__server__tool`, unprefixed full names and unique tool tails.
+  Buffered JSON/SSE and fragmented live streams use the same resolver. Unknown or
+  foreign names stay unchanged; ambiguous tails fail locally before continuity
+  publication and do not create provider-account cooldowns. The public reverse map
+  continues to contain only actual forward renames. Seven focused guards passed;
+  actual-executor stream/cooldown guards and the broader feature matrices are being
+  qualified in PR #734. The accepted pin remains unchanged, and full current-upstream
+  parity and installed provider acceptance remain incomplete.
+
+
 - The Grok client-version slice from v8.0.23, immutable upstream
   `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, now has the upstream 1.0.46
   fallback and strict numeric 1.0.13 floor. An anonymous npm metadata fetch is

@@ -3404,6 +3404,124 @@ data: {\"type\":\"message_stop\"}\n\n";
     }
 
     #[tokio::test]
+    async fn upstream_mcp_live_stream_restores_fragmented_declared_passthroughs() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let catalog = crate::internal::registry::embedded_models_catalog().unwrap();
+        let model = crate::internal::registry::models_for_channel(&catalog, "claude")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        for suffix in [
+            "mcp__docs-search__search-pages",
+            "docs-search__search-pages",
+            "search-pages",
+        ] {
+            let frame=format!("data: {}\n\n",serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fixture-tool","name":format!("mcp__{server}__{suffix}"),"input":{}}})).into_bytes();
+            let middle = frame.len() / 2;
+            let start=format!("data: {}\n\n",serde_json::json!({"type":"message_start","message":{"id":"fixture-message","model":model}})).into_bytes();
+            let chunks=vec![Ok(start),Ok(frame[..middle].to_vec()),Ok(frame[middle..].to_vec()),Ok(b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n".to_vec())];
+            let account = executor(Arc::new(SequenceTransport::statuses(vec![])))
+                .with_stream_transport(Arc::new(FixedStreamingTransport {
+                    status: 200,
+                    chunks,
+                }));
+            let outcome=account.execute_stream_for_model(target(),None,br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__docs-search__search-pages"}]}"#.to_vec()).await.unwrap();
+            let mut stream = outcome.into_response();
+            let mut output = Vec::new();
+            while let Some(chunk) = stream.next_chunk().await {
+                output.extend(chunk.unwrap());
+            }
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("\"name\":\"mcp__docs-search__search-pages\""));
+            assert!(!text.contains(&format!("mcp__{server}__")));
+            assert!(stream.diagnostics_committed);
+        }
+    }
+    #[tokio::test]
+    async fn upstream_mcp_unary_ambiguity_never_records_account_cooldown() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let body=serde_json::to_vec(&serde_json::json!({"content":[{"type":"tool_use","name":format!("mcp__{server}__query")}]})).unwrap();
+        let transport = Arc::new(SequenceTransport::responding(&body));
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let account = executor(transport.clone())
+            .with_account_state_clock(
+                "fixture-account",
+                Arc::new(CooldownConductor::new(cooldowns.clone())),
+                Arc::new(FixedAccountClock),
+            )
+            .unwrap();
+        let result=account.execute(target(),br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__first__query"},{"name":"mcp__second__query"}]}"#.to_vec(),false).await;
+        assert!(matches!(
+            result,
+            Err(ClaudeExecutionError::AmbiguousToolAlias)
+        ));
+        assert_eq!(transport.bodies.lock().unwrap().len(), 1);
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn upstream_mcp_stream_ambiguity_stops_locally_without_cooldown_or_continuity() {
+        let alias = super::super::helps::claude_mcp_tool_alias("access-old", "Bash", 0);
+        let server = alias
+            .strip_prefix("mcp__")
+            .unwrap()
+            .split_once("__")
+            .unwrap()
+            .0;
+        let frame=format!("data: {}\n\n",serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fixture-tool","name":format!("mcp__{server}__query"),"input":{}}})).into_bytes();
+        let catalog = crate::internal::registry::embedded_models_catalog().unwrap();
+        let model = crate::internal::registry::models_for_channel(&catalog, "claude")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        let start=format!("data: {}\n\n",serde_json::json!({"type":"message_start","message":{"id":"fixture-ambiguous-message","model":model}})).into_bytes();
+        let cooldowns = Arc::new(MemoryCooldownStore::default());
+        let account = executor(Arc::new(SequenceTransport::statuses(vec![])))
+            .with_account_state_clock(
+                "fixture-account",
+                Arc::new(CooldownConductor::new(cooldowns.clone())),
+                Arc::new(FixedAccountClock),
+            )
+            .unwrap()
+            .with_stream_transport(Arc::new(FixedStreamingTransport {
+                status: 200,
+                chunks: vec![
+                    Ok(start),
+                    Ok(frame),
+                    Ok(b"data: {\"type\":\"message_stop\"}\n\n".to_vec()),
+                ],
+            }));
+        let outcome=account.execute_stream_for_model(target(),None,br#"{"messages":[{"role":"user","content":"go"}],"tools":[{"name":"Bash"},{"name":"mcp__first__query"},{"name":"mcp__second__query"}]}"#.to_vec()).await.unwrap();
+        let mut stream = outcome.into_response();
+        let first = stream.next_chunk().await.unwrap().unwrap();
+        assert!(String::from_utf8(first).unwrap().contains("message_start"));
+        assert_eq!(
+            stream.next_chunk().await,
+            Some(Err(ClaudeMessagesTransportFailure::Protocol))
+        );
+        stream.record_terminal_failure().await;
+        assert!(stream.next_chunk().await.is_none());
+        assert!(stream.failure_binding.is_none());
+        assert!(!stream.diagnostics_committed);
+        assert!(cooldowns.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn fragmented_sse_tool_names_are_restored_only_after_complete_line() {
         let (sender, receiver) = mpsc::channel(4);
         sender
