@@ -15,6 +15,7 @@ pub mod google_drive;
 pub mod hubspot;
 pub mod jira;
 pub mod linear;
+pub mod outlook;
 pub mod teams;
 
 pub trait ToolkitAdapter: Send + Sync {
@@ -40,6 +41,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(jira::Jira::default()),
         Box::new(linear::Linear::default()),
         Box::new(teams::Teams::default()),
+        Box::new(outlook::Outlook::default()),
     ]
 }
 
