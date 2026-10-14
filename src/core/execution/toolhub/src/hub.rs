@@ -595,7 +595,15 @@ impl<B: SecretBackend> ToolHub<B> {
             }
             return Ok(ToolOutcome::ProviderError {
                 status: response.status,
-                data: response.json().unwrap_or(Value::Null),
+                data: response.json().ok().filter(|v| !v.is_null()).unwrap_or_else(|| {
+                    let text = String::from_utf8_lossy(&response.body);
+                    let text: String = text.chars().take(500).collect();
+                    if text.trim().is_empty() {
+                        serde_json::json!({"error": format!("HTTP {} (empty response body)", response.status)})
+                    } else {
+                        serde_json::json!({"error": text})
+                    }
+                }),
             });
         }
     }

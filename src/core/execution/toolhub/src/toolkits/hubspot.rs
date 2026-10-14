@@ -979,7 +979,7 @@ impl ToolkitAdapter for HubSpot {
             "HUBSPOT_FIND_ASSOCIATIONS" => HttpRequest::new(
                 "GET",
                 self.url(&format!(
-                    "/crm/v4/associations/{}/{}/{}{}",
+                    "/crm/v4/objects/{}/{}/associations/{}{}",
                     path_segment(args, "from_object_type")?,
                     path_segment(args, "from_object_id")?,
                     path_segment(args, "to_object_type")?,

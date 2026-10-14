@@ -299,7 +299,7 @@ fn cases() -> Vec<Case<'static>> {
             args: json!({"from_object_id": "101", "from_object_type": "contact",
                 "to_object_type": "deal"}),
             method: "GET",
-            url_contains: sts(vec!["/crm/v4/associations/contact/101/deal", "limit=100"]),
+            url_contains: sts(vec!["/crm/v4/objects/contact/101/associations/deal", "limit=100"]),
             body_eq: st(vec![]),
             response_status: 200,
             response: json!({"results": [{"toObjectId": "301", "associationTypes": [
