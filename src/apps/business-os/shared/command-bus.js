@@ -455,7 +455,7 @@ function requireCommandCapability(commandId, capability) {
 }
 
 // Native intake rejects every replicated mutation without a verifiable
-// capability token (THESEN 14.10.2026: such a command was rejected about twice
+// capability token (customer tenant 14.10.2026: such a command was rejected about twice
 // per second until native terminalized it). The token is part of the immutable
 // intent, so a document inserted without one can never become authorized.
 // Check the exact document at the local-insert boundary, independent of how
