@@ -55,6 +55,8 @@ fn account(id: &str, priority: i32) -> ApiKeyAccountConfig {
         id: id.into(),
         endpoint: ApiKeyEndpoint::Xai,
         api_key_secret: ProviderSecretRef::new("provider-api-keys", format!("api-{id}")),
+        owner_user_id: None,
+        creation_operation: None,
         disabled: false,
         priority,
         models: vec![model_fixture()],
