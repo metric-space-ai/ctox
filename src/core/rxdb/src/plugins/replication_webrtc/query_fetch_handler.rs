@@ -688,20 +688,6 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         }
     };
 
-    if !registry.try_rate_consume(&peer_identity) {
-        send_error(
-            handler.as_ref(),
-            &peer,
-            &message.id,
-            &request.request_id,
-            QUERY_FETCH_ERROR_RATE_LIMITED,
-            "per-peer query-fetch rate limit reached",
-            true,
-        )
-        .await;
-        return Ok(());
-    }
-
     let connection_identity = handler.connection_identity(&peer);
     let cancel_flag = match registry.try_acquire(&connection_identity, &request.request_id) {
         Some(flag) => flag,
@@ -725,6 +711,23 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler + 'static>(
         key: fetch_inflight_key(&connection_identity, &request.request_id),
         flag: Arc::clone(&cancel_flag),
     };
+    // A rejected stream never executed a fetch. In particular, retries while
+    // the prior final chunk still owns its slot must not drain the peer's
+    // request-rate budget and starve a later user-visible lead read.
+    if !registry.try_rate_consume(&peer_identity) {
+        drop(permit);
+        send_error(
+            handler.as_ref(),
+            &peer,
+            &message.id,
+            &request.request_id,
+            QUERY_FETCH_ERROR_RATE_LIMITED,
+            "per-peer query-fetch rate limit reached",
+            true,
+        )
+        .await;
+        return Ok(());
+    }
     let mut request = request;
     request.projection =
         match crate::query_fingerprint::normalize_query_projection(&json!(request.projection)) {
@@ -3132,6 +3135,42 @@ mod tests {
         }
         let frames = handler.sent.lock();
         assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_RATE_LIMITED));
+    }
+
+    #[tokio::test]
+    async fn rejected_stream_retries_do_not_spend_peer_rate_tokens() {
+        let collection = seeded_collection(1).await;
+        let registry = authorized_query_registry(1);
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        registry
+            .inflight
+            .try_acquire("p1", "held")
+            .expect("hold the only stream slot");
+        for i in 0..=registry.rate_burst {
+            run_query_fetch(
+                Arc::clone(&registry),
+                Arc::clone(&handler),
+                MockPeer("p1"),
+                "p1".to_string(),
+                make_request(&format!("overload-{i}"), "business_records", 0),
+            )
+            .await
+            .unwrap();
+        }
+        registry.inflight.release("p1", "held");
+        run_query_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            make_request("visible-lead", "business_records", 0),
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(error_code_emitted(&frames, QUERY_FETCH_ERROR_STREAM_LIMIT));
+        assert!(!error_code_emitted(&frames, QUERY_FETCH_ERROR_RATE_LIMITED));
     }
 
     #[tokio::test]

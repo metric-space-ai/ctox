@@ -7337,6 +7337,9 @@ var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_chats"
 ]);
 var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+var CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
+var CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
+var CLIENT_QUERY_RATE_INTERVAL_MS = 1e3;
 function isBackgroundQuery(envelope) {
   return SHELL_BACKGROUND_QUERY_COLLECTIONS.has(String(envelope?.collectionName || ""));
 }
@@ -7380,6 +7383,37 @@ function createDemandLoadingTransport({
   const fileCollectors = /* @__PURE__ */ new Map();
   const rowsCollectors = /* @__PURE__ */ new Map();
   const queryStreamState = getGlobalQueryStreamState();
+  function scheduleQueryRateWake(delayMs) {
+    if (queryStreamState.rateTimer) return;
+    queryStreamState.rateTimer = setTimeout(() => {
+      queryStreamState.rateTimer = null;
+      drainReadyQueryRequests();
+    }, Math.max(1, delayMs));
+  }
+  function takeQueryRateToken() {
+    const peerId = String(resolvePeerId() || "");
+    if (!peerId) return false;
+    const now = Date.now();
+    let bucket = queryStreamState.rateBucket;
+    if (!bucket || bucket.peerId !== peerId) {
+      bucket = { peerId, tokens: CLIENT_QUERY_RATE_BURST, atMs: now };
+      queryStreamState.rateBucket = bucket;
+    }
+    const intervals = Math.floor((now - bucket.atMs) / CLIENT_QUERY_RATE_INTERVAL_MS);
+    if (intervals > 0) {
+      bucket.tokens = Math.min(
+        CLIENT_QUERY_RATE_BURST,
+        bucket.tokens + intervals * CLIENT_QUERY_RATE_REFILL_PER_SECOND
+      );
+      bucket.atMs += intervals * CLIENT_QUERY_RATE_INTERVAL_MS;
+    }
+    if (bucket.tokens <= 0) {
+      scheduleQueryRateWake(bucket.atMs + CLIENT_QUERY_RATE_INTERVAL_MS - now);
+      return false;
+    }
+    bucket.tokens -= 1;
+    return true;
+  }
   const cancelledQueryRequests = /* @__PURE__ */ new Map();
   const transportOwner = /* @__PURE__ */ Symbol("ctox-demand-transport-owner");
   const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
@@ -7684,7 +7718,7 @@ function createDemandLoadingTransport({
         });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && hasFreeQuerySlot(background)) run();
+      if (ready && hasFreeQuerySlot(background) && !queryStreamState.queue.some((entry) => entry.isReady()) && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
@@ -7731,6 +7765,7 @@ function createDemandLoadingTransport({
           });
         };
         if (!ready) entry.waitForReady();
+        else drainReadyQueryRequests();
       }
     });
   }
@@ -7750,6 +7785,7 @@ function createDemandLoadingTransport({
       let index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
       if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
       if (index < 0) return;
+      if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
       entry.run();
     }
@@ -7759,6 +7795,12 @@ function createDemandLoadingTransport({
     let attempt = 0;
     for (; ; ) {
       if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      if (attempt > 0) {
+        while (resolvePeerId() && !takeQueryRateToken()) {
+          if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+          await delay4(50);
+        }
+      }
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);

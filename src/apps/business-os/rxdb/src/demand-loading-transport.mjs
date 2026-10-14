@@ -416,7 +416,11 @@ export function createDemandLoadingTransport({
           });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && !queryStreamState.queue.length && hasFreeQuerySlot(background) && takeQueryRateToken()) run();
+      // Pending handshakes may fill the bounded queue. A ready request can
+      // still use a free stream slot; preserve FIFO among ready waiters.
+      if (ready && hasFreeQuerySlot(background)
+        && !queryStreamState.queue.some(entry => entry.isReady())
+        && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
@@ -499,6 +503,14 @@ export function createDemandLoadingTransport({
     let attempt = 0;
     for (;;) {
       if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      // A retry is another RPC and can spend a native rate token. The first
+      // attempt already reserved its token when the stream slot was admitted.
+      if (attempt > 0) {
+        while (resolvePeerId() && !takeQueryRateToken()) {
+          if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+          await delay(50);
+        }
+      }
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);

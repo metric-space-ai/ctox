@@ -1525,6 +1525,19 @@ cannot revive a removed request. The existing 60-second peer-readiness wait
 remains bounded. Already dispatched requests retain their existing RPC,
 collector and retry behavior.
 
+**S5-Vorgriff (THESEN, 14.10.2026):** The same admission queue also reserves
+per-peer query-fetch rate tokens before dispatch. Native permits an initial
+`max(32, streams × 8)` burst and refills 16 requests/s; the browser deliberately
+uses `streams × 6` and 12/s, leaving capacity for reads outside its queue.
+Foreground app queries take the next available token before queued shell feeds.
+The bucket resets on a new authenticated peer identity, while requests waiting
+for a token occupy no stream slot. `query-rate-admission-smoke.mjs` tests a
+59-window shell burst and a subsequent foreground lead read without changing
+the native peer limit.
+Native spends a rate token only after a stream slot is actually acquired:
+`STREAM_LIMIT_EXCEEDED` retries must not consume the later interactive query's
+budget. Browser retries reserve another local token before sending another RPC.
+
 Identical demand-query windows also share an unfinished network operation when
 connection generation, accepted peer, current permission digest and the complete
 query/projection envelope match. Distinct `requireRevision` hydration tokens retain
