@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createDemandLoadingTransport } from '../src/demand-loading-transport.mjs';
-import { createQueryDemandLoader, createSidecarWithMemoryBackend } from '../src/index.mjs';
+import { createRxDatabase, createQueryDemandLoader, createSidecarWithMemoryBackend } from '../src/index.mjs';
 
 const deadline = (ms) => new Promise((_, reject) => setTimeout(
   () => reject(new Error(`strict native query was not admitted within ${ms}ms`)), ms,
@@ -54,6 +54,9 @@ let windowedStrictMs = null;
   const storageCollection = {
     databaseName: 'thesen-strict-query-fixture',
     primaryPath: 'id',
+    schemaIndexes: () => [],
+    observe: () => () => {},
+    close() {},
     async bulkWrite(rows) {
       for (const row of rows) {
         const document = row?.document || row;
@@ -76,14 +79,27 @@ let windowedStrictMs = null;
     queryGeneration: () => 'fixture-generation',
     requestQueryFetch: (request, options) => transport.requestQueryFetch(request, options),
   });
+  const db = await createRxDatabase({
+    name: storageCollection.databaseName,
+    storage: { nativeStorage: { collection: () => storageCollection, close() {} } },
+  });
+  await db.addCollections({
+    outbound_lead_generation_leads: {
+      schema: {
+        version: 1, primaryKey: 'id', type: 'object',
+        properties: { id: { type: 'string' } },
+      },
+    },
+  });
+  db.outbound_lead_generation_leads.setDemandLoader(loader);
   let strict;
   try {
     await waitFor(() => started.length >= 7);
     const startedAt = performance.now();
-    strict = loader.resolveQuery({
+    strict = db.outbound_lead_generation_leads.find({
       selector: { id: { $in: ['lead-fixture'] } },
       sort: [{ id: 'asc' }], limit: 1, requireRevision: 'fixture:new:full:0',
-    });
+    }).exec();
     const documents = await Promise.race([strict, deadline(1500)]);
     windowedStrictMs = Math.round(performance.now() - startedAt);
     assert.ok(windowedStrictMs < 2000, 'windowed requireRevision read must finish under 2s');
@@ -93,6 +109,7 @@ let windowedStrictMs = null;
   } finally {
     releaseOrdinary();
     await Promise.allSettled([...ordinary, strict].filter(Boolean));
+    await db.close();
   }
 }
 
