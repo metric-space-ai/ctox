@@ -494,6 +494,15 @@ pub fn run_channel_command(
         "chef or admin role required"
     );
     match command_type {
+        "ctox.channel.test"
+            if request.channel.trim() == "email"
+                && request.config.as_object().is_some_and(|c| !c.is_empty()) =>
+        {
+            Ok(channels::test_email_draft_for_business_os(
+                root,
+                &request.config,
+            ))
+        }
         "ctox.channel.test" => {
             let account_key = request.account_key.trim();
             let account_key = if account_key.is_empty() {

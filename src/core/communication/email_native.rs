@@ -2379,6 +2379,96 @@ fn synced_message_direction_in_folder(
     }
 }
 
+/// TCP connect with a bounded wait. A plain `TcpStream::connect` against a
+/// host that drops SYNs blocks for minutes, which left the Business OS
+/// connection test hanging at "CTOX testet IMAP + SMTP".
+fn connect_with_timeout(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let mut last_error = None;
+    for addr in (host, port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "host has no address")
+    }))
+}
+
+/// Upper bound for a draft connection test. The UI waits 30 s; the core
+/// answers a little earlier so the user always gets a reason.
+pub(crate) const DRAFT_TEST_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Probe IMAP + SMTP with settings that are NOT saved yet. Nothing is written:
+/// no account row, no runtime env. Always returns a JSON result, also on
+/// error or timeout.
+pub(crate) fn test_draft(
+    root: &Path,
+    db_path: &Path,
+    overrides: &BTreeMap<String, String>,
+) -> Value {
+    let mut runtime =
+        crate::inference::runtime_env::effective_operator_env_map(root).unwrap_or_default();
+    runtime.extend(overrides.clone());
+    let mut options = base_options_from_runtime(root, &runtime, db_path);
+    options.email = options.email.trim().to_lowercase();
+    if options.provider != "imap" {
+        return json!({
+            "ok": false,
+            "draft": true,
+            "error": format!("draft test supports IMAP/SMTP only, not {}", options.provider),
+        });
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe_imap_smtp(&options));
+    });
+    match rx.recv_timeout(DRAFT_TEST_TIMEOUT) {
+        Ok(Ok(checks)) => json!({
+            "ok": true, "draft": true, "imap_ok": true, "smtp_ok": true, "checks": checks,
+        }),
+        Ok(Err((stage, error))) => json!({
+            "ok": false,
+            "draft": true,
+            "imap_ok": stage != "imap",
+            "smtp_ok": false,
+            "stage": stage,
+            "error": format!("{error:#}"),
+        }),
+        Err(_) => json!({
+            "ok": false,
+            "draft": true,
+            "timeout": true,
+            "error": format!(
+                "no answer from the mail server within {} s",
+                DRAFT_TEST_TIMEOUT.as_secs()
+            ),
+        }),
+    }
+}
+
+fn probe_imap_smtp(
+    options: &EmailOptions,
+) -> std::result::Result<Vec<Value>, (&'static str, anyhow::Error)> {
+    if options.email.is_empty() || options.password.trim().is_empty() {
+        return Err(("imap", anyhow!("email address and password are required")));
+    }
+    let mut checks = Vec::new();
+    let mut imap = ImapClient::connect(options).map_err(|e| ("imap", e))?;
+    imap.login(&options.email, &options.password)
+        .map_err(|e| ("imap", e))?;
+    imap.select("INBOX").map_err(|e| ("imap", e))?;
+    imap.logout();
+    checks.push(json!({"name": "imap_login", "ok": true}));
+    let mut smtp = SmtpClient::connect(options).map_err(|e| ("smtp", e))?;
+    smtp.login(&options.email, &options.password)
+        .map_err(|e| ("smtp", e))?;
+    smtp.close();
+    checks.push(json!({"name": "smtp_login", "ok": true}));
+    Ok(checks)
+}
+
 fn normalize_provider(value: &str) -> String {
     let normalized = value.trim().to_lowercase();
     match normalized.as_str() {
@@ -2674,7 +2764,7 @@ struct ImapClient {
 
 impl ImapClient {
     fn connect(options: &EmailOptions) -> Result<Self> {
-        let tcp = TcpStream::connect((options.imap_host.as_str(), options.imap_port))
+        let tcp = connect_with_timeout(options.imap_host.as_str(), options.imap_port)
             .with_context(|| {
                 format!(
                     "failed to connect to IMAP {}:{}",
@@ -2932,7 +3022,7 @@ struct SmtpClient {
 
 impl SmtpClient {
     fn connect(options: &EmailOptions) -> Result<Self> {
-        let tcp = TcpStream::connect((options.smtp_host.as_str(), options.smtp_port))
+        let tcp = connect_with_timeout(options.smtp_host.as_str(), options.smtp_port)
             .with_context(|| {
                 format!(
                     "failed to connect to SMTP {}:{}",
@@ -5067,6 +5157,23 @@ fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn draft_test_without_credentials_returns_result_without_saving() {
+        let dir = std::env::temp_dir().join(format!("ctox-draft-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("channels.db");
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("CTO_EMAIL_PROVIDER".to_string(), "gmail".to_string());
+        overrides.insert("CTO_EMAIL_ADDRESS".to_string(), "a@b.de".to_string());
+        overrides.insert("CTO_EMAIL_PASSWORD".to_string(), String::new());
+        let result = super::test_draft(&dir, &db, &overrides);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["draft"], true);
+        assert!(result["error"].as_str().unwrap().contains("password"));
+        assert!(!db.exists(), "draft test must not create the channel db");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn business_os_wizard_providers_map_to_core_transports() {
         for id in ["gmail", "apple", "imap-standard", "custom", "", "IMAP"] {

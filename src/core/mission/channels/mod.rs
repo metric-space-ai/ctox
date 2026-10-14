@@ -172,6 +172,7 @@ pub use business_os_projection::{
     pull_communication_threads_for_business_os, pull_communication_threads_for_business_os_after,
     read_pairing_state_for_business_os, save_channel_settings_for_business_os,
     start_pairing_for_business_os, sync_channel_for_business_os, test_channel_for_business_os,
+    test_email_draft_for_business_os,
 };
 
 use anyhow::Context;

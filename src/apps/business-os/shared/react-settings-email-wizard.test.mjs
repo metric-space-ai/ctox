@@ -69,3 +69,48 @@ test('failed channel test surfaces the adapter error', () => {
     'IMAP login failed',
   );
 });
+
+test('one.com, IONOS, Strato and Outlook presets fill servers', () => {
+  const one = hooks.emailConfigPayload({ provider: 'onecom', data: { emailAddress: 'm@metric-space.ai', emailPassword: 'x' } });
+  assert.deepEqual([one.provider, one.imap_host, one.imap_port, one.smtp_host, one.smtp_port], ['imap', 'imap.one.com', 993, 'send.one.com', 465]);
+  assert.equal(hooks.emailConfigPayload({ provider: 'ionos', data: {} }).smtp_host, 'smtp.ionos.de');
+  assert.equal(hooks.emailConfigPayload({ provider: 'strato', data: {} }).imap_host, 'imap.strato.de');
+  const outlook = hooks.emailConfigPayload({ provider: 'outlook', data: {} });
+  assert.deepEqual([outlook.provider, outlook.smtp_host, outlook.smtp_port], ['imap', 'smtp.office365.com', 587]);
+});
+
+test('provider detection by domain and MX lookup', async () => {
+  assert.deepEqual(await hooks.detectEmailProvider('x@gmail.com', null), { provider: 'gmail', source: 'domain' });
+  const seen = [];
+  const fakeFetch = async (url) => {
+    seen.push(url);
+    return { ok: true, json: async () => ({ Answer: [{ data: '10 mx4.pub.mailpod14-cph3.one.com.' }] }) };
+  };
+  assert.deepEqual(await hooks.detectEmailProvider('michael@metric-space.ai', fakeFetch), { provider: 'onecom', source: 'mx' });
+  assert.match(seen[0], /name=metric-space\.ai&type=MX/);
+  assert.doesNotMatch(seen[0], /michael/);
+  assert.equal(hooks.emailProviderForMxHosts(['1 aspmx.l.google.com.']), 'gmail');
+  assert.equal(hooks.emailProviderForMxHosts(['0 x-de.mail.protection.outlook.com']), 'outlook');
+  assert.deepEqual(await hooks.detectEmailProvider('a@nowhere.example', async () => { throw new Error('offline'); }), { provider: '', source: '' });
+});
+
+test('email form marks settings as draft until the test succeeds', () => {
+  const html = withLang('en', () => hooks.emailWizard({ wizard: 'email', step: 'form', provider: 'custom', data: {} }));
+  assert.match(html, /Draft: these settings are only saved after a successful test/);
+});
+
+test('hub shows active mailbox, replace button and undo bar instead of a dialog', () => {
+  const state = {
+    accounts: [{ channel: 'email', account_key: 'email:a@b.de', address: 'a@b.de' }],
+    pendingDisconnect: null,
+  };
+  const html = withLang('de', () => hooks.channelsHubPanel(state));
+  assert.match(html, /Aktives Postfach/);
+  assert.match(html, /data-channel-replace="email:a@b\.de"/);
+  assert.match(html, /Postfach ersetzen/);
+  assert.match(html, /data-channel-disconnect="email:a@b\.de">Trennen/);
+  const pending = withLang('en', () => hooks.channelsHubPanel({ ...state, pendingDisconnect: { accountKey: 'email:a@b.de' } }));
+  assert.doesNotMatch(pending, /data-channel-disconnect="email:a@b\.de"/);
+  assert.match(pending, /data-channel-disconnect-undo>Undo/);
+  assert.match(pending, /email:a@b\.de will be disconnected/);
+});
