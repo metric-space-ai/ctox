@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 
 mod api_key_config;
 mod api_key_ingress;
-pub(crate) use api_key_ingress::{install_api_key_account_owned_authorized, ApiKeyProvider};
+pub(crate) use api_key_ingress::{
+    install_api_key_account_owned_authorized, ApiKeyProvider, DiscoveryError,
+};
 mod kimi_host;
 pub use api_key_config::{ApiKeyAccountConfig, ApiKeyEndpoint};
 pub(crate) use kimi_host::save_provider_integration_config;

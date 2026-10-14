@@ -221,3 +221,89 @@ fn revocation_before_config_commit_removes_only_the_new_secret() {
         "synthetic-existing-credential"
     );
 }
+
+#[tokio::test]
+async fn owned_creation_replay_preserves_key_revision_and_rejects_changes() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let operation = uuid::Uuid::new_v4();
+    let mut hash = Sha256::new();
+    hash.update(b"verified-owner");
+    hash.update([0]);
+    hash.update(operation.to_string().as_bytes());
+    let id = format!("api-{:x}", hash.finalize());
+    let first = commit_discovered_record(
+        root.path(),
+        KEY,
+        DiscoveredAccount {
+            endpoint: ApiKeyEndpoint::Xai,
+            models: vec![model_fixture()],
+            attempts: Vec::new(),
+        },
+        || Ok(()),
+        id,
+        Some(("verified-owner", &operation.to_string())),
+    )
+    .unwrap();
+    let stored = super::super::load_provider_integration_config(root.path()).unwrap();
+    let account = &stored.config.api_key_accounts[0];
+    let generation = crate::secrets::secret_record_content_version(
+        root.path(),
+        &account.api_key_secret.scope,
+        &account.api_key_secret.name,
+    )
+    .unwrap();
+    let replay = install_api_key_account_owned_authorized(
+        root.path(),
+        "verified-owner",
+        operation,
+        ApiKeyProvider::Xai,
+        Zeroizing::new(KEY.into()),
+        || Ok(()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.id, replay.id);
+    assert_eq!(first.revision, replay.revision);
+    assert_eq!(
+        generation,
+        crate::secrets::secret_record_content_version(
+            root.path(),
+            &account.api_key_secret.scope,
+            &account.api_key_secret.name
+        )
+        .unwrap()
+    );
+    for (provider, key) in [
+        (ApiKeyProvider::Xai, "changed-synthetic-key"),
+        (ApiKeyProvider::Kimi, KEY),
+    ] {
+        assert!(install_api_key_account_owned_authorized(
+            root.path(),
+            "verified-owner",
+            operation,
+            provider,
+            Zeroizing::new(key.into()),
+            || Ok(())
+        )
+        .await
+        .is_err());
+    }
+    assert!(install_api_key_account_owned_authorized(
+        root.path(),
+        "verified-owner",
+        operation,
+        ApiKeyProvider::Xai,
+        Zeroizing::new(KEY.into()),
+        || anyhow::bail!("retired")
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        super::super::load_provider_integration_config(root.path())
+            .unwrap()
+            .config
+            .api_key_accounts,
+        stored.config.api_key_accounts
+    );
+}
