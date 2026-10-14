@@ -10770,7 +10770,6 @@ fn attach_typed_business_command_context(
         &compact_business_command_context_for_prompt(&context),
     )?);
     execution_prompt.push_str("\n```\n");
-    append_outbound_person_research_contract(&context["command"], &mut execution_prompt);
     Ok(execution_prompt)
 }
 
