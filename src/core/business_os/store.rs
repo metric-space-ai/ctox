@@ -27036,6 +27036,26 @@ fn command_prompt(
         payload.remove("instruction");
         payload.remove("prompt");
     }
+    // The owner's research workflow (Outbound → Rechercheablauf) is the
+    // agent's contract and must reach it verbatim. Inside the bounded JSON
+    // preview it sat behind the lead snapshot and was cut off: on THESEN
+    // (14.10.2026) a 13k-char workflow never reached the worker ("… truncated
+    // 30533 chars …"), so the research ignored its contact areas and source
+    // chain. It is rendered as its own block and dropped from the preview.
+    let research_instructions = owner_research_instructions(&command.payload);
+    if research_instructions.is_some() {
+        if let Some(payload) = payload_preview_value.as_object_mut() {
+            payload.remove("research_instructions");
+            payload.remove("research_instructions_default");
+        }
+    }
+    let research_instructions = research_instructions
+        .map(|text| {
+            format!(
+                "\nRechercheablauf des Owners (research_instructions, wörtlich, unverändert, verbindlich):\n{text}\n"
+            )
+        })
+        .unwrap_or_default();
     let payload_preview_value = sanitize_command_prompt_preview(payload_preview_value);
     let context_preview_value =
         sanitize_command_prompt_preview(business_command_client_context_value(command));
@@ -27060,7 +27080,7 @@ fn command_prompt(
     let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
     let prompt_enrichment = prompt_enrichment.unwrap_or_default();
     let prompt = format!(
-        "{instruction}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{research_instructions}{required_skills}{app_target}{prompt_enrichment}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
@@ -27069,6 +27089,16 @@ fn command_prompt(
         &prompt,
         BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS,
     ))
+}
+
+/// Non-empty owner research workflow carried by an Outbound research command.
+fn owner_research_instructions(payload: &Value) -> Option<String> {
+    payload
+        .get("research_instructions")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn sanitize_command_prompt_preview(value: Value) -> Value {
@@ -31594,6 +31624,40 @@ pub(super) mod tests {
             Ok(())
         })?;
         Ok(())
+    }
+
+    #[test]
+    fn command_prompt_carries_owner_research_instructions_verbatim_before_preview() {
+        let workflow = format!(
+            "1. Firmendaten. 4. Ansprechpartner Einkauf: Leiter Einkauf. {} 9. Lücken schließen.",
+            "Belege je Feld. ".repeat(900)
+        );
+        let snapshot = "x".repeat(60_000);
+        let command = BusinessCommand {
+            id: Some("leadgen-lead-research-test".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: "business_os.chat.task".to_string(),
+            record_id: Some("lead_test".to_string()),
+            payload: serde_json::json!({
+                "instruction": "Starte eine Outbound Neurecherche.",
+                "lead_snapshot": {"data": {"blob": snapshot}},
+                "research_instructions": workflow,
+                "research_instructions_default": workflow,
+            }),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let prompt =
+            command_prompt("leadgen-lead-research-test", &command, &[], None).expect("prompt");
+        let block = prompt
+            .find("Rechercheablauf des Owners")
+            .expect("workflow block present");
+        assert!(block < prompt.find("Payload JSON:").expect("preview present"));
+        assert!(
+            prompt.contains(&workflow),
+            "workflow must be verbatim and complete"
+        );
+        assert_eq!(prompt.matches("9. Lücken schließen.").count(), 1);
     }
 
     #[test]
