@@ -1643,12 +1643,13 @@ async function openBusinessDataPlane(syncConfig) {
         tokenError);
     });
     const { createSyncRuntime } = await loadSyncModule();
+    const syncDb = state.db;
     state.sync = createSyncRuntime({
-      db: state.db,
+      db: syncDb,
       config: syncConfig,
       onDiagnostic: updateSyncDiagnostics,
       capabilityTokenProvider: commandBusModule.getBusinessOsCapabilityToken,
-      ensureCollectionRegistered: ensureDeclaredCollectionSchema,
+      ensureCollectionRegistered: (collection) => ensureDeclaredCollectionSchema(collection, syncDb),
       mayReadCollection: (collection) => roleMayReadCollection(
         businessActorFromSession(state.session, state.governance).role,
         collection,
@@ -6536,9 +6537,8 @@ async function registerModuleSchemas(mod) {
   return registration;
 }
 
-async function ensureDeclaredCollectionSchema(collection) {
-  const db = state.db;
-  if (!db || db.raw?.[collection]) return;
+async function ensureDeclaredCollectionSchema(collection, db) {
+  if (!db || state.db !== db || db.raw?.[collection]) return;
   let lastError = null;
   for (const mod of state.modules || []) {
     if (state.db !== db) return;
