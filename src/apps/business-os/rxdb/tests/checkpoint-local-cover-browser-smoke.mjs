@@ -33,6 +33,25 @@ try {
     let records = storage.collection(name, { schema });
     const write = async (id, revision, physicalMs) => records.bulkWrite([{ id, _rev: revision, _meta: { ctoxHlc: formatHybridLogicalClock({ physicalMs, logical: 0, nodeId: 'fixture-native' }) } }], options);
     try {
+      const originalTransaction = IDBDatabase.prototype.transaction;
+      const checkpointModes = [];
+      IDBDatabase.prototype.transaction = function (stores, mode, ...rest) {
+        checkpointModes.push(mode || 'readonly');
+        return originalTransaction.call(this, stores, mode, ...rest);
+      };
+      try {
+        const empty = storage.collection('fixture_empty', { schema });
+        const emptyStatus = await empty.replicationCheckpointStatus('fixture-schema');
+        check(emptyStatus.localStoreGeneration, 'empty legacy collection acquires a local generation');
+        check(JSON.stringify(checkpointModes) === JSON.stringify(['readonly', 'readwrite', 'readonly']),
+          `first checkpoint must initialize only a narrow marker transaction: ${checkpointModes}`);
+        checkpointModes.length = 0;
+        await empty.replicationCheckpointStatus('fixture-schema');
+        check(JSON.stringify(checkpointModes) === JSON.stringify(['readonly']),
+          `established checkpoint must not reserve the shared document writer: ${checkpointModes}`);
+      } finally {
+        IDBDatabase.prototype.transaction = originalTransaction;
+      }
       await write('older-row', '1-native', Date.now());
       await write('head-row', '1-native', Date.now() + 1000);
       const initialStatus = await records.replicationCheckpointStatus('fixture-schema');
