@@ -2635,13 +2635,57 @@ fn business_command_core_diagnostics_uncached(root: &Path) -> Result<Value> {
     }))
 }
 
+/// Terminal failure classification for an intake failure. The default is the
+/// generic native intake failure; deterministic rejections (for example a
+/// replicated command without a valid capability token) carry their own
+/// contract error code plus a machine-readable reason for the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BusinessCommandIntakeFailureKind {
+    pub error_code: &'static str,
+    pub reason: Option<&'static str>,
+}
+
+impl BusinessCommandIntakeFailureKind {
+    pub(crate) const NATIVE_UNAVAILABLE: Self = Self {
+        error_code: "native_unavailable",
+        reason: None,
+    };
+}
+
 pub(crate) fn record_business_command_intake_failure(
     root: &Path,
     claim: BusinessCommandClaimRequest,
     error_message: &str,
     retry_budget: u32,
 ) -> Result<Value> {
-    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, true)
+    record_business_command_intake_failure_inner(
+        root,
+        claim,
+        error_message,
+        retry_budget,
+        true,
+        BusinessCommandIntakeFailureKind::NATIVE_UNAVAILABLE,
+    )
+}
+
+/// A deterministic intake rejection (authorization, contract). It is recorded
+/// with its own error code and reaches the terminal failed state once its
+/// (usually single-attempt) budget is spent instead of being replayed.
+pub(crate) fn record_business_command_intake_rejection(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+    kind: BusinessCommandIntakeFailureKind,
+) -> Result<Value> {
+    record_business_command_intake_failure_inner(
+        root,
+        claim,
+        error_message,
+        retry_budget,
+        true,
+        kind,
+    )
 }
 
 /// The domain owner has proved application in its own transaction. Delivery
@@ -2652,7 +2696,14 @@ pub(crate) fn record_business_command_applied_effect_delivery_failure(
     error_message: &str,
     retry_budget: u32,
 ) -> Result<Value> {
-    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, false)
+    record_business_command_intake_failure_inner(
+        root,
+        claim,
+        error_message,
+        retry_budget,
+        false,
+        BusinessCommandIntakeFailureKind::NATIVE_UNAVAILABLE,
+    )
 }
 
 fn record_business_command_intake_failure_inner(
@@ -2661,6 +2712,7 @@ fn record_business_command_intake_failure_inner(
     error_message: &str,
     retry_budget: u32,
     allow_terminal_failure: bool,
+    kind: BusinessCommandIntakeFailureKind,
 ) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
@@ -2686,14 +2738,36 @@ fn record_business_command_intake_failure_inner(
         )?;
         (attempt, true)
     } else {
-        let attempt = tx.query_row(
-            "SELECT COALESCE(MAX(attempt), 0) + 1
+        // `UNIQUE(command_id, attempt)` spans resolved history too. Number the
+        // next attempt after every row ever recorded for this command; only
+        // the open (unresolved) failures count against the retry budget.
+        // Numbering from the open rows alone reused attempt 1 after a
+        // resolution, the INSERT failed on the unique constraint, nothing was
+        // recorded, and intake replayed the command forever (THESEN
+        // 14.10.2026: ~2 rejections per second for one auth_assist command).
+        let (attempt, open_failures) = tx.query_row(
+            "SELECT COALESCE(MAX(attempt), 0) + 1,
+                    COALESCE(SUM(CASE WHEN resolved_at_ms IS NULL THEN 1 ELSE 0 END), 0) + 1
              FROM business_command_intake_failures
-             WHERE command_id = ?1 AND resolved_at_ms IS NULL",
+             WHERE command_id = ?1",
             params![claim.command_id],
-            |row| row.get::<_, u32>(0),
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)),
         )?;
-        let exhausted = attempt >= retry_budget.max(1);
+        // A command whose canonical aggregate is already terminal can never
+        // succeed on replay; report it exhausted so intake republishes the
+        // terminal projection instead of scheduling another retry.
+        let canonical_terminal = allow_terminal_failure
+            && tx
+                .query_row(
+                    "SELECT 1 FROM business_command_aggregates
+                     WHERE command_id = ?1
+                       AND (execution_phase = 'terminal' OR terminal_status != 'none')",
+                    params![claim.command_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+        let exhausted = open_failures >= retry_budget.max(1) || canonical_terminal;
         tx.execute(
             "INSERT INTO business_command_intake_failures
                 (command_id, attempt, error_message, exhausted, observed_at_ms, resolved_at_ms)
@@ -2759,13 +2833,16 @@ fn record_business_command_intake_failure_inner(
         } else {
             format!("{error_message}; first intake failure: {first_error_message}")
         };
-        let failure_result = json!({
+        let mut failure_result = json!({
             "ok": false,
-            "error_code": "native_unavailable",
+            "error_code": kind.error_code,
             "error_message": terminal_error_message,
             "first_intake_error": first_error_message,
             "last_intake_error": error_message,
         });
+        if let Some(reason) = kind.reason {
+            failure_result["reason"] = Value::String(reason.to_string());
+        }
         if let Some((_, _, phase, _, projection_version, _)) = canonical.as_ref() {
             prior_phase = phase.clone();
             next_projection_version = projection_version.saturating_add(1);
@@ -2773,7 +2850,7 @@ fn record_business_command_intake_failure_inner(
                 "UPDATE business_command_aggregates
                  SET execution_phase = 'terminal', terminal_status = 'failed', attempt = ?2,
                      projection_version = ?3, result_json = ?4,
-                     error_code = 'native_unavailable', error_message = ?5,
+                     error_code = ?7, error_message = ?5,
                      retryable = 0, updated_at_ms = ?6
                  WHERE command_id = ?1 AND execution_phase != 'terminal'",
                 params![
@@ -2783,6 +2860,7 @@ fn record_business_command_intake_failure_inner(
                     serde_json::to_string(&failure_result)?,
                     terminal_error_message,
                     now_ms,
+                    kind.error_code,
                 ],
             )?;
         } else {
@@ -2793,7 +2871,7 @@ fn record_business_command_intake_failure_inner(
                      intent_json, result_json, error_code, error_message, retryable,
                      created_at_ms, updated_at_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'control', 'terminal', 'failed', ?7, 1,
-                         ?8, ?9, 'native_unavailable', ?10, 0, ?11, ?12)",
+                         ?8, ?9, ?13, ?10, 0, ?11, ?12)",
                 params![
                     claim.command_id,
                     claim.idempotency_key,
@@ -2807,6 +2885,7 @@ fn record_business_command_intake_failure_inner(
                     terminal_error_message,
                     claim.created_at_ms,
                     now_ms,
+                    kind.error_code,
                 ],
             )?;
         }
