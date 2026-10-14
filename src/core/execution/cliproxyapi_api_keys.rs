@@ -74,6 +74,8 @@ impl Routes {
         let handler = build_with_http(&self.root, &stored, http)?.remove(provider);
         if let Some(handler) = &handler {
             cached.insert(provider.to_owned(), handler.clone());
+        } else {
+            cached.remove(provider);
         }
         Ok(handler)
     }

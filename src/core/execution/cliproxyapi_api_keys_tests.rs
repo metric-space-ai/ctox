@@ -312,6 +312,7 @@ async fn owned_api_uses_live_catalog_and_retires_remove_readd_route() {
     };
     assert_eq!(retired.status(), 409);
     assert!(routes.route_for("xai").unwrap().is_none());
+    assert!(routes.cached.lock().unwrap().is_empty());
     conn.execute(
         "UPDATE business_provider_federation_models SET models_json=?1 WHERE owner_user_id=?2",
         rusqlite::params![

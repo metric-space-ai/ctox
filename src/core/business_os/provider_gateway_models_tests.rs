@@ -184,6 +184,24 @@ fn gateway_models_denies_removed_disabled_wrong_owner_and_revoked_owner() -> Res
         [],
     )?;
     assert!(read(root.path(), &account, &binding)?.models.is_empty());
-
+    conn.execute(
+        "UPDATE business_users SET active=1 WHERE user_id='owner'",
+        [],
+    )?;
+    // Retire dependent fixture metadata in the normal removal order. Keep
+    // SQLite foreign-key enforcement enabled throughout this regression.
+    conn.execute(
+        "DELETE FROM business_provider_federation_model_observations WHERE account_id=?1",
+        [&id],
+    )?;
+    conn.execute(
+        "DELETE FROM business_provider_federation_native_bindings WHERE account_id=?1",
+        [&id],
+    )?;
+    conn.execute(
+        "DELETE FROM business_provider_federation_accounts WHERE account_id=?1",
+        [&id],
+    )?;
+    assert!(read(root.path(), &account, &binding)?.models.is_empty());
     Ok(())
 }
