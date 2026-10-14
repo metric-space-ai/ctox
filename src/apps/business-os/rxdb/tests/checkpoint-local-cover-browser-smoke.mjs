@@ -52,6 +52,23 @@ try {
       } finally {
         IDBDatabase.prototype.transaction = originalTransaction;
       }
+      const windowed = Array.from({ length: 65 }, (_, index) =>
+        storage.collection(`fixture_windowed_${index}`, { schema }));
+      await Promise.all(windowed.map((collection) => collection.replicationCheckpointStatus('fixture-schema')));
+      const start = performance.now();
+      const modes = [];
+      IDBDatabase.prototype.transaction = function (stores, mode, ...rest) {
+        modes.push(mode || 'readonly');
+        return originalTransaction.call(this, stores, mode, ...rest);
+      };
+      try {
+        await Promise.all(windowed.map((collection) => collection.replicationCheckpointStatus('fixture-schema')));
+      } finally {
+        IDBDatabase.prototype.transaction = originalTransaction;
+      }
+      check(modes.length === windowed.length && modes.every((mode) => mode === 'readonly'),
+        `65 reconnect checkpoints must not serialize as document writes: ${modes.length} ${modes.filter((mode) => mode !== 'readonly').length}`);
+      const checkpoint65Ms = Math.round(performance.now() - start);
       await write('older-row', '1-native', Date.now());
       await write('head-row', '1-native', Date.now() + 1000);
       const initialStatus = await records.replicationCheckpointStatus('fixture-schema');
@@ -107,11 +124,13 @@ try {
       const recreated = await records.replicationCheckpointStatus('fixture-schema');
       check(recreated.localStoreGeneration !== afterClear.localStoreGeneration, 'recreated store receives a different identity');
       check(!covers(beforeRecreate, key(recreated)), 'recreated store never inherits the previous store checkpoint');
-      return { resume: true, reopened: true, eviction: true, abortRollback: true, cleared: true, recreated: true };
+      return { resume: true, reopened: true, eviction: true, abortRollback: true, cleared: true, recreated: true, checkpoint65Ms };
     } finally { await storage.close(); }
   });
-  assert.deepEqual(result, { resume: true, reopened: true, eviction: true, abortRollback: true, cleared: true, recreated: true });
-  console.log('checkpoint local cover browser smoke OK');
+  const { checkpoint65Ms, ...checks } = result;
+  assert.deepEqual(checks, { resume: true, reopened: true, eviction: true, abortRollback: true, cleared: true, recreated: true });
+  assert.ok(Number.isFinite(checkpoint65Ms) && checkpoint65Ms >= 0);
+  console.log(`checkpoint local cover browser smoke OK; 65 readonly reconnect checkpoints ${result.checkpoint65Ms}ms`);
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));
