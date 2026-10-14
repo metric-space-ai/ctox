@@ -745,17 +745,90 @@ fn reconcile_receipted_email_status(lead: &mut Value) -> usize {
     matches.len()
 }
 
+/// The experte.de verdict notes a status cites in `sources[].quote` or
+/// `attempts[].result`, read as (address, deliverable).
+fn cited_verdicts(status: &Value) -> Vec<(String, bool)> {
+    let quotes = status
+        .get("sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|source| source.get("quote").and_then(Value::as_str));
+    let results = status
+        .get("attempts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attempt| attempt.get("result").and_then(Value::as_str));
+    quotes
+        .chain(results)
+        .filter_map(parse_verdict_note)
+        .collect()
+}
+
+/// A status a research writeback stored for a person after reading the
+/// native verdict for that person's current address. It cites exactly that
+/// verdict, so it corrects the reading of the verdict instead of repeating a
+/// stale placeholder. It may lower the claim to `action_required` or
+/// `no_match`; a `verified` claim must agree with the cited verdict.
+fn is_cited_email_correction(status: &Value, email: &str) -> bool {
+    if matches!(
+        status.get("via").and_then(Value::as_str),
+        Some("native_email_validation" | "native_email_validation_receipt")
+    ) {
+        return false;
+    }
+    let cited = cited_verdicts(status)
+        .into_iter()
+        .filter(|(address, _)| address == email)
+        .map(|(_, valid)| valid)
+        .collect::<Vec<_>>();
+    if cited.is_empty() {
+        return false;
+    }
+    match status.get("status").and_then(Value::as_str).map(str::trim) {
+        Some("verified") => {
+            let claimed = match status.get("value").and_then(Value::as_str) {
+                Some("valid") => true,
+                Some("invalid") => false,
+                _ => return false,
+            };
+            cited.iter().all(|valid| *valid == claimed)
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 /// A later research writeback may carry the worker's old `action_required`
 /// placeholder for step 4a. Keep a native verdict only for the same person
-/// and the same address; a changed address must be checked again.
-pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) -> usize {
+/// and the same address; a changed address must be checked again. A status
+/// that cites the native verdict for the person's current address is a
+/// correction and stays (`is_cited_email_correction`). Returns the person keys
+/// whose native verdict was put back, so the caller can report every
+/// delivered status it did not keep.
+pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) -> Vec<String> {
     let Some(previous) = previous.as_object() else {
-        return 0;
+        return Vec::new();
     };
     let checked = email_receipt_entries(lead);
+    let current = lead
+        .get("person_field_status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let lead_level_correction = lead
+        .pointer("/field_status/person_email_validation")
+        .is_some_and(|status| {
+            lead.get("contacts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(contact_email)
+                .any(|email| is_cited_email_correction(status, &email))
+        });
     let mut restored = Vec::new();
     let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) else {
-        return 0;
+        return Vec::new();
     };
     for contact in contacts.iter_mut() {
         let Some(person_key) = contact
@@ -798,6 +871,13 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
         {
             continue;
         }
+        if current
+            .get(&person_key)
+            .and_then(|fields| fields.get("person_email_validation"))
+            .is_some_and(|status| is_cited_email_correction(status, &email))
+        {
+            continue;
+        }
         // Worker-supplied statuses can contain arbitrary extra JSON keys. The
         // daemon's own last-pass receipt must agree on address, run and result.
         let run_id = status
@@ -820,7 +900,7 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
         restored.push((person_key, status.clone()));
     }
     if restored.is_empty() {
-        return 0;
+        return Vec::new();
     }
     let unbound_valid_address = contacts.iter().any(|contact| {
         contact
@@ -857,7 +937,10 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
     if !lead.get("field_status").is_some_and(Value::is_object) {
         lead["field_status"] = json!({});
     }
-    if best.get("value").and_then(Value::as_str) == Some("invalid") && unbound_valid_address {
+    if lead_level_correction {
+        // The writeback's own lead-level reading of a cited verdict stays.
+    } else if best.get("value").and_then(Value::as_str) == Some("invalid") && unbound_valid_address
+    {
         lead["field_status"]["person_email_validation"] = json!({
             "status": "action_required",
             "value": null,
@@ -868,7 +951,7 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
     } else {
         lead["field_status"]["person_email_validation"] = best.clone();
     }
-    restored.len()
+    restored.into_iter().map(|(key, _)| key).collect()
 }
 
 fn run_dir_from_envelope(envelope: &Value) -> Option<PathBuf> {
@@ -1323,7 +1406,10 @@ mod tests {
         checked["contacts"][0]["field_status"]["person_email_validation"] =
             json!({"status": "action_required"});
 
-        assert_eq!(restore_native_email_verdicts(&mut checked, &previous), 1);
+        assert_eq!(
+            restore_native_email_verdicts(&mut checked, &previous).len(),
+            1
+        );
         assert_eq!(
             checked["field_status"]["person_email_validation"]["status"],
             "verified"
@@ -1342,7 +1428,7 @@ mod tests {
         different_email["field_status"]["person_email_validation"] =
             json!({"status": "action_required"});
         assert_eq!(
-            restore_native_email_verdicts(&mut different_email, &previous),
+            restore_native_email_verdicts(&mut different_email, &previous).len(),
             0
         );
         assert_eq!(
@@ -1355,7 +1441,7 @@ mod tests {
         different_person["field_status"]["person_email_validation"] =
             json!({"status": "action_required"});
         assert_eq!(
-            restore_native_email_verdicts(&mut different_person, &previous),
+            restore_native_email_verdicts(&mut different_person, &previous).len(),
             0
         );
 
@@ -1364,8 +1450,74 @@ mod tests {
         forged_receipt["field_status"]["person_email_validation"] =
             json!({"status": "action_required"});
         assert_eq!(
-            restore_native_email_verdicts(&mut forged_receipt, &previous),
+            restore_native_email_verdicts(&mut forged_receipt, &previous).len(),
             0
+        );
+    }
+
+    #[test]
+    fn a_correction_citing_the_native_verdict_is_kept_but_cannot_raise_it() {
+        let mut checked = json!({
+            "contacts": [{"person_key": "p1", "person_email": "a@weicon.de"}],
+        });
+        let mut unknown = verdict("a@weicon.de", false);
+        unknown.note = "EXPERTE.de verdict: a@weicon.de | Unbekannt".to_string();
+        apply_email_verdicts(&mut checked, &[unknown.clone()]);
+        checked["payload"]["email_validation_pass"]["checked"] = json!([{
+            "email": "a@weicon.de", "valid": false, "run_id": "scrape_run-test"
+        }]);
+        let previous = checked["person_field_status"].clone();
+        let deliver = |lead: &mut Value, status: Value| {
+            lead["person_field_status"]["p1"]["person_email_validation"] = status.clone();
+            lead["contacts"][0]["field_status"]["person_email_validation"] = status.clone();
+            lead["field_status"]["person_email_validation"] = status;
+        };
+
+        let mut corrected = checked.clone();
+        deliver(
+            &mut corrected,
+            json!({"status": "action_required", "person_key": "p1",
+                "attempts": [{"kind": "scrape", "result": unknown.note}]}),
+        );
+        assert!(restore_native_email_verdicts(&mut corrected, &previous).is_empty());
+        for status in [
+            &corrected["person_field_status"]["p1"]["person_email_validation"],
+            &corrected["contacts"][0]["field_status"]["person_email_validation"],
+            &corrected["field_status"]["person_email_validation"],
+        ] {
+            assert_eq!(status["status"], "action_required", "{corrected}");
+        }
+
+        // The cited verdict names another address: not a correction.
+        let mut foreign = checked.clone();
+        deliver(
+            &mut foreign,
+            json!({"status": "action_required", "person_key": "p1",
+                "sources": [{"quote": "EXPERTE.de verdict: b@weicon.de | Unbekannt"}]}),
+        );
+        assert_eq!(
+            restore_native_email_verdicts(&mut foreign, &previous),
+            vec!["p1".to_string()]
+        );
+        assert_eq!(
+            foreign["person_field_status"]["p1"]["person_email_validation"]["via"],
+            "native_email_validation"
+        );
+
+        // Claiming "valid" from a verdict the daemon read as undeliverable.
+        let mut raised = checked.clone();
+        deliver(
+            &mut raised,
+            json!({"status": "verified", "value": "valid", "person_key": "p1",
+                "sources": [{"quote": unknown.note}]}),
+        );
+        assert_eq!(
+            restore_native_email_verdicts(&mut raised, &previous),
+            vec!["p1".to_string()]
+        );
+        assert_eq!(
+            raised["person_field_status"]["p1"]["person_email_validation"]["value"],
+            "invalid"
         );
     }
 
@@ -1596,7 +1748,7 @@ mod tests {
                 json!({"status": "action_required"});
         }
         lead["field_status"]["person_email_validation"] = json!({"status": "action_required"});
-        assert_eq!(restore_native_email_verdicts(&mut lead, &previous), 5);
+        assert_eq!(restore_native_email_verdicts(&mut lead, &previous).len(), 5);
         assert_eq!(
             lead["field_status"]["person_email_validation"]["value"],
             "valid"
