@@ -3283,6 +3283,7 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
+| `concurrent-open-negotiation-smoke` | Collections released by one channel-open event join one accepted protocol exchange instead of occupying serial frame-ACK windows with duplicate negotiations. |
 | `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
 | `webrtc-authority-generation-smoke` | Transport renegotiation with identical native session/storage/checkpoint/schema keeps strict query generation stable; changed peer identity or any native-authority input rejects it. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |

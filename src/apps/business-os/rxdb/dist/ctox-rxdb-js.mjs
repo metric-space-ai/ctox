@@ -11082,6 +11082,8 @@ var SharedRoomPeer = class {
     const hintedPeerId = peerIdHint && this.isPeerOpen(peerIdHint) ? peerIdHint : "";
     const peerId = hintedPeerId || this.openSharedPeerIds()[0] || await this.waitForOpenSharedPeerId().catch(() => null);
     if (!peerId) return null;
+    if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
+    if (this.negotiationCatchUp) return this.negotiationCatchUp;
     this.negotiationCatchUp = Promise.resolve().then(async () => {
       if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
       if (!this.isPeerOpen(peerId)) return null;

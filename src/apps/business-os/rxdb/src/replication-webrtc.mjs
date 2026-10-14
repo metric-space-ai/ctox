@@ -534,6 +534,11 @@ class SharedRoomPeer {
     const peerId = hintedPeerId || this.openSharedPeerIds()[0]
       || await this.waitForOpenSharedPeerId().catch(() => null);
     if (!peerId) return null;
+    // Several collections can resume from the same open-channel await. The
+    // first waiter owns the framed protocol exchange; later waiters must join
+    // it instead of sending parallel requests into the serial ACK window.
+    if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
+    if (this.negotiationCatchUp) return this.negotiationCatchUp;
     this.negotiationCatchUp = Promise.resolve()
       .then(async () => {
         if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) return this.negotiated;
