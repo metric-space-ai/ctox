@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod stripe;
 pub mod typeform;
 pub mod zoom;
 pub mod intercom;
@@ -51,6 +52,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(stripe::Stripe::default()),
         Box::new(typeform::Typeform::default()),
         Box::new(zoom::Zoom::default()),
         Box::new(intercom::Intercom::default()),
