@@ -1546,7 +1546,8 @@ After THESEN showed a fresh-revision Outbound lead read timing out behind
 ordinary windows of the same collection, `requireRevision` demand reads use a
 strict admission class. One of the existing eight stream slots stays available
 for strict reads, and they take the next rate token ahead of queued ordinary
-windows. The native stream and rate limits are unchanged. Strict and ordinary
+windows; after at most eight consecutive strict admissions, one waiting
+ordinary request advances. The native stream and rate limits are unchanged. Strict and ordinary
 windows do not share a coalesced transport request, because an ordinary fetch
 must not hold a fresh-revision caller behind its queue position. The
 `query-strict-admission-smoke.mjs` fixture holds ordinary lead windows and

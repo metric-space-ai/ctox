@@ -134,4 +134,30 @@ let windowedStrictMs = null;
   await Promise.all(ordinary);
 }
 
+// Continuous fresh-revision traffic must not permanently exclude ordinary
+// windows. After eight strict admissions, the next released slot serves one
+// waiting ordinary request before more strict work.
+{
+  delete globalThis[Symbol.for('ctox.rxdb.query-stream-state.v1')];
+  let releaseHeld;
+  const held = new Promise(resolve => { releaseHeld = resolve; });
+  const started = [];
+  let transport;
+  const peer = peerFor(started, () => transport, request =>
+    request.requestId.startsWith('strict-held-') ? held : undefined);
+  transport = createDemandLoadingTransport({ getPeerId: () => 'native' });
+  transport.attach(peer);
+  const active = Array.from({ length: 8 }, (_, i) =>
+    transport.requestQueryFetch(envelope(`strict-held-${i}`), { priority: 'strict' }));
+  await waitFor(() => started.length === 8);
+  const queued = Array.from({ length: 8 }, (_, i) =>
+    transport.requestQueryFetch(envelope(`strict-queued-${i}`), { priority: 'strict' }));
+  const ordinary = transport.requestQueryFetch(envelope('ordinary-fair'));
+  releaseHeld();
+  await waitFor(() => started.length > 8);
+  assert.equal(started[8], 'ordinary-fair',
+    'strict priority must yield after a bounded burst so ordinary windows progress');
+  await Promise.all([...active, ...queued, ordinary]);
+}
+
 console.log(`query strict admission smoke OK; windowed requireRevision ${windowedStrictMs}ms`);

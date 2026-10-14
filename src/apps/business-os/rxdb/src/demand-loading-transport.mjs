@@ -26,6 +26,7 @@ const CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY
 // Keep one existing stream slot available for a user action that requires a
 // fresh native revision. Ordinary window hydration must not occupy all eight.
 export const CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
+const MAX_CONSECUTIVE_STRICT_ADMISSIONS = 8;
 // The native peer admits max(32, streams * 8) requests initially and refills
 // 16 tokens/second. Admit fewer here so a page's parallel collection reads do
 // not spend the entire peer budget before a user's lead-detail query arrives.
@@ -409,6 +410,9 @@ export function createDemandLoadingTransport({
       const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
+        queryStreamState.consecutiveStrictAdmissions = strict
+          ? (queryStreamState.consecutiveStrictAdmissions || 0) + 1
+          : 0;
         if (!strict) queryStreamState.activeNonStrict = (queryStreamState.activeNonStrict || 0) + 1;
         if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
         Promise.resolve()
@@ -493,11 +497,16 @@ export function createDemandLoadingTransport({
         }
         return hasFreeQuerySlot(entry.background, entry.strict);
       };
-      // A fresh-revision user action takes the reserved stream before ordinary
-      // windows from the same app; shell background stays within its share.
-      let index = queryStreamState.queue.findIndex(entry => entry.strict && admissible(entry));
-      if (index < 0) index = queryStreamState.queue.findIndex(entry => !entry.background && admissible(entry));
-      if (index < 0) index = queryStreamState.queue.findIndex(entry => entry.background && admissible(entry));
+      // A fresh-revision action takes the reserved stream before ordinary
+      // windows, but a sustained strict stream must still advance other work.
+      const strictIndex = queryStreamState.queue.findIndex(entry => entry.strict && admissible(entry));
+      const normalIndex = queryStreamState.queue.findIndex(entry => !entry.strict && !entry.background && admissible(entry));
+      const backgroundIndex = queryStreamState.queue.findIndex(entry => !entry.strict && entry.background && admissible(entry));
+      const ordinaryIndex = normalIndex >= 0 ? normalIndex : backgroundIndex;
+      const index = strictIndex >= 0 && (
+        (queryStreamState.consecutiveStrictAdmissions || 0) < MAX_CONSECUTIVE_STRICT_ADMISSIONS
+        || ordinaryIndex < 0
+      ) ? strictIndex : ordinaryIndex;
       if (index < 0) return;
       if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
