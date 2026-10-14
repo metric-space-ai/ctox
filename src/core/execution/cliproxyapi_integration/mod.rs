@@ -21,6 +21,10 @@ pub(crate) use api_key_ingress::{
 mod kimi_host;
 pub use api_key_config::{ApiKeyAccountConfig, ApiKeyEndpoint};
 pub(crate) use kimi_host::save_provider_integration_config;
+pub(in crate::execution) use kimi_host::{
+    open_config_db as open_integration_config_db,
+    INTEGRATION_CONFIG_TABLE as PROVIDER_INTEGRATION_CONFIG_TABLE,
+};
 
 pub use kimi_host::{
     build_instance_kimi_auth, build_kimi_subscription_route,

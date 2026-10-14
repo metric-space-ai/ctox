@@ -55,7 +55,7 @@ fn target(conn: &Connection, actor: &str, local_holder: &str, request: &Request)
         "SELECT a.private_local_account_id,b.fingerprint,a.provider FROM business_provider_federation_accounts a
          JOIN business_provider_federation_native_bindings b ON b.account_id=a.account_id
          WHERE a.account_id=?1 AND a.owner_user_id=?2 AND a.holder_instance_id=?3
-         AND a.provider IN ('claude','codex') AND a.private_local_account_id<>?4 AND a.revision=?5",
+         AND (a.provider IN ('claude','codex') OR (a.provider IN ('zai','minimax','xai','kimi') AND b.fingerprint LIKE 'api-key:v1:%')) AND a.private_local_account_id<>?4 AND a.revision=?5",
         params![request.account_id,owner,local_holder,INHERITED_NATIVE_ACCOUNT_ID,request.expected_account_revision],
         |row| Ok(Target { owner:owner.clone(),holder:local_holder.into(),local:row.get(0)?,binding:row.get(1)?,provider:row.get(2)? }),
     ).context("native account is unavailable, unsupported or changed")
@@ -263,7 +263,7 @@ pub(in crate::business_os) fn recover(
         "account control target changed; reconciliation required"
     );
     if let Some(enabled) = effect.enabled {
-        tx.execute("UPDATE business_provider_federation_accounts SET enabled=?2,credential_ready=?2,revision=revision+1,observed_at_ms=?3 WHERE account_id=?1",params![pending.request.account_id,enabled,store::now_ms() as i64])?;
+        tx.execute("UPDATE business_provider_federation_accounts SET enabled=?2,credential_ready=?3,revision=revision+1,observed_at_ms=?4 WHERE account_id=?1",params![pending.request.account_id,enabled,effect.configured.unwrap_or(enabled),store::now_ms() as i64])?;
         set_native_binding(
             &tx,
             &pending.request.account_id,
@@ -300,7 +300,7 @@ pub(in crate::business_os) fn recover(
 pub(super) fn project(conn: &Connection, rows: &mut [Value]) -> Result<()> {
     for row in rows {
         let id = row["id"].as_str().context("account id is missing")?;
-        let supported:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM business_provider_federation_accounts a JOIN business_provider_federation_native_bindings b ON b.account_id=a.account_id WHERE a.account_id=?1 AND a.provider IN ('claude','codex') AND a.private_local_account_id<>?2 AND NOT EXISTS(SELECT 1 FROM business_provider_account_controls p WHERE p.owner_user_id=a.owner_user_id AND p.completed=0))",params![id,INHERITED_NATIVE_ACCOUNT_ID],|r| r.get(0))?;
+        let supported:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM business_provider_federation_accounts a JOIN business_provider_federation_native_bindings b ON b.account_id=a.account_id WHERE a.account_id=?1 AND (a.provider IN ('claude','codex') OR (a.provider IN ('zai','minimax','xai','kimi') AND b.fingerprint LIKE 'api-key:v1:%')) AND a.private_local_account_id<>?2 AND NOT EXISTS(SELECT 1 FROM business_provider_account_controls p WHERE p.owner_user_id=a.owner_user_id AND p.completed=0))",params![id,INHERITED_NATIVE_ACCOUNT_ID],|r| r.get(0))?;
         row["controls"] = json!({"canEnable":supported,"canRemove":supported});
     }
     Ok(())
