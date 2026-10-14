@@ -442,3 +442,140 @@ async fn accepted_credentials_are_encrypted_and_not_replaced_by_login() {
     let projection = serde_json::to_string(&XaiLoginProgress::Accepted).unwrap();
     assert!(!projection.contains("fixture-access"));
 }
+
+#[tokio::test]
+async fn catalog_diagnostics_missing_account_is_local_and_has_operator_action() {
+    let root = tempfile::tempdir().unwrap();
+    let error = discover_models_detailed(root.path()).await.unwrap_err();
+    assert_eq!(error.kind, GrokCatalogErrorKind::AccountNotConfigured);
+    assert_eq!(error.phase, "credential");
+    assert_eq!(error.http_status, None);
+    assert!(error.to_string().contains("ctox runtime grok-login"));
+    assert!(!subscription_installed(root.path()));
+}
+#[tokio::test]
+async fn catalog_diagnostics_invalid_record_is_not_an_upstream_rejection() {
+    let root = tempfile::tempdir().unwrap();
+    crate::secrets::write_secret_record(
+        root.path(),
+        SCOPE,
+        NAME,
+        "private-malformed-fixture",
+        None,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let error = discover_models_detailed(root.path()).await.unwrap_err();
+    assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
+    assert_eq!(error.http_status, None);
+    assert!(!format!("{error:?} {error}").contains("private-malformed-fixture"));
+    assert!(!error.to_string().contains("grok-login"));
+}
+#[tokio::test]
+async fn catalog_diagnostics_expiry_without_refresh_never_claims_http_denial() {
+    let root = tempfile::tempdir().unwrap();
+    let mut stored = stored_bundle(&bundle());
+    stored.expires_at = Some(0);
+    stored.refresh = None;
+    crate::secrets::write_secret_record(
+        root.path(),
+        SCOPE,
+        NAME,
+        &serde_json::to_string(&stored).unwrap(),
+        None,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let error = discover_models_detailed(root.path()).await.unwrap_err();
+    assert_eq!(error.kind, GrokCatalogErrorKind::RefreshUnavailable);
+    assert_eq!(error.phase, "token_refresh");
+    assert_eq!(error.http_status, None);
+}
+async fn catalog_fixture(
+    root: &Path,
+    status: u16,
+    body: &str,
+) -> Result<Vec<String>, GrokCatalogFailure> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    test_endpoint(
+        root,
+        Some(format!("http://{}", listener.local_addr().unwrap())),
+    );
+    let reply = format!(
+        "HTTP/1.1 {status} fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = vec![0; 16384];
+        let n = socket.read(&mut buffer).await.unwrap();
+        assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("GET /models "));
+        socket.write_all(reply.as_bytes()).await.unwrap();
+    });
+    let result = discover_models_detailed(root).await;
+    test_endpoint(root, None);
+    server.await.unwrap();
+    result
+}
+#[tokio::test]
+async fn catalog_diagnostics_received_http_status_never_exposes_error_body() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    for status in [401, 403, 429, 503] {
+        let error = catalog_fixture(
+            root.path(),
+            status,
+            "fixture-access fixture-refresh private-upstream-detail",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::UpstreamRejected);
+        assert_eq!(error.http_status, Some(status));
+        let public = format!(
+            "{} {error} {error:?}",
+            serde_json::to_string(&error).unwrap()
+        );
+        for private in [
+            "fixture-access",
+            "fixture-refresh",
+            "private-upstream-detail",
+        ] {
+            assert!(!public.contains(private));
+        }
+    }
+}
+#[tokio::test]
+async fn catalog_diagnostics_transport_before_response_has_no_http_witness() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    test_endpoint(root.path(), Some(endpoint));
+    let error = discover_models_detailed(root.path()).await.unwrap_err();
+    test_endpoint(root.path(), None);
+    assert_eq!(error.kind, GrokCatalogErrorKind::Transport);
+    assert_eq!(error.http_status, None);
+}
+#[tokio::test]
+async fn catalog_diagnostics_valid_catalog_and_credential_echo_are_distinct() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let result = catalog_fixture(root.path(), 200, r#"{"data":[{"id":"catalog-fixture"}]}"#)
+        .await
+        .unwrap();
+    assert_eq!(result, ["catalog-fixture"]);
+    for body in [
+        r#"{"data":[{"id":"fixture-access"}]}"#,
+        r#"{"data":[{"id":"fixture-refresh"}]}"#,
+        r#"{"data":[{"id":false}]}"#,
+        "private-invalid-json",
+    ] {
+        let error = catalog_fixture(root.path(), 200, body).await.unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCatalog);
+        assert_eq!(error.http_status, Some(200));
+        assert!(!serde_json::to_string(&error)
+            .unwrap()
+            .contains("fixture-access"));
+    }
+}
