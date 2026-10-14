@@ -546,6 +546,6 @@ fn live_read_only_calls() {
             return;
         };
         let out = result.unwrap_or_else(|e| panic!("live {tool} failed: {e}"));
-        eprintln!("live {tool}: {} top-level keys", out.as_object().map_or(0, |m| m.len()));
+        assert!(out.is_object(), "live {tool}: expected an object, got {out}");
     }
 }
