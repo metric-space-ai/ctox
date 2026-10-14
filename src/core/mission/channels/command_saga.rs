@@ -2686,20 +2686,14 @@ fn record_business_command_intake_failure_inner(
         )?;
         (attempt, true)
     } else {
-        // The row key `(command_id, attempt)` spans resolved history too, so a
-        // new failure series after a resolution continues the numbering; only
-        // the open rows of the current series count against the budget.
-        // Numbering from the open rows alone collided with the resolved series
-        // and re-ran the intake in a hot loop (thesen 14.10.2026).
-        let (attempt, open_attempts) = tx.query_row(
-            "SELECT COALESCE(MAX(attempt), 0) + 1,
-                    COALESCE(SUM(CASE WHEN resolved_at_ms IS NULL THEN 1 ELSE 0 END), 0)
+        let attempt = tx.query_row(
+            "SELECT COALESCE(MAX(attempt), 0) + 1
              FROM business_command_intake_failures
-             WHERE command_id = ?1",
+             WHERE command_id = ?1 AND resolved_at_ms IS NULL",
             params![claim.command_id],
-            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?)),
+            |row| row.get::<_, u32>(0),
         )?;
-        let exhausted = open_attempts + 1 >= retry_budget.max(1);
+        let exhausted = attempt >= retry_budget.max(1);
         tx.execute(
             "INSERT INTO business_command_intake_failures
                 (command_id, attempt, error_message, exhausted, observed_at_ms, resolved_at_ms)
