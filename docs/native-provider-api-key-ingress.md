@@ -29,7 +29,7 @@ reconciliation; replay does not overwrite an unexplained existing secret.
 The successful response contains `action`, `commandId`, `configured:true`,
 `adoptionRequired:true`, `endpoint`, `models`, and `inferenceVerified:false`.
 It contains no holder-local account ID, credential reference, fingerprint or key.
-An accepted catalog is not a successful inference check.
+An accepted catalog is not a successful inference check. A discovery rejection returns configured:false and a key-free discovery object containing the checked endpoint profiles, genuine HTTP statuses (or null for local failures), and failure classes.
 
 Next invoke the existing admitted `ctox.workjet.providers.adopt_native` command
 with an empty payload. That path imports only API accounts bound to the current

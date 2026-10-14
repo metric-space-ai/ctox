@@ -4,7 +4,7 @@
 //! into a business command, registry projection, response or diagnostic.
 use super::{provider_federation, store};
 use crate::execution::cliproxyapi_integration::{
-    install_api_key_account_owned_authorized, ApiKeyProvider,
+    install_api_key_account_owned_authorized, ApiKeyProvider, DiscoveryError,
 };
 use anyhow::{ensure, Context};
 use rxdb::plugins::replication_webrtc::{
@@ -114,8 +114,22 @@ async fn handle(
         key,
         || authority.check(),
     )
-    .await?;
+    .await;
     authority.check()?;
+    let receipt = match receipt {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            if let Some(discovery) = error.downcast_ref::<DiscoveryError>() {
+                return Ok(GuardedAuxiliaryResponse {
+                    result: json!({"action":request.action,"commandId":request.command_id,
+                        "configured":false,"adoptionRequired":false,"discovery":discovery,
+                        "inferenceVerified":false}),
+                    publication: authority,
+                });
+            }
+            return Err(error);
+        }
+    };
     // Registry adoption remains the ordinary admitted adopt_native command.
     // Private local account IDs, references and fingerprints never leave holder.
     Ok(GuardedAuxiliaryResponse {
@@ -193,6 +207,81 @@ mod tests {
         );
         let owner = token(root.path(), "chef");
         assert!(Authority::capture(root.path().into(), owner, Arc::new(|| false)).is_err());
+    }
+    #[tokio::test]
+    async fn replay_response_keeps_private_identifiers_and_keys_on_holder_and_retires_publication()
+    {
+        use crate::execution::cliproxyapi_integration::{
+            load_provider_integration_config, save_provider_integration_config,
+            ApiKeyAccountConfig, ApiKeyEndpoint, ProviderSecretRef,
+        };
+        use sha2::{Digest, Sha256};
+        let root = tempfile::tempdir().unwrap();
+        let authority = Arc::new(
+            Authority::capture(
+                root.path().into(),
+                token(root.path(), "chef"),
+                Arc::new(|| true),
+            )
+            .unwrap(),
+        );
+        let operation = uuid::Uuid::new_v4();
+        let mut hash = Sha256::new();
+        hash.update(authority.owner.as_bytes());
+        hash.update([0]);
+        hash.update(operation.to_string().as_bytes());
+        let id = format!("api-{:x}", hash.finalize());
+        let reference = ProviderSecretRef::new("provider-api-keys", "synthetic-native-reference");
+        crate::secrets::write_secret_record(
+            root.path(),
+            &reference.scope,
+            &reference.name,
+            "synthetic-private-key",
+            None,
+            json!({}),
+        )
+        .unwrap();
+        let mut config = load_provider_integration_config(root.path()).unwrap();
+        config.config.api_key_accounts.push(ApiKeyAccountConfig {
+            id: id.clone(),
+            endpoint: ApiKeyEndpoint::Xai,
+            api_key_secret: reference,
+            owner_user_id: Some(authority.owner.clone()),
+            creation_operation: Some(operation.to_string()),
+            disabled: false,
+            priority: 0,
+            models: Vec::new(),
+        });
+        save_provider_integration_config(root.path(), config.revision, &config.config).unwrap();
+        let response=handle(authority,vec![json!({"version":1,"action":"instance.providers.apiKey.add","commandId":operation.to_string(),"provider":"xai","secret":"synthetic-private-key"})]).await.unwrap();
+        assert_eq!(response.result["configured"], true);
+        assert_eq!(response.result["inferenceVerified"], false);
+        for private in [
+            "synthetic-private-key",
+            "synthetic-native-reference",
+            id.as_str(),
+        ] {
+            assert!(!response.result.to_string().contains(private));
+        }
+        let mut published = false;
+        response
+            .publication
+            .with_current(&mut || {
+                published = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(published);
+        store::open_store(root.path()).unwrap().execute("UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='api-operator'",[]).unwrap();
+        published = false;
+        assert!(response
+            .publication
+            .with_current(&mut || {
+                published = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!published);
     }
     #[test]
     fn request_cannot_supply_owner_actor_or_arbitrary_endpoint() {

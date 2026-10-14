@@ -194,9 +194,10 @@ fn owned_api_observations(root: &Path) -> Result<Vec<(String, NativeAccountObser
                 &account.api_key_secret.scope,
                 &account.api_key_secret.name,
             )?;
+            let account_bytes = serde_json::to_vec(account)?;
             let fingerprint = version.as_ref().map(|version| {
                 let mut digest = Sha256::new();
-                digest.update(serde_json::to_vec(account).expect("private account serializes"));
+                digest.update(&account_bytes);
                 digest.update([0]);
                 digest.update(version.as_bytes());
                 format!("{:x}", digest.finalize())
