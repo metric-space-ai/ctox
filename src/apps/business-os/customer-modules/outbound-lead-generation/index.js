@@ -759,6 +759,8 @@ export async function mount(ctx) {
     state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
     if (state.leerNachladenTimer) globalThis.clearTimeout(state.leerNachladenTimer);
     state.leerNachladenTimer = null;
+    if (state.selectedDetailRetryTimer) globalThis.clearTimeout(state.selectedDetailRetryTimer);
+    state.selectedDetailRetryTimer = null;
     if (state.commandRefreshTimer) globalThis.clearInterval(state.commandRefreshTimer);
     if (state.startupSnapshotTimer) globalThis.clearTimeout(state.startupSnapshotTimer);
     state.startupSnapshotTimer = null;
@@ -798,7 +800,7 @@ function istKanalAbriss(error) {
 function auftragNichtZugestellt(error) {
   return /no authenticated WebRTC peer|collection peer: not-connected|nicht mit CTOX verbunden/i.test(String(error?.message || error));
 }
-const NICHT_ZUGESTELLT_HINWEIS = 'Der Auftrag hat CTOX nicht erreicht: Die Verbindung dieses Browsers zu CTOX ist unterbrochen. Der Lead bleibt offen. Bitte die Seite neu laden und die Recherche erneut starten.';
+const NICHT_ZUGESTELLT_HINWEIS = 'Die Recherche konnte nicht gestartet werden.';
 
 async function recoverCommandChannel(reason) {
   console.info('[olg] Kanal-Selbstheilung', { reason });
@@ -1515,10 +1517,9 @@ function meldeAktionsfehler(event, error) {
   const text = String(error?.message || error || 'Unbekannter Fehler');
   console.error('[olg] Aktion fehlgeschlagen', { aktion, text });
   const wartung = /wird aktualisiert|schreibgesch|read-?only|MAINTENANCE/i.test(text);
-  const meldung = wartung
-    ? `Das hat nicht geklappt: CTOX wird gerade aktualisiert und Apps sind vorübergehend schreibgeschützt. Bitte in ein paar Minuten erneut versuchen.\n\n(${text})`
-    : `Das hat nicht geklappt: ${text}`;
-  void showBusinessAlert(meldung);
+  void showBusinessAlert(wartung
+    ? 'Gerade nicht möglich, bitte gleich noch einmal.'
+    : 'Das hat nicht geklappt.');
 }
 
 function bindUi() {
@@ -1987,6 +1988,11 @@ function listLeads() { return state.leadListRows || state.leads; }
 function campaignListLeads(campaign) { return listLeads().filter(lead => leadKampagnen(lead).includes(campaign)); }
 
 const FULL_LEAD_READ_PACKAGE = 40;
+function leadReadTransient(error) {
+  return error?.code === 'LEAD_QUERY_TIMEOUT'
+    || error?.code === 'LEAD_QUERY_AUTHORITY_MISSING'
+    || /nicht rechtzeitig aus CTOX geladen|authority is unavailable|noch nicht für Datenabfragen bereit/i.test(String(error?.message || error));
+}
 async function ensureFullLeads(ids, { fresh = false } = {}) {
   const generation = state.collectionBindingGeneration;
   const requested = [...new Set(ids.filter(Boolean))];
@@ -1995,39 +2001,51 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
   const missing = requested.filter(id => fresh || !cached.has(id) || cached.get(id)._rev !== summaries.get(id)?._rev);
   if (!missing.length) return requested.map(id => cached.get(id));
   const sequence = ++state.fullLeadReadSequence;
-  // Ein Lesefenster (15 s) je Paket: alle 498 Leads einer Kampagne in einem
-  // Fenster waren 63 Achter-Abfragen und liefen auf thesen (08.10.2026)
-  // regelmaessig in "Daten konnten nicht rechtzeitig aus CTOX geladen werden".
-  const rows = [];
-  for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
-    const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
-    rows.push(...await withLeadQueryAuthority(state.ctx.sync,
-      signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
-        isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
-      }));
-  }
-  if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
-    throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
-  }
-  const currentSummaries = new Map(listLeads().map(row => [row.id, row]));
-  for (const row of rows) {
-    if (summaries.get(row.id)?._rev !== currentSummaries.get(row.id)?._rev
-      && row._rev !== currentSummaries.get(row.id)?._rev) {
-      throw new Error('Der Lead wurde während des Ladens aktualisiert. Bitte die Aktion erneut versuchen.');
+  // Ein Lesefenster (15 s) je Paket. Zeitueberschreitung und fehlende
+  // Leseberechtigung werden still bis zu dreimal wiederholt; ein gewechselter
+  // Kanal oder eine neuere Fassung wird nicht wiederholt.
+  for (let versuch = 0; versuch < 3; versuch += 1) {
+    try {
+      const rows = [];
+      for (let offset = 0; offset < missing.length; offset += FULL_LEAD_READ_PACKAGE) {
+        const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
+        rows.push(...await withLeadQueryAuthority(state.ctx.sync,
+          signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
+            isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
+          }));
+      }
+      if (generation !== state.collectionBindingGeneration || state.uiMounted === false) {
+        throw new Error('Die CTOX-Verbindung hat sich geändert. Bitte die Aktion erneut versuchen.');
+      }
+      const currentSummaries = new Map(listLeads().map(row => [row.id, row]));
+      for (const row of rows) {
+        if (summaries.get(row.id)?._rev !== currentSummaries.get(row.id)?._rev
+          && row._rev !== currentSummaries.get(row.id)?._rev) {
+          throw new Error('Der Lead wurde während des Ladens aktualisiert. Bitte die Aktion erneut versuchen.');
+        }
+      }
+      const current = new Map(state.leads.map(row => [row.id, row]));
+      for (const row of rows) {
+        if (sequence < (state.fullLeadAppliedSequence.get(row.id) || 0)) continue;
+        state.fullLeadAppliedSequence.set(row.id, sequence);
+        const full = normalizeLeadRecipientShape(row);
+        current.set(row.id, full);
+        if (state.leadListRows) {
+          const index = state.leadListRows.findIndex(entry => entry.id === row.id);
+          if (index >= 0) state.leadListRows[index] = leadListRow(full);
+        }
+      }
+      state.leads = applyPendingLeadPatches([...current.values()]);
+      return requested.map(id => state.leads.find(row => row.id === id));
+    } catch (error) {
+      const nochmal = leadReadTransient(error) && versuch < 2
+        && generation === state.collectionBindingGeneration && state.uiMounted !== false;
+      if (!nochmal) throw error;
+      console.warn('[outbound-lead-generation] Lead-Lesen, neuer Versuch', versuch + 1, error);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(60_000, 1000 * 2 ** versuch)));
+      if (generation !== state.collectionBindingGeneration || state.uiMounted === false) throw error;
     }
   }
-  const current = new Map(state.leads.map(row => [row.id, row]));
-  for (const row of rows) {
-    if (sequence < (state.fullLeadAppliedSequence.get(row.id) || 0)) continue;
-    state.fullLeadAppliedSequence.set(row.id, sequence);
-    const full = normalizeLeadRecipientShape(row);
-    current.set(row.id, full);
-    if (state.leadListRows) {
-      const index = state.leadListRows.findIndex(entry => entry.id === row.id);
-      if (index >= 0) state.leadListRows[index] = leadListRow(full);
-    }
-  }
-  state.leads = applyPendingLeadPatches([...current.values()]);
   return requested.map(id => state.leads.find(row => row.id === id));
 }
 
@@ -2053,10 +2071,22 @@ async function loadSelectedLeadDetails() {
         .catch(() => {});
     }
   } catch (error) {
-    if (state.selectedLeadId === id && generation === state.collectionBindingGeneration) {
-      state.selectedDetailError = String(error?.message || error);
-      renderDetail();
+    if (state.selectedLeadId !== id || generation !== state.collectionBindingGeneration) return;
+    console.warn('[outbound-lead-generation] Details', error);
+    const transient = leadReadTransient(error);
+    if (transient && state.selectedDetailRetriedKey !== key) {
+      state.selectedDetailRetriedKey = key;
+      state.selectedDetailError = '';
+      if (state.selectedDetailRetryTimer) globalThis.clearTimeout(state.selectedDetailRetryTimer);
+      state.selectedDetailRetryTimer = globalThis.setTimeout(() => {
+        state.selectedDetailRetryTimer = null;
+        if (state.uiMounted === false || state.collectionBindingGeneration !== generation) return;
+        if (state.selectedLeadId === id) void loadSelectedLeadDetails();
+      }, 1000);
+    } else {
+      state.selectedDetailError = 'Details konnten nicht geladen werden.';
     }
+    renderDetail();
   } finally {
     if (state.selectedDetailLoadingKey === key) state.selectedDetailLoadingKey = '';
     if (state.selectedDetailRequestedKey !== key && state.uiMounted !== false) void loadSelectedLeadDetails();
@@ -2078,10 +2108,6 @@ async function prepareFullLeadAction(action, id, campaign) {
   else if (FULL_CAMPAIGN_ACTIONS.has(action)) ids = campaignListLeads(campaign).map(row => row.id);
   else if (FULL_SINGLE_ACTIONS.has(action)) ids = [id || state.selectedLeadId].filter(Boolean);
   if (!ids.length) return;
-  const previousNotice = state.notice;
-  const notice = `Vollständige Leads werden geladen (${ids.length}) …`;
-  state.notice = notice;
-  renderCenter();
   try {
     await ensureFullLeads(ids, { fresh: !action.startsWith('export-') });
     if (FULL_SELECTION_ACTIONS.has(action) && (ids.length !== state.selectedLeadIds.size || ids.some(id => !state.selectedLeadIds.has(id)))) {
@@ -2091,7 +2117,6 @@ async function prepareFullLeadAction(action, id, campaign) {
       throw new Error('Der ausgewählte Lead hat sich geändert. Bitte die Aktion erneut ausführen.');
     }
   } finally {
-    if (state.notice === notice) state.notice = previousNotice;
     renderCenter();
   }
 }
@@ -2304,7 +2329,7 @@ function renderCampaigns() {
             <button class="ctox-pane-icon" data-action="rename-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne umbenennen" aria-label="${escapeHtml(campaign.name)} umbenennen">${icon('edit')}</button>
             <button class="ctox-pane-icon is-danger" data-action="delete-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne „${escapeHtml(campaign.name)}“ löschen" aria-label="${escapeHtml(campaign.name)} löschen">${icon('trash')}</button>
           </div>
-        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Kampagnen werden geladen …', tr('noCampaigns', 'Noch keine Kampagne.')))}</div>`}`;
+        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Wird geladen …', tr('noCampaigns', 'Noch keine Kampagne.')))}</div>`}`;
   if (state.kampagnenHtml === kampagnenHtml && body.childElementCount) return;
   state.kampagnenHtml = kampagnenHtml;
   body.innerHTML = kampagnenHtml;
@@ -2614,28 +2639,30 @@ function renderResearchPolicy() {
   const record = state.researchPolicyRecord || {};
   const reconciliationStatus = String(record.reconciliation_status || '').trim();
   const reconciliationError = String(record.reconciliation_error || '').trim();
-  const reconciliationTaskId = String(record.reconciliation_task_id || '').trim();
+  const laeuft = Boolean(state.adapterReconciliationPending)
+    || reconciliationStatus === 'queued' || reconciliationStatus === 'running';
+  if (reconciliationStatus === 'failed' && reconciliationError && state.reconciliationFehlerGewarnt !== reconciliationError) {
+    state.reconciliationFehlerGewarnt = reconciliationError;
+    console.warn('[outbound-lead-generation] Adapter-Abgleich', reconciliationError);
+  }
   const reconciliationLabel = !ADAPTER_RECONCILIATION_VIA_WORKER
     ? 'Der gespeicherte Rechercheablauf gilt ab dem nächsten Recherchestart.'
-    : state.adapterReconciliationPending
-    ? 'Adapter-Abgleich wird übergeben …'
-    : reconciliationStatus === 'completed'
-      ? 'Alle Adapter wurden für diesen Rechercheablauf abgeglichen.'
-      : reconciliationStatus === 'queued' || reconciliationStatus === 'running'
-        ? 'Adapter-Abgleich läuft.'
+    : laeuft
+      ? ''
+      : reconciliationStatus === 'completed'
+        ? 'Alle Adapter wurden für diesen Rechercheablauf abgeglichen.'
         : reconciliationStatus === 'failed'
-          ? `Adapter-Abgleich fehlgeschlagen${reconciliationError ? `: ${reconciliationError}` : '.'}`
+          ? 'Adapter-Abgleich fehlgeschlagen.'
           : 'Beim Speichern werden alle Adapter automatisch geprüft und aktualisiert.';
   return `<section class="leadgen-policy-editor">
     <label class="leadgen-policy-label">${tr('policyNew', 'Prompt: Neue Recherche')}</label>
-    <textarea data-research-policy placeholder="${state.researchPolicyLoaded ? '' : 'Prompt wird geladen – Synchronisierung läuft …'}" aria-label="${tr('policyNew', 'Prompt: Neue Recherche')}">${escapeHtml(state.researchPolicyDraft)}</textarea>
+    <textarea data-research-policy placeholder="${state.researchPolicyLoaded ? '' : 'Wird geladen …'}" aria-label="${tr('policyNew', 'Prompt: Neue Recherche')}">${escapeHtml(state.researchPolicyDraft)}</textarea>
     <label class="leadgen-policy-label">${tr('policyFollowup', 'Prompt: Nachrecherche')}<span class="leadgen-policy-hint"> — ${tr('policyFollowupHint', 'leer = Prompt der Neuen Recherche wird verwendet')}</span></label>
     <textarea data-research-policy-followup placeholder="${tr('policyFollowupHint', 'leer = Prompt der Neuen Recherche wird verwendet')}" aria-label="${tr('policyFollowup', 'Prompt: Nachrecherche')}">${escapeHtml(state.researchPolicyFollowupDraft || '')}</textarea>
     <p class="leadgen-muted">Welche Felder für die Freigabe Pflicht sind, steht im Reiter „Pflichtfelder“.</p>
-    <div class="leadgen-adapter-state ${reconciliationStatus === 'completed' ? 'is-ready' : ''}" role="status">
+    ${reconciliationLabel ? `<div class="leadgen-adapter-state ${reconciliationStatus === 'completed' ? 'is-ready' : ''}" role="status">
       ${reconciliationStatus === 'completed' ? icon('check') : '<i></i>'}${escapeHtml(reconciliationLabel)}
-      ${reconciliationTaskId ? `<button class="ctox-button ctox-button--sm" data-action="track-task" data-task-id="${escapeHtml(reconciliationTaskId)}" data-command-id="${escapeHtml(record.reconciliation_command_id || '')}">Vorgang öffnen</button>` : ''}
-    </div>
+    </div>` : ''}
     <footer>
       <button class="ctox-button" data-action="reset-policy">${tr('reset', 'Zurücksetzen')}</button>
       <button class="ctox-button is-primary" data-action="save-policy">${icon('check')}<span>${tr('save', 'Speichern')}</span></button>
@@ -2711,11 +2738,6 @@ function updateDigestScheduleText(config) {
   return tage ? `${tage} um ${config.time} Uhr` : 'an keinem Tag';
 }
 
-function updateDigestFehlertext(roh) {
-  const text = String(roh || '').replace(/\s+/g, ' ').trim();
-  return text.length > 400 ? `${text.slice(0, 400)} …` : text;
-}
-
 function updateDigestStatusText() {
   const status = state.digestStatus || {};
   const zeit = (ms) => new Date(ms).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -2725,9 +2747,12 @@ function updateDigestStatusText() {
     zeilen.push(`Zuletzt planmäßig gesendet: ${zeit(Number(status.last_sent_at_ms))}${an ? ` an ${an} ${an === 1 ? 'Empfänger' : 'Empfänger'}` : ''}.`);
   }
   if (Number(status.last_test_at_ms) > 0) {
-    zeilen.push(`Test ${status.last_test_ok ? 'gesendet' : 'fehlgeschlagen'}: ${zeit(Number(status.last_test_at_ms))}.`);
+    zeilen.push(status.last_test_ok ? 'Test gesendet.' : 'Test fehlgeschlagen.');
   }
-  if (status.last_error) zeilen.push(`Letzter Fehler: ${updateDigestFehlertext(status.last_error)}`);
+  if (status.last_error && state.digestFehlerGewarnt !== status.last_error) {
+    state.digestFehlerGewarnt = status.last_error;
+    console.warn('[outbound-lead-generation] Update-Verteiler', status.last_error);
+  }
   return zeilen;
 }
 
@@ -2785,7 +2810,7 @@ function renderUpdateDigest() {
       ${preview ? `<div class="leadgen-digest-preview">
         <header><span>${preview.error ? 'Vorschau nicht möglich' : preview.sent ? 'Gesendet' : 'Vorschau'}</span><button class="ctox-pane-icon" data-action="digest-preview-close" title="Vorschau schließen" aria-label="Vorschau schließen">${icon('close')}</button></header>
         ${preview.error
-          ? `<p class="leadgen-digest-warn">${escapeHtml(preview.error)}</p>`
+          ? `<p class="leadgen-digest-warn">Vorschau nicht möglich.</p>`
           : `<dl>
               <dt>Von</dt><dd>${escapeHtml(preview.sender || 'Postfach der CTOX-Instanz')}</dd>
               <dt>An</dt><dd>${escapeHtml((preview.recipients || []).join(', ') || '— noch keine Empfänger —')}</dd>
@@ -2920,7 +2945,8 @@ async function runUpdateDigest(dryRun) {
     };
     if (!dryRun) zeigeHinweis(`Update gesendet an ${(result.recipients || config.recipients).length} Empfänger.`);
   } catch (error) {
-    state.digestPreview = { error: updateDigestFehlertext(error?.message || error) };
+    console.warn('[outbound-lead-generation] Update-Vorschau', error);
+    state.digestPreview = { error: true };
   } finally {
     state.digestBusy = '';
     state.sourcePanelUserActionAt = Date.now();
@@ -3203,11 +3229,31 @@ function fehlerInKlartext(rohtext) {
   return { code: 'unknown', label: tr('sourceUnknown', 'Status unbekannt — diese Quelle wurde noch nie geprüft.'), chip };
 }
 
+function quellenStatusText(status, ready) {
+  if (ready) return 'Aktiv';
+  if (['disabled', 'internal_unavailable', 'failed', 'blocked', 'credential_rejected', 'credential_missing', 'account_inactive', 'registry_run_failed', 'request_expired'].includes(status?.code)) return 'Inaktiv';
+  return '';
+}
+function quellenZugangsChip(chip) {
+  if (!chip || chip.code === 'unknown') return null;
+  if (/Stand unbekannt|wird übertragen/i.test(String(chip.label || ''))) return null;
+  if (chip.code === 'missing') return { code: 'missing', label: 'Zugang fehlt' };
+  if (chip.code === 'invalid') {
+    return {
+      code: 'invalid',
+      label: /konto beim anbieter/i.test(String(chip.label || '')) ? 'Konto beim Anbieter inaktiv' : 'Zugang abgelehnt',
+    };
+  }
+  if (chip.code === 'available') return { code: 'available', label: 'Zugang hinterlegt' };
+  return null;
+}
 function renderSourceRow(item) {
   const intern = isInternalResearchSource(item);
   const adapter = intern ? null : state.adapters.find((entry) => entry.source_id === item.id);
   const status = sourceStatus(item, adapter);
   const ready = intern ? !['internal_unavailable', 'disabled'].includes(status.code) : ['ready', 'registry_active', 'registry_run_ok', 'web_research'].includes(status.code);
+  const statusText = quellenStatusText(status, ready);
+  const zugang = quellenZugangsChip(status.chip);
   // Owner-Vorgabe 31.08.: Der Browser-Entsperr-Weg ist IMMER erreichbar -
   // Status-Raterei ('failed' vom letzten Command ueberschrieb 'blocked' vom
   // Scrape) hat den Knopf genau dann versteckt, wenn man ihn brauchte.
@@ -3227,17 +3273,8 @@ function renderSourceRow(item) {
     <div class="leadgen-source-copy">
       <strong>${escapeHtml(item.label)}</strong>
       <span>${escapeHtml(item.countries.join('/'))} · ${escapeHtml(item.field_keys.map(researchFieldLabel).join(', '))}${escapeHtml(hintergrund)}</span>
-      <span class="leadgen-adapter-state ${ready ? 'is-ready' : ''}">${ready ? icon('check') : '<i></i>'}${escapeHtml(status.label)}</span>
-      ${status.detail
-        // Ein eigener App-Test ist keine Fehlermeldung (Rundgang 28.09.2026:
-        // „Technische Meldung“ klappte bei erfolgreichen Quellen nur das
-        // Testdatum auf).
-        ? (/^eigener App-Test/i.test(String(status.detail).trim())
-          ? `<span class="leadgen-source-detail">${escapeHtml(String(status.detail).trim().replace(/^eigener/i, 'Eigener'))}</span>`
-          : `<details class="leadgen-source-detail"><summary>Technische Meldung</summary><code>${escapeHtml(status.detail)}</code></details>`)
-        : ''}
-      ${status.chip ? `<span class="leadgen-source-credential is-${escapeHtml(status.chip.code)}">${escapeHtml(status.chip.label)}</span>` : ''}
-      ${status.chip?.detail ? `<p class="leadgen-muted leadgen-source-credential-detail" role="alert">${escapeHtml(status.chip.detail)}</p>` : ''}
+      ${statusText ? `<span class="leadgen-adapter-state ${ready ? 'is-ready' : ''}">${ready ? icon('check') : '<i></i>'}${escapeHtml(statusText)}</span>` : ''}
+      ${zugang ? `<span class="leadgen-source-credential is-${escapeHtml(zugang.code)}">${escapeHtml(zugang.label)}</span>` : ''}
     </div>
     ${intern ? '' : `<div class="leadgen-source-actions" role="group" aria-label="Adapter für ${escapeHtml(item.label)} verwalten">
       <button class="ctox-pane-icon" data-action="adapter-settings" title="Adapter-Einstellungen" aria-label="Adapter-Einstellungen für ${escapeHtml(item.label)}">${icon('settings')}</button>
@@ -3417,7 +3454,7 @@ function renderCenter() {
   const filterAktiv = Boolean(String(state.search || '').trim()) || (state.leadStatusFilter?.size || 0) > 0;
   const leerText = filterAktiv && campaignListLeads(state.selectedCampaign).length
     ? 'Keine Leads passen zu Suche oder Filter.'
-    : emptyCollectionText(['leads'], 'Leads werden geladen …',
+    : emptyCollectionText(['leads'], 'Wird geladen …',
       tr('noLeads', 'Noch keine Leads importiert.'));
   // Wie die Kampagnenliste: unveraenderte Liste NICHT neu schreiben, sonst
   // verliert jede Sekunde ein Klick oder der Zeiger seine Zeile
@@ -3468,14 +3505,14 @@ function renderUnvollstaendigerImport(campaign) {
   const erwartet = Number(job.payload?.expected_lead_count || 0);
   const vorhanden = campaignListLeads(campaign).length;
   return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status">
-    <span>${escapeHtml(`Import unvollständig: ${vorhanden} von ${erwartet} Firmen übernommen`)}</span>
+    <span>${escapeHtml(`${vorhanden} von ${erwartet} übernommen`)}</span>
     <button class="ctox-button" data-action="resume-import" data-import-id="${escapeHtml(job.id)}">Fortsetzen</button>
   </div>`;
 }
 function renderCampaignRecipientExclusions(campaign) {
   const cached = new Set(state.leads.map(lead => lead.id));
   const missing = campaignListLeads(campaign).filter(lead => !cached.has(lead.id)).length;
-  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status"><span>Kontaktdaten von ${missing} Leads werden erst bei Auswahl oder Prüfung geladen.</span><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
+  const notice = missing ? `<div class="leadgen-recipient-exclusions is-pending is-compact"><button class="ctox-button" data-action="recheck-sellify">Kontakte prüfen</button></div>` : '';
   return notice + renderLoadedCampaignRecipientExclusions(campaign);
 }
 function renderLoadedCampaignRecipientExclusions(campaign) {
@@ -3499,24 +3536,9 @@ function renderLoadedCampaignRecipientExclusions(campaign) {
     || /nicht prüfbar|wird geprüft/i.test(String(row.decision.label || '')));
   const blocked = unique.filter((row) => !pending.includes(row));
   if (!blocked.length) {
-    // Nichts ist ausgeschlossen — die Pruefung konnte nur nicht laufen.
-    // Laufende Pruefung von ausgebliebener Antwort unterscheiden: eine Pruefung
-    // dauert gemessen bis 75 Sekunden. "Hat nicht geantwortet" waehrend sie noch
-    // laeuft las sich wie ein Defekt.
     const laeuft = unique.some((row) => state.recipientEligibilityBusy.has(row.lead?.id));
-    const zeitueberschritten = unique.filter((row) => state.recipientEligibilityTimedOut.has(row.lead?.id)).length;
-    // Rundgang 11.09.2026: der rote Kasten nahm in schmalen Fenstern die ganze
-    // Leadliste ein. Eine Zeile reicht; die Begruendung steht im Hinweistext.
-    const erklaerung = 'Solange ein Kontakt nicht gegen Sellify geprüft ist, bleibt er für die Übergabe gesperrt – ohne Prüfung darf niemand angeschrieben werden. '
-      + (laeuft ? 'Die Prüfung dauert je Lead bis zu 90 Sekunden.' : '');
-    const text = laeuft
-      ? `Sperrvermerk-Prüfung läuft · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`
-      : zeitueberschritten
-        ? `Sperrvermerk-Prüfung ohne Antwort · ${zeitueberschritten} Kontakt${zeitueberschritten === 1 ? '' : 'e'}`
-        : `Sperrvermerk-Prüfung ausstehend · ${unique.length} Kontakt${unique.length === 1 ? '' : 'e'}`;
-    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status" title="${escapeHtml(erklaerung)}">
-      <span>${escapeHtml(text)}</span>
-      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>${laeuft ? 'Prüfung läuft …' : 'Jetzt prüfen'}</button>
+    return `<div class="leadgen-recipient-exclusions is-pending is-compact" role="status">
+      <button class="ctox-button" data-action="recheck-sellify"${laeuft ? ' disabled' : ''}>Jetzt prüfen</button>
     </div>`;
   }
   const foreign = unique.filter((row) => {
@@ -3532,8 +3554,6 @@ function renderLoadedCampaignRecipientExclusions(campaign) {
   const teile = [
     hartGesperrt ? `${hartGesperrt} Kontakt${hartGesperrt === 1 ? '' : 'e'} gesperrt` : '',
     zuPruefen ? `${zuPruefen} zu prüfen` : '',
-    pending.length ? `${pending.length} ungeprüft` : '',
-    pruefungLaeuft ? 'Prüfung läuft …' : '',
   ].filter(Boolean);
   return `<details class="leadgen-recipient-exclusions" data-disclosure="recipient-exclusions">
     <summary>${escapeHtml(teile.join(' · '))}</summary>
@@ -3543,8 +3563,7 @@ function renderLoadedCampaignRecipientExclusions(campaign) {
       ${decision.originalRemark ? `<q>${escapeHtml(decision.originalRemark)}</q>` : `<span>${escapeHtml(decision.reason || '')}</span>`}
     </li>`).join('')}</ul>
     ${blocked.length > shown.length ? `<p>… und ${blocked.length - shown.length} weitere.</p>` : ''}
-    ${pending.length ? `<p>${pending.length} Kontakt${pending.length === 1 ? '' : 'e'} konnten nicht geprüft werden.
-      <button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>${pruefungLaeuft ? 'Prüfung läuft …' : 'Prüfung wiederholen'}</button></p>` : ''}
+    ${pending.length ? `<p><button class="ctox-button" data-action="recheck-sellify"${pruefungLaeuft ? ' disabled' : ''}>Jetzt prüfen</button></p>` : ''}
     ${foreign.length ? `<p role="status">${foreign.length} Kontakt${foreign.length === 1 ? '' : 'e'} gehören laut Datensatz zu einer anderen Firma als der Lead — bitte im Lead prüfen.</p>` : ''}
   </details>`;
 }
@@ -3649,7 +3668,7 @@ function renderDetail() {
     if (actions) actions.innerHTML = '';
     if (tabsHost) tabsHost.innerHTML = '';
     body.innerHTML = `<div class="leadgen-empty" role="status">${escapeHtml(summary
-      ? state.selectedDetailError || 'Details und Belege werden geladen …'
+      ? state.selectedDetailError || 'Wird geladen …'
       : tr('selectLead', 'Lead auswählen.'))}${summary && state.selectedDetailError
         ? `<button class="ctox-button" data-action="select-lead" data-id="${escapeHtml(summary.id)}">Details erneut laden</button>` : ''}</div>`;
     return;
@@ -3675,15 +3694,16 @@ function renderDetail() {
   const validationDetails = blockers.join(' · ')
     || (alreadyValidated ? tr('validatedHint', 'Der Lead ist validiert und kann an Sellify übergeben werden.') : tr('validateHint', 'Alle Punkte erfüllt – Lead jetzt validieren.'));
   const handoffPrecondition = sellifyHandoffPrecondition(lead);
+  const handoffSichtbar = handoffPrecondition && handoffPrecondition !== HANDOFF_OHNE_TEXT ? handoffPrecondition : '';
   const researchSubmissionRunning = researchSubmissionPending(lead);
   const handoffVorbereitung = state.sellifyUebergabeVorbereitung?.has?.(lead.id) === true;
   const handoffUnterbrochen = uebergabeUnterbrochen(lead);
   const handoffRunning = (lead.sellify_status === 'queued' && !handoffUnterbrochen) || handoffVorbereitung;
   const handoffDisabled = Boolean(handoffPrecondition) || handoffRunning;
   const handoffTitle = handoffVorbereitung
-    ? 'Übergabe wird vorbereitet: Sellify-Sperrvermerke werden unmittelbar vor dem Schreiben erneut geprüft …'
+    ? ''
     : handoffRunning ? tr('handoffRunning', 'Übergabe läuft')
-      : handoffPrecondition || (handoffUnterbrochen ? 'Die letzte Übergabe wurde unterbrochen (Browser geschlossen). Erneut übergeben: bereits angelegte Datensätze werden erkannt und aktualisiert.' : '');
+      : handoffSichtbar || (handoffUnterbrochen ? 'Die letzte Übergabe wurde unterbrochen (Browser geschlossen). Erneut übergeben: bereits angelegte Datensätze werden erkannt und aktualisiert.' : '');
   const activeTab = DETAIL_TAB_IDS.includes(state.activeDetailTab) ? state.activeDetailTab : 'overview';
   // Owner-Vorgabe 31.08.: zwei getrennte Wege mit harter Sellify-Weiche.
   // "Neue Recherche" bricht ab, wenn die Firma bereits im CRM existiert;
@@ -3763,13 +3783,12 @@ function renderLeadEditor() {
     const registriert = state.adapterInspectorScript;
     const skriptBereit = registriert && registriert.target_key === source.target_key;
     const script = skriptBereit && registriert.available ? String(registriert.text || '') : adapterScriptText(adapter);
-    const stand = !registriert || state.adapterInspectorScriptLaeuft
-      ? 'Skript wird aus der Scrape-Registry geladen …'
-      : skriptBereit && registriert.available
-        ? `Skriptstand ${registriert.revision_no ?? '?'}${registriert.created_at ? ` vom ${new Date(registriert.created_at).toLocaleDateString('de-DE')}` : ''}${registriert.truncated ? ' (gekürzt)' : ''}`
-        : (registriert?.error ? `Skript nicht lesbar: ${registriert.error}` : 'Für diese Quelle ist in der Scrape-Registry noch kein Skript registriert.');
+    if (registriert?.error && state.adapterSkriptFehlerGewarnt !== registriert.error) {
+      state.adapterSkriptFehlerGewarnt = registriert.error;
+      console.warn('[outbound-lead-generation] Adapter-Skript', registriert.error);
+    }
     // Nicht bei jedem Sync-Tick neu schreiben (Scrollposition, P4 V15).
-    const signatur = JSON.stringify([source.id, stand, script.length, adapter?.updated_at_ms || 0]);
+    const signatur = JSON.stringify([source.id, script.length, adapter?.updated_at_ms || 0, state.adapterInspectorScriptLaeuft]);
     if (mount.dataset.adapterSignatur === signatur && mount.querySelector('.leadgen-adapter-inspector')) return;
     mount.dataset.adapterSignatur = signatur;
     mount.innerHTML = `
@@ -3779,8 +3798,7 @@ function renderLeadEditor() {
             <div><span class="ctox-pane-kicker">Adapter-Skript</span><h2 class="ctox-pane-title">${escapeHtml(source.label)}</h2></div>
             <button class="ctox-pane-icon" data-action="close-adapter-script" title="Schließen" aria-label="Schließen">${icon('close')}</button>
           </header>
-          <p class="leadgen-muted" role="status">${escapeHtml(stand)}</p>
-          <pre class="leadgen-adapter-script"><code>${escapeHtml(script || '—')}</code></pre>
+          ${script ? `<pre class="leadgen-adapter-script"><code>${escapeHtml(script)}</code></pre>` : ''}
           <footer class="leadgen-dialog-actions">
             <button class="ctox-button" data-action="close-adapter-script">Schließen</button>
             <button class="ctox-button is-primary" data-action="build-adapter" data-id="${escapeHtml(source.id)}">${adapter ? 'Adapter neu erzeugen' : 'Adapter erzeugen'}</button>
@@ -4291,6 +4309,7 @@ function handleKeydown(event) {
 function selectLeadAndRefreshEligibility(id) {
   state.selectedLeadId = id || '';
   state.selectedDetailError = '';
+  state.selectedDetailRetriedKey = '';
   renderCenter();
   renderDetail();
   void loadSelectedLeadDetails();
@@ -4740,8 +4759,9 @@ async function startScopedResearch(campaign, leads, options = {}) {
   };
   await Promise.all(Array.from({ length: Math.min(3, eligibleLeads.length) }, arbeiter));
   if (!queued.length) {
+    if (failed.length) console.warn('[outbound-lead-generation] Recherchestart', failed.map((entry) => entry.error));
     const message = failed.length
-      ? `Kein Lead konnte gestartet werden (${failed.length} Fehler): ${failed.slice(0, 3).map((entry) => entry.error).join(' \u00b7 ')}`
+      ? 'Kein Lead konnte gestartet werden.'
       : 'Kein Lead war fuer die Recherche offen.';
     zeigeHinweis(message);
     Object.assign(run, { status: 'failed', finishedAtMs: Date.now(), error: message });
@@ -4752,11 +4772,10 @@ async function startScopedResearch(campaign, leads, options = {}) {
   if (failed.length) {
     const gruende = [...new Set(failed.map((eintrag) => String(eintrag.error || '').trim()).filter(Boolean))];
     zeigeHinweis(`${queued.length} gestartet, ${failed.length} nicht gestartet.`, 30000);
+    console.warn('[outbound-lead-generation] Recherchestart unvollst\u00e4ndig', gruende);
     await showBusinessAlert(
       `${queued.length} Recherche${queued.length === 1 ? '' : 'n'} gestartet. `
-      + `${failed.length} Lead${failed.length === 1 ? '' : 's'} wurde${failed.length === 1 ? '' : 'n'} nicht gestartet:\n\n`
-      + gruende.slice(0, 5).map((grund) => `\u2022 ${grund}`).join('\n')
-      + (gruende.length > 5 ? `\n\u2026 und ${gruende.length - 5} weitere Gruende.` : ''),
+      + `${failed.length} Lead${failed.length === 1 ? '' : 's'} wurde${failed.length === 1 ? '' : 'n'} nicht gestartet.`,
     );
   } else {
     zeigeHinweis(`${queued.length} Recherche${queued.length === 1 ? '' : 'n'} gestartet.`);
@@ -5822,13 +5841,14 @@ async function pruefeKampagnenVermerke(campaign) {
     renderCenter();
   }
   console.info('[outbound-lead-generation] Vermerkprüfung', campaign, JSON.stringify({ ...zaehler, gesendet }));
+  if (state.freitextLetzterFehler) console.warn('[outbound-lead-generation] Vermerkprüfung', state.freitextLetzterFehler);
   await showBusinessAlert([
     `Sellify-Vermerke in „${campaign}“: ${leads.length} Leads.`,
-    `${zaehler.ohne} ohne Freitextvermerk, ${zaehler.geprueft} bereits vom CTOX-Agenten beurteilt, ${zaehler.offen} mit Vermerk ohne Urteil.`,
-    gesendet ? `${gesendet} davon an den CTOX-Agenten übergeben; die Urteile erscheinen, sobald er antwortet.`
-      : (zaehler.offen && state.freitextLetzterFehler ? `Übergabe an den CTOX-Agenten fehlgeschlagen: ${state.freitextLetzterFehler}`
-        : (zaehler.offen ? 'Die offenen Vermerke sind bereits beim CTOX-Agenten in Prüfung.' : '')),
-    zaehler.fehler ? `${zaehler.fehler} Leads konnten nicht geprüft werden (Sellify-Kontext nicht geladen); bitte erneut starten.` : '',
+    `${zaehler.ohne} ohne Freitextvermerk, ${zaehler.geprueft} bereits beurteilt, ${zaehler.offen} mit Vermerk ohne Urteil.`,
+    gesendet ? `${gesendet} davon übergeben; die Urteile erscheinen, sobald sie vorliegen.`
+      : (zaehler.offen && state.freitextLetzterFehler ? 'Die Übergabe hat nicht geklappt.'
+        : (zaehler.offen ? 'Die offenen Vermerke sind bereits in Prüfung.' : '')),
+    zaehler.fehler ? `${zaehler.fehler} Leads konnten nicht geprüft werden. Bitte erneut starten.` : '',
   ].filter(Boolean).join('\n'));
 }
 
@@ -6933,7 +6953,8 @@ async function toggleSource(id) {
   } catch (error) {
     state.sourceToggleIntent.delete(id);
     state.sources = state.sources.map((source) => source.id === id ? { ...source, enabled: !enabled } : source);
-    await showBusinessAlert(`Umschalten fehlgeschlagen: ${String(error?.message || error)}`);
+    console.warn('[outbound-lead-generation] Umschalten', error);
+    await showBusinessAlert('Umschalten hat nicht geklappt.');
   } finally {
     if (state.sourceTogglePending.delete(id)) renderSourcePanel();
   }
@@ -7052,7 +7073,8 @@ function showSourceCredentialDialog({ existingSecretName = '', onSave = null } =
           username.readOnly = false;
           password.readOnly = false;
           speichern.textContent = 'Sicher speichern';
-          zeigeHinweis(error?.message || String(error), 'alert');
+          console.warn('[outbound-lead-generation] Zugang speichern', error);
+          zeigeHinweis('Speichern hat nicht geklappt.', 'alert');
           return;
         }
         password.value = '';
@@ -7147,12 +7169,10 @@ function setzeZugangUebertragung(secretName, eintrag) {
 }
 
 function zugangsFehlerText(roh) {
-  // Toter Befehlskanal des Tabs (Sync-Befund B1) oder keine Bestaetigung:
-  // der Nutzer braucht die Handlung, nicht den Sync-Engine-Text.
-  if (/peer-not-open|webrtc|rc_push|timed? ?out|timeout|zeit(ü|ue)berschreitung|nicht innerhalb/i.test(roh)) {
-    return `Dieser Browser-Tab erreicht CTOX gerade nicht (${roh}). Bitte die Seite neu laden (⌘R bzw. F5) und den Zugang erneut eingeben.`;
+  if (/peer-not-open|webrtc|rc_push|timed? ?out|timeout|zeit(ü|ue)berschreitung|nicht innerhalb/i.test(String(roh || ''))) {
+    return 'Gerade nicht möglich, bitte gleich noch einmal.';
   }
-  return roh;
+  return 'Das hat nicht geklappt.';
 }
 
 async function verfolgeZugangUebertragung(receipt, commandId, secretName) {
@@ -7357,11 +7377,13 @@ async function queueAdapterReconciliationAfterSourceChange(reason) {
         await queueAdapterReconciliation(reason, state.researchPolicyRecord);
         return;
       } catch (retryError) {
-        showBusinessAlert(`Die Quelle wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${String(retryError?.message || retryError)}`);
+        console.warn('[outbound-lead-generation] Adapter-Abgleich', retryError);
+        showBusinessAlert('Die Quelle wurde gespeichert. Der Adapter-Abgleich hat nicht geklappt.');
         return;
       }
     }
-    showBusinessAlert(`Die Quelle wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${message}`);
+    console.warn('[outbound-lead-generation] Adapter-Abgleich', error);
+    showBusinessAlert('Die Quelle wurde gespeichert. Der Adapter-Abgleich hat nicht geklappt.');
   }
 }
 
@@ -7436,13 +7458,10 @@ async function addSource() {
 
 function zugangsLegende(secretName) {
   if (!secretName) return ' · keiner hinterlegt';
-  const code = `<code>${escapeHtml(secretName)}</code>`;
   const stand = secretStand(secretName);
-  if (!stand) return state.secretKatalogLaeuft
-    ? ` · Verweis auf ${code} (Stand wird geprüft …)`
-    : ` · Verweis auf ${code} (Secret Store nicht erreichbar, Stand unbekannt)`;
-  if (!stand.vorhanden) return ` · Verweis auf ${code}, im Secret Store liegt aber KEIN Wert`;
-  return ` · hinterlegt${stand.datum ? ` am ${stand.datum}` : ''} (${code})`;
+  if (!stand) return '';
+  if (!stand.vorhanden) return ' · keiner hinterlegt';
+  return stand.datum ? ` · hinterlegt am ${stand.datum}` : ' · hinterlegt';
 }
 
 async function editSource(sourceId) {
@@ -7606,7 +7625,8 @@ async function editSource(sourceId) {
           knoepfe.forEach((knopf) => { knopf.disabled = false; });
           layer.querySelectorAll('input, textarea').forEach((feld) => { feld.readOnly = false; });
           speichern.textContent = 'Speichern';
-          zeigeFehler(error?.message || String(error));
+          console.warn('[outbound-lead-generation] Zugang speichern', error);
+          zeigeFehler('Speichern hat nicht geklappt.');
           layer.querySelector('[data-ss-konflikt]')?.setAttribute('role', 'alert');
           return;
         }
@@ -7703,7 +7723,8 @@ async function editSource(sourceId) {
     try {
       await deleteSourceCredential(zuLoeschendesSecret);
     } catch (error) {
-      await showBusinessAlert(`Der Verweis ist entfernt, aber der gespeicherte Zugang ${zuLoeschendesSecret} konnte nicht gelöscht werden: ${error?.message || error}`);
+      console.warn('[outbound-lead-generation] Zugang löschen', error);
+      await showBusinessAlert('Der Verweis ist entfernt, der gespeicherte Zugang konnte aber nicht gelöscht werden.');
       return;
     }
   }
@@ -7711,7 +7732,7 @@ async function editSource(sourceId) {
   // uebertragen …" und danach "hinterlegt (Datum)" (Owner-Vorgabe: nichts
   // blockiert die App, um zwei Werte zu speichern).
   if (zugangEntfernt) {
-    await showBusinessAlert(`Zugang für ${item.label} wurde aus dem CTOX Secret Store entfernt.`);
+    await showBusinessAlert(`Zugang für ${item.label} wurde entfernt.`);
   }
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
@@ -7746,14 +7767,16 @@ async function deleteSource(sourceId) {
       // Sammlung hochschieben und Erfolg verlangen (pushToRemotePeers).
       if (geloeschterStand) await flushReplicatedCollection('outbound_lead_generation_sources', []);
     } catch (error) {
-      await showBusinessAlert(`Die Quelle ist hier gelöscht, CTOX hat die Löschung aber noch nicht bestätigt (${error?.message || error}). Der gespeicherte Zugang bleibt deshalb vorerst erhalten; bitte die Seite neu laden und prüfen.`);
+      console.warn('[outbound-lead-generation] Quellenlöschung', error);
+      await showBusinessAlert('Die Quelle ist hier gelöscht. Die Löschung wurde noch nicht bestätigt.');
       await queueAdapterReconciliationAfterSourceChange('source_deleted');
       return;
     }
     try {
       await deleteSourceCredential(item.credential_secret_name);
     } catch (error) {
-      await showBusinessAlert(`Die Quelle ist gelöscht, ihr gespeicherter Zugang konnte aber nicht entfernt werden: ${error?.message || error}`);
+      console.warn('[outbound-lead-generation] Zugang löschen', error);
+      await showBusinessAlert('Die Quelle ist gelöscht, der gespeicherte Zugang konnte aber nicht entfernt werden.');
     }
   }
   await queueAdapterReconciliationAfterSourceChange('source_deleted');
@@ -7800,11 +7823,12 @@ async function pruefeZugang(sourceId) {
     stand = secretStand(name);
   }
   if (!stand) {
-    await showBusinessAlert('Der Stand des Zugangs ist unbekannt: Der CTOX Secret Store war in drei Versuchen nicht erreichbar. Bitte die Seite neu laden (⌘R) und erneut prüfen.');
+    console.warn('[outbound-lead-generation] Secret Store nicht erreichbar', name);
+    await showBusinessAlert('Der Zugang konnte nicht geprüft werden.');
     return;
   }
   if (!stand.vorhanden) {
-    await showBusinessAlert(`Für „${item.label}“ liegt KEIN Zugang im CTOX Secret Store (${name}). Über das Zahnrad eintragen, dann erneut prüfen.`);
+    await showBusinessAlert(`Für „${item.label}“ liegt kein Zugang. Über das Zahnrad eintragen, dann erneut prüfen.`);
     return;
   }
   // Der eigentliche Beweis ist die Quelle selbst: derselbe Pruefbefehl wie beim
@@ -7964,7 +7988,8 @@ async function runAdapterCommand(sourceId, commandType) {
     }), { allowTerminalCommand: true, allowControlCommand: true });
   } catch (error) {
     result = { status: 'failed', error: String(error?.message || error), command_id: commandId, task_id: '' };
-    showBusinessAlert(result.error);
+    console.warn('[outbound-lead-generation] Adapter-Befehl', error);
+    showBusinessAlert('Das hat nicht geklappt.');
   }
   if (commandType.endsWith('.auth_assist') && result.status !== 'failed') {
     const authAssist = authAssistFromCommandResult(result);
@@ -7999,9 +8024,8 @@ async function runAdapterCommand(sourceId, commandType) {
     : entry);
   renderSourcePanel();
   } catch (error) {
-    const message = String(error?.message || error || 'Der Datenzugriff konnte nicht gestartet werden.');
     console.error('[outbound-lead-generation] adapter command failed', error);
-    showBusinessAlert(message);
+    showBusinessAlert('Das hat nicht geklappt.');
   }
 }
 
@@ -8311,7 +8335,8 @@ async function verschiebeAuswahlInKampagne() {
       ? `${verschoben} Lead${verschoben === 1 ? '' : 's'} nach „${ziel}“ verschoben.`
       : `Die Leads sind bereits in „${ziel}“.`);
   } catch (error) {
-    await showBusinessAlert(`Verschieben fehlgeschlagen: ${error?.message || error}`);
+    console.warn('[outbound-lead-generation] Verschieben', error);
+    await showBusinessAlert('Verschieben hat nicht geklappt.');
   } finally {
     state.campaignMutationMessage = '';
     render();
@@ -8387,7 +8412,8 @@ async function renameCampaign(currentName) {
       5_000,
     ).catch(() => {});
     render();
-    await showBusinessAlert(`Die Kampagne konnte nicht vollständig gespeichert werden: ${error?.message || error}`);
+    console.warn('[outbound-lead-generation] Kampagne speichern', error);
+    await showBusinessAlert('Die Kampagne konnte nicht gespeichert werden.');
   }
 }
 
@@ -8486,7 +8512,8 @@ async function deleteCampaign(campaignName) {
     state.imports = vorherImports;
     state.selectedCampaign = vorherKampagne;
     render();
-    await showBusinessAlert(`Die Kampagne „${campaign}“ wurde NICHT gelöscht: ${zugangsFehlerText(String(error?.message || error))}`);
+    console.warn('[outbound-lead-generation] Kampagne löschen', error);
+    await showBusinessAlert(`Die Kampagne „${campaign}“ wurde nicht gelöscht.`);
     return;
   } finally {
     state.kampagnenLoeschen.delete(campaign);
@@ -8729,8 +8756,9 @@ async function saveLeadEditor() {
     await speichern;
     zeigeHinweis(`„${name}“ gespeichert.`, 6000);
   } catch (error) {
-    zeigeHinweis(`Speichern von „${name}“ fehlgeschlagen.`, 30000);
-    await showBusinessAlert(`Die Änderungen an „${name}“ konnten nicht gespeichert werden: ${String(error?.message || error)}`);
+    console.warn('[outbound-lead-generation] Lead speichern', error);
+    zeigeHinweis('Speichern hat nicht geklappt.', 30000);
+    await showBusinessAlert('Speichern hat nicht geklappt.');
   }
   await reload().catch(() => {});
   render();
@@ -8800,9 +8828,10 @@ async function saveResearchPolicy() {
     // frueher gescheitertes Veroeffentlichen haette sonst nie nachgeholt
     // werden koennen (Review 7).
     const erneut = await publishResearchPolicyToScrapeStore(existing);
+    if (!erneut?.ok) console.warn('[outbound-lead-generation] Rechercheablauf', erneut?.reason);
     showBusinessAlert(erneut?.ok
-      ? 'Keine Änderung – der Rechercheablauf ist so gespeichert und wurde erneut an CTOX übergeben.'
-      : `Keine Änderung am Rechercheablauf; die Übergabe an CTOX ist fehlgeschlagen: ${erneut?.reason || 'unbekannt'}`);
+      ? 'Keine Änderung – der Rechercheablauf ist so gespeichert.'
+      : 'Speichern hat nicht geklappt.');
     return;
   }
   const record = researchPolicyRecord(
@@ -8842,9 +8871,10 @@ async function saveResearchPolicy() {
       ? 'Rechercheablauf gespeichert. Er gilt ab dem nächsten Recherchestart.'
       : submission?.deduplicated
         ? 'Rechercheablauf gespeichert. Der passende Adapter-Stand ist bereits aktiv.'
-        : 'Rechercheablauf gespeichert. CTOX gleicht jetzt alle Adapter in einem Vorgang ab.');
+        : 'Rechercheablauf gespeichert.');
   } catch (error) {
-    showBusinessAlert(`Der Rechercheablauf wurde gespeichert, aber der Adapter-Abgleich konnte nicht gestartet werden: ${String(error?.message || error)}`);
+    console.warn('[outbound-lead-generation] Adapter-Abgleich', error);
+    showBusinessAlert('Der Rechercheablauf wurde gespeichert. Der Adapter-Abgleich hat nicht geklappt.');
   }
 }
 
@@ -9352,7 +9382,8 @@ async function sucheSellifyKampagnen() {
       : `Keine Sellify-Kampagne mit „${query}“ gefunden.`;
   } catch (error) {
     state.sellifyImportResults = [];
-    state.sellifyImportNotice = `Suche fehlgeschlagen: ${String(error?.message || error)}`;
+    console.warn('[outbound-lead-generation] Sellify-Suche', error);
+    state.sellifyImportNotice = 'Suche hat nicht geklappt.';
   } finally {
     stopp();
     state.sellifyImportSucheLaeuft = false;
@@ -9553,7 +9584,8 @@ async function importiereSellifyKampagne(kampagnenName) {
     }
   } catch (error) {
     clearInterval(uhr);
-    zeigeHinweis(`Import „${name}“ fehlgeschlagen: ${String(error?.message || error)}`, 30000);
+    console.warn('[outbound-lead-generation] Import', error);
+    zeigeHinweis('Import hat nicht geklappt.', 30000);
   } finally {
     clearInterval(uhr);
     state.hintergrundImport = '';
@@ -9679,13 +9711,9 @@ async function openImporter(defaultTitle = '') {
         zeigeHinweis(`${ergebnis?.message || 'Leads importiert.'} Recherche starten: „Alle recherchieren“ in der Kampagne.`, 0);
         return ergebnis;
       } catch (fehler) {
-        const grund = String(fehler?.message || fehler);
         console.error('[outbound-lead-generation] Import fehlgeschlagen', fehler);
-        zeigeHinweis(`Import fehlgeschlagen: ${grund}`, 0);
-        await showBusinessAlert(
-          `Der Import wurde nicht ausgeführt.\n\n${grund}\n\n`
-          + 'Es wurde nichts gespeichert. Bitte erneut versuchen; bleibt es dabei, ist die Datenverbindung noch nicht bereit.',
-        );
+        zeigeHinweis('Import hat nicht geklappt.', 0);
+        await showBusinessAlert('Der Import hat nicht geklappt.');
         throw fehler;
       }
     },
@@ -10232,7 +10260,7 @@ async function schliesseKampagnenLuecken(kampagne, sichtbareIds = '') {
   };
   await Promise.all(Array.from({ length: Math.min(3, leads.length) }, arbeiter));
   zeigeHinweis(`Lückenschluss für ${gestartet} von ${leads.length} Leads gestartet.`, 15000);
-  showBusinessAlert(`Lückenschluss für ${gestartet} von ${leads.length} Leads gestartet.${nichtGesendet ? ` ${nichtGesendet} Aufträge haben CTOX nicht erreicht – bitte Seite neu laden und erneut starten.` : ''}`);
+  showBusinessAlert(`Lückenschluss für ${gestartet} von ${leads.length} Leads gestartet.${nichtGesendet ? ` ${nichtGesendet} konnten nicht gestartet werden.` : ''}`);
 }
 
 function rechercheFortsetzung(lead, felder) {
@@ -11234,6 +11262,7 @@ async function validateLead(id) {
 // operator sees WHY a handoff is unavailable instead of a dead button. It was
 // called at index.js:813 but never defined — every lead selection therefore
 // threw a ReferenceError and the pane never rendered.
+const HANDOFF_OHNE_TEXT = '⁠';
 function sellifyHandoffPrecondition(lead) {
   if (!lead || lead.validation_status !== 'validated') {
     return 'Bitte den Lead vor der Übergabe validieren.';
@@ -11250,13 +11279,13 @@ function sellifyHandoffPrecondition(lead) {
     return 'Bitte zuerst mindestens eine Person auswählen.';
   }
   if (wartungAktiv() && (!state.recipientEligibilityReady.has(lead.id) || state.recipientEligibilityTimedOut.has(lead.id))) {
-    return 'CTOX wird gerade aktualisiert. Die Sperrvermerke werden danach automatisch geprüft.';
+    return HANDOFF_OHNE_TEXT;
   }
   if (!state.recipientEligibilityReady.has(lead.id)) {
-    return 'Die Sellify-Sperrvermerke werden noch geprüft.';
+    return HANDOFF_OHNE_TEXT;
   }
   if (state.recipientEligibilityTimedOut.has(lead.id)) {
-    return 'Sellify war gerade nicht erreichbar. Die Sperrvermerke werden in Kürze automatisch erneut geprüft.';
+    return HANDOFF_OHNE_TEXT;
   }
   const plan = buildCampaignRecipientList(lead);
   if (!plan.recipients.length) {
@@ -11441,24 +11470,22 @@ async function sendLeadToSellifyAusfuehren(lead, id, { includeCampaign = false }
         sellify_finished_at_ms: Date.now(),
       },
     });
+    console.warn('[outbound-lead-generation] Übergabe', error);
     showBusinessAlert(pending
-      ? `${String(error?.message || error)} Der Lead wird als „Übergeben, Bestätigung ausstehend“ geführt.`
+      ? 'Der Lead wird als „Übergeben, Bestätigung ausstehend“ geführt.'
       : uebergabeFehlerText(error));
   }
 }
 
-// Technische Abbruchcodes in eine Handlungsanweisung uebersetzen; der Rohtext
-// bleibt in Klammern fuer die Fehlersuche. "QUERY_CANCELLED: peer-peer-not-open"
-// allein sagte dem Nutzer nicht, dass ein erneuter Klick sicher ist.
 function uebergabeFehlerText(error) {
-  const roh = String(error?.message || error || 'Unbekannter Fehler');
+  const roh = String(error?.message || error || '');
   if (/peer-not-open|peer-peer|QUERY_CANCELLED|webrtc|RATE_LIMITED|timed? ?out|nicht innerhalb|Rückmeldung steht noch aus/i.test(roh)) {
-    return `Die Verbindung zu CTOX war während der Übergabe kurz unterbrochen. Bitte erneut übergeben: bereits in Sellify angelegte Firmen und Personen werden erkannt und nicht doppelt angelegt.\n\n(${roh})`;
+    return 'Die Übergabe hat nicht geklappt. Bitte erneut übergeben: bereits angelegte Firmen und Personen werden erkannt und nicht doppelt angelegt.';
   }
   if (/wird aktualisiert|schreibgesch|read-?only|MAINTENANCE/i.test(roh)) {
-    return `CTOX wird gerade aktualisiert. Bitte nach dem Update erneut übergeben.\n\n(${roh})`;
+    return 'Gerade nicht möglich, bitte gleich noch einmal.';
   }
-  return roh;
+  return 'Die Übergabe hat nicht geklappt.';
 }
 
 
@@ -13036,7 +13063,8 @@ async function cancelResearch(id) {
     // nichts mehr - dann nur den Lead aus "Läuft" holen, sonst bliebe er dort
     // ohne jeden Ausweg stehen.
     if (!/not found|no cancellable|already terminal|invalid_transition|nicht gefunden/i.test(message)) {
-      await showBusinessAlert(`Die Recherche konnte nicht abgebrochen werden: ${message}`);
+      console.warn('[outbound-lead-generation] Recherche abbrechen', error);
+      await showBusinessAlert('Die Recherche konnte nicht abgebrochen werden.');
       return;
     }
   }
@@ -13128,12 +13156,11 @@ async function exportResearchXlsx(leads, label) {
       await openResearchSnapshot(state.ctx?.actions, blob, fileName, snapshot);
     } catch (error) {
       console.warn('[outbound-lead-generation] Spreadsheet konnte nicht geöffnet werden', error);
-      zeigeHinweis(`Excel heruntergeladen. Spreadsheet nicht geöffnet: ${error?.message || error}`);
     }
   } catch (error) {
     console.warn('[outbound-lead-generation] Excel-Export fehlgeschlagen', error);
     zeigeHinweis('');
-    await showBusinessAlert(`Der Excel-Export ist fehlgeschlagen: ${error?.message || error}`);
+    await showBusinessAlert('Der Excel-Export hat nicht geklappt.');
   } finally {
     state.exportXlsxBusy = false;
     render();

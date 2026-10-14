@@ -168,10 +168,10 @@ export function renderActiveOutreachShell(campaign) {
   const counts = activeOutreachCounts(campaign.id);
   const view = stateRef.activeOutreach.view || 'lead_queue';
   const tabs = [
-    { key: 'lead_queue', label: translate('leadQueue', 'Lead Queue'), count: counts.leadQueue },
+    { key: 'lead_queue', label: translate('leadQueue', 'Leads'), count: counts.leadQueue },
     { key: 'engagements', label: translate('activeEngagements', 'Aktive Engagements'), count: counts.engagements },
     { key: 'approval_inbox', label: translate('approvalInbox', 'Freigabe-Inbox'), count: counts.approvalInbox },
-    { key: 'ready_to_send', label: translate('readyToSend', 'Versand-Queue'), count: counts.readyToSend },
+    { key: 'ready_to_send', label: translate('readyToSend', 'Versand'), count: counts.readyToSend },
     { key: 'replies', label: translate('replies', 'Antworten'), count: counts.replies },
     { key: 'done', label: translate('done', 'Abgeschlossen'), count: counts.done },
     { key: 'settings', label: translate('skillSettings', 'Skills & Vorlagen'), count: (stateRef.outboundSkillbooks?.length || 0) + (stateRef.outboundLetterTemplates?.length || 0) },
@@ -187,7 +187,6 @@ export function renderActiveOutreachShell(campaign) {
           <p>${escapeFn(translate('activeOutreachIntro', 'CTOX bereitet Nachrichten, Antworten und Termine vor. Versand erst nach expliziter Freigabe.'))}</p>
         </div>
         <div class="outbound-outreach-head-actions">
-          <button type="button" class="ctox-button" data-action="ao-reconcile-provider" title="${escapeFn(translate('reconcileProviderHint', 'Status der Mailserver-Queue mit Outbound-Messages abgleichen'))}">${escapeFn(translate('reconcileProvider', 'Provider-Status abgleichen'))}</button>
           <button type="button" class="ctox-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Fällige Engagements verarbeiten: Drafts vorbereiten, Suppressed schließen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
           <button type="button" class="ctox-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollstaendigen JSON-Export der Outbound-Daten dieser Campaign laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
         </div>
@@ -533,7 +532,7 @@ function renderEngagementTimeline(engagement, messages) {
       entries.push({ ts: msg.updated_at_ms || 0, kind: 'approved', label: translate('approved', 'Freigegeben'), msgId: msg.id });
     }
     if (msg.send_status === 'queued_for_provider') {
-      entries.push({ ts: msg.updated_at_ms || 0, kind: 'queued', label: translate('queuedForProvider', 'In Mailserver-Queue'), msgId: msg.id });
+      entries.push({ ts: msg.updated_at_ms || 0, kind: 'queued', label: translate('queuedForProvider', 'Wird gesendet'), msgId: msg.id });
     }
     if (msg.send_status === 'sent') {
       entries.push({ ts: msg.sent_at_ms || msg.updated_at_ms || 0, kind: 'sent', label: translate('sent', 'Gesendet'), msgId: msg.id });
@@ -650,7 +649,7 @@ function renderReadyToSend(campaign) {
     .filter((m) => (m.approval_status || '') === 'approved')
     .filter((m) => !['sent', 'queued_for_provider'].includes(m.send_status || ''));
   if (messages.length === 0) {
-    return `<div class="ctox-empty">${escapeFn(translate('noReadyToSend', 'Keine freigegebenen Nachrichten in der Versand-Queue.'))}</div>`;
+    return `<div class="ctox-empty">${escapeFn(translate('noReadyToSend', 'Keine freigegebenen Nachrichten.'))}</div>`;
   }
   return `
     <ol class="outbound-outreach-ready">
@@ -670,16 +669,15 @@ function renderReadyToSendItem(msg) {
   // records why it could not go out (suppression, limit, queue failure, …).
   const blocked = (msg.send_status || '') === 'send_blocked';
   const blockReason = msg.payload?.send_block_reason || '';
-  const lastError = msg.payload?.last_send_error || '';
   const sendLabel = blocked
     ? translate('retrySend', 'Erneut versuchen')
-    : translate('queueSend', 'In Mailserver-Queue einreihen');
+    : translate('queueSend', 'Senden');
   return `
     <li class="outbound-outreach-ready-item${blocked ? ' outbound-outreach-ready-blocked' : ''}" data-context-record-id="${escapeFn(msg.id)}" data-context-record-type="outbound_message" data-context-label="${escapeFn(subject || recipient || msg.id)}">
       <div>
         <strong>${escapeFn(subject)}</strong>
         <small>${escapeFn(recipient)}</small>
-        ${blocked ? `<span class="ctox-badge outbound-outreach-badge-blocked" title="${escapeFn(lastError)}">${escapeFn(translate('sendBlocked', 'Versand blockiert'))}: ${escapeFn(prettyBlockReason(blockReason))}</span>` : ''}
+        ${blocked ? `<span class="ctox-badge outbound-outreach-badge-blocked">${escapeFn(translate('sendBlocked', 'Versand blockiert'))}: ${escapeFn(prettyBlockReason(blockReason))}</span>` : ''}
       </div>
       <div class="outbound-outreach-actions-cell">
         ${isPhysical
@@ -1012,12 +1010,12 @@ function prettyBlockReason(reason) {
     sender_blocked: translate('blockSenderBlocked', 'Sender gesperrt'),
     sender_limit_exhausted: translate('blockLimit', 'Tageslimit erreicht'),
     approval_required: translate('blockApproval', 'Freigabe erforderlich'),
-    provider_queue_failed: translate('blockQueue', 'Mailserver-Queue fehlgeschlagen'),
+    provider_queue_failed: translate('blockQueue', 'Versand hat nicht geklappt'),
     missing_recipient: translate('blockRecipient', 'Empfänger fehlt'),
     missing_sender: translate('blockSender', 'Sender fehlt'),
     send_blocked: translate('blockGeneric', 'Versand blockiert'),
   };
-  return map[reason] || reason || translate('blockGeneric', 'Versand blockiert');
+  return map[reason] || translate('blockGeneric', 'Versand blockiert');
 }
 
 function formatTimestamp(ms) {
@@ -1130,6 +1128,11 @@ function setError(msg) {
   triggerRender();
 }
 
+function meldeFehler(error, text = 'Das hat nicht geklappt.') {
+  console.warn('[outbound] Aktion', error);
+  setError(text);
+}
+
 function clearError() {
   if (!stateRef.activeOutreach.error) return;
   stateRef.activeOutreach.error = null;
@@ -1142,7 +1145,7 @@ function withBusyMessage(messageId, fn) {
   return Promise.resolve()
     .then(fn)
     .catch((error) => {
-      setError(error?.message || String(error));
+      meldeFehler(error);
       throw error;
     })
     .finally(() => {
@@ -1157,7 +1160,7 @@ function withBusyEngagement(engagementId, fn) {
   return Promise.resolve()
     .then(fn)
     .catch((error) => {
-      setError(error?.message || String(error));
+      meldeFehler(error);
       throw error;
     })
     .finally(() => {
@@ -1287,7 +1290,7 @@ async function seedSkillbooks() {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 
@@ -1310,7 +1313,7 @@ async function saveSkillbookFromCard(skillbookId) {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error, 'Speichern hat nicht geklappt.');
   }
 }
 
@@ -1331,7 +1334,7 @@ async function newLetterTemplate(campaignId) {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error, 'Speichern hat nicht geklappt.');
   }
 }
 
@@ -1353,7 +1356,7 @@ async function saveLetterTemplateFromCard(templateId) {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error, 'Speichern hat nicht geklappt.');
   }
 }
 
@@ -1383,7 +1386,7 @@ async function auditExport() {
     anchor.remove();
     URL.revokeObjectURL(url);
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error, 'Der Export hat nicht geklappt.');
   }
 }
 
@@ -1417,7 +1420,7 @@ async function schedulerTick() {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 
@@ -1443,7 +1446,7 @@ async function bookSlot(meetingRequestId, slotIndex) {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 
@@ -1470,7 +1473,7 @@ async function regenerateSlots(meetingRequestId, messageId) {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 
@@ -1486,7 +1489,7 @@ async function reconcileProviderStatus() {
     await loadActiveOutreachData();
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 
@@ -1567,7 +1570,7 @@ async function startEngagementFromLead(leadId, campaign, { autoDraft }) {
     stateRef.activeOutreach.selectedEngagementId = engagementId;
     triggerRender();
   } catch (error) {
-    setError(error?.message || String(error));
+    meldeFehler(error);
   }
 }
 

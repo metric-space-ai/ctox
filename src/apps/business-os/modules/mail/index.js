@@ -45,9 +45,9 @@ const FALLBACK_LABELS = {
     thread: 'Thread',
     campaign: 'E-Mail-Gruppe',
     emptyTitle: 'Keine E-Mails',
-    emptyBody: 'Nachrichten erscheinen nach der ersten Synchronisierung.',
-    syncingTitle: 'Mail wird synchronisiert',
-    syncingBody: 'Postfächer und Nachrichten werden gerade geladen.',
+    emptyBody: '',
+    syncingTitle: '',
+    syncingBody: '',
     noSelectionTitle: 'Keine Mail ausgewählt',
     noSelectionBody: 'Wähle eine E-Mail oder E-Mail-Gruppe aus.',
     reply: 'Antworten',
@@ -67,7 +67,7 @@ const FALLBACK_LABELS = {
     savedDraft: 'Entwurf gespeichert.',
     approvalRequested: 'Entwurf wurde zur Freigabe eingereicht.',
     approved: 'Nachricht wurde freigegeben.',
-    queued: 'Nachricht wurde in die Mailserver-Queue eingereiht.',
+    queued: 'Wird gesendet.',
     missingRecipient: 'Bitte eine gültige Empfängeradresse eingeben.',
     missingSender: 'Bitte ein Absenderpostfach auswählen.',
     missingContent: 'Betreff oder Nachricht darf nicht leer sein.',
@@ -128,9 +128,9 @@ const FALLBACK_LABELS = {
     thread: 'Thread',
     campaign: 'Email group',
     emptyTitle: 'No email',
-    emptyBody: 'Messages appear after the first synchronization.',
-    syncingTitle: 'Syncing mail',
-    syncingBody: 'Mailboxes and messages are loading.',
+    emptyBody: '',
+    syncingTitle: '',
+    syncingBody: '',
     noSelectionTitle: 'No email selected',
     noSelectionBody: 'Select an email or email group.',
     reply: 'Reply',
@@ -150,7 +150,7 @@ const FALLBACK_LABELS = {
     savedDraft: 'Draft saved.',
     approvalRequested: 'Draft was submitted for approval.',
     approved: 'Message approved.',
-    queued: 'Message queued in the mailserver.',
+    queued: 'Sending.',
     missingRecipient: 'Enter a valid recipient address.',
     missingSender: 'Select a sender mailbox.',
     missingContent: 'Subject or message must not be empty.',
@@ -208,6 +208,40 @@ export async function mount(ctx) {
 
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;
+
+  function aktionsfehler(error) {
+    console.warn('[mail] Aktion', error);
+    return t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+  }
+
+  function clearMailReadFailure() {
+    view.mailReadError = '';
+    view.mailReadRetryAttempt = 0;
+    if (view.mailReadRetryTimer) {
+      window.clearTimeout(view.mailReadRetryTimer);
+      view.mailReadRetryTimer = null;
+    }
+    if (root?.dataset) delete root.dataset.mailReadRetry;
+  }
+
+  function noteMailReadFailure(error) {
+    console.warn('[mail] Lesen', error);
+    view.mailReadError = 'retry';
+    if (view.disposed || view.mailReadRetryTimer) return;
+    const delay = Math.min(60_000, 2000 * 2 ** (view.mailReadRetryAttempt || 0));
+    view.mailReadRetryAttempt = (view.mailReadRetryAttempt || 0) + 1;
+    if (root?.dataset) root.dataset.mailReadRetry = '1';
+    view.mailReadRetryTimer = window.setTimeout(() => {
+      view.mailReadRetryTimer = null;
+      if (view.disposed) return;
+      refreshData().then(() => {
+        if (!view.disposed) render();
+      }).catch((retryError) => {
+        noteMailReadFailure(retryError);
+        if (!view.disposed) render();
+      });
+    }, delay);
+  }
   applyStaticLabels(root, t);
 
   const refs = collectRefs(root);
@@ -317,14 +351,15 @@ export async function mount(ctx) {
     render();
   }).catch((error) => {
     if (view.disposed) return;
-    view.mailReadError = String(error?.message || error);
-    view.loading = false;
+    noteMailReadFailure(error);
+    if (!view.mailReadComplete) view.loading = true;
     render();
   });
 
   return () => {
     view.disposed = true;
     if (view.emptyReadTimer) window.clearTimeout(view.emptyReadTimer);
+    if (view.mailReadRetryTimer) window.clearTimeout(view.mailReadRetryTimer);
     void view.contentEditor?.destroy?.();
     if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
     for (const cleanup of cleanups) {
@@ -566,8 +601,8 @@ export async function mount(ctx) {
       try {
         await refreshData();
       } catch (error) {
-        view.mailReadError = String(error?.message || error);
-        view.loading = false;
+        noteMailReadFailure(error);
+        if (!view.mailReadComplete) view.loading = true;
       }
       if (!view.disposed) render();
     }, 120);
@@ -688,7 +723,7 @@ export async function mount(ctx) {
       } catch (error) {
         if (sequence > view.authorityDecisionSequence) {
           view.authorityDecisionSequence = sequence;
-          view.mailReadError = String(error?.message || error);
+          noteMailReadFailure(error);
           // A stale local snapshot cannot prove that access still exists.
           // Keep persisted RxDB data intact, but hide it until native authority
           // has confirmed this account again.
@@ -703,7 +738,7 @@ export async function mount(ctx) {
       if (!authorizedAccounts.length) {
         hideUnverifiedMail();
         view.mailReadComplete = true;
-        view.mailReadError = '';
+        clearMailReadFailure();
         view.loading = false;
         return;
       }
@@ -729,11 +764,11 @@ export async function mount(ctx) {
           view.mailReadComplete = true;
           // Keep a timed-out empty mailbox actionable until replication reports
           // readiness or the selected folder actually contains records.
-          if (view.readiness?.ready !== false || currentRecords().length) view.mailReadError = '';
+          if (view.readiness?.ready !== false || currentRecords().length) clearMailReadFailure();
         } else {
           view.threads = view.threads.filter((thread) => visibleAccountKeys.has(thread.account_key));
           view.communicationMessages = view.communicationMessages.filter((message) => visibleAccountKeys.has(message.account_key));
-          if (failedRead) view.mailReadError = String(failedRead.message || failedRead);
+          if (failedRead) noteMailReadFailure(failedRead);
         }
         if (view.accountKey && !visibleAccountKeys.has(view.accountKey)) {
           view.accountKey = '';
@@ -741,7 +776,7 @@ export async function mount(ctx) {
           view.selectedId = '';
         }
       } else if (failedRead) {
-        view.mailReadError = String(failedRead.message || failedRead);
+        noteMailReadFailure(failedRead);
       }
     }
     if (sequence >= view.lastAppliedAuxiliarySequence) {
@@ -849,19 +884,21 @@ export async function mount(ctx) {
     refs.scopeList.innerHTML = rows.length ? rows.map((item) => {
       const scopeType = view.leftGrammar.band === 'campaigns' ? 'campaign' : 'queue';
       const shape = scopeAsList ? 'mail-scope-card--line' : 'mail-scope-card--shard';
-      const meta = scopeAsList ? '' : `<span class="mail-scope-meta">${escapeHtml(mailCountsKnown(view) ? item.meta : t('refreshing', 'Wird aktualisiert…'))}</span>`;
+      const meta = scopeAsList || !mailCountsKnown(view) ? '' : `<span class="mail-scope-meta">${escapeHtml(item.meta)}</span>`;
       const section = showFolderSections && (item.id === 'inbound' || item.id === 'approval')
         ? `<div class="mail-scope-section-title">${escapeHtml(item.id === 'inbound' ? t('folders', 'Ordner') : t('workflows', 'Arbeitsabläufe'))}</div>`
         : '';
       return `${section}<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
-        <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(mailCountsKnown(view) ? (item.countLabel ?? item.count) : '…')}</span>
+        <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}${mailCountsKnown(view) ? `<span class="mail-scope-count">${escapeHtml(item.countLabel ?? item.count)}</span>` : ''}
       </button>`;
     }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Ordner'))}</span></div>`;
     renderNavigationSelection();
     const groupsVisible = view.leftGrammar.band === 'campaigns';
     refs.navigationTitle.textContent = groupsVisible ? t('groups', 'E-Mail-Gruppen') : t('mailbox', 'Postfach');
     refs.newGroup.hidden = !groupsVisible;
-    const footer = `${mailCountsKnown(view) ? view.accounts.length : '…'} ${t('mailbox', 'Postfächer')} · ${mailCountsKnown(view) ? visibleGroups.length : '…'} ${t('groups', 'E-Mail-Gruppen')}`;
+    const footer = mailCountsKnown(view)
+      ? `${view.accounts.length} ${t('mailbox', 'Postfächer')} · ${visibleGroups.length} ${t('groups', 'E-Mail-Gruppen')}`
+      : '';
     refs.sidebarFooter.textContent = footer;
     refs.leftPane.__ctoxPaneGrammar?.setFooter?.(footer);
   }
@@ -898,8 +935,10 @@ export async function mount(ctx) {
     refs.listPane.dataset.mailView = view.listGrammar.view;
     syncViewToggleButton(ctx, refs.listPane, view.listGrammar.view, t);
     writePaneCounts(refs.listPane, counts, mailCountsKnown(view));
-    const range = !mailCountsKnown(view) ? '…' : allRows.length ? `${pageStart + 1}–${pageStart + rows.length} / ${allRows.length}` : '0';
-    const footer = `${range} ${t('messages', 'Nachrichten')} · ${view.accountKey ? accountLabel(view.accountKey) : t('allMailboxes', 'alle Postfächer')}`;
+    const range = !mailCountsKnown(view) ? '' : allRows.length ? `${pageStart + 1}–${pageStart + rows.length} / ${allRows.length}` : '0';
+    const footer = range
+      ? `${range} ${t('messages', 'Nachrichten')} · ${view.accountKey ? accountLabel(view.accountKey) : t('allMailboxes', 'alle Postfächer')}`
+      : '';
     refs.listFooter.textContent = footer;
     refs.prevPage.disabled = view.page === 0;
     refs.nextPage.disabled = view.page >= maxPage;
@@ -908,10 +947,8 @@ export async function mount(ctx) {
     renderListSelection();
     renderBulkBar(rows, allRows);
 
-    refs.readError.hidden = !view.mailReadError;
-    refs.readErrorText.textContent = view.mailReadError
-      ? t('mailReadError', 'Mail-Daten konnten nicht sicher geladen werden. Bitte erneut versuchen.')
-      : '';
+    if (refs.readError) refs.readError.hidden = true;
+    if (refs.readErrorText) refs.readErrorText.textContent = '';
 
     const shouldSync = view.loading || (view.readiness?.ready === false && (!view.mailReadComplete || view.accounts.length > 0));
     // Bound every empty syncing view, including a folder selected after mount.
@@ -924,19 +961,19 @@ export async function mount(ctx) {
         view.emptyReadTimer = null;
         if (view.disposed || view.mailReadError || currentRecords().length) return;
         if (!view.loading && view.readiness?.ready !== false) return;
-        view.mailReadError = 'Mail sync did not complete';
-        view.loading = false;
+        noteMailReadFailure(new Error('Mail sync did not complete'));
+        view.loading = true;
         renderList();
       }, MAIL_READ_TIMEOUT_MS);
     }
+    const waiting = !allRows.length && (Boolean(view.mailReadError) || shouldSync);
     refs.listEmpty.hidden = allRows.length > 0;
+    refs.listEmpty.classList.toggle('ctox-syncing', waiting);
+    if (waiting) refs.listEmpty.dataset.mailReadRetry = view.mailReadError ? '1' : '';
+    else delete refs.listEmpty.dataset.mailReadRetry;
     if (!allRows.length) {
-      refs.emptyTitle.textContent = view.mailReadError
-        ? t('mailReadErrorTitle', 'Postfach derzeit nicht verfügbar')
-        : shouldSync ? t('syncingTitle', 'Mail wird synchronisiert') : t('emptyTitle', 'Keine E-Mails');
-      refs.emptyBody.textContent = view.mailReadError
-        ? t('mailReadErrorBody', 'Die Nachrichten konnten nicht gelesen werden. Bitte erneut versuchen.')
-        : shouldSync ? t('syncingBody', 'Postfächer und Nachrichten werden gerade geladen.') : t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.');
+      refs.emptyTitle.textContent = waiting ? '' : t('emptyTitle', 'Keine E-Mails');
+      refs.emptyBody.textContent = '';
     }
   }
 
@@ -1112,7 +1149,6 @@ export async function mount(ctx) {
         <div class="mail-group-progress" aria-label="${escapeAttribute(`${stats.done} von ${stats.total} erledigt`)}"><div><strong>${stats.done} von ${stats.total} erledigt</strong><span>${stats.percent} %</span></div><progress value="${stats.done}" max="${Math.max(1, stats.total)}">${stats.percent} %</progress></div>
         <div class="mail-metric-strip">
           ${renderMetric(stats.total, t('total', 'Gesamt'))}
-          ${renderMetric(stats.queued, 'In Queue')}
           ${renderMetric(stats.delivered, 'Zugestellt')}
           ${renderMetric(stats.opened, 'Öffnung erfasst')}
           ${renderMetric(stats.clicked, 'Link geklickt')}
@@ -1127,11 +1163,11 @@ export async function mount(ctx) {
     if (view.requestedSourceFocus) {
       const ready = ['communication_threads', 'communication_messages', 'outbound_messages']
         .every((name) => ctx.sync?.collectionReadiness?.(name)?.ready === true);
-      const title = ready ? 'Verknüpfte Mail nicht verfügbar' : 'Verknüpfte Mail wird synchronisiert';
-      const body = ready
-        ? 'Der Datensatz ist in diesem Postfach nicht sichtbar. Die Mail-Übersicht bleibt verfügbar.'
-        : 'Der Datensatz wird geöffnet, sobald die Mail-Daten bereit sind.';
-      refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty" role="status"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></div>`;
+      if (!ready) {
+        refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty ctox-syncing" role="status"></div>`;
+        return;
+      }
+      refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty" role="status"><strong>Verknüpfte Mail nicht verfügbar</strong><span>Der Datensatz ist in diesem Postfach nicht sichtbar.</span></div>`;
       return;
     }
     refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty"><strong>${escapeHtml(t('noSelectionTitle', 'Keine Mail ausgewählt'))}</strong><span>${escapeHtml(t('noSelectionBody', 'Wähle eine Nachricht oder Kampagne aus.'))}</span></div>`;
@@ -1176,7 +1212,6 @@ export async function mount(ctx) {
     if (action === 'refresh-status') {
       await runBusy(async () => {
         await dispatchOutbound('outbound.provider.reconcile', id, { message_id: id });
-        showToast('Zustellstatus wurde mit dem Mailserver abgeglichen.');
       });
       return;
     }
@@ -1201,7 +1236,7 @@ export async function mount(ctx) {
         showToast(t('approved', 'Nachricht wurde freigegeben.'));
       } else if (action === 'send') {
         await dispatchOutbound('outbound.message.send_approved', id, { message_id: id });
-        showToast(t('queued', 'Nachricht wurde in die Mailserver-Queue eingereiht.'));
+        showToast(t('queued', 'Wird gesendet.'));
       }
     });
   }
@@ -1286,7 +1321,7 @@ export async function mount(ctx) {
           ? t('approvalRequested', 'Entwurf wurde zur Freigabe eingereicht.')
           : `${recipients.length} ${t('draftsSaved', 'Entwurf/Entwürfe gespeichert.')}`;
       notify('success', successMessage);
-    }, (error) => setComposerStatus(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'), true));
+    }, (error) => setComposerStatus(aktionsfehler(error), true));
   }
 
   async function ensureComposeCampaign(campaignId, seed = {}) {
@@ -1468,7 +1503,7 @@ export async function mount(ctx) {
       renderDetail();
     }, (error) => {
       refs.saveContent.disabled = false;
-      showToast(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
+      showToast(aktionsfehler(error));
     });
   }
 
@@ -1523,7 +1558,7 @@ export async function mount(ctx) {
       view.mailserver.health = outcome.health || {};
     } catch (error) {
       console.error('[mail] failed to load mailserver configuration', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       renderMailboxAdmin();
@@ -1568,7 +1603,7 @@ export async function mount(ctx) {
       await loadMailserverConfig();
       view.mailserver.message = successMessage;
     } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       renderMailboxAdmin();
@@ -1600,7 +1635,7 @@ export async function mount(ctx) {
       await loadMailserverConfig();
       view.mailserver.message = 'Versanddomain gespeichert. Die DNS-Werte stehen unten zum Kopieren bereit.';
     } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       renderMailboxAdmin();
@@ -1631,7 +1666,7 @@ export async function mount(ctx) {
       await loadMailserverConfig();
       view.mailserver.message = 'Versanddomain gelöscht.';
     } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       renderMailboxAdmin();
@@ -1669,7 +1704,7 @@ export async function mount(ctx) {
       view.mailserver.message = t('mailboxCreated', 'Postfach wurde angelegt und dem Nutzer zugeordnet.');
     } catch (error) {
       console.error('[mail] failed to create mailbox', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       render();
@@ -1706,7 +1741,7 @@ export async function mount(ctx) {
       view.mailserver.message = t('mailboxDeleted', 'Postfach wurde gelöscht.');
     } catch (error) {
       console.error('[mail] failed to delete mailbox', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
+      view.mailserver.error = aktionsfehler(error);
     } finally {
       view.mailserver.loading = false;
       render();
@@ -1868,7 +1903,7 @@ export async function mount(ctx) {
     } catch (error) {
       console.error('[mail] action failed', error);
       if (onError) onError(error);
-      else showToast(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
+      else showToast(aktionsfehler(error));
     } finally {
       view.busy = false;
       root.classList.remove('is-busy');
@@ -2084,7 +2119,7 @@ export async function mount(ctx) {
       await refreshData();
       clearSelection(false);
       render();
-      notify('success', `${completed} ${action === 'request-approval' ? t('submittedForApproval', 'Mails zur Freigabe eingereicht.') : t('queuedForSending', 'Mails zum Versand eingereiht.')}`);
+      notify('success', `${completed} ${action === 'request-approval' ? t('submittedForApproval', 'Mails zur Freigabe eingereicht.') : t('queuedForSending', 'Mails werden gesendet.')}`);
     });
   }
 
@@ -3077,7 +3112,7 @@ function messageStatusLabel(message, t) {
   if (Number(message.payload?.click_count || 0) > 0) return 'Link geklickt';
   if (Number(message.payload?.open_count || 0) > 0) return 'Öffnung erfasst';
   if (messageDeliveryStatus(message) === 'delivered') return 'Zugestellt';
-  if (send === 'queued_for_provider') return t('queued', 'In Mailserver-Queue');
+  if (send === 'queued_for_provider') return t('queued', 'Wird gesendet');
   if (approval === 'awaiting_approval') return t('awaiting', 'Freigabe');
   if (approval === 'approved') return t('approved', 'Freigegeben');
   if (send.includes('fail')) return t('failed', 'Fehler');
@@ -3128,7 +3163,7 @@ function messageProgressModel(message) {
   const labels = [
     ['Entwurf erstellt', 'edit'],
     [approved ? 'Freigegeben' : 'Freigabe ausstehend', approved ? 'check' : 'clock'],
-    [queued ? 'An Mailserver übergeben' : 'Versand ausstehend', 'send'],
+    [queued ? 'Wird gesendet' : 'Versand ausstehend', 'send'],
     [delivery === 'failed' ? 'Zustellung fehlgeschlagen' : delivery === 'delivered' ? 'Zugestellt' : 'Zustellung ausstehend', delivery === 'failed' ? 'warning' : 'check'],
     [opened ? 'Öffnung erfasst' : trackingEnabled ? 'Keine Öffnung erfasst' : 'Öffnungstracking nicht aktiv', 'eye'],
     [clicked ? 'Link geklickt' : trackingEnabled ? 'Kein Linkklick erfasst' : 'Klicktracking nicht aktiv', 'link'],
@@ -3158,15 +3193,15 @@ function messageEventTimeline(message) {
     state: approval === 'approved' ? 'done' : 'pending',
   });
   if (payload.provider_queued_at_ms) {
-    events.push({ label: 'An Mailserver übergeben', detail: formatRecordTime(payload.provider_queued_at_ms), state: 'done' });
+    events.push({ label: 'Wird gesendet', detail: formatRecordTime(payload.provider_queued_at_ms), state: 'done' });
   }
   const delivery = messageDeliveryStatus(message);
   if (delivery === 'delivered') {
     events.push({ label: 'Zugestellt', detail: formatRecordTime(payload.delivered_at_ms || payload.provider_completed_at_ms || message.sent_at_ms), state: 'done' });
   } else if (delivery === 'failed') {
-    events.push({ label: 'Zustellung fehlgeschlagen', detail: payload.provider_error_text || payload.last_send_error || 'Der Mailserver hat einen permanenten Fehler gemeldet.', state: 'failed' });
+    events.push({ label: 'Zustellung fehlgeschlagen', detail: formatRecordTime(payload.provider_completed_at_ms || message.updated_at_ms), state: 'failed' });
   } else if (delivery === 'queued') {
-    events.push({ label: 'Zustellung läuft', detail: 'Wartet auf das terminale SMTP-Ergebnis', state: 'active' });
+    events.push({ label: 'Zustellung läuft', detail: '', state: 'active' });
   }
   if (Number(payload.open_count || 0) > 0) {
     events.push({ label: `Öffnung erfasst · ${payload.open_count}×`, detail: formatRecordTime(payload.last_opened_at_ms), state: 'done' });

@@ -1967,7 +1967,7 @@ function wireCollectionReadiness() {
 }
 
 function syncingStateHint() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(t('syncingData', 'Daten werden synchronisiert.'))}</div>`;
+  return `<div class="ctox-syncing" role="status" aria-live="polite"></div>`;
 }
 
 function scheduleDataRefresh(delay = 80) {
@@ -2452,7 +2452,8 @@ function wireEvents(root) {
           throw new Error('Fehler beim Speichern der Domain.');
         }
       } catch (err) {
-        showBusinessAlert(err.message || String(err));
+        console.warn('[outbound] Domain speichern', err);
+        showBusinessAlert('Speichern hat nicht geklappt.');
       } finally {
         await loadMailserverConfig();
       }
@@ -2491,7 +2492,8 @@ function wireEvents(root) {
           throw new Error('Fehler beim Löschen der Domain.');
         }
       } catch (err) {
-        showBusinessAlert(err.message || String(err));
+        console.warn('[outbound] Domain löschen', err);
+        showBusinessAlert('Löschen hat nicht geklappt.');
       } finally {
         await loadMailserverConfig();
       }
@@ -2529,7 +2531,8 @@ function wireEvents(root) {
           throw new Error('Fehler beim Erstellen des E-Mail-Kontos.');
         }
       } catch (err) {
-        showBusinessAlert(err.message || String(err));
+        console.warn('[outbound] E-Mail-Konto speichern', err);
+        showBusinessAlert('Speichern hat nicht geklappt.');
       } finally {
         await loadMailserverConfig();
       }
@@ -2568,7 +2571,8 @@ function wireEvents(root) {
           throw new Error('Fehler beim Löschen des E-Mail-Kontos.');
         }
       } catch (err) {
-        showBusinessAlert(err.message || String(err));
+        console.warn('[outbound] E-Mail-Konto löschen', err);
+        showBusinessAlert('Löschen hat nicht geklappt.');
       } finally {
         await loadMailserverConfig();
       }
@@ -2852,7 +2856,16 @@ function wireEvents(root) {
   root.addEventListener('change', (event) => {
     if (event.target.matches('[data-campaign-record-import]')) {
       const input = event.target;
-      importCampaignRecords(input.files?.[0]).catch((error) => showBusinessAlert(error?.message || String(error)));
+      importCampaignRecords(input.files?.[0]).catch((error) => {
+        console.warn('[outbound] Kampagnenimport', error);
+        const message = String(error?.message || '');
+        const known = [
+          t('campaignImportEmpty', 'Die JSON-Datei enthält keine gültigen Campaign- oder Sequenz-Datensätze.'),
+          t('campaignImportDenied', 'Campaigns können mit den aktuellen Rechten nicht importiert werden.'),
+          t('sequenceImportDenied', 'Sequenzen können mit den aktuellen Rechten nicht importiert werden.'),
+        ];
+        showBusinessAlert(known.includes(message) ? message : 'Import hat nicht geklappt.');
+      });
       input.value = '';
       return;
     }
@@ -4080,9 +4093,6 @@ function renderCRMCompanyRows(row) {
                 <span class="outbound-spinner"></span>
                 <div>
                   <strong>${escapeHtml(t('generatingOutreachEllipsis', 'Anschreiben wird generiert...'))}</strong>
-                  <div class="outbound-muted outbound-loading-hint">
-                    ${escapeHtml(state.generatingOutreach.get(contactKey)?.statusText || t('outreachInProgress', 'CTOX erstellt das Anschreiben...'))}
-                  </div>
                 </div>
               </div>
             ` : `
@@ -4254,68 +4264,12 @@ function syncTableEmptyOverlay(scrollContainer, shouldShow, message) {
   scrollContainer.insertAdjacentHTML('beforeend', html);
 }
 
-function renderActiveResearchSummary(campaign) {
-  const counts = researchActivityCounts(campaign.id);
-  const active = [
-    [t('running', 'läuft'), counts.running],
-    [t('waiting', 'wartet'), counts.waiting],
-    [t('failed', 'Fehler'), counts.failed],
-    [t('cancelled', 'abgebrochen'), counts.cancelled],
-  ].filter(([, count]) => count > 0);
-  if (!active.length) return '';
-  const tone = counts.failed || counts.cancelled ? 'warn' : counts.running ? 'running' : 'waiting';
-  return `
-    <div class="outbound-active-research ${tone}" title="CTOX Research Status">
-      <span></span>
-      <b>${active.map(([label, count]) => `${formatCount(count)} ${label}`).join(' · ')}</b>
-    </div>
-  `;
+function renderActiveResearchSummary() {
+  return '';
 }
 
-function renderResearchActivityPanel(campaign) {
-  const activity = researchActivityRows(campaign.id);
-  const counts = researchActivityCounts(campaign.id, activity);
-  if (!counts.total) return '';
-  const isProblem = counts.failed || counts.cancelled;
-  const title = counts.running
-    ? t('automationActiveResearch', 'CTOX arbeitet: {0} läuft{1}{2}',
-        formatCount(counts.running),
-        counts.waiting ? t('automationActiveResearchWaiting', ' · {0} wartet', formatCount(counts.waiting)) : '',
-        isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
-      )
-    : t('automationIdleResearch', 'CTOX arbeitet gerade nicht: {0} wartet{1}',
-        formatCount(counts.waiting),
-        isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
-      );
-  const items = activity
-    .filter((item) => item.kind !== 'done' && item.kind !== 'idle')
-    .slice(0, 5);
-  return `
-    <details class="outbound-research-activity ${isProblem ? 'warn' : counts.running ? 'running' : 'waiting'}">
-      <summary>
-        <div class="outbound-research-activity-head">
-          <span>CTOX Research</span>
-          <strong>${escapeHtml(title)}</strong>
-        </div>
-        <div class="outbound-research-activity-counts">
-          ${renderActivityCount(t('running', 'läuft'), counts.running)}
-          ${renderActivityCount(t('waiting', 'wartet'), counts.waiting)}
-          ${renderActivityCount(t('failed', 'Fehler'), counts.failed, counts.failed ? 'warn' : '')}
-          ${renderActivityCount(t('cancelled', 'abgebrochen'), counts.cancelled, counts.cancelled ? 'warn' : '')}
-        </div>
-      </summary>
-      ${items.length ? `
-        <ol class="outbound-research-activity-list">
-          ${items.map((item) => `
-            <li class="${escapeHtml(item.kind)}">
-              <b>${escapeHtml(item.label)}</b>
-              <span>${escapeHtml(item.statusLabel)}</span>
-            </li>
-          `).join('')}
-        </ol>
-      ` : ''}
-    </details>
-  `;
+function renderResearchActivityPanel() {
+  return '';
 }
 
 function renderActivityCount(label, count, tone = '') {
@@ -4372,9 +4326,7 @@ function renderTableEmptyState(message) {
     if (readiness?.ready === false) {
       return `
     <div class="outbound-table-empty-overlay">
-        <div class="ctox-syncing" role="status" aria-live="polite">
-          <span>${escapeHtml(t('syncingData', 'Daten werden synchronisiert.'))}</span>
-        </div>
+        <div class="ctox-syncing" role="status" aria-live="polite"></div>
     </div>
   `;
     }
@@ -4960,22 +4912,13 @@ function renderResearchSettingsDrawer(campaign) {
     const ms = state.mailserver || { domains: [], users: [], loading: false, error: null };
     
     let msContent = '';
-    if (ms.loading) {
+    if (ms.loading && !(ms.domains?.length || ms.users?.length)) {
       msContent = `
         <div class="outbound-mailserver-loading">
           <div class="outbound-spinner outbound-spinner--lg"></div>
-          <p class="outbound-muted">${escapeHtml(t('loadingMailserverConfig', 'Mailserver-Konfiguration wird geladen...'))}</p>
         </div>
       `;
     } else {
-      if (ms.error) {
-        msContent += `
-          <div class="ctox-callout is-danger outbound-mailserver-error">
-            <strong>${escapeHtml(t('errorLabel', 'Fehler'))}:</strong> ${escapeHtml(ms.error)}
-          </div>
-        `;
-      }
-      
       // Sektion 1: Custom Domains
       let domainsListHtml = '';
       if (!ms.domains || ms.domains.length === 0) {
@@ -6801,7 +6744,8 @@ async function saveCampaignInlineEdit(campaignId) {
   try {
     await state.ctx.commandBus.dispatch(updateCommand, { timeoutMs: 5000 });
   } catch (error) {
-    showBusinessAlert(error?.message || String(error));
+    console.warn('[outbound] Kampagne speichern', error);
+    showBusinessAlert('Die Kampagne konnte nicht gespeichert werden.');
     return;
   }
   state.campaigns = state.campaigns.map((item) => (item.id === campaign.id ? nextCampaign : item));
@@ -8869,6 +8813,19 @@ function toggleResearchSettingsTab(tabName) {
   }
 }
 
+let mailserverRetryTimer = 0;
+let mailserverRetryAttempt = 0;
+
+function scheduleMailserverConfigRetry() {
+  if (mailserverRetryTimer) return;
+  const delay = Math.min(60_000, 1000 * 2 ** mailserverRetryAttempt);
+  mailserverRetryAttempt += 1;
+  mailserverRetryTimer = window.setTimeout(() => {
+    mailserverRetryTimer = 0;
+    if (state.researchSettingsActiveTab === 'mailserver') loadMailserverConfig();
+  }, delay);
+}
+
 async function loadMailserverConfig() {
   if (!state.ctx?.commandBus?.dispatch) return;
   state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
@@ -8900,12 +8857,19 @@ async function loadMailserverConfig() {
       const outcome = result.result || result.payload?.outcome || result;
       state.mailserver.domains = outcome.domains || [];
       state.mailserver.users = outcome.users || [];
+      state.mailserver.error = null;
+      mailserverRetryAttempt = 0;
+      if (mailserverRetryTimer) {
+        window.clearTimeout(mailserverRetryTimer);
+        mailserverRetryTimer = 0;
+      }
     } else {
-      throw new Error('Fehler beim Laden der Mailserver-Konfiguration.');
+      throw new Error('mailserver config unavailable');
     }
   } catch (err) {
-    console.error('[outbound] Failed to load mailserver config', err);
-    state.mailserver.error = err.message || String(err);
+    console.warn('[outbound] Mailserver-Konfiguration', err);
+    state.mailserver.error = null;
+    scheduleMailserverConfigRetry();
   } finally {
     state.mailserver.loading = false;
     // Re-render if tab is still active
@@ -9139,7 +9103,7 @@ async function generateOutreachForContact(itemId, contactIndex) {
       c.outreach_status = 'draft_failed';
     }).catch(() => {});
     renderCenter();
-    showBusinessAlert(`Fehler bei der Outreach-Generierung: ${err.message}`);
+    showBusinessAlert('Das Anschreiben konnte nicht erstellt werden.');
   }
 }
 

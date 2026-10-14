@@ -170,7 +170,7 @@ test('data-driven empty states gate on canonical collection readiness', async ()
   assert.match(js, /outboundCollectionReadiness\('outbound_companies'\)/, 'company table empty gates on outbound_companies readiness');
   assert.match(js, /ctox-syncing" role="status" aria-live="polite"/, 'unready + empty renders the syncing shell');
   assert.match(js, /readiness\?\.ready === false[\s\S]*?ctox-empty/, 'empty fallback only renders once the collection is ready');
-  assert.match(js, /t\('syncingData', 'Daten werden synchronisiert\.'\)/, 'sync hint goes through module i18n');
+  assert.doesNotMatch(js, /Daten werden synchronisiert|CTOX arbeitet/);
 });
 
 test('campaign scope recovers existing outbound rows for the only visible campaign', () => {

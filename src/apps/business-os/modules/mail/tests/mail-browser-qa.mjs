@@ -500,7 +500,8 @@ mailQa: try {
     window.__mailReadFailures.set('communication_threads', 'mail read failed');
     window.__mailNotify('communication_threads');
   });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 1);
   await page.evaluate(() => {
     window.__mailReadFailures.delete('communication_threads');
@@ -800,12 +801,14 @@ mailQa: try {
     window.__mailReadFailures.set('communication_threads', 'PENDING');
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
-  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-list-empty].ctox-syncing').waitFor({ state: 'visible' });
+  assert.equal(await page.getByText('Mail wird synchronisiert', { exact: true }).count(), 0);
   assert.equal(await page.getByText('Keine E-Mails', { exact: true }).count(), 0);
   await page.evaluate(() => {
     window.__mailReadPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 600);
   });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached', timeout: 14_000 });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   assert.ok(await page.evaluate(() => {
     const attempts = (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline;
     return attempts >= 2
@@ -825,7 +828,8 @@ mailQa: try {
     window.__mailNotify('communication_threads');
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  assert.equal(await page.locator('[data-mail-root][data-mail-read-retry="1"]').count(), 0);
   await page.evaluate(() => {
     window.__mailRows.communication_messages.find((message) => message.message_key === 'mail-1').subject = 'Projektstatus nach Sync';
     window.__mailFastPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 20);
@@ -837,13 +841,13 @@ mailQa: try {
     window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
-  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
-  await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-list-empty].ctox-syncing').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached', timeout: 14_000 });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  assert.equal(await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).count(), 0);
   await page.evaluate(() => window.__mailReadFailures.delete('communication_threads'));
-  await page.locator('[data-mail-retry-read]').click();
   await assertVisibleText(page, 'Projektstatus nach Sync');
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   await page.evaluate(async () => {
     window.__unmountMail();
     const catchingUp = { ready: false, state: 'catching_up' };
@@ -870,24 +874,26 @@ mailQa: try {
     };
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
-  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
-  await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-list-empty].ctox-syncing').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached', timeout: 14_000 });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  assert.equal(await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).count(), 0);
   await page.evaluate(() => {
     window.__mailRows.communication_threads = window.__savedMailThreads;
     window.__mailRows.communication_messages = window.__savedMailMessages;
     window.__mailNotify('communication_threads');
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   await page.evaluate(() => {
     window.__mailRows.communication_threads = [];
     window.__mailRows.communication_messages = [];
     window.__mailNotify('communication_threads');
   });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached', timeout: 14_000 });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   await page.evaluate(() => window.__mailReadinessListener({ ready: true, state: 'live' }));
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.locator('[data-mail-root]:not([data-mail-read-retry])').waitFor({ state: 'attached' });
   await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });
   await page.evaluate(async () => {
     window.__unmountMail();
@@ -949,7 +955,8 @@ mailQa: try {
     window.__mailNativeUnavailable = true;
     window.dispatchEvent(new Event('focus'));
   });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 8_000 });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
   assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
   await page.evaluate(() => {
@@ -982,7 +989,8 @@ mailQa: try {
     window.__mailNativeUnavailable = true;
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
-  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-root][data-mail-read-retry="1"]').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
   assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, native account revocation, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');

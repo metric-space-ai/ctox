@@ -88,19 +88,19 @@ const FALLBACK_LABELS = {
     emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über verbundene Channels führt.',
     noResultsTitle: 'Keine Treffer',
     noResultsBody: 'Keine Konversation passt zu den aktiven Filtern.',
-    syncFailureTitle: 'Kommunikation ist gerade nicht verfügbar',
-    syncFailureBody: 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.',
-    syncStartingTitle: 'Kommunikation wird synchronisiert',
-    syncStartingBody: 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.',
-    listSyncingTitle: 'Konversationen werden synchronisiert',
-    listSyncingBody: 'Daten werden synchronisiert. Konversationen erscheinen, sobald die erste Synchronisation abgeschlossen ist.',
-    timelineSyncing: 'Nachrichten werden synchronisiert.',
-    projectionMissingTitle: 'Konversationen werden vorbereitet',
-    projectionMissingBody: 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.',
+    syncFailureTitle: '',
+    syncFailureBody: '',
+    syncStartingTitle: '',
+    syncStartingBody: '',
+    listSyncingTitle: '',
+    listSyncingBody: '',
+    timelineSyncing: '',
+    projectionMissingTitle: '',
+    projectionMissingBody: '',
     diagnosticsLabel: 'Status',
     accountFilterEmpty: 'Keine Accounts verfügbar',
     accountFilterCount: 'Accounts verfügbar',
-    accountFilterSyncFailure: 'Accounts gerade nicht verfügbar',
+    accountFilterSyncFailure: '',
     emptyDetailTitle: 'Keine Konversation ausgewählt',
     emptyDetailBody: 'Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.',
     rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
@@ -128,7 +128,7 @@ const FALLBACK_LABELS = {
     statusRead: 'gelesen',
     statusReceived: 'eingegangen',
     statusFailed: 'fehlgeschlagen',
-    statusQueued: 'in Warteschlange',
+    statusQueued: 'wird gesendet',
     todayLabel: 'Heute',
     yesterdayLabel: 'Gestern',
     unknownContact: 'Unbekannter Kontakt',
@@ -158,9 +158,9 @@ const FALLBACK_LABELS = {
     contextOpenFlowview: 'Im CTOX-Flow öffnen',
     taskBadgeLabel: 'Task',
     workBadgeLabel: 'Work',
-    detailRouteStatus: 'Queue-Status',
+    detailRouteStatus: '',
     detailWorkId: 'Work-ID',
-    routeQueued: 'in Queue',
+    routeQueued: 'wird gesendet',
     routeLeased: 'gelistet',
     routeRunning: 'läuft',
     routeDone: 'fertig',
@@ -216,19 +216,19 @@ const FALLBACK_LABELS = {
     emptyListBody: 'Communications CTOX has on connected channels appear here.',
     noResultsTitle: 'No matches',
     noResultsBody: 'No conversation matches the active filters.',
-    syncFailureTitle: 'Communication is unavailable right now',
-    syncFailureBody: 'Conversations appear automatically once communication data is loaded.',
-    syncStartingTitle: 'Communication is syncing',
-    syncStartingBody: 'Accounts and messages have not fully arrived in the local app yet.',
-    listSyncingTitle: 'Syncing conversations',
-    listSyncingBody: 'Syncing data. Conversations appear once the initial sync completes.',
-    timelineSyncing: 'Syncing messages.',
-    projectionMissingTitle: 'Preparing conversations',
-    projectionMissingBody: 'Accounts and messages are being prepared for the contact view.',
+    syncFailureTitle: '',
+    syncFailureBody: '',
+    syncStartingTitle: '',
+    syncStartingBody: '',
+    listSyncingTitle: '',
+    listSyncingBody: '',
+    timelineSyncing: '',
+    projectionMissingTitle: '',
+    projectionMissingBody: '',
     diagnosticsLabel: 'Status',
     accountFilterEmpty: 'No accounts available',
     accountFilterCount: 'accounts available',
-    accountFilterSyncFailure: 'Accounts unavailable right now',
+    accountFilterSyncFailure: '',
     emptyDetailTitle: 'No conversation selected',
     emptyDetailBody: 'Pick a conversation on the left to view the CTOX-side timeline.',
     rightEmptyBody: 'Contact details and linked records appear here.',
@@ -256,7 +256,7 @@ const FALLBACK_LABELS = {
     statusRead: 'read',
     statusReceived: 'received',
     statusFailed: 'failed',
-    statusQueued: 'queued',
+    statusQueued: 'sending',
     todayLabel: 'Today',
     yesterdayLabel: 'Yesterday',
     unknownContact: 'Unknown contact',
@@ -286,9 +286,9 @@ const FALLBACK_LABELS = {
     contextOpenFlowview: 'Open in CTOX flow',
     taskBadgeLabel: 'Task',
     workBadgeLabel: 'Work',
-    detailRouteStatus: 'Queue status',
+    detailRouteStatus: '',
     detailWorkId: 'Work ID',
-    routeQueued: 'queued',
+    routeQueued: 'sending',
     routeLeased: 'leased',
     routeRunning: 'running',
     routeDone: 'done',
@@ -923,11 +923,11 @@ export async function mount(ctx) {
     const hasAccountFailure = diagnostics.problemCollections.includes('communication_accounts');
     refs.accountFilterStatus.dataset.state = hasAccountFailure ? 'error' : '';
     if (hasAccountFailure) {
-      refs.accountFilterStatus.textContent = t('accountFilterSyncFailure', 'Accounts gerade nicht verfügbar');
+      refs.accountFilterStatus.textContent = '';
     } else if (accountCount > 0) {
       refs.accountFilterStatus.textContent = `${accountCount} ${t('accountFilterCount', 'Accounts verfügbar')}`;
     } else {
-      refs.accountFilterStatus.textContent = t('accountFilterEmpty', 'Keine Communication-Accounts synchronisiert');
+      refs.accountFilterStatus.textContent = t('accountFilterEmpty', 'Keine Accounts verfügbar');
     }
   }
 
@@ -1154,7 +1154,10 @@ export async function mount(ctx) {
       readiness: view.threadsReadiness,
       t,
     });
-    const syncing = state.kind === 'syncing';
+    const syncing = state.kind === 'syncing'
+      || state.kind === 'sync-failure'
+      || state.kind === 'sync-starting'
+      || state.kind === 'projection-missing';
     refs.emptyList.classList.toggle('ctox-empty', !syncing);
     refs.emptyList.classList.toggle('ctox-syncing', syncing);
     if (syncing) {
@@ -1363,8 +1366,6 @@ export async function mount(ctx) {
         syncing.className = 'ctox-syncing conv-syncing';
         syncing.setAttribute('role', 'status');
         syncing.setAttribute('aria-live', 'polite');
-        syncing.innerHTML = `<span></span>`;
-        syncing.querySelector('span').textContent = t('timelineSyncing', 'Nachrichten werden synchronisiert.');
         refs.timeline.appendChild(syncing);
         return;
       }
@@ -1582,7 +1583,7 @@ export async function mount(ctx) {
     btn.className = 'ctox-chip conv-message-task-chip';
     btn.dataset.kind = kind;
     if (routeStatus) btn.dataset.routeStatus = routeStatus;
-    btn.title = `${label}: ${id}${routeStatus ? ` · ${labelForRouteStatus(routeStatus, t)}` : ''}`;
+    btn.title = `${label}`;
     btn.innerHTML = `
       <span class="conv-message-task-chip-kind"></span>
       <span class="conv-message-task-chip-id"></span>
@@ -1592,14 +1593,7 @@ export async function mount(ctx) {
     btn.querySelector('.conv-message-task-chip-kind').textContent = label;
     btn.querySelector('.conv-message-task-chip-id').textContent = shortenId(id);
     const statusEl = btn.querySelector('.conv-message-task-chip-status');
-    if (routeStatus) {
-      statusEl.textContent = labelForRouteStatus(routeStatus, t);
-      statusEl.dataset.routeStatus = routeStatus;
-      const variant = badgeVariantForRouteStatus(routeStatus);
-      if (variant) statusEl.classList.add(variant);
-    } else {
-      statusEl.hidden = true;
-    }
+    statusEl.hidden = true;
     btn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1645,7 +1639,6 @@ export async function mount(ctx) {
     dl.className = 'conv-message-details-body';
     appendDetailRow(dl, t('detailMessageKey', 'Message-Key'), msg.message_key);
     if (msg.remote_id) appendDetailRow(dl, t('detailRemoteId', 'Remote-ID'), msg.remote_id);
-    if (msg.route_status) appendDetailRow(dl, t('detailRouteStatus', 'Queue-Status'), labelForRouteStatus(msg.route_status, t));
     if (msg.ticket_self_work_id) appendDetailRow(dl, t('detailWorkId', 'Work-ID'), msg.ticket_self_work_id);
     else if (msg.work_id) appendDetailRow(dl, t('detailWorkId', 'Work-ID'), msg.work_id);
     if (msg.observed_at) appendDetailRow(dl, t('detailObservedAt', 'CTOX beobachtet'), formatDateShort(msg.observed_at));
@@ -2856,8 +2849,8 @@ function conversationEmptyState({
   if (diagnostics.hasFailure) {
     return {
       kind: 'sync-failure',
-      title: t('syncFailureTitle', 'Kommunikation ist gerade nicht verfügbar'),
-      body: t('syncFailureBody', 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.'),
+      title: '',
+      body: '',
     };
   }
   if (totalBuckets > 0 && filteredBuckets === 0 && hasActiveFilters) {
@@ -2870,15 +2863,15 @@ function conversationEmptyState({
   if (totalBuckets === 0 && localData) {
     return {
       kind: 'projection-missing',
-      title: t('projectionMissingTitle', 'Konversationen werden vorbereitet'),
-      body: t('projectionMissingBody', 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.'),
+      title: '',
+      body: '',
     };
   }
   if (diagnostics.isStarting) {
     return {
       kind: 'sync-starting',
-      title: t('syncStartingTitle', 'Kommunikation wird synchronisiert'),
-      body: t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.'),
+      title: '',
+      body: '',
     };
   }
   // Canonical readiness gate: the unfiltered source collection has not
@@ -2886,8 +2879,8 @@ function conversationEmptyState({
   if (totalBuckets === 0 && readiness?.ready === false) {
     return {
       kind: 'syncing',
-      title: t('listSyncingTitle', 'Konversationen werden synchronisiert'),
-      body: t('listSyncingBody', 'Daten werden synchronisiert. Konversationen erscheinen, sobald die erste Synchronisation abgeschlossen ist.'),
+      title: '',
+      body: '',
     };
   }
   return {
@@ -3147,8 +3140,8 @@ function labelForStatus(status, t) {
     case 'read': return t('statusRead', 'gelesen');
     case 'received': return t('statusReceived', 'eingegangen');
     case 'failed': return t('statusFailed', 'fehlgeschlagen');
-    case 'queued': return t('statusQueued', 'in Warteschlange');
-    default: return status || '';
+    case 'queued': return t('statusQueued', 'wird gesendet');
+    default: return '';
   }
 }
 
@@ -3199,7 +3192,7 @@ function labelForRouteStatus(status, t) {
   switch (String(status || '').toLowerCase()) {
     case 'pending':
     case 'accepted':
-    case 'queued': return t('routeQueued', 'in Queue');
+    case 'queued': return t('routeQueued', 'wird gesendet');
     case 'leased': return t('routeLeased', 'gelistet');
     case 'running':
     case 'working': return t('routeRunning', 'läuft');
@@ -3211,7 +3204,7 @@ function labelForRouteStatus(status, t) {
     case 'canceled': return t('routeCancelled', 'abgebrochen');
     case 'blocked':
     case 'stale_missing_native': return t('routeBlocked', 'blockiert');
-    default: return status || '';
+    default: return '';
   }
 }
 

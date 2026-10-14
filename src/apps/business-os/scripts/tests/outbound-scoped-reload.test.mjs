@@ -250,18 +250,18 @@ try {
     };
     const render = () => { hooks.renderCampaigns(); hooks.renderCenter(); };
     render();
-    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
-    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    assert.match(campaignBody.innerHTML, /Wird geladen/);
+    assert.match(leadBody.innerHTML, /Wird geladen/);
     await assert.rejects(hooks.reload(['leads', 'imports']), error => error.code === 'OUTBOUND_COLLECTION_READ_FAILED' && /remote request token timeout/.test(error.details.leads));
     render();
     // A collection that never loaded is still starting: loading, not an error.
-    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
-    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    assert.match(campaignBody.innerHTML, /Wird geladen/);
+    assert.match(leadBody.innerHTML, /Wird geladen/);
     // Retries continue, so a lasting failure still reads as loading, never as an error.
     state.collectionReadErrors.get('leads').since -= 61_000;
     render();
-    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
-    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    assert.match(campaignBody.innerHTML, /Wird geladen/);
+    assert.match(leadBody.innerHTML, /Wird geladen/);
     assert.doesNotMatch(leadBody.innerHTML + campaignBody.innerHTML, /konnten nicht geladen|Noch keine/);
     failed = false;
     await hooks.reload(['leads']);
@@ -542,7 +542,7 @@ try {
       state.ctx.actions.openApp = () => { throw Error('receiver missing'); };
       await hooks.exportResearchXlsx(leads, 'retry');
       assert.equal(downloaded.length, 2, 'receiver failure does not discard successful download');
-      assert.equal(state.exportXlsxBusy, false); assert.match(state.notice, /Excel heruntergeladen.*nicht geöffnet/);
+      assert.equal(state.exportXlsxBusy, false); assert.equal(state.notice, 'Excel mit 139 Leads heruntergeladen.'); assert.doesNotMatch(state.notice, /nicht geöffnet/);
     } finally {
       globalThis.document = oldDocument; globalThis.setTimeout = oldTimeout;
       delete globalThis.__outboundExportProbe;
