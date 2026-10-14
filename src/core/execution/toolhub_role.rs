@@ -51,6 +51,7 @@ fn parse_env_role(v: &str) -> Option<TeamRole> {
         "supervisor" => Some(TeamRole::Supervisor),
         "persistent_worker" => Some(TeamRole::PersistentWorker),
         "one_shot_worker" | "worker" => Some(TeamRole::OneShotWorker),
+        "operator" => Some(TeamRole::Operator),
         "" => None,
         // Unknown values are treated as the most restricted role.
         _ => Some(TeamRole::OneShotWorker),
@@ -100,6 +101,29 @@ pub fn resolve_with(conn: Option<&Connection>, session: Option<&str>, env_role: 
         (None, Some(e)) => e,
         (Some(TeamRole::Supervisor), Some(e)) => e, // env may restrict
         (Some(b), Some(_)) => b,                    // a worker binding cannot be elevated
+    }
+}
+
+/// Role for a call relayed by Workjet (MCP `business_os.toolhub_*`). Workjet,
+/// not the model, supplies `claim` from the thread's team config; it is the
+/// authority for Workjet-side roles (one-shot workers are not bound in CTOX).
+/// A CTOX binding still wins: a bound worker is never elevated, a bound
+/// supervisor can only be restricted. Unbound thread without claim → one-shot.
+pub fn resolve_claimed(conn: Option<&Connection>, thread: Option<&str>, claim: Option<&str>) -> TeamRole {
+    let claim = claim.and_then(parse_env_role);
+    let thread = thread.map(str::trim).filter(|t| !t.is_empty());
+    let bound = match (conn, thread) {
+        (Some(c), Some(t)) if table_has(c, "workjet_supervisor_bindings", t) => Some(TeamRole::Supervisor),
+        (Some(c), Some(t)) if table_has(c, "workjet_persistent_worker_bindings", t) => Some(TeamRole::PersistentWorker),
+        _ => None,
+    };
+    match (bound, claim, thread) {
+        (Some(TeamRole::Supervisor), Some(c), _) if c != TeamRole::Operator => c,
+        (Some(b), _, _) => b,
+        (None, Some(TeamRole::Supervisor), _) => TeamRole::OneShotWorker, // unbound supervisor claim
+        (None, Some(c), _) => c,
+        (None, None, Some(_)) => TeamRole::OneShotWorker,
+        (None, None, None) => TeamRole::Operator,
     }
 }
 
@@ -243,6 +267,20 @@ mod tests {
     }
 
     #[test]
+    fn relayed_claims_never_beat_ctox_bindings() {
+        let c = db();
+        assert_eq!(resolve_claimed(Some(&c), Some("sup"), Some("supervisor")), TeamRole::Supervisor);
+        assert_eq!(resolve_claimed(Some(&c), Some("sup"), Some("operator")), TeamRole::Supervisor);
+        assert_eq!(resolve_claimed(Some(&c), Some("sup"), Some("one_shot_worker")), TeamRole::OneShotWorker);
+        assert_eq!(resolve_claimed(Some(&c), Some("pw"), Some("supervisor")), TeamRole::PersistentWorker);
+        assert_eq!(resolve_claimed(Some(&c), Some("pw"), Some("operator")), TeamRole::PersistentWorker);
+        assert_eq!(resolve_claimed(Some(&c), Some("x"), Some("supervisor")), TeamRole::OneShotWorker);
+        assert_eq!(resolve_claimed(Some(&c), Some("x"), Some("operator")), TeamRole::Operator);
+        assert_eq!(resolve_claimed(Some(&c), Some("x"), None), TeamRole::OneShotWorker);
+        assert_eq!(resolve_claimed(Some(&c), None, None), TeamRole::Operator);
+    }
+
+    #[test]
     fn only_supervisor_and_operator_raise_cards() {
         assert!(TeamRole::Supervisor.may_raise_cards());
         assert!(TeamRole::Operator.may_raise_cards());
@@ -256,7 +294,7 @@ mod tests {
             (TeamRole::Supervisor, "Role rule (Supervisor)"),
             (TeamRole::PersistentWorker, "Role rule (Persistent worker)"),
             (TeamRole::OneShotWorker, "Role rule (One-shot worker)"),
-            (TeamRole::Operator, "Role rule (Operator shell)"),
+            (TeamRole::Operator, "Role rule (Owner chat)"),
         ];
         for (role, own) in roles {
             let s = prompt_section(role);

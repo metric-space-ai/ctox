@@ -1780,6 +1780,37 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
             object_schema(vec![]),
         ),
         read_tool(
+            "business_os.toolhub_list",
+            "Connected third-party app accounts of this instance (Toolhub). No secrets.",
+            object_schema(vec![optional_string("thread_id"), optional_string("team_role")]),
+        ),
+        read_tool(
+            "business_os.toolhub_catalog",
+            "Toolhub toolkits, actions and input schemas (optionally one toolkit).",
+            object_schema(vec![optional_string("toolkit"), optional_string("thread_id"), optional_string("team_role")]),
+        ),
+        write_tool(
+            "business_os.toolhub_exec",
+            "Run one Toolhub action (`<toolkit>.<ACTION>`) with JSON arguments. Writes need confirm=true after approval. On credential_required, supervisors get a pinned user card; workers get needs_user for their supervisor.",
+            object_schema(vec![
+                required_string("tool"),
+                required_object("arguments"),
+                optional_boolean("confirm"),
+                optional_string("thread_id"),
+                optional_string("team_role"),
+            ]),
+        ),
+        write_tool(
+            "business_os.toolhub_needs_user",
+            "Report that a toolkit needs the user (credential, connect, confirm). Supervisors raise the card; workers get the needs_user hand-off.",
+            object_schema(vec![
+                required_string("toolkit"),
+                optional_string("reason"),
+                optional_string("thread_id"),
+                optional_string("team_role"),
+            ]),
+        ),
+        read_tool(
             "business_os.list_modules",
             "Use this when you need the installed Business OS module catalog.",
             object_schema(vec![]),
@@ -3567,6 +3598,12 @@ fn call_tool_inner(
                     .as_deref()
                     .unwrap_or(""),
             )?
+        }
+        "business_os.toolhub_list"
+        | "business_os.toolhub_catalog"
+        | "business_os.toolhub_exec"
+        | "business_os.toolhub_needs_user" => {
+            crate::execution::toolhub_host::handle_toolhub_mcp_tool(root, tool_name, &arguments)?
         }
         "business_os.status" => mcp_status(root, &context)?,
         "business_os.list_modules" => serde_json::to_value(list_modules(root, &context)?)?,

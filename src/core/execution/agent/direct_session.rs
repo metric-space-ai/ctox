@@ -1293,6 +1293,14 @@ impl PersistentSession {
         settings: &BTreeMap<String, String>,
         persona: Option<&str>,
     ) -> Result<Self> {
+        // Isolated queue jobs (research, gap closure) are bounded leaf work:
+        // one-shot worker role, never an operator that may raise user cards.
+        let settings = &crate::execution::toolhub_role::with_team(
+            root,
+            settings,
+            None,
+            Some(crate::execution::toolhub_role::TeamRole::OneShotWorker),
+        );
         Self::start_with_instructions_and_tool_mode(
             root, settings, None, persona, false, false, false, None, false, false,
         )
@@ -1308,6 +1316,13 @@ impl PersistentSession {
         base_instructions: Option<&str>,
         persona: Option<&str>,
     ) -> Result<Self> {
+        // Narrow queue jobs (app authoring, …) run without a user in the loop.
+        let settings = &crate::execution::toolhub_role::with_team(
+            root,
+            settings,
+            None,
+            Some(crate::execution::toolhub_role::TeamRole::OneShotWorker),
+        );
         Self::start_with_instructions_and_tool_mode(
             root,
             settings,
@@ -3383,7 +3398,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ctox-native-prompt-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let cases = [
-            (None, "Role rule (Operator shell)"),
+            (None, "Role rule (Owner chat)"),
             (Some("supervisor"), "Role rule (Supervisor)"),
             (Some("persistent_worker"), "Role rule (Persistent worker)"),
             (Some("one_shot_worker"), "Role rule (One-shot worker)"),

@@ -843,6 +843,106 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
     }
 }
 
+/// Business OS MCP tools `business_os.toolhub_{list,catalog,exec,needs_user}`:
+/// the same instance handler as `/api/business-os/toolhub/*`, so harnesses
+/// reach the Toolhub through their MCP connection without a local `ctox`.
+/// Role-aware: only supervisor/operator calls raise a user card; workers get
+/// a structured `needs_user` for their supervisor.
+pub fn handle_toolhub_mcp_tool(root: &Path, tool: &str, args: &Value) -> Result<Value> {
+    let thread = args.get("thread_id").and_then(Value::as_str);
+    let claim = args.get("team_role").and_then(Value::as_str);
+    let role = {
+        let conn = crate::business_os::store::open_store(root).ok();
+        toolhub_role::resolve_claimed(conn.as_ref(), thread, claim)
+    };
+    let routed = |route: &str, body: &Value| -> Result<Value> {
+        let (status, value) = handle_toolhub_http(root, route, false, body);
+        if status != 200 {
+            bail!(
+                "{}",
+                value.get("message").and_then(Value::as_str).unwrap_or("toolhub request failed")
+            );
+        }
+        Ok(value)
+    };
+    match tool {
+        "business_os.toolhub_list" => {
+            let catalog = routed("catalog", &Value::Null)?;
+            let mcp = routed("connections", &Value::Null)?;
+            Ok(json!({"ok": true, "accounts": catalog["accounts"], "mcp_connections": mcp["connections"], "role": role.as_str()}))
+        }
+        "business_os.toolhub_catalog" => {
+            let mut catalog = routed("catalog", &Value::Null)?;
+            if let Some(filter) = args.get("toolkit").and_then(Value::as_str) {
+                if let Some(list) = catalog["toolkits"].as_array_mut() {
+                    list.retain(|t| t["slug"] == filter);
+                }
+            }
+            Ok(catalog)
+        }
+        "business_os.toolhub_exec" => {
+            let name = args.get("tool").and_then(Value::as_str).unwrap_or_default();
+            let body = json!({
+                "tool": name,
+                "arguments": args.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                "confirm": args.get("confirm").and_then(Value::as_bool).unwrap_or(false),
+            });
+            let mut value = routed("call", &body)?;
+            if value["exit_code"] == exit::CREDENTIAL_REQUIRED {
+                let toolkit = name.split('.').next().unwrap_or_default();
+                let fields = value["outcome"].get("fields").cloned().unwrap_or_else(|| json!([]));
+                value["needs_user"] = raise_or_hand_off(root, role, toolkit, "credential_required", thread, fields)?;
+            }
+            value["role"] = json!(role.as_str());
+            Ok(value)
+        }
+        "business_os.toolhub_needs_user" => {
+            let toolkit = args.get("toolkit").and_then(Value::as_str).unwrap_or_default();
+            let reason = args.get("reason").and_then(Value::as_str).unwrap_or("user input required");
+            let fields = args.get("fields").cloned().unwrap_or_else(|| json!([]));
+            Ok(json!({"ok": true, "role": role.as_str(),
+                "needs_user": raise_or_hand_off(root, role, toolkit, reason, thread, fields)?}))
+        }
+        other => bail!("unknown toolhub tool `{other}`"),
+    }
+}
+
+/// Supervisor/operator: create (deduped) the card in the thread's session.
+/// Workers: never a card, only the hand-off object.
+fn raise_or_hand_off(
+    root: &Path,
+    role: toolhub_role::TeamRole,
+    toolkit: &str,
+    reason: &str,
+    thread: Option<&str>,
+    fields: Value,
+) -> Result<Value> {
+    let kind = card_kind_for(root, toolkit);
+    let kind_str = serde_json::to_value(kind)?.as_str().unwrap_or("credential").to_string();
+    let mut out = toolhub_role::needs_user(role, &kind_str, toolkit, reason, fields)["needs_user"].clone();
+    if role.may_raise_cards() {
+        let mut r = toolhub_ui::create(
+            root,
+            kind,
+            toolkit,
+            vec![],
+            Some(reason.to_string()),
+            thread.map(str::to_string),
+            900,
+        )?;
+        attach_connection_fields(root, &mut r);
+        out["ui_request"] = toolhub_ui::summary(&r);
+        out["next"] = json!("A card is pinned in the chat. End the turn as waiting; retry after it is resolved.");
+    } else {
+        out["next"] = json!(if role == toolhub_role::TeamRole::PersistentWorker {
+            "Hand this needs_user to your supervisor (workjet_escalate) and park."
+        } else {
+            "Stop and end your run with this needs_user; the supervisor re-dispatches you."
+        });
+    }
+    Ok(out)
+}
+
 /// `exec <server>.<tool>` against a connected remote MCP server.
 fn exec_mcp(root: &Path, args: &[String], projects: ProjectResolver<'_>) -> (i32, Value) {
     use ctox_toolhub::remote_mcp::McpOutcome;
@@ -1024,6 +1124,44 @@ pub fn exec<B: SecretBackend>(
 mod tests {
     use super::*;
     use ctox_toolhub::MemorySecretBackend;
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let r = std::env::temp_dir().join(format!("ctox-toolhub-mcp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        std::fs::create_dir_all(&r).unwrap();
+        r
+    }
+
+    #[test]
+    fn mcp_needs_user_raises_card_only_for_supervisor_or_operator() {
+        // Workers: hand-off only, nothing pinned in the chat.
+        for (claim, tag) in [("one_shot_worker", "os"), ("persistent_worker", "pw"), ("supervisor", "unbound-sup")] {
+            let root = temp_root(tag);
+            let out = handle_toolhub_mcp_tool(&root, "business_os.toolhub_needs_user",
+                &json!({"toolkit": "jira", "thread_id": "t1", "team_role": claim})).unwrap();
+            assert!(out["needs_user"].get("ui_request").is_none(), "{claim} must not raise a card");
+            assert_eq!(out["needs_user"]["toolkit"], "jira");
+            assert!(toolhub_ui::list(&root).unwrap_or_default().is_empty(), "{claim}");
+        }
+        // Owner-facing thread (operator claim, unbound): card pinned to the thread.
+        let root = temp_root("op");
+        let out = handle_toolhub_mcp_tool(&root, "business_os.toolhub_needs_user",
+            &json!({"toolkit": "jira", "thread_id": "t1", "team_role": "operator"})).unwrap();
+        assert_eq!(out["role"], "operator");
+        assert!(out["needs_user"]["ui_request"].is_object());
+        let open = toolhub_ui::list(&root).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].session.as_deref(), Some("t1"));
+        // Deduped on repeat.
+        handle_toolhub_mcp_tool(&root, "business_os.toolhub_needs_user",
+            &json!({"toolkit": "jira", "thread_id": "t1", "team_role": "operator"})).unwrap();
+        assert_eq!(toolhub_ui::list(&root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mcp_unknown_toolhub_tool_is_rejected() {
+        assert!(handle_toolhub_mcp_tool(&temp_root("unk"), "business_os.toolhub_nope", &json!({})).is_err());
+    }
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
