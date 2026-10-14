@@ -1,6 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-import { CALENDAR_SCHEMA, validateCalendarValue } from './workjet-calendar-contract.generated.mjs?v=20261013-shell-v2-bounded-write-admission';
+import { CALENDAR_SCHEMA, validateCalendarValue } from './workjet-calendar-contract.generated.mjs?v=20261014-shell-v2-news-app';
 
 export const CALENDAR_READ_METHOD = 'ctox.workjet.calendar.read.v1';
 function requireCalendarValue(type, value) {

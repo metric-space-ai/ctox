@@ -30,6 +30,7 @@
     "modules/matching/ui/businessOsControls.js",
     "modules/matching/ui/ctoxCommandAdapter.js",
     "modules/nachweise/index.js",
+    "modules/news/index.js",
     "modules/outbound/active-outreach.js",
     "modules/outbound/index.js",
     "modules/placements/index.js",

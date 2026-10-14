@@ -2,7 +2,7 @@
   "schema": "workjet.operator-icon-selection.v1",
   "selectionSource": "operator-approved-desktop-preview",
   "assetKind": "raster-reference",
-  "count": 34,
+  "count": 35,
   "icons": [
     {
       "appId": "ctox",
@@ -343,6 +343,16 @@
       "sourceArtifact": "/Users/michaelwelsch/Documents/ctox/runtime/icon-selection/workjet-all-apps-v2/business-os-desktop-34-icons-mockup.html",
       "renderAsset": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg",
       "renderSha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284"
+    },
+    {
+      "appId": "news",
+      "candidateId": "candidate-01",
+      "sha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759",
+      "mediaType": "image/jpeg",
+      "asset": "shared/assets/workjet-icons/operator-selection-v1/news.jpg",
+      "sourceArtifact": "src/apps/business-os/modules/news/icon.svg",
+      "renderAsset": "shared/assets/workjet-icons/operator-selection-v1/news.jpg",
+      "renderSha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759"
     }
   ]
 }

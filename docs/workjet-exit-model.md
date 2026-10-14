@@ -18,6 +18,37 @@ Business data and command receipts travel through CTOX Sync/RxDB/WebRTC.
 `submit`: `{project_id, as_of?, inputs}`. Routing `inbound_channel` is optional;
 all other unknown keys are rejected. The existing command ID is the immutable
 intent/idempotency key. `record_id`, if present, must equal `project_id`.
+
+### Adopt a researched plan in one operation
+
+The existing owner-only `submit` also accepts `{project_id, confirm_run_id}`.
+`confirm_run_id` is the exact latest `assessment.run_id` shown to the Owner.
+It is mutually exclusive with `inputs`, `resources` and `as_of`. The existing
+business-command ID is the durable operation/idempotency key: repeat the same
+ID and payload after a lost reply; changed payload under that ID is rejected.
+
+Native terminal research always stores `plan.confirmed=false`, even when the
+model claims confirmation. It must return a complete source-backed plan and
+scenarios, including a reasoned resource proposal if none was recorded. Read
+returns `assessment.resource_proposal` and `assessment.plan_summary`; a complete
+plan awaiting only acceptance has `missing_inputs:["confirmed_resource_plan"]`
+and the finding `resource_proposal_requires_confirmation`. A resource-only
+proposal or genuinely missing sources/rights is not an adoptable valuation.
+
+Adoption loads the retained inputs inside the existing domain-effect transaction,
+checks current project ownership, latest-run CAS and source validity at today's
+UTC date, confirms that stored plan and calculates synchronously. It creates an
+immutable new run and returns `{ok:true,assessment}` with `status:"provisional"`,
+`result.expected_exit_equity_eur`, `result.p10_eur/p50_eur/p90_eur` and `scenarios`.
+It starts no further model turn. Replays return the original committed receipt;
+a new operation for an old proposal is rejected as stale. Missing/expired evidence
+stays explicit, and independent review is not silently claimed.
+
+The existing Workjet guest action `project.exit_model.submit` accepts
+`{action,commandId,projectId,confirmRunId}` and maps the run pin to
+`confirm_run_id`; inputs cannot override that pin. Its response retains strict
+command/project/session correlation. A signed shell containing this control
+adapter must be delivered before the Workjet UI enables its adoption button.
 Dates are canonical `YYYY-MM-DD`; omitted `as_of` is today's UTC date.
 
 Resources are a **proposal**, not hidden monthly financial allocations:
