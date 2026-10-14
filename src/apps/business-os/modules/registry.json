@@ -2027,6 +2027,81 @@
       "deletable": true
     },
     {
+      "id": "news",
+      "title": "News",
+      "description": "Synthetischer News-Feed je Thema im Stil von X: CTOX liest Labs, X, YouTube, Newsletter und Communities zu einem festen Rhythmus und schreibt kurze Posts mit Einordnung und Originalquellen.",
+      "entry": "modules/news/index.html",
+      "collections": [
+        "business_commands",
+        "news_topics",
+        "news_sources",
+        "news_issues",
+        "news_posts"
+      ],
+      "layout": {
+        "shell": "windowed",
+        "shell_contract": "v2",
+        "shell_geometry_contract": "business-os-v2-global-1",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-news\"><defs><linearGradient id=\"grad-news\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0e7490\" /><stop offset=\"100%\" stop-color=\"#4f46e5\" /></linearGradient></defs><rect x=\"3\" y=\"6\" width=\"13\" height=\"14\" rx=\"2.5\" fill=\"url(#grad-news)\" fill-opacity=\"0.12\" stroke=\"url(#grad-news)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M6.5 10h6M6.5 13.5h6M6.5 17h4\" stroke=\"url(#grad-news)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M16 3.5a5 5 0 0 1 5 5M16 7a1.6 1.6 0 0 1 1.6 1.6\" stroke=\"#f97316\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+        "left": "topics with their recent issues",
+        "center": "X-style feed of the selected issue: intro post, editorial long form, sources",
+        "right": "most discussed items of the selected issue",
+        "third_pane_justification": "The feed reads like X: what is trending across the issue stays visible next to the posts and jumps to the matching thread; the pane collapses below 1024px.",
+        "drawers": {
+          "right": "topic configuration: cadence, sources and accounts, editorial rules"
+        },
+        "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/news.jpg",
+        "icon_asset_sha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759",
+        "icon_selection_sha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759",
+        "icon_selection_candidate": "candidate-01",
+        "icon_asset_kind": "raster-reference"
+      },
+      "category": "Knowledge",
+      "version": "0.1.0",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "news",
+        "feed",
+        "research",
+        "scraping",
+        "monitoring"
+      ],
+      "store": {
+        "summary": "Scheduled, source-backed news feeds per topic with an X-style reader.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/news",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "store",
+      "default_installed": false,
+      "launch_kind": "desktop-app",
+      "presentation": {
+        "default_mode": "window",
+        "supported_modes": [
+          "window",
+          "maximized",
+          "focus"
+        ],
+        "initial_size": {
+          "width": 1240,
+          "height": 800
+        },
+        "minimum_size": {
+          "width": 640,
+          "height": 480
+        },
+        "multi_instance": false,
+        "auto_restore": false
+      },
+      "source": "catalog",
+      "core": false,
+      "editable": true,
+      "deletable": true
+    },
+    {
       "id": "notes",
       "title": "Notes",
       "description": "Premium local-first markdown note workspace matching macOS Notes aesthetic.",

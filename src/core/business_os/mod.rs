@@ -122,6 +122,7 @@ mod store_ats_commands;
 mod store_catalog_projections;
 mod store_customer_commands;
 mod store_office_commands;
+mod store_news_commands;
 mod store_outbound_commands;
 mod store_outbound_delivery_policy;
 mod store_policy;

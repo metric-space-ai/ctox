@@ -73,6 +73,90 @@ fn preparation_calendar_is_one_native_task_two_hours_before_the_appointment() ->
     Ok(())
 }
 
+// Preparation and exit research are distinct durable intents in one registered
+// Supervisor history. Count their exact receipts, not every history message as
+// if it were another preparation, and retain both identities across replays.
+fn admitted_preparation_and_exit(
+    root: &Path,
+    task: &schedule::ScheduledTaskView,
+    scheduled_for: &str,
+    meeting: &Value,
+) -> anyhow::Result<Value> {
+    let prepare = stable_id("workjet_meeting_prepare", &[&task.task_id, scheduled_for]);
+    let refresh = stable_id("jf_exit", &[&task.task_id, scheduled_for]);
+    let exit = stable_id("workjet_exit_research", &["owner", "project", &refresh]);
+    let conn = open_store(root)?;
+    let mut receipts = Vec::new();
+    for (operation, source, purpose) in [
+        (&prepare, "native-workjet-jour-fixe-schedule", "jour-fix"),
+        (
+            &exit,
+            "native-workjet-exit-research",
+            "Research project project exit proceeds",
+        ),
+    ] {
+        let admitted = store::load_business_command(&conn, operation)?;
+        assert_eq!(
+            admitted.command_type,
+            "ctox.workjet.project.supervisor.turn.submit"
+        );
+        assert_eq!(admitted.record_id.as_deref(), Some("project"));
+        assert_eq!(admitted.client_context["source"], source);
+        assert_eq!(admitted.client_context["actor"]["id"], "owner");
+        assert_eq!(
+            admitted.payload["thread_id"],
+            meeting["meeting"]["supervisor"]["workjet_thread_id"]
+        );
+        let retained =
+            channels::inspect_business_command(root, operation)?.context("submission receipt")?;
+        assert_eq!(retained["command"]["status"], "completed");
+        let receipt = retained["command"]["result"].clone();
+        assert_eq!(receipt["binding"]["project_id"], "project");
+        assert_eq!(
+            receipt["turn"]["thread_id"],
+            meeting["meeting"]["supervisor"]["workjet_thread_id"]
+        );
+        let command = receipt["turn"]["command_id"]
+            .as_str()
+            .context("turn command")?;
+        let queued = channels::load_queue_task_for_business_os_command(root, command)?
+            .context("turn queue")?;
+        assert_eq!(queued.message_key, receipt["turn"]["task_id"]);
+        assert_eq!(
+            queued.thread_key,
+            meeting["meeting"]["supervisor"]["ctox_thread_key"]
+        );
+        assert!(queued.prompt.contains(purpose), "{}", queued.prompt);
+        // Both are admitted before either model turn runs; preparation does
+        // not depend on an Exit result or wait for its completion.
+        assert_eq!(queued.route_status, "pending");
+        assert_ne!(receipt["turn"]["execution_phase"], "terminal");
+        assert!(outbound_load_record(
+            &conn,
+            "user_thread_messages",
+            receipt["message_id"].as_str().context("message id")?
+        )?
+        .is_some());
+        receipts.push(receipt);
+    }
+    for field in ["command_id", "task_id"] {
+        assert_ne!(receipts[0]["turn"][field], receipts[1]["turn"][field]);
+    }
+    assert_ne!(receipts[0]["message_id"], receipts[1]["message_id"]);
+    assert_eq!(
+        receipts[0]["turn"]["task_id"],
+        meeting["preparation_task_id"]
+    );
+    let (runs, research): (i64, String) = conn.query_row(
+        "SELECT count(*), research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(runs, 1);
+    assert_eq!(research, receipts[1]["turn"]["command_id"]);
+    assert_eq!(count(root, "user_thread_messages")?, 2);
+    Ok(json!(receipts))
+}
+
 #[test]
 fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() -> anyhow::Result<()>
 {
@@ -151,10 +235,14 @@ fn test_time_creates_one_planned_meeting_and_the_registered_supervisor_turn() ->
     assert!(queue
         .prompt
         .contains(meeting["meeting"]["id"].as_str().unwrap()));
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+    let admitted = admitted_preparation_and_exit(root.path(), &first, &due.to_rfc3339(), &meeting)?;
     assert_eq!(
         schedule::emit_due_task_at(root.path(), &first.task_id, due)?.emitted_count,
         0
+    );
+    assert_eq!(
+        admitted_preparation_and_exit(root.path(), &first, &due.to_rfc3339(), &meeting)?,
+        admitted
     );
     Ok(())
 }
@@ -167,6 +255,7 @@ fn replay_after_admission_before_schedule_receipt_retains_metadata_and_one_turn(
     let due = first.next_run_at.as_deref().unwrap();
     let emitted = crate::business_os::emit_project_report(root.path(), &first, due)?;
     let before = latest(root.path())?;
+    let admitted = admitted_preparation_and_exit(root.path(), &first, due, &before)?;
     let conn = open_store(root.path())?;
     let mut saved = before["meeting"].clone();
     saved["state"] = json!("failed");
@@ -192,7 +281,10 @@ fn replay_after_admission_before_schedule_receipt_retains_metadata_and_one_turn(
     )?;
     assert_eq!(after["status"], "completed");
     assert_eq!(after["result"]["meeting"], saved);
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+    assert_eq!(
+        admitted_preparation_and_exit(root.path(), &first, due, &before)?,
+        admitted
+    );
     Ok(())
 }
 
@@ -302,6 +394,13 @@ fn revoked_native_owner_or_changed_supervisor_history_cannot_prepare_or_read() -
             &first,
             first.next_run_at.as_deref().unwrap(),
         )?;
+        let meeting = latest(root.path())?;
+        let admitted = admitted_preparation_and_exit(
+            root.path(),
+            &first,
+            first.next_run_at.as_deref().unwrap(),
+            &meeting,
+        )?;
         let conn = open_store(root.path())?;
         if revoked {
             conn.execute(
@@ -335,8 +434,62 @@ fn revoked_native_owner_or_changed_supervisor_history_cannot_prepare_or_read() -
             first.next_run_at.as_deref().unwrap()
         )
         .is_err());
-        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        assert_eq!(
+            admitted_preparation_and_exit(
+                root.path(),
+                &first,
+                first.next_run_at.as_deref().unwrap(),
+                &meeting
+            )?,
+            admitted
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn existing_autostart_research_does_not_block_or_duplicate_preparation() -> anyhow::Result<()> {
+    let root = fixture()?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let research: String = open_store(root.path())?.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |row| row.get(0),
+    )?;
+    let first = task(root.path())?;
+    let due = first.next_run_at.as_deref().unwrap();
+    let emitted = crate::business_os::emit_project_report(root.path(), &first, due)?;
+    let meeting = latest(root.path())?;
+    assert_eq!(meeting["meeting"]["state"], "planned");
+    assert_ne!(
+        meeting["preparation_task_id"],
+        channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("existing Exit queue")?
+            .message_key
+    );
+    assert_eq!(
+        channels::load_queue_task_for_business_os_command(root.path(), &research)?
+            .context("existing Exit queue")?
+            .route_status,
+        "pending"
+    );
+    assert_eq!(
+        emitted,
+        crate::business_os::emit_project_report(root.path(), &first, due)?
+    );
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let (runs, retained): (i64, String) = conn.query_row(
+        "SELECT count(*), research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(retained, research);
+    assert_eq!(runs, 1);
+    assert_eq!(count(root.path(), "user_thread_messages")?, 2);
+    assert_eq!(
+        latest(root.path())?["preparation_task_id"],
+        meeting["preparation_task_id"]
+    );
     Ok(())
 }
 
