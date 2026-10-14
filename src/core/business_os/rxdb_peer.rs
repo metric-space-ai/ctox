@@ -11477,7 +11477,7 @@ pub(in crate::business_os) mod tests {
 
     #[test]
     fn replicated_command_without_capability_terminalizes_without_retry_loop() {
-        // THESEN 14.10.2026: an outbound auth_assist command arrived without a
+        // Customer tenant 14.10.2026: an outbound auth_assist command arrived without a
         // valid capability token and intake rejected it ~2x per second
         // forever. It must reach one browser-visible terminal failure.
         let root = tempfile::tempdir().expect("temp root");
