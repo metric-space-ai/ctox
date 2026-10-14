@@ -343,7 +343,7 @@ pub(super) fn search_schema(tool: &Value) -> Value {
         required.push(json!("query"));
     }
     schema["required"] = Value::Array(required);
-    if tool.get("parameters").is_none() {
+    if !tool.get("parameters").is_some_and(Value::is_object) {
         schema["properties"]["limit"] =
             json!({"type":"number","description":"Maximum number of tools to return."});
         schema["additionalProperties"] = json!(false);

@@ -8,6 +8,7 @@ use crate::internal::thinking::{convert_level_to_budget, has_level, map_to_claud
 use serde_json::{json, Map, Value};
 
 use super::response::CLAUDE_RESPONSES_REDACTED_THINKING_PREFIX;
+use super::tool_search::{ToolSearchPlan, ANCHOR, SEARCH};
 
 pub fn convert_openai_responses_request_to_claude(
     model_name: &str,
@@ -36,6 +37,9 @@ fn convert_openai_responses_request_to_claude_impl(
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return input.to_vec();
     };
+    let plan = ToolSearchPlan::new(&root);
+    let mut search_calls = std::collections::BTreeSet::new();
+    let mut search_outputs = std::collections::BTreeSet::new();
     let mut messages = Vec::new();
     let mut system_blocks = Vec::new();
     let mut pending_tools: Vec<(String, Value)> = Vec::new();
@@ -129,7 +133,14 @@ fn convert_openai_responses_request_to_claude_impl(
             "function_call" => {
                 let call_id =
                     sanitize_tool_id(item.get("call_id").and_then(Value::as_str).unwrap_or(""));
-                let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                let name = if plan.enabled {
+                    plan.history_name(item)
+                } else {
+                    item.get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned()
+                };
                 let arguments = item
                     .get("arguments")
                     .and_then(Value::as_str)
@@ -144,7 +155,62 @@ fn convert_openai_responses_request_to_claude_impl(
                     json!({"role":"assistant", "content":content}),
                 ));
             }
-            "function_call_output" => {
+            "tool_search_call" if plan.enabled => {
+                let raw_id = item["call_id"].as_str().unwrap_or("").trim();
+                if raw_id.is_empty() || item["execution"] != "client" {
+                    continue;
+                }
+                search_calls.insert(raw_id.to_owned());
+                let call_id = sanitize_tool_id(raw_id);
+                let arguments = item
+                    .get("arguments")
+                    .map(|v| {
+                        if let Some(raw) = v.as_str() {
+                            serde_json::from_str::<Value>(raw).unwrap_or(Value::Null)
+                        } else {
+                            v.clone()
+                        }
+                    })
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| json!({}));
+                let mut content = std::mem::take(&mut pending_reasoning);
+                content.push(json!({"type":"tool_use","id":call_id,"name":plan.name(SEARCH),"input":arguments}));
+                pending_tools.push((call_id, json!({"role":"assistant","content":content})));
+            }
+            "tool_search_output" if plan.enabled => {
+                flush_reasoning(&mut messages, &mut pending_reasoning);
+                let raw_id = item["call_id"].as_str().unwrap_or("").trim();
+                if !raw_id.is_empty() && !search_outputs.insert(raw_id.to_owned()) {
+                    continue;
+                }
+                let content = plan.output_content(item);
+                if raw_id.is_empty() || !search_calls.contains(raw_id) {
+                    flush_tools(&mut messages, &mut pending_tools);
+                    let text = if let Some(text) = content.as_str() {
+                        text.to_owned()
+                    } else {
+                        let names = content
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|v| v["tool_name"].as_str())
+                            .collect::<Vec<_>>();
+                        format!("Tools now available to call: {}.", names.join(", "))
+                    };
+                    messages.push(json!({"role":"user","content":[{"type":"text","text":text}]}));
+                    continue;
+                }
+                let call_id = sanitize_tool_id(raw_id);
+                flush_tool_for(&mut messages, &mut pending_tools, &call_id);
+                messages.push(json!({"role":"user","content":[{"type":"tool_result","tool_use_id":call_id,"content":content}]}));
+            }
+            "custom_tool_call" if plan.enabled => {
+                let call_id = sanitize_tool_id(item["call_id"].as_str().unwrap_or(""));
+                let mut content = std::mem::take(&mut pending_reasoning);
+                content.push(json!({"type":"tool_use","id":call_id,"name":plan.history_name(item),"input":{"input":item["input"].as_str().unwrap_or("")}}));
+                pending_tools.push((call_id, json!({"role":"assistant","content":content})));
+            }
+            "function_call_output" | "custom_tool_call_output" => {
                 flush_reasoning(&mut messages, &mut pending_reasoning);
                 let call_id =
                     sanitize_tool_id(item.get("call_id").and_then(Value::as_str).unwrap_or(""));
@@ -198,18 +264,68 @@ fn convert_openai_responses_request_to_claude_impl(
 
     let mut included_names = Vec::new();
     let mut tools = Vec::new();
-    for tool in root
-        .get("tools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        convert_tool(tool, &mut tools, &mut included_names);
+    if plan.enabled {
+        let mut anchor_index = None;
+        for d in &plan.descriptors {
+            let name = plan.name(&d.name);
+            let start = tools.len();
+            if d.search {
+                included_names.push(name.clone());
+                tools.push(json!({"name":name,"description":d.tool["description"].as_str().unwrap_or(""),"input_schema":super::tool_search::search_schema(&d.tool)}));
+            } else if d.kind == "custom" {
+                included_names.push(name.clone());
+                tools.push(json!({"name":name,"description":tool_description(&d.tool),"input_schema":{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}}));
+            } else {
+                let mut tool = d.tool.clone();
+                tool["name"] = json!(name);
+                convert_tool(&tool, &mut tools, &mut included_names);
+            }
+            if plan.native && d.priority == 2 && matches!(d.kind.as_str(), "function" | "custom") {
+                if tools.len() > start && anchor_index.is_none() {
+                    anchor_index = Some(start);
+                }
+                for tool in &mut tools[start..] {
+                    tool.as_object_mut().unwrap().remove("cache_control");
+                    tool["defer_loading"] = json!(true);
+                }
+            }
+        }
+        if plan.native && !tools.iter().any(|tool| tool["name"] == ANCHOR) {
+            tools.insert(
+                anchor_index.unwrap_or(tools.len()),
+                super::tool_search::anchor(),
+            );
+        }
+    } else {
+        for tool in root
+            .get("tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if tool["type"] == SEARCH {
+                continue;
+            }
+            convert_tool(tool, &mut tools, &mut included_names);
+        }
     }
     if !tools.is_empty() {
         output.insert("tools".into(), Value::Array(tools));
     }
-    if let Some(choice) = convert_tool_choice(root.get("tool_choice"), &included_names) {
+    let mut choice = root.get("tool_choice").cloned();
+    if plan.enabled {
+        if let Some(choice) = choice.as_mut().filter(|v| v["type"] == "function") {
+            let name = choice
+                .get("name")
+                .or_else(|| choice.pointer("/function/name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            choice["name"] = json!(plan.history_name(
+                &json!({"name":name,"namespace":choice["namespace"].as_str().unwrap_or("")})
+            ));
+        }
+    }
+    if let Some(choice) = convert_tool_choice(choice.as_ref(), &included_names) {
         output.insert("tool_choice".into(), choice);
     }
 
@@ -599,6 +715,7 @@ fn convert_message(item: &Value, role: &str) -> Option<Value> {
 fn convert_content_part(part: &Value) -> Option<Value> {
     let kind = part.get("type").and_then(Value::as_str)?;
     let mut converted = match kind {
+        "tool_reference" if part["tool_name"].is_string() => part.clone(),
         "input_text" | "output_text" => json!({"type":"text", "text":part.get("text")?.as_str()?}),
         "input_image" => media_part(part, "image_url", "image", false)?,
         "input_file" => media_part(part, "file_data", "document", true)?,
