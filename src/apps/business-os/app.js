@@ -6543,15 +6543,18 @@ async function ensureDeclaredCollectionSchema(collection, db) {
   for (const mod of state.modules || []) {
     if (state.db !== db) return;
     if (!Array.isArray(mod?.collections) || !mod.collections.includes(collection)) continue;
-    const cachedRegistration = state.schemaRegistrations.has(mod.id);
+    const cachedRegistration = state.schemaRegistrations.get(mod.id);
     try {
       await registerModuleSchemas(mod);
       if (state.db !== db || db.raw?.[collection]) return;
       // A completed registration promise can belong to an earlier attempt
       // that did not add this collection. Re-check the actual database before
-      // trusting the cache, and retry that module once.
+      // trusting the cache, and retry that module once. Another caller may
+      // already have replaced it; never discard that newer registration.
       if (cachedRegistration) {
-        state.schemaRegistrations.delete(mod.id);
+        if (state.schemaRegistrations.get(mod.id) === cachedRegistration) {
+          state.schemaRegistrations.delete(mod.id);
+        }
         await registerModuleSchemas(mod);
         if (state.db !== db || db.raw?.[collection]) return;
       }
