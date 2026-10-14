@@ -2,7 +2,7 @@
   "refresh": "Refresh",
   "search": "Search threads",
   "noThreads": "No relevant threads.",
-  "syncingThreads": "Syncing threads.",
+  "syncingThreads": "Loading …",
   "noSelection": "No thread selected.",
   "commandFailed": "Action could not be completed.",
   "viewShowList": "Show as list",
