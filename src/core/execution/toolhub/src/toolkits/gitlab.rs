@@ -357,15 +357,19 @@ impl GitLab {
                 "Projekte, Issues, Merge Requests, Labels und CI-Pipelines in GitLab lesen und bearbeiten.",
                 "Read and change projects, issues, merge requests, labels and CI pipelines in GitLab.",
             ),
-            auth_schemes: vec![AuthScheme::OAuth2(OAuth2Scheme {
-                authorize_url: "https://gitlab.com/oauth/authorize".into(),
-                token_url: "https://gitlab.com/oauth/token".into(),
-                default_scopes: vec!["api".into(), "read_user".into()],
-                pkce: false,
-                scope_separator: " ".into(),
-                refreshable: true,
-                extra_authorize_params: vec![],
-            })],
+            auth_schemes: vec![
+                AuthScheme::OAuth2(OAuth2Scheme {
+                    authorize_url: "https://gitlab.com/oauth/authorize".into(),
+                    token_url: "https://gitlab.com/oauth/token".into(),
+                    default_scopes: vec!["api".into(), "read_user".into()],
+                    pkce: false,
+                    scope_separator: " ".into(),
+                    refreshable: true,
+                    extra_authorize_params: vec![],
+                }),
+                // Personal access token (scopes api/read_api): same `Authorization: Bearer <token>` header.
+                AuthScheme::Bearer,
+            ],
             tools: vec![
                 t(
                     "GITLAB_GET_CURRENT_USER",

@@ -166,15 +166,22 @@ impl ClickUp {
                 "ClickUp: Spaces, Folder, Listen, Aufgaben, Kommentare und Zeiteinträge lesen und ändern.",
                 "ClickUp: read and change spaces, folders, lists, tasks, comments and time entries.",
             ),
-            auth_schemes: vec![AuthScheme::OAuth2(OAuth2Scheme {
-                authorize_url: "https://app.clickup.com/api".into(),
-                token_url: "https://api.clickup.com/api/v2/oauth/token".into(),
-                default_scopes: vec![],
-                pkce: false,
-                scope_separator: " ".into(),
-                refreshable: true,
-                extra_authorize_params: vec![],
-            })],
+            auth_schemes: vec![
+                AuthScheme::OAuth2(OAuth2Scheme {
+                    authorize_url: "https://app.clickup.com/api".into(),
+                    token_url: "https://api.clickup.com/api/v2/oauth/token".into(),
+                    default_scopes: vec![],
+                    pkce: false,
+                    scope_separator: " ".into(),
+                    refreshable: true,
+                    extra_authorize_params: vec![],
+                }),
+                // Personal API token (`pk_...`): ClickUp expects it verbatim in `Authorization`, no prefix.
+                AuthScheme::ApiKey {
+                    header_name: "authorization".into(),
+                    prefix: String::new(),
+                },
+            ],
             tools: vec![
                 t(
                     "CLICKUP_LIST_WORKSPACES",

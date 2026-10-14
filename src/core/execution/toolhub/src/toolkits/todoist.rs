@@ -174,16 +174,20 @@ impl Todoist {
                 "Aufgaben, Projekte, Abschnitte, Labels und Kommentare in Todoist lesen und bearbeiten.",
                 "Read and change tasks, projects, sections, labels and comments in Todoist.",
             ),
-            auth_schemes: vec![AuthScheme::OAuth2(OAuth2Scheme {
-                authorize_url: "https://todoist.com/oauth/authorize".into(),
-                token_url: "https://todoist.com/oauth/access_token".into(),
-                // Exactly the scope list of `todoistAuth` in `src/index.ts`.
-                default_scopes: vec![SCOPE.into()],
-                pkce: false,
-                scope_separator: " ".into(),
-                refreshable: true,
-                extra_authorize_params: vec![],
-            })],
+            auth_schemes: vec![
+                AuthScheme::OAuth2(OAuth2Scheme {
+                    authorize_url: "https://todoist.com/oauth/authorize".into(),
+                    token_url: "https://todoist.com/oauth/access_token".into(),
+                    // Exactly the scope list of `todoistAuth` in `src/index.ts`.
+                    default_scopes: vec![SCOPE.into()],
+                    pkce: false,
+                    scope_separator: " ".into(),
+                    refreshable: true,
+                    extra_authorize_params: vec![],
+                }),
+                // Personal API token from Todoist settings: same `Authorization: Bearer <token>` header.
+                AuthScheme::Bearer,
+            ],
             tools: vec![
                 t(
                     "TODOIST_GET_CURRENT_USER",

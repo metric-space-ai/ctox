@@ -32,9 +32,16 @@ fi
 
 base="${1:?Basis-URL, z. B. https://welsch.ctox.dev}"
 echo "A) Öffentlich"
-code=$(curl -s -o /tmp/cb.html -w '%{http_code}' "$base/toolhub/oauth/callback?state=smoke&code=smoke")
-[ "$code" = 200 ] && grep -qi toolhub /tmp/cb.html && ok "Rückleitung erreichbar ohne Login (200)" \
-  || bad "Rückleitung liefert $code (Login-Gate? Gateway-Ausnahme fehlt)"
+code=$(curl -s -D /tmp/cb.hdr -o /tmp/cb.html -w '%{http_code}' "$base/toolhub/oauth/callback?state=smoke&code=smoke")
+# Unbekannter state -> die Instanz antwortet 400 mit ihrer Toolhub-Fehlerseite.
+# Eine Login-Seite (x-business-os-login-required) heißt: Gateway-Ausnahme fehlt.
+if grep -qi '^x-business-os-login-required' /tmp/cb.hdr; then
+  bad "Rückleitung landet auf der Login-Seite ($code): Gateway-Ausnahme fehlt (README Abschnitt 2)"
+elif { [ "$code" = 400 ] || [ "$code" = 200 ]; } && grep -q 'data-toolhub-result' /tmp/cb.html; then
+  ok "Rückleitung erreicht die Instanz ohne Login ($code, Toolhub-Seite)"
+else
+  bad "Rückleitung liefert $code ohne Toolhub-Seite"
+fi
 for s in mcp.vercel.com mcp.cloudflare.com; do
   curl -sf "https://$s/.well-known/oauth-authorization-server" | grep -q registration_endpoint \
     && ok "$s bietet dynamische Client-Registrierung" || bad "$s Discovery"

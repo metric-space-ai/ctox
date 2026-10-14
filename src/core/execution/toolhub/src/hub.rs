@@ -125,7 +125,16 @@ impl<B: SecretBackend> ToolHub<B> {
     /// Resolve `GITHUB_GET_REPO` or the CLI form `github.get_repo`.
     pub fn tool(&self, name: &str) -> Result<(&dyn ToolkitAdapter, &ToolSpec)> {
         let slug = match name.split_once('.') {
-            Some((toolkit, action)) => format!("{}_{}", toolkit, action).to_ascii_uppercase(),
+            // `linear.get_viewer` and `linear.LINEAR_GET_VIEWER` both mean LINEAR_GET_VIEWER.
+            Some((toolkit, action)) => {
+                let prefix = format!("{}_", toolkit.replace('-', "_")).to_ascii_uppercase();
+                let action = action.to_ascii_uppercase();
+                if action.starts_with(&prefix) {
+                    action
+                } else {
+                    format!("{prefix}{action}")
+                }
+            }
             None => name.to_string(),
         };
         let slug = slug.as_str();

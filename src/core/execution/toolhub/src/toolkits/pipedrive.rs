@@ -389,29 +389,36 @@ impl Pipedrive {
                 "Pipedrive-CRM: Deals, Kontakte, Organisationen, Aktivitäten, Leads, Notizen und Produkte lesen und bearbeiten.",
                 "Pipedrive CRM: read and change deals, persons, organizations, activities, leads, notes and products.",
             ),
-            auth_schemes: vec![AuthScheme::OAuth2(OAuth2Scheme {
-                authorize_url: "https://oauth.pipedrive.com/oauth/authorize".into(),
-                token_url: "https://oauth.pipedrive.com/oauth/token".into(),
-                // Scopes of the Activepieces piece (`src/lib/auth.ts`).
-                default_scopes: [
-                    BASE,
-                    "admin",
-                    CONTACTS,
-                    USERS,
-                    DEALS,
-                    ACTIVITIES,
-                    LEADS,
-                    PRODUCTS,
-                    "webhooks:full",
-                ]
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
-                pkce: false,
-                scope_separator: " ".into(),
-                refreshable: true,
-                extra_authorize_params: Vec::new(),
-            })],
+            auth_schemes: vec![
+                AuthScheme::OAuth2(OAuth2Scheme {
+                    authorize_url: "https://oauth.pipedrive.com/oauth/authorize".into(),
+                    token_url: "https://oauth.pipedrive.com/oauth/token".into(),
+                    // Scopes of the Activepieces piece (`src/lib/auth.ts`).
+                    default_scopes: [
+                        BASE,
+                        "admin",
+                        CONTACTS,
+                        USERS,
+                        DEALS,
+                        ACTIVITIES,
+                        LEADS,
+                        PRODUCTS,
+                        "webhooks:full",
+                    ]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+                    pkce: false,
+                    scope_separator: " ".into(),
+                    refreshable: true,
+                    extra_authorize_params: Vec::new(),
+                }),
+                // Personal API token: Pipedrive accepts it in the `x-api-token` header.
+                AuthScheme::ApiKey {
+                    header_name: "x-api-token".into(),
+                    prefix: String::new(),
+                },
+            ],
             tools: vec![
                 t(
                     "PIPEDRIVE_GET_CURRENT_USER",
