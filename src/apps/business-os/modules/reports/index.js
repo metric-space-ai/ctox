@@ -445,7 +445,7 @@ export function resolveReportsDataState({ sourceCount = 0, readiness = null } = 
 }
 
 function renderReportsSyncingState() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite"><strong>${escapeHtml(state.t('syncingReports', 'Bugs & Features werden synchronisiert.'))}</strong><span>${escapeHtml(state.t('syncingReportsDetail', 'Die Einträge werden gerade aus dem CTOX-Datenstrom geladen.'))}</span></div>`;
+  return `<div class="ctox-syncing" role="status" aria-live="polite" aria-busy="true"></div>`;
 }
 
 function reportCollection(name) {
@@ -559,7 +559,7 @@ function render({ resetScroll = false } = {}) {
 
 function renderListEmptyState(allItems) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsListUnavailable', 'Noch keine Einträge'))}</strong><span>${escapeHtml(state.t('reportsListUnavailableDetail', 'Wird automatisch gefüllt.'))}</span></div>`;
+    return renderReportsSyncingState();
   }
   if (allItems.length) {
     return `<p class="ctox-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
@@ -572,7 +572,7 @@ function renderListEmptyState(allItems) {
 
 function renderDetailEmptyState({ normalized, filtered }) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><span>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</span></div>`;
+    return renderReportsSyncingState();
   }
   if (!normalized.length) {
     if (resolveReportsDataState({ sourceCount: normalized.length, readiness: reportsDataReadiness() }) === 'syncing') {
@@ -1267,7 +1267,8 @@ async function rollbackSelectedRelease(report) {
     if (status) status.textContent = state.t('rollbackExecuted', 'Rollback ausgeführt.');
     await refreshReports();
   } catch (error) {
-    if (status) status.textContent = error.message || String(error);
+    console.warn('[reports] rollback failed', error);
+    if (status) status.textContent = state.t('rollbackFailed', 'Rollback hat nicht geklappt.');
   }
 }
 

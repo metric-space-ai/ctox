@@ -122,15 +122,15 @@ const labels = {
     draftSaved: 'Entwurf gespeichert',
     draftDiscarded: 'Entwurf verworfen',
     noSearchResults: 'Keine passenden Notizen',
-    dataUnavailable: 'Notizen sind gerade nicht verfügbar.',
-    dataUnavailableHint: 'Die Liste wird automatisch gefüllt, sobald Notizen geladen sind.',
+    dataUnavailable: '',
+    dataUnavailableHint: '',
     usingLocalCache: 'Notizen werden aus dem letzten verfügbaren Stand angezeigt.',
     seededNotes: 'Beispielnotizen wurden lokal angelegt.',
     newNotebookPrompt: 'Name für das neue Notizbuch:',
     newTagPrompt: 'Name für den neuen Tag:',
     defaultFolder: 'Notizen',
     noNotes: 'Keine Notizen vorhanden',
-    syncingNotes: 'Notizen werden synchronisiert.',
+    syncingNotes: '',
     readTime: 'Min. Lesezeit',
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
@@ -151,15 +151,15 @@ const labels = {
     draftSaved: 'Draft saved',
     draftDiscarded: 'Draft discarded',
     noSearchResults: 'No matching notes',
-    dataUnavailable: 'Notes are unavailable right now.',
-    dataUnavailableHint: 'The list fills automatically once notes are loaded.',
+    dataUnavailable: '',
+    dataUnavailableHint: '',
     usingLocalCache: 'Showing the last available notes.',
     seededNotes: 'Sample notes were created locally.',
     newNotebookPrompt: 'Name for the new notebook:',
     newTagPrompt: 'Name for the new tag:',
     defaultFolder: 'Notes',
     noNotes: 'No notes available',
-    syncingNotes: 'Syncing notes.',
+    syncingNotes: '',
     readTime: 'min read',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
@@ -190,6 +190,9 @@ const state = {
   notesReadiness: null,
   readinessCleanup: null,
   renderTimer: null,
+  notesLoadRetryTimer: null,
+  notesLoadRetryAttempt: 0,
+  unmounted: false,
   t: (key, fallback) => fallback ?? key,
   dataDiagnostics: { kind: 'starting', message: '' },
   toastTimer: null,
@@ -394,8 +397,10 @@ export async function mount(ctx) {
     state.presenceCleanup?.();
     state.presenceCleanup = null;
     try { state.ctx?.presence?.clear?.(); } catch {}
+    state.unmounted = true;
     if (state.saveTimer) clearTimeout(state.saveTimer);
     if (state.renderTimer) clearTimeout(state.renderTimer);
+    clearNotesLoadRetry();
     if (state.toastTimer) clearTimeout(state.toastTimer);
     
     state.lexicalUpdateListenerCleanup?.();
@@ -657,15 +662,41 @@ async function decryptLockedNotesInMemory() {
   }
 }
 
+function scheduleNotesLoadRetry() {
+  if (state.unmounted || state.notesLoadRetryTimer) return;
+  const attempt = Number(state.notesLoadRetryAttempt) || 0;
+  const delayMs = Math.min(60000, 1000 * (2 ** attempt));
+  state.notesLoadRetryAttempt = attempt + 1;
+  const timer = setTimeout(() => {
+    state.notesLoadRetryTimer = null;
+    if (state.unmounted) return;
+    loadNotesFromLocal().catch((error) => {
+      console.warn('[notes] list retry failed', error);
+    });
+  }, delayMs);
+  if (typeof timer?.unref === 'function') timer.unref();
+  state.notesLoadRetryTimer = timer;
+}
+
+function clearNotesLoadRetry() {
+  if (state.notesLoadRetryTimer) {
+    clearTimeout(state.notesLoadRetryTimer);
+    state.notesLoadRetryTimer = null;
+  }
+  state.notesLoadRetryAttempt = 0;
+}
+
 async function loadNotesFromLocal() {
+  if (state.unmounted) return;
   const collection = getCollection();
   const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
   if (!collection) {
     state.notes = [];
     state.notebooks = [];
     state.tags = [];
-    state.dataDiagnostics = { kind: 'missing', message: state.t('dataUnavailable') };
+    state.dataDiagnostics = { kind: 'missing', message: '' };
     syncNotebooksAndTags();
+    scheduleNotesLoadRetry();
     scheduleRender();
     return;
   }
@@ -704,20 +735,18 @@ async function loadNotesFromLocal() {
     
     syncNotebooksAndTags();
     saveToLocalCache(); // Passive write-only mirror purely for Playwright E2E tests to read
+    clearNotesLoadRetry();
     scheduleRender();
   } catch (error) {
-    if (isBusinessOsPermissionDenied(error)) {
-      console.log(`${logPrefix} data access locked`, error?.message || error);
-    } else {
-      console.error(`${logPrefix} failed to load notes`, error);
-    }
+    console.warn(`${logPrefix} failed to load notes`, error);
     state.notes = [];
     state.notebooks = [];
     state.tags = [];
     state.dataDiagnostics = {
       kind: isBusinessOsPermissionDenied(error) ? 'missing' : 'error',
-      message: error?.message || state.t('dataUnavailable'),
+      message: '',
     };
+    scheduleNotesLoadRetry();
     syncNotebooksAndTags();
     scheduleRender();
   }
@@ -939,8 +968,8 @@ function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel,
   if (diagnosticKind === 'missing' || diagnosticKind === 'error') {
     return {
       kind: 'unavailable',
-      title: translate('dataUnavailable', 'Notes are unavailable right now.'),
-      body: translate('dataUnavailableHint', 'The list fills automatically once notes are loaded.')
+      title: '',
+      body: '',
     };
   }
   if (hasSearch) {
@@ -970,8 +999,8 @@ function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel,
   if (readiness?.ready === false) {
     return {
       kind: 'syncing',
-      title: translate('syncingNotes', 'Notizen werden synchronisiert.'),
-      body: ''
+      title: '',
+      body: '',
     };
   }
   return {
@@ -1011,13 +1040,8 @@ function renderNotesList() {
       readiness: state.notesReadiness || readNotesReadiness(),
       t: state.t
     });
-    if (emptyState.kind === 'syncing') {
-      els.notesList.innerHTML = `
-      <div class="ctox-syncing nn-empty-state-syncing" role="status" aria-live="polite">
-        <strong>${escapeHtml(emptyState.title)}</strong>
-        ${emptyState.body ? `<span>${escapeHtml(emptyState.body)}</span>` : ''}
-      </div>
-    `;
+    if (emptyState.kind === 'syncing' || emptyState.kind === 'unavailable') {
+      els.notesList.innerHTML = `<div class="ctox-syncing nn-empty-state-${escapeHtml(emptyState.kind)}" role="status" aria-busy="true"></div>`;
       return;
     }
     els.notesList.innerHTML = `

@@ -179,7 +179,9 @@ function renderList(root) {
   root.querySelector('[data-count="all"]').textContent = String(state.decisions.filter((item) => item.is_deleted !== true).length);
   const list = root.querySelector('[data-decision-list]');
   if (!visible.length) {
-    list.innerHTML = `<div class="kundenpipeline-empty">${isLoadingEmpty() ? 'Entscheidungen werden synchronisiert …' : 'Keine passenden Entscheidungen.'}</div>`;
+    list.innerHTML = isLoadingEmpty()
+      ? '<div class="ctox-syncing kundenpipeline-empty" role="status" aria-busy="true"></div>'
+      : '<div class="kundenpipeline-empty">Keine passenden Entscheidungen.</div>';
   } else {
     list.innerHTML = visible.map((decision) => `
       <button type="button" class="kundenpipeline-decision-card${decision.id === state.selectedId ? ' is-selected' : ''}" data-decision-id="${escapeHtml(decision.id)}" aria-pressed="${decision.id === state.selectedId}">
@@ -188,7 +190,7 @@ function renderList(root) {
         <span class="kundenpipeline-card-foot"><span>${escapeHtml(decision.question || decision.vorgang_id || 'Kein Kontext')}</span><span>${escapeHtml(formatDate(decision.created_at_ms))}</span></span>
       </button>`).join('');
   }
-  root.querySelector('[data-list-status]').textContent = state.error || `${visible.length} von ${state.decisions.length} Entscheidungen`;
+  root.querySelector('[data-list-status]').textContent = `${visible.length} von ${state.decisions.length} Entscheidungen`;
 }
 
 function renderDetail(root) {
@@ -280,7 +282,8 @@ async function refresh(root) {
       state.selectedId = filterDecisions(state.decisions)[0]?.id || state.decisions[0]?.id || '';
     }
   } catch (error) {
-    state.error = `Laden fehlgeschlagen: ${error?.message || error}`;
+    console.warn('[kundenpipeline] load failed', error);
+    state.error = '';
   } finally {
     state.loading = false;
     render(root);
@@ -290,7 +293,8 @@ async function refresh(root) {
 async function dispatchDecision(root, decision, optionId) {
   if (!state.ctx?.commandBus?.dispatch) {
     state.commandError = true;
-    state.commandStatus = 'CTOX Command Bus ist nicht verfügbar.';
+    console.warn('[kundenpipeline] command bus unavailable');
+    state.commandStatus = 'Aktion hat nicht geklappt.';
     render(root);
     return;
   }
@@ -309,7 +313,8 @@ async function dispatchDecision(root, decision, optionId) {
     await refresh(root);
   } catch (error) {
     state.commandError = true;
-    state.commandStatus = `Aktion fehlgeschlagen: ${error?.message || error}`;
+    console.warn('[kundenpipeline] action failed', error);
+    state.commandStatus = 'Aktion hat nicht geklappt.';
     render(root);
   }
 }

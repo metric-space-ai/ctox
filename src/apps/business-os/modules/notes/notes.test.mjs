@@ -42,6 +42,8 @@ test('empty state distinguishes sync diagnostics from real empty lists', () => {
   });
 
   assert.equal(diagnostic.kind, 'unavailable');
+  assert.equal(diagnostic.title, '');
+  assert.equal(diagnostic.body, '');
   assert.doesNotMatch(diagnostic.body, /missing|collection/i);
 
   const empty = hooks.buildNotesEmptyState({
@@ -71,6 +73,8 @@ test('empty source list follows collection readiness (syncing vs empty)', () => 
     readiness: { collection: 'notes', state: 'catching-up', ready: false, syncing: true, updatedAt: 0 },
   });
   assert.equal(syncing.kind, 'syncing');
+  assert.equal(syncing.title, '');
+  assert.equal(syncing.body, '');
 
   const offlinePending = hooks.buildNotesEmptyState({
     ...base,

@@ -217,7 +217,7 @@ const labels = {
     noOpportunities: 'Noch keine Opportunities',
     noOpportunitiesBody: 'Lege eine Opportunity am ausgewählten Kunden an oder importiere Renewals aus Bestandssignalen.',
     noOutbound: 'Keine Outbound-Übergaben',
-    noOutboundBody: 'Qualifizierte Outbound-Firmen erscheinen hier, sobald Outbound-Daten lokal synchronisiert sind.',
+    noOutboundBody: 'Qualifizierte Outbound-Firmen erscheinen hier.',
     noDedupe: 'Keine offenen Dubletten',
     noDedupeBody: 'Domain- oder E-Mail-Treffer aus Imports landen hier zur Entscheidung.',
     inspectorEmpty: 'Kein Kunde ausgewählt',
@@ -264,10 +264,13 @@ const labels = {
     commandPendingStatus: 'Ausstehend',
     commandCompletedStatus: 'Abgeschlossen',
     commandFailedStatus: 'Fehlgeschlagen',
-    commandFailed: 'Änderung konnte nicht gespeichert werden: {0}',
+    commandFailed: 'Speichern hat nicht geklappt.',
     commandUnavailable: 'Änderungen sind gerade nicht verfügbar.',
-    loadingStatus: 'Aktualisiert...',
-    syncingData: 'Daten werden synchronisiert.',
+    loadingStatus: '',
+    syncingData: '',
+    saved: 'Gespeichert',
+    saveFailed: 'Speichern hat nicht geklappt.',
+    importFailed: 'Import hat nicht geklappt.',
     permissionReadOnly: 'Nur Lesen',
     permissionReadOnlyBody: 'Deine Rolle darf Kundendaten ansehen, aber nicht bearbeiten.',
     permissionDenied: 'Keine Berechtigung für Kunden-Änderungen.',
@@ -383,7 +386,7 @@ const labels = {
     noOpportunities: 'No opportunities yet',
     noOpportunitiesBody: 'Create an opportunity on the selected account or import renewals from customer signals.',
     noOutbound: 'No outbound handoffs',
-    noOutboundBody: 'Qualified outbound companies appear here once outbound data is synced locally.',
+    noOutboundBody: 'Qualified outbound companies appear here.',
     noDedupe: 'No open dedupe cases',
     noDedupeBody: 'Domain or email matches from imports land here for review.',
     inspectorEmpty: 'No customer selected',
@@ -430,9 +433,12 @@ const labels = {
     commandPendingStatus: 'Pending',
     commandCompletedStatus: 'Completed',
     commandFailedStatus: 'Failed',
-    commandFailed: 'Command could not be recorded: {0}',
+    commandFailed: 'Saving did not work.',
+    saved: 'Saved',
+    saveFailed: 'Saving did not work.',
+    importFailed: 'Import did not work.',
     commandUnavailable: 'Command bus unavailable.',
-    syncingData: 'Syncing data.',
+    syncingData: '',
     permissionReadOnly: 'Read-only',
     permissionReadOnlyBody: 'Your role can inspect customer data, but cannot modify it.',
     permissionDenied: 'No permission for customer changes.',
@@ -559,6 +565,7 @@ export async function mount(ctx) {
       try { cleanup?.(); } catch {}
     }
     if (state.renderTimer) window.clearTimeout(state.renderTimer);
+    clearCustomersReadRetry();
   };
 }
 
@@ -698,9 +705,10 @@ function wireUi(root) {
   });
   root.querySelector('[data-customers-import-input]')?.addEventListener('change', (event) => {
     importCustomersJsonFile(event.target?.files?.[0]).catch((error) => {
+      console.warn('[customers] import failed', error);
       state.ctx?.notifications?.notify?.({
         title: state.t('importCustomers', labels.de.importCustomers),
-        body: error?.message || String(error),
+        body: state.t('importFailed', labels.de.importFailed),
       });
     }).finally(() => { if (event.target) event.target.value = ''; });
   });
@@ -710,7 +718,8 @@ function wireUi(root) {
     const action = actionEl?.getAttribute('data-customers-action');
     if (action) {
       handleAction(action, actionEl).catch((error) => {
-        state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
+        console.warn('[customers] action failed', error);
+        state.diagnostics.commandState = state.t('saveFailed', labels.de.saveFailed);
         renderRight();
       });
       return;
@@ -869,7 +878,8 @@ function wireUi(root) {
         return null;
       },
     }).catch((error) => {
-      state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
+      console.warn('[customers] action failed', error);
+      state.diagnostics.commandState = state.t('saveFailed', labels.de.saveFailed);
       renderRight();
     });
   });
@@ -878,7 +888,8 @@ function wireUi(root) {
     if (!form?.matches('[data-customers-form]')) return;
     event.preventDefault();
     submitForm(form).catch((error) => {
-      state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
+      console.warn('[customers] action failed', error);
+      state.diagnostics.commandState = state.t('saveFailed', labels.de.saveFailed);
       renderRight();
     });
   });
@@ -1300,11 +1311,14 @@ async function refreshData(options = {}) {
     }
     state.collections = { ...emptyCollections(), ...Object.fromEntries(entries) };
     state.diagnostics.error = '';
+    clearCustomersReadRetry();
     state.diagnostics.optionalDeniedCollections = optionalDeniedCollections;
     state.diagnostics.lastLoadedAt = Date.now();
     syncSelection();
   } catch (error) {
-    state.diagnostics.error = error?.message || String(error);
+    console.warn('[customers] refresh failed', error);
+    state.diagnostics.error = '';
+    scheduleCustomersReadRetry();
   } finally {
     state.diagnostics.loading = false;
     render();
@@ -1312,9 +1326,32 @@ async function refreshData(options = {}) {
 }
 
 function reportRefreshError(error) {
-  state.diagnostics.error = error?.message || String(error);
+  console.warn('[customers] refresh failed', error);
+  state.diagnostics.error = '';
   state.diagnostics.loading = false;
+  scheduleCustomersReadRetry();
   render();
+}
+
+let customersReadRetryTimer = null;
+let customersReadRetryAttempt = 0;
+
+function scheduleCustomersReadRetry() {
+  if (customersReadRetryTimer) return;
+  const delayMs = Math.min(60000, 1000 * (2 ** customersReadRetryAttempt));
+  customersReadRetryAttempt += 1;
+  const timer = setTimeout(() => {
+    customersReadRetryTimer = null;
+    refreshData().catch(reportRefreshError);
+  }, delayMs);
+  if (typeof timer?.unref === 'function') timer.unref();
+  customersReadRetryTimer = timer;
+}
+
+function clearCustomersReadRetry() {
+  if (customersReadRetryTimer) clearTimeout(customersReadRetryTimer);
+  customersReadRetryTimer = null;
+  customersReadRetryAttempt = 0;
 }
 
 function isBusinessOsPermissionDenied(error) {
@@ -1356,7 +1393,7 @@ function dataEmptyShowsSyncing(sourceEmpty, readiness) {
 }
 
 function renderSyncingState() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('syncingData', labels.de.syncingData))}</div>`;
+  return `<div class="ctox-syncing" role="status" aria-live="polite" aria-busy="true"></div>`;
 }
 
 // Data-driven empty branch: rendered only when the visible list is empty. If
@@ -1648,7 +1685,7 @@ function renderAccountList() {
     && dataEmptyShowsSyncing(sourceEmpty, collectionSyncReadiness('customer_accounts'));
   if (syncingNode) {
     syncingNode.hidden = !syncing;
-    if (syncing) syncingNode.textContent = state.t('syncingData', labels.de.syncingData);
+    if (syncing) syncingNode.textContent = '';
   }
   if (empty) empty.hidden = syncing || accounts.length > 0;
   markSelectedAccountRows();
@@ -2032,9 +2069,6 @@ function renderLegacyCenter() {
         ? `<button class="ctox-button ctox-button--sm" type="button" data-customers-action="clear-filters">${escapeHtml(state.t('clearFilters', labels.de.clearFilters))}</button>`
         : ''}
       <span class="ctox-badge">${escapeHtml(state.t('visibleCount', labels.de.visibleCount, visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows })))}</span>
-      ${state.diagnostics.loading ? `<span class="ctox-badge">${escapeHtml(state.t('loadingStatus', labels.de.loadingStatus))}</span>` : ''}
-      ${state.diagnostics.error ? `<span class="ctox-badge is-danger">${escapeHtml(state.diagnostics.error)}</span>` : ''}
-      ${state.diagnostics.optionalDeniedCollections?.length ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('linkedDataLimited', labels.de.linkedDataLimited))}</span>` : ''}
     </div>
     <div class="ctox-pane-scroll customers-center-scroll">
       ${state.centerView === 'contacts'
@@ -3074,11 +3108,7 @@ async function dispatchCommand(command) {
   }
   await state.ctx.sync?.startCollection?.('business_commands');
   const result = await state.ctx.commandBus.dispatch(command);
-  state.diagnostics.commandState = state.t(
-    'commandPending',
-    labels.de.commandPending,
-    result?.command_id || command.id || command.type
-  );
+  state.diagnostics.commandState = state.t('saved', labels.de.saved);
   return result;
 }
 

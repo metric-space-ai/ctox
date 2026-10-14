@@ -7,7 +7,7 @@
   "approve": "Annehmen",
   "reject": "Ablehnen",
   "resolve": "Entscheidung speichern",
-  "syncing": "Entscheidungen werden synchronisiert …",
+  "syncing": "",
   "noDecisions": "Keine passenden Entscheidungen.",
   "noSelection": "Wähle eine Entscheidung aus.",
   "actions": "Aktionen",

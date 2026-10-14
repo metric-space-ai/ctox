@@ -250,7 +250,11 @@ test('counts stay hidden until the first reload finished and retries back off af
   assert.equal(hooks.countText(0), '…');
   assert.equal(
     hooks.taskSourceSummary({ id: 'task-x', knowledge_domain: 'drone_bearing_design' }),
-    'Quellen werden synchronisiert …',
+    '',
+  );
+  assert.doesNotMatch(
+    String(hooks.taskSourceSummary({ id: 'task-x', knowledge_domain: 'drone_bearing_design' })),
+    /synchron/i,
   );
 
   assert.equal(hooks.failureRetryDelay(0), 5000);
@@ -937,7 +941,9 @@ test('initial research loading cannot masquerade as an empty knowledge base', ()
   assert.match(researchSource, /await waitForReplicationBridge\(bridge, collection\)/);
   assert.match(researchSource, /subscribeCollectionReadiness/);
   assert.match(researchSource, /dataEmptyShowsSyncing\(true, tasksReadiness\)/);
-  assert.match(researchSource, /Research-Daten werden mit dieser Instanz synchronisiert/);
+  assert.match(researchSource, /kind: 'syncing', title: '', body: ''/);
+  assert.match(researchSource, /ctox-syncing research-empty-card/);
+  assert.doesNotMatch(researchSource, /Research-Daten werden mit dieser Instanz synchronisiert/);
   assert.match(researchSource, /await refreshAll\(\{ seed: true, mountToken \}\)[\s\S]*?state\.initialDataReady = true/);
 });
 
@@ -1591,7 +1597,8 @@ test('a retryable rows error stays on that table and leaves the rest of the dash
     const banner = hooks.renderKnowledgeTableRowStates();
     assert.match(banner, /data-table-id="table:kdt-measurements"/);
     assert.match(banner, /data-row-state="error"/);
-    assert.match(banner, /Parquet-Fenster fehlgeschlagen/);
+    assert.match(banner, /Laden hat nicht geklappt/);
+    assert.doesNotMatch(banner, /Parquet-Fenster fehlgeschlagen/);
     assert.match(banner, /Erneut versuchen/);
     assert.doesNotMatch(banner, /table:kdt-sources/);
     assert.match(hooks.renderSourcesTable(), /Verified propeller source/);
