@@ -65,7 +65,6 @@
   "adapterUnreachable": "Last check failed",
   "adapterReady": "Ready",
   "adaptersLoading": "Loading …",
-  "adaptersFailed": "Adapters could not be loaded.",
   "adaptersEmpty": "No scraping adapters yet. They are created in the Outbound app under “Sources & access”.",
   "adaptersManagedHint": "Managed in the Outbound app (“Sources & access”).",
   "preciseType": "Insert",

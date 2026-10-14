@@ -65,7 +65,7 @@ export async function mount(container, ctx) {
     ctx.setTitle?.(name);
   } catch (error) {
     ctx.reportFileIntegrityError?.(error, fileIntegrityDetails(args, fileId, mimeType));
-    content.innerHTML = `<p class="is-error">Datei konnte nicht geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
+    content.innerHTML = `<p class="is-error">Datei konnte nicht geöffnet werden.</p>`;
   }
 
   return () => {

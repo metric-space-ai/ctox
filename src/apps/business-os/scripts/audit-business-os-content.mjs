@@ -53,7 +53,6 @@ export const STATE_PROSE_PATTERNS = Object.freeze([
   /\bLetzter Fehler:/iu,
   /\bnoch nicht (?:synchronisiert|verbunden)\b/iu,
   /\b(?:CTOX|Sellify|Mailserver|Dienst|Server) ist (?:gerade |zurzeit )?nicht erreichbar\b/iu,
-  /\$\{\s*(?:error|err|e|reason|cause)\??\.message\b/u,
 ]);
 
 /** Shell files audited for state prose only (they also hold transport code). */
@@ -71,6 +70,10 @@ export const STATE_PROSE_SHELL_FILES = Object.freeze([
 export const STATE_PROSE_EXTRA_ROOTS = Object.freeze([
   'src/apps/business-os/customer-modules',
 ]);
+
+/** A raw error message interpolated where the UI renders it. */
+const RAW_ERROR_SINK_PATTERN =
+  /(?:innerHTML|textContent|setStatus\(|set(?:Error|Warning|Notice|Message)\(|showBusinessAlert\(|notify\(|notifications\.show\(|\btitle\s*[:=])[^\n;]*\$\{[^}\n]*\b(?:error|err|e|reason|cause)\??\.message\b/gu;
 
 function findStateProse(value) {
   const findings = [];
@@ -164,14 +167,10 @@ const JSX_TEXT_PATTERN = />\s*([^<>{}]*\p{L}[^<>{}]*)\s*</gu;
 
 /**
  * Technical diagnostic UI is a deliberate exception, scoped to exact shell
- * fragments. This does not create a global ignore word.
+ * fragments behind an admin gate. This does not create a global ignore word.
+ * The shell's former sync-diagnostics drawer was removed on 14.10.2026.
  */
 export const TECHNICAL_DIAGNOSTIC_CONTEXTS = Object.freeze([
-  {
-    path: 'src/apps/business-os/app.js',
-    context: /WebRTC Sync|Sync Room|<span>Signaling<\/span>|Signaling-URL|WebRTC-Signalisierung|Native control surface for queues, runs, sync state, and agent context|Native CTOX control surface for queue tasks, runs, module reports, releases, and source evidence/iu,
-    reason: 'the shell exposes an explicit advanced connection-diagnostics panel',
-  },
   {
     path: 'src/apps/business-os/shared/react-settings.js',
     context: /data-sync-room|data-sync-signaling|WebRTC-Signalisierung|WebRTC-Raum|WebRTC-Signalisierungs-URLs/iu,
@@ -509,6 +508,16 @@ export function auditSourceText(source, relativePath, { metadata = false, forbid
     const context = `${source.slice(Math.max(0, start - 220), start)}${value}`;
     if (forbidden) add(start, value, context, 'rendered-text');
     if (stateProse) addStateProse(start, value, 'state-prose');
+  }
+  if (stateProse) {
+    for (const match of source.matchAll(RAW_ERROR_SINK_PATTERN)) {
+      const finding = makeFinding({ source, relativePath: normalizedPath, start: match.index ?? 0, term: 'raw error message', kind: 'state-prose' });
+      const key = `${finding.path}:${finding.line}:${finding.term}:${finding.kind}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        findings.push(finding);
+      }
+    }
   }
   return findings;
 }

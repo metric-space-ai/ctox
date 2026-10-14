@@ -6291,7 +6291,7 @@ async function openModule(moduleId, options = {}) {
     state.activeModuleSyncLease = moduleSyncLeasePromise;
   } catch (error) {
     console.error(`[business-os] Schema registration failed for ${mod.id}`, error);
-    setStatus(`Schema warning: ${error.message || error}`);
+    console.warn('[business-os] schema warning', error);
   }
   try {
     const moduleScript = await moduleScriptPromise;
@@ -6316,7 +6316,7 @@ async function openModule(moduleId, options = {}) {
         } else {
           console.error(`[business-os] mount failed for ${mod.id}`, error);
         }
-        setStatus(`${moduleDisplayTitle(mod)}: ${error?.message || error}`);
+        console.warn(`[business-os] ${mod.id} failed`, error);
       }
     }
     // Wire shell-owned column resizing for any declarative handles the module
@@ -6540,7 +6540,7 @@ function startModuleSync(mod) {
       if (isRecoverableDataPlaneAbort(error)) return;
       if (await recoverFromLocalRxDbSchemaDrift(error)) return;
       console.error(`[business-os] Sync startup failed for ${mod.id}`, error);
-      setStatus(`Sync failed: ${error.message || error}`);
+      console.warn('[business-os] sync failed', error);
     });
 }
 
@@ -8999,7 +8999,7 @@ function renderLoginGate(session, options = {}) {
       ${pairingMissing ? `
         <div class="auth-gate-actions">
           <div class="auth-gate-error" data-gate-error>
-            Business OS benötigt eine Pairing-Konfiguration mit sync_room und Signaling-URL.
+            Bitte den Link aus Workjet erneut öffnen.
           </div>
         </div>
       ` : `
@@ -15317,7 +15317,7 @@ async function loadSyncConfig() {
   const config = await readBusinessOsLaunchConfig();
   if (config) return config;
 
-  throw new Error('Business OS WebRTC sync config is missing. Pair this browser with a CTOX instance first.');
+  throw new Error('Business OS sync config is missing. Pair this browser with a CTOX instance first.');
 }
 
 async function readBusinessOsLaunchConfig() {

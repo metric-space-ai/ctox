@@ -38,7 +38,6 @@ const MESSAGES = {
     infoAria: 'Informationen',
     loadingFiles: 'Lade Dateien...',
     errorPrefix: 'Fehler',
-    syncFailedPrefix: 'Synchronisierung fehlgeschlagen',
     collectionUnavailable: (id) => `Collection "${id}" ist nicht verfügbar.`,
     objectCount: (n) => `${n} Objekt${n === 1 ? '' : 'e'}`,
     colName: 'Name',
@@ -108,7 +107,6 @@ const MESSAGES = {
     infoAria: 'Info',
     loadingFiles: 'Loading files...',
     errorPrefix: 'Error',
-    syncFailedPrefix: 'Sync failed',
     collectionUnavailable: (id) => `Collection "${id}" is not available.`,
     objectCount: (n) => `${n} item${n === 1 ? '' : 's'}`,
     colName: 'Name',
@@ -666,7 +664,7 @@ export async function mount(ctx) {
         contentHashScheme: row.contentHashScheme,
       });
       console.warn('[explorer] preview failed', error);
-      body.innerHTML = `<p class="app-explorer-message is-error">Vorschau konnte nicht geladen werden.</p>`;
+      body.innerHTML = `<p class="app-explorer-message">Vorschau nicht verfügbar.</p>`;
     }
   }
 

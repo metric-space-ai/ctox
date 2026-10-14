@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  STATE_PROSE_PATTERNS,
   EXCLUSION_RULES,
   FORBIDDEN_TERMS,
   INTERNAL_COPY_CONTEXTS,
@@ -52,10 +53,7 @@ test('implementation tokens and technical predicates are not product-copy findin
     auditSourceText("const protocol='WebRTC'; const id='ctox-rxdb-js'; const ready = message.includes('RxDB Error-Code: DB6');", 'src/apps/business-os/modules/example/index.js'),
     [],
   );
-  assert.deepEqual(
-    auditSourceText('<h2>WebRTC Sync</h2>', 'src/apps/business-os/app.js'),
-    [],
-  );
+  assert.ok(auditSourceText('<h2>WebRTC Sync</h2>', 'src/apps/business-os/app.js').length > 0);
   assert.ok(auditSourceText('<h2>WebRTC Sync</h2>', 'src/apps/business-os/modules/notes/index.js').length > 0);
   assert.deepEqual(
     auditSourceText("setTimeout(() => reject(new Error('replication did not become ready')), 1);", 'src/apps/business-os/desktop-apps/example/app.js').map(({ term }) => term),
@@ -96,4 +94,23 @@ test('the guard is sourced from the Workjet vocabulary contract', () => {
   assert.ok(FORBIDDEN_TERMS.includes('RxDB'));
   assert.ok(FORBIDDEN_TERMS.includes('WebRTC'));
   assert.ok(USER_TERMS.includes('Workjet'));
+});
+
+test('state prose is flagged in rendered copy but not in thrown errors or logs', () => {
+  const path = 'src/apps/business-os/modules/example/index.js';
+  const hits = (source) => auditSourceText(source, path).filter(({ kind }) => kind === 'state-prose');
+  assert.ok(hits("el.textContent = 'Leads konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten.';").length > 0);
+  assert.ok(hits("label.textContent = 'Stand unbestätigt';").length > 0);
+  assert.ok(hits("host.innerHTML = `<p>Daten werden synchronisiert.</p>`;").length > 0);
+  assert.ok(hits("host.innerHTML = `<p>${escapeHtml(error.message)}</p>`;").length > 0, 'escaping does not make a raw error message user copy');
+  assert.ok(hits("host.innerHTML = `<p>Fehler: ${error.message}</p>`;").length > 0);
+  assert.equal(hits("throw new Error('Daten konnten nicht rechtzeitig aus CTOX geladen werden.');").length, 0);
+  assert.equal(hits("console.warn('Sync-Fehler: retrying');").length, 0);
+  assert.equal(hits("melde(`Firmen werden abgeglichen: ${index} / ${gesamt}`);").length, 0, 'user-started progress stays allowed');
+  assert.equal(hits("toast.textContent = 'Datei konnte nicht gelesen werden (JSON erwartet).';").length, 0, 'user action errors stay allowed');
+});
+
+test('state prose patterns are explicit regular expressions', () => {
+  assert.ok(STATE_PROSE_PATTERNS.length >= 10);
+  for (const pattern of STATE_PROSE_PATTERNS) assert.ok(pattern instanceof RegExp);
 });

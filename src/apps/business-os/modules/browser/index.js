@@ -2782,10 +2782,15 @@ function renderAdapterRail(ctx, refs, state) {
   }
   rail.replaceChildren();
   if (state.adapterFehler) {
-    const fehler = document.createElement('div');
-    fehler.className = 'ctox-empty';
-    fehler.textContent = t('adaptersFailed', 'Adapter konnten nicht geladen werden.');
-    rail.appendChild(fehler);
+    // No state sentence: retry the read silently while the rail is open.
+    if (!state.adapterRetryTimer) {
+      state.adapterRetryTimer = setTimeout(() => {
+        state.adapterRetryTimer = null;
+        ladeScrapingAdapter(ctx, state).then(() => {
+          if (state.leftView?.band === 'adapters') renderAdapterRail(ctx, refs, state);
+        });
+      }, 10_000);
+    }
     return;
   }
   if (!state.adapters.length) {

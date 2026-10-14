@@ -44,7 +44,6 @@ const MESSAGES = {
     infoAria: 'Informationen',
     loadingFiles: 'Lade Dateien...',
     errorPrefix: 'Fehler',
-    syncFailedPrefix: 'Synchronisierung fehlgeschlagen',
     collectionUnavailable: (id) => `Collection "${id}" ist nicht verfügbar.`,
     objectCount: (n) => `${n} Objekt${n === 1 ? '' : 'e'}`,
     colName: 'Name',
@@ -113,7 +112,6 @@ const MESSAGES = {
     infoAria: 'Info',
     loadingFiles: 'Loading files...',
     errorPrefix: 'Error',
-    syncFailedPrefix: 'Sync failed',
     collectionUnavailable: (id) => `Collection "${id}" is not available.`,
     objectCount: (n) => `${n} item${n === 1 ? '' : 's'}`,
     colName: 'Name',
@@ -354,7 +352,7 @@ export async function mount(container, ctx) {
         reason: 'sync_error',
         total: 0,
         visible: 0,
-        message: `${T.syncFailedPrefix}: ${error?.message || error}`,
+        message: '',
       };
       renderHeader();
       renderRows();
@@ -636,7 +634,7 @@ export async function mount(container, ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.dragOutFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.dragOutFailedPrefix)}</p>`;
     }
   }
 
@@ -694,7 +692,7 @@ export async function mount(container, ctx) {
         contentGenerationId: row.contentGenerationId,
         contentHashScheme: row.contentHashScheme,
       });
-      body.innerHTML = `<p class="app-explorer-message is-error">Vorschau konnte nicht geladen werden: ${escapeHtml(error?.message || error)}</p>`;
+      body.innerHTML = `<p class="app-explorer-message">Vorschau nicht verfügbar.</p>`;
     }
   }
 
@@ -783,7 +781,7 @@ export async function mount(container, ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.openInAppFailed(appTitle(appId)))}: ${escapeHtml(error?.message || error)}</p>`;
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.openInAppFailed(appTitle(appId)))}</p>`;
     }
   }
 
@@ -808,7 +806,7 @@ export async function mount(container, ctx) {
       });
       const body = refs.preview.querySelector('[data-preview-body]');
       if (body) {
-        body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.downloadFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
+        body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.downloadFailedPrefix)}</p>`;
       }
     }
   }

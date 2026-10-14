@@ -257,7 +257,6 @@ export async function mount(container, ctx) {
     console.warn('[source-editor] Monaco unavailable, using textarea fallback:', error);
     refs.monacoHost.hidden = true;
     refs.fallback.hidden = false;
-    setStatus('Monaco konnte nicht geladen werden. Texteditor-Fallback aktiv.', true);
   });
 
   await loadModuleCatalog();
@@ -413,7 +412,7 @@ export async function mount(container, ctx) {
       clearEditor('Source nicht verfügbar', state.moduleTitle || '');
       renderFileList();
       console.warn('[code-editor] source load failed', error);
-      setStatus('Source konnte nicht geladen werden.', true);
+      setStatus('Öffnen hat nicht geklappt.', true);
     } finally {
       state.loading = false;
       renderFileList();
@@ -780,7 +779,7 @@ export async function mount(container, ctx) {
       commits = await loadCommitsFromRxdb();
     } catch (error) {
       console.warn('[code-editor] history unavailable', error);
-      refs.historyPanel.innerHTML = '<p class="source-editor-empty">Verlauf konnte nicht geladen werden.</p>';
+      refs.historyPanel.innerHTML = '';
       return;
     }
     state.commits = commits;
