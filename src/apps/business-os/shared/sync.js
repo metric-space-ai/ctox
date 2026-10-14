@@ -1896,7 +1896,7 @@ async function startWebRtcReplication({
         }
         recordCollection?.(collection, {
           queryReady: demandOnly ? queryReady : true,
-          queryReadyAt: queryReady ? new Date().toISOString() : null,
+          queryReadyAt: (demandOnly ? queryReady : true) ? new Date().toISOString() : null,
           reason: null,
         });
         if (queryReady && typeof onNativeQueryReady === 'function') {
