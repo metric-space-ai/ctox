@@ -16,6 +16,23 @@ emits the required action for each file without changing the pin.
 `scripts/check_upstream_anchors.sh` proves
 that every existing mirror still refers to the locked upstream source.
 
+For a Go module namespace migration, the development-only classifier below
+reports modified Go files whose only byte changes are parser-identified import
+path tokens. It preserves aliases, comments, whitespace, function bodies and
+file modes; any additional change remains manual review. It requires locally
+available immutable Git objects and the existing Go reference toolchain.
+
+```sh
+GOTOOLCHAIN=local GOPROXY=off go run scripts/classify_upstream_import_migration.go \
+  -repo <upstream-checkout> -base <full-accepted-hash> \
+  -candidate <full-candidate-hash> -out <new-report.json>
+```
+
+An import-only candidate is review evidence, not an accepted disposition. The
+report never changes the pin, review statuses, source anchors or gate credit;
+affected module and full-feature tests still apply. Added/deleted files and
+all other deltas remain in the canonical candidate review.
+
 An upstream advance is a staged operation. Discovery and review preparation are
 automatable; accepting a new baseline deliberately remains a gated operation:
 

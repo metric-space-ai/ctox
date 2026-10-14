@@ -29,7 +29,7 @@ jq '{
   summary,
   modules: (
     [.changes[] | {
-      module,
+      module: .module,
       source_kind,
       required_action
     }]
@@ -59,13 +59,13 @@ review_matches_delta() {
       .candidate_commit == $delta[0].candidate_commit and
       ([.changes[] | {
         upstream,
-        module,
+        module: .module,
         kind,
         source_kind,
         required_action
       }] == [$delta[0].changes[] | {
         upstream,
-        module,
+        module: .module,
         kind,
         source_kind,
         required_action
