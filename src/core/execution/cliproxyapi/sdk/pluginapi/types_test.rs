@@ -111,6 +111,27 @@ fn all_async_contracts_are_object_safe_send_and_sync() {
 }
 
 #[test]
+fn metadata_config_defaults_match_upstream_go_wire_cases() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/differential/plugin_config_default_fixtures.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        let metadata: Metadata =
+            serde_json::from_value(serde_json::json!({"ConfigFields":[case["input"].clone()]}))
+                .unwrap();
+        let encoded = serde_json::to_value(metadata).unwrap();
+        let field = &encoded["ConfigFields"][0];
+        assert!(
+            field.as_object().unwrap().contains_key("Default"),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(field["Default"], case["expected"], "{}", case["name"]);
+    }
+}
+
+#[test]
 fn metadata_config_fields_expose_plugin_schema() {
     let metadata = Metadata {
         name: "example".into(),
@@ -123,6 +144,7 @@ fn metadata_config_fields_expose_plugin_schema() {
             field_type: ConfigFieldType(ConfigFieldType::ENUM.into()),
             enum_values: vec!["safe".into(), "fast".into()],
             description: "Execution mode.".into(),
+            default_value: None,
         }],
     };
     assert!(!metadata.logo.is_empty());
