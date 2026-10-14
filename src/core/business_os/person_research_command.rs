@@ -2755,7 +2755,7 @@ mod tests {
         )?;
         let (capability, _) = store::issue_business_os_capability_token_for_managed_user(
             root,
-            "bound-owner",
+            "bound-owner+fixture@example.test",
             "Bound Owner",
             "admin",
             chrono::Utc::now().timestamp_millis(),
@@ -2787,7 +2787,7 @@ import json,os,pathlib
 i=json.loads(os.environ['CTOX_SCRAPE_INPUT_JSON'])
 p=pathlib.Path(os.environ['CTOX_SCRAPE_RUN_DIR']).parents[1]/'bound_calls.txt'
 p.write_text(p.read_text()+'x' if p.exists() else 'x')
-assert i['owner_user_id']=='bound-owner'
+assert i['owner_user_id']=='bound-owner+fixture@example.test'
 assert i['task_id']=='cmd-bound-google'
 assert i['company']=='UITEST Bound GmbH'
 print(json.dumps({'records':[{'field':'firma_name','value':i['company']}],
@@ -2838,7 +2838,10 @@ CTOX_BOUND_FIXTURE
             )?;
             assert_eq!(result["status"], "succeeded", "{result}");
             assert_eq!(result["records_found"], 1);
-            assert_eq!(result["source_session"]["owner_user_id"], "bound-owner");
+            assert_eq!(
+                result["source_session"]["owner_user_id"],
+                "bound-owner+fixture@example.test"
+            );
             assert_eq!(result["source_session"]["task_id"], "cmd-bound-google");
             assert_eq!(
                 result["source_session"]["session_id"],
@@ -2880,7 +2883,7 @@ CTOX_BOUND_FIXTURE
         let conn = store::open_store(root)?;
         conn.execute(
             "UPDATE business_users SET role = 'user' WHERE user_id = ?1",
-            ["bound-owner"],
+            ["bound-owner+fixture@example.test"],
         )?;
         drop(conn);
         let revoked = execute_bound_research_target(

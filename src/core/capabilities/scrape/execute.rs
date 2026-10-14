@@ -1161,7 +1161,8 @@ fn bound_source_session(payload: &Value, input_json: Option<&str>, run_id: &str)
         (!id.trim().is_empty()
             && id.len() <= 256
             && id.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':')
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'_' | b'-' | b':' | b'@' | b'+')
             }))
         .then(|| id.to_string())
     };
