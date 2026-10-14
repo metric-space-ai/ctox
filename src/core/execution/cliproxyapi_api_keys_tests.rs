@@ -467,3 +467,77 @@ async fn native_api_http_only_received_upstream_errors_report_provider_auth() {
         assert_eq!(wire.seen.lock().unwrap().len(), 1);
     }
 }
+
+#[tokio::test]
+async fn api_pool_missing_credential_keeps_siblings_available_without_pin_fallback() {
+    let (root, stored) = setup();
+    let wire = Arc::new(Wire::default());
+    let routes = build(root.path(), &stored, Duration::from_secs(5)).unwrap();
+    *routes.http.lock().unwrap() = Some(wire.clone());
+    let old = routes.route_for("xai").unwrap().unwrap();
+    crate::secrets::delete_secret_record(root.path(), "provider-api-keys", "api-first").unwrap();
+    let fresh = routes
+        .route_for("xai")
+        .expect("a missing account must not disable its provider pool")
+        .unwrap();
+    let response = scoped_http_request(fresh.clone(), None).await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.contains("X-CTOX-Account-Selected: second\r\n"));
+    let pinned = scoped_http_request(fresh, Some("first")).await;
+    assert!(pinned.starts_with("HTTP/1.1 503"));
+    assert!(!pinned.contains("X-CTOX-Upstream-Status:"));
+    let stale = scoped_http_request(old, Some("first")).await;
+    assert!(stale.starts_with("HTTP/1.1 409"));
+    {
+        let seen = wire.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0]
+            .headers
+            .values()
+            .flatten()
+            .any(|v| v == "Bearer fixture-credential-second"));
+    }
+    crate::secrets::write_secret_record(
+        root.path(),
+        "provider-api-keys",
+        "api-first",
+        "fixture-credential-first",
+        None,
+        serde_json::json!({"purpose":"private fixture"}),
+    )
+    .unwrap();
+    let restored = routes.route_for("xai").unwrap().unwrap();
+    for (pin, expected) in [(Some("first"), "first"), (None, "second")] {
+        let response = scoped_http_request(restored.clone(), pin).await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.contains(&format!("X-CTOX-Account-Selected: {expected}\r\n")));
+    }
+    assert_eq!(wire.seen.lock().unwrap().len(), 3);
+}
+#[tokio::test]
+async fn api_pool_invalid_local_key_is_not_a_provider_auth_verdict_or_wildcard() {
+    let (root, stored) = setup();
+    let wire = Arc::new(Wire::default());
+    crate::secrets::write_secret_record(
+        root.path(),
+        "provider-api-keys",
+        "api-first",
+        "",
+        None,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let handlers = build_with_http(root.path(), &stored, wire.clone())
+        .expect("invalid local key must not prevent healthy account use");
+    let response = scoped_http_request(handlers["xai"].clone(), None).await;
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.contains("X-CTOX-Account-Selected: second\r\n"));
+    let pinned = scoped_http_request(handlers["xai"].clone(), Some("first")).await;
+    assert!(pinned.starts_with("HTTP/1.1 503"));
+    assert!(!pinned.contains("X-CTOX-Error-Class:"));
+    assert_eq!(wire.seen.lock().unwrap().len(), 1);
+    crate::secrets::delete_secret_record(root.path(), "provider-api-keys", "api-second").unwrap();
+    assert!(build_with_http(root.path(), &stored, wire)
+        .unwrap()
+        .is_empty());
+}
