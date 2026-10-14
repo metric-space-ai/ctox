@@ -776,6 +776,15 @@ test('compact settings tabs expose their complete labels on hover and to assisti
   }
 });
 
+test('settings hide runtime, sync and account ids without the admin gate', () => {
+  const html = baseTemplate({ isAdmin: false, canOpenAdmin: false, tab: 'runtime' });
+  assert.doesNotMatch(html, /data-settings-tab="runtime"/);
+  assert.doesNotMatch(html, /data-settings-tab="sync"/);
+  assert.doesNotMatch(html, /Signaling-Server|Status unbekannt|Runtime nicht geladen/);
+  assert.doesNotMatch(html, /<th>ID<\/th>/);
+  assert.match(html, /data-language-select/);
+});
+
 test('settings appearance tab hides when branding permission is absent', () => {
   const html = baseTemplate({
     tab: 'runtime',

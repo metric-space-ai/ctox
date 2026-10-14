@@ -3323,9 +3323,7 @@ async function openSettingsDrawer(options = {}) {
         ${shellPreferenceControlsTemplate()}
         <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
       </header>
-      <section class="settings-section">
-        <header><h3>Datenspeicher</h3><span>Wird vorbereitet.</span></header>
-      </section>
+      <section class="settings-section" aria-busy="true"></section>
     `;
     loading.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
     els.rightDrawer.append(loading);
@@ -3333,22 +3331,8 @@ async function openSettingsDrawer(options = {}) {
   try {
     await waitForDataPlaneReady();
   } catch (error) {
+    console.warn('[business-os] settings data plane failed', error);
     if (!ownsRightDrawer(ticket)) return;
-    els.rightDrawer.replaceChildren();
-    const failed = document.createElement('div');
-    failed.className = 'drawer-body settings-drawer';
-    failed.innerHTML = `
-      <header class="drawer-header-row settings-head">
-        ${shellPreferenceControlsTemplate()}
-        <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
-      </header>
-      <section class="settings-section">
-        <header><h3>Datenspeicher</h3><span>Nicht bereit.</span></header>
-        <p class="muted">${escapeHtml(String(error?.message || error || 'Unbekannter Fehler'))}</p>
-      </section>
-    `;
-    failed.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
-    els.rightDrawer.append(failed);
     return;
   }
   if (!ownsRightDrawer(ticket)) return;
@@ -3363,7 +3347,7 @@ async function openSettingsDrawer(options = {}) {
     sync: createLiveSyncFacade({ host: els.rightDrawer }),
     commandBus: createLiveCommandBusFacade(),
     db: createScopedSystemDbFacade('settings-drawer-react-settings', SETTINGS_DB_COLLECTIONS),
-    initialTab: options.initialTab || 'runtime',
+    initialTab: options.initialTab || 'appearance',
     onAccount: openAccountDrawer,
     onClose: closeDrawers,
     onModulesChanged: refreshModules,

@@ -48,6 +48,16 @@ const PROVIDER_SUBSCRIPTION_COMMANDS = Object.freeze({
 
 let subscriptionAuthWindowSequence = 0;
 
+function settingsFailureNote(error) {
+  console.warn('[business-os] settings action failed', error);
+  return '';
+}
+
+function noteSettingsFailure(settingsState, error, sentence = 'Das hat nicht geklappt.') {
+  console.warn('[business-os] settings action failed', error);
+  settingsState.commandStatus = sentence;
+}
+
 export async function openReactSettings({
   mount,
   modules = [],
@@ -57,7 +67,7 @@ export async function openReactSettings({
   sync = null,
   commandBus = null,
   db = null,
-  initialTab = 'runtime',
+  initialTab = 'appearance',
   onAccount,
   onClose,
   onModulesChanged,
@@ -72,6 +82,14 @@ export async function openReactSettings({
   const user = session?.user || {};
   const role = resolveRole(session);
   const isAdmin = roleCanManage(role);
+  const canOpenAdmin = canOpenModuleAdmin({ modules, session, governance });
+  const adminSettingsTabs = new Set(['runtime', 'sync', 'mcp', 'activity']);
+  const requestedTab = String(initialTab || 'appearance').trim() || 'appearance';
+  const startingTab = adminSettingsTabs.has(requestedTab)
+    ? (isAdmin ? requestedTab : 'appearance')
+    : requestedTab === 'admin'
+      ? (canOpenAdmin ? 'admin' : 'appearance')
+      : requestedTab;
   const canManageBranding = canUseBusinessPermission({
     session,
     governance,
@@ -79,7 +97,7 @@ export async function openReactSettings({
     scopeType: 'workspace',
   });
   const settingsState = {
-    tab: initialTab || 'runtime',
+    tab: startingTab,
     commandStatus: '',
     subscriptionAuth: null,
     runtimeSettings: null,
@@ -206,7 +224,7 @@ export async function openReactSettings({
       settingsState.modules = payload.modules || settingsState.modules;
       settingsState.governance = payload.governance || settingsState.governance;
     } catch (error) {
-      settingsState.commandStatus = `Module konnten nicht geladen werden: ${error.message || error}`;
+      console.warn('[business-os] settings modules failed', error);
     }
     try {
       const payload = await loadTemplates({ db });
@@ -232,7 +250,7 @@ export async function openReactSettings({
         settingsState.commandStatus = '';
       }
     } catch (error) {
-      settingsState.commandStatus = `Runtime-Status konnte nicht geladen werden: ${error.message || error}`;
+      console.warn('[business-os] runtime settings failed', error);
     }
     settingsState.runtimeLoading = false;
     render();
@@ -257,7 +275,7 @@ export async function openReactSettings({
       settingsState.branding = {
         ...settingsState.branding,
         loading: false,
-        error: String(error?.message || error),
+        error: settingsFailureNote(error),
       };
     }
     render();
@@ -290,7 +308,7 @@ export async function openReactSettings({
         ...settingsState.activity,
         loading: false,
         loaded: !transient,
-        error: String(error?.message || error),
+        error: settingsFailureNote(error),
       };
       if (transient && settingsState.tab === 'activity' && activityRetryAttempts < 5) {
         activityRetryAttempts += 1;
@@ -324,13 +342,15 @@ export async function openReactSettings({
       settingsState.mcp = {
         ...settingsState.mcp,
         loading: false,
-        error: String(error?.message || error),
+        error: settingsFailureNote(error),
       };
     }
     render();
   };
   const activateSettingsTab = (nextTab) => {
     if (!nextTab || settingsState.tab === nextTab) return;
+    if (adminSettingsTabs.has(nextTab) && !isAdmin) return;
+    if (nextTab === 'admin' && !canOpenAdmin) return;
     // Leaving the channels tab? Cancel any in-flight QR polling.
     if (settingsState.tab === 'channels' && nextTab !== 'channels') {
       if (settingsState.channels?.qrPoll) {
@@ -487,7 +507,7 @@ export async function openReactSettings({
           const result = await commandBus.dispatch(command);
           settingsState.commandStatus = `Task ${result.task_id || result.command_id || result.status} angelegt.`;
         } catch (error) {
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
         }
         render();
       });
@@ -507,7 +527,7 @@ export async function openReactSettings({
         );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
       } catch (error) {
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
       }
       render();
     });
@@ -576,9 +596,9 @@ export async function openReactSettings({
       } catch (error) {
         settingsState.branding = {
           ...settingsState.branding,
-          error: String(error?.message || error),
+          error: settingsFailureNote(error),
         };
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
       }
       render();
     });
@@ -598,9 +618,9 @@ export async function openReactSettings({
       } catch (error) {
         settingsState.branding = {
           ...settingsState.branding,
-          error: String(error?.message || error),
+          error: settingsFailureNote(error),
         };
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
       }
       render();
     });
@@ -720,10 +740,8 @@ export async function openReactSettings({
           sync,
           waitForProjection: false,
         }).catch((error) => {
-          const message = `Runtime konnte nach Start des Provider-Logins nicht gespeichert werden: ${String(error?.message || error)}`;
-          settingsState.commandStatus = settingsState.subscriptionAuth?.userCode
-            ? `${settingsState.commandStatus} ${message}`
-            : message;
+          console.warn('[business-os] runtime settings failed', error);
+          settingsState.commandStatus = 'Speichern hat nicht geklappt.';
           render();
         });
         waitForSubscriptionConnection(providerId, {
@@ -749,14 +767,15 @@ export async function openReactSettings({
           await refreshRuntimeSettings();
         }).catch((error) => {
           if (String(error?.message || error).includes('Zeitüberschreitung')) return;
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
           render();
         });
       } catch (error) {
+        console.warn('[business-os] provider login failed', error);
         writeSubscriptionAuthWindow(
           authWindow,
           `${providerLabel} Login konnte nicht gestartet werden`,
-          String(error?.message || error),
+          'Anmelden hat nicht geklappt.',
           true,
         );
         settingsState.subscriptionAuth = {
@@ -764,9 +783,9 @@ export async function openReactSettings({
           provider: providerId,
           accountId,
           action: 'connect',
-          error: String(error?.message || error),
+          error: settingsFailureNote(error),
         };
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
       }
       render();
     }));
@@ -850,9 +869,9 @@ export async function openReactSettings({
       } catch (error) {
         settingsState.subscriptionAuth = {
           status: 'failed', provider: providerId, accountId, action,
-          error: String(error?.message || error),
+          error: settingsFailureNote(error),
         };
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
         render();
       }
     }));
@@ -893,7 +912,7 @@ export async function openReactSettings({
         settingsState.canManageUsers = roleCanManage(resolveRole(session));
         settingsState.commandStatus = `Nutzer ${id} gespeichert.`;
       } catch (error) {
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
       }
       render();
     });
@@ -936,7 +955,7 @@ export async function openReactSettings({
             ...settingsState.moduleWhyStatus,
             [moduleId]: { loading: false, error: String(error?.message || error) },
           };
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
         }
         render();
       });
@@ -979,12 +998,12 @@ export async function openReactSettings({
             ...settingsState.moduleSupportStatus,
             [moduleId]: {
               loading: false,
-              error: String(error?.message || error),
+              error: settingsFailureNote(error),
               downloadUrl: '',
               downloadName: '',
             },
           };
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
         }
         render();
       });
@@ -1000,7 +1019,7 @@ export async function openReactSettings({
           settingsState.governance = await assignFounder(moduleId, userId, true, { commandBus, db, session });
           settingsState.commandStatus = `${userId} ist verantwortlich für ${moduleId}.`;
         } catch (error) {
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
         }
         render();
       });
@@ -1024,7 +1043,7 @@ export async function openReactSettings({
         await refreshManagedModules();
         await onModulesChanged?.();
       } catch (error) {
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
         render();
       }
     });
@@ -1045,7 +1064,7 @@ export async function openReactSettings({
           await refreshManagedModules();
           await onModulesChanged?.();
         } catch (error) {
-          settingsState.commandStatus = String(error?.message || error);
+          noteSettingsFailure(settingsState, error);
           render();
         }
       });
@@ -1075,7 +1094,7 @@ export async function openReactSettings({
         await refreshManagedModules();
         await onModulesChanged?.();
       } catch (error) {
-        settingsState.commandStatus = String(error?.message || error);
+        noteSettingsFailure(settingsState, error);
         render();
       }
     });
@@ -1104,7 +1123,7 @@ export async function openReactSettings({
         ...settingsState.workjetPairing,
         loading: false,
         invite: null,
-        error: String(error?.message || error),
+        error: settingsFailureNote(error),
       };
     }
     render();
@@ -1172,18 +1191,17 @@ function settingsTemplate({
     </header>
 
     <section class="settings-user-card">
-      <div class="settings-avatar" aria-hidden="true">${escapeHtml(initials(user.display_name || user.id || 'CTOX'))}</div>
+      <div class="settings-avatar" aria-hidden="true">${escapeHtml(initials(user.display_name || 'CTOX'))}</div>
       <div>
-        <strong>${escapeHtml(user.display_name || user.id || 'Nicht eingeloggt')}</strong>
-        <span>${escapeHtml(user.id || 'keine Session')}</span>
+        <strong>${escapeHtml(user.display_name || 'Nicht eingeloggt')}</strong>
       </div>
       <mark class="role-badge">${escapeHtml(roleDisplayName(role))}</mark>
     </section>
 
     <nav class="settings-tabs" aria-label="Einstellungsbereiche">
-      ${tabButton('runtime', 'Runtime', tab)}
+      ${isAdmin ? tabButton('runtime', 'Runtime', tab) : ''}
       ${tabButton('channels', 'Kanäle', tab)}
-      ${tabButton('sync', 'Sync', tab)}
+      ${isAdmin ? tabButton('sync', 'Sync', tab) : ''}
       ${branding?.canManage ? tabButton('appearance', 'Design', tab) : ''}
       ${isAdmin ? tabButton('mcp', 'MCP', tab) : ''}
       ${tabButton('users', 'Team', tab)}
@@ -1192,9 +1210,9 @@ function settingsTemplate({
     </nav>
 
     <div class="settings-scroll">
-      ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth) : ''}
+      ${tab === 'runtime' && isAdmin ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth) : ''}
       ${tab === 'channels' ? channelsPanel(channels) : ''}
-      ${tab === 'sync' ? syncPanel(syncConfig, isAdmin, workjetPairing) : ''}
+      ${tab === 'sync' && isAdmin ? syncPanel(syncConfig, isAdmin, workjetPairing) : ''}
       ${tab === 'appearance' && branding?.canManage ? appearancePanel(branding) : ''}
       ${tab === 'mcp' && isAdmin ? mcpPanel(mcp) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
@@ -1274,8 +1292,9 @@ function settingsPreferenceControls() {
 function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth = null) {
   if (runtimeLoading && !runtimeSettings) {
     return `
-      <section class="settings-section runtime-editor">
-        <header><h3>Inference</h3><span>Status wird geladen…</span></header>
+      <section class="settings-section runtime-editor" aria-busy="true">
+        <header><h3>Anbieter, Zugang und Modell</h3></header>
+        <p>Wird geladen …</p>
       </section>
     `;
   }
@@ -1306,21 +1325,19 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
     <section class="settings-section runtime-editor">
       <header>
         <div><h3>Anbieter, Zugang und Modell</h3></div>
-        <span>${escapeHtml(runtimeLoading ? 'Status wird geladen…' : diagnostics.service_message || 'Status unbekannt')}</span>
       </header>
+      ${providerLoaded ? `
       <div class="runtime-healthline ${serviceNeedsAttention || authNeedsAttention || modelUnavailable ? 'is-danger' : 'is-ok'}">
         <span aria-hidden="true"></span>
-        <strong>${escapeHtml(providerLoaded ? `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}` : 'Runtime nicht geladen')}</strong>
+        <strong>${escapeHtml(`${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}`)}</strong>
         <em>${escapeHtml(runtimeAuthSummary(provider, authMode, auth, runtimeSettings?.provider_subscriptions))}</em>
-      </div>
-      ${!runtimeLoading && (serviceNeedsAttention || authNeedsAttention || modelUnavailable || (providerLoaded && !runtime.chat_model)) ? `
+      </div>` : ''}
+      ${!runtimeLoading && (authNeedsAttention || modelUnavailable || (providerLoaded && !runtime.chat_model)) ? `
         <p class="runtime-healthline is-danger" role="alert">${escapeHtml(authNeedsAttention
           ? 'Die Crew kann keine Aufgaben bearbeiten: Der Zugang zum Modellanbieter fehlt. Bitte anmelden oder einen API-Schlüssel hinterlegen.'
           : modelUnavailable
             ? 'Das ausgewählte Modell wird für diesen Zugang nicht angeboten. Bitte ein verfügbares Modell auswählen.'
-          : !runtime.chat_model
-            ? 'Die Crew kann keine Aufgaben bearbeiten: Bitte ein Modell auswählen.'
-            : 'Die Crew meldet einen Betriebsfehler. Aufgaben können derzeit scheitern; prüfe den Zugang und den letzten Fehler.')}</p>` : ''}
+            : 'Die Crew kann keine Aufgaben bearbeiten: Bitte ein Modell auswählen.')}</p>` : ''}
       <div class="runtime-flow">
         <div class="runtime-choice-section">
           <span class="runtime-section-label">Provider</span>
@@ -1610,15 +1627,12 @@ function mcpEffectiveStatus(info, error) {
   if (info.managed?.status === 'ready') return 'Managed bereit';
   if (info.status === 'local_ready_managed_not_connected') return 'Lokal bereit; Managed Web Auth fehlt';
   if (info.status === 'ready') return 'Bereit';
-  return String(info.status || 'Status unbekannt');
+  return '';
 }
 
 function mcpErrorMessage(error) {
-  const message = String(error?.message || error || '').trim();
-  if (/failed to fetch|networkerror|load failed/i.test(message)) {
-    return 'Der MCP-Status konnte nicht geladen werden. Verbindung prüfen und erneut versuchen.';
-  }
-  return message || 'Der MCP-Status konnte nicht geladen werden.';
+  if (error) console.warn('[business-os] mcp status failed', error);
+  return 'Der MCP-Status konnte nicht geladen werden.';
 }
 
 function mcpStatusLabel(info, error) {
@@ -1626,7 +1640,7 @@ function mcpStatusLabel(info, error) {
   if (!info) return 'Noch nicht geladen.';
   if (info.managed?.status === 'ready') return 'Managed MCP bereit fuer externe Coding Agents.';
   if (info.status === 'local_ready_managed_not_connected') return 'Lokal bereit; Managed Web Auth fehlt.';
-  return info.status === 'ready' ? 'Bereit fuer externe MCP Clients.' : String(info.status || 'Status unbekannt.');
+  return info.status === 'ready' ? 'Bereit fuer externe MCP Clients.' : '';
 }
 
 function mcpCopyValue(kind, info) {
@@ -1653,8 +1667,7 @@ function usersPanel(user, role, isAdmin, users, canManageUsers) {
       <header><h3>Aktive Sitzung</h3><span>Rolle: ${escapeHtml(roleDisplayName(role))}</span></header>
       <table class="settings-table">
         <tbody>
-          <tr><th>Teammitglied</th><td>${escapeHtml(user.display_name || user.id || '-')}</td></tr>
-          <tr><th>ID</th><td>${escapeHtml(user.id || '-')}</td></tr>
+          <tr><th>Teammitglied</th><td>${escapeHtml(user.display_name || '-')}</td></tr>
           <tr><th>Rolle</th><td>${escapeHtml(roleDisplayName(role))}</td></tr>
         </tbody>
       </table>
@@ -1666,7 +1679,7 @@ function usersPanel(user, role, isAdmin, users, canManageUsers) {
         <tbody>
           ${rows.map((row) => `
             <tr>
-              <td>${escapeHtml(row.display_name || row.id)}</td>
+              <td>${escapeHtml(row.display_name || '-')}</td>
               <td>${escapeHtml(roleDisplayName(row.role || 'user'))}</td>
               <td><span class="settings-status-badge" data-state="${row.active === false ? 'inactive' : 'active'}">${escapeHtml(row.active === false ? 'Inaktiv' : 'Aktiv')}</span></td>
             </tr>
@@ -2515,7 +2528,7 @@ function hostLabel(value) {
 function runtimeModelControl(provider, model, canManage, availableModels = [], label = 'Chat Modell') {
   const value = String(model || '');
   if (!String(provider || '').trim()) {
-    return `<label class="runtime-field"><span>${escapeHtml(label)}</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="Runtime nicht geladen" ${canManage ? '' : 'disabled'} /></label>`;
+    return `<label class="runtime-field"><span>${escapeHtml(label)}</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="" ${canManage ? '' : 'disabled'} /></label>`;
   }
   if (String(provider || '').toLowerCase() === 'local') {
     return `<label class="runtime-field"><span>${escapeHtml(label)}</span><input data-runtime-model value="${escapeAttr(value)}" placeholder="Lokales Modell" ${canManage ? '' : 'disabled'} /></label>`;
