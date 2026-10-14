@@ -343,6 +343,45 @@ test('research auth assist opens the exact protected-source browser session with
   assert.match(outboundSource, /openDesktopApp\?\.\(['"]browser['"]/);
 });
 
+test('a failed auth assist closes only the browser window it pre-opened', async () => {
+  const windows = [{ id: 'win-mail' }];
+  const destroyed = [];
+  const ctx = {
+    windowManager: {
+      listWindows: () => windows.map((win) => ({ ...win })),
+      destroy: async (id) => { destroyed.push(id); },
+    },
+    openDesktopApp: async (appId) => {
+      assert.equal(appId, 'browser');
+      const id = 'win-browser-new';
+      windows.push({ id });
+      return id;
+    },
+  };
+  const created = await hooks.preopenAuthAssistBrowserWindow(ctx);
+  assert.equal(created, 'win-browser-new');
+  assert.equal(await hooks.closePreopenedAuthAssistBrowserWindow(ctx, created), true);
+  assert.deepEqual(destroyed, ['win-browser-new']);
+
+  // A browser window the user already had open is reused by openDesktopApp
+  // and must never be closed by a failed login request.
+  const existingCtx = {
+    ...ctx,
+    openDesktopApp: async () => 'win-mail',
+  };
+  const reused = await hooks.preopenAuthAssistBrowserWindow(existingCtx);
+  assert.equal(reused, null);
+  assert.equal(await hooks.closePreopenedAuthAssistBrowserWindow(existingCtx, reused), false);
+  assert.deepEqual(destroyed, ['win-browser-new']);
+
+  // The command-bus rejection (no capability token) flows through the
+  // try/finally that closes the pre-opened window.
+  assert.match(
+    outboundSource,
+    /finally \{\s*if \(!browserLaunched\) \{\s*await closePreopenedAuthAssistBrowserWindow\(state\.ctx, preopenedBrowserWindowId\);/,
+  );
+});
+
 test('outbound import extracts company rows from uploaded Excel workbooks', async () => {
   const buffer = await fs.readFile(new URL('../../../../../tests/fixtures/outbound/minimal-companies.xlsx', import.meta.url));
 

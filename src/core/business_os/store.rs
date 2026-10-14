@@ -19986,6 +19986,16 @@ pub(super) fn rxdb_verified_identity_email(
     claims.email
 }
 
+const CAPABILITY_REQUIRED_MESSAGE: &str =
+    "a valid capability token is required for Business OS commands";
+
+fn presented_capability_token(client_ctx: &Value) -> bool {
+    client_ctx
+        .get("capability_token")
+        .and_then(Value::as_str)
+        .is_some_and(|token| !token.trim().is_empty())
+}
+
 fn rxdb_session_from_command(
     root: &Path,
     command: &BusinessCommand,
@@ -20038,8 +20048,16 @@ fn rxdb_session_from_command(
             // Untrusted browser peer with no currently valid token: fail closed.
             // Offline behavior is explicit and deterministic; the browser keeps
             // the command pending instead of mutating under a synthetic actor.
+            // The reason prefix lets intake terminalize the command as
+            // `auth_required` instead of replaying a rejection that can never
+            // succeed (see business_command_capability_rejection_reason).
             CommandOrigin::ReplicatedPeer => {
-                anyhow::bail!("a valid capability token is required for Business OS commands")
+                let reason = if presented_capability_token(&client_ctx) {
+                    CAPABILITY_INVALID_REASON
+                } else {
+                    CAPABILITY_MISSING_REASON
+                };
+                anyhow::bail!("{reason}: {CAPABILITY_REQUIRED_MESSAGE}")
             }
         }
     };
@@ -20215,6 +20233,54 @@ pub(super) fn authorize_recoverable_person_research_command(
         "person-research recovery requires web_stack.person_research"
     );
     authorize_recoverable_background_control_command(root, command)
+}
+
+/// Owner of an already admitted recoverable background control command that
+/// is being replayed from its own token-less native projection. Returns
+/// `None` whenever the replay presents a capability token (normal
+/// authentication applies), the type is not recoverable, the canonical
+/// command is missing or terminal, or its stored native authorization
+/// receipt is not a trusted, allowed receipt for this module. The replay
+/// still cannot change the immutable intent: the control claim rejects a
+/// different payload hash, and the resume path revalidates the receipt actor
+/// against current policy before any handler runs.
+pub(super) fn admitted_recoverable_replay_owner(
+    root: &Path,
+    command: &BusinessCommand,
+) -> Option<String> {
+    let client_context = business_command_client_context_value(command);
+    if presented_capability_token(&client_context) {
+        return None;
+    }
+    let permission = recoverable_background_control_permission(&command.command_type)?;
+    let command_id = command.id.as_deref()?;
+    let projection = channels::business_command_projection(root, command_id).ok()?;
+    if projection.get("execution_phase").and_then(Value::as_str) == Some("terminal")
+        || projection
+            .get("terminal_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status != "none")
+    {
+        return None;
+    }
+    let authorization = projection.get("native_authorization")?;
+    let receipt_matches = authorization.get("contract").and_then(Value::as_str)
+        == Some("ctox-business-command-authorization-v1")
+        && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+        && authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str())
+        && authorization.get("scope_type").and_then(Value::as_str) == Some("module")
+        && authorization.get("scope_id").and_then(Value::as_str) == Some(command.module.as_str());
+    if !receipt_matches {
+        return None;
+    }
+    authorization
+        .get("actor")
+        .filter(|actor| actor.get("trusted").and_then(Value::as_bool) == Some(true))?
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 pub(super) fn authorize_recoverable_background_control_command(
@@ -21104,6 +21170,66 @@ pub(crate) fn record_business_command_intake_failure(
     error_message: &str,
     retry_budget: u32,
 ) -> anyhow::Result<Value> {
+    record_business_command_intake_failure_with_kind(
+        root,
+        document,
+        error_message,
+        retry_budget,
+        channels::BusinessCommandIntakeFailureKind::NATIVE_UNAVAILABLE,
+    )
+}
+
+/// Reason codes for replicated commands rejected because they carry no
+/// valid native capability token. The browser reads them from the terminal
+/// command projection (`error_code = auth_required`, `result.reason`).
+pub(crate) const CAPABILITY_MISSING_REASON: &str = "capability_missing";
+pub(crate) const CAPABILITY_INVALID_REASON: &str = "capability_invalid";
+
+/// Classify a native intake error as a capability (authorization) rejection
+/// from [`rxdb_session_from_command`]. Returns the machine-readable reason.
+pub(crate) fn business_command_capability_rejection_reason(
+    error: &anyhow::Error,
+) -> Option<&'static str> {
+    let message = format!("{error:#}");
+    if !message.contains(CAPABILITY_REQUIRED_MESSAGE) {
+        return None;
+    }
+    if message.contains(CAPABILITY_INVALID_REASON) {
+        Some(CAPABILITY_INVALID_REASON)
+    } else {
+        Some(CAPABILITY_MISSING_REASON)
+    }
+}
+
+/// Record a deterministic capability rejection. The command terminalizes as
+/// `failed` with `error_code = auth_required` once `retry_budget` open
+/// failures exist; a missing token uses a budget of one.
+pub(crate) fn record_business_command_capability_rejection(
+    root: &Path,
+    document: &Value,
+    error_message: &str,
+    reason: &'static str,
+    retry_budget: u32,
+) -> anyhow::Result<Value> {
+    record_business_command_intake_failure_with_kind(
+        root,
+        document,
+        error_message,
+        retry_budget,
+        channels::BusinessCommandIntakeFailureKind {
+            error_code: "auth_required",
+            reason: Some(reason),
+        },
+    )
+}
+
+fn record_business_command_intake_failure_with_kind(
+    root: &Path,
+    document: &Value,
+    error_message: &str,
+    retry_budget: u32,
+    kind: channels::BusinessCommandIntakeFailureKind,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -21136,17 +21262,25 @@ pub(crate) fn record_business_command_intake_failure(
             .unwrap_or(Value::Null),
     };
     let has_applied_effect = domain_effect_identity_for_intake(root, command_id)?.is_some();
-    let record_failure = if has_applied_effect {
-        channels::record_business_command_applied_effect_delivery_failure
+    let claim = business_command_core_claim(command_id, &command)?;
+    let core_outcome = if has_applied_effect {
+        channels::record_business_command_applied_effect_delivery_failure(
+            root,
+            claim,
+            error_message,
+            retry_budget,
+        )?
+    } else if kind == channels::BusinessCommandIntakeFailureKind::NATIVE_UNAVAILABLE {
+        channels::record_business_command_intake_failure(root, claim, error_message, retry_budget)?
     } else {
-        channels::record_business_command_intake_failure
+        channels::record_business_command_intake_rejection(
+            root,
+            claim,
+            error_message,
+            retry_budget,
+            kind,
+        )?
     };
-    let core_outcome = record_failure(
-        root,
-        business_command_core_claim(command_id, &command)?,
-        error_message,
-        retry_budget,
-    )?;
     if core_outcome
         .get("canonical_failure_created")
         .and_then(Value::as_bool)
@@ -29617,6 +29751,144 @@ pub(super) mod tests {
             resolve_business_command_intake_failures(root.path(), "cmd_intake_failure")?,
             2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn intake_failure_attempts_stay_distinct_after_history_resolution() -> anyhow::Result<()> {
+        // THESEN 14.10.2026: after a resolution the next failure reused
+        // attempt 1, hit UNIQUE(command_id, attempt), was never recorded and
+        // intake replayed the command about twice per second.
+        let root = tempdir()?;
+        let command_id = "cmd_intake_attempt_numbering";
+        let document = serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "contract_version": 2,
+            "idempotency_key": command_id,
+            "payload_hash": "sha256:intake-attempt-fixture",
+            "module": "ctox",
+            "command_type": "business_os.test",
+            "record_id": "record-1",
+            "payload": {"instruction": "test"},
+            "client_context": {},
+            "created_at_ms": 1,
+        });
+        for expected in 1..=2_u64 {
+            let failure =
+                record_business_command_intake_failure(root.path(), &document, "failure", 5)?;
+            assert_eq!(failure["attempt"], Value::from(expected));
+            assert_eq!(failure["exhausted"], Value::Bool(false));
+        }
+        assert_eq!(
+            resolve_business_command_intake_failures(root.path(), command_id)?,
+            2
+        );
+        let after_resolution =
+            record_business_command_intake_failure(root.path(), &document, "failure again", 5)?;
+        assert_eq!(
+            after_resolution["attempt"],
+            Value::from(3),
+            "a new failure after resolution must not reuse a resolved attempt number"
+        );
+        assert_eq!(
+            after_resolution["exhausted"],
+            Value::Bool(false),
+            "only open failures count against the retry budget"
+        );
+        let conn = Connection::open(crate::paths::core_db(root.path()))?;
+        let attempts = conn
+            .prepare(
+                "SELECT attempt FROM business_command_intake_failures
+                 WHERE command_id = ?1 ORDER BY attempt",
+            )?
+            .query_map(params![command_id], |row| row.get::<_, u32>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(attempts, vec![1, 2, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_capability_rejection_terminalizes_on_first_observation() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let command_id = "cmd_leadgen_source_capability_missing";
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.auth_assist".to_string(),
+            record_id: Some("adapter-1".to_string()),
+            payload: serde_json::json!({"adapter_id": "adapter-1"}),
+            client_context: serde_json::json!({"source_module": "outbound"}),
+        };
+        let error = rxdb_session_from_command(root.path(), &command, false)
+            .expect_err("a replicated command without a token must be rejected");
+        assert_eq!(
+            business_command_capability_rejection_reason(&error),
+            Some(CAPABILITY_MISSING_REASON)
+        );
+        let mut presented = command.clone();
+        presented.client_context =
+            serde_json::json!({"source_module": "outbound", "capability_token": "forged"});
+        let invalid = rxdb_session_from_command(root.path(), &presented, false)
+            .expect_err("an unverifiable token must be rejected");
+        assert_eq!(
+            business_command_capability_rejection_reason(&invalid),
+            Some(CAPABILITY_INVALID_REASON)
+        );
+        assert_eq!(
+            business_command_capability_rejection_reason(&anyhow::anyhow!("title is required")),
+            None
+        );
+
+        let document = business_command_core_claim(command_id, &command)?.intent;
+        let message = format!("native business command store execution failed: {error:#}");
+        let rejected = record_business_command_capability_rejection(
+            root.path(),
+            &document,
+            &message,
+            CAPABILITY_MISSING_REASON,
+            1,
+        )?;
+        assert_eq!(rejected["attempt"], Value::from(1));
+        assert_eq!(rejected["exhausted"], Value::Bool(true));
+        assert_eq!(rejected["canonical_failure_created"], Value::Bool(true));
+        assert_eq!(rejected["terminal_projection_ready"], Value::Bool(true));
+        let failure = &rejected["failure_document"];
+        assert_eq!(failure["status"], "failed");
+        assert_eq!(failure["execution_phase"], "terminal");
+        assert_eq!(failure["terminal_status"], "failed");
+        assert_eq!(failure["error_code"], "auth_required");
+        assert_eq!(failure["retryable"], false);
+        assert_eq!(failure["result"]["reason"], CAPABILITY_MISSING_REASON);
+        crate::command_lifecycle::validate_document(failure)
+            .map_err(|error| anyhow::anyhow!("invalid lifecycle document: {error:?}"))?;
+
+        // A later replay of the same document (for example re-pushed by the
+        // browser after the history was resolved) records a new attempt and
+        // republishes the terminal state immediately instead of retrying.
+        resolve_business_command_intake_failures(root.path(), command_id)?;
+        let replay = record_business_command_capability_rejection(
+            root.path(),
+            &document,
+            &message,
+            CAPABILITY_MISSING_REASON,
+            1,
+        )?;
+        assert_eq!(replay["attempt"], Value::from(2));
+        assert_eq!(replay["exhausted"], Value::Bool(true));
+        assert_eq!(replay["canonical_already_terminal"], Value::Bool(true));
+        assert_eq!(replay["canonical_failure_created"], Value::Bool(false));
+        assert_eq!(replay["terminal_projection_ready"], Value::Bool(true));
+        assert_eq!(replay["failure_document"]["error_code"], "auth_required");
+        let conn = Connection::open(crate::paths::core_db(root.path()))?;
+        let transitions: u64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_transitions
+             WHERE command_id = ?1 AND to_phase = 'terminal'",
+            params![command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(transitions, 1, "exactly one terminal transition");
         Ok(())
     }
 
@@ -46695,6 +46967,93 @@ pub(super) mod tests {
         let recovered = authorize_recoverable_background_control_command(root, &redacted)?;
         assert_eq!(recovered.origin, CommandOrigin::TrustedLocal);
         assert_eq!(recovered.client_context["actor"]["id"], "operator");
+        Ok(())
+    }
+
+    #[test]
+    fn token_less_projection_replay_of_admitted_auth_assist_skips_capability_gate(
+    ) -> anyhow::Result<()> {
+        // THESEN 14.10.2026: native projected an accepted auth_assist from its
+        // audited intent (no capability_token); background recovery re-read
+        // that projection as a replicated command and the capability gate
+        // rejected it on every intake pass.
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_leadgen_source_admitted_auth_assist";
+        seed_business_user(root, "operator", "chef")?;
+        let (capability_token, _) =
+            issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.auth_assist".to_string(),
+            record_id: Some("adapter_leadgen_dnb".to_string()),
+            payload: serde_json::json!({"adapter_id": "adapter_leadgen_dnb", "source_id": "dnb"}),
+            client_context: serde_json::json!({
+                "source_module": "outbound-lead-generation",
+                "actor": { "id": "operator" },
+                "capability_token": capability_token
+            }),
+        };
+        assert_eq!(
+            admitted_recoverable_replay_owner(root, &command),
+            None,
+            "a presented token always takes normal authentication"
+        );
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("valid auth_assist must produce an authorization receipt")?;
+        let claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+
+        let projection = channels::business_command_projection(root, command_id)?;
+        assert!(
+            projection
+                .pointer("/client_context/capability_token")
+                .is_none(),
+            "the canonical projection carries no capability token"
+        );
+        let mut replay = command.clone();
+        replay.client_context = projection["client_context"].clone();
+        let gate = rxdb_session_from_command(root, &replay, false)
+            .expect_err("the token-less projection cannot authenticate");
+        assert_eq!(
+            business_command_capability_rejection_reason(&gate),
+            Some(CAPABILITY_MISSING_REASON)
+        );
+        assert_eq!(
+            admitted_recoverable_replay_owner(root, &replay).as_deref(),
+            Some("operator")
+        );
+        let replay_claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &replay,
+                recoverable_background_control_claim_authorization(root, &replay).as_ref(),
+            )?,
+        )?;
+        assert_eq!(replay_claim.disposition, "uncertain");
+        let recovered = authorize_recoverable_background_control_command(root, &replay)?;
+        assert_eq!(recovered.client_context["actor"]["id"], "operator");
+
+        // Never for an unknown command, a non-recoverable type or a foreign module.
+        let mut unknown = replay.clone();
+        unknown.id = Some("cmd_never_admitted".to_string());
+        assert_eq!(admitted_recoverable_replay_owner(root, &unknown), None);
+        let mut other_module = replay.clone();
+        other_module.module = "documents".to_string();
+        assert_eq!(admitted_recoverable_replay_owner(root, &other_module), None);
+        let mut other_type = replay;
+        other_type.command_type = "office.document.create".to_string();
+        assert_eq!(admitted_recoverable_replay_owner(root, &other_type), None);
         Ok(())
     }
 
