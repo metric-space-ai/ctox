@@ -2,6 +2,7 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use super::claude_executor_request::ClaudeMcpAliasResolver;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
@@ -705,7 +706,8 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .await
                 .map_err(ClaudeExecutionError::Transport)?,
             &request,
-        );
+        )
+        .map_err(|_| ClaudeExecutionError::AmbiguousToolAlias)?;
         let mut replay = UnauthorizedReplayState::default();
         if replay.observe(first.status(), true) != UnauthorizedReplayDecision::RefreshAndReplay {
             self.publish_usage(model, &first, request.stream());
@@ -754,7 +756,8 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .await
                 .map_err(ClaudeExecutionError::Transport)?,
             &retry,
-        );
+        )
+        .map_err(|_| ClaudeExecutionError::AmbiguousToolAlias)?;
         let _ = replay.observe(response.status(), true);
         self.publish_usage(model, &response, retry.stream());
         if (200..300).contains(&response.status()) {
@@ -951,6 +954,10 @@ impl ClaudeSubscriptionMessagesExecutor {
             failure_binding: self.account_state.clone(),
             model: model.map(str::to_owned),
             tool_name_reverse_map: request.tool_name_reverse_map().clone(),
+            tool_name_resolver: ClaudeMcpAliasResolver::new(
+                request.body(),
+                request.tool_name_reverse_map(),
+            ),
             usage_sink: self.usage_sink.clone(),
             diagnostics_state,
             request_scoped,
@@ -974,6 +981,7 @@ impl ClaudeSubscriptionMessagesExecutor {
             failure_binding: None,
             model: model.map(str::to_owned),
             tool_name_reverse_map: HashMap::new(),
+            tool_name_resolver: ClaudeMcpAliasResolver::default(),
             usage_sink: None,
             diagnostics_state,
             request_scoped: true,
@@ -1167,6 +1175,7 @@ pub struct ClaudeStreamExecutionOutcome {
     failure_binding: Option<AccountStateBinding>,
     model: Option<String>,
     tool_name_reverse_map: HashMap<String, String>,
+    tool_name_resolver: ClaudeMcpAliasResolver,
     usage_sink: Option<Arc<dyn ClaudeUsageSink>>,
     diagnostics_state: ClaudeDiagnosticsRequestState,
     request_scoped: bool,
@@ -1190,6 +1199,7 @@ impl ClaudeStreamExecutionOutcome {
             model: self.model,
             failure_recorded: false,
             tool_name_reverse_map: self.tool_name_reverse_map,
+            tool_name_resolver: self.tool_name_resolver,
             usage_sink: self.usage_sink,
             stream_line_buffer: Vec::new(),
             stream_eof: false,
@@ -1244,6 +1254,7 @@ pub struct ClaudeTrackedMessagesStreamResponse {
     model: Option<String>,
     failure_recorded: bool,
     tool_name_reverse_map: HashMap<String, String>,
+    tool_name_resolver: ClaudeMcpAliasResolver,
     stream_line_buffer: Vec<u8>,
     stream_eof: bool,
     pending_transport_failure: Option<ClaudeMessagesTransportFailure>,
@@ -1274,12 +1285,13 @@ impl ClaudeTrackedMessagesStreamResponse {
             }
             if let Some(boundary) = complete_sse_frame_len(&self.stream_line_buffer) {
                 let frame: Vec<u8> = self.stream_line_buffer.drain(..boundary).collect();
+                let restored = match self.restore_frame(&frame) {
+                    Ok(data) => data,
+                    Err(error) => return Some(Err(error)),
+                };
                 observe_plugin_executor_stream("claude", &frame, &mut self.usage_buffer);
                 self.observe_diagnostics(&frame);
-                return Some(Ok(restore_claude_stream_tool_names(
-                    &frame,
-                    &self.tool_name_reverse_map,
-                )));
+                return Some(Ok(restored));
             }
             if self.stream_eof {
                 if self.stream_line_buffer.is_empty() {
@@ -1293,12 +1305,13 @@ impl ClaudeTrackedMessagesStreamResponse {
                     return None;
                 }
                 let line = std::mem::take(&mut self.stream_line_buffer);
+                let restored = match self.restore_frame(&line) {
+                    Ok(data) => data,
+                    Err(error) => return Some(Err(error)),
+                };
                 observe_plugin_executor_stream("claude", &line, &mut self.usage_buffer);
                 self.observe_diagnostics(&line);
-                return Some(Ok(restore_claude_stream_tool_names(
-                    &line,
-                    &self.tool_name_reverse_map,
-                )));
+                return Some(Ok(restored));
             }
             match self.response.next_chunk().await {
                 Some(Ok(chunk)) => self.stream_line_buffer.extend_from_slice(&chunk),
@@ -1307,6 +1320,21 @@ impl ClaudeTrackedMessagesStreamResponse {
                     self.pending_transport_failure = Some(error);
                 }
                 None => self.stream_eof = true,
+            }
+        }
+    }
+
+    fn restore_frame(&mut self, frame: &[u8]) -> Result<Vec<u8>, ClaudeMessagesTransportFailure> {
+        match restore_claude_stream_tool_names(frame, &self.tool_name_resolver) {
+            Ok(data) => Ok(data),
+            Err(_) => {
+                // A request-local alias ambiguity is not an account failure.
+                self.failure_binding = None;
+                self.stream_line_buffer.clear();
+                self.pending_transport_failure = None;
+                self.stream_eof = true;
+                self.finish_stream_usage();
+                Err(ClaudeMessagesTransportFailure::Protocol)
             }
         }
     }
@@ -1468,6 +1496,7 @@ pub enum ClaudeExecutionError {
     Transport(ClaudeMessagesTransportFailure),
     AccountStateConfiguration,
     StreamingUnavailable,
+    AmbiguousToolAlias,
     CallerSystemBlock(ClaudeCallerSystemBlockError),
 }
 
@@ -1492,6 +1521,9 @@ impl fmt::Display for ClaudeExecutionError {
             }
             Self::Request(error) => write!(formatter, "Claude request is invalid: {error}"),
             Self::Transport(error) => write!(formatter, "Claude transport failed: {error:?}"),
+            Self::AmbiguousToolAlias => {
+                formatter.write_str("Claude MCP alias matches multiple declared tools")
+            }
             Self::AccountStateConfiguration => {
                 formatter.write_str("Claude account state configuration is invalid")
             }
@@ -3386,6 +3418,10 @@ data: {\"type\":\"message_stop\"}\n\n";
             model: None,
             failure_recorded: false,
             tool_name_reverse_map: HashMap::from([("Bash".to_owned(), "bash".to_owned())]),
+            tool_name_resolver: ClaudeMcpAliasResolver::new(
+                b"{}",
+                &HashMap::from([("Bash".to_owned(), "bash".to_owned())]),
+            ),
             stream_line_buffer: Vec::new(),
             stream_eof: false,
             usage_sink: None,
