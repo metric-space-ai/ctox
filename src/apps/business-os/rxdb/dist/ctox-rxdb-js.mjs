@@ -7362,6 +7362,7 @@ var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
 ]);
 var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
 var CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
+var MAX_CONSECUTIVE_STRICT_ADMISSIONS = 8;
 var CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
 var CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
 var CLIENT_QUERY_RATE_INTERVAL_MS = 1e3;
@@ -7737,6 +7738,7 @@ function createDemandLoadingTransport({
       const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
+        queryStreamState.consecutiveStrictAdmissions = strict ? (queryStreamState.consecutiveStrictAdmissions || 0) + 1 : 0;
         if (!strict) queryStreamState.activeNonStrict = (queryStreamState.activeNonStrict || 0) + 1;
         if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {
@@ -7813,9 +7815,11 @@ function createDemandLoadingTransport({
         }
         return hasFreeQuerySlot(entry2.background, entry2.strict);
       };
-      let index = queryStreamState.queue.findIndex((entry2) => entry2.strict && admissible(entry2));
-      if (index < 0) index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
-      if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
+      const strictIndex = queryStreamState.queue.findIndex((entry2) => entry2.strict && admissible(entry2));
+      const normalIndex = queryStreamState.queue.findIndex((entry2) => !entry2.strict && !entry2.background && admissible(entry2));
+      const backgroundIndex = queryStreamState.queue.findIndex((entry2) => !entry2.strict && entry2.background && admissible(entry2));
+      const ordinaryIndex = normalIndex >= 0 ? normalIndex : backgroundIndex;
+      const index = strictIndex >= 0 && ((queryStreamState.consecutiveStrictAdmissions || 0) < MAX_CONSECUTIVE_STRICT_ADMISSIONS || ordinaryIndex < 0) ? strictIndex : ordinaryIndex;
       if (index < 0) return;
       if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
