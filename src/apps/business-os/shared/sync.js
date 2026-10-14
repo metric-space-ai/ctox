@@ -880,7 +880,10 @@ export function createSyncRuntime({
         });
         return follower;
       }
-      recordCollection(collection, { status: 'starting' });
+      recordCollection(collection, {
+        status: 'starting',
+        startQueuedAt: new Date().toISOString(),
+      });
       const startLane = collectionStartLaneCursor % collectionStartLanes.length;
       collectionStartLaneCursor += 1;
       const startBridge = () => {
@@ -888,6 +891,7 @@ export function createSyncRuntime({
         const ownsBridge = () => bridges.get(collection) === bridgePromise
           && hasRepairOwner(collection, requiresOwner, repairRetirement);
         if (!ownsBridge()) return retiredBridge(collection);
+        recordCollection(collection, { bridgeStartedAt: new Date().toISOString() });
         return startWebRtcReplication({
           db,
           config,
@@ -902,6 +906,9 @@ export function createSyncRuntime({
           // swallowed — the primary "peer dropped → schedule repair" trigger
           // never ran.
           scheduleRestart: (...args) => { if (ownsBridge()) scheduleRestartOfUnhealthyCollections(...args); },
+        }).then((bridge) => {
+          if (ownsBridge()) recordCollection(collection, { bridgeRegisteredAt: new Date().toISOString() });
+          return bridge;
         });
       };
       const bridgePromise = collectionStartLanes[startLane].then(startBridge);
@@ -1889,6 +1896,7 @@ async function startWebRtcReplication({
         }
         recordCollection?.(collection, {
           queryReady: demandOnly ? queryReady : true,
+          queryReadyAt: queryReady ? new Date().toISOString() : null,
           reason: null,
         });
         if (queryReady && typeof onNativeQueryReady === 'function') {
