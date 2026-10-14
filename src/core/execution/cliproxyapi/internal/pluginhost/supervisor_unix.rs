@@ -296,6 +296,31 @@ impl PluginSupervisor {
         Ok(delay)
     }
 
+    pub(super) async fn call_process(
+        &mut self,
+        call: super::abi::PluginCall,
+        plugin_id: &str,
+        callbacks: &super::host_callbacks::HostCallbackRouter,
+    ) -> Result<Envelope, super::abi::PluginClientError> {
+        let active = self
+            .active
+            .as_mut()
+            .ok_or(super::abi::PluginClientError::Closed)?;
+        super::process_client::exchange_unary(
+            active.connection.stream_mut(),
+            call,
+            plugin_id,
+            callbacks,
+        )
+        .await
+    }
+
+    pub(super) async fn abort_process(&mut self) {
+        if let Some(mut active) = self.active.take() {
+            active.kill_and_wait().await;
+        }
+    }
+
     pub async fn shutdown(&mut self) -> Result<ExitReport, PluginSupervisorError> {
         let mut active = self
             .active

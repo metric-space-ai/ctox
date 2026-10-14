@@ -27,6 +27,8 @@ pub mod management;
 pub mod model_router;
 pub mod model_stream_bridge;
 pub mod platform;
+#[cfg(any(unix, windows))]
+pub mod process_client;
 pub mod process_transport;
 pub mod quota_provider;
 pub mod rpc_client;
