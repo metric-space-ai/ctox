@@ -1542,6 +1542,16 @@ the native peer limit.
 Native spends a rate token only after a stream slot is actually acquired:
 `STREAM_LIMIT_EXCEEDED` retries must not consume the later interactive query's
 budget. Browser retries reserve another local token before sending another RPC.
+After THESEN showed a fresh-revision Outbound lead read timing out behind
+ordinary windows of the same collection, `requireRevision` demand reads use a
+strict admission class. One of the existing eight stream slots stays available
+for strict reads, and they take the next rate token ahead of queued ordinary
+windows. The native stream and rate limits are unchanged. Strict and ordinary
+windows do not share a coalesced transport request, because an ordinary fetch
+must not hold a fresh-revision caller behind its queue position. The
+`query-strict-admission-smoke.mjs` fixture holds ordinary lead windows and
+exhausts the local rate burst; it verifies the strict read starts before either
+backlog drains.
 
 Identical demand-query windows also share an unfinished network operation when
 connection generation, accepted peer, current permission digest and the complete

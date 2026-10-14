@@ -7361,6 +7361,7 @@ var SHELL_BACKGROUND_QUERY_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_chats"
 ]);
 var CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+var CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
 var CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
 var CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
 var CLIENT_QUERY_RATE_INTERVAL_MS = 1e3;
@@ -7674,9 +7675,10 @@ function createDemandLoadingTransport({
     if (p !== peer) peerGeneration += 1;
     peer = p;
   }
-  function requestQueryFetch(envelope, { authorityKey = null } = {}) {
+  function requestQueryFetch(envelope, { authorityKey = null, priority = "normal" } = {}) {
+    const strict = priority === "strict";
     if (typeof authorityKey !== "string" || !authorityKey) {
-      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
+      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope), strict);
     }
     const requestId = String(envelope?.requestId || "");
     const peerId = String(getPeerId() || "");
@@ -7684,6 +7686,7 @@ function createDemandLoadingTransport({
       peerGeneration,
       peerId,
       authorityKey,
+      strict,
       { ...envelope, requestId: void 0 }
     ]);
     let shared = coalescedQueryWindows.get(key);
@@ -7704,7 +7707,7 @@ function createDemandLoadingTransport({
     coalescedQueryConsumers.set(requestId, shared);
     if (created) {
       coalescedQueryWindows.set(key, shared);
-      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason)).then(
+      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason), strict).then(
         (result) => settleCoalescedQuery(shared, null, result),
         (error) => settleCoalescedQuery(shared, error)
       );
@@ -7727,22 +7730,24 @@ function createDemandLoadingTransport({
     }
     shared.consumers.clear();
   }
-  function withQueryStreamSlot(envelope, fn) {
+  function withQueryStreamSlot(envelope, fn, strict = false) {
     return new Promise((resolve, reject) => {
       const requestId = String(envelope?.requestId || "");
       const estimatedBytes = estimateEnvelopeBytes(envelope);
       const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
+        if (!strict) queryStreamState.activeNonStrict = (queryStreamState.activeNonStrict || 0) + 1;
         if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
         Promise.resolve().then(fn).then(resolve, reject).finally(() => {
           queryStreamState.active = Math.max(0, queryStreamState.active - 1);
+          if (!strict) queryStreamState.activeNonStrict = Math.max(0, (queryStreamState.activeNonStrict || 0) - 1);
           if (background) queryStreamState.activeBackground = Math.max(0, (queryStreamState.activeBackground || 0) - 1);
           drainReadyQueryRequests();
         });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && hasFreeQuerySlot(background) && !queryStreamState.queue.some((entry) => entry.isReady()) && takeQueryRateToken()) run();
+      if (ready && hasFreeQuerySlot(background, strict) && !queryStreamState.queue.some((entry) => entry.isReady()) && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry2) => total + Math.max(0, Number(entry2?.estimatedBytes) || 0),
@@ -7762,6 +7767,7 @@ function createDemandLoadingTransport({
           owner: transportOwner,
           estimatedBytes,
           background,
+          strict,
           isReady: () => Boolean(resolvePeerId()),
           waitingForPeer: false
         };
@@ -7793,8 +7799,9 @@ function createDemandLoadingTransport({
       }
     });
   }
-  function hasFreeQuerySlot(background) {
+  function hasFreeQuerySlot(background, strict = false) {
     if (queryStreamState.active >= CLIENT_QUERY_STREAM_LIMIT) return false;
+    if (!strict && (queryStreamState.activeNonStrict || 0) >= CLIENT_NON_STRICT_QUERY_STREAM_LIMIT) return false;
     return !background || (queryStreamState.activeBackground || 0) < CLIENT_BACKGROUND_QUERY_STREAM_LIMIT;
   }
   function drainReadyQueryRequests() {
@@ -7804,9 +7811,10 @@ function createDemandLoadingTransport({
           entry2.waitForReady();
           return false;
         }
-        return hasFreeQuerySlot(entry2.background);
+        return hasFreeQuerySlot(entry2.background, entry2.strict);
       };
-      let index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
+      let index = queryStreamState.queue.findIndex((entry2) => entry2.strict && admissible(entry2));
+      if (index < 0) index = queryStreamState.queue.findIndex((entry2) => !entry2.background && admissible(entry2));
       if (index < 0) index = queryStreamState.queue.findIndex((entry2) => entry2.background && admissible(entry2));
       if (index < 0) return;
       if (!takeQueryRateToken()) return;
@@ -8827,7 +8835,8 @@ function createQueryDemandLoader({
                   },
                   window: normalizedWindow
                 }, {
-                  authorityKey: JSON.stringify([String(queryGeneration?.() || ""), fetchPermissionDigest])
+                  authorityKey: JSON.stringify([String(queryGeneration?.() || ""), fetchPermissionDigest]),
+                  priority: strictRequireRevision ? "strict" : "normal"
                 }),
                 cancellationPromise
               ]);
