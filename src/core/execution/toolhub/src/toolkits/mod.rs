@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod mailchimp;
 pub mod monday;
 pub mod stripe;
 pub mod typeform;
@@ -53,6 +54,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(mailchimp::Mailchimp::default()),
         Box::new(monday::Monday::default()),
         Box::new(stripe::Stripe::default()),
         Box::new(typeform::Typeform::default()),
