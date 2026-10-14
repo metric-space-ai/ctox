@@ -35,6 +35,7 @@ function makeStorageCollection(databaseName) {
   const sidecar = createSidecarWithMemoryBackend({ databaseName: 'require-revision-token' });
   const storageCollection = makeStorageCollection('require-revision-token');
   const fetchedFingerprints = [];
+  const fetchPriorities = [];
   let fetches = 0;
   const loader = createQueryDemandLoader({
     storageCollection,
@@ -42,9 +43,10 @@ function makeStorageCollection(databaseName) {
     collectionName: 'spreadsheet_rows',
     schemaVersion: 1,
     queryGeneration: () => 'spreadsheet-authority-generation',
-    requestQueryFetch: async (request) => {
+    requestQueryFetch: async (request, options) => {
       fetches += 1;
       fetchedFingerprints.push(request.queryFingerprint);
+      fetchPriorities.push(options.priority);
       return {
         documents: [{ id: 'row-1', spreadsheet_id: 'sheet-1', fetch: fetches }],
         // This mirrors the vestigial server echo and intentionally can never
@@ -80,6 +82,8 @@ function makeStorageCollection(databaseName) {
     fetchedFingerprints.length === 2 && fetchedFingerprints[0] === fetchedFingerprints[1],
     'requireRevision token changes must not alter the query fingerprint',
   );
+  assert(fetchPriorities.length === 2 && fetchPriorities.every((priority) => priority === 'strict'),
+    'requireRevision must reserve strict transport priority for every new token');
 }
 
 // No caller token: preserve the existing miss-then-hit behavior without a

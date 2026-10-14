@@ -23,6 +23,9 @@ export const SHELL_BACKGROUND_QUERY_COLLECTIONS = new Set([
   'ctox_harness_status', 'business_chats',
 ]);
 const CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+// Keep one existing stream slot available for a user action that requires a
+// fresh native revision. Ordinary window hydration must not occupy all eight.
+const CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
 // The native peer admits max(32, streams * 8) requests initially and refills
 // 16 tokens/second. Admit fewer here so a page's parallel collection reads do
 // not spend the entire peer budget before a user's lead-detail query arrives.
@@ -342,17 +345,18 @@ export function createDemandLoadingTransport({
     peer = p;
   }
 
-  function requestQueryFetch(envelope, { authorityKey = null } = {}) {
+  function requestQueryFetch(envelope, { authorityKey = null, priority = 'normal' } = {}) {
+    const strict = priority === 'strict';
     // Share only a currently executing exact window under the caller's current
     // bridge/account authority. Hydration revision tokens remain loader-local;
     // a completed operation is never reused as a new strict native read.
     if (typeof authorityKey !== 'string' || !authorityKey) {
-      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope));
+      return withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope), strict);
     }
     const requestId = String(envelope?.requestId || '');
     const peerId = String(getPeerId() || '');
     const key = JSON.stringify([
-      peerGeneration, peerId, authorityKey, { ...envelope, requestId: undefined },
+      peerGeneration, peerId, authorityKey, strict, { ...envelope, requestId: undefined },
     ]);
     let shared = coalescedQueryWindows.get(key);
     const created = !shared;
@@ -373,7 +377,7 @@ export function createDemandLoadingTransport({
     coalescedQueryConsumers.set(requestId, shared);
     if (created) {
       coalescedQueryWindows.set(key, shared);
-      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason)).then(
+      withQueryStreamSlot(envelope, () => requestQueryFetchWithRetry(envelope, () => shared.cancelledReason), strict).then(
         result => settleCoalescedQuery(shared, null, result),
         error => settleCoalescedQuery(shared, error),
       );
@@ -398,19 +402,21 @@ export function createDemandLoadingTransport({
     shared.consumers.clear();
   }
 
-  function withQueryStreamSlot(envelope, fn) {
+  function withQueryStreamSlot(envelope, fn, strict = false) {
     return new Promise((resolve, reject) => {
       const requestId = String(envelope?.requestId || '');
       const estimatedBytes = estimateEnvelopeBytes(envelope);
       const background = isBackgroundQuery(envelope);
       const run = () => {
         queryStreamState.active += 1;
+        if (!strict) queryStreamState.activeNonStrict = (queryStreamState.activeNonStrict || 0) + 1;
         if (background) queryStreamState.activeBackground = (queryStreamState.activeBackground || 0) + 1;
         Promise.resolve()
           .then(fn)
           .then(resolve, reject)
           .finally(() => {
             queryStreamState.active = Math.max(0, queryStreamState.active - 1);
+            if (!strict) queryStreamState.activeNonStrict = Math.max(0, (queryStreamState.activeNonStrict || 0) - 1);
             if (background) queryStreamState.activeBackground = Math.max(0, (queryStreamState.activeBackground || 0) - 1);
             drainReadyQueryRequests();
           });
@@ -418,7 +424,7 @@ export function createDemandLoadingTransport({
       const ready = Boolean(resolvePeerId());
       // Pending handshakes may fill the bounded queue. A ready request can
       // still use a free stream slot; preserve FIFO among ready waiters.
-      if (ready && hasFreeQuerySlot(background)
+      if (ready && hasFreeQuerySlot(background, strict)
         && !queryStreamState.queue.some(entry => entry.isReady())
         && takeQueryRateToken()) run();
       else {
@@ -437,7 +443,7 @@ export function createDemandLoadingTransport({
           return;
         }
         const entry = {
-          requestId, run, reject, owner: transportOwner, estimatedBytes, background,
+          requestId, run, reject, owner: transportOwner, estimatedBytes, background, strict,
           isReady: () => Boolean(resolvePeerId()), waitingForPeer: false,
         };
         queryStreamState.queue.push(entry);
@@ -472,8 +478,9 @@ export function createDemandLoadingTransport({
     });
   }
 
-  function hasFreeQuerySlot(background) {
+  function hasFreeQuerySlot(background, strict = false) {
     if (queryStreamState.active >= CLIENT_QUERY_STREAM_LIMIT) return false;
+    if (!strict && (queryStreamState.activeNonStrict || 0) >= CLIENT_NON_STRICT_QUERY_STREAM_LIMIT) return false;
     return !background || (queryStreamState.activeBackground || 0) < CLIENT_BACKGROUND_QUERY_STREAM_LIMIT;
   }
 
@@ -484,10 +491,12 @@ export function createDemandLoadingTransport({
           entry.waitForReady();
           return false;
         }
-        return hasFreeQuerySlot(entry.background);
+        return hasFreeQuerySlot(entry.background, entry.strict);
       };
-      // App queries first; shell background queries only within their share.
-      let index = queryStreamState.queue.findIndex(entry => !entry.background && admissible(entry));
+      // A fresh-revision user action takes the reserved stream before ordinary
+      // windows from the same app; shell background stays within its share.
+      let index = queryStreamState.queue.findIndex(entry => entry.strict && admissible(entry));
+      if (index < 0) index = queryStreamState.queue.findIndex(entry => !entry.background && admissible(entry));
       if (index < 0) index = queryStreamState.queue.findIndex(entry => entry.background && admissible(entry));
       if (index < 0) return;
       if (!takeQueryRateToken()) return;

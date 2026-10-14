@@ -336,6 +336,7 @@ export function createQueryDemandLoader({
               window: normalizedWindow,
             }, {
               authorityKey: JSON.stringify([String(queryGeneration?.() || ''), fetchPermissionDigest]),
+              priority: strictRequireRevision ? 'strict' : 'normal',
             }),
             cancellationPromise,
           ]);
