@@ -23,6 +23,12 @@ export const SHELL_BACKGROUND_QUERY_COLLECTIONS = new Set([
   'ctox_harness_status', 'business_chats',
 ]);
 const CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
+// The native peer admits max(32, streams * 8) requests initially and refills
+// 16 tokens/second. Admit fewer here so a page's parallel collection reads do
+// not spend the entire peer budget before a user's lead-detail query arrives.
+const CLIENT_QUERY_RATE_BURST = Math.max(1, CLIENT_QUERY_STREAM_LIMIT * 6);
+const CLIENT_QUERY_RATE_REFILL_PER_SECOND = 12;
+const CLIENT_QUERY_RATE_INTERVAL_MS = 1000;
 function isBackgroundQuery(envelope) {
   return SHELL_BACKGROUND_QUERY_COLLECTIONS.has(String(envelope?.collectionName || ''));
 }
@@ -84,6 +90,35 @@ export function createDemandLoadingTransport({
   const fileCollectors = new Map();    // requestId -> { chunks, resolve, reject }
   const rowsCollectors = new Map();    // requestId -> { bySeq, finalSeq, resolve, reject }
   const queryStreamState = getGlobalQueryStreamState();
+  function scheduleQueryRateWake(delayMs) {
+    if (queryStreamState.rateTimer) return;
+    queryStreamState.rateTimer = setTimeout(() => {
+      queryStreamState.rateTimer = null;
+      drainReadyQueryRequests();
+    }, Math.max(1, delayMs));
+  }
+  function takeQueryRateToken() {
+    const peerId = String(resolvePeerId() || '');
+    if (!peerId) return false;
+    const now = Date.now();
+    let bucket = queryStreamState.rateBucket;
+    if (!bucket || bucket.peerId !== peerId) {
+      bucket = { peerId, tokens: CLIENT_QUERY_RATE_BURST, atMs: now };
+      queryStreamState.rateBucket = bucket;
+    }
+    const intervals = Math.floor((now - bucket.atMs) / CLIENT_QUERY_RATE_INTERVAL_MS);
+    if (intervals > 0) {
+      bucket.tokens = Math.min(CLIENT_QUERY_RATE_BURST,
+        bucket.tokens + intervals * CLIENT_QUERY_RATE_REFILL_PER_SECOND);
+      bucket.atMs += intervals * CLIENT_QUERY_RATE_INTERVAL_MS;
+    }
+    if (bucket.tokens <= 0) {
+      scheduleQueryRateWake(bucket.atMs + CLIENT_QUERY_RATE_INTERVAL_MS - now);
+      return false;
+    }
+    bucket.tokens -= 1;
+    return true;
+  }
   const cancelledQueryRequests = new Map();
   const transportOwner = Symbol('ctox-demand-transport-owner');
   const terminalTimeoutMs = Math.max(1, Number(collectorTimeoutMs) || DEFAULT_COLLECTOR_TIMEOUT_MS);
@@ -381,7 +416,7 @@ export function createDemandLoadingTransport({
           });
       };
       const ready = Boolean(resolvePeerId());
-      if (ready && hasFreeQuerySlot(background)) run();
+      if (ready && !queryStreamState.queue.length && hasFreeQuerySlot(background) && takeQueryRateToken()) run();
       else {
         const queuedBytes = queryStreamState.queue.reduce(
           (total, entry) => total + Math.max(0, Number(entry?.estimatedBytes) || 0),
@@ -428,6 +463,7 @@ export function createDemandLoadingTransport({
             });
         };
         if (!ready) entry.waitForReady();
+        else drainReadyQueryRequests();
       }
     });
   }
@@ -450,6 +486,7 @@ export function createDemandLoadingTransport({
       let index = queryStreamState.queue.findIndex(entry => !entry.background && admissible(entry));
       if (index < 0) index = queryStreamState.queue.findIndex(entry => entry.background && admissible(entry));
       if (index < 0) return;
+      if (!takeQueryRateToken()) return;
       const [entry] = queryStreamState.queue.splice(index, 1);
       // Reserve synchronously. A queued microtask would leave a free slot that
       // another caller can steal before this admitted request starts.
