@@ -210,7 +210,7 @@ pub(super) fn handle_workjet_project_list_command(
         .map(|id| {
             Ok((
                 (*id).to_owned(),
-                super::workjet_exit_model::read_state(&conn, id, &owner_user_id)?,
+                super::workjet_exit_model::read_current_state(root, &conn, id, &owner_user_id)?,
             ))
         })
         .collect::<anyhow::Result<serde_json::Map<String, Value>>>()?;

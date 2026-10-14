@@ -2,6 +2,86 @@
 // License: AGPL-3.0-only
 use super::*;
 #[test]
+fn exit_read_and_project_list_follow_durable_block_without_trusting_worker_inputs(
+) -> anyhow::Result<()> {
+    use crate::business_os::workjet_exit_model as exit;
+    let root = super::weekly_reports::fixture()?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |row| row.get(0),
+    )?;
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    // Isolated review hold with unreviewed numeric inputs: readback may expose
+    // the hold, never promote that worker text to an adoptable valuation.
+    let unreviewed = json!({"user_reply":json!({"exit_model_inputs":
+        crate::business_os::workjet_exit_model_engine::fixture()}).to_string()});
+    core.execute(
+        "UPDATE business_command_aggregates SET execution_phase='blocked',terminal_status='none',error_message='Missing transferable rights and exit-price evidence',result_json=?2 WHERE command_id=?1",
+        rusqlite::params![research, unreviewed.to_string()],
+    )?;
+    let read = BusinessCommand {
+        id: Some("read-blocked-exit".into()),
+        module: "ctox".into(),
+        command_type: "ctox.workjet.exit_model.read".into(),
+        record_id: Some("project".into()),
+        payload: json!({"project_id":"project"}),
+        client_context: json!({}),
+        origin: CommandOrigin::TrustedLocal,
+    };
+    let state = exit::handle_command(root.path(), &read, "owner", None)?["assessment"].clone();
+    assert_eq!(state["status"], "blocked");
+    assert_eq!(state["findings"][0]["code"], "research_command_blocked");
+    assert_eq!(
+        state["findings"][0]["message"],
+        "Missing transferable rights and exit-price evidence"
+    );
+    assert_eq!(state["research_execution"]["command_id"], research);
+    assert!(state["result"].is_null());
+    assert!(state["plan_summary"].is_null());
+    assert_eq!(state["scenarios"], json!([]));
+    assert!(exit::handle_command(root.path(), &read, "foreign", None).is_err());
+    let list = store::handle_workjet_project_list_command(
+        root.path(),
+        &BusinessCommand {
+            command_type: "ctox.workjet.project.list".into(),
+            record_id: None,
+            payload: json!({}),
+            ..read.clone()
+        },
+        "owner",
+    )?;
+    assert_eq!(list["exit_models"]["project"], state);
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM workjet_exit_model_runs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
+    assert_eq!(
+        exit::read_state(&conn, "project", "owner")?["status"],
+        "researching"
+    );
+    // A supported release may resume the same command. Its readback must not
+    // stay frozen in a terminal blocked snapshot or admit a duplicate run.
+    core.execute("UPDATE business_command_aggregates SET execution_phase='running',error_message=NULL WHERE command_id=?1", [&research])?;
+    assert_eq!(
+        exit::handle_command(root.path(), &read, "owner", None)?["assessment"]["status"],
+        "researching"
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM workjet_exit_model_runs", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn exit_autostart_admits_exactly_one_turn_without_resources_and_retains_reasoned_proposal(
 ) -> anyhow::Result<()> {
     use crate::business_os::workjet_exit_model as exit;
