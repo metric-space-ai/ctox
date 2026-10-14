@@ -1,30 +1,30 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-news-accounts-r2';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-news-accounts-r2';
-import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-news-accounts-r2';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-news-accounts-r2';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-news-accounts-r2';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-news-accounts-r2';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-news-accounts-r2';
-import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-news-accounts-r2';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-news-skill-binding';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-news-skill-binding';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-news-skill-binding';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-news-skill-binding';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-news-skill-binding';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-news-skill-binding';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-news-skill-binding';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-news-skill-binding';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-news-skill-binding';
+import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-news-skill-binding';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-news-skill-binding';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-news-skill-binding';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-news-skill-binding';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-news-skill-binding';
+import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-news-skill-binding';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/app-lifecycle.js?v=20261014-shell-v2-news-skill-binding';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -33,20 +33,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/permissions.js?v=20261014-shell-v2-news-skill-binding';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261014-shell-v2-news-accounts-r2';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/branding.js?v=20261014-shell-v2-news-skill-binding';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-news-skill-binding';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/presentation.js?v=20261014-shell-v2-news-skill-binding';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -57,9 +57,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-news-accounts-r2';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-news-accounts-r2';
-import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-news-skill-binding';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-news-skill-binding';
+import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-news-skill-binding';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -67,27 +67,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/maintenance-state.js?v=20261014-shell-v2-news-skill-binding';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/workspace-session.js?v=20261014-shell-v2-news-skill-binding';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/taskbar-pins.js?v=20261014-shell-v2-news-skill-binding';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261014-shell-v2-news-accounts-r2';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-news-accounts-r2';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-news-accounts-r2';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-news-accounts-r2';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/workjet-theme.js?v=20261014-shell-v2-news-skill-binding';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-news-skill-binding';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-news-skill-binding';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-news-skill-binding';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-news-skill-binding';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -95,14 +95,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261014-shell-v2-news-accounts-r2';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-news-accounts-r2';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/startup-deadlines.js?v=20261014-shell-v2-news-skill-binding';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-news-skill-binding';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-news-skill-binding';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-news-accounts-r2';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-news-accounts-r2';
+} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-news-skill-binding';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -123,7 +123,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261014-shell-v2-news-accounts-r2';
+const APP_BUILD = '20261014-shell-v2-news-skill-binding';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -14047,7 +14047,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
   const supervisorActions = ['project.supervisor.route.read.v1', 'project.supervisor.route.capabilities.v1', 'project.supervisor.route.read.v2', 'project.supervisor.route.capabilities.v2', 'project.supervisor.bind', 'project.supervisor.turn.capabilities', 'project.supervisor.turn.submit',
     'project.supervisor.turn.watch', 'project.supervisor.turn.cancel', 'project.supervisor.turn.history', 'project.supervisor.turn.input',
     'project.kpis.read', 'project.kpis.refresh', 'project.kpis.configure', 'project.jour_fixe.meeting.read',
-    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit',
+    'project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit', 'project.init',
     'project.jour_fixe.meeting.start', 'project.jour_fixe.meeting.end',
     'project.jour_fixe.transcript.append', 'project.jour_fixe.narration.local_publish',
     'project.jour_fixe.transcript.local_candidate', 'project.jour_fixe.todos.revise', 'project.jour_fixe.todos.confirm',
@@ -14640,6 +14640,30 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
       throw new Error('Workjet supervisor binding returned an uncorrelated or unsuccessful receipt.');
     }
     return { action, commandId, projectId, binding: { contract, projectId, threadId, threadKey } };
+  }
+
+  if (action === 'project.init') {
+    // One-click onboarding; a stable operationId makes polling idempotent.
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'operationId']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
+    const operationId = boundedWorkjetProjectText(request.operationId, 'operationId', 128);
+    const receipt = await state.commandBus.dispatch({
+      id: commandId, command_id: commandId, module: 'ctox',
+      command_type: 'ctox.workjet.project.init', record_id: projectId,
+      payload: { project_id: projectId, operation_id: operationId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(state.session) },
+    }, { until: 'terminal', sync_queue_tasks: false, timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (state.session !== requestSession || state.db !== requestDb || actorContext(state.session).id !== ownerUserId
+      || receipt?.command_id !== commandId || receipt.ok !== true || receipt.status !== 'completed'
+      || receipt.result?.ok !== true || receipt.result?.project_id !== projectId
+      || !Array.isArray(receipt.result?.steps)) {
+      throw new Error('Project init returned an uncorrelated or unsuccessful response.');
+    }
+    const steps = receipt.result.steps.slice(0, 12).map((step) => ({
+      id: String(step.id), state: String(step.state), detail: String(step.detail ?? '').slice(0, 256),
+    }));
+    return { action, commandId, projectId, operationId, steps };
   }
 
   if (['project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit'].includes(action)) {

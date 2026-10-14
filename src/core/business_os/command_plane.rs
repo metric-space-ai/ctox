@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 144] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -380,6 +380,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 144] = [
     "ctox.workjet.exit_model.read",
     "ctox.workjet.exit_model.refresh",
     "ctox.workjet.exit_model.submit",
+    "ctox.workjet.project.init",
     "ctox.workjet.project.kpis.configure",
     "ctox.workjet.project.chat.ensure",
     "ctox.workjet.project.supervisor.bind",
@@ -1368,6 +1369,7 @@ impl CentralCommandPolicyRequirement {
         } else if matches!(
             command_type,
             "ctox.workjet.project.upsert"
+                | "ctox.workjet.project.init"
                 | "ctox.workjet.project.kpis.refresh"
                 | "ctox.workjet.exit_model.refresh"
                 | "ctox.workjet.exit_model.submit"
@@ -1945,6 +1947,19 @@ fn dispatch_business_command(
                 actor,
                 prepared.domain_effect_admission.as_ref(),
             ) {
+                Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({"ok":false,"error":error.to_string()}),
+                    error,
+                )),
+            }
+        }
+        "ctox.workjet.project.init" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            let actor =
+                session_user_id(session).context("project init requires an authenticated user")?;
+            match super::project_chats::project_init::handle(root, command, actor) {
                 Ok(result) => Ok(BusinessCommandDispatchOutcome::completed(result, None)),
                 Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
                     None,
