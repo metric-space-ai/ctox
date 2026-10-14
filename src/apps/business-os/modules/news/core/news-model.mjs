@@ -213,6 +213,22 @@ export function redditPresetSource(sources, topicId, now = Date.now()) {
   return { ...base, items, updated_at_ms: now };
 }
 
+// Subreddits used to be community scrape targets, which Reddit blocks from
+// server IPs. Fold them into the topic's Reddit account source; the caller
+// removes the returned legacy ids when it saves.
+export function migrateLegacyRedditSources(sources, topicId, now = Date.now()) {
+  const legacy = sources.filter((source) => source.topic_id === topicId
+    && source.kind === 'community' && redditItem(source.url));
+  if (!legacy.length) return { sources, removedIds: [] };
+  let reddit = sources.find((source) => source.topic_id === topicId && source.kind === 'reddit')
+    || newSource(topicId, 'reddit', 'Reddit', redditItem(legacy[0].url), now);
+  const items = [...new Set([...(reddit.items || []), ...legacy.map((source) => redditItem(source.url))])];
+  reddit = { ...reddit, items, updated_at_ms: now };
+  const removedIds = legacy.map((source) => source.id);
+  const rest = sources.filter((source) => !removedIds.includes(source.id) && source.id !== reddit.id);
+  return { sources: [...rest, reddit], removedIds };
+}
+
 export function presetSources(topicId, preset, kind, existing = [], now = Date.now()) {
   const known = new Set(existing.filter((source) => source.topic_id === topicId).map((source) => source.url));
   return preset
@@ -289,10 +305,28 @@ export function topicsForBand(topics, grammar = {}) {
 }
 
 export function issuesForTopic(issues, topicId, limit = 6) {
+  const seenDates = new Set();
   return issues
     .filter((issue) => issue.topic_id === topicId)
     .sort((a, b) => String(b.issue_date).localeCompare(String(a.issue_date)) || (Number(b.created_at_ms) || 0) - (Number(a.created_at_ms) || 0))
+    // A failed run that a newer run of the same day replaced is history, not
+    // an issue: keep it only while it is the newest one for its date.
+    .filter((issue) => {
+      const superseded = issue.status === 'failed' && seenDates.has(issue.issue_date);
+      seenDates.add(issue.issue_date);
+      return !superseded;
+    })
     .slice(0, limit);
+}
+
+// Two issues of the same day are told apart by their start time.
+export function issueNodeLabel(issue, siblings, lang = 'de', today = new Date()) {
+  const label = issueLabel(issue.issue_date, lang, today);
+  const sameDay = siblings.filter((other) => other.issue_date === issue.issue_date).length;
+  const created = Number(issue.created_at_ms) || 0;
+  if (sameDay < 2 || !created) return label;
+  const time = new Date(created).toLocaleTimeString(lang === 'en' ? 'en-US' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+  return `${label} · ${time}`;
 }
 
 export function postsForIssue(posts, issueId, grammar = {}) {
