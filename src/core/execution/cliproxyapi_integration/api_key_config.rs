@@ -13,6 +13,7 @@ pub enum ApiKeyEndpoint {
     MiniMax,
     Xai,
     KimiCoding,
+    KimiCodingGlobal,
     KimiPlatformGlobal,
     KimiPlatformChina,
 }
@@ -22,7 +23,10 @@ impl ApiKeyEndpoint {
             Self::ZaiPlatform | Self::ZaiCoding => "zai",
             Self::MiniMax => "minimax",
             Self::Xai => "xai",
-            Self::KimiCoding | Self::KimiPlatformGlobal | Self::KimiPlatformChina => "kimi",
+            Self::KimiCoding
+            | Self::KimiCodingGlobal
+            | Self::KimiPlatformGlobal
+            | Self::KimiPlatformChina => "kimi",
         }
     }
     // No arbitrary credential-bearing URL or endpoint fallback at execution.
@@ -34,6 +38,7 @@ impl ApiKeyEndpoint {
             Self::MiniMax => "https://api.minimax.io/v1",
             Self::Xai => "https://api.x.ai/v1",
             Self::KimiCoding => "https://api.kimi.com/coding/v1",
+            Self::KimiCodingGlobal => "https://api.kimi.ai/coding/v1",
             Self::KimiPlatformGlobal => "https://api.moonshot.ai/v1",
             Self::KimiPlatformChina => "https://api.moonshot.cn/v1",
         }
