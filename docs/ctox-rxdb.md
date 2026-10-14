@@ -2641,6 +2641,13 @@ a TTL'd BroadcastChannel lease with deterministic tie-break is the fallback.
 Followers keep writing to their local primary/WAL and notify the leader of
 dirty collections/ids. The leader broadcasts replicated invalidations back.
 `freeze`/`pagehide` releases ownership; persistent checkpoints handle catch-up.
+If a Web Lock remains held by a same-origin client that sends no leader
+heartbeat, a fresh tab waits one heartbeat interval plus a short grace period
+and then takes over the lock. A former leader yields on the takeover notice
+and checks that its own lock client still holds the lease before advertising
+another heartbeat. This prevents an orphaned Worker lock from leaving every
+collection in follower state indefinitely; the browser smoke holds the lock in
+a real Worker without a sync bridge and verifies single-tab recovery.
 
 Peers advertising `ctox-checkpoint-generation-v2` validate retained
 checkpoints with the persistent native storage generation, collection, schema
