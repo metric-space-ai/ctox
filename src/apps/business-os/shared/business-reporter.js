@@ -931,9 +931,9 @@ function reporterStatusText(result) {
 }
 
 function reporterErrorText(error) {
+  console.warn('[business-reporter] send failed', error);
   if (error?.name === 'OperationTimeoutError') return reporterCopy().failedTimeout;
-  const message = String(error?.message || error || '').trim();
-  return message || 'Report konnte nicht gesendet werden.';
+  return document.documentElement.lang === 'en' ? 'Sending did not work.' : 'Senden hat nicht geklappt.';
 }
 
 export async function persistLocalBusinessReport({ db, sync = null, session = null, report }) {

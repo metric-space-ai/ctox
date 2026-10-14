@@ -120,10 +120,10 @@ export function buildModuleWhyDiagnosticsView({
   const dataSummary = cleanText(access.summary) || labels.noDataAreas || 'Keine Datenbereiche deklariert';
   const releaseLine = cleanText(release.releaseLine || release.statusLabel)
     || labels.noReleaseProjection
-    || 'Noch kein Release projiziert';
+    || '';
   const rollbackLine = cleanText(release.rollbackLine)
     || labels.noRollbackProjection
-    || 'Noch kein Rollback-Ziel projiziert';
+    || '';
 
   const rows = [
     {
@@ -177,7 +177,7 @@ export function buildModuleWhyDiagnosticsView({
       label: labels.release || 'Freigabe',
       state: canRelease ? 'allowed' : 'blocked',
       value: canRelease
-        ? `${decisionLabel(true, labels)} · ${releaseLine}`
+        ? [decisionLabel(true, labels), releaseLine].filter(Boolean).join(' · ')
         : decisionLabel(false, labels),
       reason: canRelease
         ? (labels.releaseAllowedReason || 'Dieser Nutzer darf Team-Releases vorbereiten oder freigeben.')
@@ -188,7 +188,7 @@ export function buildModuleWhyDiagnosticsView({
       label: labels.rollback || 'Rollback',
       state: canRollback ? 'allowed' : 'blocked',
       value: canRollback
-        ? `${decisionLabel(true, labels)} · ${rollbackLine}`
+        ? [decisionLabel(true, labels), rollbackLine].filter(Boolean).join(' · ')
         : decisionLabel(false, labels),
       reason: canRollback
         ? (labels.rollbackAllowedReason || 'Dieser Nutzer darf auf ein geprüftes Rollback-Ziel zurückgehen.')

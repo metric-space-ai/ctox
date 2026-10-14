@@ -371,10 +371,7 @@ export function appLifecycleBadge(moduleLike, options = {}) {
     modificationState: update.modificationState,
     catalogVersion: update.catalogVersion,
     installedVersion: update.installedVersion,
-    title: [version, `App-Sichtbarkeit: ${label}`, update.available ? 'Update verfügbar' : '', lifecycle.reason,
-      'Datenrechte werden separat geprüft.']
-      .filter(Boolean)
-      .join(' · '),
+    title: '',
     text,
     version,
   };

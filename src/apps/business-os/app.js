@@ -19,7 +19,6 @@ import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from '.
 import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-query-ready-coalesce2';
 import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-query-ready-coalesce2';
 import {
-  appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
@@ -61,10 +60,6 @@ import {
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-query-ready-coalesce2';
 import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-query-ready-coalesce2';
 import {
-  CTOX_MAINTENANCE_MESSAGE,
-  CTOX_MAINTENANCE_SYNC_MESSAGE,
-  isDataEmptyStateText,
-  maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
 } from './shared/maintenance-state.js?v=20261014-shell-v2-query-ready-coalesce2';
@@ -1047,7 +1042,6 @@ const shellMessages = {
     context: 'Kontext',
     topics: 'Themen',
     loadingWorkspace: 'Workspace wird geladen',
-    loadingModule: 'Modul-Workspace wird geladen.',
     localWorkspace: 'Lokaler Workspace',
     syncingContent: 'Inhalte werden synchronisiert',
     syncComplete: 'Inhalte synchronisiert',
@@ -1116,9 +1110,7 @@ const shellMessages = {
     appMenuOpen: 'App-Menü öffnen',
     notificationsAria: 'Benachrichtigungen',
     openWindowsAria: 'Offene Fenster',
-    startupStarting: 'System wird gestartet...',
-    startupFailedTitle: 'System-Start fehlgeschlagen',
-    startupFailedBody: 'Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Die lokale Datenverbindung meldet:',
+    startupFailedSentence: 'Die App konnte nicht gestartet werden.',
     startupRetry: 'Erneut versuchen',
     gateSubtitle: 'Melden Sie sich an, um eine Verbindung zur ctox-Instanz herzustellen.',
     gateUser: 'Benutzer',
@@ -1128,26 +1120,8 @@ const shellMessages = {
     gateSso: 'Mit SSO einloggen',
     gateFooter: 'Sichere Ende-zu-Ende verschlüsselte Verbindung.',
     gateInvalidCredentials: 'Ungültiger Benutzername oder Passwort.',
-    drawerLoginHint: 'Bei Desktop-Start wird die CTOX-Instanz automatisch übernommen.',
     drawerLoginSubmit: 'Einloggen',
     drawerLoginExternal: 'Extern einloggen',
-    bootConfig: 'System-Konfiguration wird geladen...',
-    bootSession: 'Anmeldesitzung wird überprüft...',
-    bootDatastore: 'Lokaler Datenspeicher wird geladen...',
-    bootWorkspace: 'Workspace wird vorbereitet...',
-    bootApps: 'Ihre Anwendungen werden vorbereitet...',
-    bootCatalog: 'Apps werden synchronisiert...',
-    bootOptimize: 'Lokaler Datenspeicher wird optimiert...',
-    bootReady: 'Workspace ist bereit. CTOX wird gestartet...',
-    bootDbConfig: 'Datenspeicher-Konfiguration wird vorbereitet...',
-    bootDbOpen: 'Lokaler Speicher wird geöffnet...',
-    bootDbStructures: 'Systemdatenstrukturen werden aufgebaut...',
-    bootDesktopLayout: 'Desktop-Layout wird geladen...',
-    bootSyncStart: 'Echtzeit-Synchronisierung wird gestartet...',
-    bootServices: 'Dienste werden gestartet...',
-    bootSchemas: 'Datenstrukturen werden vorbereitet...',
-    bootSchemasRegister: 'Speicherstrukturen werden registriert...',
-    bootSchemasDone: 'Speicherstrukturen erfolgreich geladen.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'Crew',
@@ -1166,7 +1140,6 @@ const shellMessages = {
     context: 'Context',
     topics: 'Topics',
     loadingWorkspace: 'Loading workspace',
-    loadingModule: 'Loading module workspace.',
     localWorkspace: 'Local workspace',
     syncingContent: 'Syncing content',
     syncComplete: 'Content synced',
@@ -1235,9 +1208,7 @@ const shellMessages = {
     appMenuOpen: 'Open app menu',
     notificationsAria: 'Notifications',
     openWindowsAria: 'Open windows',
-    startupStarting: 'Starting system...',
-    startupFailedTitle: 'System startup failed',
-    startupFailedBody: 'A fatal error occurred while connecting to the local data network. The local data connection reports:',
+    startupFailedSentence: 'The app could not be started.',
     startupRetry: 'Retry',
     gateSubtitle: 'Sign in to connect to the ctox instance.',
     gateUser: 'User',
@@ -1247,26 +1218,8 @@ const shellMessages = {
     gateSso: 'Sign in with SSO',
     gateFooter: 'Secure end-to-end encrypted connection.',
     gateInvalidCredentials: 'Invalid username or password.',
-    drawerLoginHint: 'On desktop start the CTOX instance is taken over automatically.',
     drawerLoginSubmit: 'Sign in',
     drawerLoginExternal: 'External sign-in',
-    bootConfig: 'Loading system configuration...',
-    bootSession: 'Checking sign-in session...',
-    bootDatastore: 'Loading local datastore...',
-    bootWorkspace: 'Preparing workspace...',
-    bootApps: 'Preparing your applications...',
-    bootCatalog: 'Syncing apps...',
-    bootOptimize: 'Optimizing local datastore...',
-    bootReady: 'Workspace ready. Starting CTOX...',
-    bootDbConfig: 'Preparing datastore configuration...',
-    bootDbOpen: 'Opening local storage...',
-    bootDbStructures: 'Building system data structures...',
-    bootDesktopLayout: 'Loading desktop layout...',
-    bootSyncStart: 'Starting realtime sync...',
-    bootServices: 'Starting services...',
-    bootSchemas: 'Preparing data structures...',
-    bootSchemasRegister: 'Registering storage structures...',
-    bootSchemasDone: 'Storage structures loaded.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'Crew',
@@ -1287,7 +1240,6 @@ const els = {
   status: document.querySelector('[data-status-text]'),
   collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
-  maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
   ctoxVersion: document.querySelector('[data-ctox-version]'),
   tabs: document.querySelector('[data-module-tabs]'),
@@ -1350,6 +1302,7 @@ async function bootstrap() {
     const loginFailed = session.reason === 'invalid_credentials'
       || new URLSearchParams(location.search).has('loginFailed');
     clearStoredBrowserAuth();
+    clearStartupRetryState();
     renderLoginGate(session, { loginFailed });
     setStatus(shellText('loginRequired'));
     return;
@@ -1359,29 +1312,29 @@ async function bootstrap() {
 
   assertManagedDesktopCapability(launchConfigForPageSession || readUrlPairingConfig());
 
-  setStartupProgress(10, shellText('bootConfig'));
-  setStartupProgress(30, shellText('bootSession'));
-  setStartupProgress(50, shellText('bootDatastore'));
+  setStartupProgress(10);
+  setStartupProgress(30);
+  setStartupProgress(50);
   const syncConfig = await traceShellPhase('sync-config', loadSyncConfig);
   await traceShellPhase('build-guard', () => resetBusinessDataPlaneForBuildIfNeeded(syncConfig));
   await traceShellPhase('data-plane-open', () => openBusinessDataPlane(syncConfig));
   if (await completeWorkjetPairingRedirect()) return;
 
-  setStartupProgress(70, shellText('bootWorkspace'));
+  setStartupProgress(70);
   let modules;
   try {
-    setStartupProgress(85, shellText('bootApps'));
+    setStartupProgress(85);
     modules = await traceShellPhase('module-catalog', loadModules);
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; extending its WebRTC wait', error);
-    setStartupProgress(82, shellText('bootCatalog'));
+    setStartupProgress(82);
     try {
       modules = await traceShellPhase('module-catalog-retry', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     } catch (retryError) {
       if (!isModuleCatalogSyncError(retryError)) throw retryError;
       console.warn('[business-os] module catalog still unavailable; restarting only its WebRTC bridge', retryError);
-      setStartupProgress(80, shellText('bootCatalog'));
+      setStartupProgress(80);
       await state.sync?.restartCollection?.('business_module_catalog');
       modules = await traceShellPhase('module-catalog-restarted', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     }
@@ -1453,7 +1406,8 @@ async function bootstrap() {
   // Initialize the global ctox context menu
   initGlobalCtoxContextMenu();
 
-  setStartupProgress(95, shellText('bootReady'));
+  setStartupProgress(95);
+  let moduleStartupFailed = false;
   try {
     const workspaceSession = readWorkspaceSessionSnapshot();
     const explicitModule = location.hash.replace(/^#/, '').trim();
@@ -1468,11 +1422,12 @@ async function bootstrap() {
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
   } catch (error) {
-    console.error('[business-os] module startup failed', error);
+    moduleStartupFailed = true;
+    console.warn('[business-os] module startup failed', error);
     if (isManagedCollectionAuthorizationError(error)) {
       showStartupError(error);
     } else {
-      setStatus(`Module startup failed: ${error.message || error}`);
+      showStartupError(error);
     }
   } finally {
     // Catalog refreshes are deferred only while the shell itself is being
@@ -1480,6 +1435,7 @@ async function bootstrap() {
     // the first open attempt; keeping this false when no fallback module opened
     // would strand every later catalog notification in the deferred queue.
     state.initialModuleOpened = true;
+    if (!moduleStartupFailed) clearStartupRetryState();
     flushDeferredCatalogRefresh();
     // Metadata-only recovery diagnostics preserve all replicas, but must not
     // hold database opening or the first usable app behind enumeration.
@@ -1594,7 +1550,7 @@ async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
 
 async function openBusinessDataPlane(syncConfig) {
   resetDataPlaneReady('open-business-data-plane');
-  setStartupProgress(51, shellText('bootDbConfig'));
+  setStartupProgress(51);
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
@@ -1606,11 +1562,11 @@ async function openBusinessDataPlane(syncConfig) {
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
-    setStartupProgress(62, shellText('bootDesktopLayout'));
+    setStartupProgress(62);
     // Paint cached pins without querying the data plane before Sync exists.
     renderTabs();
 
-    setStartupProgress(66, shellText('bootSyncStart'));
+    setStartupProgress(66);
     // Resolve the native-signed actor capability before the first multiplexed
     // WebRTC peer handshake. Protected demand collections authorize the peer
     // from that initial protocol payload; fetching the token only after a core
@@ -1654,7 +1610,7 @@ async function openBusinessDataPlane(syncConfig) {
       ),
     });
 
-    setStartupProgress(69, shellText('bootServices'));
+    setStartupProgress(69);
     state.commandBus = commandBusModule.createCommandBus({
       db: () => state.db,
       sync: () => state.sync,
@@ -1722,12 +1678,12 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
   const { createBusinessDb } = await loadBusinessDbModule();
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    setStartupProgress(54, shellText('bootDbOpen'));
+    setStartupProgress(54);
     state.db = await traceShellPhase(`local-db-open-${attempt}`, () => createBusinessDb({ name: dbName, trace: traceShellPhase }));
     assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
     try {
-      setStartupProgress(58, shellText('bootDbStructures'));
+      setStartupProgress(58);
       // addCollections() is not cancellable. A Promise.race timeout used to
       // reject after 12 seconds while RxDB was still writing IndexedDB schema
       // metadata. The retry path then closed that live database and started a
@@ -1805,7 +1761,7 @@ function isModuleCatalogSyncError(error) {
 
 async function registerCoreCollections() {
   const t0 = performance.now();
-  setStartupProgress(58, shellText('bootSchemas'));
+  setStartupProgress(58);
 
   const { ctox, desktop } = await loadCoreSchemaModules();
   const ctoxSchemes = withMigrationStrategies(ctox.collections, ctox.migrationStrategies);
@@ -1816,10 +1772,10 @@ async function registerCoreCollections() {
     ...desktopSchemes,
   };
 
-  setStartupProgress(59, shellText('bootSchemasRegister'));
+  setStartupProgress(59);
   await state.db.addCollections(consolidated);
 
-  setStartupProgress(61, shellText('bootSchemasDone'));
+  setStartupProgress(61);
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   // Scoped window placement is hydrated synchronously from localStorage.
@@ -2673,6 +2629,9 @@ async function openIntegratedModuleLifecycle(moduleLike) {
     ? state.modules.find((entry) => entry.id === moduleLike)
     : moduleLike;
   if (!mod?.id) return;
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canManageVersions) return;
   const session = await ensureIntegratedModuleToolSession(mod);
   await session?.showVersions?.();
 }
@@ -2704,20 +2663,21 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
   const codingAgentAvailable = desktopAppTargetAvailable('coding-agents');
   const canOpenCodingAgent = canCode && codingAgentAvailable;
   const canRollback = canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canCode && !canRollback) return;
   const moduleTitle = moduleDisplayTitle(mod);
+  const versionLabel = lifecycle.versionLabel || mod.version || '';
   const menu = document.createElement('section');
   menu.className = 'shell-window-v2-version-menu';
   menu.setAttribute('role', 'dialog');
   menu.setAttribute('aria-label', `${moduleDisplayTitle(mod)} Versionsmenü`);
   menu.innerHTML = `
     <header class="shell-v2-version-menu-head">
-      <div><span>${escapeHtml(moduleTitle)}</span><strong>${escapeHtml(lifecycle.versionLabel || mod.version || 'Version —')}</strong></div>
-      <small>${escapeHtml(lifecycle.label || lifecycle.state || 'Status unbekannt')}</small>
+      <div><span>${escapeHtml(moduleTitle)}</span>${versionLabel ? `<strong>${escapeHtml(versionLabel)}</strong>` : ''}</div>
     </header>
     <div class="shell-v2-version-menu-actions">
       <button type="button" data-v2-menu-action="history">Versionshistorie</button>
       ${canSource ? '<button type="button" data-v2-menu-action="source">Im Source Code Editor öffnen</button>' : ''}
-      <button type="button" data-v2-menu-action="coding" ${canOpenCodingAgent ? '' : `disabled title="${canCode ? 'Coding-Agent-App ist nicht verfügbar' : 'Keine Berechtigung: apps.modify'}"`}>Im Coding Agent öffnen</button>
+      ${canOpenCodingAgent ? '<button type="button" data-v2-menu-action="coding">Im Coding Agent öffnen</button>' : ''}
     </div>
     <div class="shell-v2-version-history" data-v2-version-history aria-live="polite">
       <p>Versionshistorie auswählen, um gespeicherte Versionen zu laden.</p>
@@ -2786,7 +2746,7 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
     if (historyLoading || !menu.isConnected) return;
     historyLoading = true;
     if (historyAction) historyAction.disabled = true;
-    history.innerHTML = '<p aria-busy="true">Versionshistorie wird autorisiert geladen…</p>';
+    history.innerHTML = '<p aria-busy="true">Wird geladen …</p>';
     try {
       const terminal = await dispatchShellModuleCommand({
         commandType: 'ctox.module.list_versions',
@@ -2802,8 +2762,9 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
       renderShellV2VersionHistory({ mod, menu, history, versions, canRollback, windowId });
     } catch (error) {
       if (!menu.isConnected) return;
+      console.warn('[business-os] version history failed', error);
       history.innerHTML = `
-        <p class="is-error" role="alert">Versionshistorie nicht verfügbar: ${escapeHtml(error?.message || error)}</p>
+        <p class="is-error" role="alert">Versionshistorie konnte nicht geladen werden.</p>
         <button type="button" data-v2-version-retry>Erneut versuchen</button>
       `;
       history.querySelector('[data-v2-version-retry]')?.addEventListener('click', loadHistory, { once: true });
@@ -2818,6 +2779,9 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
 
 function wireShellV2ModuleTitle(mod, win, scope) {
   if (resolveShellWindowContract(mod)?.contract !== 'v2' || !win?.id || !scope) return;
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canManageVersions) return;
   let trigger = scope.querySelector('.ctox-pane-header .ctox-pane-title');
   if (!trigger) {
     const shellHeader = win.element?.querySelector?.('[data-window-header]');
@@ -2828,15 +2792,13 @@ function wireShellV2ModuleTitle(mod, win, scope) {
     trigger.textContent = moduleDisplayTitle(mod);
     shellHeader.prepend(trigger);
   }
-  const lifecycle = appLifecycleState(mod, { session: state.session, governance: state.governance });
-  const version = lifecycle.versionLabel || String(mod.version || mod.app_version || 'Version —');
   trigger.classList.add('shell-v2-module-title-trigger');
   trigger.tabIndex = 0;
   trigger.setAttribute('role', 'button');
   trigger.setAttribute('aria-haspopup', 'dialog');
   trigger.setAttribute('aria-expanded', 'false');
-  trigger.setAttribute('aria-label', `${moduleDisplayTitle(mod)}; ${version}; Versionsmenü öffnen`);
-  trigger.title = `${version} · Versionsmenü öffnen`;
+  trigger.setAttribute('aria-label', `${moduleDisplayTitle(mod)}; Versionsmenü öffnen`);
+  trigger.removeAttribute('title');
   const open = (event) => toggleShellV2VersionMenu(mod, { id: win.id, trigger, event });
   trigger.addEventListener('click', open);
   trigger.addEventListener('keydown', (event) => {
@@ -2854,11 +2816,11 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
   history.innerHTML = `
     <label class="shell-v2-version-select"><span>Frühere Version</span>
       <select data-v2-version-select>
-        ${versions.map((version) => `<option value="${escapeHtml(version.version_id || '')}">#${escapeHtml(version.seq || '—')} · ${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))} · ${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</option>`).join('')}
+        ${versions.map((version) => `<option value="${escapeHtml(version.version_id || '')}">${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))} · ${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</option>`).join('')}
       </select>
     </label>
     <div class="shell-v2-restore-actions">
-      <button type="button" data-v2-restore-start ${canRollback ? '' : 'disabled title="Keine Berechtigung: apps.rollback"'}>Version wiederherstellen</button>
+      ${canRollback ? '<button type="button" data-v2-restore-start>Version wiederherstellen</button>' : ''}
     </div>
     <p data-v2-version-status role="status"></p>
   `;
@@ -2875,7 +2837,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
     const confirm = document.createElement('div');
     confirm.className = 'shell-v2-restore-confirm';
     confirm.innerHTML = `
-      <p>${escapeHtml(moduleTitle)} wirklich auf Version #${escapeHtml(selected.seq || '—')} zurücksetzen?</p>
+      <p>${escapeHtml(moduleTitle)} wirklich auf diese Version zurücksetzen?</p>
       <button type="button" data-v2-restore-confirm>Wiederherstellen</button>
       <button type="button" data-v2-restore-cancel>Abbrechen</button>
     `;
@@ -2890,7 +2852,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
       busy = true;
       for (const button of confirm.querySelectorAll('button')) button.disabled = true;
       event.currentTarget.textContent = 'Wiederherstellung läuft…';
-      status.textContent = 'Stage, Validierung und atomarer Austausch laufen…';
+      status.textContent = 'Wird wiederhergestellt…';
       try {
         await dispatchShellModuleCommand({
           commandType: 'ctox.module.rollback_version',
@@ -2900,7 +2862,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
           source: 'business-os-shell-v2-version-menu',
           until: 'terminal',
         });
-        status.textContent = `Version #${selected.seq || '—'} wurde vollständig wiederhergestellt.`;
+        status.textContent = 'Die Version wurde wiederhergestellt.';
         state.moduleRevisions[mod.id] = Date.now();
         state.schemaRegistrations.delete(mod.id);
         closeShellV2VersionMenu(windowId, { returnFocus: false });
@@ -2911,7 +2873,8 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
         busy = false;
         for (const button of confirm.querySelectorAll('button')) button.disabled = false;
         event.currentTarget.textContent = 'Wiederherstellen';
-        status.textContent = `Wiederherstellung fehlgeschlagen: ${error?.message || error}`;
+        console.warn('[business-os] version restore failed', error);
+        status.textContent = 'Wiederherstellen hat nicht geklappt.';
         status.classList.add('is-error');
       }
     });
@@ -2943,7 +2906,6 @@ async function ensureIntegratedModuleToolSession(mod) {
     <header class="module-integrated-tools-bar" aria-label="App-Ansicht">
       <div class="module-integrated-tools-identity">
         <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-        <span>${escapeHtml(mod.id)}</span>
       </div>
       <nav class="module-integrated-tools-tabs" aria-label="App, Source und Versionen">
         <button type="button" data-integrated-view="app">App</button>
@@ -3095,11 +3057,10 @@ async function mountIntegratedModuleSource({ mod, host, showApp }) {
 }
 
 function renderIntegratedModuleSourceError({ mod, host, error, retry }) {
-  console.error(`[module-source:${mod.id}] mount failed:`, error);
+  console.warn(`[module-source:${mod.id}] mount failed:`, error);
   host.innerHTML = `
     <div class="module-integrated-error" role="alert">
-      <strong>Source konnte nicht geladen werden</strong>
-      <span>${escapeHtml(error?.message || error)}</span>
+      <strong>Source konnte nicht geladen werden.</strong>
       <button type="button">Erneut versuchen</button>
     </div>
   `;
@@ -3128,7 +3089,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
   const versionOptions = versions.map((version) => `
     <button type="button" class="module-integrated-version-row${version.version_id === selected?.version_id ? ' is-active' : ''}"
       data-integrated-version-id="${escapeHtml(version.version_id || '')}" aria-current="${version.version_id === selected?.version_id ? 'true' : 'false'}">
-      <span><b>#${escapeHtml(version.seq || '—')}</b> ${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))}</span>
+      <span>${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))}</span>
       <small>${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</small>
     </button>
   `).join('');
@@ -3148,19 +3109,17 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       <main class="module-integrated-version-detail">
         <header class="module-integrated-version-summary">
           <div>
-            <span class="module-integrated-kicker">Aktueller Status</span>
-            <strong>${escapeHtml(lifecycle.versionLabel || 'Version fehlt')} · ${escapeHtml(lifecycle.label || lifecycle.state)}</strong>
-            <small>${escapeHtml(projection.releaseLine || lifecycle.reason || '')}</small>
+            <strong>${escapeHtml(lifecycle.versionLabel || moduleDisplayTitle(mod))}</strong>
+            ${(projection.currentVersion || projection.statusLabel) ? `<small>${escapeHtml(projection.releaseLine)}</small>` : ''}
           </div>
-          ${selected ? `
-          <button type="button" class="module-integrated-switch-version" data-integrated-version-switch
-            ${canRollback ? '' : 'disabled'} title="${canRollback ? 'Diese Version wiederherstellen' : 'Keine Rollback-Berechtigung'}">
-            Auf #${escapeHtml(selected.seq || '—')} wechseln
+          ${selected && canRollback ? `
+          <button type="button" class="module-integrated-switch-version" data-integrated-version-switch>
+            Version wiederherstellen
           </button>` : ''}
         </header>
         ${selected ? `
         <dl class="module-integrated-version-facts">
-          <div><dt>Version</dt><dd>#${escapeHtml(selected.seq || '—')} ${escapeHtml(selected.label || moduleVersionOriginLabel(selected.origin))}</dd></div>
+          <div><dt>Version</dt><dd>${escapeHtml(selected.label || moduleVersionOriginLabel(selected.origin))}</dd></div>
           <div><dt>Zeitpunkt</dt><dd>${escapeHtml(formatLifecycleTimestamp(selected.created_at_ms))}</dd></div>
           <div><dt>Quelle</dt><dd>${escapeHtml(moduleVersionOriginLabel(selected.origin))}</dd></div>
           <div><dt>Dateien</dt><dd>${escapeHtml(selected.file_count ?? '—')}</dd></div>
@@ -3179,7 +3138,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
           <label><span>Zielversion</span><input name="target_version" value="${escapeHtml(releaseVersion)}" pattern="\\d+\\.\\d+\\.\\d+" required ${canRelease ? '' : 'disabled'}></label>
           <label><span>Sichtbarkeit</span><select name="release_channel" ${canRelease ? '' : 'disabled'}><option value="team">Team</option><option value="restricted">Eingeschränkt</option></select></label>
           <label><span>Release-Notiz</span><input name="notes" placeholder="Was wurde geändert?" ${canRelease ? '' : 'disabled'}></label>
-          <button type="submit" ${canRelease ? '' : 'disabled'}>${canRelease ? 'Version freigeben' : 'Keine Release-Berechtigung'}</button>
+          ${canRelease ? '<button type="submit">Version freigeben</button>' : ''}
           <p data-integrated-release-status role="status"></p>
         </form>
       </main>
@@ -3207,15 +3166,16 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       });
       state.moduleRevisions[mod.id] = Date.now();
       state.schemaRegistrations.delete(mod.id);
-      setStatus(`${moduleDisplayTitle(mod)} wurde auf Version #${selected.seq || '—'} zurückgesetzt.`);
+      setStatus(`${moduleDisplayTitle(mod)} wurde wiederhergestellt.`);
       state.windowManager?.destroy?.(windowId);
       await delay(240);
       const refreshed = state.modules.find((entry) => entry.id === mod.id) || mod;
       await openWindowedModule(refreshed);
     } catch (error) {
       button.disabled = false;
-      button.textContent = `Auf #${selected.seq || '—'} wechseln`;
-      setStatus(`Versionswechsel fehlgeschlagen: ${error?.message || error}`, true);
+      button.textContent = 'Version wiederherstellen';
+      console.warn('[business-os] version switch failed', error);
+      setStatus('Wiederherstellen hat nicht geklappt.', true);
     }
   });
   host.querySelector('[data-integrated-release]')?.addEventListener('submit', async (event) => {
@@ -3226,7 +3186,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
     const status = form.querySelector('[data-integrated-release-status]');
     const data = new FormData(form);
     submit.disabled = true;
-    status.textContent = 'Release wird über den Command Bus gesendet…';
+    status.textContent = 'Version wird freigegeben…';
     try {
       await dispatchShellModuleCommand({
         commandType: 'ctox.module.release',
@@ -3241,8 +3201,9 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       await renderIntegratedModuleVersions({ mod, host, windowId });
     } catch (error) {
       submit.disabled = false;
-      status.textContent = `Release fehlgeschlagen: ${error?.message || error}`;
-      setStatus(status.textContent, true);
+      console.warn('[business-os] module release failed', error);
+      status.textContent = 'Freigeben hat nicht geklappt.';
+      setStatus('Freigeben hat nicht geklappt.', true);
     }
   });
 }
@@ -3358,9 +3319,7 @@ async function openSettingsDrawer(options = {}) {
         ${shellPreferenceControlsTemplate()}
         <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
       </header>
-      <section class="settings-section">
-        <header><h3>Datenspeicher</h3><span>Wird vorbereitet.</span></header>
-      </section>
+      <section class="settings-section" aria-busy="true"></section>
     `;
     loading.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
     els.rightDrawer.append(loading);
@@ -3368,22 +3327,8 @@ async function openSettingsDrawer(options = {}) {
   try {
     await waitForDataPlaneReady();
   } catch (error) {
+    console.warn('[business-os] settings data plane failed', error);
     if (!ownsRightDrawer(ticket)) return;
-    els.rightDrawer.replaceChildren();
-    const failed = document.createElement('div');
-    failed.className = 'drawer-body settings-drawer';
-    failed.innerHTML = `
-      <header class="drawer-header-row settings-head">
-        ${shellPreferenceControlsTemplate()}
-        <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
-      </header>
-      <section class="settings-section">
-        <header><h3>Datenspeicher</h3><span>Nicht bereit.</span></header>
-        <p class="muted">${escapeHtml(String(error?.message || error || 'Unbekannter Fehler'))}</p>
-      </section>
-    `;
-    failed.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
-    els.rightDrawer.append(failed);
     return;
   }
   if (!ownsRightDrawer(ticket)) return;
@@ -3398,7 +3343,7 @@ async function openSettingsDrawer(options = {}) {
     sync: createLiveSyncFacade({ host: els.rightDrawer }),
     commandBus: createLiveCommandBusFacade(),
     db: createScopedSystemDbFacade('settings-drawer-react-settings', SETTINGS_DB_COLLECTIONS),
-    initialTab: options.initialTab || 'runtime',
+    initialTab: options.initialTab || 'appearance',
     onAccount: openAccountDrawer,
     onClose: closeDrawers,
     onModulesChanged: refreshModules,
@@ -4746,16 +4691,12 @@ function desktopAppDescriptorForModule(mod) {
 
 function windowHeaderOptionsForModule(mod) {
   const title = moduleDisplayTitle(mod);
-  const lifecycle = appLifecycleBadge(mod, {
-    session: state.session,
-    governance: state.governance,
-  });
-  const version = lifecycle.version || String(mod?.version || mod?.app_version || '').trim() || 'v—';
-  const status = lifecycle.text || lifecycle.label || (lifecycle.public ? 'Public' : 'Privat');
   const canOpenSource = shouldRenderModuleSourceAction({
     module: mod,
     canOpenSource: canViewModuleSource(mod),
   });
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
   if (resolveShellWindowContract(mod)?.contract === 'v2') {
     return {
       headerBadges: [],
@@ -4764,17 +4705,7 @@ function windowHeaderOptionsForModule(mod) {
     };
   }
   return {
-    headerBadges: [
-      { label: version, title: lifecycle.title || `${title}: ${version}`, state: 'version' },
-      {
-        id: 'lifecycle',
-        icon: status.slice(0, 1).toUpperCase(),
-        label: status,
-        title: lifecycle.title || `${title}: ${status}`,
-        ariaLabel: `${title}: ${version} ${status}; Versionen und Status öffnen`,
-        state: lifecycle.state || (lifecycle.public ? 'team' : 'private'),
-      },
-    ],
+    headerBadges: [],
     headerActions: [
       canOpenSource ? {
         id: 'source',
@@ -4782,14 +4713,12 @@ function windowHeaderOptionsForModule(mod) {
         label: 'Source',
         title: `Source von ${title} öffnen`,
       } : null,
-      {
+      canManageVersions ? {
         id: 'versions',
         icon: '↺',
         label: shellLang() === 'de' ? 'Versionen' : 'Versions',
-        title: shellLang() === 'de'
-          ? `Versionen, Freigabe und Rollback von ${title} öffnen`
-          : `Open versions, release and rollback for ${title}`,
-      },
+        title: shellLang() === 'de' ? 'Versionen öffnen' : 'Open versions',
+      } : null,
     ].filter(Boolean),
     onHeaderAction: (action) => {
       // Toggle: clicking the active header tool again returns to the app.
@@ -5134,10 +5063,6 @@ function createWindowedModuleHost(mod) {
   content.innerHTML = `
     <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
       ${renderLoadingShadowFallback(mod)}
-    </div>
-    <div class="module-loading-note" aria-hidden="true">
-      <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-      <span>${escapeHtml(shellText('loadingModule'))}</span>
     </div>
   `;
   const right = document.createElement('aside');
@@ -5531,20 +5456,10 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.module
-    ? appLifecycleBadge(target.module, {
-      session: state.session,
-      governance: state.governance,
-    })
-    : null;
-  const lifecycleIconAttributes = lifecycle?.state === 'preview' && !lifecycle.updateAvailable
-    ? `role="img" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(lifecycleBadgeAriaLabel(target.title || target.id, lifecycle))}"`
-    : 'aria-hidden="true"';
   button.innerHTML = `
-    <span class="module-tab-icon" ${lifecycleIconAttributes}>${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
-    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
@@ -5580,11 +5495,6 @@ function renderModuleTab(target, options = {}) {
   button.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     showTargetContextMenu(event, target);
-  });
-  button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5728,7 +5638,7 @@ function showTargetContextMenu(event, target) {
       modify: () => openModuleEditDrawer(module),
     },
   });
-  if (module) items.push({ key: 'versions', icon: '↻', label: state.lang === 'en' ? 'Versions and updates' : 'Versionen und Updates', action: () => openAppLifecycleDrawer(module) });
+  if (module && canModifyModule(module)) items.push({ key: 'versions', icon: '↻', label: state.lang === 'en' ? 'Versions and updates' : 'Versionen und Updates', action: () => openAppLifecycleDrawer(module) });
   state.contextMenu.show(event, items);
 }
 
@@ -7686,11 +7596,7 @@ function renderModulePermissionDeniedState(mod, error, host = els.host?.querySel
     <span>${escapeHtml(de
       ? 'Diese App ist sichtbar, aber die freigegebenen Daten reichen fuer diesen Bereich noch nicht aus.'
       : 'This app is visible, but the shared data access is not enough for this area.')}</span>
-    <button class="text-button" type="button" data-open-app-permissions>${escapeHtml(de ? 'App-Rechte ansehen' : 'View app permissions')}</button>
   `;
-  locked.querySelector('[data-open-app-permissions]')?.addEventListener('click', () => {
-    openAppLifecycleDrawer(mod);
-  });
   host.replaceChildren(locked);
 }
 
@@ -8269,10 +8175,6 @@ function renderModuleFrame(mod) {
       <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
         ${renderLoadingShadowFallback(mod)}
       </div>
-      <div class="module-loading-note" aria-hidden="true">
-        <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-        <span>${escapeHtml(shellText('loadingModule'))}</span>
-      </div>
     </div>
   `;
   return root;
@@ -8405,10 +8307,6 @@ function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
   const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
-  const lifecycle = appLifecycleBadge(mod, {
-    session: state.session,
-    governance: state.governance,
-  });
   const canOpenSource = shouldRenderModuleSourceAction({
     module: mod,
     canOpenSource: canViewModuleSource(mod),
@@ -8418,7 +8316,6 @@ function renderModuleAppBar(mod) {
       <div class="module-appbar-title">
         <span class="module-appbar-icon" aria-hidden="true">${svgHtml || escapeHtml(glyphForModule(mod.id))}</span>
         <span>${title}</span>
-        ${lifecycle?.version ? `<button class="module-lifecycle-chip" type="button" data-module-lifecycle="${escapeHtml(mod.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${title}: ${lifecycle.version} ${lifecycle.text}`)}"><b>${escapeHtml(lifecycle.version)}</b><span>${escapeHtml(lifecycle.text)}</span></button>` : ''}
       </div>
       <div class="module-appbar-actions">
         <select class="header-select module-appbar-select" style="display: none; width: auto; max-width: 140px; margin-right: 4px;" data-module-version-select="${escapeHtml(mod.id)}" aria-label="${escapeHtml(shellText('selectVersion') || 'Version auswählen')}">
@@ -8437,14 +8334,10 @@ function renderModuleAppBar(mod) {
   `;
 }
 
-function lifecycleBadgeAriaLabel(title, lifecycle) {
-  const state = [lifecycle?.version, lifecycle?.text].filter(Boolean).join(' ');
-  return [title, state].filter(Boolean).join(': ');
-}
-
 function updateActiveAppChrome(mod) {
-  const instanz = getInstanceName();
-  document.title = `${moduleDisplayTitle(mod)} · CTOX Business OS (${instanz})`;
+  const workspace = String(workspaceStatusText() || '').trim();
+  const title = moduleDisplayTitle(mod);
+  document.title = workspace ? `${title} · ${workspace}` : title;
 }
 
 function taskbarMarkForModule(mod) {
@@ -8736,7 +8629,7 @@ function renameModule(moduleId, label) {
 }
 
 function openAppLifecycleDrawer(mod) {
-  if (!mod?.id) return;
+  if (!mod?.id || !canModifyModule(mod)) return;
   const lifecycle = appLifecycleState(mod, {
     session: state.session,
     governance: state.governance,
@@ -8755,7 +8648,12 @@ function openAppLifecycleDrawer(mod) {
     actor: state.session?.user,
     module: mod,
     lifecycle,
-    releaseProjection,
+    releaseProjection: {
+      ...releaseProjection,
+      releaseLine: (releaseProjection.currentVersion || releaseProjection.statusLabel)
+        ? releaseProjection.releaseLine
+        : '',
+    },
     dataAccess,
     permissionView,
     permissions: {
@@ -8768,11 +8666,10 @@ function openAppLifecycleDrawer(mod) {
     },
     dataPermissions: buildLifecycleDataPermissionDiagnostics(mod, dataAccess),
   });
-  const releaseFact = releaseProjection.hasReleaseState
+  const releaseFact = (releaseProjection.currentVersion || releaseProjection.statusLabel)
     ? releaseProjection.releaseLine
-    : 'Noch kein Release projiziert';
-  const rollbackFact = releaseProjection.rollbackLine || 'Noch kein Rollback-Ziel projiziert';
-  const dataAccessFact = dataAccess?.summary || 'Keine Datenbereiche deklariert';
+    : '';
+  const rollbackFact = releaseProjection.rollbackLine || '';
   const body = document.createElement('div');
   body.className = 'drawer-body module-lifecycle-drawer';
   body.dataset.lifecyclePermissionState = permissionView.state;
@@ -8780,7 +8677,6 @@ function openAppLifecycleDrawer(mod) {
     <header class="drawer-header-row">
       <div>
         <h2>${escapeHtml(moduleDisplayTitle(mod))}</h2>
-        <p>${escapeHtml(mod.id)}</p>
       </div>
       <button class="icon-button" type="button" data-close-lifecycle aria-label="Schließen">×</button>
     </header>
@@ -8788,7 +8684,7 @@ function openAppLifecycleDrawer(mod) {
       <div class="module-lifecycle-mark" aria-hidden="true">${escapeHtml(lifecycle.state === 'team' ? 'T' : (lifecycle.state === 'preview' ? 'V' : (lifecycle.state === 'restricted' ? 'S' : 'P')))}</div>
       <div>
         <strong>${escapeHtml(lifecycle.label)}</strong>
-        <span>${escapeHtml(lifecycle.versionLabel || 'Version fehlt')}</span>
+        ${lifecycle.versionLabel ? `<span>${escapeHtml(lifecycle.versionLabel)}</span>` : ''}
       </div>
     </section>
     <section class="module-lifecycle-access" data-lifecycle-permission-state="${escapeHtml(permissionView.state)}" aria-label="App-Rechte">
@@ -8804,18 +8700,9 @@ function openAppLifecycleDrawer(mod) {
         <dt>Standard nach Version</dt>
         <dd>${lifecycle.state === 'restricted' ? 'Eingeschränkte Team-Version' : (lifecycle.public ? 'Team-sichtbar' : 'Privat bis zur Team-Version')}</dd>
       </div>
-      <div>
-        <dt>Freigabe</dt>
-        <dd>${escapeHtml(releaseFact)}</dd>
-      </div>
-      <div>
-        <dt>Rollback</dt>
-        <dd>${escapeHtml(rollbackFact)}</dd>
-      </div>
-      <div>
-        <dt>Datenzugriff</dt>
-        <dd>${escapeHtml(dataAccessFact)}</dd>
-      </div>
+      ${releaseFact ? `<div><dt>Freigabe</dt><dd>${escapeHtml(releaseFact)}</dd></div>` : ''}
+      ${rollbackFact ? `<div><dt>Rollback</dt><dd>${escapeHtml(rollbackFact)}</dd></div>` : ''}
+      ${dataAccess?.summary ? `<div><dt>Datenzugriff</dt><dd>${escapeHtml(dataAccess.summary)}</dd></div>` : ''}
       ${dataAccess?.reviewNote ? `
       <div>
         <dt>Review</dt>
@@ -8856,8 +8743,9 @@ function openAppLifecycleDrawer(mod) {
   });
   openDrawer('right', body);
   populateLifecycleVersions(body, mod, { canRollback }).catch((error) => {
+    console.warn('[business-os] lifecycle versions failed', error);
     const list = body.querySelector('[data-lifecycle-version-list]');
-    if (list) list.textContent = error?.message || 'Versionen konnten nicht geladen werden.';
+    if (list) list.textContent = 'Versionen konnten nicht geladen werden.';
   });
 }
 
@@ -8873,24 +8761,23 @@ async function populateLifecycleVersions(body, mod, { canRollback = false } = {}
     return;
   }
   for (const version of versions.slice(0, 12)) {
-    const button = document.createElement('button');
-    button.type = 'button';
+    const button = document.createElement(canRollback ? 'button' : 'div');
+    if (canRollback) button.type = 'button';
     button.className = 'module-lifecycle-version';
-    button.disabled = !canRollback;
     button.dataset.versionId = String(version.version_id || '');
     const label = version.label || moduleVersionOriginLabel(version.origin);
-    button.innerHTML = `<b>#${escapeHtml(version.seq || '—')} ${escapeHtml(label)}</b><span>${escapeHtml(new Date(version.created_at_ms || 0).toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US'))}</span>`;
-    button.title = canRollback ? 'Auf diese Version zurücksetzen' : 'Keine Rollback-Berechtigung';
-    button.addEventListener('click', async () => {
-      if (!canRollback || !version.version_id) return;
-      const confirmed = confirm(`Möchtest du "${moduleDisplayTitle(mod)}" wirklich auf Version #${version.seq || '—'} zurücksetzen?`);
+    button.innerHTML = `<b>${escapeHtml(label)}</b><span>${escapeHtml(new Date(version.created_at_ms || 0).toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US'))}</span>`;
+    if (canRollback) button.addEventListener('click', async () => {
+      if (!version.version_id) return;
+      const confirmed = confirm(`Möchtest du "${moduleDisplayTitle(mod)}" wirklich auf diese Version zurücksetzen?`);
       if (!confirmed) return;
       button.disabled = true;
       try {
         await rollbackModuleSelection(mod.id, { kind: 'bundle', id: version.version_id });
         closeDrawers();
       } catch (error) {
-        setStatus(`Rollback fehlgeschlagen: ${error?.message || error}`, true);
+        console.warn('[business-os] rollback failed', error);
+        setStatus('Wiederherstellen hat nicht geklappt.', true);
         button.disabled = false;
       }
     });
@@ -9343,7 +9230,6 @@ function renderLoginDrawer(session) {
     <header class="drawer-header-row">
       <div>
         <h2>Login</h2>
-        <p>${escapeHtml(shellText('drawerLoginHint'))}</p>
       </div>
       <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
@@ -9387,7 +9273,7 @@ function renderProfileDrawer() {
     <header class="drawer-header-row">
       <div>
         <h2>Konto</h2>
-        <p>${escapeHtml(user.display_name || user.id || 'CTOX User')} · ${escapeHtml(roleDisplayName(role))}</p>
+        <p>${escapeHtml(displayName || 'Konto')} · ${escapeHtml(roleDisplayName(role))}</p>
       </div>
       <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
@@ -9412,7 +9298,7 @@ function renderProfileDrawer() {
         <button class="text-button account-primary" type="submit">Speichern</button>
         <button class="text-button" type="button" data-logout>Abmelden</button>
       </div>
-      <small data-profile-status>Anzeigename wird im Team gespeichert. Sprache bleibt lokal und wird beim Laden der Module angewendet.</small>
+      <small data-profile-status></small>
     </form>
     <form class="account-form account-password-form" data-password-form>
       <label>
@@ -9464,7 +9350,8 @@ function renderProfileDrawer() {
       statusEl.dataset.state = 'ok';
       closeDrawers();
     } catch (error) {
-      statusEl.textContent = error?.message || 'Account konnte nicht gespeichert werden.';
+      console.warn('[business-os] account save failed', error);
+      statusEl.textContent = 'Speichern hat nicht geklappt.';
       statusEl.dataset.state = 'error';
     } finally {
       submit.disabled = false;
@@ -10099,9 +9986,6 @@ function startMaintenanceMonitor() {
     applyMaintenanceState(normalizeMaintenancePayload(null));
     return;
   }
-  els.maintenanceBanner?.querySelector('[data-maintenance-retry]')?.addEventListener('click', () => {
-    refreshMaintenanceStatus({ retry: true }).then(scheduleMaintenancePoll);
-  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       refreshMaintenanceStatus().then(scheduleMaintenancePoll);
@@ -10124,7 +10008,7 @@ function isWorkjetStaticShellLaunch() {
   ].includes(source);
 }
 
-async function refreshMaintenanceStatus(options = {}) {
+async function refreshMaintenanceStatus() {
   const rememberedLease = rememberedMaintenanceLease();
   const rememberedLeaseId = rememberedLease.leaseId;
   try {
@@ -10136,11 +10020,6 @@ async function refreshMaintenanceStatus(options = {}) {
     if (!payload.active && ['completed', 'rolled_back'].includes(next.status)) {
       rememberMaintenanceLease('');
       applyMaintenanceState(normalizeMaintenancePayload(payload));
-      if (next.status === 'rolled_back') {
-        setStatus(next.error || (shellLang() === 'de'
-          ? 'Das Upgrade wurde zurückgesetzt. CTOX verwendet wieder die vorherige Version.'
-          : 'The upgrade was rolled back. CTOX is using the previous version again.'));
-      }
       return;
     }
     applyMaintenanceState(next);
@@ -10155,9 +10034,6 @@ async function refreshMaintenanceStatus(options = {}) {
         retryable: true,
         progress: {
           percent: state.maintenance?.percent || 70,
-          message: options.retry
-            ? 'Verbindung wird erneut aufgebaut'
-            : 'CTOX-Dienst startet neu · Verbindung wird wiederhergestellt',
         },
         last_error: String(error?.message || error),
       },
@@ -10170,27 +10046,11 @@ function applyMaintenanceState(next) {
   state.maintenance = next;
   document.body.dataset.maintenanceActive = next.active ? 'true' : 'false';
   document.body.dataset.maintenanceStatus = next.status || 'idle';
-  if (els.maintenanceBanner) {
-    els.maintenanceBanner.hidden = !next.active;
-    const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-    const progress = els.maintenanceBanner.querySelector('[data-maintenance-progress]');
-    const retry = els.maintenanceBanner.querySelector('[data-maintenance-retry]');
-    if (detail) detail.textContent = next.error && ['failed', 'stale'].includes(next.status)
-      ? `${maintenancePhaseLabel(next, shellLang())}: ${next.error}`
-      : maintenancePhaseLabel(next, shellLang());
-    if (progress) {
-      progress.style.width = `${Math.round(next.percent || 0)}%`;
-      progress.title = `${Math.round(next.percent || 0)}%`;
-    }
-    if (retry) retry.hidden = !next.retryable;
-  }
   if (next.active) {
-    startMaintenanceEmptyStateGuard();
     if (next.serviceActive && next.replicationUp && next.status === 'active') {
       tryAcknowledgeMaintenanceReadiness();
     }
   } else {
-    stopMaintenanceEmptyStateGuard();
     state.maintenanceAckLeaseId = '';
     if (wasActive) resumeMaintenanceInterruptedModuleMount();
   }
@@ -10211,8 +10071,7 @@ function resumeMaintenanceInterruptedModuleMount() {
       const refreshed = state.modules.find((entry) => entry.id === moduleId) || state.activeModule;
       await openModule(refreshed.id, { force: true, isNavHistory: true });
     } catch (error) {
-      console.error(`[business-os] ${moduleId} remount after maintenance failed`, error);
-      setStatus(`${moduleId}: ${error?.message || error}`);
+      console.warn(`[business-os] ${moduleId} remount after maintenance failed`, error);
     }
   });
 }
@@ -10238,21 +10097,9 @@ async function tryAcknowledgeMaintenanceReadiness() {
     const diagnostics = state.syncDiagnostics?.collections?.[name];
     return !(diagnostics?.initialReplicationAt || diagnostics?.initialReplicationState === 'complete');
   });
-  if (missing.length) {
-    if (els.maintenanceBanner) {
-      const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-      // Name the collection that is holding the instance read-only. "1
-      // ausstehend" forced a reach into window.ctoxBusinessOsSyncDiagnostics
-      // to find out which one, while every user waited out the grace period
-      // (thesen 09.09.2026, four upgrades in a row).
-      if (detail) {
-        const named = missing.slice(0, 3).join(', ');
-        const rest = missing.length > 3 ? ` und ${missing.length - 3} weitere` : '';
-        detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · wartet auf ${named}${rest}`;
-      }
-    }
-    return;
-  }
+  // Collections that have not finished their first replication keep the lease
+  // unacknowledged. The shell does not describe that wait in the customer UI.
+  if (missing.length) return;
   state.maintenanceAckLeaseId = leaseId;
   const commandId = `cmd_maintenance_ready_${crypto.randomUUID?.() || Date.now()}`;
   try {
@@ -10275,39 +10122,6 @@ async function tryAcknowledgeMaintenanceReadiness() {
     state.maintenanceAckLeaseId = '';
     console.warn('[business-os] maintenance readiness acknowledgement failed:', error);
   }
-}
-
-function startMaintenanceEmptyStateGuard() {
-  applyMaintenanceEmptyStateGuard();
-  if (state.maintenanceEmptyObserver) return;
-  state.maintenanceEmptyObserver = new MutationObserver(applyMaintenanceEmptyStateGuard);
-  state.maintenanceEmptyObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-}
-
-function applyMaintenanceEmptyStateGuard() {
-  if (!state.maintenance?.active) return;
-  const selectors = '[class*="empty"], [data-empty], td[colspan]';
-  for (const node of document.querySelectorAll(selectors)) {
-    if (isDataEmptyStateText(node.textContent)) node.dataset.maintenanceEmptyState = 'true';
-  }
-  for (const host of document.querySelectorAll('[data-module-content]')) {
-    if (!host.querySelector('[data-maintenance-empty-state="true"]')) continue;
-    if (host.querySelector('[data-maintenance-data-placeholder]')) continue;
-    const placeholder = document.createElement('div');
-    placeholder.className = 'ctox-maintenance-data-placeholder';
-    placeholder.dataset.maintenanceDataPlaceholder = '';
-    placeholder.textContent = CTOX_MAINTENANCE_SYNC_MESSAGE;
-    host.prepend(placeholder);
-  }
-}
-
-function stopMaintenanceEmptyStateGuard() {
-  state.maintenanceEmptyObserver?.disconnect?.();
-  state.maintenanceEmptyObserver = null;
-  document.querySelectorAll('[data-maintenance-empty-state]').forEach((node) => {
-    delete node.dataset.maintenanceEmptyState;
-  });
-  document.querySelectorAll('[data-maintenance-data-placeholder]').forEach((node) => node.remove());
 }
 
 function startWorkspaceBrandingMonitor() {
@@ -15919,14 +15733,7 @@ function isWorkspaceStatusText(text) {
   return Boolean(brandingName && value === brandingName);
 }
 
-function setStartupProgress(percent, statusText) {
-  setStatus(statusText);
-
-  const statusLabel = document.getElementById('startup-status-text');
-  if (statusLabel) {
-    statusLabel.textContent = statusText;
-  }
-
+function setStartupProgress(percent) {
   if (progressTimer) {
     clearInterval(progressTimer);
     progressTimer = null;
@@ -15971,151 +15778,90 @@ function setStartupProgress(percent, statusText) {
 }
 window.setStartupProgress = setStartupProgress;
 
-function getFriendlyErrorMessage(error) {
-  const msg = error ? String(error.message || error) : '';
+const STARTUP_RETRY_STORAGE_KEY = 'ctox.businessOs.startupRetry';
+const STARTUP_RETRY_CAP_MS = 60_000;
 
-  let title = 'Unerwartetes Systemproblem';
-  let description = 'Das Business OS konnte nicht vollständig geladen werden.';
-  let advice = 'Bitte versuchen Sie die Seite neu zu laden. Falls das Problem weiterhin besteht, vergewissern Sie sich, dass der CTOX-Dienst im Hintergrund läuft.';
-
-  if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || msg.includes('nativen Capability-Token')) {
-    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
-    title = `${instanceName} konnte nicht geladen werden`;
-    description = 'Die Anmeldung bei ctox.dev war erfolgreich, aber der Startlink enthält keine von der CTOX-Instanz signierte Datenberechtigung. Deshalb wurde der verwaltete Workspace sicher gestoppt.';
-    advice = 'Die ctox.dev-Desktop-Schnittstelle muss einen kurzlebigen Berechtigungsschlüssel für diese Instanz ausstellen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
-  } else if (isManagedCollectionAuthorizationError(error)) {
-    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
-    title = `${instanceName} konnte nicht geladen werden`;
-    description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
-    advice = 'Bitte die Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
-  } else if (isStartupDeadlineError(error)) {
-    title = 'Netzwerk-Zeitüberschreitung beim Start';
-    description = 'Eine benötigte Startanfrage hat nicht rechtzeitig geantwortet.';
-    advice = 'Bitte auf "Erneut versuchen" klicken. Bleibt die Meldung bestehen, prüfen Sie die Netzwerkverbindung und den CTOX-Dienst.';
-  } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
-    title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
-    description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
-    advice = 'Bitte öffnen Sie die Anwendung über http://localhost:8765/ anstelle von http://127.0.0.1:8765/. Safari stuft "localhost" als sichere Herkunft ein und schaltet die benötigten Verschlüsselungsfunktionen (WebCrypto) frei.';
-  } else if (msg.includes('pairing') || msg.includes('sync config is missing') || msg.includes('Pair this browser')) {
-    title = 'Keine Kopplung vorhanden';
-    description = 'Dieser Browser ist noch nicht mit einer aktiven CTOX-Instanz verbunden.';
-    advice = 'Bitte öffnen Sie Business OS über den bereitgestellten Link aus Ihrer CTOX-Schnittstelle oder koppeln Sie die Instanz erneut.';
-  } else if (msg.includes('IndexedDB lock') || msg.includes('timed out')) {
-    title = 'Lokaler Speicher blockiert';
-    description = 'Der lokale Browsercache hat nicht rechtzeitig geantwortet.';
-    advice = 'Die Anwendung versucht automatisch einen frischen lokalen Cache zu öffnen und neu zu synchronisieren. Falls diese Meldung erneut erscheint, bitte die Seite neu laden; die technischen Details nennen den konkreten Timeout.';
-  } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
-    title = 'Datenstruktur-Aktualisierung';
-    description = 'Die Struktur des lokalen Datenspeichers wird an die neue Version angepasst.';
-    advice = 'Der lokale Speicher wird automatisch zurückgesetzt und neu synchronisiert. Bitte klicken Sie auf "Erneut versuchen", um fortzufahren.';
-  } else if (msg.includes('modulkatalog') || msg.includes('business_module_catalog') || msg.includes('module catalog')) {
-    title = 'Systemmodule konnten nicht geladen werden';
-    description = 'Die Synchronisation der Systemmodule mit der CTOX-Hintergrundinstanz konnte nicht abgeschlossen werden.';
-    advice = 'Bitte stellen Sie sicher, dass der CTOX-Hintergrunddienst aktiv läuft und eine stabile Netzwerkverbindung besteht.';
-  } else if (msg.includes('Cannot access') && msg.includes('before initialization')) {
-    title = 'Fehler in Skript-Reihenfolge';
-    description = 'Eine Systemvariable wurde vor ihrer Initialisierung aufgerufen (Temporal Dead Zone).';
-    advice = 'Dieses Ladeproblem wurde behoben. Bitte leeren Sie den Browser-Cache und klicken Sie auf "Erneut versuchen".';
-  } else if (msg.includes('Failed to fetch dynamically imported module') || msg.includes('ctox-rxdb-js.mjs') || msg.includes('RxDB bundle import')) {
-    title = 'Business-OS-Dateien konnten nicht geladen werden';
-    description = 'Ein benötigtes CTOX-DB-Bundle fehlt, ist veraltet oder wurde vom Cache mit einer alten Version geladen.';
-    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, muss die Instanz mit den aktuellen Business-OS-Assets synchronisiert werden.';
-  } else if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('signaling')) {
-    title = 'Netzwerkverbindung fehlgeschlagen';
-    description = 'Eine Netzwerk- oder Datenverbindung konnte nicht aufgebaut werden.';
-    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, prüfen Sie die Instanzdienste und die Erreichbarkeit des Verbindungsdienstes.';
-  }
-
-  return { title, description, advice };
+function clearStartupRetryState() {
+  try { sessionStorage.removeItem(STARTUP_RETRY_STORAGE_KEY); } catch {}
 }
 
-function isManagedCollectionAuthorizationError(error) {
-  const config = launchConfigForPageSession || readUrlPairingConfig();
-  if (config?.desktop_instance?.source !== 'ctox_dev') return false;
-  return /UNAUTHORIZED: peer is not authorized for this collection/i.test(
-    String(error?.message || error || '')
-  );
+function startupRetryAttempt() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(STARTUP_RETRY_STORAGE_KEY) || '{}');
+    return Math.max(0, Number(parsed.attempt) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function startupRetryDelayMs(attempt) {
+  const exponent = Math.min(16, Math.max(0, Number(attempt) - 1));
+  return Math.min(STARTUP_RETRY_CAP_MS, 1000 * (2 ** exponent));
+}
+
+function isStartupRetryImpossible(error) {
+  const message = String(error?.message || error || '');
+  if (!globalThis.crypto?.subtle || message.includes('WebCrypto')) return true;
+  if (
+    message.includes('pairing')
+    || message.includes('sync config is missing')
+    || message.includes('Pair this browser')
+  ) return true;
+  if (isManagedCollectionAuthorizationError(error)) return true;
+  if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token')) {
+    return typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch !== 'function';
+  }
+  return false;
+}
+
+function scheduleStartupBootRetry(error) {
+  const attempt = startupRetryAttempt() + 1;
+  const delay = startupRetryDelayMs(attempt);
+  try {
+    sessionStorage.setItem(STARTUP_RETRY_STORAGE_KEY, JSON.stringify({ attempt, at: Date.now() }));
+  } catch {}
+  window.setTimeout(() => {
+    const message = String(error?.message || '');
+    if (
+      (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token'))
+      && typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
+    ) {
+      globalThis.ctoxBusinessOsDesktop.refreshManagedLaunch();
+      return;
+    }
+    window.location.reload();
+  }, delay);
+}
+
+function renderUnrecoverableStartupError() {
+  const errorCard = document.getElementById('startup-error-card');
+  if (errorCard) errorCard.hidden = false;
+  const retryBtn = document.getElementById('startup-retry-btn');
+  if (!retryBtn) return;
+  retryBtn.onclick = () => {
+    retryBtn.disabled = true;
+    clearStartupRetryState();
+    window.location.reload();
+  };
 }
 
 function showStartupError(error) {
   // A fatal startup failure must also stop companions whose imports or schema work is pending.
   cancelBusinessCompanions();
-  console.error('[business-os] bootstrap error caught:', error);
-  const errMsg = error ? (error.message || String(error)) : 'Unbekannter Fehler';
-
+  console.warn('[business-os] bootstrap error caught:', error);
+  const errorCard = document.getElementById('startup-error-card');
+  if (errorCard) errorCard.hidden = true;
   if (progressTimer) {
     clearInterval(progressTimer);
     progressTimer = null;
   }
-  currentProgress = 100;
-
-  const statusLabel = document.getElementById('startup-status-text');
-  if (statusLabel) {
-    statusLabel.textContent = 'System-Start fehlgeschlagen.';
-    statusLabel.classList.add('is-error');
+  if (isStartupRetryImpossible(error)) {
+    renderUnrecoverableStartupError();
+    return;
   }
-
-  const progressBar = document.getElementById('startup-progress-bar');
-  if (progressBar) {
-    progressBar.style.width = '100%';
-    progressBar.classList.add('is-error');
-  }
-
-  const errorBody = document.querySelector('.error-body');
-  if (errorBody) {
-    const friendly = getFriendlyErrorMessage(error);
-    errorBody.innerHTML = `
-      <div class="friendly-error-info">
-        <h4 class="friendly-error-title">${escapeHtml(friendly.title)}</h4>
-        <p class="friendly-error-description">${escapeHtml(friendly.description)}</p>
-        <div class="friendly-error-advice">
-          <strong>Empfohlene Aktion:</strong>
-          ${escapeHtml(friendly.advice)}
-        </div>
-      </div>
-      <details class="technical-details-toggle">
-        <summary>Technische Details (für Entwickler)</summary>
-        <code class="error-msg-block" id="startup-error-msg"></code>
-      </details>
-    `;
-  }
-
-  const errorMsgBlock = document.getElementById('startup-error-msg');
-  if (errorMsgBlock) {
-    errorMsgBlock.textContent = formatStartupErrorDetails(error, errMsg);
-  }
-
-  const errorCard = document.getElementById('startup-error-card');
-  if (errorCard) {
-    errorCard.removeAttribute('hidden');
-  }
-
-  const retryBtn = document.getElementById('startup-retry-btn');
-  if (retryBtn) {
-    retryBtn.onclick = async () => {
-      retryBtn.disabled = true;
-      if (
-        (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || String(error?.message || '').includes('nativen Capability-Token'))
-        && typeof window.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
-      ) {
-        retryBtn.textContent = 'Neue Berechtigung wird angefordert...';
-        window.ctoxBusinessOsDesktop.refreshManagedLaunch();
-        return;
-      }
-      retryBtn.textContent = 'Wird neu geladen...';
-      window.location.reload();
-    };
-  }
+  scheduleStartupBootRetry(error);
 }
 window.showStartupError = showStartupError;
-
-function formatStartupErrorDetails(error, errMsg = '') {
-  const message = String(error?.message || errMsg || error || 'Unbekannter Fehler');
-  const stack = String(error?.stack || '').trim();
-  if (!stack || stack === message) return message;
-  if (stack.startsWith(message)) return stack;
-  return `${message}\n\n${stack}`;
-}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -16355,31 +16101,8 @@ function filterStartMenu(panel, query) {
   }
 }
 
-function renderStartMenuLifecycleBadge(target) {
-  if (!target?.module) return '';
-  const lifecycle = appLifecycleBadge(target.module, {
-    session: state.session,
-    governance: state.governance,
-  });
-  if (!lifecycle?.runtimeInstalled) return '';
-  const title = target.title || target.id;
-  const updateDot = lifecycle.updateAvailable
-    ? `<i class="start-menu-update-dot" aria-hidden="true"></i>`
-    : '';
-  return `
-    <button
-      class="start-menu-lifecycle-badge${lifecycle.updateAvailable ? ' has-update' : ''}"
-      type="button"
-      data-module-lifecycle="${escapeHtml(target.id)}"
-      data-state="${escapeHtml(lifecycle.state)}"
-      title="${escapeHtml(lifecycle.title)}"
-      aria-label="${escapeHtml(lifecycleBadgeAriaLabel(title, lifecycle))}"
-    >
-      ${updateDot}
-      ${lifecycle.version ? `<b>${escapeHtml(lifecycle.version)}</b>` : ''}
-      <span>${escapeHtml(lifecycle.text || lifecycle.label || '')}</span>
-    </button>
-  `;
+function renderStartMenuLifecycleBadge() {
+  return '';
 }
 
 function buildStartMenuItem(target) {
@@ -16837,11 +16560,11 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
   const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
   const missingMsgLabel = lang === 'de' ? 'Nachricht fehlt.' : 'Message is missing.';
   const missingReviewerLabel = lang === 'de' ? 'Reviewer fehlt.' : 'Reviewer is missing.';
-  const chatNotReadyLabel = lang === 'de' ? 'Die Crew ist noch nicht bereit.' : 'The crew is not ready.';
+  const sendFailedLabel = lang === 'de' ? 'Senden hat nicht geklappt.' : 'Sending did not work.';
   const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Crew...' : 'Opening crew...');
   const commandOpeningLabel = lang === 'de' ? 'Sende an Threads...' : 'Sending to Threads...';
   const reviewerLabel = lang === 'de' ? 'Reviewer' : 'Reviewer';
-  const reviewerPlaceholder = lang === 'de' ? 'reviewer-user-id' : 'reviewer-user-id';
+  const reviewerPlaceholder = lang === 'de' ? 'Name oder E-Mail' : 'Name or email';
   const initialUserOptions = renderBusinessUserDatalistOptions([], { session: state.session });
 
   const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
@@ -17026,6 +16749,31 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
     textarea.style.boxShadow = 'none';
   });
 
+  const retryContextSend = (attempt = 0) => {
+    if (form.dataset.crewRetry !== '1') return;
+    if (globalCtoxContextMenuEl?.querySelector('form') !== form) return;
+    if (state.commandBus?.dispatch) {
+      form.dataset.crewRetry = '';
+      if (statusEl) statusEl.textContent = '';
+      form.requestSubmit();
+      return;
+    }
+    if (attempt >= 16) {
+      form.dataset.crewRetry = '';
+      console.warn('[business-os] crew handoff gave up waiting for the command bus');
+      if (statusEl) statusEl.textContent = sendFailedLabel;
+      return;
+    }
+    window.setTimeout(() => retryContextSend(attempt + 1), Math.min(60_000, 1000 * 2 ** Math.min(16, attempt)));
+  };
+  const waitForContextSend = () => {
+    if (form.dataset.crewRetry === '1') return;
+    form.dataset.crewRetry = '1';
+    console.warn('[business-os] crew handoff waiting for the command bus');
+    if (statusEl) statusEl.textContent = '';
+    retryContextSend(0);
+  };
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const prompt = textarea.value.trim();
@@ -17045,7 +16793,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         return;
       }
       if (!state.commandBus?.dispatch) {
-        if (statusEl) statusEl.textContent = chatNotReadyLabel;
+        waitForContextSend();
         return;
       }
       if (statusEl) statusEl.textContent = commandOpeningLabel;
@@ -17109,13 +16857,14 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         }, { until: 'local' });
         hideSubmittedMenu();
       } catch (error) {
-        if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
+        console.warn('[business-os] approval request failed', error);
+        if (statusEl) statusEl.textContent = sendFailedLabel;
       }
       return;
     }
 
     if (!state.commandBus?.dispatch) {
-      if (statusEl) statusEl.textContent = chatNotReadyLabel;
+      waitForContextSend();
       return;
     }
 
@@ -17161,7 +16910,8 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
       });
       hideSubmittedMenu();
     } catch (error) {
-      if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
+      console.warn('[business-os] crew handoff failed', error);
+      if (statusEl) statusEl.textContent = sendFailedLabel;
     }
   });
 

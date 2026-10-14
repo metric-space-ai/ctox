@@ -237,93 +237,8 @@ button {
   overflow: hidden;
 }
 
-body[data-maintenance-active="true"] .app-shell {
-  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-}
-
 .app-shell:has(> .collection-freshness-warning:not([hidden])) {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-}
-
-body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warning:not([hidden])) {
-  grid-template-rows: var(--shell-topbar-height) auto auto minmax(0, 1fr);
-}
-
-.ctox-maintenance-banner {
-  position: relative;
-  z-index: 8;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(90px, 18vw) auto;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 38px;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
-
-.ctox-maintenance-banner[hidden] {
-  display: none;
-}
-
-.ctox-maintenance-icon {
-  color: var(--accent);
-  font-size: 18px;
-  line-height: 1;
-  animation: ctox-maintenance-spin 1.4s linear infinite;
-}
-
-.ctox-maintenance-copy {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.ctox-maintenance-copy strong,
-.ctox-maintenance-copy span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ctox-maintenance-copy strong {
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
-}
-
-.ctox-maintenance-copy span {
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-
-.ctox-maintenance-progress {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 65%, transparent);
-}
-
-.ctox-maintenance-progress > span {
-  display: block;
-  width: 0;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width var(--motion-base) var(--ease-standard);
-}
-
-.ctox-maintenance-retry {
-  min-height: 28px;
-  padding: 3px var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  font-size: var(--fs-meta);
-  font-weight: 700;
 }
 
 .collection-freshness-warning {
@@ -338,56 +253,6 @@ body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warn
 
 .collection-freshness-warning[hidden] {
   display: none;
-}
-
-body[data-maintenance-status="failed"] .ctox-maintenance-banner,
-body[data-maintenance-status="stale"] .ctox-maintenance-banner {
-  border-bottom-color: color-mix(in srgb, var(--danger) 70%, var(--line));
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
-}
-
-[data-maintenance-empty-state="true"] {
-  display: none !important;
-}
-
-/* Floating toast — must never sit in the content flow or it shifts the app
-   header/content down. Overlaid at the bottom of the module content instead. */
-.ctox-maintenance-data-placeholder {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  margin: 0;
-  max-width: calc(100% - 24px);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface));
-  color: var(--text);
-  font-size: var(--fs-meta);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-  pointer-events: none;
-}
-
-@keyframes ctox-maintenance-spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 720px) {
-  .ctox-maintenance-banner {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    padding-inline: var(--space-2);
-  }
-
-  .ctox-maintenance-copy span,
-  .ctox-maintenance-progress {
-    display: none;
-  }
 }
 
 .topbar {
@@ -651,9 +516,7 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
 }
 
 .module-tab-lifecycle,
-.module-tab-version,
-.module-lifecycle-chip,
-.start-menu-lifecycle-badge {
+.module-tab-version {
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
   border-radius: 999px;
@@ -680,35 +543,26 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   cursor: pointer;
 }
 
-.module-tab-lifecycle[data-state="private"],
-.module-lifecycle-chip[data-state="private"],
-.start-menu-lifecycle-badge[data-state="private"] {
+.module-tab-lifecycle[data-state="private"] {
   border-color: color-mix(in srgb, var(--warning) 38%, var(--line));
   color: color-mix(in srgb, var(--warning) 78%, var(--text));
 }
 
-.module-tab-lifecycle[data-state="preview"],
-.module-lifecycle-chip[data-state="preview"],
-.start-menu-lifecycle-badge[data-state="preview"] {
+.module-tab-lifecycle[data-state="preview"] {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
   color: var(--accent);
 }
 
-.module-tab-lifecycle[data-state="team"],
-.module-lifecycle-chip[data-state="team"],
-.start-menu-lifecycle-badge[data-state="team"] {
+.module-tab-lifecycle[data-state="team"] {
   border-color: color-mix(in srgb, var(--success) 30%, var(--line));
   color: var(--success);
 }
 
-.module-tab-lifecycle[data-state="restricted"],
-.module-lifecycle-chip[data-state="restricted"],
-.start-menu-lifecycle-badge[data-state="restricted"] {
+.module-tab-lifecycle[data-state="restricted"] {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
   color: var(--danger);
 }
 
-.start-menu-update-dot,
 .desktop-icon-update-dot,
 .module-tab-update-dot {
   display: inline-block;
@@ -717,11 +571,6 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   border-radius: 999px;
   background: var(--accent);
   flex: 0 0 auto;
-}
-
-.start-menu-lifecycle-badge.has-update {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-  color: var(--accent);
 }
 
 .desktop-icon-update-dot {
@@ -1311,35 +1160,6 @@ body.is-resizing * {
   gap: var(--space-1);
 }
 
-.start-menu-item-meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-}
-
-.start-menu-lifecycle-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  max-width: 132px;
-  min-height: 20px;
-  padding: 0 var(--space-2);
-  cursor: pointer;
-}
-
-.start-menu-lifecycle-badge b,
-.start-menu-lifecycle-badge span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.start-menu-lifecycle-badge b {
-  color: var(--text);
-}
-
 .start-menu-item:hover .start-menu-item-label {
   color: var(--text-strong, var(--text));
 }
@@ -1501,28 +1321,6 @@ body.is-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.module-lifecycle-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: 23px;
-  max-width: 180px;
-  padding: 0 var(--space-2);
-  cursor: pointer;
-}
-
-.module-lifecycle-chip b,
-.module-lifecycle-chip span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.module-lifecycle-chip b {
-  color: var(--text);
 }
 
 .module-lifecycle-drawer .module-lifecycle-summary {
@@ -6337,25 +6135,6 @@ body[data-module-loading] .topbar {
   transition: width var(--motion-slow) var(--ease-standard), background var(--motion-slow) var(--ease-standard);
 }
 
-.startup-progress-bar.is-error {
-  width: 100% !important;
-  background: linear-gradient(90deg, var(--danger) 0%, color-mix(in srgb, var(--danger) 74%, var(--text-strong)) 100%) !important;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--danger) 60%, transparent) !important;
-}
-
-.startup-status-text {
-  font-size: var(--fs-base);
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.2px;
-  min-height: 18px;
-  transition: color var(--motion-base) var(--ease-standard);
-}
-
-.startup-status-text.is-error {
-  color: var(--danger) !important;
-}
-
 .startup-error-card {
   display: flex;
   flex-direction: column;
@@ -6380,58 +6159,11 @@ body[data-module-loading] .topbar {
   display: none !important;
 }
 
-.error-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
-  padding-bottom: var(--space-3);
-}
-
-.error-warning-icon {
-  width: 28px;
-  height: 28px;
-  color: var(--danger);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--danger) 34%, transparent));
-}
-
-.error-header h3 {
-  font-size: var(--fs-hero);
-  font-weight: 600;
-  color: var(--danger);
+.startup-error-sentence {
   margin: 0;
-}
-
-.error-body {
-  min-height: 0;
-  margin-bottom: 0;
-  overflow: auto;
-  padding-right: var(--space-1);
-}
-
-.error-body p {
   font-size: var(--fs-base);
   line-height: 1.5;
   color: var(--text);
-  margin: 0 0 var(--space-3) 0;
-}
-
-.error-msg-block {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
-  border-radius: 8px;
-  padding: var(--space-3) var(--space-4);
-  color: var(--text-strong);
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: normal;
-  overflow-wrap: anywhere;
-  max-height: min(220px, 28vh);
-  box-shadow: inset 0 2px 8px color-mix(in srgb, var(--text-strong) 10%, transparent);
 }
 
 .error-footer {
@@ -6471,14 +6203,6 @@ body[data-module-loading] .topbar {
   box-shadow: 0 2px 10px color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
-.error-retry-btn svg {
-  animation: none;
-}
-
-.error-retry-btn:hover svg {
-  animation: startup-spin 1.5s linear infinite;
-}
-
 /* Animations */
 @keyframes startup-logo-float {
   0%, 100% {
@@ -6500,81 +6224,11 @@ body[data-module-loading] .topbar {
   }
 }
 
-@keyframes startup-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 @keyframes startup-shake {
   10%, 90% { transform: translate3d(-1px, 0, 0); }
   20%, 80% { transform: translate3d(2px, 0, 0); }
   30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
   40%, 60% { transform: translate3d(4px, 0, 0); }
-}
-
-/* Friendly Error Info inside Error Card */
-.friendly-error-info {
-  margin-bottom: var(--space-4);
-}
-
-.friendly-error-title {
-  font-size: var(--fs-title);
-  font-weight: 600;
-  color: var(--danger);
-  margin: 0 0 var(--space-2) 0;
-}
-
-.friendly-error-description {
-  font-size: var(--fs-base);
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 0 0 var(--space-3) 0;
-}
-
-.friendly-error-advice {
-  font-size: var(--fs-base);
-  line-height: 1.55;
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
-  border-radius: 6px;
-  padding: var(--space-3) var(--space-4);
-  color: color-mix(in srgb, var(--danger) 82%, var(--text));
-  margin: var(--space-4) 0;
-}
-
-.friendly-error-advice strong {
-  color: var(--danger);
-  display: block;
-  margin-bottom: var(--space-1);
-  text-transform: uppercase;
-  font-size: var(--fs-meta);
-  letter-spacing: 0.09em;
-}
-
-/* Collapsible technical details panel */
-.technical-details-toggle {
-  margin-top: var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  padding-top: var(--space-3);
-}
-
-.technical-details-toggle summary {
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-  font-weight: 500;
-  outline: none;
-  transition: color var(--motion-fast) var(--ease-standard);
-}
-
-.technical-details-toggle summary:hover {
-  color: var(--text);
-}
-
-.technical-details-toggle[open] summary {
-  color: var(--danger);
-  margin-bottom: var(--space-3);
 }
 
 /* Shared UI safety and consistency pass. Keep this low-specificity so module
@@ -6747,7 +6401,7 @@ textarea::placeholder {
    Module shell chrome that app.js (commit a47f2f2ca) introduced WITHOUT its CSS.
    renderModuleAppBar()  -> .module-appbar
    renderModuleFrame()   -> auto-derived .module-loading-shadow (replaced the old
-                            per-module .module-loading-shell) + .module-loading-note
+                            per-module .module-loading-shell)
    declarative resizing  -> .ctox-column-resizer inside [data-resize-frame]
    Without these rules the app bar, the loading shell, and the resize handles
    render unstyled — a blank loading screen and ungrabbable dividers.
@@ -6898,36 +6552,13 @@ textarea::placeholder {
 .mls-icon { width: 60px; height: 60px; border-radius: 16px !important; }
 .mls-icon-label { width: 68px; height: 10px; }
 
-/* OS-snappy rule: loaders must be invisible in normal operation. The shadow
-   and note only become visible if a module switch takes longer than the
-   reveal delay (cold first load, slow network) — fast mounts never flash a
-   skeleton. CSS animations beat normal declarations, hence the !important on
-   the note-fade rule below. */
-.module-loading-shadow,
-.module-loading-note {
+/* OS-snappy rule: the skeleton stays invisible in normal operation and only
+   appears if a module switch takes longer than the reveal delay. */
+.module-loading-shadow {
   opacity: 0;
   animation: ctox-loader-reveal 1ms linear 280ms both;
 }
 @keyframes ctox-loader-reveal { to { opacity: 1; } }
-
-/* "<App> wird geladen" note, centered over the shadow; fades once the real
-   markup shadow has been injected (is-pending removed). */
-.module-loading-note {
-  position: absolute;
-  inset-block-start: 16px;
-  inset-inline: 0;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  text-align: center;
-  color: var(--muted);
-  pointer-events: none;
-}
-.module-loading-note strong { color: var(--text); font-size: var(--fs-base); }
-.module-loading-note span { font-size: var(--fs-sm); }
-.module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0 !important; animation: none !important; }
 
 /* Declarative column resizer handle. Modules put a
    `.ctox-column-resizer[data-resizer-var]` inside a `[data-resize-frame]` grid
@@ -8895,10 +8526,6 @@ button.shell-window-header-meta:focus-visible,
   /* --- Shell frame: one compact row, workspace takes the rest --- */
   .app-shell {
     grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  body[data-maintenance-active="true"] .app-shell {
-    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   /* One 48px control row plus 2x4px padding. */

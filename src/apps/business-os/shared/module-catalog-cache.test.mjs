@@ -52,10 +52,12 @@ for (const rejectOpen of [false, true]) {
     restoreWorkspaceSession: async () => {},
     markBootTiming() {},
     setWorkspaceStatus() {},
-    console: { error() {} },
+    console: { error() {}, warn() {} },
     isManagedCollectionAuthorizationError: () => false,
     showStartupError() {},
     setStatus() {},
+    moduleStartupFailed: false,
+    clearStartupRetryState() {},
     syncConfig: {},
     flushDeferredCatalogRefresh: () => {
       assert.equal(startupState.initialModuleOpened, true, 'construction readiness must precede deferred catalog release');

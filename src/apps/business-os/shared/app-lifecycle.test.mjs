@@ -414,8 +414,8 @@ test('Mail badge identifies app publication without granting access to mail data
   const options = { session: session('team_member'), governance };
   const badge = appLifecycleBadge(mail, options);
   assert.equal(badge.text, 'App privat');
-  assert.match(badge.title, /App-Sichtbarkeit: Privat/);
-  assert.match(badge.title, /Datenrechte werden separat geprüft/);
+  assert.equal(badge.title, '');
+  assert.doesNotMatch(String(badge.title), /App-Sichtbarkeit|Datenrechte werden separat|Update verfügbar/);
   assert.equal(badge.public, false);
   assert.equal(canSeeModuleForAppVersion(mail, options), false);
   const released = { ...mail, lifecycle: { ...mail.lifecycle, visibility_state: 'team', release_status: 'released' } };

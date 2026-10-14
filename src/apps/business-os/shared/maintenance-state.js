@@ -59,19 +59,6 @@ export function maintenanceRequiredCollections(moduleLike) {
     .sort();
 }
 
-export function maintenancePhaseLabel(state, locale = 'de') {
-  const de = locale !== 'en';
-  if (state?.status === 'stale') return de ? 'Upgrade unterbrochen' : 'Upgrade interrupted';
-  if (state?.status === 'failed') return de ? 'Upgrade fehlgeschlagen' : 'Upgrade failed';
-  if (state?.phase === 'waiting_collections') {
-    return de ? CTOX_MAINTENANCE_SYNC_MESSAGE : 'Data is syncing after the update';
-  }
-  if (state?.phase === 'waiting_replication') {
-    return de ? 'CTOX-Dienst aktiv · Replikation wird verbunden' : 'CTOX service active · reconnecting replication';
-  }
-  return state?.detail || (de ? CTOX_MAINTENANCE_MESSAGE : 'CTOX is being updated – your data is preserved');
-}
-
 export function isDataEmptyStateText(text) {
   const value = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
   if (!value) return false;

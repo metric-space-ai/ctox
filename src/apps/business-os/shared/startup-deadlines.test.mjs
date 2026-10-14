@@ -79,8 +79,11 @@ test('fatal startup authorization cancels pending companion work', async () => {
 
   assert.ok(authBranch >= 0, 'bootstrap must route managed authorization failures to the fatal startup error path');
   assert.ok(startupError >= 0, 'fatal startup error handler must exist');
-  const errorHandler = appSource.indexOf("console.error('[business-os] bootstrap error caught:", startupError);
-  assert.ok(cancelPending > startupError && cancelPending < errorHandler, 'fatal startup errors must cancel pending companions before error rendering');
+  const errorHandler = appSource.indexOf("console.warn('[business-os] bootstrap error caught:", startupError);
+  assert.ok(cancelPending > startupError && cancelPending < errorHandler, 'fatal startup errors must cancel pending companions before the raw error is logged');
+  assert.equal(appSource.includes('Technische Details (für Entwickler)'), false);
+  assert.match(appSource, /scheduleStartupBootRetry\(error\)/);
+  assert.match(appSource, /STARTUP_RETRY_CAP_MS = 60_000/);
 });
 
 test('the deadline wins while the request or response body is pending', async () => {
