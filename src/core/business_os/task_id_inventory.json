@@ -137,6 +137,13 @@
     },
     {
       "file": "src/core/business_os/store.rs",
+      "function": "process_news_queue_command",
+      "occurrence": 1,
+      "semantics": "execution_link",
+      "target_field": "execution_task_id"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
       "function": "process_source_parse_command",
       "occurrence": 1,
       "semantics": "execution_link",
