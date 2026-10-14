@@ -14,7 +14,36 @@ use ctox_cliproxyapi::internal::runtime::executor::{
     openai_compat_executor::{OpenAiCompatConfig, OpenAiCompatError, OpenAiCompatExecutor},
 };
 use ctox_cliproxyapi::sdk::api::handlers::openai::OpenAiResponsesGenericStream;
-use ctox_cliproxyapi::sdk::pluginapi::{HostHttpClient, ProviderExecutor};
+use ctox_cliproxyapi::sdk::pluginapi::{
+    HostHttpClient, HttpRequest, HttpResponse, HttpStreamResponse, PluginFuture, ProviderExecutor,
+};
+
+/// Observe only responses actually received by the configured provider
+/// transport. A local selection/configuration/transport failure never becomes
+/// a provider verdict. The request-local recorder retains closed metadata only.
+struct ObservedApiHttp(Arc<dyn HostHttpClient>);
+impl HostHttpClient for ObservedApiHttp {
+    fn execute<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpResponse> {
+        Box::pin(async move {
+            let response = self.0.execute(request).await?;
+            ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(
+                response.status_code,
+                &response.body,
+            );
+            Ok(response)
+        })
+    }
+    fn execute_stream<'a>(&'a self, request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
+        Box::pin(async move {
+            let response = self.0.execute_stream(request).await?;
+            ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(
+                response.status_code,
+                &[],
+            );
+            Ok(response)
+        })
+    }
+}
 
 pub(super) struct Routes {
     root: PathBuf,
@@ -154,7 +183,7 @@ fn resolve(
         key,
         version: before,
         available,
-        http,
+        http: Arc::new(ObservedApiHttp(http)),
     })
 }
 pub(super) fn build(
@@ -249,6 +278,8 @@ impl Handler {
                 ..Default::default()
             })
             .collect::<Vec<_>>();
+        let candidates =
+            ctox_cliproxyapi::internal::api::account_selection::candidates(&candidates);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

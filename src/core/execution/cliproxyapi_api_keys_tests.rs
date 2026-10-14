@@ -14,6 +14,7 @@ struct Wire {
     root: Option<PathBuf>,
     rotate: bool,
     retire_models: bool,
+    status: Option<u16>,
 }
 impl HostHttpClient for Wire {
     fn execute_stream<'a>(&'a self, _request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
@@ -43,8 +44,14 @@ impl HostHttpClient for Wire {
             )
             .unwrap();
         }
-        Box::pin(async {
-            Ok(HttpResponse { status_code: 200, headers: Default::default(), body: br#"{"id":"chatcmpl","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#.to_vec() })
+        Box::pin(async move {
+            if self.status == Some(0) {
+                return Err(
+                    Arc::new(std::io::Error::other("synthetic transport failure"))
+                        as ctox_cliproxyapi::sdk::pluginapi::PluginExecutionError,
+                );
+            }
+            Ok(HttpResponse { status_code: self.status.unwrap_or(200), headers: Default::default(), body: br#"{"id":"chatcmpl","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#.to_vec() })
         })
     }
 }
@@ -348,4 +355,85 @@ async fn owned_api_model_withdrawal_during_io_cannot_publish_success() {
     };
     assert_eq!(response.status(), 409);
     assert_eq!(wire.seen.lock().unwrap().len(), 1);
+}
+
+struct HttpFixture(Arc<Handler>);
+impl ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::OpenAiResponsesRouteHandler for HttpFixture {
+    fn handle_provider_route<'a>(&'a self,_provider:Option<&'a str>,body:&'a [u8])->std::pin::Pin<Box<dyn std::future::Future<Output=OpenAiResponsesRouteResponse>+Send+'a>> {
+        Box::pin(self.0.handle_route(body))
+    }
+}
+async fn scoped_http_request(handler: Arc<Handler>, pin: Option<&str>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body =
+        serde_json::to_vec(&serde_json::json!({"model":model_fixture(),"input":"Hi"})).unwrap();
+    let mut request=format!("POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nX-CTOX-Session-ID: ordinary-session\r\n",body.len());
+    if let Some(pin) = pin {
+        request.push_str(&format!("X-CTOX-Account: {pin}\r\n"));
+    }
+    request.push_str("\r\n");
+    let mut bytes = request.into_bytes();
+    bytes.extend(body);
+    let (mut server, mut client) = tokio::io::duplex(64 * 1024);
+    let exchange = async move {
+        let serve = async move {
+            ctox_cliproxyapi::internal::api::server::serve_responses_connection(
+                &mut server,
+                &HttpFixture(handler),
+            )
+            .await
+            .unwrap();
+        };
+        let read = async move {
+            client.write_all(&bytes).await.unwrap();
+            client.shutdown().await.unwrap();
+            let mut response = Vec::new();
+            client.read_to_end(&mut response).await.unwrap();
+            String::from_utf8(response).unwrap()
+        };
+        let (_, response) = tokio::join!(serve, read);
+        response
+    };
+    tokio::time::timeout(Duration::from_secs(5), exchange)
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn native_api_http_pin_uses_exact_account_without_rebinding_session() {
+    let (root, stored) = setup();
+    let wire = Arc::new(Wire::default());
+    let handlers = build_with_http(root.path(), &stored, wire.clone()).unwrap();
+    let handler = handlers["xai"].clone();
+    for (pin, expected) in [(None, "first"), (Some("second"), "second"), (None, "first")] {
+        let response = scoped_http_request(handler.clone(), pin).await;
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(
+            response.contains(&format!("X-CTOX-Account-Selected: {expected}\r\n")),
+            "selected-account acknowledgement differs from the requested account"
+        );
+        let seen = wire.seen.lock().unwrap();
+        let last = seen.last().unwrap();
+        assert!(
+            last.headers
+                .values()
+                .flatten()
+                .any(|value| value == &format!("Bearer fixture-credential-{expected}")),
+            "the selected account must use only its own fixture credential"
+        );
+    }
+    assert_eq!(wire.seen.lock().unwrap().len(), 3);
+}
+#[tokio::test]
+async fn native_api_http_unknown_or_disabled_pin_never_borrows_sibling_credentials() {
+    let (root, mut stored) = setup();
+    stored.config.api_key_accounts[1].disabled = true;
+    save_provider_integration_config(root.path(), stored.revision, &stored.config).unwrap();
+    let wire = Arc::new(Wire::default());
+    let handlers = build_with_http(root.path(), &stored, wire.clone()).unwrap();
+    for pin in ["missing", "second"] {
+        let response = scoped_http_request(handlers["xai"].clone(), Some(pin)).await;
+        assert!(response.starts_with("HTTP/1.1 503"));
+        assert!(!response.contains("X-CTOX-Account-Selected:"));
+    }
+    assert!(wire.seen.lock().unwrap().is_empty());
 }
