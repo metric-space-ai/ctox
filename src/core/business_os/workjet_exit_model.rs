@@ -28,7 +28,7 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workjet_exit_model_runs (
 );
 CREATE INDEX IF NOT EXISTS workjet_exit_model_project_runs ON workjet_exit_model_runs(project_id,sequence DESC);";
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
     project_id: String,
@@ -38,6 +38,8 @@ struct Request {
     resources: Option<Resources>,
     #[serde(default)]
     inputs: Option<Inputs>,
+    #[serde(default)]
+    confirm_run_id: Option<String>,
     #[serde(default, rename = "inbound_channel")]
     _inbound_channel: Option<String>,
 }
@@ -154,6 +156,20 @@ fn assessment(
         } else {
             value["status"] = json!("blocked");
             value["findings"] = json!([{"code":"required_inputs_missing","message":"The resource plan, rights, adapter or current source evidence is incomplete."}]);
+            if missing == vec!["confirmed_resource_plan"] {
+                value["findings"] = json!([{"code":"resource_proposal_requires_confirmation","message":"The complete source-backed plan is a proposal. The Owner can adopt this exact run; calculation then uses the stored inputs without another model turn."}]);
+            }
+        }
+        if !inputs.plan.confirmed {
+            let monthly_budget = (0..60)
+                .map(|i| {
+                    inputs.plan.paid_marketing[i]
+                        + inputs.plan.brand_budget[i]
+                        + inputs.plan.cash_opex[i]
+                        + inputs.plan.capex[i]
+                })
+                .fold(0.0_f64, f64::max);
+            value["resource_proposal"] = json!({"hours_per_week":inputs.plan.hours_per_week,"monthly_budget_eur":monthly_budget,"comparison_mode":inputs.plan.comparison_mode});
         }
     } else {
         value["status"] = json!(if research { "researching" } else { "blocked" });
@@ -207,6 +223,33 @@ fn persist(
         .as_of
         .as_deref()
         .context("as_of must be resolved before write")?;
+    let mut request = request.clone();
+    if let Some(proposal_run) = &request.confirm_run_id {
+        ensure!(
+            read_state(conn, &request.project_id, &owner)?["run_id"] == *proposal_run,
+            "exit proposal is stale; read the current proposal before confirming"
+        );
+        let raw: Option<String> = conn.query_row(
+            "SELECT inputs_json FROM workjet_exit_model_runs WHERE run_id=?1 AND project_id=?2 AND owner_user_id=?3 AND inputs_json IS NOT NULL",
+            params![proposal_run, request.project_id, owner], |row| row.get(0)
+        ).optional()?;
+        let raw = raw
+            .context("exit proposal has no complete researched plan; refresh the research first")?;
+        ensure!(
+            raw.len() <= 512 * 1024,
+            "stored exit inputs exceed read budget"
+        );
+        let mut inputs: Inputs = serde_json::from_str(&raw)?;
+        ensure!(!inputs.plan.confirmed, "exit plan is already confirmed");
+        inputs.plan.confirmed = true;
+        let missing = engine::validate(&inputs, as_of)?;
+        ensure!(
+            missing.is_empty(),
+            "exit proposal is not confirmable: {}",
+            missing.join(", ")
+        );
+        request.inputs = Some(inputs);
+    }
     let mut value = assessment(
         &request.project_id,
         run_id,
@@ -215,6 +258,9 @@ fn persist(
         request.resources.as_ref(),
         research_command.is_some(),
     )?;
+    if let Some(proposal_run) = &request.confirm_run_id {
+        value["confirmed_from_run_id"] = json!(proposal_run);
+    }
     if request.resources.is_none() {
         let previous = read_state(conn, &request.project_id, &owner)?;
         if let Some(proposal) = previous.get("resource_proposal") {
@@ -291,12 +337,12 @@ fn admit_research(
         .allowed,
         "exit research owner may not create CTOX tasks"
     );
-    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Resource PROPOSAL only: {}. No hidden budget allocations; obtain a confirmed 60-month committed_plan, transferable rights and source-backed conditional scenarios. Do not make up numbers or sources, contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,serde_json::to_string(&resources)?);
+    let mut goal=format!("Research project {} exit proceeds as of {} over 60 calendar months. Resource PROPOSAL only: {}. No hidden budget allocations; propose a complete 60-month committed_plan with confirmed=false, transferable rights and source-backed conditional scenarios. Do not make up numbers or sources, contact people, buy data, deploy, or schedule recurring work. Use authorized project evidence and public primary sources. Return ONLY one JSON object {{\"exit_model_inputs\":<Inputs object>}} conforming to docs/workjet-exit-model.md, or {{\"exit_model_blocked\":{{\"missing_inputs\":[<explicit gaps>]}}}}. Use adapter saas_reference_v1 only for qualifying recurring software; terminal_equity_grid_v1 requires independently sourced terminal equity prices and already includes failed/no-sale states. Unsupported game/IP economics stay blocked. Sources retain observed_at, valid_until and kind; assumptions are never observations. The calculation engine, not your prose, computes E5.",request.project_id,as_of,serde_json::to_string(&resources)?);
     if resources.is_none() {
-        goal.push_str(" No resource plan or proposal is recorded. Research a reasoned resource proposal from this project\'s real goal, phase, team and budget evidence; do not insert generic example numbers. Return resource_proposal {hours_per_week,monthly_budget_eur,comparison_mode} and resource_proposal_reason (nonempty, <=2048 chars) alongside exit_model_blocked. This is a proposal, never owner confirmation; if evidence is absent name the missing inputs instead. The native store retains the proposal for an owner correction/confirmation and a later refresh.");
+        goal.push_str(" No resource plan or proposal is recorded. Research a reasoned resource proposal from this project\'s real goal, phase, team and budget evidence; do not insert generic example numbers. Return resource_proposal {hours_per_week,monthly_budget_eur,comparison_mode} and resource_proposal_reason (nonempty, <=2048 chars) alongside exit_model_inputs with a complete researched plan (confirmed=false) and sourced scenarios; use exit_model_blocked only if real evidence is missing. This is a proposal, never owner confirmation; if evidence is absent name the missing inputs instead. The native store retains the proposal for an owner correction/confirmation and a later refresh.");
     }
     goal.push_str(" Research relevant project factors: addressable/servable market, demand and willingness to pay, competitors and defensible moat, acquisition/distribution access and conversion, retention, brand white space and trust, technical feasibility and milestones, team/development/sales/onboarding/service capacity, costs and committed financing, transferable IP/data/licence rights, founder replacement, buyer classes, comparable control-sale prices and sale probability including failed/unsold peers. Translate evidence into explicit operating assumptions, not a score-to-Euro multiplier. Distinguish observations, derivations, priors and unknowns. Keep alternative buyer routes exclusive and avoid double-counting cash, brand, technology or synergy.");
-    goal.push_str(" Plan fields: version,mode=committed_plan,comparison_mode,confirmed,hours_per_week,assumptions:string[],source_ids:string[],opening_customers,opening_cash,paid_marketing,brand_budget,cash_opex,equity_funding,capex,sales_capacity,onboarding_capacity,service_capacity,reserve_months,tax_proxy. All eight monthly arrays require 60 finite nonnegative values. Sources: id,reference,observed_at,valid_until,kind=observed|derived|assumed. Inputs fields: adapter,sale_perimeter=100_percent_equity_before_fees_and_personal_tax,rights_confirmed,perimeter_source_ids,sources,plan,scenarios,outcomes,build_probability,technical_failure_sale_probability,technical_failure_equity_price,probability_source_ids. SaaS scenarios: name,source_ids,weight_given_build,launch_month,sales_lag,sam0,sam_annual_growth,cpl,conversion,organic_leads0,organic_annual_growth,logo_churn,arpa0,arpa_annual_growth,gross_margin,brand0,brand_ceiling,brand_speed,brand_reference_budget,brand_organic_lift,brand_price_lift,multiple_basis=ARR|LTM_REVENUE|EBITDA,multiple,sale_probability,debt_like_exit,wc_adjustment,failure_sale_probability,failure_equity_price. Grid outcomes: state,probability,sale_probability,equity_price_eur,source_ids; no additional build risk. Never claim owner confirmation from your own proposal.");
+    goal.push_str(" Plan fields: version,mode=committed_plan,comparison_mode,confirmed,hours_per_week,assumptions:string[],source_ids:string[],opening_customers,opening_cash,paid_marketing,brand_budget,cash_opex,equity_funding,capex,sales_capacity,onboarding_capacity,service_capacity,reserve_months,tax_proxy. All eight monthly arrays require 60 finite nonnegative values. Sources: id,reference,observed_at,valid_until,kind=observed|derived|assumed. Inputs fields: adapter,sale_perimeter=100_percent_equity_before_fees_and_personal_tax,rights_confirmed,perimeter_source_ids,sources,plan,scenarios,outcomes,build_probability,technical_failure_sale_probability,technical_failure_equity_price,probability_source_ids. SaaS scenarios: name,source_ids,weight_given_build,launch_month,sales_lag,sam0,sam_annual_growth,cpl,conversion,organic_leads0,organic_annual_growth,logo_churn,arpa0,arpa_annual_growth,gross_margin,brand0,brand_ceiling,brand_speed,brand_reference_budget,brand_organic_lift,brand_price_lift,multiple_basis=ARR|LTM_REVENUE|EBITDA,multiple,sale_probability,debt_like_exit,wc_adjustment,failure_sale_probability,failure_equity_price. Grid outcomes: state,probability,sale_probability,equity_price_eur,source_ids; no additional build risk. Never claim owner confirmation from your own proposal; always set plan.confirmed=false. The Owner confirms the stored complete plan with one submit using confirm_run_id.");
     let accepted = store::accept_rxdb_business_command_with_origin(
         root,
         json!({"id":operation,"module":"ctox","command_type":"ctox.workjet.project.supervisor.turn.submit","record_id":request.project_id,"payload":{"project_id":request.project_id,"thread_id":thread,"goal":goal},"client_context":{"actor":super::threads::actor_payload(&session),"source":"native-workjet-exit-research"}}),
@@ -415,6 +461,13 @@ pub(super) fn handle_command(
         "record_id must match project_id"
     );
     let kind = command.command_type.as_str();
+    if request.confirm_run_id.is_some() {
+        ensure!(
+            kind == "ctox.workjet.exit_model.submit"
+                && request.inputs.is_none() && request.resources.is_none() && request.as_of.is_none(),
+            "confirm_run_id requires submit with project_id only; inputs/resources/as_of cannot override the stored proposal"
+        );
+    }
     if kind == "ctox.workjet.exit_model.read" {
         ensure!(
             request.inputs.is_none() && request.resources.is_none() && request.as_of.is_none(),
@@ -448,7 +501,7 @@ pub(super) fn handle_command(
     // Cross-process project admission fence covers active-turn inspection,
     // durable queue admission and mapping commit. It never holds a SQLite
     // transaction while the nested producer writes to the same store.
-    let _research_fence = if kind.ends_with(".refresh") {
+    let _research_fence = if kind.ends_with(".refresh") || request.confirm_run_id.is_some() {
         let directory = root.join("state/workjet-exit-model-admission");
         std::fs::create_dir_all(&directory)?;
         let file = std::fs::OpenOptions::new()
@@ -462,6 +515,12 @@ pub(super) fn handle_command(
     } else {
         None
     };
+    if let Some(proposal_run) = &request.confirm_run_id {
+        ensure!(
+            !proposal_run.trim().is_empty() && proposal_run.len() <= 256,
+            "invalid confirm_run_id"
+        );
+    }
     if kind.ends_with(".refresh")
         && command.origin == CommandOrigin::TrustedLocal
         && command.client_context["source"] == AUTOSTART_SOURCE
@@ -490,11 +549,13 @@ pub(super) fn handle_command(
             request.resources.is_none(),
             "submit resources belong in the typed 60-month plan"
         );
-        let inputs = request
-            .inputs
-            .as_ref()
-            .context("submit requires researched inputs")?;
-        engine::validate(inputs, request.as_of.as_deref().unwrap())?;
+        if request.confirm_run_id.is_none() {
+            let inputs = request
+                .inputs
+                .as_ref()
+                .context("submit requires researched inputs")?;
+            engine::validate(inputs, request.as_of.as_deref().unwrap())?;
+        }
         (
             stable_id("exit_run", &[&owner, operation_id(command)?]),
             None,
@@ -568,13 +629,15 @@ pub(super) fn complete_research(
             let Some(proposal) = original
                 .get("resource_proposal")
                 .cloned()
+                .or_else(|| parsed.as_ref()?.get("resource_proposal").cloned())
                 .and_then(|v| serde_json::from_value::<Resources>(v).ok())
             else {
                 return false;
             };
             // The owner controls resource bounds. A researcher may explicitly
             // propose allocations, but cannot enlarge the approved proposal.
-            inputs.plan.hours_per_week <= proposal.hours_per_week
+            proposal.validate().is_ok()
+                && inputs.plan.hours_per_week <= proposal.hours_per_week
                 && inputs.plan.comparison_mode == proposal.comparison_mode
                 && (0..60).all(|i| {
                     inputs.plan.paid_marketing[i]
@@ -584,7 +647,9 @@ pub(super) fn complete_research(
                         <= proposal.monthly_budget_eur + 1e-8
                 })
         });
-    if let Some(inputs) = valid_inputs {
+    if let Some(mut inputs) = valid_inputs {
+        // A research turn can propose, never impersonate Owner confirmation.
+        inputs.plan.confirmed = false;
         let session = store::active_domain_recovery_session(root, &owner)?;
         let operation = stable_id("exit_research_result", &[&run]);
         let accepted = store::accept_rxdb_business_command_with_origin(

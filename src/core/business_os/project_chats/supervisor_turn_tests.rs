@@ -119,6 +119,66 @@ fn exit_autostart_skips_archived_projects_and_rejects_revoked_owner() -> anyhow:
     }
     Ok(())
 }
+
+#[test]
+fn exit_autostart_researched_plan_without_prior_resources_can_be_adopted_once() -> anyhow::Result<()>
+{
+    let root = super::weekly_reports::fixture()?;
+    crate::business_os::refresh_due_workjet_exit_models(root.path())?;
+    let conn = open_store(root.path())?;
+    let research: String = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+        [],
+        |row| row.get(0),
+    )?;
+    drop(conn);
+    let inputs = crate::business_os::workjet_exit_model_engine::fixture();
+    crate::business_os::workjet_exit_model::complete_research(root.path(), &research,
+        &json!({"exit_model_inputs":inputs,"resource_proposal":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"},"resource_proposal_reason":"Test-only source-backed plan from the fixture; not production project data."}).to_string())?;
+    let conn = open_store(root.path())?;
+    let proposal = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
+    assert_eq!(
+        proposal["missing_inputs"],
+        json!(["confirmed_resource_plan"])
+    );
+    assert_eq!(proposal["plan_summary"]["confirmed"], false);
+    assert!(proposal["resource_proposal"].is_object());
+    assert!(proposal["result"].is_null());
+    let command = json!({"id":"exit-adopt-complete","module":"ctox","command_type":"ctox.workjet.exit_model.submit","record_id":"project","payload":{"project_id":"project","confirm_run_id":proposal["run_id"]},"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}});
+    let started = std::time::Instant::now();
+    let confirmed = crate::business_os::command_plane::accept_rxdb_business_command(
+        root.path(),
+        command.clone(),
+    )?;
+    eprintln!(
+        "EXIT_CONFIRM_FIXTURE_ELAPSED_MS={}",
+        started.elapsed().as_millis()
+    );
+    assert_eq!(confirmed["status"], "completed", "{confirmed}");
+    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        confirmed["result"]["assessment"]["result"]["expected_exit_equity_eur"],
+        8050.0
+    );
+    assert!(!confirmed["result"]["assessment"]["scenarios"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        crate::business_os::command_plane::accept_rxdb_business_command(root.path(), command)?
+            ["result"],
+        confirmed["result"]
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?,
+        1
+    );
+    Ok(())
+}
 #[test]
 fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Result<()> {
     let root = super::weekly_reports::fixture()?;
@@ -165,7 +225,26 @@ fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Resu
     )?;
     let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
     ensure!(state["status"] == "completed", "read failed: {state}");
-    assert_eq!(state["result"]["assessment"]["status"], "provisional");
+    assert_eq!(state["result"]["assessment"]["status"], "blocked");
+    assert_eq!(
+        state["result"]["assessment"]["plan_summary"]["confirmed"],
+        false
+    );
+    assert!(state["result"]["assessment"]["result"].is_null());
+    let confirmation =
+        json!({"project_id":"project","confirm_run_id":state["result"]["assessment"]["run_id"]});
+    let confirmed = exit("exit-confirm", "submit", confirmation.clone())?;
+    assert_eq!(confirmed["status"], "completed", "{confirmed}");
+    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+    assert_eq!(
+        exit("exit-confirm", "submit", confirmation)?["result"],
+        confirmed["result"]
+    );
+    let state = exit(
+        "exit-confirmed-read",
+        "read",
+        json!({"project_id":"project"}),
+    )?;
     assert_eq!(
         state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
         8050.0

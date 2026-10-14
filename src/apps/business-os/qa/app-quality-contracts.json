@@ -354,6 +354,18 @@
       ]
     },
     {
+      "id": "news",
+      "archetype": "timeline-thread",
+      "variant": "topic-feed",
+      "business_story": "Themen mit Quellen und Rhythmus anlegen, Ausgaben erzeugen lassen und den Feed lesen",
+      "required_actions": [
+        "create",
+        "filter",
+        "edit",
+        "run"
+      ]
+    },
+    {
       "id": "notes",
       "archetype": "editor-document",
       "variant": "text-editor",

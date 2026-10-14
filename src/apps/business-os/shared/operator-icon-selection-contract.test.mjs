@@ -15,7 +15,7 @@ const manifestPath = resolve(
 );
 const registryPath = resolve(businessOsRoot, 'modules/registry.json');
 
-test('all 34 operator-selected raster icons are hash-bound and registered', async () => {
+test('all 35 operator-selected raster icons are hash-bound and registered', async () => {
   const [manifest, registry] = await Promise.all([
     readFile(manifestPath, 'utf8').then(JSON.parse),
     readFile(registryPath, 'utf8').then(JSON.parse),
@@ -23,9 +23,9 @@ test('all 34 operator-selected raster icons are hash-bound and registered', asyn
 
   assert.equal(manifest.schema, 'workjet.operator-icon-selection.v1');
   assert.equal(manifest.assetKind, 'raster-reference');
-  assert.equal(manifest.count, 34);
-  assert.equal(manifest.icons.length, 34);
-  assert.equal(new Set(manifest.icons.map(({ appId }) => appId)).size, 34);
+  assert.equal(manifest.count, 35);
+  assert.equal(manifest.icons.length, 35);
+  assert.equal(new Set(manifest.icons.map(({ appId }) => appId)).size, 35);
   assert.deepEqual(Object.keys(OPERATOR_ICON_SELECTION).sort(), manifest.icons.map(({ appId }) => appId).sort());
 
   for (const icon of manifest.icons) {

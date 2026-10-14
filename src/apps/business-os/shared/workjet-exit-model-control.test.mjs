@@ -47,3 +47,14 @@ test('exit resource proposal has no implicit defaults or hidden allocations', as
     await assert.rejects(fixture().invoke({ ...request, resources }), /Invalid exit resource/);
   }
 });
+
+test('exit confirmation submits the stored run once without accepting input overrides', async () => {
+  const request = { action: 'project.exit_model.submit', commandId: 'adopt-1', projectId: 'p1', confirmRunId: 'proposal-1' };
+  const f = fixture(); await f.invoke(request);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.commands[0].payload)), { project_id: 'p1', confirm_run_id: 'proposal-1' });
+  assert.equal(f.commands[0].command_type, 'ctox.workjet.exit_model.submit');
+  for (const key of ['inputs', 'resources', 'asOf']) await assert.rejects(fixture().invoke({ ...request, [key]: {} }), /cannot override/);
+  await assert.rejects(fixture().invoke({ ...request, confirmRunId: '' }), /confirmRunId/);
+  await assert.rejects(fixture().invoke({ ...request, action: 'project.exit_model.read' }), /identity only/);
+  await assert.rejects(fixture().invoke({ ...request, action: 'project.exit_model.refresh' }), /cannot submit/);
+});
