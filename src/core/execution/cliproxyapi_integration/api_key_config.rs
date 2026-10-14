@@ -50,6 +50,11 @@ pub struct ApiKeyAccountConfig {
     pub id: String,
     pub endpoint: ApiKeyEndpoint,
     pub api_key_secret: ProviderSecretRef,
+    /// Holder-private verified owner and idempotent creation nonce; never caller claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_operation: Option<String>,
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
@@ -71,6 +76,16 @@ impl ApiKeyAccountConfig {
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
         {
             return Err(Error::InvalidAccountId);
+        }
+        match (&self.owner_user_id, &self.creation_operation) {
+            (None, None) => {}
+            (Some(owner), Some(operation))
+                if !owner.is_empty()
+                    && owner.len() <= 512
+                    && owner.trim() == owner
+                    && !owner.chars().any(char::is_control)
+                    && uuid::Uuid::parse_str(operation).is_ok() => {}
+            _ => return Err(Error::InvalidAccountId),
         }
         self.api_key_secret.validate()?;
         if self.api_key_secret.scope != "provider-api-keys" {

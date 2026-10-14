@@ -173,10 +173,52 @@ fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
         .collect()
 }
 
+/// Read only holder-private configuration and secret generation metadata. Legacy
+/// unowned accounts are never silently adopted by an arbitrary administrator.
+fn owned_api_observations(root: &Path) -> Result<Vec<(String, NativeAccountObservation)>> {
+    use sha2::{Digest, Sha256};
+    let config = crate::execution::cliproxyapi_integration::load_provider_integration_config(root)?;
+    ensure!(
+        config.config.api_key_accounts.len() <= MAX_ACCOUNTS,
+        "native account limit exceeded"
+    );
+    config
+        .config
+        .api_key_accounts
+        .iter()
+        .filter_map(|account| account.owner_user_id.as_ref().map(|owner| (owner, account)))
+        .map(|(owner, account)| {
+            account.validate()?;
+            let version = crate::secrets::secret_record_content_version(
+                root,
+                &account.api_key_secret.scope,
+                &account.api_key_secret.name,
+            )?;
+            let fingerprint = version.as_ref().map(|version| {
+                let mut digest = Sha256::new();
+                digest.update(serde_json::to_vec(account).expect("private account serializes"));
+                digest.update([0]);
+                digest.update(version.as_bytes());
+                format!("{:x}", digest.finalize())
+            });
+            Ok((
+                owner.clone(),
+                NativeAccountObservation {
+                    provider: account.endpoint.provider().into(),
+                    local_account_id: account.id.clone(),
+                    enabled: !account.disabled,
+                    credential_ready: version.is_some(),
+                    private_binding: fingerprint,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// The command plane supplies a currently authorized session actor. Validate
 /// the current actor again in the domain transaction, then resolve only a
 /// verified managed alias. No owner field can be supplied in the payload.
-fn management_owner(conn: &Connection, actor: &str) -> Result<String> {
+pub(in crate::business_os) fn management_owner(conn: &Connection, actor: &str) -> Result<String> {
     let allowed: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM business_users
          WHERE user_id=?1 AND active=1 AND role IN ('chef','admin'))",
@@ -247,24 +289,33 @@ pub(super) fn handle_command(
                 accounts.len() <= MAX_ACCOUNTS,
                 "native account limit exceeded"
             );
+            let api_accounts = owned_api_observations(root)?;
             let mut conn = store::open_store(root)?;
-            let applied = admitted.apply(&mut conn, |tx| {
-                let owner = management_owner(tx, actor)?;
-                let now = store::now_ms() as i64;
-                // Unsupported/unreadable main routes do not erase the last
-                // observation or prevent independent subscription adoption.
-                if let Ok(current) = &inherited {
-                    retire_inherited_route(
-                        tx,
-                        &owner,
-                        &holder,
-                        current.as_ref().map(|metadata| metadata.provider.as_str()),
-                        now,
-                    )?;
-                }
-                adopt(tx, &owner, &holder, &accounts, now)?;
-                projection::applied(tx, &owner)
-            })?;
+            let applied =
+                admitted.apply(&mut conn, |tx| {
+                    let owner = management_owner(tx, actor)?;
+                    accounts.extend(api_accounts.into_iter().filter_map(
+                        |(account_owner, account)| (account_owner == owner).then_some(account),
+                    ));
+                    ensure!(
+                        accounts.len() <= MAX_ACCOUNTS,
+                        "native account limit exceeded"
+                    );
+                    let now = store::now_ms() as i64;
+                    // Unsupported/unreadable main routes do not erase the last
+                    // observation or prevent independent subscription adoption.
+                    if let Ok(current) = &inherited {
+                        retire_inherited_route(
+                            tx,
+                            &owner,
+                            &holder,
+                            current.as_ref().map(|metadata| metadata.provider.as_str()),
+                            now,
+                        )?;
+                    }
+                    adopt(tx, &owner, &holder, &accounts, now)?;
+                    projection::applied(tx, &owner)
+                })?;
             Ok(applied.result)
         }
         "ctox.workjet.providers.observe_native" => {

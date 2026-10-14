@@ -879,6 +879,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
     super::rxdb_peer_dictation::CAPABILITY,
     super::rxdb_peer_grok::CAPABILITY,
+    super::rxdb_peer_provider_api_keys::CAPABILITY,
     CTOX_COMMAND_LIFECYCLE_CAPABILITY,
 ];
 /// Standby reconciliation is a safety net, not the normal data path. Runtime
@@ -3156,6 +3157,7 @@ async fn run_native_peer(
                 super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
                 super::rxdb_peer_dictation::register(pool, &root)?;
                 super::rxdb_peer_grok::register(pool, &root)?;
+                super::rxdb_peer_provider_api_keys::register(pool, &root)?;
                 let calendar_read_root = root.clone();
                 pool.register_auxiliary_request_handler(
                     super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
