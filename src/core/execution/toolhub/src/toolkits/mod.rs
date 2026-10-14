@@ -16,7 +16,6 @@ pub mod calendly;
 pub mod sharepoint;
 pub mod twilio;
 pub mod brevo;
-pub mod box_storage;
 pub mod onedrive;
 pub mod todoist;
 pub mod freshdesk;
@@ -71,7 +70,6 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(sharepoint::SharePoint::default()),
         Box::new(twilio::Twilio::default()),
         Box::new(brevo::Brevo::default()),
-        Box::new(box_storage::BoxStorage::default()),
         Box::new(onedrive::OneDrive::default()),
         Box::new(todoist::Todoist::default()),
         Box::new(freshdesk::Freshdesk::default()),
