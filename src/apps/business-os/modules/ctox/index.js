@@ -88,7 +88,6 @@ const labels = {
     shape_square: "eckig",
     shape_triangle: "Dreieck",
     retryLoad: "Erneut laden",
-    syncDisconnected: "Verbindung unterbrochen – die Anzeige kann veraltet sein",
     openInChat: "Im Chat öffnen",
     zoomOut: "Verkleinern",
     zoomIn: "Vergrößern",
@@ -262,7 +261,7 @@ const labels = {
     tasksImported: "{count} Aufgaben importiert.",
     taskImportFailed: "Import fehlgeschlagen – die Datei enthält keine lesbaren Aufgaben.",
     noWorkHere: 'Hier liegt gerade keine Arbeit.',
-    syncingTasks: "Aufgaben werden aktualisiert.",
+    syncingTasks: "Wird geladen …",
     noRecentWork: 'Noch keine aktuelle Arbeit erfasst.',
     noMetrics: "noch keine Verbrauchsdaten",
     routing: "Zuordnung",
@@ -383,7 +382,6 @@ const labels = {
     shape_square: "square",
     shape_triangle: "triangle",
     retryLoad: "Reload",
-    syncDisconnected: "Disconnected – the view may be out of date",
     openInChat: "Open in chat",
     zoomOut: "Zoom out",
     zoomIn: "Zoom in",
@@ -557,7 +555,7 @@ const labels = {
     tasksImported: '{count} tasks imported.',
     taskImportFailed: 'Import failed — no importable tasks in the file.',
     noWorkHere: 'No work here right now.',
-    syncingTasks: 'Syncing tasks.',
+    syncingTasks: 'Loading …',
     noRecentWork: 'No recent work recorded yet.',
     noMetrics: 'no live token metrics',
     routing: "Assignment",
@@ -1106,23 +1104,32 @@ function dataState(state) {
 
 function dataStatusMarkup(state) {
   const status = dataState(state);
-  if (status.kind === 'ready') return '';
-  const message = status.kind === 'restricted'
-    ? `${labels[state.lang].tasks}: ${labels[state.lang].notPermittedForRole}`
-    : labels[state.lang]['dataState_' + status.kind] || labels[state.lang].loadingRuntime;
-  const retry = status.kind === 'error'
-    ? ` <button type="button" class="ctox-button is-small" data-ctox-retry-load>${escapeHtml(labels[state.lang].retryLoad)}</button>`
-    : '';
-  return `<span data-ctox-data-state="${status.kind}" role="${status.kind === 'error' ? 'alert' : 'status'}">${escapeHtml(message)}${status.reason ? ` <small class="ctox-data-state-reason" title="${escapeAttr(status.reason)}">${escapeHtml(status.reason)}</small>` : ''}</span>${retry}`;
+  const t = labels[state.lang];
+  if (status.kind === 'ready' || status.kind === 'loading' || status.kind === 'offline') return '';
+  if (status.kind === 'restricted') {
+    return `<span data-ctox-data-state="restricted" role="status">${escapeHtml(`${t.tasks}: ${t.notPermittedForRole}`)}</span>`;
+  }
+  if (state.dataError === t.notPermittedForRole) {
+    return `<span data-ctox-data-state="error" role="status">${escapeHtml(t.notPermittedForRole)}</span>`;
+  }
+  if (status.kind === 'idle') {
+    const message = t.dataState_idle || '';
+    return message
+      ? `<span data-ctox-data-state="idle" role="status">${escapeHtml(message)}</span>`
+      : '';
+  }
+  if (status.kind === 'error') {
+    return `<button type="button" class="ctox-button is-small" data-ctox-retry-load>${escapeHtml(t.retryLoad)}</button>`;
+  }
+  return '';
 }
 
 function showDataError(state, error) {
   if (state.disposed) return;
   const message = error?.message || String(error);
-  // A read the peer refuses is a role question, not a broken store: say so
-  // in the owner's words and keep the raw code in the tooltip.
+  console.warn('[ctox] data load failed', message);
   state.dataError = /UNAUTHORIZED|not authorized/i.test(message)
-    ? `${labels[state.lang].notPermittedForRole} (${message.split(':')[0].trim()})`
+    ? labels[state.lang].notPermittedForRole
     : message;
   // Keep the last successful model, selection and task list when a read fails.
   if (state.model) render(state);
@@ -1337,17 +1344,13 @@ function syncHarnessHealthUiState(state) {
   const harness = state.ctx.host.querySelector('[data-ctox-harness]');
   if (!harness) return;
   const health = state.harnessHealth || deriveHarnessHealth(state);
-  const title = harnessHealthTitle(state, health);
-  const message = harnessHealthMessage(state, health);
-  const detail = health.severity === 'ok' ? title : `${title}: ${message}`;
   harness.dataset.harnessHealth = health.severity;
-  harness.title = detail;
-  harness.setAttribute('aria-label', detail);
+  harness.removeAttribute('title');
   harness.classList.toggle('has-critical-harness', health.severity === 'critical');
   harness.classList.toggle('has-warning-harness', health.severity === 'warning');
   harness.querySelectorAll('[data-harness-health-tooltip]').forEach((element) => {
-    element.title = detail;
-    element.setAttribute('aria-label', detail);
+    element.removeAttribute('title');
+    element.removeAttribute('aria-label');
   });
 }
 
@@ -1379,32 +1382,10 @@ function harnessHealthMessage(state, health) {
 }
 
 function updateHarnessHealthAlerts(state) {
-  const health = state.harnessHealth || deriveHarnessHealth(state);
   const notifications = state.ctx?.notifications;
-  if (!notifications?.show) return;
-  if (!health || health.severity !== 'critical') {
-    if (state.harnessToastId && notifications.close) notifications.close(state.harnessToastId);
-    state.harnessToastId = '';
-    state.harnessToastKey = '';
-    return;
-  }
-  const key = `${health.reason}:${health.waitingCount}:${health.focusTaskId}`;
-  if (state.harnessToastId && state.harnessToastKey === key) return;
-  if (state.harnessToastId && notifications.close) notifications.close(state.harnessToastId);
-  state.harnessToastKey = key;
-  state.harnessToastId = notifications.show({
-    type: 'error',
-    icon: '!',
-    title: harnessHealthTitle(state, health),
-    message: harnessHealthMessage(state, health),
-    time: 0,
-    action: health.focusTaskId
-      ? {
-          label: labels[state.lang].harnessOpenTask,
-          callback: () => selectTask(state, health.focusTaskId, { drawer: true, center: true }),
-        }
-      : null,
-  });
+  if (state.harnessToastId && notifications?.close) notifications.close(state.harnessToastId);
+  state.harnessToastId = '';
+  state.harnessToastKey = '';
 }
 
 function interpolateLabel(template, values) {
@@ -2110,15 +2091,10 @@ function statusBadgeVariant(tone) {
 }
 
 function friendlyWebStackStatus(webStack, t) {
-  if (webStack?.loading) return t.webStackLoading;
+  if (webStack?.loading) return '';
   const raw = String(webStack?.error || '').trim();
-  if (!raw) return webStack?.notice || t.webStackRxdbOnly;
-  const lower = raw.toLowerCase();
-  if (lower.includes('projection is not available') || lower.includes('rxdb')) return t.webStackConnecting;
-  if (lower.includes('not available') || lower.includes('unavailable')) return t.webStackUnavailable;
-  if (lower.includes('command bus')) return t.webStackConnecting;
-  // Unknown error shape — never surface raw stack/projection error text in the UI.
-  return t.webStackUnavailable;
+  if (raw) return '';
+  return webStack?.notice || t.webStackRxdbOnly;
 }
 
 function webStackProjectionMissing(webStack) {
@@ -2183,18 +2159,16 @@ function webStackPanel(state) {
 
   const friendlyStatus = friendlyWebStackStatus(webStack, t);
   const projectionMissing = webStackProjectionMissing(webStack);
-  const headerSummary = webStack.loading
-    ? t.webStackLoading
-    : projectionMissing
-      ? t.webStackSyncRequired
-      : `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`;
-  const statusTone = webStack.error ? 'is-warning' : (webStack.notice ? 'is-info' : '');
+  const headerSummary = !webStack.loading && !projectionMissing
+    ? `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`
+    : '';
+  const statusTone = webStack.notice && !webStack.error ? 'is-info' : '';
   return `
     <section class="ctox-web-stack-panel ctox-context-item" data-webstack-panel data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack" ${state.webStackPanelOpen ? '' : 'hidden'}>
       <header class="ctox-pane-title-row ctox-web-stack-head">
         <div class="ctox-pane-titles ctox-web-stack-head-titles">
           <span class="ctox-pane-kicker">${escapeHtml(t.webStack)}</span>
-          <strong class="ctox-badge ${statusTone}">${escapeHtml(headerSummary)}</strong>
+          ${headerSummary ? `<strong class="ctox-badge ${statusTone}">${escapeHtml(headerSummary)}</strong>` : ''}
         </div>
         <div class="ctox-pane-actions ctox-web-stack-head-actions">
           <button type="button" class="ctox-pane-icon" data-webstack-check-projection aria-label="${escapeAttr(t.webStackCheckProjection)}" title="${escapeAttr(t.webStackCheckProjection)}">${actionIcon(state, 'refresh')}</button>
@@ -2202,11 +2176,10 @@ function webStackPanel(state) {
         </div>
       </header>
       <div class="ctox-web-stack-body">
-        <div class="ctox-callout ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</div>
-        ${projectionMissing ? `<div class="ctox-callout is-info ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</div>` : ''}
+        ${friendlyStatus ? `<div class="ctox-callout ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</div>` : ''}
         ${hasCredentialOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
         <div class="ctox-web-stack-source-list">
-          ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
+          ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}</small>`}
         </div>
         <div class="ctox-web-stack-capture-list">
           <span>${escapeHtml(t.webStackRecentCaptures)}</span>
@@ -2465,7 +2438,7 @@ function taskStatusSteps(task, state) {
 function taskHistoryPermissionNotice(state) {
   if (!state.taskHistoryUnavailable?.size) return '';
   const t = labels[state.lang];
-  return `<span class="ctox-history-connection" data-task-history-unavailable role="status" title="${escapeAttr(`COLLECTION_READ_FORBIDDEN: ${[...state.taskHistoryUnavailable].join(', ')}`)}">${escapeHtml(`${t.timeline}: ${t.notPermittedForRole}`)}</span>`;
+  return `<span class="ctox-history-connection" data-task-history-unavailable role="status">${escapeHtml(`${t.timeline}: ${t.notPermittedForRole}`)}</span>`;
 }
 
 function renderMain(state) {
@@ -2516,7 +2489,7 @@ function renderMain(state) {
   // Without a selected task and without current data the workspace itself
   // carries the state line; the footer must not repeat it.
   const stateInWorkspace = !selectedTask && Boolean(state.ctx) && dataState(state).kind !== 'ready';
-  const dataNotice = stateInWorkspace ? '' : (dataStatusMarkup(state) || (!syncIsConnected(state) ? escapeHtml(t.syncDisconnected) : ''));
+  const dataNotice = stateInWorkspace ? '' : dataStatusMarkup(state);
   main.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
@@ -5143,7 +5116,12 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
 async function requestWebStackAuthAssist(state, source) {
   const t = labels[state.lang];
   if (!state.ctx?.commandBus?.dispatch) {
-    state.webStack = { ...(state.webStack || {}), error: 'Die Verbindung zur Crew ist nicht verfügbar.' };
+    console.warn('[ctox] web stack auth assist unavailable');
+    state.webStack = {
+      ...(state.webStack || {}),
+      error: '',
+      notice: state.lang === 'de' ? 'Das hat nicht geklappt.' : 'That didn’t work.',
+    };
     renderMain(state);
     return;
   }
@@ -6829,7 +6807,7 @@ function flowSourceView(state) {
   if (projection?.ok === false && state.ctx?.sync?.mode === 'webrtc') {
     return {
       mode: state.runtimeStatus || displayFlowMode('rxdb-webrtc'),
-      status: t.flowProjectionMissing,
+      status: '',
     };
   }
   // Suppress the placeholder "Unavailable / unavailable" pair: when no flow data
