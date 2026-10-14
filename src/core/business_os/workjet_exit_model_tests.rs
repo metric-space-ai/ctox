@@ -172,7 +172,10 @@ fn terminal_research_retains_a_valid_resource_proposal_without_claiming_it_is_ad
     complete_research(root, "research-cmd", &format!("```json\n{reply}\n```"))?;
     let conn = reader(root)?;
     let state = read_state(&conn, "project-1", "owner-1")?;
-    assert_eq!(state["resource_proposal"], reply["resource_proposal"]);
+    assert_eq!(
+        state["resource_proposal"],
+        json!({"hours_per_week":7.0,"monthly_budget_eur":0.0,"comparison_mode":"project_specific"})
+    );
     assert_eq!(state["findings"][0]["code"], "resource_proposal_recorded");
     assert_eq!(state["status"], "blocked");
     assert!(state["plan_summary"].is_null());
