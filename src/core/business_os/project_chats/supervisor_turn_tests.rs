@@ -43,7 +43,7 @@ fn exit_read_and_project_list_follow_durable_block_without_trusting_worker_input
     assert!(state["plan_summary"].is_null());
     assert_eq!(state["scenarios"], json!([]));
     assert!(exit::handle_command(root.path(), &read, "foreign", None).is_err());
-    let list = store::handle_workjet_project_list_command(
+    let list = crate::business_os::store_workjet_projects::handle_workjet_project_list_command(
         root.path(),
         &BusinessCommand {
             command_type: "ctox.workjet.project.list".into(),
