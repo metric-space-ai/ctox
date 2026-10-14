@@ -28,6 +28,7 @@ pub mod model_router;
 pub mod model_stream_bridge;
 pub mod platform;
 pub mod process_transport;
+pub mod quota_provider;
 pub mod rpc_client;
 pub mod rpc_client_stream;
 pub mod rpc_schema;
@@ -81,6 +82,8 @@ mod model_router_test;
 mod platform_test;
 #[cfg(test)]
 mod process_transport_test;
+#[cfg(test)]
+mod quota_provider_test;
 #[cfg(test)]
 mod request_lifecycle_test;
 #[cfg(test)]

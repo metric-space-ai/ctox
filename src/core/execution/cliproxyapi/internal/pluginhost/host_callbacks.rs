@@ -99,6 +99,14 @@ impl HostCallbackRouter {
         {
             return Err(HostCallbackRouteError::WrongPlugin);
         }
+        // Quota leases carry only account HTTP authority, never auth-store,
+        // model-execution or other host mutation authority.
+        if authority.http_is_scoped()
+            && !method.starts_with("host.http.")
+            && method != METHOD_HOST_LOG
+        {
+            return Err(HostCallbackRouteError::UnknownMethod);
+        }
         let handler = self
             .handlers
             .get(method)

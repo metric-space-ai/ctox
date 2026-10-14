@@ -2,6 +2,7 @@
 // Port-Status: adapted_to_ctox
 // Port-Note: account-scoped HTTP authority is retained by the callback lease
 // License: MIT (upstream); modifications AGPL-3.0-only
+use super::abi::PluginClientError;
 use super::{
     adapters::{CapabilityClientConfigError, RpcCapabilityClient},
     auth_provider::HostConfigSummarySource,
@@ -13,7 +14,15 @@ use crate::sdk::{
         QuotaFetchResponse, QuotaProvider, QuotaResetRequest, QuotaResetResponse,
     },
 };
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
+pub(crate) const QUOTA_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) async fn bounded_quota_call<T>(
+    future: impl Future<Output = Result<T, PluginClientError>>,
+) -> Result<T, PluginClientError> {
+    tokio::time::timeout(QUOTA_CALL_TIMEOUT, future)
+        .await
+        .map_err(|_| PluginClientError::DeadlineExceeded)?
+}
 #[derive(Clone)]
 pub struct RpcQuotaProvider {
     identifier: String,
@@ -56,11 +65,13 @@ impl QuotaProvider for RpcQuotaProvider {
         request: QuotaDescribeRequest,
     ) -> PluginFuture<'a, QuotaDescribeResponse> {
         Box::pin(async move {
-            self.client
-                .client()
-                .call(METHOD_QUOTA_DESCRIBE, &request, None)
-                .await
-                .map_err(|error| Arc::new(error) as _)
+            bounded_quota_call(
+                self.client
+                    .client()
+                    .call(METHOD_QUOTA_DESCRIBE, &request, None),
+            )
+            .await
+            .map_err(|error| Arc::new(error) as _)
         })
     }
     fn fetch_quota<'a>(
@@ -70,10 +81,14 @@ impl QuotaProvider for RpcQuotaProvider {
         Box::pin(async move {
             request.host = self.host.snapshot();
             let http = request.http_client.take();
-            self.client
-                .call_scoped_http(METHOD_QUOTA_FETCH, &request, http, None)
-                .await
-                .map_err(|error| Arc::new(error) as _)
+            bounded_quota_call(self.client.call_scoped_http(
+                METHOD_QUOTA_FETCH,
+                &request,
+                http,
+                None,
+            ))
+            .await
+            .map_err(|error| Arc::new(error) as _)
         })
     }
     fn reset_quota<'a>(
@@ -83,10 +98,14 @@ impl QuotaProvider for RpcQuotaProvider {
         Box::pin(async move {
             request.host = self.host.snapshot();
             let http = request.http_client.take();
-            self.client
-                .call_scoped_http(METHOD_QUOTA_RESET, &request, http, None)
-                .await
-                .map_err(|error| Arc::new(error) as _)
+            bounded_quota_call(self.client.call_scoped_http(
+                METHOD_QUOTA_RESET,
+                &request,
+                http,
+                None,
+            ))
+            .await
+            .map_err(|error| Arc::new(error) as _)
         })
     }
 }

@@ -26,6 +26,30 @@ use crate::sdk::{
     },
 };
 use serde_json::{json, value::to_raw_value, Value};
+
+#[tokio::test(start_paused = true)]
+async fn quota_rpc_timeout_revokes_callback_and_returns_a_real_deadline_error() {
+    let (provider, client, _, contexts) = provider(true);
+    let http = Arc::new(Http::new("account-a"));
+    let task = tokio::spawn(async move {
+        provider
+            .fetch_quota(QuotaFetchRequest {
+                http_client: Some(http),
+                ..Default::default()
+            })
+            .await
+    });
+    client.started.notified().await;
+    assert_eq!(contexts.len(), 1);
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    let error = task.await.unwrap().unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<PluginClientError>(),
+        Some(&PluginClientError::DeadlineExceeded)
+    );
+    assert!(contexts.is_empty());
+}
+
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -35,6 +59,48 @@ use std::{
     },
 };
 use tokio::sync::{mpsc, Notify};
+
+struct ForbiddenHostMutation(Arc<AtomicUsize>);
+impl super::host_callbacks::HostCallbackHandler for ForbiddenHostMutation {
+    fn call<'a>(
+        &'a self,
+        _: &'a CallbackAuthority,
+        _: &'a serde_json::value::RawValue,
+    ) -> super::host_callbacks::HostCallbackFuture<'a> {
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Envelope::success(Some(to_raw_value(&json!({})).unwrap())))
+        })
+    }
+}
+#[tokio::test]
+async fn quota_callback_capability_cannot_invoke_registered_auth_store_mutations() {
+    let contexts = CallbackContextRegistry::new();
+    let count = Arc::new(AtomicUsize::new(0));
+    let mut router = HostCallbackRouter::new(contexts.clone());
+    router
+        .register(
+            "host.auth.save",
+            Arc::new(ForbiddenHostMutation(count.clone())),
+        )
+        .unwrap();
+    let lease = contexts.open(CallbackAuthority::new("quota-plugin", None).bind_http(None));
+    let response = router
+        .dispatch(
+            "quota-plugin",
+            lease.id(),
+            "host.auth.save",
+            &to_raw_value(&json!({})).unwrap(),
+            0,
+        )
+        .await;
+    assert_eq!(
+        response.err().unwrap(),
+        HostCallbackRouteError::UnknownMethod
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
 struct Host;
 impl HostConfigSummarySource for Host {
     fn snapshot(&self) -> HostConfigSummary {
