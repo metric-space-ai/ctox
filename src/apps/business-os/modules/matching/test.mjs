@@ -137,6 +137,8 @@ test('matching transient dialogs and menus stay inside the module host', async (
   const source = await readFile(new URL('./ui/index.js', import.meta.url), 'utf8');
   assert.match(source, /function getScopedMatchingHost\(\)/);
   assert.match(source, /syncFeedback\.setHostRoot\?\.\(matchingHost\)/);
+  assert.doesNotMatch(source, /Matching wird synchronisiert|Sync fehlgeschlagen|Datenänderung übernommen|siehe Konsole/);
+  assert.match(source, /__reloadRetryDelayMs = Math\.min\(60_000, delay \* 2\)/);
   assert.match(source, /root\.appendChild\(menu\)/);
   assert.match(source, /root\.append\(layer\)/);
   assert.doesNotMatch(source, /document\.body\.append(?:Child)?\((?:menu|layer)\)/);
