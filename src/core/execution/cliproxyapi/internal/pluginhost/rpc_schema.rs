@@ -76,6 +76,7 @@ pub struct RpcCapabilities {
     pub stream_chunk_interceptor: bool,
     pub thinking_applier: bool,
     pub usage_plugin: bool,
+    pub quota_provider: bool,
     pub command_line_plugin: bool,
     pub management_api: bool,
 }

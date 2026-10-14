@@ -172,7 +172,14 @@ impl ManagementHttpResponse {
     }
 }
 
+#[cfg(test)]
+#[path = "server_management_quota_test.rs"]
+mod quota_route_tests;
+#[path = "server_management_quota.rs"]
+mod quota_routes;
 pub struct ManagementHandler {
+    quota_service:
+        Option<Arc<crate::internal::api::handlers::management::ManagementPluginQuotaService>>,
     authenticator: Arc<ManagementAuthenticator>,
     runtime_status: Option<Arc<dyn ManagementRuntimeStatusSource>>,
     runtime_config: Option<Arc<dyn ManagementRuntimeConfigSource>>,
@@ -192,6 +199,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_service: None,
         }
     }
 
@@ -207,6 +215,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_service: None,
         }
     }
 
@@ -223,6 +232,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_service: None,
         }
     }
 
@@ -238,6 +248,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            quota_service: None,
         }
     }
 
@@ -556,13 +567,17 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let response = match read_request(stream).await {
-        Ok(request) => handler.handle(
-            &request.method,
-            &request.target,
-            &request.headers,
-            &request.body,
-            client_ip,
-        ),
+        Ok(request) => {
+            handler
+                .handle_async(
+                    &request.method,
+                    &request.target,
+                    &request.headers,
+                    &request.body,
+                    client_ip,
+                )
+                .await
+        }
         Err(error) => ManagementHttpResponse::error(error.status, error.message),
     };
     write_management_response(stream, &response).await

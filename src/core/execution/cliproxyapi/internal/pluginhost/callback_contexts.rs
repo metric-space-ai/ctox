@@ -7,11 +7,18 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-#[derive(Clone, Debug)]
+use crate::sdk::pluginapi::HostHttpClient;
+use tokio::sync::Notify;
+
+#[derive(Clone)]
 pub struct CallbackAuthority {
     plugin_id: String,
     deadline_unix_ms: Option<u64>,
     cancelled: Arc<AtomicBool>,
+    changed: Arc<Notify>,
+    context_id: String,
+    // None preserves the existing host policy. Some(None) explicitly denies HTTP.
+    scoped_http: Option<Option<Arc<dyn HostHttpClient>>>,
 }
 
 impl CallbackAuthority {
@@ -20,6 +27,9 @@ impl CallbackAuthority {
             plugin_id: plugin_id.into().trim().to_owned(),
             deadline_unix_ms,
             cancelled: Arc::new(AtomicBool::new(false)),
+            changed: Arc::new(Notify::new()),
+            context_id: String::new(),
+            scoped_http: None,
         }
     }
 
@@ -33,10 +43,45 @@ impl CallbackAuthority {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+        self.changed.notify_waiters();
     }
 
+    pub fn bind_http(mut self, client: Option<Arc<dyn HostHttpClient>>) -> Self {
+        self.scoped_http = Some(client);
+        self
+    }
+    pub fn http_is_scoped(&self) -> bool {
+        self.scoped_http.is_some()
+    }
+    pub fn http_client(&self) -> Option<Arc<dyn HostHttpClient>> {
+        self.scoped_http.as_ref().and_then(Clone::clone)
+    }
+    pub fn context_id(&self) -> &str {
+        &self.context_id
+    }
+    pub async fn cancelled(&self) {
+        loop {
+            let changed = self.changed.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            changed.await;
+        }
+    }
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl std::fmt::Debug for CallbackAuthority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallbackAuthority")
+            .field("plugin_id", &self.plugin_id)
+            .field("deadline_unix_ms", &self.deadline_unix_ms)
+            .field("cancelled", &self.is_cancelled())
+            .field("http_scoped", &self.http_is_scoped())
+            .field("http_available", &self.http_client().is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -73,13 +118,14 @@ impl CallbackContextRegistry {
         }
     }
 
-    pub fn open(&self, authority: CallbackAuthority) -> CallbackContextLease {
+    pub fn open(&self, mut authority: CallbackAuthority) -> CallbackContextLease {
         let id = self
             .inner
             .next
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1)
             .to_string();
+        authority.context_id = id.clone();
         self.inner
             .entries
             .lock()

@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::OnceCell;
+type QuotaSupportedCache = Arc<Mutex<BTreeMap<String, Arc<OnceCell<Vec<String>>>>>>;
 
 use crate::sdk::pluginapi::Metadata;
 
@@ -46,6 +48,7 @@ impl std::fmt::Debug for CapabilityRecord {
 pub struct Snapshot {
     enabled: bool,
     records: Vec<Arc<CapabilityRecord>>,
+    quota_supported: QuotaSupportedCache,
 }
 
 impl Snapshot {
@@ -56,9 +59,21 @@ impl Snapshot {
                 .cmp(&left.priority)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        Self { enabled, records }
+        Self {
+            enabled,
+            records,
+            quota_supported: Default::default(),
+        }
     }
 
+    pub(crate) fn quota_supported_cell(&self, id: &str) -> Arc<OnceCell<Vec<String>>> {
+        self.quota_supported
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(id.to_owned())
+            .or_default()
+            .clone()
+    }
     pub fn enabled(&self) -> bool {
         self.enabled
     }
@@ -130,6 +145,7 @@ fn capability_names(capabilities: &RpcCapabilities) -> Vec<String> {
         ),
         ("thinking_applier", capabilities.thinking_applier),
         ("usage_plugin", capabilities.usage_plugin),
+        ("quota_provider", capabilities.quota_provider),
         ("command_line_plugin", capabilities.command_line_plugin),
         ("management_api", capabilities.management_api),
     ]
