@@ -239,13 +239,22 @@ fn commit_discovered(
     found: DiscoveredAccount,
     current: impl Fn() -> anyhow::Result<()>,
 ) -> anyhow::Result<InstalledApiAccount> {
+    commit_discovered_with_id(root, key, found, current, uuid::Uuid::new_v4())
+}
+fn commit_discovered_with_id(
+    root: &Path,
+    key: &str,
+    found: DiscoveredAccount,
+    current: impl Fn() -> anyhow::Result<()>,
+    id: uuid::Uuid,
+) -> anyhow::Result<InstalledApiAccount> {
     let _lifecycle = crate::secrets::credential_lifecycle_guard();
     current()?;
     let mut stored = super::load_provider_integration_config(root)?;
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = id.to_string();
     let secret = ProviderSecretRef::new("provider-api-keys", format!("api-key-{id}"));
     anyhow::ensure!(
-        !crate::secrets::secret_exists(root, &secret.scope, &secret.name),
+        !crate::secrets::secret_exists(root, &secret.scope, &secret.name)?,
         "new API credential name already exists"
     );
     let account = ApiKeyAccountConfig {
