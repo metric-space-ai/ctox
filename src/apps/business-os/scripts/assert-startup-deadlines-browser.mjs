@@ -81,21 +81,22 @@ async function assertLaunchContextDeadline() {
     const pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html`);
-    await page.waitForSelector('#startup-error-card:not([hidden])', { state: 'visible' });
+    // A launch-context deadline is retryable. The shell keeps the neutral boot
+    // screen and reloads itself; it must not surface the timeout or a stack.
+    await page.waitForSelector('html[data-auth-state="locked"]', { timeout: 20_000 });
 
     const failed = await page.evaluate(() => ({
-      title: document.querySelector('.friendly-error-title')?.textContent?.trim(),
-      details: document.getElementById('startup-error-msg')?.textContent?.trim(),
-      retryVisible: !document.getElementById('startup-retry-btn')?.closest('[hidden]'),
-      retryText: document.getElementById('startup-retry-btn')?.textContent?.trim(),
+      statusText: document.getElementById('startup-status-text')?.textContent || '',
+      errorCardHidden: document.getElementById('startup-error-card')?.hidden !== false,
+      details: document.getElementById('startup-error-msg')?.textContent?.trim() || '',
+      visibleSentence: document.getElementById('startup-error-card')?.hidden === false
+        ? (document.querySelector('.startup-error-sentence')?.textContent?.trim() || '')
+        : '',
     }));
-    assert.equal(failed.title, 'Netzwerk-Zeitüberschreitung beim Start');
-    assert.match(failed.details, /Business OS launch context timed out after 30 seconds/);
-    assert.equal(failed.retryVisible, true);
-    assert.match(failed.retryText, /Erneut versuchen/);
-
-    await page.click('#startup-retry-btn');
-    await page.waitForSelector('html[data-auth-state="locked"]');
+    assert.equal(failed.statusText, '');
+    assert.equal(failed.errorCardHidden, true);
+    assert.equal(failed.details, '');
+    assert.equal(failed.visibleSentence, '');
     // The unauthenticated/logout gate must not mount either companion.
     const lockedCompanions = await page.evaluate(() => ({
       reporter: Boolean(document.querySelector('[data-ctox-reporter]')),

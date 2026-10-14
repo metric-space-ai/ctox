@@ -155,26 +155,11 @@
             <div class="startup-progress-container">
               <div class="startup-progress-bar" id="startup-progress-bar"></div>
             </div>
-            <div class="startup-status-text" id="startup-status-text" data-shell-t="startupStarting">System wird gestartet...</div>
 
             <div class="startup-error-card" id="startup-error-card" hidden>
-              <div class="error-header">
-                <svg class="error-warning-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke-linecap="round" stroke-linejoin="round"/>
-                  <line x1="12" y1="9" x2="12" y2="13" stroke-linecap="round" stroke-linejoin="round"/>
-                  <line x1="12" y1="17" x2="12.01" y2="17" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                <h3 data-shell-t="startupFailedTitle">System-Start fehlgeschlagen</h3>
-              </div>
-              <div class="error-body">
-                <p data-shell-t="startupFailedBody">Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Die lokale Datenverbindung meldet:</p>
-                <code class="error-msg-block" id="startup-error-msg"></code>
-              </div>
+              <p class="startup-error-sentence" data-shell-t="startupFailedSentence">Die App konnte nicht gestartet werden.</p>
               <div class="error-footer">
                 <button class="error-retry-btn" id="startup-retry-btn" type="button">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 11-.57-8.38l5.67-5.67" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
                   <span data-shell-t="startupRetry">Erneut versuchen</span>
                 </button>
               </div>

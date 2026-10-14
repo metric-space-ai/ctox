@@ -1116,9 +1116,7 @@ const shellMessages = {
     appMenuOpen: 'App-Menü öffnen',
     notificationsAria: 'Benachrichtigungen',
     openWindowsAria: 'Offene Fenster',
-    startupStarting: 'System wird gestartet...',
-    startupFailedTitle: 'System-Start fehlgeschlagen',
-    startupFailedBody: 'Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Die lokale Datenverbindung meldet:',
+    startupFailedSentence: 'Die App konnte nicht gestartet werden.',
     startupRetry: 'Erneut versuchen',
     gateSubtitle: 'Melden Sie sich an, um eine Verbindung zur ctox-Instanz herzustellen.',
     gateUser: 'Benutzer',
@@ -1131,23 +1129,6 @@ const shellMessages = {
     drawerLoginHint: 'Bei Desktop-Start wird die CTOX-Instanz automatisch übernommen.',
     drawerLoginSubmit: 'Einloggen',
     drawerLoginExternal: 'Extern einloggen',
-    bootConfig: 'System-Konfiguration wird geladen...',
-    bootSession: 'Anmeldesitzung wird überprüft...',
-    bootDatastore: 'Lokaler Datenspeicher wird geladen...',
-    bootWorkspace: 'Workspace wird vorbereitet...',
-    bootApps: 'Ihre Anwendungen werden vorbereitet...',
-    bootCatalog: 'Apps werden synchronisiert...',
-    bootOptimize: 'Lokaler Datenspeicher wird optimiert...',
-    bootReady: 'Workspace ist bereit. CTOX wird gestartet...',
-    bootDbConfig: 'Datenspeicher-Konfiguration wird vorbereitet...',
-    bootDbOpen: 'Lokaler Speicher wird geöffnet...',
-    bootDbStructures: 'Systemdatenstrukturen werden aufgebaut...',
-    bootDesktopLayout: 'Desktop-Layout wird geladen...',
-    bootSyncStart: 'Echtzeit-Synchronisierung wird gestartet...',
-    bootServices: 'Dienste werden gestartet...',
-    bootSchemas: 'Datenstrukturen werden vorbereitet...',
-    bootSchemasRegister: 'Speicherstrukturen werden registriert...',
-    bootSchemasDone: 'Speicherstrukturen erfolgreich geladen.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'Crew',
@@ -1235,9 +1216,7 @@ const shellMessages = {
     appMenuOpen: 'Open app menu',
     notificationsAria: 'Notifications',
     openWindowsAria: 'Open windows',
-    startupStarting: 'Starting system...',
-    startupFailedTitle: 'System startup failed',
-    startupFailedBody: 'A fatal error occurred while connecting to the local data network. The local data connection reports:',
+    startupFailedSentence: 'The app could not be started.',
     startupRetry: 'Retry',
     gateSubtitle: 'Sign in to connect to the ctox instance.',
     gateUser: 'User',
@@ -1250,23 +1229,6 @@ const shellMessages = {
     drawerLoginHint: 'On desktop start the CTOX instance is taken over automatically.',
     drawerLoginSubmit: 'Sign in',
     drawerLoginExternal: 'External sign-in',
-    bootConfig: 'Loading system configuration...',
-    bootSession: 'Checking sign-in session...',
-    bootDatastore: 'Loading local datastore...',
-    bootWorkspace: 'Preparing workspace...',
-    bootApps: 'Preparing your applications...',
-    bootCatalog: 'Syncing apps...',
-    bootOptimize: 'Optimizing local datastore...',
-    bootReady: 'Workspace ready. Starting CTOX...',
-    bootDbConfig: 'Preparing datastore configuration...',
-    bootDbOpen: 'Opening local storage...',
-    bootDbStructures: 'Building system data structures...',
-    bootDesktopLayout: 'Loading desktop layout...',
-    bootSyncStart: 'Starting realtime sync...',
-    bootServices: 'Starting services...',
-    bootSchemas: 'Preparing data structures...',
-    bootSchemasRegister: 'Registering storage structures...',
-    bootSchemasDone: 'Storage structures loaded.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'Crew',
@@ -1350,6 +1312,7 @@ async function bootstrap() {
     const loginFailed = session.reason === 'invalid_credentials'
       || new URLSearchParams(location.search).has('loginFailed');
     clearStoredBrowserAuth();
+    clearStartupRetryState();
     renderLoginGate(session, { loginFailed });
     setStatus(shellText('loginRequired'));
     return;
@@ -1359,29 +1322,29 @@ async function bootstrap() {
 
   assertManagedDesktopCapability(launchConfigForPageSession || readUrlPairingConfig());
 
-  setStartupProgress(10, shellText('bootConfig'));
-  setStartupProgress(30, shellText('bootSession'));
-  setStartupProgress(50, shellText('bootDatastore'));
+  setStartupProgress(10);
+  setStartupProgress(30);
+  setStartupProgress(50);
   const syncConfig = await traceShellPhase('sync-config', loadSyncConfig);
   await traceShellPhase('build-guard', () => resetBusinessDataPlaneForBuildIfNeeded(syncConfig));
   await traceShellPhase('data-plane-open', () => openBusinessDataPlane(syncConfig));
   if (await completeWorkjetPairingRedirect()) return;
 
-  setStartupProgress(70, shellText('bootWorkspace'));
+  setStartupProgress(70);
   let modules;
   try {
-    setStartupProgress(85, shellText('bootApps'));
+    setStartupProgress(85);
     modules = await traceShellPhase('module-catalog', loadModules);
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; extending its WebRTC wait', error);
-    setStartupProgress(82, shellText('bootCatalog'));
+    setStartupProgress(82);
     try {
       modules = await traceShellPhase('module-catalog-retry', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     } catch (retryError) {
       if (!isModuleCatalogSyncError(retryError)) throw retryError;
       console.warn('[business-os] module catalog still unavailable; restarting only its WebRTC bridge', retryError);
-      setStartupProgress(80, shellText('bootCatalog'));
+      setStartupProgress(80);
       await state.sync?.restartCollection?.('business_module_catalog');
       modules = await traceShellPhase('module-catalog-restarted', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     }
@@ -1453,7 +1416,8 @@ async function bootstrap() {
   // Initialize the global ctox context menu
   initGlobalCtoxContextMenu();
 
-  setStartupProgress(95, shellText('bootReady'));
+  setStartupProgress(95);
+  let moduleStartupFailed = false;
   try {
     const workspaceSession = readWorkspaceSessionSnapshot();
     const explicitModule = location.hash.replace(/^#/, '').trim();
@@ -1468,11 +1432,12 @@ async function bootstrap() {
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
   } catch (error) {
-    console.error('[business-os] module startup failed', error);
+    moduleStartupFailed = true;
+    console.warn('[business-os] module startup failed', error);
     if (isManagedCollectionAuthorizationError(error)) {
       showStartupError(error);
     } else {
-      setStatus(`Module startup failed: ${error.message || error}`);
+      showStartupError(error);
     }
   } finally {
     // Catalog refreshes are deferred only while the shell itself is being
@@ -1480,6 +1445,7 @@ async function bootstrap() {
     // the first open attempt; keeping this false when no fallback module opened
     // would strand every later catalog notification in the deferred queue.
     state.initialModuleOpened = true;
+    if (!moduleStartupFailed) clearStartupRetryState();
     flushDeferredCatalogRefresh();
     // Metadata-only recovery diagnostics preserve all replicas, but must not
     // hold database opening or the first usable app behind enumeration.
@@ -1594,7 +1560,7 @@ async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
 
 async function openBusinessDataPlane(syncConfig) {
   resetDataPlaneReady('open-business-data-plane');
-  setStartupProgress(51, shellText('bootDbConfig'));
+  setStartupProgress(51);
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
@@ -1606,11 +1572,11 @@ async function openBusinessDataPlane(syncConfig) {
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
-    setStartupProgress(62, shellText('bootDesktopLayout'));
+    setStartupProgress(62);
     // Paint cached pins without querying the data plane before Sync exists.
     renderTabs();
 
-    setStartupProgress(66, shellText('bootSyncStart'));
+    setStartupProgress(66);
     // Resolve the native-signed actor capability before the first multiplexed
     // WebRTC peer handshake. Protected demand collections authorize the peer
     // from that initial protocol payload; fetching the token only after a core
@@ -1654,7 +1620,7 @@ async function openBusinessDataPlane(syncConfig) {
       ),
     });
 
-    setStartupProgress(69, shellText('bootServices'));
+    setStartupProgress(69);
     state.commandBus = commandBusModule.createCommandBus({
       db: () => state.db,
       sync: () => state.sync,
@@ -1722,12 +1688,12 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
   const { createBusinessDb } = await loadBusinessDbModule();
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    setStartupProgress(54, shellText('bootDbOpen'));
+    setStartupProgress(54);
     state.db = await traceShellPhase(`local-db-open-${attempt}`, () => createBusinessDb({ name: dbName, trace: traceShellPhase }));
     assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
     try {
-      setStartupProgress(58, shellText('bootDbStructures'));
+      setStartupProgress(58);
       // addCollections() is not cancellable. A Promise.race timeout used to
       // reject after 12 seconds while RxDB was still writing IndexedDB schema
       // metadata. The retry path then closed that live database and started a
@@ -1805,7 +1771,7 @@ function isModuleCatalogSyncError(error) {
 
 async function registerCoreCollections() {
   const t0 = performance.now();
-  setStartupProgress(58, shellText('bootSchemas'));
+  setStartupProgress(58);
 
   const { ctox, desktop } = await loadCoreSchemaModules();
   const ctoxSchemes = withMigrationStrategies(ctox.collections, ctox.migrationStrategies);
@@ -1816,10 +1782,10 @@ async function registerCoreCollections() {
     ...desktopSchemes,
   };
 
-  setStartupProgress(59, shellText('bootSchemasRegister'));
+  setStartupProgress(59);
   await state.db.addCollections(consolidated);
 
-  setStartupProgress(61, shellText('bootSchemasDone'));
+  setStartupProgress(61);
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   // Scoped window placement is hydrated synchronously from localStorage.
@@ -15919,14 +15885,7 @@ function isWorkspaceStatusText(text) {
   return Boolean(brandingName && value === brandingName);
 }
 
-function setStartupProgress(percent, statusText) {
-  setStatus(statusText);
-
-  const statusLabel = document.getElementById('startup-status-text');
-  if (statusLabel) {
-    statusLabel.textContent = statusText;
-  }
-
+function setStartupProgress(percent) {
   if (progressTimer) {
     clearInterval(progressTimer);
     progressTimer = null;
@@ -15971,151 +15930,90 @@ function setStartupProgress(percent, statusText) {
 }
 window.setStartupProgress = setStartupProgress;
 
-function getFriendlyErrorMessage(error) {
-  const msg = error ? String(error.message || error) : '';
+const STARTUP_RETRY_STORAGE_KEY = 'ctox.businessOs.startupRetry';
+const STARTUP_RETRY_CAP_MS = 60_000;
 
-  let title = 'Unerwartetes Systemproblem';
-  let description = 'Das Business OS konnte nicht vollständig geladen werden.';
-  let advice = 'Bitte versuchen Sie die Seite neu zu laden. Falls das Problem weiterhin besteht, vergewissern Sie sich, dass der CTOX-Dienst im Hintergrund läuft.';
-
-  if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || msg.includes('nativen Capability-Token')) {
-    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
-    title = `${instanceName} konnte nicht geladen werden`;
-    description = 'Die Anmeldung bei ctox.dev war erfolgreich, aber der Startlink enthält keine von der CTOX-Instanz signierte Datenberechtigung. Deshalb wurde der verwaltete Workspace sicher gestoppt.';
-    advice = 'Die ctox.dev-Desktop-Schnittstelle muss einen kurzlebigen Berechtigungsschlüssel für diese Instanz ausstellen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
-  } else if (isManagedCollectionAuthorizationError(error)) {
-    const instanceName = String((launchConfigForPageSession || readUrlPairingConfig())?.desktop_instance?.display_name || 'Die gewählte Instanz').trim();
-    title = `${instanceName} konnte nicht geladen werden`;
-    description = 'Die CTOX-Instanz hat den Zugriff auf die benötigten Business-OS-Daten abgelehnt. Der verwaltete Workspace wurde deshalb sicher gestoppt.';
-    advice = 'Bitte die Berechtigungen dieser ctox.dev-Verbindung prüfen. Eine lokale Ersatzoberfläche wird nicht verwendet.';
-  } else if (isStartupDeadlineError(error)) {
-    title = 'Netzwerk-Zeitüberschreitung beim Start';
-    description = 'Eine benötigte Startanfrage hat nicht rechtzeitig geantwortet.';
-    advice = 'Bitte auf "Erneut versuchen" klicken. Bleibt die Meldung bestehen, prüfen Sie die Netzwerkverbindung und den CTOX-Dienst.';
-  } else if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
-    title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
-    description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
-    advice = 'Bitte öffnen Sie die Anwendung über http://localhost:8765/ anstelle von http://127.0.0.1:8765/. Safari stuft "localhost" als sichere Herkunft ein und schaltet die benötigten Verschlüsselungsfunktionen (WebCrypto) frei.';
-  } else if (msg.includes('pairing') || msg.includes('sync config is missing') || msg.includes('Pair this browser')) {
-    title = 'Keine Kopplung vorhanden';
-    description = 'Dieser Browser ist noch nicht mit einer aktiven CTOX-Instanz verbunden.';
-    advice = 'Bitte öffnen Sie Business OS über den bereitgestellten Link aus Ihrer CTOX-Schnittstelle oder koppeln Sie die Instanz erneut.';
-  } else if (msg.includes('IndexedDB lock') || msg.includes('timed out')) {
-    title = 'Lokaler Speicher blockiert';
-    description = 'Der lokale Browsercache hat nicht rechtzeitig geantwortet.';
-    advice = 'Die Anwendung versucht automatisch einen frischen lokalen Cache zu öffnen und neu zu synchronisieren. Falls diese Meldung erneut erscheint, bitte die Seite neu laden; die technischen Details nennen den konkreten Timeout.';
-  } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
-    title = 'Datenstruktur-Aktualisierung';
-    description = 'Die Struktur des lokalen Datenspeichers wird an die neue Version angepasst.';
-    advice = 'Der lokale Speicher wird automatisch zurückgesetzt und neu synchronisiert. Bitte klicken Sie auf "Erneut versuchen", um fortzufahren.';
-  } else if (msg.includes('modulkatalog') || msg.includes('business_module_catalog') || msg.includes('module catalog')) {
-    title = 'Systemmodule konnten nicht geladen werden';
-    description = 'Die Synchronisation der Systemmodule mit der CTOX-Hintergrundinstanz konnte nicht abgeschlossen werden.';
-    advice = 'Bitte stellen Sie sicher, dass der CTOX-Hintergrunddienst aktiv läuft und eine stabile Netzwerkverbindung besteht.';
-  } else if (msg.includes('Cannot access') && msg.includes('before initialization')) {
-    title = 'Fehler in Skript-Reihenfolge';
-    description = 'Eine Systemvariable wurde vor ihrer Initialisierung aufgerufen (Temporal Dead Zone).';
-    advice = 'Dieses Ladeproblem wurde behoben. Bitte leeren Sie den Browser-Cache und klicken Sie auf "Erneut versuchen".';
-  } else if (msg.includes('Failed to fetch dynamically imported module') || msg.includes('ctox-rxdb-js.mjs') || msg.includes('RxDB bundle import')) {
-    title = 'Business-OS-Dateien konnten nicht geladen werden';
-    description = 'Ein benötigtes CTOX-DB-Bundle fehlt, ist veraltet oder wurde vom Cache mit einer alten Version geladen.';
-    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, muss die Instanz mit den aktuellen Business-OS-Assets synchronisiert werden.';
-  } else if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('signaling')) {
-    title = 'Netzwerkverbindung fehlgeschlagen';
-    description = 'Eine Netzwerk- oder Datenverbindung konnte nicht aufgebaut werden.';
-    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, prüfen Sie die Instanzdienste und die Erreichbarkeit des Verbindungsdienstes.';
-  }
-
-  return { title, description, advice };
+function clearStartupRetryState() {
+  try { sessionStorage.removeItem(STARTUP_RETRY_STORAGE_KEY); } catch {}
 }
 
-function isManagedCollectionAuthorizationError(error) {
-  const config = launchConfigForPageSession || readUrlPairingConfig();
-  if (config?.desktop_instance?.source !== 'ctox_dev') return false;
-  return /UNAUTHORIZED: peer is not authorized for this collection/i.test(
-    String(error?.message || error || '')
-  );
+function startupRetryAttempt() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(STARTUP_RETRY_STORAGE_KEY) || '{}');
+    return Math.max(0, Number(parsed.attempt) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function startupRetryDelayMs(attempt) {
+  const exponent = Math.min(16, Math.max(0, Number(attempt) - 1));
+  return Math.min(STARTUP_RETRY_CAP_MS, 1000 * (2 ** exponent));
+}
+
+function isStartupRetryImpossible(error) {
+  const message = String(error?.message || error || '');
+  if (!globalThis.crypto?.subtle || message.includes('WebCrypto')) return true;
+  if (
+    message.includes('pairing')
+    || message.includes('sync config is missing')
+    || message.includes('Pair this browser')
+  ) return true;
+  if (isManagedCollectionAuthorizationError(error)) return true;
+  if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token')) {
+    return typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch !== 'function';
+  }
+  return false;
+}
+
+function scheduleStartupBootRetry(error) {
+  const attempt = startupRetryAttempt() + 1;
+  const delay = startupRetryDelayMs(attempt);
+  try {
+    sessionStorage.setItem(STARTUP_RETRY_STORAGE_KEY, JSON.stringify({ attempt, at: Date.now() }));
+  } catch {}
+  window.setTimeout(() => {
+    const message = String(error?.message || '');
+    if (
+      (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token'))
+      && typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
+    ) {
+      globalThis.ctoxBusinessOsDesktop.refreshManagedLaunch();
+      return;
+    }
+    window.location.reload();
+  }, delay);
+}
+
+function renderUnrecoverableStartupError() {
+  const errorCard = document.getElementById('startup-error-card');
+  if (errorCard) errorCard.hidden = false;
+  const retryBtn = document.getElementById('startup-retry-btn');
+  if (!retryBtn) return;
+  retryBtn.onclick = () => {
+    retryBtn.disabled = true;
+    clearStartupRetryState();
+    window.location.reload();
+  };
 }
 
 function showStartupError(error) {
   // A fatal startup failure must also stop companions whose imports or schema work is pending.
   cancelBusinessCompanions();
-  console.error('[business-os] bootstrap error caught:', error);
-  const errMsg = error ? (error.message || String(error)) : 'Unbekannter Fehler';
-
+  console.warn('[business-os] bootstrap error caught:', error);
+  const errorCard = document.getElementById('startup-error-card');
+  if (errorCard) errorCard.hidden = true;
   if (progressTimer) {
     clearInterval(progressTimer);
     progressTimer = null;
   }
-  currentProgress = 100;
-
-  const statusLabel = document.getElementById('startup-status-text');
-  if (statusLabel) {
-    statusLabel.textContent = 'System-Start fehlgeschlagen.';
-    statusLabel.classList.add('is-error');
+  if (isStartupRetryImpossible(error)) {
+    renderUnrecoverableStartupError();
+    return;
   }
-
-  const progressBar = document.getElementById('startup-progress-bar');
-  if (progressBar) {
-    progressBar.style.width = '100%';
-    progressBar.classList.add('is-error');
-  }
-
-  const errorBody = document.querySelector('.error-body');
-  if (errorBody) {
-    const friendly = getFriendlyErrorMessage(error);
-    errorBody.innerHTML = `
-      <div class="friendly-error-info">
-        <h4 class="friendly-error-title">${escapeHtml(friendly.title)}</h4>
-        <p class="friendly-error-description">${escapeHtml(friendly.description)}</p>
-        <div class="friendly-error-advice">
-          <strong>Empfohlene Aktion:</strong>
-          ${escapeHtml(friendly.advice)}
-        </div>
-      </div>
-      <details class="technical-details-toggle">
-        <summary>Technische Details (für Entwickler)</summary>
-        <code class="error-msg-block" id="startup-error-msg"></code>
-      </details>
-    `;
-  }
-
-  const errorMsgBlock = document.getElementById('startup-error-msg');
-  if (errorMsgBlock) {
-    errorMsgBlock.textContent = formatStartupErrorDetails(error, errMsg);
-  }
-
-  const errorCard = document.getElementById('startup-error-card');
-  if (errorCard) {
-    errorCard.removeAttribute('hidden');
-  }
-
-  const retryBtn = document.getElementById('startup-retry-btn');
-  if (retryBtn) {
-    retryBtn.onclick = async () => {
-      retryBtn.disabled = true;
-      if (
-        (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || String(error?.message || '').includes('nativen Capability-Token'))
-        && typeof window.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
-      ) {
-        retryBtn.textContent = 'Neue Berechtigung wird angefordert...';
-        window.ctoxBusinessOsDesktop.refreshManagedLaunch();
-        return;
-      }
-      retryBtn.textContent = 'Wird neu geladen...';
-      window.location.reload();
-    };
-  }
+  scheduleStartupBootRetry(error);
 }
 window.showStartupError = showStartupError;
-
-function formatStartupErrorDetails(error, errMsg = '') {
-  const message = String(error?.message || errMsg || error || 'Unbekannter Fehler');
-  const stack = String(error?.stack || '').trim();
-  if (!stack || stack === message) return message;
-  if (stack.startsWith(message)) return stack;
-  return `${message}\n\n${stack}`;
-}
 
 function escapeHtml(value) {
   return String(value ?? '')

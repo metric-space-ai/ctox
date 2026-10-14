@@ -6337,25 +6337,6 @@ body[data-module-loading] .topbar {
   transition: width var(--motion-slow) var(--ease-standard), background var(--motion-slow) var(--ease-standard);
 }
 
-.startup-progress-bar.is-error {
-  width: 100% !important;
-  background: linear-gradient(90deg, var(--danger) 0%, color-mix(in srgb, var(--danger) 74%, var(--text-strong)) 100%) !important;
-  box-shadow: 0 0 12px color-mix(in srgb, var(--danger) 60%, transparent) !important;
-}
-
-.startup-status-text {
-  font-size: var(--fs-base);
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.2px;
-  min-height: 18px;
-  transition: color var(--motion-base) var(--ease-standard);
-}
-
-.startup-status-text.is-error {
-  color: var(--danger) !important;
-}
-
 .startup-error-card {
   display: flex;
   flex-direction: column;
@@ -6380,58 +6361,11 @@ body[data-module-loading] .topbar {
   display: none !important;
 }
 
-.error-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  border-bottom: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
-  padding-bottom: var(--space-3);
-}
-
-.error-warning-icon {
-  width: 28px;
-  height: 28px;
-  color: var(--danger);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--danger) 34%, transparent));
-}
-
-.error-header h3 {
-  font-size: var(--fs-hero);
-  font-weight: 600;
-  color: var(--danger);
+.startup-error-sentence {
   margin: 0;
-}
-
-.error-body {
-  min-height: 0;
-  margin-bottom: 0;
-  overflow: auto;
-  padding-right: var(--space-1);
-}
-
-.error-body p {
   font-size: var(--fs-base);
   line-height: 1.5;
   color: var(--text);
-  margin: 0 0 var(--space-3) 0;
-}
-
-.error-msg-block {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
-  border-radius: 8px;
-  padding: var(--space-3) var(--space-4);
-  color: var(--text-strong);
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: normal;
-  overflow-wrap: anywhere;
-  max-height: min(220px, 28vh);
-  box-shadow: inset 0 2px 8px color-mix(in srgb, var(--text-strong) 10%, transparent);
 }
 
 .error-footer {
@@ -6471,14 +6405,6 @@ body[data-module-loading] .topbar {
   box-shadow: 0 2px 10px color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
-.error-retry-btn svg {
-  animation: none;
-}
-
-.error-retry-btn:hover svg {
-  animation: startup-spin 1.5s linear infinite;
-}
-
 /* Animations */
 @keyframes startup-logo-float {
   0%, 100% {
@@ -6500,81 +6426,11 @@ body[data-module-loading] .topbar {
   }
 }
 
-@keyframes startup-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
 @keyframes startup-shake {
   10%, 90% { transform: translate3d(-1px, 0, 0); }
   20%, 80% { transform: translate3d(2px, 0, 0); }
   30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
   40%, 60% { transform: translate3d(4px, 0, 0); }
-}
-
-/* Friendly Error Info inside Error Card */
-.friendly-error-info {
-  margin-bottom: var(--space-4);
-}
-
-.friendly-error-title {
-  font-size: var(--fs-title);
-  font-weight: 600;
-  color: var(--danger);
-  margin: 0 0 var(--space-2) 0;
-}
-
-.friendly-error-description {
-  font-size: var(--fs-base);
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 0 0 var(--space-3) 0;
-}
-
-.friendly-error-advice {
-  font-size: var(--fs-base);
-  line-height: 1.55;
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
-  border-radius: 6px;
-  padding: var(--space-3) var(--space-4);
-  color: color-mix(in srgb, var(--danger) 82%, var(--text));
-  margin: var(--space-4) 0;
-}
-
-.friendly-error-advice strong {
-  color: var(--danger);
-  display: block;
-  margin-bottom: var(--space-1);
-  text-transform: uppercase;
-  font-size: var(--fs-meta);
-  letter-spacing: 0.09em;
-}
-
-/* Collapsible technical details panel */
-.technical-details-toggle {
-  margin-top: var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  padding-top: var(--space-3);
-}
-
-.technical-details-toggle summary {
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-  font-weight: 500;
-  outline: none;
-  transition: color var(--motion-fast) var(--ease-standard);
-}
-
-.technical-details-toggle summary:hover {
-  color: var(--text);
-}
-
-.technical-details-toggle[open] summary {
-  color: var(--danger);
-  margin-bottom: var(--space-3);
 }
 
 /* Shared UI safety and consistency pass. Keep this low-specificity so module
