@@ -20,6 +20,8 @@ use ctox_toolhub::{
 };
 use serde_json::{json, Value};
 
+use super::toolhub_role;
+use super::toolhub_ui;
 use crate::secrets;
 
 /// Loopback port of the local OAuth callback server.
@@ -386,7 +388,49 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
         }
         Some("exec") => {
             let resolver = store_project_resolver(root);
-            let (code, value) = exec(&hub, rest, &resolver);
+            let (code, mut value) = exec(&hub, rest, &resolver);
+            if code == exit::CREDENTIAL_REQUIRED
+                && value.is_object()
+                && !has(rest, "--no-ui-request")
+            {
+                // Surface a card in the session instead of a dead end — but only
+                // the supervisor raises cards; workers hand a needs_user back.
+                let role = toolhub_role::resolve(root, session_from(rest).as_deref());
+                if let Some(toolkit) = rest
+                    .first()
+                    .and_then(|n| n.split('.').next())
+                    .filter(|_| !role.may_raise_cards())
+                {
+                    let kind = card_kind_for(root, toolkit);
+                    let hand_off = toolhub_role::needs_user(
+                        role,
+                        &serde_json::to_value(kind)?.as_str().unwrap_or("credential").to_string(),
+                        toolkit,
+                        "credential_required",
+                        value.get("fields").cloned().unwrap_or_else(|| json!([])),
+                    );
+                    value["needs_user"] = hand_off["needs_user"].clone();
+                    value["next"] = hand_off["next"].clone();
+                } else if let Some(toolkit) = rest.first().and_then(|n| n.split('.').next()) {
+                    let kind = card_kind_for(root, toolkit);
+                    if let Ok(mut r) = toolhub_ui::create(
+                        root,
+                        kind,
+                        toolkit,
+                        vec![],
+                        None,
+                        session_from(rest),
+                        900,
+                    ) {
+                        attach_connection_fields(root, &mut r);
+                        value["ui_request"] = toolhub_ui::summary(&r);
+                        value["next"] = json!(format!(
+                            "ctox ui status {} (or rerun after the user connects)",
+                            r.id
+                        ));
+                    }
+                }
+            }
             println!("{}", serde_json::to_string_pretty(&value)?);
             if code != exit::OK {
                 std::process::exit(code);
@@ -712,30 +756,62 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
             let (Some(toolkit), Some(credential)) = (s("toolkit"), s("credential")) else {
                 return err(400, "toolkit and credential required".into());
             };
-            let given: std::collections::BTreeMap<String, String> = body
-                .get("params")
-                .and_then(Value::as_object)
-                .map(|m| {
-                    m.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let result = hub_for_proxy(root).and_then(|h| {
-                let config = AuthConfig {
-                    id: format!("{toolkit}-token"),
-                    toolkit: toolkit.clone(),
-                    scheme: h.credential_scheme(&toolkit)?,
-                    source: ClientCredentialSource::None,
-                    client_id: None,
-                    scopes: vec![],
-                    enabled: true,
-                };
-                h.upsert_auth_config(&config, None)?;
-                h.connect_with_credential_params(&config.id, INSTANCE_SCOPE, "workjet", credential.trim(), &given)
-            });
-            match result {
+            let given = params_from(&body);
+            match store_token(root, &toolkit, &credential, &given) {
                 Ok(account) => (200, json!({"ok": true, "account": account})),
+                Err(e) => err(400, e.to_string()),
+            }
+        }
+        // In-session cards (see toolhub_ui). Secrets go to the secret store,
+        // never into the request file or the response.
+        "ui/requests" => {
+            let session = s("session");
+            match toolhub_ui::list(root) {
+                Ok(all) => {
+                    let horizon = now_secs().saturating_sub(24 * 3600);
+                    let items: Vec<_> = all
+                        .into_iter()
+                        .filter(|r| r.created_at >= horizon)
+                        .filter(|r| {
+                            session.is_none() || r.session.is_none() || r.session == session
+                        })
+                        .collect();
+                    (200, json!({"ok": true, "requests": items}))
+                }
+                Err(e) => err(500, e.to_string()),
+            }
+        }
+        "ui/resolve" if !admin => err(403, "chef or admin role required".into()),
+        "ui/resolve" => {
+            let id = s("id").unwrap_or_default();
+            let action = s("action").unwrap_or_default();
+            let result = match action.as_str() {
+                "submit" => toolhub_ui::resolve_credential(
+                    root,
+                    &id,
+                    body.get("values").unwrap_or(&Value::Null),
+                    |toolkit, credential, params| {
+                        store_token(root, toolkit, credential, params).map(|_| ())
+                    },
+                ),
+                "decline" => toolhub_ui::finish(root, &id, toolhub_ui::UiStatus::Declined),
+                "approve" => toolhub_ui::get(root, &id).and_then(|r| {
+                    if r.kind != toolhub_ui::UiKind::Confirm {
+                        bail!("not a confirm request");
+                    }
+                    toolhub_ui::finish(root, &id, toolhub_ui::UiStatus::Done)
+                }),
+                "connected" => toolhub_ui::get(root, &id).and_then(|r| {
+                    if toolkit_connected(root, &r.toolkit) {
+                        toolhub_ui::finish(root, &id, toolhub_ui::UiStatus::Done)
+                    } else {
+                        Ok(r)
+                    }
+                }),
+                other => Err(anyhow::anyhow!("unknown action `{other}`")),
+            };
+            match result {
+                Ok(r) => (200, json!({"ok": true, "request": r})),
                 Err(e) => err(400, e.to_string()),
             }
         }
@@ -1044,6 +1120,76 @@ mod tests {
     }
 
     #[test]
+    fn ui_card_credential_lands_in_secret_store_and_unblocks_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        assert_eq!(
+            card_kind_for(&root, "slack"),
+            toolhub_ui::UiKind::Credential
+        );
+        assert_eq!(card_kind_for(&root, "vercel"), toolhub_ui::UiKind::Connect);
+        let r = toolhub_ui::create(
+            &root,
+            toolhub_ui::UiKind::Credential,
+            "slack",
+            vec![],
+            None,
+            Some("t1".into()),
+            600,
+        )
+        .unwrap();
+        let (_, listed) =
+            handle_toolhub_http(&root, "ui/requests", false, &json!({"session": "t1"}));
+        assert_eq!(listed["requests"][0]["id"], r.id);
+        let (_, other) =
+            handle_toolhub_http(&root, "ui/requests", false, &json!({"session": "t2"}));
+        assert!(other["requests"].as_array().unwrap().is_empty());
+        let waiter = {
+            let root = root.clone();
+            let id = r.id.clone();
+            std::thread::spawn(move || toolhub_ui::wait(&root, &id, |_| false).unwrap())
+        };
+        let body = json!({"id": r.id, "action": "submit", "values": {"token": "xoxb-card-999"}});
+        assert_eq!(
+            handle_toolhub_http(&root, "ui/resolve", false, &body).0,
+            403
+        );
+        let (code, v) = handle_toolhub_http(&root, "ui/resolve", true, &body);
+        assert_eq!(code, 200, "{v}");
+        assert!(!v.to_string().contains("xoxb-card-999"));
+        let done = waiter.join().unwrap();
+        assert_eq!(toolhub_ui::exit_code(done.status), toolhub_ui::exit::DONE);
+        assert!(toolkit_connected(&root, "slack"));
+        let (_, cat) = handle_toolhub_http(&root, "catalog", false, &Value::Null);
+        assert!(!cat.to_string().contains("xoxb-card-999"));
+        // Connect cards only finish once the connection is really live.
+        let c = toolhub_ui::create(
+            &root,
+            toolhub_ui::UiKind::Connect,
+            "vercel",
+            vec![],
+            None,
+            None,
+            600,
+        )
+        .unwrap();
+        let (_, v) = handle_toolhub_http(
+            &root,
+            "ui/resolve",
+            true,
+            &json!({"id": c.id, "action": "connected"}),
+        );
+        assert_eq!(v["request"]["status"], "open");
+        let (_, v) = handle_toolhub_http(
+            &root,
+            "ui/resolve",
+            true,
+            &json!({"id": c.id, "action": "decline"}),
+        );
+        assert_eq!(v["request"]["status"], "declined");
+    }
+
+    #[test]
     fn central_proxy_token_connect_catalog_and_approval_gate() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -1118,5 +1264,187 @@ mod tests {
         assert_eq!(listed[0].metadata["status"], "ACTIVE");
         b.delete("toolhub:github:ca_1", "token").unwrap();
         assert!(b.get("toolhub:github:ca_1", "token").unwrap().is_none());
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Store a token credential for a native toolkit, instance-wide.
+/// `params` object of a proxy body (per-connection parameters, non-secret).
+fn params_from(body: &Value) -> std::collections::BTreeMap<String, String> {
+    body.get("params")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn store_token(
+    root: &Path,
+    toolkit: &str,
+    credential: &str,
+    params: &std::collections::BTreeMap<String, String>,
+) -> Result<Value> {
+    let h = hub_for_proxy(root)?;
+    let config = AuthConfig {
+        id: format!("{toolkit}-token"),
+        toolkit: toolkit.to_string(),
+        scheme: h.credential_scheme(toolkit)?,
+        source: ClientCredentialSource::None,
+        client_id: None,
+        scopes: vec![],
+        enabled: true,
+    };
+    h.upsert_auth_config(&config, None)?;
+    let account = h.connect_with_credential_params(
+        &config.id,
+        INSTANCE_SCOPE,
+        "workjet",
+        credential.trim(),
+        params,
+    )?;
+    Ok(serde_json::to_value(account)?)
+}
+
+fn is_native_toolkit(root: &Path, toolkit: &str) -> bool {
+    hub_for_proxy(root)
+        .map(|h| {
+            serde_json::to_value(h.catalog())
+                .ok()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .any(|t| t.get("slug").and_then(Value::as_str) == Some(toolkit))
+        })
+        .unwrap_or(false)
+}
+
+/// True once the instance holds a live connection for this toolkit.
+fn toolkit_connected(root: &Path, toolkit: &str) -> bool {
+    let mcp_live = mcp(root)
+        .and_then(|h| h.list())
+        .map(|l| {
+            l.iter()
+                .any(|c| c.server == toolkit && c.project == INSTANCE_SCOPE && c.status == "ACTIVE")
+        })
+        .unwrap_or(false);
+    mcp_live
+        || hub_for_proxy(root)
+            .and_then(|h| h.store().list())
+            .map(|l| {
+                l.iter().any(|a| {
+                    a.toolkit == toolkit
+                        && a.project == INSTANCE_SCOPE
+                        && serde_json::to_value(&a.status).ok() == Some(json!("ACTIVE"))
+                })
+            })
+            .unwrap_or(false)
+}
+
+/// Kind of card that resolves a missing credential for this toolkit.
+fn card_kind_for(root: &Path, toolkit: &str) -> toolhub_ui::UiKind {
+    let remote = ctox_toolhub::remote_mcp::registry()
+        .iter()
+        .any(|s| s.slug == toolkit);
+    if remote && !is_native_toolkit(root, toolkit) {
+        toolhub_ui::UiKind::Connect
+    } else {
+        toolhub_ui::UiKind::Credential
+    }
+}
+
+/// Credential cards also ask for the toolkit's per-connection params
+/// (subdomain, instance URL, …) with DE+EN labels from the adapter.
+fn attach_connection_fields(root: &Path, r: &mut toolhub_ui::UiRequest) {
+    if r.kind != toolhub_ui::UiKind::Credential || !r.params.is_empty() {
+        return;
+    }
+    let Ok(h) = hub_for_proxy(root) else { return };
+    if let Ok(fields) = h.connection_fields(&r.toolkit) {
+        if !fields.is_empty() {
+            r.params = fields.iter().filter_map(|f| serde_json::to_value(f).ok()).collect();
+            let _ = toolhub_ui::save_request(root, r);
+        }
+    }
+}
+
+fn session_from(args: &[String]) -> Option<String> {
+    flag(args, "--session")
+        .map(String::from)
+        .or_else(|| std::env::var("CTOX_SESSION_ID").ok())
+        .filter(|s| !s.trim().is_empty())
+}
+
+const UI_USAGE: &str = "usage: ctox ui request credential|connect|confirm --toolkit <slug> \\
+  [--fields name[,name:plain]] [--message <text>] [--session <id>] [--timeout <secs>] [--no-wait]
+  ctox ui status <id> | ctox ui list
+exit codes (request): 0 done, 4 declined, 5 expired, 2 usage, 6 worker context (needs_user printed; only the supervisor raises cards)";
+
+/// `ctox ui …`: create and wait for in-session cards.
+pub fn handle_ui_command(root: &Path, args: &[String]) -> Result<()> {
+    let rest = args.get(1..).unwrap_or_default();
+    match args.first().map(String::as_str) {
+        Some("request") => {
+            let Some(kind) = rest.first().and_then(|k| toolhub_ui::parse_kind(k)) else {
+                eprintln!("{UI_USAGE}");
+                std::process::exit(toolhub_ui::exit::USAGE);
+            };
+            let Some(toolkit) = flag(rest, "--toolkit") else {
+                eprintln!("{UI_USAGE}");
+                std::process::exit(toolhub_ui::exit::USAGE);
+            };
+            let role = toolhub_role::resolve(root, session_from(rest).as_deref());
+            if !role.may_raise_cards() {
+                eprintln!(
+                    "ctox ui request: only the CTOX supervisor may ask the user (this session is a {}). \
+Return the needs_user below to your supervisor instead.",
+                    role.as_str()
+                );
+                print(&toolhub_role::needs_user(
+                    role,
+                    rest.first().map(String::as_str).unwrap_or("credential"),
+                    toolkit,
+                    flag(rest, "--message").unwrap_or("user input required"),
+                    json!(toolhub_ui::parse_fields(flag(rest, "--fields"))),
+                ))?;
+                std::process::exit(toolhub_ui::exit::NEEDS_SUPERVISOR);
+            }
+            let ttl = flag(rest, "--timeout")
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(900);
+            let mut r = toolhub_ui::create(
+                root,
+                kind,
+                toolkit,
+                toolhub_ui::parse_fields(flag(rest, "--fields")),
+                flag(rest, "--message").map(String::from),
+                session_from(rest),
+                ttl,
+            )?;
+            attach_connection_fields(root, &mut r);
+            if has(rest, "--no-wait") {
+                return print(&toolhub_ui::summary(&r));
+            }
+            let done = toolhub_ui::wait(root, &r.id, |r| {
+                r.kind == toolhub_ui::UiKind::Connect && toolkit_connected(root, &r.toolkit)
+            })?;
+            print(&toolhub_ui::summary(&done))?;
+            let code = toolhub_ui::exit_code(done.status);
+            if code != toolhub_ui::exit::DONE {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Some("status") => print(&toolhub_ui::get(root, required(args, "status")?)?),
+        Some("list") => print(&toolhub_ui::list(root)?),
+        _ => bail!("{UI_USAGE}"),
     }
 }

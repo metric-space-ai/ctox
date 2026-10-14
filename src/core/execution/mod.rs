@@ -12,3 +12,5 @@ pub mod models;
 pub mod responses;
 pub mod speech;
 pub mod toolhub_host;
+pub mod toolhub_role;
+pub mod toolhub_ui;
