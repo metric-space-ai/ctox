@@ -163,6 +163,7 @@ pub trait HostLogAuthority: Send + Sync {
 
 #[derive(Clone)]
 struct StandardCallbackHandler {
+    contexts: CallbackContextRegistry,
     http: HostHttpBridge,
     http_streams: Arc<HttpStreamBridge>,
     streams: StreamBridge,
@@ -181,6 +182,18 @@ enum StandardOperation {
     Log,
 }
 
+impl StandardCallbackHandler {
+    fn http_for(&self, callback: &CallbackAuthority) -> Result<HostHttpBridge, PluginClientError> {
+        if callback.http_is_scoped() {
+            callback
+                .http_client()
+                .map(HostHttpBridge::new)
+                .ok_or(PluginClientError::UnsupportedCapability)
+        } else {
+            Ok(self.http.clone())
+        }
+    }
+}
 impl HostCallbackHandler for StandardCallbackHandler {
     fn call<'a>(
         &'a self,
@@ -188,14 +201,20 @@ impl HostCallbackHandler for StandardCallbackHandler {
         payload: &'a RawValue,
     ) -> HostCallbackFuture<'a> {
         Box::pin(async move {
+            let http_owner = if callback.http_is_scoped() {
+                format!("{}:{}", callback.plugin_id(), callback.context_id())
+            } else {
+                callback.plugin_id().to_owned()
+            };
             match self.operation {
                 StandardOperation::HttpDo => {
                     let request: WireHttpRequest = decode(payload)?;
-                    let response = self
-                        .http
-                        .execute(request.into_request())
-                        .await
-                        .map_err(plugin_error)?;
+                    let http = self.http_for(callback)?;
+                    let response = tokio::select! {
+                        biased;
+                        _=callback.cancelled()=>return Err(PluginClientError::Cancelled),
+                        result=http.execute(request.into_request())=>result.map_err(plugin_error)?,
+                    };
                     envelope(&WireHttpResponse {
                         status_code: response.status_code,
                         headers: response.headers,
@@ -204,12 +223,26 @@ impl HostCallbackHandler for StandardCallbackHandler {
                 }
                 StandardOperation::HttpDoStream => {
                     let request: WireHttpRequest = decode(payload)?;
-                    let response = self
-                        .http
-                        .execute_stream(request.into_request())
-                        .await
-                        .map_err(plugin_error)?;
-                    let handle = self.http_streams.open(callback.plugin_id(), response);
+                    let http = self.http_for(callback)?;
+                    let response = tokio::select! {
+                        biased;
+                        _=callback.cancelled()=>return Err(PluginClientError::Cancelled),
+                        result=http.execute_stream(request.into_request())=>result.map_err(plugin_error)?,
+                    };
+                    let handle = self.http_streams.open(&http_owner, response);
+                    if callback.http_is_scoped() {
+                        let streams = self.http_streams.clone();
+                        let owner = http_owner.clone();
+                        let stream_id = handle.stream_id.clone();
+                        if !self.contexts.add_cleanup(
+                            callback.context_id(),
+                            Box::new(move || {
+                                let _ = streams.close(&owner, &stream_id);
+                            }),
+                        ) {
+                            return Err(PluginClientError::Cancelled);
+                        }
+                    }
                     envelope(&WireHttpStreamHandle {
                         status_code: handle.status_code,
                         headers: handle.headers,
@@ -219,11 +252,11 @@ impl HostCallbackHandler for StandardCallbackHandler {
                 StandardOperation::HttpStreamRead => {
                     let request: WireStreamId = decode(payload)?;
                     let stream_id = required(&request.stream_id)?;
-                    let chunk = self
-                        .http_streams
-                        .read(callback.plugin_id(), stream_id)
-                        .await
-                        .map_err(bridge_error)?;
+                    let chunk = tokio::select! {
+                        biased;
+                        _=callback.cancelled()=>return Err(PluginClientError::Cancelled),
+                        result=self.http_streams.read(&http_owner,stream_id)=>result.map_err(bridge_error)?,
+                    };
                     envelope(&WireStreamRead {
                         payload: chunk.payload,
                         error: chunk.error.unwrap_or_default(),
@@ -234,7 +267,7 @@ impl HostCallbackHandler for StandardCallbackHandler {
                     let request: WireStreamId = decode(payload)?;
                     let stream_id = required(&request.stream_id)?;
                     self.http_streams
-                        .close(callback.plugin_id(), stream_id)
+                        .close(&http_owner, stream_id)
                         .map_err(bridge_error)?;
                     envelope(&RpcEmptyResponse {})
                 }
@@ -320,6 +353,7 @@ pub fn install_standard_host_callbacks(
         router.register(
             method,
             Arc::new(StandardCallbackHandler {
+                contexts: router.contexts.clone(),
                 http: http.clone(),
                 http_streams: http_streams.clone(),
                 streams: streams.clone(),

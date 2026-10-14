@@ -130,6 +130,7 @@ fn capability_names(capabilities: &RpcCapabilities) -> Vec<String> {
         ),
         ("thinking_applier", capabilities.thinking_applier),
         ("usage_plugin", capabilities.usage_plugin),
+        ("quota_provider", capabilities.quota_provider),
         ("command_line_plugin", capabilities.command_line_plugin),
         ("management_api", capabilities.management_api),
     ]

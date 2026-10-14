@@ -10,7 +10,8 @@ use tokio::sync::Mutex;
 
 use crate::sdk::pluginabi::{
     METHOD_AUTH_IDENTIFIER, METHOD_EXECUTOR_IDENTIFIER, METHOD_FRONTEND_AUTH_IDENTIFIER,
-    METHOD_PLUGIN_RECONFIGURE, METHOD_PLUGIN_REGISTER, METHOD_THINKING_IDENTIFIER,
+    METHOD_PLUGIN_RECONFIGURE, METHOD_PLUGIN_REGISTER, METHOD_QUOTA_IDENTIFIER,
+    METHOD_THINKING_IDENTIFIER,
 };
 
 use super::abi::{PluginArtifact, PluginLoader};
@@ -143,6 +144,16 @@ impl PluginHost {
                 }
             };
             let identifiers = collect_identifiers(&client, &registration.capabilities).await;
+            if registration.capabilities.quota_provider
+                && !identifiers.contains_key("quota_provider")
+            {
+                failures.push(ApplyFailure {
+                    plugin_id: file.id.clone(),
+                    reason: ApplyFailureReason::InvalidRegistration,
+                });
+                let _ = client.shutdown().await;
+                continue;
+            }
             if prior.is_some() {
                 reused.insert(file.id.clone());
             }
@@ -217,6 +228,11 @@ async fn collect_identifiers(
     let mut identifiers = BTreeMap::new();
     for (name, enabled, method) in [
         (
+            "quota_provider",
+            capabilities.quota_provider,
+            METHOD_QUOTA_IDENTIFIER,
+        ),
+        (
             "auth_provider",
             capabilities.auth_provider,
             METHOD_AUTH_IDENTIFIER,
@@ -245,7 +261,10 @@ async fn collect_identifiers(
             .await;
         if let Ok(response) = response {
             let identifier = response.identifier.trim().to_ascii_lowercase();
-            if !identifier.is_empty() && identifier.len() <= 128 {
+            if !identifier.is_empty()
+                && identifier.len() <= 128
+                && (name != "quota_provider" || !identifier.chars().any(char::is_control))
+            {
                 identifiers.insert(name.to_owned(), identifier);
             }
         }
@@ -274,6 +293,7 @@ fn valid_registration(name: &str, capabilities: &RpcCapabilities) -> bool {
             capabilities.stream_chunk_interceptor,
             capabilities.thinking_applier,
             capabilities.usage_plugin,
+            capabilities.quota_provider,
             capabilities.command_line_plugin,
             capabilities.management_api,
         ]

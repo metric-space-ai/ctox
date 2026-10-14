@@ -6,6 +6,7 @@ pub mod adapters;
 pub mod adapters_auth;
 pub mod adapters_executors;
 pub mod adapters_interceptors;
+pub mod adapters_quota;
 pub mod adapters_usage_translation;
 pub mod auth_callbacks;
 pub mod auth_provider;
@@ -48,6 +49,8 @@ pub mod transport_unix;
 #[cfg(windows)]
 pub mod transport_windows;
 
+#[cfg(test)]
+mod adapters_quota_test;
 #[cfg(test)]
 mod adapters_test;
 #[cfg(test)]

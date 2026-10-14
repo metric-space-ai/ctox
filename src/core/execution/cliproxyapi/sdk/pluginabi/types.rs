@@ -41,6 +41,11 @@ pub const METHOD_RESPONSE_INTERCEPT_STREAM_CHUNK: &str = "response.intercept_str
 pub const METHOD_THINKING_IDENTIFIER: &str = "thinking.identifier";
 pub const METHOD_THINKING_APPLY: &str = "thinking.apply";
 pub const METHOD_USAGE_HANDLE: &str = "usage.handle";
+// ref: sdk/pluginabi/types.go:90-93 @ 5fc580b1d72d87a7bcfe5cfb6f479c1aea5625b3
+pub const METHOD_QUOTA_IDENTIFIER: &str = "quota.identifier";
+pub const METHOD_QUOTA_DESCRIBE: &str = "quota.describe";
+pub const METHOD_QUOTA_FETCH: &str = "quota.fetch";
+pub const METHOD_QUOTA_RESET: &str = "quota.reset";
 pub const METHOD_COMMAND_LINE_REGISTER: &str = "command_line.register";
 pub const METHOD_COMMAND_LINE_EXECUTE: &str = "command_line.execute";
 pub const METHOD_MANAGEMENT_REGISTER: &str = "management.register";

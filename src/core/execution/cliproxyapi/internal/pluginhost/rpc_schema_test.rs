@@ -50,6 +50,7 @@ fn registration() -> RpcRegistration {
             stream_chunk_interceptor: true,
             thinking_applier: false,
             usage_plugin: false,
+            quota_provider: true,
             command_line_plugin: false,
             management_api: false,
         },
@@ -74,6 +75,7 @@ fn upstream_registration_preserves_capabilities_and_go_metadata_names() {
     assert_eq!(value["metadata"]["Name"], "safe-plugin");
     assert_eq!(value["metadata"]["ConfigFields"][0]["Type"], "enum");
     assert_eq!(value["capabilities"]["scheduler"], true);
+    assert_eq!(value["capabilities"]["quota_provider"], true);
     assert_eq!(value["capabilities"]["model_router"], true);
     assert_eq!(
         value["capabilities"]["frontend_auth_provider_exclusive"],

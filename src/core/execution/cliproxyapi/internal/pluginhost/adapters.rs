@@ -23,6 +23,7 @@ use super::adapters_interceptors::{
     RpcRequestInterceptor, RpcRequestLifecyclePlugin, RpcResponseInterceptor,
     RpcStreamChunkInterceptor,
 };
+use super::adapters_quota::RpcQuotaProvider;
 use super::adapters_usage_translation::{
     ResponseNormalizePhase, RpcRequestNormalizer, RpcRequestTranslator, RpcResponseNormalizer,
     RpcResponseTranslator, RpcThinkingApplier, RpcUsagePlugin,
@@ -93,6 +94,27 @@ impl RpcCapabilityClient {
         let result = self.client.call(method, &wrapped, deadline_unix_ms).await;
         drop(lease);
         result
+    }
+
+    pub async fn call_scoped_http<Request, Response>(
+        &self,
+        method: &str,
+        request: &Request,
+        http: Option<Arc<dyn crate::sdk::pluginapi::HostHttpClient>>,
+        deadline_unix_ms: Option<u64>,
+    ) -> Result<Response, PluginClientError>
+    where
+        Request: Serialize,
+        Response: DeserializeOwned,
+    {
+        let lease = self
+            .contexts
+            .open(CallbackAuthority::new(self.plugin_id.clone(), deadline_unix_ms).bind_http(http));
+        let wrapped = RpcCallbackRequest {
+            request,
+            host_callback_id: lease.id(),
+        };
+        self.client.call(method, &wrapped, deadline_unix_ms).await
     }
 
     pub fn plugin_id(&self) -> &str {
@@ -274,7 +296,9 @@ pub fn plugin_from_record(
     let identifier = |name: &str| record.identifiers.get(name).map(String::as_str);
     let auth_provider = if rpc.auth_provider {
         identifier("auth_provider")
-            .and_then(|identifier| RpcAuthProvider::new(identifier, client.clone(), host).ok())
+            .and_then(|identifier| {
+                RpcAuthProvider::new(identifier, client.clone(), host.clone()).ok()
+            })
             .map(|provider| Arc::new(provider) as _)
     } else {
         None
@@ -298,6 +322,13 @@ pub fn plugin_from_record(
     let thinking_applier = if rpc.thinking_applier {
         identifier("thinking_applier")
             .and_then(|identifier| RpcThinkingApplier::new(identifier, client.clone()).ok())
+            .map(|provider| Arc::new(provider) as _)
+    } else {
+        None
+    };
+    let quota_provider = if rpc.quota_provider {
+        identifier("quota_provider")
+            .and_then(|identifier| RpcQuotaProvider::new(identifier, client.clone(), host).ok())
             .map(|provider| Arc::new(provider) as _)
     } else {
         None
@@ -358,9 +389,7 @@ pub fn plugin_from_record(
                 .stream_chunk_interceptor
                 .then(|| Arc::new(RpcStreamChunkInterceptor::new(client.clone())) as _),
             thinking_applier,
-            // The additive quota SDK slot is not advertised by process plugins
-            // until their guarded quota RPC adapter is installed.
-            quota_provider: None,
+            quota_provider,
             usage_plugin: rpc
                 .usage_plugin
                 .then(|| Arc::new(RpcUsagePlugin::new(client.clone())) as _),
