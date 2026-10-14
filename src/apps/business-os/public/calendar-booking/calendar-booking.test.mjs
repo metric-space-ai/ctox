@@ -34,6 +34,8 @@ test('public booking surface provides German and English without exposing server
   assert.doesNotMatch(js, /\.innerHTML\s*=/);
   assert.doesNotMatch(js, /\balert\s*\(/);
   assert.doesNotMatch(js, /err\.error|error\.message/);
+  assert.match(js, /slotsRetryMs = Math\.min\(slotsRetryMs \* 2, 60_000\)/);
+  assert.match(js, /attempt >= 1/);
 });
 
 test('public booking surface keeps secrets out of URLs and logs', () => {
