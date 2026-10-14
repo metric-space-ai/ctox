@@ -4,6 +4,15 @@ const STYLE_BUILD = new URL(import.meta.url).searchParams.get('v') || 'browser-s
 
 // Module-level translator; set from locales/<lang>.json during mount.
 let t = (key, fallback) => fallback ?? key;
+const warnedBrowserDetails = new Set();
+function warnBrowserDetail(scope, detail) {
+  const value = detail instanceof Error ? (detail.message || String(detail)) : String(detail || '').trim();
+  if (!value) return;
+  const key = `${scope}:${value}`;
+  if (warnedBrowserDetails.has(key)) return;
+  warnedBrowserDetails.add(key);
+  console.warn(`[browser] ${scope}`, detail);
+}
 const DEFAULT_SESSION_ID = 'browser_session_default';
 const DEFAULT_TAB_ID = 'browser_tab_default';
 const VIEWPORT = { width: 1280, height: 720 };
@@ -81,7 +90,7 @@ export async function mount(ctx) {
     go: root.querySelector('[data-browser-go]'),
     address: root.querySelector('[data-browser-address]'),
     addressClear: null,
-    statusChip: root.querySelector('[data-browser-status-chip]'),
+
     statusTitle: root.querySelector('[data-browser-status-title]'),
     statusMeta: root.querySelector('[data-browser-status-meta]'),
     downloads: root.querySelector('[data-browser-downloads]'),
@@ -634,7 +643,7 @@ export async function mount(ctx) {
       return;
     }
     state.addressDirty = false;
-    state.notice = 'Browser wird mit CTOX verbunden …';
+    state.notice = '';
     safeLoadAndRender();
     runBrowserCommand(submitBrowserNav(ctx, state, refs, 'navigate', { url }));
   };
@@ -650,7 +659,7 @@ export async function mount(ctx) {
       submitAddress();
     } catch (error) {
       console.error('[browser] Adresse absenden fehlgeschlagen', error);
-      state.notice = `Der Vorgang konnte nicht gestartet werden: ${error?.message || error}`;
+      state.notice = 'Der Vorgang konnte nicht gestartet werden.';
       safeLoadAndRender();
     }
   });
@@ -664,7 +673,7 @@ export async function mount(ctx) {
       submitAddress();
     } catch (error) {
       console.error('[browser] Adresse per Eingabetaste absenden fehlgeschlagen', error);
-      state.notice = `Der Vorgang konnte nicht gestartet werden: ${error?.message || error}`;
+      state.notice = 'Der Vorgang konnte nicht gestartet werden.';
       safeLoadAndRender();
     }
   });
@@ -1254,28 +1263,8 @@ function browserAuthRequestFromArgs(value) {
 }
 
 function browserStartErrorMessage(error) {
-  const code = String(error?.code || '').toLowerCase();
-  if (code === 'auth_required') return 'Die Browser-Anmeldung benötigt eine neue Business-OS-Autorisierung.';
-  if (code === 'native_unavailable') return 'Die Browser-Anmeldung konnte noch nicht mit CTOX verbunden werden. Bitte erneut versuchen.';
-  // Zwei voellig verschiedene Fehler trugen bis 13.08.2026 dieselbe Meldung.
-  // sync_unavailable heisst "keine Verbindung". projection_delayed heisst
-  // "Verbindung steht, die Antwort kam nur nicht rechtzeitig zurueck".
-  // Auf der Kundeninstanz gemessen: alle fuenf Browser-Collections
-  // 'connected' — und trotzdem stand da "CTOX ist nicht mit dem
-  // Browser-Datenkanal verbunden". Die Meldung behauptete das Gegenteil des
-  // gemessenen Zustands und schickte den Nutzer auf die falsche Faehrte
-  // ("Verbindung erneut aufbauen"), waehrend in Wahrheit nur die Antwort
-  // ausstand. Eine Zeitueberschreitung ist kein Ausfall.
-  if (code === 'sync_unavailable') {
-    return 'CTOX ist nicht mit dem Browser-Datenkanal verbunden. Der Browser wurde nicht gestartet. Bitte die Verbindung erneut aufbauen und dann erneut versuchen.';
-  }
-  if (code === 'projection_delayed') {
-    return 'CTOX hat den Befehl angenommen, aber noch nicht bestätigt. Die Verbindung steht — der Vorgang läuft möglicherweise noch. Bitte einen Moment warten und die Ansicht neu laden, bevor Sie es erneut versuchen.';
-  }
-  const message = String(error?.message || '').trim();
-  return message
-    ? `Die Browser-Anmeldung konnte nicht geöffnet werden: ${message}`
-    : 'Die Browser-Anmeldung konnte nicht geöffnet werden.';
+  warnBrowserDetail('start', error);
+  return 'Der Browser konnte nicht gestartet werden.';
 }
 
 function browserSessionError(session) {
@@ -1704,7 +1693,8 @@ function tabBefehl(ctx, state, commandType, tabId) {
     .then(() => holeLiveZustand(ctx, state))
     .then(() => state.refresh?.())
     .catch((error) => {
-      state.notice = `Der Vorgang konnte nicht gestartet werden: ${error?.message || error}`;
+      warnBrowserDetail('tab-command', error);
+      state.notice = 'Der Vorgang konnte nicht gestartet werden.';
       state.refresh?.();
     });
 }
@@ -1929,7 +1919,8 @@ function installPreciseInput(ctx, refs, state) {
         setHint(text ? 'Text am Punkt eingefügt' : 'Klick gesendet (kein Text eingegeben)');
       }
     } catch (error) {
-      setHint(`Eingabe fehlgeschlagen: ${error?.message || error}`);
+      warnBrowserDetail('precise-input', error);
+      setHint('Eingabe hat nicht geklappt.');
     }
   });
   refs.preciseText?.addEventListener('keydown', (event) => {
@@ -2230,15 +2221,18 @@ function startDirectBrowserLive(ctx, refs, state, isMounted, scheduleRefresh) {
         ? response.results.filter((result) => result?.ok === false)
         : [];
       if (failed.length) {
-        state.notice = failed[0]?.error || 'Eine Browser-Eingabe ist fehlgeschlagen.';
+        warnBrowserDetail('input', failed[0]?.error);
+        state.notice = 'Eingabe hat nicht geklappt.';
         renderNotice(refs, state.notice);
       }
     } catch (error) {
       state.directInputFailures += 1;
       if (state.directInputFailures === 2 || state.directInputFailures % 10 === 0) {
         console.warn('[browser] direct WebRTC input path reconnecting', error);
-        state.notice = 'Browser-Eingabe wird wieder verbunden …';
-        renderNotice(refs, state.notice);
+        if (state.notice === 'Browser-Eingabe wird wieder verbunden …') {
+          state.notice = '';
+          renderNotice(refs, '');
+        }
       }
     } finally {
       inputFlushInFlight = false;
@@ -2282,16 +2276,14 @@ function startDirectBrowserLive(ctx, refs, state, isMounted, scheduleRefresh) {
       // dorthin, wo der Nutzer hinsieht — auf die Buehne und in die Statuszeile.
       if (response && response.ok === false) {
         state.directLiveFailures += 1;
-        const grund = String(response.error || 'Der Browser-Dienst hat den Bildabruf abgelehnt.');
+        const grund = String(response.error || 'rejected');
         if (state.lastLiveRejection !== grund) {
           console.warn('[browser] direct live request rejected', { session_id: directSessionId, error: grund });
         }
         state.lastLiveRejection = grund;
-        state.notice = grund;
-        renderNotice(refs, state.notice);
-        if (refs.empty && state.ansicht !== 'script' && !state.latestDirectFrame) {
-          refs.empty.hidden = false;
-          refs.empty.textContent = grund;
+        if (state.notice === grund || state.notice === 'Direkter Browser-Datenkanal wird wieder verbunden …') {
+          state.notice = '';
+          renderNotice(refs, '');
         }
         schedule(1_000);
         return;
@@ -2314,7 +2306,8 @@ function startDirectBrowserLive(ctx, refs, state, isMounted, scheduleRefresh) {
         ? response.results.filter((result) => result?.ok === false)
         : [];
       if (failed.length) {
-        state.notice = failed[0]?.error || 'Eine Browser-Eingabe ist fehlgeschlagen.';
+        warnBrowserDetail('live-input', failed[0]?.error);
+        state.notice = 'Eingabe hat nicht geklappt.';
         renderNotice(refs, state.notice);
       }
       const screenshot = response?.screenshot;
@@ -2375,8 +2368,10 @@ function startDirectBrowserLive(ctx, refs, state, isMounted, scheduleRefresh) {
         // on every tick and could consume the whole application. Keep the
         // bounded input queue and let the shared WebRTC peer reconnect.
         console.warn('[browser] direct WebRTC live path reconnecting', error);
-        state.notice = 'Direkter Browser-Datenkanal wird wieder verbunden …';
-        renderNotice(refs, state.notice);
+        if (state.notice === 'Direkter Browser-Datenkanal wird wieder verbunden …') {
+          state.notice = '';
+          renderNotice(refs, '');
+        }
       }
     }
     schedule(state.directLiveFailures ? 500 : 100);
@@ -2732,7 +2727,8 @@ async function ladeScrapingAdapter(ctx, state) {
         });
         rows.push(...collectionRows.map((row) => ({ ...row, adapter_collection: collectionName })));
       } catch (error) {
-        errors.push(`${collectionName}: ${String(error?.message || error)}`);
+        warnBrowserDetail('adapter-load', error);
+        errors.push(collectionName);
       }
     }
     const deduplicated = new Map();
@@ -2741,9 +2737,7 @@ async function ladeScrapingAdapter(ctx, state) {
       deduplicated.set(`${row.adapter_collection}:${row.id || row.source_id}`, row);
     }
     state.adapters = [...deduplicated.values()];
-    state.adapterFehler = errors.length === SCRAPING_ADAPTER_COLLECTIONS.length
-      ? errors.join(' | ')
-      : '';
+    state.adapterFehler = errors.length === SCRAPING_ADAPTER_COLLECTIONS.length;
     state.adapterLadedauer = null;
   })();
   return state.adapterLadedauer;
@@ -2779,7 +2773,7 @@ function renderAdapterRail(ctx, refs, state) {
     rail.replaceChildren();
     const laden = document.createElement('div');
     laden.className = 'ctox-empty';
-    laden.textContent = t('adaptersLoading', 'Adapter werden geladen …');
+    laden.textContent = t('adaptersLoading', 'Wird geladen …');
     rail.appendChild(laden);
     ladeScrapingAdapter(ctx, state).then(() => {
       if (state.leftView?.band === 'adapters') renderAdapterRail(ctx, refs, state);
@@ -2790,7 +2784,7 @@ function renderAdapterRail(ctx, refs, state) {
   if (state.adapterFehler) {
     const fehler = document.createElement('div');
     fehler.className = 'ctox-empty';
-    fehler.textContent = t('adaptersFailed', 'Adapter konnten nicht geladen werden: ') + state.adapterFehler;
+    fehler.textContent = t('adaptersFailed', 'Adapter konnten nicht geladen werden.');
     rail.appendChild(fehler);
     return;
   }
@@ -2817,21 +2811,9 @@ function renderAdapterRail(ctx, refs, state) {
     kopf.append(punkt, name);
     const meta = document.createElement('div');
     meta.className = 'browser-adapter-meta';
-    const getestet = Number(adapter.last_test?.at_ms || adapter.updated_at_ms || 0);
-    const latenz = Number(adapter.latency_ms || adapter.last_test?.latency_ms || 0);
-    meta.textContent = [
-      String(adapter.source_id || ''),
-      zustand.text,
-      getestet ? new Date(getestet).toLocaleString() : '',
-      latenz ? `${latenz} ms` : '',
-    ].filter(Boolean).join(' · ');
-    karte.append(kopf, meta);
-    if (adapter.last_error) {
-      const fehlerzeile = document.createElement('div');
-      fehlerzeile.className = 'browser-adapter-error';
-      fehlerzeile.textContent = String(adapter.last_error).slice(0, 160);
-      karte.appendChild(fehlerzeile);
-    }
+    if (adapter.last_error) warnBrowserDetail('adapter', adapter.last_error);
+    meta.textContent = '';
+    karte.append(kopf);
     rail.appendChild(karte);
   }
   const hinweis = document.createElement('div');
@@ -3000,9 +2982,7 @@ function browserSessionShardMeta(session, tabCount = 0, ctx = null) {
   const profile = (session.profile_mode || session.payload?.profile_mode) === 'private' ? 'Privat' : 'Persönlich';
   const count = Number(tabCount || 0);
   const zustand = browserSitzungZustand(session, ctx);
-  const parts = [zustand.text, profile, status, `${count} ${count === 1 ? 'Tab' : 'Tabs'}`];
-  const error = browserSessionError(session);
-  if (error) parts.push(error);
+  const parts = [zustand.text, profile, status, `${count} ${count === 1 ? 'Tab' : 'Tabs'}`].filter(Boolean);
   if (session.__imported) parts.push('Import');
   return parts.join(' · ');
 }
@@ -3238,9 +3218,8 @@ function renderSession(refs, session, tab, frame, command, state) {
   const url = tab?.url || session.current_url || '';
   const commandError = commandErrorMessage(command);
   const runtimeError = browserSessionError(session);
-  const sessionError = runtimeError
-    ? `<div class="browser-error"><strong>Browser-Laufzeit:</strong> ${escapeHtml(runtimeError)}</div>`
-    : '';
+  if (runtimeError) warnBrowserDetail('runtime', runtimeError);
+  if (commandError) warnBrowserDetail('command', commandError);
   const commandLine = command
     ? `<div class="browser-muted">Letzte Browseraktion: ${escapeHtml(browserActionLabel(command.command_type || command.type || 'browser'))}</div>`
     : '';
@@ -3264,8 +3243,6 @@ function renderSession(refs, session, tab, frame, command, state) {
       <span>Frame</span><span>${escapeHtml(frame ? `${frame.width}x${frame.height}` : 'Kein Bild')}</span>
     </div>
     ${commandLine}
-    ${sessionError}
-    ${commandError ? `<div class="browser-error">${escapeHtml(commandError)}</div>` : ''}
   `;
 }
 
@@ -3418,14 +3395,6 @@ function authAssistStatusLabel(status, fallback) {
 }
 
 function renderStatus(refs, session, tab, frame, command) {
-  const state = browserUiState(session);
-  if (refs.statusChip) {
-    refs.statusChip.textContent = session ? browserStatusLabel(session) : t('statusDisconnected', 'Nicht verbunden');
-    refs.statusChip.dataset.state = state;
-    refs.statusChip.classList.toggle('is-success', state === 'ready');
-    refs.statusChip.classList.toggle('is-warning', ['starting', 'waiting', 'blocked'].includes(state));
-    refs.statusChip.classList.toggle('is-danger', state === 'error');
-  }
   const url = tab?.url || session?.current_url || '';
   if (refs.statusTitle) {
     refs.statusTitle.textContent = browserDisplayTitle(tab, session, url) || t('noWindowOpen', 'Kein Browser-Fenster geoeffnet');
@@ -3435,7 +3404,7 @@ function renderStatus(refs, session, tab, frame, command) {
   if (frame?.seq != null) bits.push(`Frame ${frame.seq}`);
   if (session?.frame_rate_target) bits.push(`${session.frame_rate_target} fps`);
   const error = commandErrorMessage(command) || browserSessionError(session);
-  if (error) bits.push(`Grund: ${error}`);
+  if (error) warnBrowserDetail('status', error);
   if (refs.statusMeta) refs.statusMeta.textContent = bits.join(' - ') || '-';
 }
 
@@ -3529,15 +3498,19 @@ async function renderFrame(refs, frame, state) {
 function frameEmptyText(state) {
   const session = state.latestSession;
   const commandError = commandErrorMessage(state.latestCommand);
-  if (commandError) return commandError;
+  if (commandError) {
+    warnBrowserDetail('frame-command', commandError);
+    return t('frameStartFailed', 'Der Browser konnte nicht gestartet werden.');
+  }
   if (!session) return t('frameOpenNew', 'Oeffne ein neues Browser-Fenster');
   const status = String(session.runtime_status || session.status || '').toLowerCase();
   const runtimeError = browserSessionError(session);
-  if (['failed', 'error', 'blocked'].includes(status)) {
-    return runtimeError || t('frameStartFailed', 'Der Browser konnte nicht gestartet werden');
+  if (runtimeError && ['failed', 'error', 'blocked', 'disconnected', 'offline'].includes(status)) {
+    warnBrowserDetail('frame-runtime', runtimeError);
   }
-  if (['disconnected', 'offline'].includes(status)) {
-    return runtimeError || 'Kein laufender Browser-Prozess. Starten Sie die Sitzung erneut.';
+  if (status === 'blocked') return 'Aktion erforderlich';
+  if (['failed', 'error', 'disconnected', 'offline'].includes(status)) {
+    return t('frameStartFailed', 'Der Browser konnte nicht gestartet werden.');
   }
   if (status === 'stopped' || status === 'closed') return t('frameClosed', 'Browser-Fenster geschlossen');
   // Eine abgelaufene Steuerpacht sieht aus wie ein haengendes Bild: der
@@ -3565,13 +3538,8 @@ function browserUiState(session) {
 }
 
 function browserStatusLabel(session) {
-  const state = browserUiState(session);
-  if (state === 'ready') return t('statusReady', 'Bereit');
-  if (state === 'starting') return t('statusStarting', 'Startet');
-  if (state === 'waiting') return t('statusConnecting', 'Verbindet');
-  if (state === 'blocked') return 'Aktion erforderlich';
-  if (state === 'error') return t('statusError', 'Fehler');
-  return t('statusDisconnected', 'Nicht verbunden');
+  if (browserUiState(session) === 'blocked') return 'Aktion erforderlich';
+  return '';
 }
 
 function browserDisplayTitle(tab, session, url = '') {
@@ -3607,7 +3575,7 @@ function renderDiagnostics(refs, frame, inputs, command, commands = [], handoffT
             <strong>${escapeHtml(item.command_type || item.type || 'browser')}</strong>
             <span>${escapeHtml(item.status || 'pending')}</span>
             <span>${escapeHtml(formatTime(item.updated_at_ms || item.created_at_ms))}</span>
-            <span>${escapeHtml(commandErrorMessage(item) || item.record_id || '')}</span>
+            <span></span>
           </div>
         `).join('')
       : '<div class="browser-command-row"><span>No browser commands</span></div>';
@@ -3630,7 +3598,7 @@ function commandSummary(command) {
   const type = command.command_type || command.type || 'browser';
   const status = command.status || 'pending';
   const error = commandErrorMessage(command);
-  if (error) return `${type} failed: ${error}`;
+  if (error) warnBrowserDetail('command-summary', error);
   return `${type} ${status}`;
 }
 
@@ -3955,7 +3923,8 @@ function installViewSwitch(ctx, refs, state) {
           : '';
       }
     } catch (error) {
-      refs.scriptCode.textContent = `${tBrowser(ctx, 'scriptFailed', 'Skript konnte nicht gelesen werden')}: ${error?.message || error}`;
+      warnBrowserDetail('script', error);
+      refs.scriptCode.textContent = tBrowser(ctx, 'scriptFailed', 'Skript konnte nicht gelesen werden.');
     }
   };
   for (const k of knoepfe) {
