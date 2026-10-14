@@ -1291,9 +1291,6 @@ function renderDocumentation(item) {
     item.modification_label ? `Modifikation: ${item.modification_label}` : '',
     item.latest_release ? `Letztes Release: v${item.latest_release.version} (${item.latest_release.status})` : '',
     item.repo ? `Repository: ${item.repo}` : '',
-    item.source_path ? `Source path: ${item.source_path}` : '',
-    item.local_manifest_path ? `Local manifest: ${item.local_manifest_path}` : '',
-    item.download_url ? `Installer archive: ${item.download_url}` : '',
     item.permissions?.length && !item.release_projection?.dataAccess?.hasReview
       ? `Deklarierte Datenbereiche: ${item.permissions.map(businessDataAreaLabel).join(', ')}`
       : '',
@@ -1630,8 +1627,7 @@ async function openVersionsDialog(item) {
   overlay.className = 'ctox-modal app-store-version-dialog';
   const rows = versions.map((version) => {
     const date = version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '';
-    const seal = version.sealed ? '' : ' · offen';
-    const meta = `#${version.seq} · ${escapeHtml(originLabel(version.origin))}${seal} · ${version.file_count || 0} Dateien · ${escapeHtml(date)}`;
+    const meta = [originLabel(version.origin), date].filter(Boolean).map((part) => escapeHtml(part)).join(' · ');
     return `
       <li class="app-version-row">
         <div class="app-version-meta">
