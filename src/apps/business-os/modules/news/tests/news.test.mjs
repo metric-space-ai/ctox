@@ -161,3 +161,34 @@ test('commands carry canonical type, record id, skill and record snapshot', () =
   const auth = buildAuthCommand(topic, newSource('topic_1', 'x', '', 'Home'));
   assert.equal(auth.payload.target_url, 'https://x.com/home');
 });
+
+test('reddit and x read through a CTOX account, never an API', async () => {
+  const model = await import('../core/news-model.mjs');
+  const reddit = model.newSource('topic_a', 'reddit', '', 'https://www.reddit.com/r/LocalLLaMA/top/');
+  assert.deepEqual(reddit.items, ['r/LocalLLaMA']);
+  assert.equal(reddit.status, 'needs_auth');
+  assert.equal(reddit.adapter_kind, 'browser_session');
+  assert.equal(model.newSource('topic_a', 'x', '', 'Home').adapter_kind, 'browser_session');
+  assert.equal(model.redditItem('not a sub!'), '');
+  assert.equal(model.redditItem('MachineLearning'), 'r/MachineLearning');
+  const merged = model.redditPresetSource([reddit], 'topic_a');
+  assert.equal(merged.id, reddit.id);
+  assert.deepEqual(merged.items, ['r/LocalLLaMA', 'r/MachineLearning', 'r/singularity']);
+  assert.ok(!model.COMMUNITY_PRESET.some(([, url]) => url.includes('reddit.com')));
+
+  const connect = model.buildAdapterCommand({ id: 'topic_a' }, reddit);
+  assert.equal(connect.command_type, model.NEWS_SOURCE_ADAPTER);
+  assert.equal(connect.payload.auth_source, 'reddit.com');
+  assert.deepEqual(connect.payload.required_skills, [model.NEWS_SKILL]);
+  assert.ok(connect.payload.instruction.includes(`--task-id ${connect.command_id}`));
+  assert.ok(connect.payload.instruction.includes('--generate-credential'));
+  assert.equal(model.buildAuthCommand({ id: 'topic_a' }, reddit).payload.target_url, 'https://www.reddit.com/');
+
+  const topic = model.normalizeTopic({ id: 'topic_a', title: 'KI' });
+  const generate = model.buildGenerateCommand(topic, [reddit], { id: 'issue_a', issue_date: '2026-10-14' }, null);
+  assert.ok(generate.payload.instruction.includes(`--task-id ${generate.command_id}`));
+  assert.equal(generate.payload.record_snapshot.sources[0].auth_source, 'reddit.com');
+  const lab = model.newSource('topic_a', 'lab', 'OpenAI', 'https://openai.com/news/');
+  const plain = model.buildGenerateCommand(topic, [lab], { id: 'issue_b', issue_date: '2026-10-14' }, null);
+  assert.ok(!plain.payload.instruction.includes('--task-id'));
+});

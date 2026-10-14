@@ -7,7 +7,8 @@ export const SCRAPE_SKILL = 'universal-scraping';
 export const ISSUE_OUTPUT_CONTRACT = 'ctox.news.issue.v1';
 export const CATEGORIES = Object.freeze(['model', 'tool', 'research', 'debate']);
 export const CADENCES = Object.freeze(['daily', 'weekly', 'deadline', 'manual']);
-export const SOURCE_KINDS = Object.freeze(['lab', 'x', 'youtube', 'newsletter', 'community']);
+export const SOURCE_KINDS = Object.freeze(['lab', 'x', 'reddit', 'youtube', 'newsletter', 'community']);
+export const SOURCE_REPLY_CONTRACT = 'ctox.news.source.v1';
 export const NEWS_ISSUE_GENERATE = 'news.issue.generate';
 export const NEWS_TOPIC_SCHEDULE = 'news.topic.schedule';
 export const NEWS_SOURCE_ADAPTER = 'news.source.adapter';
@@ -18,10 +19,31 @@ export const ISSUE_ACTIVE_STATUSES = Object.freeze(['queued', 'running']);
 const SOURCE_ADAPTER = Object.freeze({
   lab: { adapter_kind: 'scrape_target', auth_mode: 'none' },
   community: { adapter_kind: 'scrape_target', auth_mode: 'none' },
-  x: { adapter_kind: 'api_browser', auth_mode: 'browser_session' },
+  // No X or Reddit API: CTOX reads both through a real account in the
+  // owner's browser profile.
+  x: { adapter_kind: 'browser_session', auth_mode: 'browser_session' },
+  reddit: { adapter_kind: 'browser_session', auth_mode: 'browser_session' },
   youtube: { adapter_kind: 'youtube_transcript', auth_mode: 'none' },
   newsletter: { adapter_kind: 'mail', auth_mode: 'none' },
 });
+
+// Web-stack auth profile per account source (see web_stack_auth_profiles.rs).
+export const AUTH_SOURCES = Object.freeze({ x: 'x.com', reddit: 'reddit.com' });
+
+export function authSourceFor(source) {
+  return AUTH_SOURCES[source?.kind] || '';
+}
+
+export const REDDIT_PRESET = Object.freeze(['r/LocalLLaMA', 'r/MachineLearning', 'r/singularity']);
+
+// Accepts `r/x`, `x` or a subreddit URL and returns `r/x`.
+export function redditItem(value) {
+  const raw = String(value || '').trim();
+  const fromUrl = /reddit\.com\/(r\/[A-Za-z0-9_]+)/i.exec(raw);
+  if (fromUrl) return fromUrl[1];
+  const bare = raw.replace(/^\/?r\//i, '').replace(/\/+$/, '');
+  return /^[A-Za-z0-9_]{2,32}$/.test(bare) ? `r/${bare}` : '';
+}
 
 export const LAB_PRESET = Object.freeze([
   ['OpenAI', 'https://openai.com/news/'],
@@ -45,8 +67,6 @@ export const LAB_PRESET = Object.freeze([
 export const COMMUNITY_PRESET = Object.freeze([
   ['Hacker News', 'https://news.ycombinator.com/'],
   ['AlphaSignal', 'https://alphasignal.ai/'],
-  ['r/LocalLLaMA', 'https://www.reddit.com/r/LocalLLaMA/'],
-  ['r/MachineLearning', 'https://www.reddit.com/r/MachineLearning/'],
   ['Hugging Face Trending', 'https://huggingface.co/models?sort=trending'],
   ['GitHub Trending', 'https://github.com/trending'],
   ['arXiv cs.CL', 'https://arxiv.org/list/cs.CL/recent'],
@@ -132,7 +152,7 @@ export function validateTopic(topic) {
 export function newSource(topicId, kind, label, value, now = Date.now()) {
   const safeKind = SOURCE_KINDS.includes(kind) ? kind : 'lab';
   const adapter = SOURCE_ADAPTER[safeKind];
-  const raw = String(value || '').trim();
+  const raw = safeKind === 'reddit' ? redditItem(value) : String(value || '').trim();
   const isUrl = /^https?:\/\//i.test(raw);
   return {
     id: newId('source'),
@@ -149,7 +169,7 @@ export function newSource(topicId, kind, label, value, now = Date.now()) {
     // newsletter senders.
     items: isUrl || !raw ? [] : [raw],
     enabled: true,
-    status: safeKind === 'x' ? 'needs_auth' : 'new',
+    status: AUTH_SOURCES[safeKind] ? 'needs_auth' : 'new',
     last_error: '',
     last_run_at_ms: 0,
     payload: {},
@@ -162,6 +182,7 @@ export function sourceLabelFromValue(kind, value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (kind === 'x') return 'X';
+  if (kind === 'reddit') return 'Reddit';
   if (kind === 'youtube') return 'YouTube';
   if (kind === 'newsletter') return 'Newsletter';
   try {
@@ -175,13 +196,21 @@ export function sourceLabelFromValue(kind, value) {
 // Adding a selector to an existing account-style source (X, YouTube,
 // newsletter) extends that source instead of creating a parallel one.
 export function mergeIntoAccountSource(sources, topicId, kind, value, now = Date.now()) {
-  const raw = String(value || '').trim();
+  const raw = kind === 'reddit' ? redditItem(value) : String(value || '').trim();
   if (!raw || kind === 'lab' || kind === 'community') return null;
   const existing = sources.find((source) => source.topic_id === topicId && source.kind === kind);
   if (!existing) return null;
   const items = Array.isArray(existing.items) ? existing.items : [];
   if (items.includes(raw)) return existing;
   return { ...existing, items: [...items, raw], updated_at_ms: now };
+}
+
+// The Reddit preset extends the topic's one Reddit account source.
+export function redditPresetSource(sources, topicId, now = Date.now()) {
+  const existing = sources.find((source) => source.topic_id === topicId && source.kind === 'reddit');
+  const base = existing || newSource(topicId, 'reddit', 'Reddit', REDDIT_PRESET[0], now);
+  const items = [...new Set([...(Array.isArray(base.items) ? base.items : []), ...REDDIT_PRESET])];
+  return { ...base, items, updated_at_ms: now };
 }
 
 export function presetSources(topicId, preset, kind, existing = [], now = Date.now()) {
@@ -331,8 +360,12 @@ export function domainOf(url) {
   }
 }
 
-function commandEnvelope({ command_type: commandType, record_id: recordId, payload, sync_collections: syncCollections }) {
-  const commandId = newId(`cmd_${commandType.replaceAll('.', '_')}`);
+export function newCommandId(commandType) {
+  return newId(`cmd_${commandType.replaceAll('.', '_')}`);
+}
+
+function commandEnvelope({ command_id: givenId, command_type: commandType, record_id: recordId, payload, sync_collections: syncCollections }) {
+  const commandId = givenId || newCommandId(commandType);
   return {
     id: commandId,
     command_id: commandId,
@@ -355,6 +388,7 @@ export function sourceSnapshot(source) {
     adapter_kind: source.adapter_kind,
     target_key: source.target_key,
     auth_mode: source.auth_mode,
+    auth_source: authSourceFor(source),
     items: Array.isArray(source.items) ? source.items : [],
     status: source.status,
   };
@@ -372,13 +406,15 @@ export function topicSnapshot(topic) {
   };
 }
 
-export function buildIssueInstruction(topic, sources, previousIssue) {
+export function buildIssueInstruction(topic, sources, previousIssue, commandId = '') {
   const enabled = sources.filter((source) => source.enabled !== false);
+  const signedIn = enabled.some((source) => authSourceFor(source));
   const lines = [
     `Erstelle die News-Ausgabe für das Thema "${topic.title}" mit dem Skill ${NEWS_SKILL}.`,
     topic.prompt ? `Fokus: ${topic.prompt}` : '',
     `Sprache: ${topic.language === 'en' ? 'Englisch' : 'Deutsch'}. Höchstens ${topic.max_posts} Beiträge, Kategorien: ${topic.categories.join(', ')}.`,
     `Quellen (${enabled.length}): ${enabled.map((source) => `${source.kind}:${source.label}`).join('; ') || 'keine konfiguriert, nutze die Websuche'}.`,
+    signedIn && commandId ? `Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id ${commandId}.` : '',
     previousIssue ? `Vorherige Ausgabe ${previousIssue.issue_date}: wiederhole nur Meldungen mit neuer Entwicklung.` : '',
     `Liefere das Ergebnis im Vertrag ${ISSUE_OUTPUT_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link.`,
   ];
@@ -387,14 +423,16 @@ export function buildIssueInstruction(topic, sources, previousIssue) {
 
 export function buildGenerateCommand(topic, sources, issue, previousIssue) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
+  const commandId = newCommandId(NEWS_ISSUE_GENERATE);
   return commandEnvelope({
+    command_id: commandId,
     command_type: NEWS_ISSUE_GENERATE,
     record_id: topic.id,
     payload: {
     topic_id: topic.id,
     issue_id: issue.id,
     issue_date: issue.issue_date,
-    instruction: buildIssueInstruction(topic, topicSources, previousIssue),
+    instruction: buildIssueInstruction(topic, topicSources, previousIssue, commandId),
     required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
@@ -436,6 +474,8 @@ export function buildScheduleCommand(topic, { deleted = false } = {}) {
 }
 
 export function buildAdapterCommand(topic, source) {
+  const authSource = authSourceFor(source);
+  if (authSource) return buildConnectCommand(topic, source, authSource);
   return commandEnvelope({
     command_type: NEWS_SOURCE_ADAPTER,
     record_id: source.id,
@@ -454,6 +494,35 @@ export function buildAdapterCommand(topic, source) {
   });
 }
 
+// Account sources: the adapter is CTOX's own account. The run signs in, or
+// registers with the CTOX mailbox when no account exists yet, and answers
+// with ctox.news.source.v1.
+function buildConnectCommand(topic, source, authSource) {
+  const commandId = newCommandId(NEWS_SOURCE_ADAPTER);
+  return commandEnvelope({
+    command_id: commandId,
+    command_type: NEWS_SOURCE_ADAPTER,
+    record_id: source.id,
+    payload: {
+    topic_id: topic?.id || source.topic_id,
+    source_id: source.id,
+    auth_source: authSource,
+    instruction: [
+      `Verbinde die News-Quelle "${source.label}" über ein CTOX-Konto bei ${authSource} (Skill ${NEWS_SKILL}, Abschnitt "Konto verbinden").`,
+      `source_id: ${source.id}; --task-id ${commandId}.`,
+      `Ohne Konto: mit dem CTOX-Postfach registrieren (auth-assist-signup --generate-credential --confirm-provisioning). Antworte im Vertrag ${SOURCE_REPLY_CONTRACT}.`,
+    ].join('\n'),
+    required_skills: [NEWS_SKILL],
+    thread_key: `business-os/news/${source.topic_id}/sources`,
+    output_contract: SOURCE_REPLY_CONTRACT,
+    record_snapshot: { source: sourceSnapshot(source) },
+  },
+    sync_collections: ['news_sources'],
+  });
+}
+
+const ACCOUNT_HOME = Object.freeze({ x: 'https://x.com/home', reddit: 'https://www.reddit.com/' });
+
 export function buildAuthCommand(topic, source) {
   return commandEnvelope({
     command_type: NEWS_SOURCE_AUTH_ASSIST,
@@ -461,7 +530,8 @@ export function buildAuthCommand(topic, source) {
     payload: {
     topic_id: topic?.id || source.topic_id,
     source_id: source.id,
-    target_url: source.kind === 'x' ? 'https://x.com/home' : source.url,
+    auth_source: authSourceFor(source),
+    target_url: ACCOUNT_HOME[source.kind] || source.url,
     record_snapshot: { source: sourceSnapshot(source) },
   },
     sync_collections: ['news_sources'],

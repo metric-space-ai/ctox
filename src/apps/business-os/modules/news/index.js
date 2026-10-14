@@ -6,6 +6,7 @@ import {
   ISSUE_ACTIVE_STATUSES,
   LAB_PRESET,
   SOURCE_KINDS,
+  authSourceFor,
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
@@ -23,6 +24,7 @@ import {
   normalizeTopic,
   postsForIssue,
   presetSources,
+  redditPresetSource,
   relativeTime,
   toneBucket,
   topicsForBand,
@@ -77,13 +79,16 @@ const labels = {
     deleteTopic: 'Thema löschen',
     groupLab: 'Labs',
     groupX: 'X',
+    groupReddit: 'Reddit',
     groupYoutube: 'YouTube',
     groupNewsletter: 'Newsletter',
     groupCommunity: 'Communities',
     addLabPreset: 'Alle KI-Labs übernehmen',
     addCommunityPreset: 'Communities übernehmen',
+    addRedditPreset: 'KI-Subreddits übernehmen',
     sourceAdapter: 'Scraper einrichten',
-    sourceLogin: 'Bei X anmelden',
+    sourceConnect: 'Konto verbinden',
+    sourceLogin: 'Im Browser anmelden',
     sourceRemove: 'Quelle entfernen',
     sourceActive: 'Quelle aktiv',
     statusNeedsAuth: 'Anmeldung nötig',
@@ -96,7 +101,8 @@ const labels = {
     placeholderX: 'Liste, Suche oder @account',
     placeholderYoutube: 'https://www.youtube.com/@kanal',
     placeholderNewsletter: 'absender@newsletter.com',
-    placeholderCommunity: 'https://www.reddit.com/r/…',
+    placeholderCommunity: 'https://news.ycombinator.com/',
+    placeholderReddit: 'r/subreddit',
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
     importDone: '{0} Themen importiert',
@@ -144,13 +150,16 @@ const labels = {
     deleteTopic: 'Delete topic',
     groupLab: 'Labs',
     groupX: 'X',
+    groupReddit: 'Reddit',
     groupYoutube: 'YouTube',
     groupNewsletter: 'Newsletters',
     groupCommunity: 'Communities',
     addLabPreset: 'Add all AI labs',
     addCommunityPreset: 'Add communities',
+    addRedditPreset: 'Add AI subreddits',
     sourceAdapter: 'Set up scraper',
-    sourceLogin: 'Sign in to X',
+    sourceConnect: 'Connect account',
+    sourceLogin: 'Sign in in the browser',
     sourceRemove: 'Remove source',
     sourceActive: 'Source active',
     statusNeedsAuth: 'Sign-in needed',
@@ -163,7 +172,8 @@ const labels = {
     placeholderX: 'List, search, or @account',
     placeholderYoutube: 'https://www.youtube.com/@channel',
     placeholderNewsletter: 'sender@newsletter.com',
-    placeholderCommunity: 'https://www.reddit.com/r/…',
+    placeholderCommunity: 'https://news.ycombinator.com/',
+    placeholderReddit: 'r/subreddit',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
     importDone: '{0} topics imported',
@@ -417,6 +427,7 @@ function onClick(event) {
     'add-source': addDraftSource,
     'add-lab-preset': () => addPreset('lab'),
     'add-community-preset': () => addPreset('community'),
+    'add-reddit-preset': () => addPreset('reddit'),
     'toggle-source': () => toggleDraftSource(target.dataset.sourceId),
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
@@ -932,7 +943,7 @@ function syncCadenceFields() {
 
 function syncSourcePlaceholder() {
   const kind = els.newSourceKind?.value || 'lab';
-  const key = { lab: 'placeholderLab', x: 'placeholderX', youtube: 'placeholderYoutube', newsletter: 'placeholderNewsletter', community: 'placeholderCommunity' }[kind];
+  const key = { lab: 'placeholderLab', x: 'placeholderX', reddit: 'placeholderReddit', youtube: 'placeholderYoutube', newsletter: 'placeholderNewsletter', community: 'placeholderCommunity' }[kind];
   if (els.newSourceValue) els.newSourceValue.placeholder = t(key);
 }
 
@@ -949,6 +960,7 @@ function renderSourceGroups() {
   const groups = [
     ['lab', 'groupLab', 'add-lab-preset', 'addLabPreset'],
     ['x', 'groupX', '', ''],
+    ['reddit', 'groupReddit', 'add-reddit-preset', 'addRedditPreset'],
     ['youtube', 'groupYoutube', '', ''],
     ['newsletter', 'groupNewsletter', '', ''],
     ['community', 'groupCommunity', 'add-community-preset', 'addCommunityPreset'],
@@ -973,7 +985,8 @@ function renderSourceRow(source) {
   if (source.kind === 'lab' || source.kind === 'community') {
     actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-adapter" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceAdapter'))}" title="${esc(t('sourceAdapter'))}">${ICONS.wand}</button>`);
   }
-  if (source.kind === 'x') {
+  if (authSourceFor(source)) {
+    actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-adapter" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceConnect'))}" title="${esc(t('sourceConnect'))}">${ICONS.wand}</button>`);
     actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-auth" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceLogin'))}" title="${esc(t('sourceLogin'))}">${ICONS.key}</button>`);
   }
   actions.push(`<button class="ctox-pane-icon" type="button" data-action="remove-source" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceRemove'))}" title="${esc(t('sourceRemove'))}">${ICONS.trash}</button>`);
@@ -998,7 +1011,9 @@ function addDraftSource() {
   if (merged) {
     state.drawer.sources = state.drawer.sources.map((source) => (source.id === merged.id ? merged : source));
   } else {
-    state.drawer.sources.push(newSource(state.drawer.topic.id, kind, '', value || 'Home'));
+    const created = newSource(state.drawer.topic.id, kind, '', value || 'Home');
+    if (kind === 'reddit' && !created.items.length) return;
+    state.drawer.sources.push(created);
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
@@ -1006,6 +1021,12 @@ function addDraftSource() {
 
 function addPreset(kind) {
   if (!state.drawer) return;
+  if (kind === 'reddit') {
+    const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
+    state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
+    renderSourceGroups();
+    return;
+  }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
@@ -1154,7 +1175,7 @@ function importTopics() {
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);
         if (!topicId) continue;
-        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: raw.kind === 'x' ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
+        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
       }
       notify('success', t('importDone', idMap.size));
     } catch (error) {
