@@ -92,7 +92,7 @@ fn admitted_preparation_and_exit(
         (
             &exit,
             "native-workjet-exit-research",
-            "Research project project exit proceeds",
+            "Research the 60-month exit for project project",
         ),
     ] {
         let admitted = store::load_business_command(&conn, operation)?;
