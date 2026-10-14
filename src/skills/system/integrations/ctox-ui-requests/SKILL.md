@@ -1,6 +1,7 @@
 ---
 name: ctox-ui-requests
-description: Ask the user for a secret, an app connection or a confirmation via an in-session card instead of chat. Use when `ctox toolhub exec` exits 3 (credential_required) or before a risky action.
+description: Ask the user for a secret, an app connection or a confirmation via an in-session card instead of chat. Use when `ctox toolhub exec` exits 3 (credential_required) or before a risky action. Only the CTOX supervisor may raise cards.
+cluster: integrations
 ---
 
 # In-session cards: `ctox ui request`

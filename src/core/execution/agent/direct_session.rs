@@ -587,6 +587,20 @@ fn configure_worker_tool_stack(
     );
 }
 
+/// Every shell command of the session carries CTOX_TEAM_ROLE (and
+/// CTOX_SESSION_ID when bound), so `ctox ui request` / `ctox toolhub exec`
+/// enforce the same role the prompt describes.
+fn configure_team_shell_env(
+    cli_overrides: &mut Vec<(String, toml::Value)>,
+    settings: &BTreeMap<String, String>,
+) {
+    for (key, value) in crate::execution::toolhub_role::team_env(settings) {
+        let path = format!("shell_environment_policy.set.{key}");
+        cli_overrides.retain(|(k, _)| k != &path);
+        cli_overrides.push((path, toml::Value::String(value)));
+    }
+}
+
 fn persistent_worker_thread_name(root: &Path) -> String {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
@@ -757,6 +771,12 @@ fn compose_base_instructions(
             system_prompt.trim_end()
         )
     };
+    // Toolhub + UI-card contract, role-aware, from the ctox-toolhub skill
+    // (single source; Workjet harnesses get the same text via the capability).
+    let toolhub = crate::execution::toolhub_role::prompt_section(
+        crate::execution::toolhub_role::role_from_settings(settings),
+    );
+    let base = format!("{}\n\n{toolhub}", base.trim_end());
     Ok(
         match persona.map(str::trim).filter(|value| !value.is_empty()) {
             Some(persona) => format!("{}\n\n{persona}", base.trim_end()),
@@ -1139,6 +1159,13 @@ impl PersistentSession {
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let thread_config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
+        let thread = crate::business_os::mcp_channel::internal_command_session_thread(
+            root,
+            command_session_token,
+        );
+        let team_settings =
+            crate::execution::toolhub_role::with_team(root, settings, thread.as_deref(), None);
+        let settings = &team_settings;
         #[cfg(unix)]
         let command_context =
             crate::business_os::mcp_channel::verify_internal_command_session_token(
@@ -2174,6 +2201,7 @@ impl PersistentSession {
         // from these overrides.
         configure_managed_linux_sandbox(&mut cli_overrides);
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
+        configure_team_shell_env(&mut cli_overrides, settings);
         if native_guest {
             super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
             // Both fresh thread/start and protected original-session load use
@@ -3345,6 +3373,53 @@ mod shutdown_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Native CTOX harness x role: the final effective base instructions carry
+    /// the Toolhub section with exactly the session's role rule, for both the
+    /// default worker prompt and an override prompt (app authoring, research).
+    #[test]
+    fn native_harness_effective_prompt_has_toolhub_section_per_role() {
+        use crate::execution::toolhub_role::{SETTINGS_ROLE_KEY, SETTINGS_SESSION_KEY};
+        let root = std::env::temp_dir().join(format!("ctox-native-prompt-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let cases = [
+            (None, "Role rule (Operator shell)"),
+            (Some("supervisor"), "Role rule (Supervisor)"),
+            (Some("persistent_worker"), "Role rule (Persistent worker)"),
+            (Some("one_shot_worker"), "Role rule (One-shot worker)"),
+        ];
+        for (role, rule) in cases {
+            let mut settings = BTreeMap::new();
+            if let Some(role) = role {
+                settings.insert(SETTINGS_ROLE_KEY.to_string(), role.to_string());
+                settings.insert(SETTINGS_SESSION_KEY.to_string(), "thread-1".to_string());
+            }
+            for override_prompt in [None, Some("You are an app authoring agent.")] {
+                let prompt = compose_base_instructions(&root, &settings, override_prompt, Some("PERSONA"))
+                    .expect("compose");
+                assert!(prompt.contains("## CTOX Toolhub"), "{role:?}/{override_prompt:?}");
+                assert!(prompt.contains("ctox toolhub exec"));
+                assert!(prompt.contains(rule), "{role:?} misses {rule}");
+                assert_eq!(prompt.matches("Role rule (").count(), 1, "exactly one role rule");
+                assert!(prompt.trim_end().ends_with("PERSONA"), "persona stays last");
+            }
+        }
+    }
+
+    #[test]
+    fn native_harness_shell_env_carries_team_identity() {
+        let mut settings = BTreeMap::new();
+        settings.insert(crate::execution::toolhub_role::SETTINGS_ROLE_KEY.into(), "one_shot_worker".into());
+        settings.insert(crate::execution::toolhub_role::SETTINGS_SESSION_KEY.into(), "t9".into());
+        let mut overrides = vec![("shell_environment_policy.set.CTOX_TEAM_ROLE".to_string(), toml::Value::String("supervisor".into()))];
+        configure_team_shell_env(&mut overrides, &settings);
+        let get = |k: &str| overrides.iter().filter(|(key, _)| key == k).map(|(_, v)| v.as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(get("shell_environment_policy.set.CTOX_TEAM_ROLE"), vec!["one_shot_worker"]);
+        assert_eq!(get("shell_environment_policy.set.CTOX_SESSION_ID"), vec!["t9"]);
+        let mut unbound = Vec::new();
+        configure_team_shell_env(&mut unbound, &BTreeMap::new());
+        assert_eq!(unbound.len(), 1, "operator: role only, no session id");
+    }
 
     #[test]
     fn queue_cancel_terminal_witness_requires_exact_thread_and_turn() {

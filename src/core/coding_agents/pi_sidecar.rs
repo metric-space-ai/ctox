@@ -90,8 +90,13 @@ pub fn business_os_system_prompt() -> String {
 edit, write, grep, find, ls) to inspect and change files. The filesystem is an \
 isolated in-memory projection of this module's synced source — not the host \
 filesystem. Make changes through write/edit; your edits are applied back as \
-versioned commits to the module source.",
-        skill = BUSINESS_OS_APP_SKILL
+versioned commits to the module source.\n\n{toolhub}",
+        skill = BUSINESS_OS_APP_SKILL,
+        // Bounded leaf executor without a host shell: one-shot rules (never
+        // ask, never wait; report needs_user) from the ctox-toolhub skill.
+        toolhub = crate::execution::toolhub_role::prompt_section(
+            crate::execution::toolhub_role::TeamRole::OneShotWorker
+        )
     )
 }
 
@@ -2041,6 +2046,14 @@ mod tests {
             "the extracted embedded sidecar serves a turn"
         );
         Ok(())
+    }
+
+    #[test]
+    fn pi_sidecar_effective_prompt_has_one_shot_toolhub_section() {
+        let prompt = business_os_system_prompt();
+        assert!(prompt.contains("## CTOX Toolhub"));
+        assert!(prompt.contains("Role rule (One-shot worker)"));
+        assert!(!prompt.contains("Role rule (Supervisor)"));
     }
 
     #[test]

@@ -1195,6 +1195,21 @@ pub(super) fn current_guest_crew_command(
     Ok(command)
 }
 
+/// Workjet thread bound to an internal command session, if its command is a
+/// Business OS chat task (`/payload/thread_id`). Used to give the native harness
+/// its team role (`toolhub_role`) and `CTOX_SESSION_ID`.
+pub(crate) fn internal_command_session_thread(root: &Path, token: &str) -> Option<String> {
+    let claims = decode_internal_command_session_token(root, token).ok()?;
+    let command =
+        crate::mission::channels::business_command_projection(root, &claims.command_id).ok()?;
+    command
+        .pointer("/payload/thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
 fn decode_internal_command_session_token(
     root: &Path,
     token: &str,
