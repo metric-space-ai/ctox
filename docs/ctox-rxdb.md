@@ -552,6 +552,27 @@ fresh SQLite connection can replay old frames onto the new main file. The
 read-only intake lane never deletes or checkpoints the SQLite file family.
 The existing notifier/lost-wakeup check and retry budget remain.
 
+### Intake failures and capability rejections
+
+`business_command_intake_failures` numbers attempts per command across its
+whole history (`UNIQUE(command_id, attempt)` includes resolved rows); only
+unresolved rows count against the retry budget, and a command whose canonical
+aggregate is already terminal is exhausted on its next observation so intake
+republishes the terminal projection instead of retrying. A replicated command
+rejected because it presents no capability token terminalizes on that first
+rejection (`status=failed`, `error_code=auth_required`,
+`result.reason=capability_missing`); a presented token that fails verification
+gets one confirmation attempt (`capability_invalid`). The browser command bus
+never inserts a command document without a capability token.
+
+Native projects an admitted command from its canonical intent, whose client
+context is the audited subset without `capability_token`. When background
+recovery re-reads such a token-less projection of an admitted recoverable
+control command (`is_recoverable_background_control_command_type`), intake
+takes the owner from the stored `native_authorization` receipt instead of the
+capability gate; the control claim still rejects a changed intent and the
+resume path revalidates that actor against current policy.
+
 ### Workjet computer schema upgrade (v0 to v1)
 
 Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
