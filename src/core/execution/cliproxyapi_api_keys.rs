@@ -158,33 +158,36 @@ fn resolve(
     root: &Path,
     config: &ApiKeyAccountConfig,
     http: Arc<dyn HostHttpClient>,
-) -> anyhow::Result<Resolved> {
+) -> anyhow::Result<Option<Resolved>> {
     config
         .validate()
         .map_err(|_| anyhow::anyhow!("API account configuration is invalid"))?;
     let r = &config.api_key_secret;
-    let before = crate::secrets::secret_record_content_version(root, &r.scope, &r.name)?
-        .context("API credential is unavailable")?;
+    // A locally absent credential retires only this account. Store failures still
+    // fail closed rather than masquerading as a provider authentication verdict.
+    let Some(before) = crate::secrets::secret_record_content_version(root, &r.scope, &r.name)?
+    else {
+        return Ok(None);
+    };
     let key = Zeroizing::new(
         crate::secrets::read_secret_value(root, &r.scope, &r.name)
             .map_err(|_| anyhow::anyhow!("API credential is unavailable"))?,
     );
-    anyhow::ensure!(
-        !key.trim().is_empty() && key.len() <= 8192 && !key.chars().any(char::is_control),
-        "API credential is invalid"
-    );
+    if key.trim().is_empty() || key.len() > 8192 || key.chars().any(char::is_control) {
+        return Ok(None);
+    }
     let available = available_models(root, config, &before)?;
     anyhow::ensure!(
         current(root, config, &before, &available),
         "API account changed"
     );
-    Ok(Resolved {
+    Ok(Some(Resolved {
         config: config.clone(),
         key,
         version: before,
         available,
         http: Arc::new(ObservedApiHttp(http)),
-    })
+    }))
 }
 pub(super) fn build(
     root: &Path,
@@ -211,7 +214,9 @@ fn build_with_http(
             continue;
         }
         // An unobserved empty catalog is not a wildcard/default-model route.
-        let account = resolve(root, config, http.clone())?;
+        let Some(account) = resolve(root, config, http.clone())? else {
+            continue;
+        };
         if account.available.models.is_empty() {
             continue;
         }
