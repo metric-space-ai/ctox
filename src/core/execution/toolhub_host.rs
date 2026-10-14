@@ -143,7 +143,7 @@ const USAGE: &str = "usage: ctox toolhub <command> [options]   (JSON on stdout, 
   list [--json]                         connected accounts (no secrets)
   configs                               auth configs (no secrets)
   config-set --toolkit <slug> --id <id> --scheme <oauth2|bearer|api_key|basic> [--client-id <id>] [--client-secret-stdin] [--scope <s>]...
-  connect --auth-config <id> [--project <project_id>] [--actor <a>] [--credential-stdin] [--no-callback-server]
+  connect --auth-config <id> [--project <project_id>] [--actor <a>] [--credential-stdin [--param key=value]...] [--no-callback-server]
   complete --callback <redirect-url-or-query>
   status|refresh|disconnect --account <id>
   exec <toolkit>.<action> [--json <args>|stdin] [--project <project_id>] [--account <id>] [--confirm]
@@ -154,6 +154,19 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
+}
+
+/// Repeated `--param key=value` flags (per-connection parameters).
+fn params(args: &[String]) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut out = std::collections::BTreeMap::new();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--param" {
+            let kv = args.get(i + 1).context("--param needs key=value")?;
+            let (k, v) = kv.split_once('=').context("--param needs key=value")?;
+            out.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    Ok(out)
 }
 
 fn has(args: &[String], name: &str) -> bool {
@@ -272,11 +285,12 @@ pub fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()> {
             let resolver = store_project_resolver(root);
             let (project, actor) = (resolve_project(rest, &resolver)?, actor(rest));
             if has(rest, "--credential-stdin") {
-                return print(&hub.connect_with_credential(
+                return print(&hub.connect_with_credential_params(
                     config,
                     &project,
                     &actor,
                     &read_stdin()?,
+                    &params(rest)?,
                 )?);
             }
             let request = hub.connect_oauth(config, &project, &actor)?;
@@ -678,9 +692,17 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
                     .into_iter()
                     .filter(|a| a.project == INSTANCE_SCOPE)
                     .collect();
+                let fields: serde_json::Map<String, Value> = h
+                    .catalog()
+                    .iter()
+                    .filter_map(|t| {
+                        let f = h.connection_fields(&t.slug).ok()?;
+                        (!f.is_empty()).then(|| (t.slug.clone(), json!(f)))
+                    })
+                    .collect();
                 (
                     200,
-                    json!({"ok": true, "toolkits": h.catalog(), "accounts": accounts}),
+                    json!({"ok": true, "toolkits": h.catalog(), "accounts": accounts, "connection_fields": fields}),
                 )
             }
             Err(e) => err(500, e.to_string()),
@@ -690,18 +712,27 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
             let (Some(toolkit), Some(credential)) = (s("toolkit"), s("credential")) else {
                 return err(400, "toolkit and credential required".into());
             };
+            let given: std::collections::BTreeMap<String, String> = body
+                .get("params")
+                .and_then(Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
             let result = hub_for_proxy(root).and_then(|h| {
                 let config = AuthConfig {
                     id: format!("{toolkit}-token"),
                     toolkit: toolkit.clone(),
-                    scheme: AuthSchemeKind::Bearer,
+                    scheme: h.credential_scheme(&toolkit)?,
                     source: ClientCredentialSource::None,
                     client_id: None,
                     scopes: vec![],
                     enabled: true,
                 };
                 h.upsert_auth_config(&config, None)?;
-                h.connect_with_credential(&config.id, INSTANCE_SCOPE, "workjet", credential.trim())
+                h.connect_with_credential_params(&config.id, INSTANCE_SCOPE, "workjet", credential.trim(), &given)
             });
             match result {
                 Ok(account) => (200, json!({"ok": true, "account": account})),

@@ -598,6 +598,49 @@ impl Mailchimp {
 }
 
 impl ToolkitAdapter for Mailchimp {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "datacenter",
+            ("Mailchimp-Rechenzentrum", "Mailchimp data center"),
+            (
+                "Kürzel wie „us21“. Es steht am Ende des API-Keys (…-us21) und wird dann automatisch erkannt.",
+                "Code such as \"us21\". It is the suffix of your API key (…-us21) and is detected automatically.",
+            ),
+            "us21",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        params
+            .get("datacenter")
+            .map(|v| {
+                let dc = v.trim().to_ascii_lowercase();
+                let ok = dc.len() <= 8
+                    && dc.len() > 2
+                    && dc.bytes().take(2).all(|b| b.is_ascii_lowercase())
+                    && dc.bytes().skip(2).all(|b| b.is_ascii_digit());
+                if !ok {
+                    anyhow::bail!("invalid `datacenter`: expected a code like `us21`");
+                }
+                Ok(format!("https://{dc}.api.mailchimp.com/3.0"))
+            })
+            .transpose()
+    }
+    fn default_api_base(&self) -> Option<String> {
+        Some(self.api_base.clone())
+    }
+    fn derive_connection_params(
+        &self,
+        credential: Option<&str>,
+        _token_extra: &std::collections::BTreeMap<String, String>,
+    ) -> std::collections::BTreeMap<String, String> {
+        credential
+            .and_then(|c| c.rsplit_once('-'))
+            .map(|(_, dc)| dc.to_string())
+            .filter(|dc| self.connection_api_base(&[("datacenter".to_string(), dc.clone())].into()).is_ok())
+            .map(|dc| [("datacenter".to_string(), dc)].into())
+            .unwrap_or_default()
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }

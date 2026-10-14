@@ -540,6 +540,27 @@ impl Jira {
 }
 
 impl ToolkitAdapter for Jira {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "site",
+            ("Jira-Site", "Jira site"),
+            (
+                "Deine Atlassian-Cloud-Adresse, z. B. „acme“ oder https://acme.atlassian.net. Als Zugangsdaten „E-Mail:API-Token“ eingeben.",
+                "Your Atlassian Cloud address, e.g. \"acme\" or https://acme.atlassian.net. Enter the credential as \"email:API token\".",
+            ),
+            "acme",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        params
+            .get("site")
+            .map(|v| Ok(format!("https://{}.atlassian.net", host_label(v, "atlassian.net", "site")?)))
+            .transpose()
+    }
+    fn default_api_base(&self) -> Option<String> {
+        Some(self.api_base.clone())
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }

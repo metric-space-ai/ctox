@@ -1,6 +1,7 @@
 //! Toolkit adapters. Each adapter declares its catalog entry (data) and maps
 //! tool calls to provider HTTP requests. Auth headers are injected by the hub.
 use anyhow::Result;
+use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::http::{HttpRequest, HttpResponse};
@@ -55,6 +56,34 @@ pub trait ToolkitAdapter: Send + Sync {
     fn parse_response(&self, tool: &str, response: &HttpResponse) -> Result<Value> {
         let _ = tool;
         response.json()
+    }
+    /// Extra per-connection inputs (instance URL, subdomain, shop, data center).
+    fn connection_fields(&self) -> Vec<crate::model::ConnectionField> {
+        Vec::new()
+    }
+    /// Validate connection params and return the per-connection API base that
+    /// replaces `default_api_base()` in built request URLs. `Ok(None)` = no rewrite.
+    fn connection_api_base(&self, params: &BTreeMap<String, String>) -> Result<Option<String>> {
+        let _ = params;
+        Ok(None)
+    }
+    /// The API base `build_request` uses when no connection params apply.
+    fn default_api_base(&self) -> Option<String> {
+        None
+    }
+    /// Tool arguments filled from connection params when the caller omitted them.
+    fn connection_args(&self, params: &BTreeMap<String, String>) -> Vec<(String, String)> {
+        let _ = params;
+        Vec::new()
+    }
+    /// Params derivable without asking (API-key suffix, OAuth token response).
+    fn derive_connection_params(
+        &self,
+        credential: Option<&str>,
+        token_extra: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        let _ = (credential, token_extra);
+        BTreeMap::new()
     }
 }
 

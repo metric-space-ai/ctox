@@ -70,6 +70,9 @@ pub struct TokenSet {
     pub token_type: Option<String>,
     pub expires_in: Option<u64>,
     pub scopes: Option<Vec<String>>,
+    /// Non-secret, provider-specific fields of the token response that
+    /// determine the API host (e.g. Salesforce `instance_url`).
+    pub extra: std::collections::BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for TokenSet {
@@ -164,7 +167,12 @@ pub fn parse_token_response(body: &Value, scope_separator: &str) -> Result<Token
             .map(String::from)
             .collect()
     });
+    let extra = ["instance_url", "api_domain"]
+        .iter()
+        .filter_map(|k| body.get(*k).and_then(Value::as_str).map(|v| (k.to_string(), v.to_string())))
+        .collect();
     Ok(TokenSet {
+        extra,
         access_token,
         refresh_token: body
             .get("refresh_token")

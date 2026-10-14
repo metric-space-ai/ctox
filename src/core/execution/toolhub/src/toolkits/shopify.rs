@@ -657,6 +657,31 @@ fn customer_fields(args: &Value, consent_fallback: &str) -> Map<String, Value> {
 }
 
 impl ToolkitAdapter for Shopify {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "shop_name",
+            ("Shop-Name", "Shop name"),
+            (
+                "Der Teil vor .myshopify.com, z. B. „mein-shop“ für https://mein-shop.myshopify.com.",
+                "The part before .myshopify.com, e.g. \"my-shop\" for https://my-shop.myshopify.com.",
+            ),
+            "my-shop",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        if let Some(v) = params.get("shop_name") {
+            shop_base(&host_label(v, "myshopify.com", "shop_name")?)?;
+        }
+        Ok(None)
+    }
+    fn connection_args(&self, params: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+        params
+            .get("shop_name")
+            .and_then(|v| host_label(v, "myshopify.com", "shop_name").ok())
+            .map(|v| vec![("shop_name".to_string(), v)])
+            .unwrap_or_default()
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }

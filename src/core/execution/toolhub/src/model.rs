@@ -1,6 +1,7 @@
 //! Composio-aligned core types.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Localized user-facing text (DE + EN are mandatory).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +167,33 @@ pub struct ConnectedAccount {
     pub status_reason: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// Non-secret per-connection parameters (instance URL, subdomain, shop,
+    /// data center). Stored with the account; see `ToolkitAdapter::connection_fields`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
+}
+
+/// One extra input a connection needs besides the credential (shown on the
+/// in-chat credential card and in the store's connect dialog).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionField {
+    pub key: String,
+    pub label: LocalizedText,
+    pub help: LocalizedText,
+    pub placeholder: String,
+    pub required: bool,
+}
+
+impl ConnectionField {
+    pub fn new(key: &str, label: (&str, &str), help: (&str, &str), placeholder: &str, required: bool) -> Self {
+        Self {
+            key: key.into(),
+            label: LocalizedText::new(label.0, label.1),
+            help: LocalizedText::new(help.0, help.1),
+            placeholder: placeholder.into(),
+            required,
+        }
+    }
 }
 
 /// Secret material of a connected account. Never serialized to clients.

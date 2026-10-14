@@ -97,6 +97,20 @@ fn validate_instance_url(v: &str) -> Result<String> {
     Ok(format!("https://{host}"))
 }
 
+/// Stored per-connection org host: must be a Salesforce domain so the token
+/// can never be sent elsewhere.
+fn validate_org_host(v: &str) -> Result<String> {
+    let base = validate_instance_url(v.trim().trim_end_matches('/'))?;
+    let host = base.trim_start_matches("https://").to_ascii_lowercase();
+    if ![".salesforce.com", ".force.com", ".cloudforce.com", ".salesforce.mil"]
+        .iter()
+        .any(|s| host.ends_with(s))
+    {
+        bail!("`instance_url` must be a Salesforce host such as https://acme.my.salesforce.com");
+    }
+    Ok(base)
+}
+
 // ---------------------------------------------------------------- SOQL helpers
 
 /// `escapeSoqlValue`: backslash-escape `\ ' " \n \r \t`.
@@ -894,7 +908,7 @@ impl Salesforce {
     /// Instance URL for this call: the `instance_url` argument, else the adapter's.
     fn base(&self, args: &Value) -> Result<String> {
         match opt_str(args, "instance_url") {
-            Some(url) => validate_instance_url(url),
+            Some(url) => validate_org_host(url),
             None => Ok(self.api_base.clone()),
         }
     }
@@ -913,6 +927,34 @@ impl Salesforce {
 }
 
 impl ToolkitAdapter for Salesforce {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "instance_url",
+            ("Salesforce-Instanz-URL", "Salesforce instance URL"),
+            (
+                "Adresse deiner Salesforce-Org, z. B. https://acme.my.salesforce.com. Bei der Anmeldung über Salesforce wird sie automatisch übernommen.",
+                "Your Salesforce org address, e.g. https://acme.my.salesforce.com. Filled in automatically when you sign in with Salesforce.",
+            ),
+            "https://acme.my.salesforce.com",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        params.get("instance_url").map(|v| validate_org_host(v)).transpose()
+    }
+    fn default_api_base(&self) -> Option<String> {
+        Some(self.api_base.clone())
+    }
+    fn derive_connection_params(
+        &self,
+        _credential: Option<&str>,
+        token_extra: &std::collections::BTreeMap<String, String>,
+    ) -> std::collections::BTreeMap<String, String> {
+        token_extra
+            .get("instance_url")
+            .map(|v| [("instance_url".to_string(), v.clone())].into())
+            .unwrap_or_default()
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }
@@ -1344,10 +1386,13 @@ mod tests {
         assert!(s
             .build_request("SALESFORCE_LIST_USERS", &json!({"instance_url": "http://evil.example"}))
             .is_err());
+        assert!(s
+            .build_request("SALESFORCE_LIST_USERS", &json!({"instance_url": "https://evil.example"}))
+            .is_err());
         let per_call = s
-            .build_request("SALESFORCE_LIST_USERS", &json!({"instance_url": "https://other.my.salesforce.test"}))
+            .build_request("SALESFORCE_LIST_USERS", &json!({"instance_url": "https://other.my.salesforce.com"}))
             .unwrap();
-        assert!(per_call.url.starts_with("https://other.my.salesforce.test/"));
+        assert!(per_call.url.starts_with("https://other.my.salesforce.com/"));
     }
 
     #[test]

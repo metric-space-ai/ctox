@@ -246,6 +246,27 @@ impl Freshdesk {
 }
 
 impl ToolkitAdapter for Freshdesk {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "subdomain",
+            ("Freshdesk-Subdomain", "Freshdesk subdomain"),
+            (
+                "Der Teil vor .freshdesk.com, z. B. „acme“ für https://acme.freshdesk.com.",
+                "The part before .freshdesk.com, e.g. \"acme\" for https://acme.freshdesk.com.",
+            ),
+            "acme",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        params
+            .get("subdomain")
+            .map(|v| Ok(format!("https://{}.freshdesk.com", host_label(v, "freshdesk.com", "subdomain")?)))
+            .transpose()
+    }
+    fn default_api_base(&self) -> Option<String> {
+        Some(self.api_base.clone())
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }

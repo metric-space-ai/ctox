@@ -35,6 +35,9 @@ pub enum ToolOutcome {
         reason: LocalizedText,
         /// Hint for agents/humans how to connect (CLI command).
         connect_hint: String,
+        /// Extra inputs the credential card must ask for (DE+EN labels).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fields: Vec<ConnectionField>,
     },
 }
 
@@ -96,6 +99,20 @@ impl<B: SecretBackend> ToolHub<B> {
 
     pub fn catalog(&self) -> Vec<&ToolkitSpec> {
         self.toolkits.values().map(|t| t.spec()).collect()
+    }
+
+    /// Extra connection inputs of `toolkit` (for connect dialogs / credential cards).
+    pub fn connection_fields(&self, toolkit: &str) -> Result<Vec<ConnectionField>> {
+        Ok(self.toolkit(toolkit)?.connection_fields())
+    }
+
+    /// Static-credential scheme for `toolkit` (API key, bearer token or Basic).
+    pub fn credential_scheme(&self, toolkit: &str) -> Result<AuthSchemeKind> {
+        let kinds: Vec<AuthSchemeKind> = self.toolkit(toolkit)?.spec().auth_schemes.iter().map(|s| s.kind()).collect();
+        [AuthSchemeKind::ApiKey, AuthSchemeKind::Bearer, AuthSchemeKind::Basic]
+            .into_iter()
+            .find(|k| kinds.contains(k))
+            .ok_or_else(|| anyhow!("toolkit `{toolkit}` only supports OAuth2"))
     }
 
     fn toolkit(&self, slug: &str) -> Result<&dyn ToolkitAdapter> {
@@ -183,6 +200,7 @@ impl<B: SecretBackend> ToolHub<B> {
             status_reason: None,
             created_at: now,
             updated_at: now,
+            params: Default::default(),
         }
     }
 
@@ -301,6 +319,15 @@ impl<B: SecretBackend> ToolHub<B> {
             pending.code_verifier.as_deref(),
         ) {
             Ok(tokens) => {
+                let adapter = self.toolkit(&account.toolkit)?;
+                for (k, v) in adapter.derive_connection_params(None, &tokens.extra) {
+                    if adapter.connection_fields().iter().any(|f| f.key == k) {
+                        account.params.insert(k, v);
+                    }
+                }
+                if adapter.connection_api_base(&account.params).is_err() {
+                    account.params.clear();
+                }
                 self.apply_tokens(&mut account, &tokens, scheme.refreshable, None)?;
                 Ok(account)
             }
@@ -355,6 +382,51 @@ impl<B: SecretBackend> ToolHub<B> {
         actor: &str,
         credential: &str,
     ) -> Result<ConnectedAccount> {
+        self.connect_with_credential_params(auth_config_id, project, actor, credential, &BTreeMap::new())
+    }
+
+    /// Validate and normalize connection params for `toolkit` (fills derivable
+    /// ones, rejects unknown keys, requires required fields, checks the host).
+    pub fn resolve_connection_params(
+        &self,
+        toolkit: &str,
+        credential: Option<&str>,
+        token_extra: &BTreeMap<String, String>,
+        given: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>> {
+        let adapter = self.toolkit(toolkit)?;
+        let fields = adapter.connection_fields();
+        let mut params: BTreeMap<String, String> = adapter
+            .derive_connection_params(credential, token_extra)
+            .into_iter()
+            .filter(|(k, _)| fields.iter().any(|f| &f.key == k))
+            .collect();
+        for (k, v) in given {
+            if !fields.iter().any(|f| &f.key == k) {
+                bail!("unknown connection parameter `{k}` for `{toolkit}`");
+            }
+            if !v.trim().is_empty() {
+                params.insert(k.clone(), v.trim().to_string());
+            }
+        }
+        for f in &fields {
+            if f.required && !params.contains_key(&f.key) {
+                bail!("missing connection parameter `{}` ({})", f.key, f.label.en);
+            }
+        }
+        adapter.connection_api_base(&params)?;
+        Ok(params)
+    }
+
+    /// Like `connect_with_credential`, with per-connection params (instance URL, subdomain, ...).
+    pub fn connect_with_credential_params(
+        &self,
+        auth_config_id: &str,
+        project: &str,
+        actor: &str,
+        credential: &str,
+        params: &BTreeMap<String, String>,
+    ) -> Result<ConnectedAccount> {
         let cfg = self.enabled_config(auth_config_id)?;
         if cfg.scheme == AuthSchemeKind::OAuth2 {
             bail!("OAuth2 auth configs use connect_oauth");
@@ -362,8 +434,10 @@ impl<B: SecretBackend> ToolHub<B> {
         if credential.trim().is_empty() {
             bail!("empty credential");
         }
+        let params = self.resolve_connection_params(&cfg.toolkit, Some(credential.trim()), &BTreeMap::new(), params)?;
         let mut account = self.new_account(&cfg, project, actor, ConnectionStatus::Active);
         account.status = ConnectionStatus::Active;
+        account.params = params;
         self.store.save(
             &account,
             Some(&AccountSecret {
@@ -504,6 +578,7 @@ impl<B: SecretBackend> ToolHub<B> {
             .unwrap_or_default();
         ToolOutcome::CredentialRequired {
             toolkit: toolkit.into(),
+            fields: self.toolkit(toolkit).map(|t| t.connection_fields()).unwrap_or_default(),
             account_id,
             auth_schemes,
             connect_hint: match self
@@ -536,12 +611,38 @@ impl<B: SecretBackend> ToolHub<B> {
     ) -> Result<ToolOutcome> {
         let (adapter, spec) = self.tool(tool_slug)?;
         let tool_slug = spec.slug.as_str();
-        // Validate arguments before touching credentials.
-        let request = adapter.build_request(tool_slug, args)?;
+        // Validate arguments before touching credentials (toolkits with
+        // connection params may need them to build the request at all).
+        let fields = adapter.connection_fields();
+        if let Err(e) = adapter.build_request(tool_slug, args) {
+            if fields.is_empty() {
+                return Err(e);
+            }
+        }
         let toolkit = spec.toolkit.clone();
         let Some(mut account) = self.select_account(project, &toolkit, account_id)? else {
             return Ok(self.credential_required(&toolkit, None));
         };
+        if fields.iter().any(|f| f.required && !account.params.contains_key(&f.key)) {
+            return Ok(self.credential_required(&toolkit, Some(account.id)));
+        }
+        let mut args = args.clone();
+        if let Some(obj) = args.as_object_mut() {
+            for (k, v) in adapter.connection_args(&account.params) {
+                obj.entry(k).or_insert(Value::String(v));
+            }
+        }
+        let mut request = adapter.build_request(tool_slug, &args)?;
+        if let (Some(base), Some(default)) = (
+            adapter.connection_api_base(&account.params)?,
+            adapter.default_api_base(),
+        ) {
+            if let Some(rest) = request.url.strip_prefix(default.as_str()) {
+                if rest.is_empty() || rest.starts_with('/') || rest.starts_with('?') {
+                    request.url = format!("{base}{rest}");
+                }
+            }
+        }
         let refreshable = |a: &ConnectedAccount| {
             a.next_refresh_after.is_some()
                 || self

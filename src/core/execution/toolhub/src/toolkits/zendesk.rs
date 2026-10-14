@@ -1451,6 +1451,27 @@ fn date_filters(args: &Value) -> Result<String> {
 }
 
 impl ToolkitAdapter for Zendesk {
+    fn connection_fields(&self) -> Vec<ConnectionField> {
+        vec![ConnectionField::new(
+            "subdomain",
+            ("Zendesk-Subdomain", "Zendesk subdomain"),
+            (
+                "Der Teil vor .zendesk.com, z. B. „acme“ für https://acme.zendesk.com. Als Zugangsdaten „E-Mail/token:API-Token“ eingeben.",
+                "The part before .zendesk.com, e.g. \"acme\" for https://acme.zendesk.com. Enter the credential as \"email/token:API token\".",
+            ),
+            "acme",
+            true,
+        )]
+    }
+    fn connection_api_base(&self, params: &std::collections::BTreeMap<String, String>) -> Result<Option<String>> {
+        params
+            .get("subdomain")
+            .map(|v| Ok(format!("https://{}.zendesk.com/api/v2", host_label(v, "zendesk.com", "subdomain")?)))
+            .transpose()
+    }
+    fn default_api_base(&self) -> Option<String> {
+        Some(self.api_base.clone())
+    }
     fn spec(&self) -> &ToolkitSpec {
         &self.spec
     }

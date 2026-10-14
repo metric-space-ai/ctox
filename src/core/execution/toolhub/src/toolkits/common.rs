@@ -95,3 +95,31 @@ pub fn query(pairs: &[(&str, Option<String>)]) -> String {
         String::new()
     }
 }
+
+/// Normalize `acme`, `acme.<suffix>` or `https://acme.<suffix>/…` to the bare
+/// DNS label `acme` (lowercase letters, digits, hyphen). Used for per-connection
+/// hosts so tokens can only ever be sent to the provider's own domain.
+pub fn host_label(input: &str, suffix: &str, key: &str) -> Result<String> {
+    let mut v = input.trim().to_ascii_lowercase();
+    let mut had_scheme = false;
+    for p in ["https://", "http://"] {
+        if let Some(rest) = v.strip_prefix(p) {
+            v = rest.to_string();
+            had_scheme = true;
+        }
+    }
+    if had_scheme {
+        // Pasted browser URL: keep only the host.
+        v = v.split(['/', '?', '#']).next().unwrap_or("").to_string();
+    }
+    let label = v.strip_suffix(suffix).unwrap_or(&v).trim_end_matches('.');
+    if label.is_empty()
+        || label.len() > 63
+        || label.starts_with('-')
+        || label.ends_with('-')
+        || !label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        bail!("invalid `{key}`: expected the part before .{suffix}, e.g. `acme` for https://acme.{suffix}");
+    }
+    Ok(label.to_string())
+}

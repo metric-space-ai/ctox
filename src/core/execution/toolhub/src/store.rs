@@ -255,6 +255,7 @@ mod tests {
             status_reason: None,
             created_at: 1,
             updated_at: 1,
+            params: Default::default(),
         }
     }
 
