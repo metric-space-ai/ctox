@@ -46,8 +46,9 @@ test('conversation empty state distinguishes filter misses from sync failures', 
   });
 
   assert.equal(syncFailure.kind, 'sync-failure');
+  assert.equal(syncFailure.title, '');
+  assert.equal(syncFailure.body, '');
   assert.doesNotMatch(syncFailure.body, /communication_messages|WebRTC|replication/i);
-  assert.match(syncFailure.body, /Konversationen/);
 });
 
 test('conversation empty state gates initial-empty on collection readiness', () => {
