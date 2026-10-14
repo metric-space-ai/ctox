@@ -2,7 +2,7 @@
   "refresh": "Aktualisieren",
   "search": "Threads suchen",
   "noThreads": "Keine relevanten Threads vorhanden.",
-  "syncingThreads": "Threads werden synchronisiert.",
+  "syncingThreads": "Wird geladen …",
   "noSelection": "Kein Thread ausgewählt.",
   "commandFailed": "Aktion konnte nicht abgeschlossen werden.",
   "viewShowList": "Als Liste anzeigen",

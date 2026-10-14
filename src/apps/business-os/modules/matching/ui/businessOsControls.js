@@ -1208,23 +1208,19 @@ function ensureImportStatusHost(column) {
 function renderImportStatusCard(item) {
   const meta = getColumnMeta(item.column);
   const stateLabel = item.state === 'failed'
-    ? 'Fehler'
+    ? 'Fehlgeschlagen'
     : item.state === 'pending'
       ? 'Ausstehend'
       : item.state === 'running'
-        ? 'Running'
+        ? 'Läuft'
         : item.state === 'completed'
-          ? 'Done'
-          : 'Queued';
+          ? 'Fertig'
+          : 'Wartend';
   const summary = item.state === 'failed'
-    ? 'CTOX konnte den Import-Command nicht annehmen.'
-    : item.state === 'pending'
-      ? 'Lokal vorgemerkt. Wartet auf CTOX Verbindung oder Executor.'
-      : item.state === 'running'
-        ? 'CTOX verarbeitet diesen Import gerade.'
-        : item.state === 'completed'
-          ? 'CTOX hat den Task abgeschlossen; Ergebnis wird synchronisiert.'
-          : 'Wartet auf CTOX Parser und schreibt danach JSON in RxDB.';
+    ? 'Import hat nicht geklappt.'
+    : item.state === 'completed'
+      ? 'Import abgeschlossen.'
+      : 'Import läuft …';
   const created = item.createdAt ? new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
   return `
     <article class="import-status-card" data-import-status="${escapeDrawerHtml(item.id)}" data-ctox-task-id="${escapeDrawerHtml(item.taskId || '')}" data-ctox-command-id="${escapeDrawerHtml(item.commandId || '')}" role="button" tabindex="0" title="Im CTOX Harness öffnen">
@@ -1235,11 +1231,8 @@ function renderImportStatusCard(item) {
       <div class="import-status-source">${escapeDrawerHtml(item.sourceLabel || 'Quelle')}</div>
       <div class="import-status-summary">${escapeDrawerHtml(summary)}</div>
       <div class="import-status-meta">
-        <span>${escapeDrawerHtml(item.sourceType || 'source')}</span>
-        <span>${escapeDrawerHtml(item.taskId || item.commandId || item.recordId || 'command')}</span>
         <span>${escapeDrawerHtml(created)}</span>
       </div>
-      ${item.error ? `<div class="import-status-error">${escapeDrawerHtml(item.error)}</div>` : ''}
     </article>
   `;
 }

@@ -22,13 +22,9 @@ const labels = {
     noThreads: 'Keine relevanten Threads vorhanden.',
     noPersonalWork: 'Keine Arbeit für dich.',
     noSearchResults: 'Keine Treffer in Titel und Quellobjekt.',
-    partialSearchResults: 'Keine lokalen Treffer · weitere Daten möglich.',
     noFilterResults: 'Keine Threads in dieser Ansicht.',
-    offlinePending: 'Offline · lokaler Datenstand noch unvollständig.',
-    syncingThreads: 'Threads werden synchronisiert.',
     noSelection: 'Kein Thread ausgewählt.',
-    commandFailed: 'Aktion konnte nicht abgeschlossen werden.',
-    loadFailed: 'Threads konnten nicht geladen werden. Mit Aktualisieren erneut versuchen.',
+    commandFailed: 'Das hat nicht geklappt.',
   },
   en: {
     refresh: 'Refresh',
@@ -36,13 +32,9 @@ const labels = {
     noThreads: 'No relevant threads.',
     noPersonalWork: 'No work assigned to you.',
     noSearchResults: 'No matches in titles and source records.',
-    partialSearchResults: 'No local matches · more data may follow.',
     noFilterResults: 'No threads in this view.',
-    offlinePending: 'Offline · local data is still incomplete.',
-    syncingThreads: 'Syncing threads.',
     noSelection: 'No thread selected.',
-    commandFailed: 'Action could not be completed.',
-    loadFailed: 'Threads could not be loaded. Use Refresh to try again.',
+    commandFailed: 'That didn’t work.',
   },
 };
 
@@ -228,7 +220,6 @@ function bindElements(root) {
   els.archive = root.querySelector('[data-thread-archive]');
   els.delegate = root.querySelector('[data-thread-delegate]');
   els.toggleActions = root.querySelector('[data-toggle-actions]');
-  els.syncState = root.querySelector('[data-sync-state]');
   els.mobileBack = root.querySelector('[data-mobile-back]');
   els.mobileReply = root.querySelector('[data-mobile-reply]');
   els.mobileSnooze = root.querySelector('[data-mobile-snooze]');
@@ -1056,17 +1047,19 @@ function syncGrammarSurfaces(visibleCount) {
   const recentComplete = state.recentThreadsComplete
     && (state.threadsReadiness || readThreadsReadiness())?.ready === true;
   const displayCounts = Object.fromEntries(
-    Object.entries(counts).map(([filter, count]) => [
-      filter,
-      (filter === 'inbox' ? personalCollectionsReady() : recentComplete)
-        ? count : `≥${count}`,
-    ]),
+    Object.entries(counts).map(([filter, count]) => {
+      const exactCount = filter === 'inbox' ? personalCollectionsReady() : recentComplete;
+      return [filter, exactCount ? count : null];
+    }),
   );
   const pg = pane.__ctoxPaneGrammar;
-  if (pg?.setCounts) pg.setCounts(displayCounts);
-  else for (const [key, value] of Object.entries(displayCounts)) {
+  const visibleCounts = Object.fromEntries(
+    Object.entries(displayCounts).filter(([, value]) => value != null),
+  );
+  if (pg?.setCounts) pg.setCounts(visibleCounts);
+  for (const [key, value] of Object.entries(displayCounts)) {
     const node = pane.querySelector(`[data-pg-count="${key}"]`);
-    if (node) node.textContent = ` (${value})`;
+    if (node) node.textContent = value == null ? '' : ` (${value})`;
   }
   const secondaryActive = !PRIMARY_FILTERS.includes(state.filter);
   for (const tab of pane.querySelectorAll('[data-pg-band]')) {
@@ -1079,14 +1072,12 @@ function syncGrammarSurfaces(visibleCount) {
   // The grammar's active-dot reads search + tray select; refresh after the
   // programmatic sync above (dot = search active or secondary view set).
   pg?.refreshDot?.();
-  const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
   const exact = state.filter === 'inbox' ? personalCollectionsReady() : recentComplete;
-  const searchScope = state.search
-    ? state.searchCorpusComplete && recentComplete
-      ? ' · Suche über alle zugänglichen Threads (Titel und Quellobjekt)'
-      : ' · Suche in geladenen Threads (Titel und Quellobjekt)'
+  const filterLabel = FILTER_LABELS[state.filter] || state.filter;
+  const countLabel = exact
+    ? `${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'}`
     : '';
-  const footerText = `${exact ? '' : 'Mindestens '}${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${exact ? '' : ' · weitere Daten möglich'}${searchScope}${who ? ` · als ${who}` : ''}`;
+  const footerText = [countLabel, filterLabel].filter(Boolean).join(' · ');
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = pane.querySelector('[data-pg-footer]');
@@ -1204,8 +1195,9 @@ function whyMeLine(thread, pendingApprovals) {
   // Server-authoritative first (hub contract): native refresh_thread_states
   // writes attention_reasons in the contract vocabulary; local derivation is
   // only the fallback until states replicate.
-  const stored = arrayField(userStateForThread(thread.id)?.attention_reasons);
-  if (stored.length) return stored.slice(0, 2).join(' · ');
+  const stored = arrayField(userStateForThread(thread.id)?.attention_reasons)
+    .filter((reason) => !isRawStatusToken(reason) && !isRawSourceId(reason));
+  if (stored.length) return stored[0];
   const parts = [];
   if (pendingApprovals > 0) parts.push('Freigabe nötig');
   else if (thread.status === 'blocked') parts.push('Blockiert');
@@ -1247,8 +1239,23 @@ const STATUS_LABELS = {
 };
 
 function statusLabel(status) {
-  const entry = STATUS_LABELS[String(status || 'open')];
-  return entry ? state.t(entry[0], entry[1]) : String(status || '');
+  const entry = STATUS_LABELS[String(status || '')];
+  return entry ? state.t(entry[0], entry[1]) : '';
+}
+
+function isRawStatusToken(value) {
+  return /^(running|queued|pending|pending_sync|in_progress|failed|leased|accepted|completed|done|ctox-service|ctox)$/i.test(String(value || '').trim());
+}
+
+function isRawSourceId(value) {
+  return /^[a-z0-9]+(?:[_-][a-z0-9]+)+$/.test(String(value || '').trim());
+}
+
+function humanSourceLabel(entry) {
+  const label = String(entry?.source_label || '').trim();
+  const moduleId = String(entry?.source_module || '').trim();
+  if (!label || label === moduleId || isRawSourceId(label) || isRawStatusToken(label)) return '';
+  return label;
 }
 
 // Roster names come from the roster the module loads for its people selects;
@@ -1262,10 +1269,10 @@ function rosterName(userId) {
 function threadMetaLine(thread, why) {
   const parts = [];
   const status = statusLabel(thread.status);
-  if (status) parts.push(status);
+  if (status && status !== why) parts.push(status);
   const assignee = rosterName(thread.assigned_user_id);
-  if (assignee) parts.push(assignee);
-  const source = String(thread.source_label || thread.source_module || '').trim();
+  if (assignee && assignee !== String(thread.assigned_user_id || '').trim()) parts.push(assignee);
+  const source = humanSourceLabel(thread);
   if (source) parts.push(source);
   const due = Number(thread.due_at_ms || 0);
   // The attention line already shouts near deadlines; meta then adds nothing.
@@ -1298,14 +1305,9 @@ function renderList(threads, { resetScroll = false } = {}) {
       : state.recentThreadsComplete && readiness?.ready === true;
     if (!complete) {
       const offline = navigator.onLine === false;
-      const message = state.search
-        ? state.t('partialSearchResults', 'Keine lokalen Treffer · weitere Daten möglich.')
-        : offline
-          ? state.t('offlinePending', 'Offline · lokaler Datenstand noch unvollständig.')
-          : state.t('syncingThreads', 'Threads werden synchronisiert.');
       renderHtmlIfChanged(
         els.list,
-        `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(message)}</div>`,
+        `<div class="ctox-syncing" role="status" aria-live="polite"></div>`,
         { signature: `state:incomplete:${offline}:${Boolean(state.search)}`, preserveScroll: !resetScroll },
       );
     } else {
@@ -1408,7 +1410,7 @@ function renderDetail() {
       els.source.disabled = true;
       els.source.dataset.threadDeepLink = '';
     }
-    if (els.status) els.status.textContent = state.status || 'bereit';
+    if (els.status) els.status.textContent = state.status || '';
     renderHtmlIfChanged(els.timeline, `<div class="ctox-empty">${escapeHtml(emptyTitle)}</div>`);
     renderHtmlIfChanged(els.context, '');
     if (els.messageBody) els.messageBody.disabled = true;
@@ -1431,7 +1433,11 @@ function renderDetail() {
     const command = linkedCommandsForThread(thread.id).at(-1);
     const task = linkedTasksForThread(thread.id).at(-1);
     const workStatus = task?.status || command?.status;
-    els.status.textContent = `Abstimmung: ${statusLabel(thread.status)}${workStatus ? ` · Fachvorgang: ${workStatus}` : ''}`;
+    const threadState = statusLabel(thread.status);
+    const parts = [];
+    if (threadState) parts.push(threadState);
+    if (statusIn(workStatus, ['failed', 'error', 'blocked']) && !parts.includes('Fehlgeschlagen')) parts.push('Fehlgeschlagen');
+    els.status.textContent = parts.join(' · ');
   }
   setThreadActionState(thread);
   renderTimeline(thread);
@@ -1468,7 +1474,7 @@ function updateThreadPresenceHint(thread) {
 
 function renderTimeline(thread) {
   const loadingNote = state.detailCompleteThreadId === thread.id
-    ? '' : '<div class="ctox-syncing" role="status">Verlauf wird vollständig geladen…</div>';
+    ? '' : '<div class="ctox-syncing" role="status" aria-live="polite"></div>';
   const messages = messagesForThread(thread.id);
   const approvals = approvalsForThread(thread.id);
   const timeline = [
@@ -1488,7 +1494,7 @@ function renderTimeline(thread) {
     const messageLabel = String(message.body || message.source_label || kind || message.id).replace(/\s+/g, ' ').slice(0, 160);
     const sourceLink = sourceDeepLinkFor(message);
     const linkHtml = sourceLink
-      ? `<button type="button" class="threads-msg-link" data-thread-deep-link="${escapeAttr(sourceLink)}" title="${sourceFocusSupported(message) ? 'Objekt öffnen' : 'Quell-App öffnen'}">↗ ${escapeHtml(message.source_label || message.source_module || 'Quelle')}</button>`
+      ? `<button type="button" class="threads-msg-link" data-thread-deep-link="${escapeAttr(sourceLink)}" title="${sourceFocusSupported(message) ? 'Objekt öffnen' : 'Quell-App öffnen'}">↗ ${escapeHtml(humanSourceLabel(message) || 'Quelle')}</button>`
       : '';
     const isEvent = ['ctox_status', 'approval_request', 'approval_approved', 'approval_rejected', 'handoff', 'status'].includes(kind)
       || (!message.author_user_id && message.actor_type !== 'ai');
@@ -1540,17 +1546,17 @@ function renderApproval(approval) {
           <button type="button" class="ctox-pane-icon" data-edit-approval="${escapeAttr(approval.id)}" aria-label="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}" title="${escapeHtml(state.t('approvalEdit', 'Bearbeiten'))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20.5l4.3-1 9.1-9.1a2.1 2.1 0 0 0-3-3L5.3 16.2 4 20.5Z"/><path d="M13.5 5.5l3 3"/></svg></button>
         </div>
       ` : ''}
-      <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))} · ${escapeHtml(approval.status || 'pending')} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
+      <div class="threads-message-meta">${escapeHtml(state.t('approvalHeadingPrefix', 'CTOX Freigabe'))}${approvalStatusLabel(approval.status) ? ` · ${escapeHtml(approvalStatusLabel(approval.status))}` : ''} · ${escapeHtml(formatTime(approval.requested_at_ms || approval.created_at_ms))}</div>
       <div class="threads-message-body">${escapeHtml(approval.prompt || '')}</div>
       <dl class="ctox-fields">
-        <dt>Ziel</dt><dd>${escapeHtml(approval.target_module || approval.source_module || 'CTOX')}</dd>
+        ${humanSourceLabel({ source_label: approval.source_label, source_module: approval.target_module || approval.source_module }) ? `<dt>Ziel</dt><dd>${escapeHtml(humanSourceLabel({ source_label: approval.source_label, source_module: approval.target_module || approval.source_module }))}</dd>` : ''}
         <dt>Risiko</dt><dd>${escapeHtml(risk)}</dd>
         <dt>Erwartete Auswirkung</dt><dd>${escapeHtml(impact)}</dd>
         <dt>Evidenz</dt><dd>${escapeHtml(evidence)}</dd>
       </dl>
       <div class="threads-message-meta">${escapeHtml(state.t('approvalRequester', 'Requester'))}: ${escapeHtml(approval.requester_display_name || approval.requester_user_id || '')} · ${escapeHtml(state.t('approvalReviewerShort', 'Reviewer'))}: ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}</div>
-      ${command ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?command_id=${escapeAttr(command.command_id || command.id || '')}" title="Befehl in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalCommand', 'Command'))}: ${escapeHtml(command.command_type || '')} · ${escapeHtml(command.status || '')}</button></div>` : ''}
-      ${task ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?task_id=${escapeAttr(task.id || '')}" title="Aufgabe in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalTask', 'Task'))}: ${escapeHtml(task.title || task.id)} · ${escapeHtml(task.status || '')}</button></div>` : ''}
+      ${command ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?command_id=${escapeAttr(command.command_id || command.id || '')}" title="Befehl in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalCommand', 'Befehl'))}</button></div>` : ''}
+      ${task ? `<div class="threads-message-meta"><button type="button" class="threads-msg-link" data-thread-deep-link="#ctox?task_id=${escapeAttr(task.id || '')}" title="Aufgabe in der CTOX-App öffnen">↗ ${escapeHtml(state.t('approvalTask', 'Aufgabe'))}${task.title ? `: ${escapeHtml(task.title)}` : ''}</button></div>` : ''}
     </article>
   `;
 }
@@ -1569,9 +1575,7 @@ function renderContext(thread) {
     { label: 'Was ist passiert?', value: lastMessage?.body || thread.source_label || 'Noch keine Aktivität' },
     { label: 'Was braucht mich?', value: attentionReasons(thread).join(', ') || 'Aktuell keine direkte Aktion' },
     { label: 'Was passiert als Nächstes?', value: nextStep },
-    { label: 'Quelle', value: contextLabel(thread) },
-    { label: 'Record', value: [thread.source_record_type, thread.source_record_id].filter(Boolean).join(' / ') },
-    { label: 'Deep Link', value: thread.source_deep_link, deepLink: thread.source_deep_link },
+    { label: 'Quelle', value: humanSourceLabel(thread) },
     { label: 'Teilnehmer', value: arrayField(thread.participant_ids).join(', ') },
     { label: 'Watcher', value: arrayField(thread.watcher_user_ids).join(', ') },
     { label: 'Ungelesen', value: String(unread.length) },
@@ -1579,7 +1583,7 @@ function renderContext(thread) {
     { label: 'Offene Freigaben', value: String(approvals.filter((item) => item.status === 'pending').length) },
     ...links.map((link) => ({
       label: link.link_type || link.link_role || 'Link',
-      value: [link.app_collection, link.source_module, link.source_record_type, link.source_record_id, link.source_label].filter(Boolean).join(' / '),
+      value: humanSourceLabel(link),
       deepLink: link.deep_link,
     })),
   ].filter((row) => String(row.value || row.deepLink || '').trim());
@@ -1881,21 +1885,22 @@ async function dispatchThreadsCommand(
       },
     });
     commandId = command.id;
-    state.commandReceipt = { commandId, message: `Übermittelt · ${commandId}`, error: false };
+    state.commandReceipt = { commandId, message: 'Übermittelt', error: false };
     renderCommandReceipt();
     const outcome = await state.ctx.commandBus.dispatch(command, { until });
-    state.status = outcome?.status || 'completed';
+    state.status = '';
     state.commandReceipt = {
       commandId: outcome?.command_id || commandId,
-      message: `${until === 'terminal' ? 'Bestätigt' : 'Angenommen'} · ${outcome?.command_id || commandId}`,
+      message: until === 'terminal' ? 'Bestätigt' : 'Angenommen',
       error: false,
     };
     renderCommandReceipt();
     return outcome;
   } catch (error) {
+    console.warn('[threads] command failed', commandId, error);
     state.commandReceipt = {
       commandId,
-      message: `Aktion fehlgeschlagen${commandId ? ` · ${commandId}` : ''}: ${error?.message || String(error)}`,
+      message: 'Das hat nicht geklappt.',
       error: true,
     };
     renderCommandReceipt();
@@ -1924,16 +1929,15 @@ function setBusy(busy) {
     });
   });
   setThreadActionState(selectedThread());
-  if (els.status) els.status.textContent = busy ? 'sendet' : (state.status || 'bereit');
+  if (els.status) els.status.textContent = busy ? 'sendet' : (state.status || '');
 }
 
 function showError(error) {
   const loadFailure = error?.threadsLoadFailure === true;
   console.warn(loadFailure ? '[threads] refresh failed' : '[threads] action failed', error?.cause || error);
-  state.statusIsLoadFailure = loadFailure;
-  state.status = loadFailure
-    ? state.t('loadFailed', 'Threads konnten nicht geladen werden. Mit Aktualisieren erneut versuchen.')
-    : state.t('commandFailed', 'Aktion konnte nicht abgeschlossen werden.');
+  if (loadFailure) return;
+  state.statusIsLoadFailure = false;
+  state.status = state.t('commandFailed', 'Das hat nicht geklappt.');
   if (els.status) els.status.textContent = state.status;
 }
 
@@ -1941,7 +1945,7 @@ function clearLoadError() {
   if (!state.statusIsLoadFailure) return;
   state.statusIsLoadFailure = false;
   state.status = '';
-  if (els.status) els.status.textContent = 'bereit';
+  if (els.status) els.status.textContent = '';
 }
 
 function selectedThread() {
@@ -1991,10 +1995,10 @@ function selectedSourceContext() {
 
 function renderContextRow(row) {
   const label = row?.label || '';
-  const value = row?.value || row?.deepLink || '';
+  const value = row?.value || '';
   const deepLink = normalizeInternalDeepLink(row?.deepLink, state.selectedId, registeredModuleIds());
   const valueHtml = deepLink
-    ? `<a href="${escapeAttr(deepLink)}" data-thread-deep-link="${escapeAttr(deepLink)}">${escapeHtml(value || deepLink)}</a>`
+    ? `<a href="${escapeAttr(deepLink)}" data-thread-deep-link="${escapeAttr(deepLink)}">${escapeHtml(value || 'Öffnen')}</a>`
     : `<span>${escapeHtml(value)}</span>`;
   return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml}</dd>`;
 }
@@ -2134,7 +2138,15 @@ function taskById(taskId) {
 }
 
 function contextLabel(thread) {
-  return [thread.source_module, thread.source_label || thread.source_record_id].filter(Boolean).join(' · ') || 'Threads';
+  return humanSourceLabel(thread) || 'Threads';
+}
+
+function approvalStatusLabel(status) {
+  const key = String(status || '').toLowerCase();
+  if (key === 'pending') return 'Offen';
+  if (key === 'approved') return 'Freigegeben';
+  if (key === 'rejected') return 'Abgelehnt';
+  return '';
 }
 
 function userStateForThread(threadId) {
@@ -2208,14 +2220,6 @@ function persistNavigationState() {
 
 function updateConnectivity() {
   const online = navigator.onLine !== false;
-  if (els.syncState) {
-    const ready = personalCollectionsReady();
-    els.syncState.textContent = !online
-      ? 'Offline · lokaler Datenstand'
-      : ready ? 'Lokaler Datenstand bereit' : 'Threads werden synchronisiert';
-    els.syncState.dataset.state = !online ? 'offline' : ready ? 'ready' : 'catching-up';
-    els.syncState.classList.toggle('is-danger', !online || !ready);
-  }
   els.root?.classList.toggle('is-offline', !online);
 }
 

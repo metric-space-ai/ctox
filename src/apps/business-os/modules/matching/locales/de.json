@@ -10,12 +10,6 @@
   "emptyMatches": "Noch keine Matching-Ergebnisse oder Tasks.",
   "emptyObjects": "Noch keine Objekte oder Import-Tasks.",
   "emptyRequirements": "Noch keine Anforderungen verfügbar.",
-  "syncingTitle": "Matching wird synchronisiert",
-  "syncingCollections": "Daten werden geladen: {collections}.",
-  "syncingPreparing": "Lokale Daten werden vorbereitet.",
-  "syncingRequirements": "Anforderungen werden synchronisiert.",
-  "syncingObjects": "Objekte werden synchronisiert.",
-  "syncCollectionRequirements": "Anforderungen",
-  "syncCollectionObjects": "Objekte",
-  "syncCollectionResults": "Matches"
+  "syncingRequirements": "Wird geladen …",
+  "syncingObjects": "Wird geladen …"
 }

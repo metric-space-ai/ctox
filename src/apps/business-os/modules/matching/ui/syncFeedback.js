@@ -256,94 +256,13 @@ export function createSyncFeedback({ scope = 'default' } = {}) {
     }, delay);
   }
 
-  function reportDataChange({ collectionName = '' } = {}) {
-    if (!passiveSyncToastsEnabled()) return;
+  function reportDataChange() {}
 
-    const now = Date.now();
-    if (now - lastDataSyncAt < DATA_SYNC_COOLDOWN_MS) return;
-    lastDataSyncAt = now;
+  function reportSyncFailure() {}
 
-    const col = safeText(collectionName);
-    const label = col ? ` (${col})` : '';
-    show(`Sync: Datenänderung übernommen${label}.`, {
-      type: 'success',
-      dedupeKey: `data:${col || 'any'}`,
-      cooldownMs: DATA_SYNC_COOLDOWN_MS
-    });
-  }
+  function reportMutationEvent() {}
 
-  function reportSyncFailure(message = '') {
-    const text = safeText(message) || 'Sync fehlgeschlagen.';
-    show(text, { type: 'error', dedupeKey: `sync-error:${text}`, cooldownMs: 4000 });
-  }
-
-  function reportMutationEvent({
-    collectionName = '',
-    operation = '',
-    docId = '',
-    isRemote = null,
-    extraCount = 0
-  } = {}) {
-    const colKey = normalizeCollectionName(collectionName);
-    const entity = COLLECTION_LABELS[colKey] || safeText(collectionName) || 'Datensatz';
-    const op = normalizeOperation(operation);
-    const idLabel = shortDocId(docId);
-    const count = Math.max(0, Number(extraCount) || 0);
-
-    let type = 'info';
-    let action = 'geändert';
-    if (op === 'INSERT') {
-      type = 'success';
-      action = 'hinzugefügt';
-    } else if (op === 'DELETE') {
-      type = 'warn';
-      action = 'gelöscht';
-    }
-
-    const actor = isRemote === true
-      ? 'Peer-Änderung'
-      : isRemote === false
-      ? 'Lokal gespeichert'
-      : 'Sync';
-
-    let msg = `${actor}: ${entity} ${action}`;
-    if (idLabel) msg += ` (${idLabel})`;
-    if (count > 0) msg += `, +${count} weitere`;
-    msg += '.';
-
-    show(msg, {
-      type,
-      dedupeKey: `mut:${isRemote === true ? 'remote' : isRemote === false ? 'local' : 'unknown'}:${op}:${colKey}:${idLabel}:${count > 0 ? 'multi' : 'single'}`,
-      cooldownMs: MUTATION_SYNC_COOLDOWN_MS
-    });
-  }
-
-  function wireWebRTCStatus() {
-    const wiredKey = `__syncFeedbackWired_${scopeSafe}`;
-    if (window[wiredKey]) return;
-    window[wiredKey] = true;
-
-    window.addEventListener('rxdb:webrtc-init', () => {
-      show('Sync verbunden (WebRTC aktiv).', {
-        type: 'info',
-        dedupeKey: 'webrtc-init',
-        cooldownMs: 5000
-      });
-    });
-
-    window.addEventListener('rxdb:webrtc-error', (evt) => {
-      const msg = safeText(evt?.detail?.err);
-      reportSyncFailure(msg ? `Sync-Fehler: ${msg}` : 'Sync-Fehler: Verbindung instabil.');
-    }, true);
-
-    window.addEventListener('rxdb:webrtc-stopped', () => {
-      show('Sync pausiert (lokaler Modus).', {
-        type: 'warn',
-        dedupeKey: 'webrtc-stopped',
-        cooldownMs: 5000
-      });
-    });
-  }
+  function wireWebRTCStatus() {}
 
   return {
     setHostRoot,

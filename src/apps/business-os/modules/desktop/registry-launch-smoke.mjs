@@ -200,7 +200,11 @@ assert.ok(
 );
 assert.ok(
   desktopSource.includes("syncing.className = 'ctox-syncing';"),
-  'Desktop must render the canonical syncing shell while desktop_icons is empty and not ready'
+  'Desktop must render the neutral loading shell while desktop_icons is empty and not ready'
+);
+assert.ok(
+  !desktopSource.includes('Daten werden synchronisiert'),
+  'Desktop loading shell must not describe sync state'
 );
 assert.ok(
   desktopSource.includes('!usingFallbackDocs && iconsReadiness?.ready === false'),

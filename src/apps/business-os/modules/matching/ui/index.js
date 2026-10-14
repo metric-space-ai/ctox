@@ -79,7 +79,6 @@ let matchingViewState = readViewState(
 );
 
 const syncFeedback = createSyncFeedback({ scope: 'matching-view' });
-syncFeedback.wireWebRTCStatus();
 let matchingModuleHost = null;
 
 function getMatchingModuleHost() {
@@ -515,12 +514,7 @@ function renderObjectsEdits() {
     const avatarSrc = getObjectAvatarSrc(c); // nutzt normalizeImageSrc + fallback
 
     // Status-Text für Placeholder
-    let placeholderLine = 'Warte auf Object-Service …';
-    if (c.importError) {
-      placeholderLine = `<span class="muted">Fehler: ${_escapeHtml(c.importError)}</span>`;
-    } else if (c.importStatus) {
-      placeholderLine = `Object-Service: ${_escapeHtml(c.importStatus)}`;
-    }
+    const placeholderLine = c.importError ? 'Import hat nicht geklappt.' : 'Import läuft …';
 
     card.innerHTML = `
       <div class="object-head">
@@ -605,8 +599,8 @@ function syncObjectDetailForms() {
   if (object.isPlaceholder) {
     if (hint) {
       hint.textContent = object.importError
-        ? 'Import fehlgeschlagen – Details über den Import prüfen.'
-        : 'Import läuft – die Objekte-Daten werden automatisch geladen.';
+        ? 'Import hat nicht geklappt.'
+        : 'Import läuft …';
     }
     if (fields) fields.style.display = 'none';
     return;
@@ -809,7 +803,8 @@ function createUiPlaceholderObject({ placeholderId, displayName, sourceLabel }) 
 function markObjectPlaceholderAsError(placeholderId, errorMsg) {
   const object = (objects || []).find(c => c && c.id === placeholderId);
   if (!object) return;
-  object.importError = errorMsg || 'Unbekannter Fehler beim Import.';
+  console.warn('[matching] object import failed:', placeholderId, errorMsg);
+  object.importError = 'Import hat nicht geklappt.';
   object.importStatus = null;
   object.updatedAt = new Date().toISOString();
   renderObjects();
@@ -967,7 +962,6 @@ let matches = [];
 let matchingRuntimeCtx = null;
 let matchingReadinessCleanup = null;
 const matchingReadinessByCollection = new Map();
-const MATCHING_SYNC_PROGRESS_ID = 'matching-initial-sync';
 const MATCHING_SYNC_COLLECTIONS = Object.freeze([
   { name: 'matching_requirements', labelKey: 'syncCollectionRequirements', fallbackLabel: 'Anforderungen' },
   { name: 'matching_objects', labelKey: 'syncCollectionObjects', fallbackLabel: 'Objekte' },
@@ -1006,48 +1000,6 @@ function matchingCollectionReadiness(collectionName) {
   return snapshot;
 }
 
-function getMatchingInitialSyncProgress() {
-  let ready = 0;
-  const pendingLabels = [];
-  let syncing = false;
-
-  for (const item of MATCHING_SYNC_COLLECTIONS) {
-    const readiness = matchingCollectionReadiness(item.name);
-    if (readiness.ready) ready += 1;
-    if (readiness.syncing) {
-      syncing = true;
-      pendingLabels.push(uiText(item.labelKey, item.fallbackLabel));
-    }
-  }
-
-  return {
-    ready,
-    total: MATCHING_SYNC_COLLECTIONS.length,
-    pendingLabels,
-    syncing
-  };
-}
-
-function updateMatchingInitialSyncFeedback() {
-  const progress = getMatchingInitialSyncProgress();
-  if (!progress.syncing || progress.ready >= progress.total) {
-    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID, { delayMs: 1200 });
-    return;
-  }
-
-  const pending = progress.pendingLabels.join(', ');
-  syncFeedback.upsertProgress?.(MATCHING_SYNC_PROGRESS_ID, {
-    title: uiText('syncingTitle', 'Matching wird synchronisiert'),
-    detail: pending
-      ? uiText('syncingCollections', 'Daten werden gerade geladen: {collections}.', { collections: pending })
-      : uiText('syncingPreparing', 'Lokale Daten werden vorbereitet.'),
-    meta: `${progress.ready}/${progress.total}`,
-    value: (progress.ready / progress.total) * 100,
-    indeterminate: false,
-    type: 'info'
-  });
-}
-
 function rerenderMatchingReadinessStates() {
   renderSources();
   renderRequirements();
@@ -1063,21 +1015,18 @@ function setupMatchingCollectionReadiness() {
     subscribeMatchingCollectionReadiness(item.name, (snapshot) => {
       const previous = matchingReadinessByCollection.get(item.name);
       matchingReadinessByCollection.set(item.name, snapshot);
-      updateMatchingInitialSyncFeedback();
       if (!subscribing && previous?.state !== snapshot.state) {
         rerenderMatchingReadinessStates();
       }
     })
   );
   subscribing = false;
-  updateMatchingInitialSyncFeedback();
 
   matchingReadinessCleanup = () => {
     for (const unsubscribe of unsubscribers) {
       try { unsubscribe?.(); } catch (_) {}
     }
     matchingReadinessByCollection.clear();
-    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID);
     matchingReadinessCleanup = null;
   };
   return matchingReadinessCleanup;
@@ -1887,6 +1836,7 @@ let __reloadTimer = null;
 let __reloadInFlight = false;
 let __reloadAgainAfterFlight = false;
 let __lastReloadAt = 0;
+let __reloadRetryDelayMs = 1000;
 
 const RXDB_UI_RELOAD_THROTTLE_MS = 250;
 
@@ -2000,13 +1950,16 @@ async function __reloadAllFromRxdbNow(reason = '') {
       }
     });
 
+    __reloadRetryDelayMs = 1000;
     if (__reloadAgainAfterFlight) {
       __reloadAgainAfterFlight = false;
       __scheduleReloadAllFromRxdb(`again:${reason}`, RXDB_UI_RELOAD_THROTTLE_MS);
     }
   } catch (e) {
-    console.error('[rxdb-live] reload failed:', reason, e);
-    syncFeedback.reportSyncFailure('Sync fehlgeschlagen: Änderungen konnten nicht geladen werden.');
+    console.warn('[rxdb-live] reload failed:', reason, e);
+    const delay = __reloadRetryDelayMs;
+    __reloadRetryDelayMs = Math.min(60_000, delay * 2);
+    __scheduleReloadAllFromRxdb(`retry:${reason}`, delay);
   } finally {
     __reloadInFlight = false;
   }
@@ -2165,8 +2118,6 @@ async function setupRxdbLiveUiSync() {
     const sub = obs.subscribe((evt) => {
       try {
         if (name === 'objects') {
-          syncFeedback.reportDataChange({ collectionName: name });
-
           // ✅ Cache bust (Foto)
           __bustObjectPhotoCacheFromChangeEvent(evt);
 
@@ -2242,7 +2193,6 @@ async function setupRxdbLiveUiSync() {
         if (NOISY.has(name)) return;
       } catch (_) {}
 
-      syncFeedback.reportDataChange({ collectionName: name });
       __scheduleReloadAllFromRxdb(`change:${name}`);
     });
 
@@ -4365,7 +4315,7 @@ async function createMatch(sourceId, requirementId, objectId) {
     }
     console.error('Fehler beim Anlegen des LLM-basierten Matchings:', err);
     pendingMatchKeys.delete(procKey);
-    showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+    showBusinessAlert('Matching hat nicht geklappt.', { title: 'Matching fehlgeschlagen' });
     renderRequirements();
   }
 }
@@ -4742,7 +4692,7 @@ async function handleBulkAutoMatch(requirementId, count) {
     renderRequirements();
   } catch (e) {
     console.error('handleBulkAutoMatch Fehler:', e);
-    await showBusinessAlert('Matching-Auswahl (+Objekte) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
+    await showBusinessAlert('Matching hat nicht geklappt.', { title: 'Matching fehlgeschlagen' });
   } finally {
     // Requirement aus "busy"-Set entfernen und Buttons wieder freigeben
     bulkMatchingRequirements.delete(requirementId);
@@ -4858,7 +4808,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     renderObjects();
   } catch (e) {
     console.error('handleBulkAutoMatchForObject Fehler:', e);
-    await showBusinessAlert('Matching-Auswahl (+Requirements) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
+    await showBusinessAlert('Matching hat nicht geklappt.', { title: 'Matching fehlgeschlagen' });
   } finally {
     bulkMatchingObjects.delete(objectId);
     renderObjects();
@@ -4935,7 +4885,7 @@ async function handleDeleteObject(objectId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Objekte', e);
-    await showBusinessAlert('Objekt konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await showBusinessAlert('Löschen hat nicht geklappt.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4982,7 +4932,7 @@ async function handleDeleteRequirement(requirementId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen der Anforderung', e);
-    await showBusinessAlert('Anforderung konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await showBusinessAlert('Löschen hat nicht geklappt.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -5030,7 +4980,7 @@ async function handleDeleteSource(sourceId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Quellens', e);
-    await showBusinessAlert('Quellen konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
+    await showBusinessAlert('Löschen hat nicht geklappt.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -5342,7 +5292,7 @@ function renderRequirementSelector() {
     } else {
       grid.innerHTML = renderCollectionListState(allRows, 'matching_requirements', {
         empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-        syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
+        syncing: uiText('syncingRequirements', 'Wird geladen …')
       });
     }
   } else {
@@ -5728,7 +5678,7 @@ function renderSources(){
   if (!sources.length){
     grid.innerHTML = renderCollectionListState(sources, 'matching_requirements', {
       empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-      syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
+      syncing: uiText('syncingRequirements', 'Wird geladen …')
     });
     return;
   }
@@ -5933,7 +5883,7 @@ function renderRequirements(){
     compNameEl.textContent = 'Keine Anforderungen';
     list.innerHTML = renderCollectionListState(sources, 'matching_requirements', {
       empty: uiText('emptyRequirements', 'Noch keine Anforderungen verfügbar.'),
-      syncing: uiText('syncingRequirements', 'Anforderungen werden synchronisiert.')
+      syncing: uiText('syncingRequirements', 'Wird geladen …')
     });
     return;
   }
@@ -6630,7 +6580,7 @@ function ensureMatchModal(){
     createMatch(sourceId, requirementId, currentMatchObjectId)
       .catch(err => {
         console.error('Fehler beim Matching:', err);
-        showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+        showBusinessAlert('Matching hat nicht geklappt.', { title: 'Matching fehlgeschlagen' });
       });
 
     // Popup SOFORT schließen
@@ -7564,7 +7514,7 @@ function createObjectCard(objectUi){
         createMatch(sourceId, requirementId, objectId)
           .catch(err => {
             console.error('Fehler beim direkten Matching:', err);
-            showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
+            showBusinessAlert('Matching hat nicht geklappt.', { title: 'Matching fehlgeschlagen' });
           });
         return;
       }
@@ -7635,8 +7585,8 @@ function patchObjectCard(objectId, objectUi){
   if (taxEl){
     if (isPlaceholder) {
       const importLine = objectUi.importError
-        ? `Import fehlgeschlagen: ${objectUi.importError}`
-        : `Object-Service: ${objectUi.importStatus || 'queued'}`;
+        ? 'Import hat nicht geklappt.'
+        : 'Import läuft …';
       taxEl.textContent = importLine;
     } else {
       // Tax-Zeile: "tax · Ø Match ..."
@@ -7787,7 +7737,7 @@ function renderObjects(opts = {}){
 
     list.innerHTML = renderCollectionListState(objects, 'matching_objects', {
       empty: uiText('emptyObjects', 'Noch keine Objekte verfügbar.'),
-      syncing: uiText('syncingObjects', 'Objekte werden synchronisiert.')
+      syncing: uiText('syncingObjects', 'Wird geladen …')
     });
     return;
   }
@@ -9060,16 +9010,12 @@ function bindObjectFileUpload(btnEl, inputEl) {
       // Optional: kurze UX-Info (kannst du entfernen)
       const allFailed = [...failed, ...imageFailures];
       if (allFailed.length) {
-        showBusinessAlert(
-          `Import gestartet.\n\nErfolgreich: ${ok.length + imageResults.length}\nFehlgeschlagen: ${allFailed.length}\n\n` +
-          allFailed.slice(0, 5).map(f => `- ${f.file?.name}: ${f.error?.message || f.error}`).join('\n') +
-          (allFailed.length > 5 ? `\n… (+${allFailed.length - 5} weitere)` : ''),
-          { title: 'Import gestartet' }
-        );
+        console.warn('[matching] object file import failed:', allFailed.map((entry) => entry.error));
+        showBusinessAlert('Import hat nicht geklappt.', { title: 'Import fehlgeschlagen' });
       }
     } catch (e) {
       console.error('Objekt-Dateiimport Gesamtfehler', e);
-      showBusinessAlert('Objekt-Dateiimport fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
+      showBusinessAlert('Import hat nicht geklappt.', { title: 'Import fehlgeschlagen' });
     } finally {
       inputEl.value = '';
     }
@@ -9103,7 +9049,7 @@ if (objectImportText && objectImportTextBtn) {
       objectImportText.value = '';
     } catch (e) {
       console.error('Objekte-Import Fehler', e);
-      showBusinessAlert('Objekte-Import fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
+      showBusinessAlert('Import hat nicht geklappt.', { title: 'Import fehlgeschlagen' });
     }
   }
 
@@ -9208,8 +9154,6 @@ export async function mountMatchingDashboard(ctx = {}){
   setupMatchingCollectionReadiness();
   await ensureMatchScoreFormulaUpdate();
   await loadFromRxdb();
-  updateMatchingInitialSyncFeedback();
-
   setupMatchingIaControls();
   renderSources();
   renderRequirements();
@@ -9393,7 +9337,7 @@ function openCreateRequirementForm() {
     } catch (err) {
       console.error('[matching] createRequirementFromForm failed', err);
       if (typeof showBusinessAlert === 'function') {
-        showBusinessAlert(`Anforderung konnte nicht angelegt werden: ${err?.message || err}`);
+        showBusinessAlert('Anlegen hat nicht geklappt.');
       }
     }
   });

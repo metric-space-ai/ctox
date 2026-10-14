@@ -148,8 +148,20 @@ test('crew labels describe work without exposing implementation terminology', ()
     if (typeof labels.de[key] === 'string') assert.equal(value, labels.de[key], key);
   }
   assert.equal(labels.de.harnessOpenTask, 'Aufgabe öffnen');
-  assert.match(labels.de.harnessCriticalMessage, /\{count\}/);
-  assert.match(labels.de.harnessCriticalMessage, /\{age\}/);
+  const indexSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const alerts = indexSource.slice(
+    indexSource.indexOf('function updateHarnessHealthAlerts'),
+    indexSource.indexOf('function interpolateLabel'),
+  );
+  const healthUi = indexSource.slice(
+    indexSource.indexOf('function syncHarnessHealthUiState'),
+    indexSource.indexOf('function harnessHealthTitle'),
+  );
+  assert.doesNotMatch(alerts, /notifications\.show/);
+  assert.doesNotMatch(alerts, /harnessCriticalMessage|Offene Aufgaben/);
+  assert.doesNotMatch(healthUi, /harness\.title\s*=/);
+  assert.doesNotMatch(healthUi, /setAttribute\('aria-label'/);
+  assert.doesNotMatch(indexSource, /syncDisconnected|COLLECTION_READ_FORBIDDEN:/);
 });
 
 test('Missing authoritative task telemetry remains a safe empty state', () => {
@@ -742,14 +754,17 @@ test('WebRTC status does not claim CTOX flow is connected when projection is mis
     ctx: { sync: { mode: 'webrtc' } },
   });
   assert.equal(view.mode, 'RxDB WebRTC');
-  assert.equal(view.status, labels.de.flowProjectionMissing);
+  assert.equal(view.status, '');
   assert.notEqual(view.status, labels.de.connected);
+  assert.notEqual(view.status, labels.de.flowProjectionMissing);
 });
 
-test('Web Stack projection failures render as actionable sync diagnostics', () => {
+test('Web Stack projection failures stay silent', () => {
   const webStack = { loading: false, error: 'Web Stack projection is not available in RxDB' };
   assert.equal(webStackProjectionMissing(webStack), true);
-  assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
+  assert.equal(friendlyWebStackStatus(webStack, labels.de), '');
+  const panel = webStackPanel({ lang: 'de', webStack, model: { tasks: [] }, webStackPanelOpen: true });
+  assert.doesNotMatch(panel, /Verbindung prüfen|nicht erreichbar|werden noch geladen|noch nicht vollständig geladen|Internet-Zugänge werden geladen/);
 });
 
 test('Web Stack refresh preserves projection-missing diagnostics', () => {
@@ -759,7 +774,7 @@ test('Web Stack refresh preserves projection-missing diagnostics', () => {
   );
   assert.equal(webStack.error, 'Web Stack projection is not available in RxDB');
   assert.equal(webStackProjectionMissing(webStack), true);
-  assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
+  assert.equal(friendlyWebStackStatus(webStack, labels.de), '');
 });
 
 test('Task display copy is shown as written (no regex redaction, no underscore mangling)', () => {

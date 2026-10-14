@@ -25,11 +25,10 @@ export async function mount(ctx) {
     await matchingUi.mountMatchingDashboard?.(ctx);
   })().catch((error) => {
     if (disposed) return;
-    console.error('[matching] dashboard startup failed:', error);
+    console.warn('[matching] dashboard startup failed:', error);
     ctx.notifications?.show?.({
       type: 'error',
-      title: 'Matching konnte nicht geladen werden',
-      message: String(error?.message || error),
+      title: 'Matching hat nicht geklappt.',
       time: 9000
     });
   });

@@ -91,11 +91,6 @@
   text-overflow: ellipsis;
   font-size: var(--fs-meta);
 }
-.threads-sync-state {
-  display: block;
-  font-size: var(--fs-meta);
-}
-
 /* ----------------------------------------------------------------------------
    Shell V2 head geometry. Reference: modules/knowledge/index.css.
 
