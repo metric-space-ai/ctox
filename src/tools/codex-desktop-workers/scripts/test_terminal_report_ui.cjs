@@ -1,7 +1,7 @@
 'use strict';
-const assert=require('node:assert/strict'),vm=require('node:vm'),cp=require('node:child_process');
+const assert=require('node:assert/strict'),vm=require('node:vm'),cp=require('node:child_process'),fs=require('node:fs');
 const report=process.argv[2]||'/Users/michaelwelsch/.codex/proxy-workers/MODEL-EXPERIENCE.html';
-const html=cp.execFileSync('greppy',['rg','--no-heading','--no-line-number','^',report],{encoding:'utf8',maxBuffer:128*1024*1024});
+const html=cp.execFileSync('greppy',['rg','--no-heading','--no-line-number','^',report],{encoding:'utf8',maxBuffer:Math.max(32*1024*1024,fs.statSync(report).size+1024*1024)});
 const data=html.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1];
 const scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
 const elements=new Map(),headers={parent:[],worker:[],pr:[]},modes=[];
