@@ -192,3 +192,19 @@ test('reddit and x read through a CTOX account, never an API', async () => {
   const plain = model.buildGenerateCommand(topic, [lab], { id: 'issue_b', issue_date: '2026-10-14' }, null);
   assert.ok(!plain.payload.instruction.includes('--task-id'));
 });
+
+test('a failed run replaced on the same day leaves the issue list; same-day runs show their time', async () => {
+  const model = await import('../core/news-model.mjs');
+  const at = (h) => new Date(2026, 9, 14, h, 0).getTime();
+  const issues = [
+    { id: 'a', topic_id: 't', issue_date: '2026-10-14', status: 'failed', created_at_ms: at(7) },
+    { id: 'b', topic_id: 't', issue_date: '2026-10-14', status: 'ready', created_at_ms: at(3) },
+    { id: 'c', topic_id: 't', issue_date: '2026-10-14', status: 'queued', created_at_ms: at(17) },
+    { id: 'd', topic_id: 't', issue_date: '2026-10-13', status: 'failed', created_at_ms: at(1) },
+  ];
+  const listed = model.issuesForTopic(issues, 't');
+  assert.deepEqual(listed.map((issue) => issue.id), ['c', 'b', 'd']);
+  const today = new Date(2026, 9, 14, 18, 0);
+  assert.equal(model.issueNodeLabel(listed[0], listed, 'de', today), 'Heute · 17:00');
+  assert.equal(model.issueNodeLabel(listed[2], listed, 'de', today), 'Gestern');
+});

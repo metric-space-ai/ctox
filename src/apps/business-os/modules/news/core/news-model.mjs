@@ -289,10 +289,28 @@ export function topicsForBand(topics, grammar = {}) {
 }
 
 export function issuesForTopic(issues, topicId, limit = 6) {
+  const seenDates = new Set();
   return issues
     .filter((issue) => issue.topic_id === topicId)
     .sort((a, b) => String(b.issue_date).localeCompare(String(a.issue_date)) || (Number(b.created_at_ms) || 0) - (Number(a.created_at_ms) || 0))
+    // A failed run that a newer run of the same day replaced is history, not
+    // an issue: keep it only while it is the newest one for its date.
+    .filter((issue) => {
+      const superseded = issue.status === 'failed' && seenDates.has(issue.issue_date);
+      seenDates.add(issue.issue_date);
+      return !superseded;
+    })
     .slice(0, limit);
+}
+
+// Two issues of the same day are told apart by their start time.
+export function issueNodeLabel(issue, siblings, lang = 'de', today = new Date()) {
+  const label = issueLabel(issue.issue_date, lang, today);
+  const sameDay = siblings.filter((other) => other.issue_date === issue.issue_date).length;
+  const created = Number(issue.created_at_ms) || 0;
+  if (sameDay < 2 || !created) return label;
+  const time = new Date(created).toLocaleTimeString(lang === 'en' ? 'en-US' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+  return `${label} · ${time}`;
 }
 
 export function postsForIssue(posts, issueId, grammar = {}) {
