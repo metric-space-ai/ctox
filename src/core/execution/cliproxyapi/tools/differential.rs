@@ -1200,9 +1200,9 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
     // `__CF_USER_TEXT_ENCODING` inside a freshly started macOS process even
     // when exec receives an empty environment; it is UID/locale metadata, not
     // inherited configuration. Reject every other key on every platform.
-    let inherited_environment = std::env::vars_os().any(|(key, _)| {
+    let inherited_environment = std::env::vars_os().any(|(_key, _)| {
         #[cfg(target_os = "macos")]
-        if key == "__CF_USER_TEXT_ENCODING" {
+        if _key == "__CF_USER_TEXT_ENCODING" {
             return false;
         }
         true

@@ -3,8 +3,10 @@
 // Port-Status: candidate — real CTOX HTTP route/owner guards
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+type CandidateOpenAiCall = (Option<String>, BTreeMap<String, Vec<String>>, Value);
+
 #[derive(Default)]
-struct CandidateOpenAiCalls(Mutex<Vec<(Option<String>, BTreeMap<String, Vec<String>>, Value)>>);
+struct CandidateOpenAiCalls(Mutex<Vec<CandidateOpenAiCall>>);
 
 struct CandidateOpenAiResponse {
     response: OpenAiResponsesHttpResponse,

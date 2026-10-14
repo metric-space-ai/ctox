@@ -298,15 +298,17 @@ fn candidate_devin_model_uid_all_catalog_models_have_compatible_variants() {
 fn candidate_devin_model_uid_dynamic_updates_fallback_ties_and_scope() {
     let models = DevinModelsStore::default();
     let other_models = DevinModelsStore::default();
-    let mut catalog = StaticModelsCatalog::default();
-    catalog.devin = vec![RegistryModelInfo {
-        id: "devin/custom.model".into(),
-        thinking: Some(RegistryThinkingSupport {
-            levels: vec!["low".into(), "high".into()],
+    let mut catalog = StaticModelsCatalog {
+        devin: vec![RegistryModelInfo {
+            id: "devin/custom.model".into(),
+            thinking: Some(RegistryThinkingSupport {
+                levels: vec!["low".into(), "high".into()],
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    }];
+        }],
+        ..StaticModelsCatalog::default()
+    };
     assert_eq!(
         resolve_devin_chat_model_uid("custom.model", "medium", 0, &models, &catalog),
         "custom-model-high"

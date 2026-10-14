@@ -695,7 +695,7 @@ async fn candidate_meta_transport_stream_fragmentation_framing_usage_and_final_t
     let event = text
         .lines()
         .filter_map(|line| line.strip_prefix("data: "))
-        .last()
+        .next_back()
         .unwrap();
     assert_eq!(
         gjson::get(event, "response.output.0.id").str(),
