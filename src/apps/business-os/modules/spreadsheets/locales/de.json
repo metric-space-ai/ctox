@@ -36,10 +36,16 @@
   "draftSaveTimeout": "Automatische Draft-Speicherung beim Tabellenwechsel hat zu lange gedauert.",
   "loadingEditor": "Lade Editor",
   "documentPreparing": "Tabelle wird vorbereitet.",
-  "editorLoadFailed": "Editor konnte nicht geladen werden:",
+  "editorLoadFailed": "Tabelle konnte nicht geöffnet werden.",
+  "spreadsheetOpenFailed": "Tabelle konnte nicht geöffnet werden.",
+  "saveFailed": "Speichern hat nicht geklappt.",
+  "createFailed": "Anlegen hat nicht geklappt.",
+  "importFailed": "Import hat nicht geklappt.",
+  "exportFailed": "Export hat nicht geklappt.",
+  "deleteFailed": "Löschen hat nicht geklappt.",
   "retry": "Erneut versuchen",
-  "noSavedVersionFound": "Zu dieser Tabelle wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.",
-  "loadVersionRepairPrompt": "Bitte erneut importieren oder den Datensatz verwalten.",
+  "noSavedVersionFound": "Tabelle konnte nicht geöffnet werden.",
+  "loadVersionRepairPrompt": "Tabelle konnte nicht geöffnet werden.",
   "loadVersionFailed": "Tabelle konnte nicht geladen werden:",
   "deleteConfirmTitle": "Tabelle löschen",
   "deleteConfirmMessage": "Tabelle \"{0}\" löschen?",
@@ -85,6 +91,6 @@
   "addColumnLabel": "Spalte hinzufügen",
   "toggleRunbooks": "Runbooks & Prompt einblenden",
   "toggleRunbooksHide": "Runbooks & Prompt ausblenden",
-  "syncingSpreadsheets": "Tabellen werden synchronisiert.",
-  "syncingSpreadsheetsDetail": "Die Tabellendaten werden gerade aus dem CTOX-Datenstrom geladen."
+  "syncingSpreadsheets": "Wird geladen …",
+  "syncingSpreadsheetsDetail": "Wird geladen …"
 }

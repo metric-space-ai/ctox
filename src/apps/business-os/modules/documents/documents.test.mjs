@@ -127,6 +127,10 @@ test('document library distinguishes pending sync, a completed empty read, and a
   state.ctx.db = { collection: () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) }) };
   await assert.rejects(hooks.refreshDocuments(state), /local read failed/);
   assert.equal(hooks.documentListState(state, []), 'error');
+  assert.equal(state.documentsReadError, true, 'the read failure is not kept as user-facing prose');
+  assert.ok(state.documentsReadRetryTimer, 'a failed read schedules a silent retry');
+  clearTimeout(state.documentsReadRetryTimer);
+  state.documentsReadRetryTimer = null;
   state.documents = [{ id: 'cached' }];
   assert.equal(hooks.documentListState(state, [{ id: 'cached' }]), 'rows', 'cached rows stay usable while a refresh fails');
   assert.equal(hooks.documentListState(state, []), 'filtered', 'filters describe existing local rows');

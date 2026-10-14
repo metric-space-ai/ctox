@@ -33,7 +33,7 @@
   "syncDescription": "Notes are automatically synchronized in the background as Markdown files:",
   "syncHint": "Manually created .md files in this folder are automatically imported.",
   "noNotes": "No notes",
-  "syncingNotes": "Syncing notes.",
+  "syncingNotes": "",
   "presenceEditing": "is editing right now",
   "kicker": "Notesnook",
   "favorites": "Favorites",

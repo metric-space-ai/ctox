@@ -33,10 +33,11 @@ const labels = {
     openOps: "Aktionen einblenden",
     closeOps: "Aktionen ausblenden",
     operations: "Aktionen",
-    loadingTickets: 'Tickets werden geladen...',
-    loadingTicketsDetail: "Die Ticketdaten werden geladen.",
-    syncingTickets: 'Tickets werden synchronisiert.',
-    syncingTicketsDetail: "Die Ticketdaten werden aktualisiert.",
+    loadingTickets: '',
+    loadingTicketsDetail: '',
+    syncingTickets: '',
+    syncingTicketsDetail: '',
+    actionFailed: 'Aktion hat nicht geklappt.',
     noTickets: 'Noch keine Tickets verfügbar.',
     noTicketsDetail: "Neue Tickets erscheinen hier, sobald sie vorliegen.",
     noTicketsFiltered: 'Kein Ticket passt zum Filter.',
@@ -114,10 +115,11 @@ const labels = {
     openOps: 'Show operations',
     closeOps: 'Hide operations',
     operations: 'Operations',
-    loadingTickets: 'Loading tickets...',
-    loadingTicketsDetail: "Loading ticket data.",
-    syncingTickets: 'Syncing tickets.',
-    syncingTicketsDetail: "Updating ticket data.",
+    loadingTickets: '',
+    loadingTicketsDetail: '',
+    syncingTickets: '',
+    syncingTicketsDetail: '',
+    actionFailed: 'The action did not work.',
     noTickets: 'No tickets available yet.',
     noTicketsDetail: "New tickets appear here as they become available.",
     noTicketsFiltered: 'No ticket matches the filter.',
@@ -500,12 +502,18 @@ function onRootClick(event) {
   if (!target) return;
   const clarification = target.closest('[data-clarification-action]');
   if (clarification) {
-    runClarificationAction(clarification).catch((error) => setCommandStatus(error?.message || String(error), true));
+    runClarificationAction(clarification).catch((error) => {
+      console.warn('[tickets] clarification failed', error);
+      setCommandStatus(state.t('actionFailed', 'Aktion hat nicht geklappt.'), true);
+    });
     return;
   }
   const caseAction = target.closest('[data-ticket-action]');
   if (caseAction) {
-    runCaseAction(caseAction).catch((error) => setCommandStatus(error?.message || String(error), true));
+    runCaseAction(caseAction).catch((error) => {
+      console.warn('[tickets] action failed', error);
+      setCommandStatus(state.t('actionFailed', 'Aktion hat nicht geklappt.'), true);
+    });
     return;
   }
   const action = target.closest('[data-action]');
@@ -532,7 +540,10 @@ function onListKey(event) {
 
 function onAction(action) {
   if (action === 'new') {
-    createLocalTicket().catch((error) => setCommandStatus(error?.message || String(error), true));
+    createLocalTicket().catch((error) => {
+      console.warn('[tickets] create failed', error);
+      setCommandStatus(state.t('actionFailed', 'Aktion hat nicht geklappt.'), true);
+    });
   } else if (action === 'import') {
     importTickets();
   } else if (action === 'export') {
@@ -614,9 +625,11 @@ function focusRequestedTicket() {
   const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
     || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
   if (!ticket) {
-    setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
-    if (['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
-      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true)) {
+    const ready = ['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
+      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true);
+    if (ready) {
+      console.warn('[tickets] linked ticket unavailable', recordId);
+      setCommandStatus(state.t('ticketOpenFailed', 'Ticket konnte nicht geöffnet werden.'), true);
       reportTicketFocus('unavailable', recordId);
     }
     return;
@@ -703,7 +716,7 @@ function crewWaitSentence(task) {
     return `${t('retryAt', 'Wiederholung um')} ${Number.isFinite(at.getTime()) ? at.toLocaleTimeString(state.lang === 'en' ? 'en-GB' : 'de-DE', { hour: '2-digit', minute: '2-digit' }) : ''}`.trim();
   }
   if (status === 'leased' || status === 'running') return t('crewWorking', 'im Einsatz');
-  if (status === 'pending' || status === 'queued') return t('crewQueued', 'wartet in der Queue');
+  if (status === 'pending' || status === 'queued') return '';
   return displayStatus(status || 'open');
 }
 
@@ -765,7 +778,8 @@ async function assignCrewMember(taskId, memberId, statusNode) {
     if (statusNode) statusNode.textContent = state.t('assigned', 'Zugewiesen.');
     await refreshTickets();
   } catch (error) {
-    if (statusNode) statusNode.textContent = String(error?.message || error);
+    console.warn('[tickets] crew assign failed', error);
+    if (statusNode) statusNode.textContent = state.t('actionFailed', 'Aktion hat nicht geklappt.');
   }
 }
 
@@ -1503,18 +1517,9 @@ function renderEmptyState(title, body = '') {
   `;
 }
 
-function renderTicketLoadingState(kind) {
-  if (kind === 'loading') {
-    return renderEmptyState(
-      state.t('loadingTickets', 'Tickets werden geladen...'),
-      state.t('loadingTicketsDetail', 'Die Ticketdaten werden geladen.'),
-    );
-  }
+function renderTicketLoadingState(_kind) {
   return `
-    <div class="ctox-empty ctox-syncing">
-      <strong>${escapeHtml(state.t('syncingTickets', 'Tickets werden synchronisiert.'))}</strong>
-      <span>${escapeHtml(state.t('syncingTicketsDetail', 'Die Ticketdaten werden gerade aus dem CTOX-Datenstrom geladen.'))}</span>
-    </div>
+    <div class="ctox-empty ctox-syncing" role="status" aria-busy="true"></div>
   `;
 }
 

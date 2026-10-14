@@ -23,18 +23,20 @@ const labels = {
     noItems: 'Keine Knowledge-Einträge gefunden.',
     noResults: 'Keine passenden Knowledge-Einträge gefunden.',
     noVisibleItems: 'Keine Knowledge-Einträge in dieser Ansicht.',
-    syncUnavailable: 'Knowledge Store ist noch nicht verbunden.',
-    syncingData: 'Daten werden synchronisiert.',
+    syncUnavailable: '',
+    syncingData: '',
     noRunbooks: 'Keine Runbooks vorhanden.',
     noResources: 'Keine verifizierten Quellen zugeordnet.',
     tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
-    dataIncomplete: 'Daten unvollständig',
-    dataIncompleteHint: 'Die Tabelle wird erst angezeigt, wenn alle Daten-Chunks konsistent und vollständig repliziert wurden.',
+    dataIncomplete: '',
+    dataIncompleteHint: '',
     rowsLoading: 'Zeilen werden geladen',
-    rowsLoadFailed: 'Zeilen konnten nicht geladen werden',
+    rowsLoadFailed: 'Laden hat nicht geklappt.',
     rowsRetry: 'Erneut versuchen',
-    queued: 'Command angelegt',
-    queueFailed: 'Command konnte nicht angelegt werden',
+    queued: 'Gespeichert',
+    queueFailed: 'Speichern hat nicht geklappt.',
+    saved: 'Gespeichert',
+    saveFailed: 'Speichern hat nicht geklappt.',
     edit: 'Bearbeiten',
     closeEditor: 'Editor schließen',
     showAsList: 'Als Liste anzeigen',
@@ -54,18 +56,20 @@ const labels = {
     noItems: 'No knowledge entries found.',
     noResults: 'No matching knowledge entries found.',
     noVisibleItems: 'No knowledge entries in this view.',
-    syncUnavailable: 'Knowledge store is not connected yet.',
-    syncingData: 'Syncing data.',
+    syncUnavailable: '',
+    syncingData: '',
     noRunbooks: 'No runbooks available.',
     noResources: 'No verified sources assigned.',
     tableUnavailable: 'This item has no table.',
-    dataIncomplete: 'Incomplete data',
-    dataIncompleteHint: 'The table is shown only after all data chunks are replicated consistently and completely.',
+    dataIncomplete: '',
+    dataIncompleteHint: '',
     rowsLoading: 'Loading rows',
-    rowsLoadFailed: 'Rows could not be loaded',
+    rowsLoadFailed: 'Loading did not work.',
     rowsRetry: 'Try again',
-    queued: 'Command queued',
-    queueFailed: 'Could not queue command',
+    queued: 'Saved',
+    queueFailed: 'Saving did not work.',
+    saved: 'Saved',
+    saveFailed: 'Saving did not work.',
     edit: 'Edit',
     closeEditor: 'Close editor',
     showAsList: 'Show as list',
@@ -139,9 +143,11 @@ export async function mount(ctx) {
   state.readinessCleanup = wireCollectionReadiness();
   loadKnowledgeFromLocal({ initial: true }).catch((error) => {
     if (disposed || state.ctx !== ctx) return;
-    state.loadError = error?.message || String(error);
+    console.warn('[knowledge] initial load failed', error);
+    state.loadError = true;
     renderKnowledgeList();
     renderEmptyKnowledgeSelection();
+    scheduleInitialKnowledgeRetry(ctx);
   });
   window.addEventListener('message', handleShellMessage);
   return () => {
@@ -409,7 +415,8 @@ async function refreshKnowledgeFromLocal(options = {}) {
     ensureKnowledgeDataSyncStarted().catch(() => {});
   }
   const snapshot = await readLocalKnowledgeSnapshot();
-  state.loadError = snapshot.error || '';
+  if (snapshot.error) console.warn('[knowledge] local snapshot failed', snapshot.error);
+  state.loadError = snapshot.error ? true : '';
   state.missingCollections = snapshot.missingCollections || [];
   applyKnowledgeRecords(snapshot);
   renderKnowledgeList();
@@ -433,7 +440,8 @@ function scheduleInitialKnowledgeRetry(ctx) {
     if (state.ctx !== ctx) return;
     loadKnowledgeFromLocal({ initialRetry: true }).catch((error) => {
       if (state.ctx !== ctx) return;
-      state.loadError = error?.message || String(error);
+      console.warn('[knowledge] load retry failed', error);
+      state.loadError = true;
       renderKnowledgeList();
     });
   }, delayMs);
@@ -666,7 +674,7 @@ function knowledgeSourceReadiness() {
 // ready yet — selection/filter/permission empties stay .ctox-empty.
 function knowledgeListStateHtml({ dataDriven, readiness, message, syncingText }) {
   if (dataDriven && readiness?.ready === false) {
-    return `<div class="ctox-syncing" role="status" aria-live="polite"><strong>${escapeHtml(syncingText)}</strong></div>`;
+    return `<div class="ctox-syncing" role="status" aria-live="polite" aria-busy="true"></div>`;
   }
   return `<div class="ctox-empty"><strong>${escapeHtml(message)}</strong></div>`;
 }
@@ -1394,13 +1402,16 @@ function renderKnowledgeList({ resetScroll = false } = {}) {
     // Only the UNFILTERED empty source (knowledgeEmptyStateMessage's noItems
     // branch) is data-driven and gets the readiness gate; search/filter and
     // error empties stay plain .ctox-empty.
-    const dataDriven = !state.loadError && !state.missingCollections.length && !term && !state.items.length;
-    const emptyHtml = knowledgeListStateHtml({
-      dataDriven,
-      readiness: knowledgeSourceReadiness(),
-      message: knowledgeEmptyStateMessage(copy, term),
-      syncingText: copy.syncingData,
-    });
+    const recovering = Boolean(state.loadError || state.missingCollections.length);
+    const dataDriven = !recovering && !term && !state.items.length;
+    const emptyHtml = recovering
+      ? '<div class="ctox-syncing" role="status" aria-live="polite" aria-busy="true"></div>'
+      : knowledgeListStateHtml({
+        dataDriven,
+        readiness: knowledgeSourceReadiness(),
+        message: knowledgeEmptyStateMessage(copy, term),
+        syncingText: '',
+      });
     renderHtmlIfChanged(els.list, emptyHtml, {
       signature: `empty:${emptyHtml}`,
       preserveScroll: !resetScroll,
@@ -1457,7 +1468,7 @@ function isInternalSkillOnlyGroup(group) {
 }
 
 function knowledgeEmptyStateMessage(copy, term = '') {
-  if (state.loadError || state.missingCollections.length) return copy.syncUnavailable;
+  if (state.loadError || state.missingCollections.length) return '';
   if (term) return copy.noResults;
   if (state.items.length) return copy.noVisibleItems;
   return copy.noItems;
@@ -2024,8 +2035,8 @@ async function renderTable() {
     const completeness = dataFrameCompleteness(tableSource);
     if (!completeness.complete) {
       els.tableTitle.textContent = schemaTitleForTable(tableSource);
-      els.tableMeta.textContent = `${copy.dataIncomplete} · ${completeness.reason}`;
-      els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><strong>${escapeHtml(copy.dataIncomplete)}</strong><span>${escapeHtml(copy.dataIncompleteHint)}</span><span>${escapeHtml(completeness.reason)}</span></div>`;
+      els.tableMeta.textContent = '';
+      els.tableHost.innerHTML = '<div class="ctox-syncing" role="status" aria-busy="true"></div>';
       setRowPageButtons({ previous: true, next: true });
       return;
     }
@@ -2081,7 +2092,8 @@ async function renderTable() {
     renderDataFrameTable(schema.columns || [], rows.rows || []);
   } catch (error) {
     if (!current() || isRowsFetchCancelled(error)) return;
-    els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
+    console.warn('[knowledge] dataframe load failed', error);
+    els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><span>${escapeHtml(copy.rowsLoadFailed || 'Laden hat nicht geklappt.')}</span></div>`;
   }
 }
 
@@ -2098,15 +2110,14 @@ function isRowsFetchCancelled(error) {
 }
 
 function renderRowsLoadError(copy, error) {
-  els.tableMeta.textContent = copy.rowsLoadFailed;
+  console.warn('[knowledge] rows load failed', error);
+  els.tableMeta.textContent = '';
   const host = document.createElement('div');
   host.className = 'ctox-empty knowledge-error';
   host.setAttribute('role', 'alert');
-  const title = document.createElement('strong');
-  title.textContent = copy.rowsLoadFailed;
-  const detail = document.createElement('span');
-  detail.textContent = error?.message || String(error || '');
-  host.append(title, detail);
+  const title = document.createElement('span');
+  title.textContent = copy.rowsLoadFailed || 'Laden hat nicht geklappt.';
+  host.append(title);
   if (error?.retryable === true) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -2240,7 +2251,8 @@ async function queueMarkdownSave() {
       selected_item: item,
     },
   });
-  if (els.skillStatus) els.skillStatus.textContent = result?.ok ? `${(state.messages || labels[state.lang]).queued} · ${result.task_id || result.command_id}` : (state.messages || labels[state.lang]).queueFailed;
+  if (!result?.ok) console.warn('[knowledge] markdown save failed', result);
+  if (els.skillStatus) els.skillStatus.textContent = knowledgeCommandStatusText(result);
   if (result?.ok) {
     els.markdownView.innerHTML = markdownToHtml(markdown || '');
     state.editing = false;
@@ -2294,7 +2306,8 @@ async function queueRunbookSave() {
       },
     },
   });
-  if (els.runbookStatus) els.runbookStatus.textContent = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
+  if (!result?.ok) console.warn('[knowledge] runbook save failed', result);
+  if (els.runbookStatus) els.runbookStatus.textContent = knowledgeCommandStatusText(result, copy);
   else showCommandStatus(result);
   if (result?.ok) {
     state.editing = false;
@@ -2334,7 +2347,8 @@ async function executeRunbook() {
       thread_key: 'business-os/knowledge',
     },
   });
-  if (els.runbookStatus) els.runbookStatus.textContent = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
+  if (!result?.ok) console.warn('[knowledge] runbook execute failed', result);
+  if (els.runbookStatus) els.runbookStatus.textContent = knowledgeCommandStatusText(result, copy);
   else showCommandStatus(result);
 }
 
@@ -2355,10 +2369,15 @@ async function dispatchKnowledgeCommand(command) {
   throw new Error('The local command service is not available.');
 }
 
+function knowledgeCommandStatusText(result, copy = state.messages || labels[state.lang]) {
+  if (result?.ok) return copy.saved || copy.queued || (state.lang === 'en' ? 'Saved' : 'Gespeichert');
+  return copy.saveFailed || copy.queueFailed || (state.lang === 'en' ? 'Saving did not work.' : 'Speichern hat nicht geklappt.');
+}
+
 function showCommandStatus(result) {
-  const copy = state.messages || labels[state.lang];
-  const message = result?.ok ? `${copy.queued} · ${result.task_id || result.command_id}` : copy.queueFailed;
-  state.ctx.openBottomDrawer(drawerContent('Knowledge Command', message));
+  if (!result?.ok) console.warn('[knowledge] command failed', result);
+  const message = knowledgeCommandStatusText(result);
+  state.ctx.openBottomDrawer(drawerContent(message, message));
 }
 
 function openCreateKnowledgeBookDrawer() {
@@ -2803,13 +2822,10 @@ async function dispatchContextChat(context, message, mode = 'data') {
   if (result?.ok && trackingId) rememberCtoxTask({ taskId: result.task_id, commandId: result.command_id, trackingId, context, mode: safeMode });
   if (status) {
     if (result?.ok) {
-      status.innerHTML = `Task-ID: <code>${escapeHtml(trackingId || 'unbekannt')}</code> <button class="ctox-button" type="button" data-open-ctox-task>Im CTOX Modul öffnen</button>`;
-      status.querySelector('[data-open-ctox-task]')?.addEventListener('click', () => {
-        hideKnowledgeContextMenu();
-        location.hash = 'ctox';
-      });
+      status.textContent = knowledgeCommandStatusText(result);
     } else {
-      status.textContent = 'Konnte nicht angelegt werden.';
+      console.warn('[knowledge] context chat failed', result);
+      status.textContent = knowledgeCommandStatusText(result);
     }
   }
 }

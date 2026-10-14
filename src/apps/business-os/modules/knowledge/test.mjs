@@ -666,7 +666,8 @@ test('data-driven empty states show syncing shell only until the collection is l
   assert.match(syncing, /class="ctox-syncing"/);
   assert.match(syncing, /role="status"/);
   assert.match(syncing, /aria-live="polite"/);
-  assert.match(syncing, /Daten werden synchronisiert\./);
+  assert.doesNotMatch(syncing, /Daten werden synchronisiert/);
+  assert.doesNotMatch(syncing, /<strong>/);
 
   const offlinePending = knowledgeListStateHtml({
     dataDriven: true,

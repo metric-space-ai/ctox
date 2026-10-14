@@ -223,8 +223,9 @@ test('only a failed full rebuild shows an error after an empty openVersion resul
   };
   lifecycle.renderError = (_currentState, message) => errors.push(message);
 
+  const warnings = [];
   const originalWarn = console.warn;
-  console.warn = () => {};
+  console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
   try {
     await hooks.switchSelectedDocument(state, 'merge_1', { versionId: 'merge_1_recipient_2' }, lifecycle);
   } finally {
@@ -234,7 +235,9 @@ test('only a failed full rebuild shows an error after an empty openVersion resul
   assert.equal(counters.destroy, 1);
   assert.equal(counters.rebuild, 1);
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /Neuaufbau gescheitert/);
+  assert.match(errors[0], /Dokument konnte nicht geöffnet werden/);
+  assert.doesNotMatch(errors[0], /Neuaufbau gescheitert/);
+  assert.ok(warnings.some((line) => line.includes('Neuaufbau gescheitert')));
 });
 
 test('after a recipient switch the search field contains the active recipient label', async () => {

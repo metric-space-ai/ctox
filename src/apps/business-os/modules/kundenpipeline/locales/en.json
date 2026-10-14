@@ -7,7 +7,7 @@
   "approve": "Accept",
   "reject": "Reject",
   "resolve": "Save decision",
-  "syncing": "Decisions are syncing …",
+  "syncing": "",
   "noDecisions": "No matching decisions.",
   "noSelection": "Select a decision.",
   "actions": "Actions",

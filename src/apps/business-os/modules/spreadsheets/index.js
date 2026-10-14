@@ -155,7 +155,8 @@ export async function mount(ctx) {
       }
       return true;
     } catch (error) {
-      state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
+      console.warn('[spreadsheets] save before close failed', error);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.') });
       return false;
     }
   });
@@ -234,8 +235,8 @@ function enqueueSpreadsheetOpenFile(state, input) {
   state.openFilePromise = state.openFilePromise
     .then(() => openSpreadsheetFile(state, input))
     .catch((error) => {
-      console.error('[spreadsheets] opening file from Files failed', error);
-      state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
+      console.warn('[spreadsheets] opening file from Files failed', error);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('spreadsheetOpenFailed', 'Datei konnte nicht geöffnet werden.') });
       if (!state.editorHandle) renderSpreadsheetOpenError(state, error);
       return null;
     });
@@ -293,8 +294,9 @@ function spreadsheetIngestionMatches(record, ingestion) {
 }
 
 function renderSpreadsheetOpenError(state, error) {
+  console.warn('[spreadsheets] file open failed', error);
   const host = state.ctx.host.querySelector('[data-spreadsheets-editor]') || state.ctx.host;
-  host.innerHTML = `<div class="ctox-empty"><strong>Datei konnte nicht geöffnet werden</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+  host.innerHTML = `<div class="ctox-empty" role="alert"><span>${escapeHtml(state.t('spreadsheetOpenFailed', 'Datei konnte nicht geöffnet werden.'))}</span></div>`;
 }
 
 async function ensureSpreadsheetRuntimeReady(ctx) {
@@ -575,8 +577,8 @@ async function requestBlankSpreadsheet(state) {
     await createNewSpreadsheet(state);
     state.ctx.notifications?.show?.({ type: 'success', message: state.t('blankSpreadsheetCreated', 'Leere Tabelle erstellt.') });
   } catch (error) {
-    console.error('[spreadsheets] blank spreadsheet creation failed', error);
-    state.ctx.notifications?.show?.({ type: 'error', message: `${state.t('spreadsheetCreateFailed', 'Tabelle konnte nicht erstellt werden:')} ${error?.message || error}` });
+    console.warn('[spreadsheets] blank spreadsheet creation failed', error);
+    state.ctx.notifications?.show?.({ type: 'error', message: state.t('spreadsheetCreateFailed', 'Tabelle konnte nicht erstellt werden.') });
   } finally {
     state.creatingBlankSpreadsheet = false;
   }
@@ -1254,11 +1256,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
       const syncing = document.createElement('div');
       syncing.className = 'ctox-syncing';
       syncing.setAttribute('role', 'status');
-      syncing.setAttribute('aria-live', 'polite');
-      syncing.innerHTML = `
-        <strong>${escapeHtml(state.t('syncingSpreadsheets', 'Tabellen werden synchronisiert.'))}</strong>
-        <span>${escapeHtml(state.t('syncingSpreadsheetsDetail', 'Die Tabellendaten werden gerade aus dem CTOX-Datenstrom geladen.'))}</span>
-      `;
+      syncing.setAttribute('aria-busy', 'true');
       list.append(syncing);
       return;
     }
@@ -1370,7 +1368,8 @@ function bindLeftControls(state, wrap) {
           await renderCenter(state);
           renderRight(state);
         })().catch((error) => {
-          state.ctx.notifications?.show?.({ type: 'error', message: String(error?.message || error) });
+          console.warn('[spreadsheets] spreadsheet switch failed', error);
+          state.ctx.notifications?.show?.({ type: 'error', message: state.t('spreadsheetOpenFailed', 'Tabelle konnte nicht geöffnet werden.') });
         });
       }
       return;
@@ -1605,7 +1604,8 @@ async function renderCenter(state) {
   }
   if (load?.status === 'loading' || (!load && !state.selectedVersion)) return;
   if (load?.status === 'error') {
-    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(load.error?.message || load.error)}</span></div>`;
+    console.warn('[spreadsheets] editor load failed', load.error);
+    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error" role="alert"><span>${escapeHtml(state.t('spreadsheetOpenFailed', 'Tabelle konnte nicht geöffnet werden.'))}</span></div>`;
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.setAttribute('data-spreadsheets-retry-version', '');
@@ -1624,7 +1624,7 @@ async function renderCenter(state) {
     return;
   }
   if (load?.status === 'missing' || !state.selectedVersion) {
-    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong></div>`;
+    canvas.innerHTML = `<div class="ctox-empty spreadsheets-error" role="alert"><span>${escapeHtml(state.t('spreadsheetOpenFailed', 'Tabelle konnte nicht geöffnet werden.'))}</span></div>`;
     return;
   }
   try {
@@ -1635,8 +1635,8 @@ async function renderCenter(state) {
     }
   } catch (error) {
     if (canvas.isConnected && state.selectedId === record.id) {
-      console.error('[spreadsheets] editor open failed', error);
-      canvas.innerHTML = `<div class="ctox-empty spreadsheets-error"><strong>${escapeHtml(state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:'))}</strong><span>${escapeHtml(error?.message || error)}</span></div>`;
+      console.warn('[spreadsheets] editor open failed', error);
+      canvas.innerHTML = `<div class="ctox-empty spreadsheets-error" role="alert"><span>${escapeHtml(state.t('spreadsheetOpenFailed', 'Tabelle konnte nicht geöffnet werden.'))}</span></div>`;
     }
   }
 }
@@ -1717,10 +1717,7 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     }, 900);
   }
   function onError(error) {
-    const detail = error?.error || error;
-    const code = String(detail?.code || error?.code || '');
-    const message = String(error?.message || detail?.message || error);
-    console.error('[spreadsheets] editor save failed', `code=${code}`, `message=${message}`, error);
+    console.warn('[spreadsheets] editor save failed', error);
     if (!isCurrent()) return;
     errorReported = true;
     handle.activity += 1;
@@ -1729,7 +1726,7 @@ async function mountCtoxSpreadsheets(state, host, record, version) {
     state.saving = false;
     markSpreadsheetAsDirty(state);
     state.ctx.notifications?.show?.({
-      type: 'error', message, time: 0,
+      type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.'), time: 0,
       action: { label: state.t('close', 'Schließen'), callback: () => {} },
     });
     // No automatic retry after errors (in particular version conflicts).
@@ -1995,8 +1992,8 @@ function openNewSpreadsheetDrawer(state) {
       await createNewSpreadsheet(state, input);
       state.ctx.notifications?.show?.({ type: 'success', message: state.t('draftCreated', 'Tabellenentwurf erstellt.') });
     } catch (err) {
-      console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Erstellen: ${err.message}` });
+      console.warn('[spreadsheets] create failed', err);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('createFailed', 'Anlegen hat nicht geklappt.') });
     }
   });
 
@@ -2048,8 +2045,8 @@ function openImportModal(state) {
       await importSpreadsheetFile(state, file, tags);
       state.ctx.notifications?.show?.({ type: 'success', message: `Datei ${file.name} erfolgreich importiert.` });
     } catch (err) {
-      console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Importieren: ${err.message}` });
+      console.warn('[spreadsheets] import failed', err);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('importFailed', 'Import hat nicht geklappt.') });
     }
   });
 
@@ -2098,8 +2095,8 @@ function openExportModal(state) {
       downloadBlob(bytes, XLSX_MIME, downloadName, state.ctx.host);
       state.ctx.notifications?.show?.({ type: 'success', message: `Export abgeschlossen: ${downloadName}` });
     } catch (err) {
-      console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Exportieren: ${err.message}` });
+      console.warn('[spreadsheets] export failed', err);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('exportFailed', 'Export hat nicht geklappt.') });
     }
   });
 
@@ -2173,8 +2170,8 @@ async function openManageDrawer(state, id) {
         renderCenter(state);
       }
     } catch (err) {
-      console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Speichern: ${err.message}` });
+      console.warn('[spreadsheets] save failed', err);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.') });
     }
   });
 
@@ -2203,8 +2200,8 @@ async function openManageDrawer(state, id) {
       renderLeft(state);
       renderCenter(state);
     } catch (err) {
-      console.error(err);
-      state.ctx.notifications?.show?.({ type: 'error', message: `Fehler beim Löschen: ${err.message}` });
+      console.warn('[spreadsheets] delete failed', err);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('deleteFailed', 'Löschen hat nicht geklappt.') });
     }
   });
 

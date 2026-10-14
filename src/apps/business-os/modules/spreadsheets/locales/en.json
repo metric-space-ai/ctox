@@ -36,10 +36,16 @@
   "draftSaveTimeout": "Autosave timeout during spreadsheet switch.",
   "loadingEditor": "Loading editor",
   "documentPreparing": "Preparing spreadsheet.",
-  "editorLoadFailed": "Editor failed to load:",
+  "editorLoadFailed": "The spreadsheet could not be opened.",
+  "spreadsheetOpenFailed": "The spreadsheet could not be opened.",
+  "saveFailed": "Saving did not work.",
+  "createFailed": "Creating did not work.",
+  "importFailed": "Import did not work.",
+  "exportFailed": "Export did not work.",
+  "deleteFailed": "Deleting did not work.",
   "retry": "Retry",
-  "noSavedVersionFound": "No saved version found for this spreadsheet. Please re-import or manage the record.",
-  "loadVersionRepairPrompt": "Please re-import or manage the record.",
+  "noSavedVersionFound": "The spreadsheet could not be opened.",
+  "loadVersionRepairPrompt": "The spreadsheet could not be opened.",
   "loadVersionFailed": "Spreadsheet version failed to load:",
   "deleteConfirmTitle": "Delete spreadsheet",
   "deleteConfirmMessage": "Delete spreadsheet \"{0}\"?",
@@ -85,6 +91,6 @@
   "addColumnLabel": "Add column",
   "toggleRunbooks": "Show runbooks & prompt",
   "toggleRunbooksHide": "Hide runbooks & prompt",
-  "syncingSpreadsheets": "Syncing spreadsheets.",
-  "syncingSpreadsheetsDetail": "Spreadsheet data is being loaded from the CTOX data stream."
+  "syncingSpreadsheets": "Loading …",
+  "syncingSpreadsheetsDetail": "Loading …"
 }

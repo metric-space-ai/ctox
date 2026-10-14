@@ -1671,6 +1671,7 @@ function noteKnowledgeTableRowState(record, logicalId, phase, error = null) {
     delete state.knowledgeTableRowStates[id];
     return;
   }
+  if (phase === 'error') console.warn('[research] knowledge rows failed', error);
   const source = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
     ? record.payload
     : record;
@@ -1680,7 +1681,7 @@ function noteKnowledgeTableRowState(record, logicalId, phase, error = null) {
     title: String(source?.title || record?.title || source?.table_key || record?.table_key || id),
     phase,
     message: phase === 'error'
-      ? String(error?.message || state.t('rowsLoadFailed', 'Zeilen konnten nicht geladen werden'))
+      ? state.t('rowsLoadFailed', 'Laden hat nicht geklappt.')
       : '',
     retryable: phase === 'error' && error?.retryable === true,
   };
@@ -2664,11 +2665,7 @@ function renderLeft() {
 // dort keine Zahl.
 function taskSourceSummary(task) {
   const dataState = researchDataState();
-  if (dataState !== 'ready') {
-    return dataState === 'failed'
-      ? state.t('taskSourcesUnavailable', 'Quellen nicht verfügbar')
-      : state.t('taskSourcesSyncing', 'Quellen werden synchronisiert …');
-  }
+  if (dataState !== 'ready') return '';
   if (task.id === state.selectedTaskId) {
     const verified = evidenceRankedSources().length;
     return `${countText(verified)} ${state.t('verifiedSources', 'verifizierte Quellen')}`;
@@ -2706,13 +2703,8 @@ function renderRankingRow(source) {
 
 function renderNoTasksEmpty() {
   const empty = emptyStateForNoTask();
-  if (empty.kind === 'syncing') {
-    return `
-      <div class="ctox-syncing research-empty-card" role="status" aria-live="polite">
-        <strong>${escapeHtml(empty.title)}</strong>
-        <span>${escapeHtml(empty.body)}</span>
-      </div>
-    `;
+  if (empty.kind === 'syncing' || empty.kind === 'loading') {
+    return `<div class="ctox-syncing research-empty-card" role="status" aria-live="polite" aria-busy="true"></div>`;
   }
   return `
     <div class="ctox-empty research-empty research-empty-card">
@@ -2743,28 +2735,16 @@ function emptyStateForNoTask() {
   const tasksReadiness = collectionReadiness('research_tasks');
   const knowledgeReadiness = collectionReadiness('knowledge_tables');
   if (dataEmptyShowsSyncing(true, tasksReadiness) || dataEmptyShowsSyncing(true, knowledgeReadiness)) {
-    return {
-      kind: 'syncing',
-      title: state.t('loadingKnowledge', 'Knowledge wird geladen...'),
-      body: state.t('syncingResearchData', 'Research-Daten werden mit dieser Instanz synchronisiert.'),
-    };
+    return { kind: 'syncing', title: '', body: '' };
   }
   if (!tasksReadiness && !knowledgeReadiness && !state.initialDataReady) {
-    // No readiness API available (standalone/test harness): keep the legacy
+    // No readiness API available (standalone/test harness): keep the silent
     // loading placeholder until the first local refresh finished.
-    return {
-      kind: 'loading',
-      title: state.t('loadingKnowledge', 'Knowledge wird geladen...'),
-      body: state.t('syncingResearchData', 'Research-Daten werden mit dieser Instanz synchronisiert.'),
-    };
+    return { kind: 'loading', title: '', body: '' };
   }
   const failure = diagnosticFailures()[0];
   if (failure) {
-    return {
-      kind: 'empty',
-      title: state.t('researchUnavailableTitle', 'Research ist gerade nicht verfügbar'),
-      body: state.t('researchUnavailableBody', 'Dashboards erscheinen automatisch, sobald die Knowledge Base verfügbar ist.'),
-    };
+    return { kind: 'syncing', title: '', body: '' };
   }
   if (!state.knowledgeBases.length) {
     return {
@@ -3270,8 +3250,8 @@ async function dispatchGraphAiAction(action) {
     if (action === 'document') await dispatchGraphDocumentTask(task);
     else await dispatchTargetedGraphResearch(task);
   } catch (error) {
-    console.error('[research] graph action failed', error);
-    setStatus(`${state.t('actionFailed', 'Aktion fehlgeschlagen')}: ${errorMessage(error)}`);
+    console.warn('[research] graph action failed', error);
+    setStatus(state.t('actionFailed', 'Aktion hat nicht geklappt.'));
   } finally {
     state.graph.busyAction = '';
     renderCenter();
@@ -4489,7 +4469,7 @@ function renderKnowledgeTables(task) {
           <span>${escapeHtml(table.table_key)} · ${Number(table.row_count || 0).toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} ${escapeHtml(state.t('rows', 'rows'))}</span>
         </button>`).join(''),
       empty: state.t('noKnowledgeClaims', 'Noch keine belegten Aussagen in dieser Knowledge Base.'),
-      syncing: state.t('syncingKnowledgeTables', 'Knowledge-Tabellen werden synchronisiert.'),
+      syncing: '',
     })}</div>`;
   }
   const books = knowledgeBooks(all);
@@ -4559,7 +4539,10 @@ function renderKnowledgeTableRowStates() {
 function renderDataQualityNotices() {
   const notices = [
     ...state.rowLimitWarnings.map((warning) => `Anzeige auf ${ROW_LIMIT.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} Zeilen begrenzt (${warning.sourceRowCount.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} vorhanden).`),
-    ...state.chunkDiagnostics.map((diagnostic) => `Tabelle ${diagnostic.tableId || 'unbekannt'} wurde wegen unvollständiger Chunk-Metadaten nicht geladen: ${diagnostic.reason}`),
+    ...state.chunkDiagnostics.map((diagnostic) => {
+      console.warn('[research] incomplete table chunks', diagnostic);
+      return '';
+    }).filter(Boolean),
   ];
   if (!notices.length) return '';
   return `<div class="research-data-quality-notices" role="status">${notices.map((notice) => `<span>${escapeHtml(notice)}</span>`).join('')}</div>`;
@@ -5052,7 +5035,8 @@ async function runSelectedResearch() {
     'projected_row_count',
   ]);
   if (sourceTable && declaredSourceRows && authoritativeSourceRows.length < declaredSourceRows) {
-    setStatus(`Der Quellenkatalog wird noch synchronisiert (${authoritativeSourceRows.length}/${declaredSourceRows}). Research wurde nicht gestartet.`);
+    console.warn('[research] source catalog not ready', { have: authoritativeSourceRows.length, declared: declaredSourceRows });
+    setStatus(state.t('catalogNotReady', 'Gleich verfügbar – bitte erneut starten.'));
     renderRight();
     return;
   }
@@ -6388,22 +6372,10 @@ function diagnosticFailures() {
 }
 
 function reloadStatusText() {
-  const failures = diagnosticFailures();
-  if (failures.length) {
-    const seconds = Math.max(1, Math.round((state.diagnostics.failureRetryAt - Date.now()) / 1000));
-    if (hasLocalResearchData()) {
-      return state.t('researchRefreshDelayed', `Aktualisierung verzögert – neuer Versuch in ${seconds} s`, seconds);
-    }
-    return state.diagnostics.failureRetryAt
-      ? state.t('researchSyncRetry', `Synchronisation gestört – neuer Versuch in ${seconds} s`, seconds)
-      : state.t('researchUnavailableTitle', 'Research ist gerade nicht verfügbar');
-  }
-  if (!state.diagnostics.reloadFinishedAt) return state.t('loadingKnowledge', 'Knowledge wird geladen...');
-  const domainCount = state.knowledgeBases.length;
-  const taskCount = state.tasks.length;
-  const sourceCount = state.sourceModels.length;
-  if (!domainCount) return state.t('noKnowledgeDomains', 'Noch keine Knowledge Base verfügbar');
-  return state.t('researchReadySummary', '{0} Aufgaben, {1} Knowledge Bases, {2} Quellen verfügbar.', taskCount, domainCount, sourceCount);
+  if (diagnosticFailures().length) return '';
+  if (!state.diagnostics.reloadFinishedAt) return '';
+  if (!state.knowledgeBases.length) return state.t('noKnowledgeDomains', 'Noch keine Knowledge Base verfügbar');
+  return '';
 }
 
 function visibleResearchStatus() {
@@ -6985,7 +6957,7 @@ function renderReportsWorkbench(task) {
     return `
       <section class="research-empty research-empty-card" data-report-gate="ready-empty">
         <strong>${escapeHtml(state.t('noResearchReports', 'Noch keine verknüpften Fachberichte'))}</strong>
-        <span>${escapeHtml(state.t('createResearchReportHint', 'Erstelle einen Bericht aus dem verifizierten Research-Graph. Er erscheint nach der Documents-Synchronisierung hier.'))}</span>
+        <span>${escapeHtml(state.t('createResearchReportHint', 'Erstelle einen Bericht aus dem verifizierten Research-Graph.'))}</span>
       </section>
     `;
   }
@@ -7007,15 +6979,19 @@ function renderReportsWorkbench(task) {
         renderCenter();
       })
       .catch(err => {
-        state.reportContents[selectedReport.id] = `Fehler beim Laden des Fachberichts: ${err.message}`;
+        console.warn('[research] report load failed', err);
+        state.reportContents[selectedReport.id] = '';
+        if (!state.reportContentErrors) state.reportContentErrors = {};
+        state.reportContentErrors[selectedReport.id] = true;
         renderCenter();
       });
   }
   
-  const viewerContent = content === null 
+  const reportFailed = Boolean(state.reportContentErrors?.[selectedReport.id]);
+  const viewerContent = content === null
     ? `<div class="research-report-loading"><span class="research-spinner"></span>Lade Fachbericht...</div>`
-    : content.startsWith('Fehler')
-      ? `<div class="research-report-error">${escapeHtml(content)}</div>`
+    : reportFailed
+      ? `<div class="research-report-error">${escapeHtml(state.t('reportLoadFailed', 'Laden hat nicht geklappt.'))}</div>`
       : `
         <div class="ai-warning-banner">
           <div class="research-ai-banner-row">
