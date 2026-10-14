@@ -82,6 +82,8 @@ mod management_test;
 mod model_router_test;
 #[cfg(test)]
 mod platform_test;
+#[cfg(all(test, any(unix, windows)))]
+mod process_client_test;
 #[cfg(test)]
 mod process_transport_test;
 #[cfg(test)]

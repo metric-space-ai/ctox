@@ -1,6 +1,8 @@
+// These integration tests observe real Unix socket lifetimes.
+// Windows named-pipe runtime acceptance remains separate.
 // Origin: CTOX
 // License: AGPL-3.0-only
-#![cfg(any(unix, windows))]
+#![cfg(unix)]
 
 use ctox_cliproxyapi::internal::pluginhost::{
     abi::{PluginArtifact, PluginCall, PluginClientError, PluginLoader},
@@ -110,6 +112,64 @@ async fn process_loader_caller_drop_kills_child_and_reload_uses_new_socket() {
         Err(PluginClientError::Closed)
     ));
     second.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_call_respects_deadline_while_another_call_is_running() {
+    let root = short_root();
+    let loader = fixture(root.path());
+    let client = loader.open(&artifact()).await.unwrap();
+    let mut first = Box::pin(client.call(hanging_call(None)));
+    assert!(tokio::time::timeout(Duration::from_millis(30), &mut first)
+        .await
+        .is_err());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let second = tokio::time::timeout(
+        Duration::from_millis(300),
+        client.call(hanging_call(Some(now + 50))),
+    )
+    .await
+    .expect("queued call ignored its deadline");
+    assert!(matches!(second, Err(PluginClientError::DeadlineExceeded)));
+    drop(first);
+    assert!(client.shutdown().await.is_err());
+}
+
+#[tokio::test]
+async fn malformed_call_does_not_kill_a_healthy_child() {
+    let root = short_root();
+    let loader = fixture(root.path());
+    let client = loader.open(&artifact()).await.unwrap();
+    let mut call = hanging_call(None);
+    call.method = "NOT-A-VALID-METHOD".into();
+    assert!(matches!(
+        client.call(call).await,
+        Err(PluginClientError::InvalidRequest)
+    ));
+    let rpc = RpcPluginClient::new(client);
+    assert!(rpc
+        .register("plugin.register", Vec::new(), None)
+        .await
+        .is_ok());
+    rpc.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropping_last_client_reaps_idle_child() {
+    let root = short_root();
+    let loader = fixture(root.path());
+    let client = loader.open(&artifact()).await.unwrap();
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while std::fs::read_dir(root.path().join(".cpa")).unwrap().count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

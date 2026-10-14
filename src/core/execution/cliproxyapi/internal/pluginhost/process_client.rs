@@ -92,11 +92,37 @@ enum Command {
 impl PluginClient for ProcessPluginClient {
     fn call<'a>(&'a self, call: PluginCall) -> PluginFuture<'a, Envelope> {
         Box::pin(async move {
+            let mut call = call;
+            let now = unix_time_ms();
+            let deadline = call
+                .deadline_unix_ms
+                .unwrap_or(u64::MAX)
+                .min(now.saturating_add(30_000));
+            if deadline <= now {
+                return Err(PluginClientError::DeadlineExceeded);
+            }
+            call.deadline_unix_ms = Some(deadline);
+            // Validate before queueing: malformed caller input cannot poison a
+            // healthy child, and queue memory is bounded by the frame limit.
+            super::rpc_schema::encode_process_frame(&ProcessMessage::Request {
+                protocol_version: PROCESS_PROTOCOL_VERSION,
+                request_id: "validate".into(),
+                method: call.method.clone(),
+                deadline_unix_ms: call.deadline_unix_ms,
+                payload: call.payload.clone(),
+            })
+            .map_err(|_| PluginClientError::InvalidRequest)?;
             let (sender, receiver) = oneshot::channel();
             self.sender
                 .try_send(Command::Call(call, sender))
                 .map_err(|_| PluginClientError::Closed)?;
-            receiver.await.map_err(|_| PluginClientError::Closed)?
+            tokio::time::timeout(
+                Duration::from_millis(deadline.saturating_sub(unix_time_ms())),
+                receiver,
+            )
+            .await
+            .map_err(|_| PluginClientError::DeadlineExceeded)?
+            .map_err(|_| PluginClientError::Closed)?
         })
     }
     fn call_stream<'a>(&'a self, _call: PluginCall) -> PluginFuture<'a, PluginStream> {

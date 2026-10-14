@@ -1286,7 +1286,8 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                         ..Metadata::default()
                     },
                     capabilities: RpcCapabilities {
-                        executor: plugin_id != "fixture-no-executor",
+                        executor: plugin_id != "fixture-no-executor" && plugin_id != "fixture-quota",
+                        quota_provider: plugin_id == "fixture-quota",
                         executor_model_scope: ExecutorModelScope(ExecutorModelScope::BOTH.into()),
                         executor_input_formats: vec!["openai-responses".into()],
                         executor_output_formats: vec!["openai-responses".into()],
@@ -1302,6 +1303,41 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 };
                 write_process_message(&mut stream, &response).await?;
                 registered = true;
+                continue;
+            }
+            if plugin_id == "fixture-quota" && method.starts_with("quota.") {
+                let result = match method.as_str() {
+                    "quota.identifier" => serde_json::json!({"identifier":"fixture-quota"}),
+                    "quota.describe" => serde_json::json!({"supported_providers":["fixture-quota"],"supports_reset":false}),
+                    "quota.fetch" => {
+                        let request: Value = decode_upstream_json(&payload)?;
+                        write_process_message(&mut stream, &ProcessMessage::Request {
+                            protocol_version: PROCESS_PROTOCOL_VERSION,
+                            request_id: "fixture-http".into(), method: "host.http.do".into(), deadline_unix_ms: None,
+                            payload: encode_upstream_json(&serde_json::json!({
+                                "host_callback_id":request["host_callback_id"],
+                                "method":"GET", "url":"https://fixture.invalid/quota"
+                            }))?,
+                        }).await?;
+                        let Some(ProcessMessage::Response { request_id: id, envelope, .. }) = read_process_message(&mut stream).await? else { return Err("missing callback response".into()); };
+                        if id != "fixture-http" { return Err("wrong callback response".into()); }
+                        if !envelope.ok {
+                            write_process_message(&mut stream, &ProcessMessage::Response {
+                                protocol_version: PROCESS_PROTOCOL_VERSION, request_id,
+                                envelope: ctox_cliproxyapi::sdk::pluginabi::Envelope::failure(ctox_cliproxyapi::sdk::pluginabi::Error {
+                                    code:"fixture_callback_denied".into(),message:"fixture HTTP rejected".into(), ..Default::default()
+                                }),
+                            }).await?;
+                            continue;
+                        }
+                        serde_json::json!({"subscription":{"plan":"fixture-plan"}})
+                    }
+                    _ => return Err("unsupported fixture quota method".into()),
+                };
+                write_process_message(&mut stream, &ProcessMessage::Response {
+                    protocol_version: PROCESS_PROTOCOL_VERSION, request_id,
+                    envelope: ctox_cliproxyapi::sdk::pluginabi::Envelope::success(Some(encode_upstream_json(&result)?)),
+                }).await?;
                 continue;
             }
             if method == ctox_cliproxyapi::sdk::pluginabi::METHOD_EXECUTOR_IDENTIFIER {

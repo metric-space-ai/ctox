@@ -8,7 +8,8 @@ promote the accepted upstream revision, or claim live provider quota support.
 The caller explicitly supplies the runtime directory, executable artifact and
 host callback router. Each open has a unique private local endpoint; the child
 receives no inherited environment and gets its one-shot handshake token through
-stdin. Calls use a bounded queue and a bounded response deadline. A dropped call,
+stdin. Calls use a bounded queue and a response deadline that includes queue
+waiting. Malformed caller input is rejected before dispatch. A dropped call,
 protocol failure or expired response ends the child and closes the queue because
 a partially consumed length-prefixed frame cannot safely be reused.
 
@@ -23,3 +24,10 @@ production composition, complete streaming transport, wire the official CTOX
 credential resolver and typed plugin runtime configuration, attach the quota
 service during actual management startup, then measure through the installed
 management endpoint. No empty/rejecting loader stands in for that work.
+
+The Unix integration tests run the actual child binary: lifecycle, independent
+reload endpoints, caller drop, idle-client drop, queued deadlines, invalid input,
+and a complete quota fetch through the host with an account-scoped HTTP callback.
+Denied account HTTP authority must not fall back to the broader host client.
+Separate framed-transport tests reject cross-call and cross-plugin callbacks.
+Windows runtime acceptance is not claimed by these Linux results.
