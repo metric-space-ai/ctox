@@ -1115,7 +1115,7 @@ async function loadSelectedVersion(state, isActive = () => true) {
         ? await withSpreadsheetVersionTimeout(
           spreadsheetCollection(state.ctx, 'spreadsheet_versions').findOne(record.current_version_id).exec(),
           timeoutMs,
-          `Version ${record.current_version_id} konnte nicht geladen werden.`,
+          `spreadsheet version ${record.current_version_id} read timeout`,
         )
         : null;
       if (!isCurrent()) return null;

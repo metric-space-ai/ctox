@@ -29,18 +29,18 @@ function diagnostics(state, confirmedAt = 0, pullEnabled = true) {
   } } } };
 }
 
-test('sync stays a dot before 30 seconds, then shows the unconfirmed label', () => {
+test('sync state changes after 30 seconds but never renders a label', () => {
   const options = { collections: ['catalogue'], diagnostics: diagnostics('catching-up'), nowMs: 129_999 };
   assert.equal(compactFreshnessPresentation(options, 100_000).label, '');
-  assert.equal(compactFreshnessPresentation({ ...options, nowMs: 130_000 }, 100_000).label, 'Stand unbestätigt');
+  assert.equal(compactFreshnessPresentation({ ...options, nowMs: 130_000 }, 100_000).label, '');
   assert.equal(compactFreshnessPresentation({ ...options, nowMs: 130_000 }, 100_000).state, 'unconfirmed');
 });
 
 test('offline data remains explicitly unconfirmed rather than acquiring a healthy dot', () => {
   const value = compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: diagnostics('offline-pending'), nowMs: 130_000 }, 100_000);
   assert.equal(value.state, 'offline');
-  assert.equal(value.label, 'Stand unbestätigt');
-  assert.match(value.title, /Offline/);
+  assert.equal(value.label, '');
+  assert.equal(value.title, '');
 });
 
 test('recent pull confirmation clears the warning, while an expired confirmation cannot mark data healthy', () => {
@@ -56,8 +56,8 @@ test('an empty view is idle and does not claim remote data was confirmed', () =>
   assert.equal(compactFreshnessPresentation().state, 'idle');
 });
 
-test('the compact label uses the selected language', () => {
-  assert.equal(compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: diagnostics('catching-up'), language: 'en', nowMs: 130_000 }, 100_000).label, 'Unconfirmed');
+test('no language renders a compact label', () => {
+  assert.equal(compactFreshnessPresentation({ collections: ['catalogue'], diagnostics: diagnostics('catching-up'), language: 'en', nowMs: 130_000 }, 100_000).label, '');
 });
 
 function warningFixture(online = true) {
@@ -89,7 +89,7 @@ test('a quiet sync stream still changes the indicator at 30s and a new session s
   t.mock.timers.tick(29_999);
   assert.equal(fixture.label.textContent, '');
   t.mock.timers.tick(1);
-  assert.equal(fixture.label.textContent, 'Stand unbestätigt');
+  assert.equal(fixture.label.textContent, '');
   renderCollectionFreshnessWarning(fixture.warning, { ...options, sessionKey: secondSession });
   assert.equal(fixture.label.textContent, '');
   fixture.cleanup();
@@ -122,7 +122,7 @@ test('real browser connectivity events invalidate old confirmation until a new p
   t.mock.timers.tick(29_999);
   assert.equal(fixture.label.textContent, '');
   t.mock.timers.tick(1);
-  assert.equal(fixture.label.textContent, 'Stand unbestätigt');
+  assert.equal(fixture.label.textContent, '');
   fixture.event('online');
   assert.equal(fixture.warning.dataset.syncState, 'unconfirmed');
   renderCollectionFreshnessWarning(fixture.warning, options);
@@ -149,7 +149,7 @@ test('a silent live snapshot expires and then gives the full 30s unconfirmed int
   assert.equal(fixture.label.textContent, '');
   t.mock.timers.tick(1);
   assert.equal(fixture.warning.dataset.syncState, 'unconfirmed');
-  assert.equal(fixture.label.textContent, 'Stand unbestätigt');
+  assert.equal(fixture.label.textContent, '');
   fixture.cleanup();
 });
 
@@ -159,7 +159,7 @@ test('an initially offline view cannot reuse a recent live snapshot', () => {
     collections: ['catalogue'], compact: true, diagnostics: diagnostics('live', Date.now()),
   });
   assert.equal(fixture.warning.dataset.syncState, 'offline');
-  assert.match(fixture.warning.title, /Offline/);
+  assert.equal(fixture.warning.title, '');
   fixture.cleanup();
 });
 

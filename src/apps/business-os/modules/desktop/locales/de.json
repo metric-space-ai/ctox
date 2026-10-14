@@ -4,7 +4,7 @@
   "startButton": "Start",
   "showDesktop": "Desktop anzeigen",
   "newFolder": "Neuer Ordner",
-  "refresh": "Aktualisieren",
+  "refresh": "Desktop-Icons neu laden",
   "settings": "Einstellungen",
   "wallpaper": "Hintergrund",
   "displayStyle": "Stil",
@@ -54,13 +54,11 @@
   "iconsAdded": "Fehlende Standard-Icons wurden hinzugefügt.",
   "iconsArranged": "Desktop-Icons wurden ausgerichtet.",
   "iconsSorted": "Desktop-Icons wurden nach Namen sortiert.",
-  "refresh": "Desktop-Icons neu laden",
   "menuFile": "Datei",
   "menuView": "Ansicht",
   "menuHelp": "Hilfe",
   "menuApple": "CTOX",
   "menuAboutDesktop": "Über Desktop",
   "trayClock": "Uhr",
-  "ctoxLiveActivity": "CTOX live",
   "openUnavailable": "App nicht verfügbar."
 }

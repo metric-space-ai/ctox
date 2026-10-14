@@ -81,7 +81,6 @@ const FALLBACK_LABELS = {
     iconsAdded: 'Fehlende Standard-Icons wurden hinzugefügt.',
     iconsArranged: 'Desktop-Icons wurden ausgerichtet.',
     iconsSorted: 'Desktop-Icons wurden nach Namen sortiert.',
-    ctoxLiveActivity: 'CTOX live',
   },
   en: {
     moduleTitle: 'Desktop',
@@ -120,7 +119,6 @@ const FALLBACK_LABELS = {
     iconsAdded: 'Missing default icons were added.',
     iconsArranged: 'Desktop icons were arranged.',
     iconsSorted: 'Desktop icons were sorted by name.',
-    ctoxLiveActivity: 'CTOX live',
   },
 };
 
@@ -187,7 +185,6 @@ export async function mount(ctx) {
   }
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
-  const commandsCollection = ctx.db?.collection?.('business_commands');
 
   let layout = await readLocalDesktopLayout({
     collection: layoutCollection,
@@ -203,7 +200,6 @@ export async function mount(ctx) {
   cleanups.push(subscribeIcons());
   cleanups.push(subscribeIconsReadiness());
   cleanups.push(subscribeModuleCatalogChanges());
-  if (commandsCollection) cleanups.push(subscribeCommandStream());
 
   const onDragOverSurface = (event) => {
     const isPin = event.dataTransfer?.types.includes('application/x-ctox-taskbar-pin');
@@ -955,31 +951,6 @@ export async function mount(ctx) {
     return true;
   }
 
-  function subscribeCommandStream() {
-    if (!ctx.notifications) return () => {};
-    let lastSeenAt = Date.now();
-    // invalidateOnly: the listener never received a per-document change here
-    // (a `$` emission is a {collectionName, documents} snapshot), so the full
-    // 200-command window it fetched on every start bought nothing.
-    const sub = commandsCollection.$.subscribe((change) => {
-      const doc = change?.documentData || change?.doc?._data || change?.doc;
-      if (!doc) return;
-      if (!doc.updated_at_ms || doc.updated_at_ms <= lastSeenAt) return;
-      lastSeenAt = doc.updated_at_ms;
-      if (doc.module === ctx.module.id) return;
-      ctx.notifications.show({
-        type: 'info',
-        title: t('ctoxLiveActivity', 'CTOX live'),
-        message: composeCommandToast(doc),
-        action: launcher.knows(doc.module) ? {
-          label: t('openInModule', 'Öffnen'),
-          callback: () => openDesktopTarget({ target_module: doc.module, label: titleForModule(doc.module) }),
-        } : undefined,
-      });
-    }, { invalidateOnly: true });
-    return () => sub.unsubscribe?.();
-  }
-
   function titleForModule(moduleId) {
     const entry = launcher.entries().find((mod) => mod.id === moduleId);
     return entry?.title || moduleId || '';
@@ -996,10 +967,6 @@ export async function mount(ctx) {
     return persisted || titleForModule(targetModule);
   }
 
-  function composeCommandToast(doc) {
-    const moduleTitle = titleForModule(doc.module);
-    return `${moduleTitle ? `[${moduleTitle}] ` : ''}${doc.command_type || ''}`.trim() || doc.command_id || '';
-  }
   async function ensureLayout(collection, launcherRef, unknownLayout) {
     return ensureDesktopLayoutWithAuthority({
       collection,

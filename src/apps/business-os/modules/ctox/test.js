@@ -151,12 +151,14 @@ test('crew labels describe work without exposing implementation terminology', ()
   const indexSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
   const alerts = indexSource.slice(
     indexSource.indexOf('function updateHarnessHealthAlerts'),
-    indexSource.indexOf('function interpolateLabel'),
+    indexSource.indexOf('function formatRelativeAge'),
   );
   const healthUi = indexSource.slice(
     indexSource.indexOf('function syncHarnessHealthUiState'),
-    indexSource.indexOf('function harnessHealthTitle'),
+    indexSource.indexOf('function updateHarnessHealthAlerts'),
   );
+  assert.ok(alerts.length > 0 && healthUi.length > 0);
+  assert.doesNotMatch(indexSource, /function harnessHealth(?:Title|Message)\b/);
   assert.doesNotMatch(alerts, /notifications\.show/);
   assert.doesNotMatch(alerts, /harnessCriticalMessage|Offene Aufgaben/);
   assert.doesNotMatch(healthUi, /harness\.title\s*=/);

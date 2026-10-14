@@ -4,7 +4,7 @@
   "startButton": "Start",
   "showDesktop": "Show desktop",
   "newFolder": "New folder",
-  "refresh": "Refresh",
+  "refresh": "Reload desktop icons",
   "settings": "Settings",
   "wallpaper": "Wallpaper",
   "displayStyle": "Style",
@@ -54,13 +54,11 @@
   "iconsAdded": "Missing default icons were added.",
   "iconsArranged": "Desktop icons were arranged.",
   "iconsSorted": "Desktop icons were sorted by name.",
-  "refresh": "Reload desktop icons",
   "menuFile": "File",
   "menuView": "View",
   "menuHelp": "Help",
   "menuApple": "CTOX",
   "menuAboutDesktop": "About desktop",
   "trayClock": "Clock",
-  "ctoxLiveActivity": "CTOX live",
   "openUnavailable": "App unavailable."
 }

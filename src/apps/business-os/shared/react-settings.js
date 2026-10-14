@@ -1632,7 +1632,7 @@ function mcpEffectiveStatus(info, error) {
 
 function mcpErrorMessage(error) {
   if (error) console.warn('[business-os] mcp status failed', error);
-  return 'Der MCP-Status konnte nicht geladen werden.';
+  return '';
 }
 
 function mcpStatusLabel(info, error) {
@@ -2669,7 +2669,7 @@ function runtimeAvailableModels(runtime, provider, authMode) {
 function runtimeDiagnosticMessage(provider, authMode, auth, diagnostics) {
   const message = String(diagnostics?.message || '').trim();
   if (message.includes('wirkt konfiguriert') && isSubscriptionMode(authMode) && !auth.subscription_session_configured) {
-    return 'ChatGPT Subscription ist noch nicht verbunden.';
+    return 'ChatGPT Subscription: nicht angemeldet.';
   }
   if (message.includes('wirkt konfiguriert') && String(provider || '').toLowerCase() === 'local') {
     return 'Lokale CTOX Runtime ausgewählt; keine API-Autorisierung nötig.';
@@ -2762,7 +2762,7 @@ function providerSubscriptionsPanel(projection = {}, canManage = false, subscrip
   }).join('');
   return `<section class="settings-section">
     <header><h3>Provider Subscriptions</h3><span>Provider und Modell werden unabhängig gewählt. Tokens bleiben ausschließlich im CTOX Secret Store.</span></header>
-    <div class="settings-grid">${rows || '<span>Provider-Status wird synchronisiert.</span>'}</div>
+    <div class="settings-grid">${rows || ''}</div>
   </section>`;
 }
 

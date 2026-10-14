@@ -2764,8 +2764,7 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
       if (!menu.isConnected) return;
       console.warn('[business-os] version history failed', error);
       history.innerHTML = `
-        <p class="is-error" role="alert">Versionshistorie konnte nicht geladen werden.</p>
-        <button type="button" data-v2-version-retry>Erneut versuchen</button>
+        <button type="button" data-v2-version-retry>Versionen erneut laden</button>
       `;
       history.querySelector('[data-v2-version-retry]')?.addEventListener('click', loadHistory, { once: true });
     } finally {
@@ -3060,8 +3059,7 @@ function renderIntegratedModuleSourceError({ mod, host, error, retry }) {
   console.warn(`[module-source:${mod.id}] mount failed:`, error);
   host.innerHTML = `
     <div class="module-integrated-error" role="alert">
-      <strong>Source konnte nicht geladen werden.</strong>
-      <button type="button">Erneut versuchen</button>
+      <button type="button">Source erneut laden</button>
     </div>
   `;
   host.querySelector('button')?.addEventListener('click', () => retry?.(), { once: true });
@@ -5021,24 +5019,40 @@ async function closeWindowForRecovery(id) {
 }
 
 function renderWindowAppRecovery(host, { title, onRetry }) {
+  // No state sentence: retry silently with backoff while the window is open;
+  // the button only lets the user retry right away.
   const recovery = document.createElement('div');
   recovery.className = 'shell-app-recovery';
-  recovery.innerHTML = `
-    <strong>${escapeHtml(title)} konnte nicht geladen werden.</strong>
-    <span>Die Verbindung wird beim erneuten Öffnen wiederhergestellt.</span>
-    <button type="button">Erneut öffnen</button>
-  `;
+  recovery.innerHTML = `<button type="button">${escapeHtml(title)} erneut öffnen</button>`;
   const button = recovery.querySelector('button');
-  button?.addEventListener('click', async () => {
-    button.disabled = true;
+  let attempt = 0;
+  let timer = null;
+  let running = false;
+  const retry = async () => {
+    if (running || !recovery.isConnected) return;
+    running = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    if (button) button.disabled = true;
     try {
       await onRetry?.();
     } catch (error) {
       console.error('[business-os] app recovery failed', error);
-      button.disabled = false;
+      if (button) button.disabled = false;
+      schedule();
+    } finally {
+      running = false;
     }
-  });
+  };
+  const schedule = () => {
+    if (!recovery.isConnected && attempt > 0) return;
+    const delay = Math.min(60_000, 2_000 * 2 ** Math.min(attempt, 5));
+    attempt += 1;
+    timer = setTimeout(retry, delay);
+  };
+  button?.addEventListener('click', retry);
   host.replaceChildren(recovery);
+  schedule();
 }
 
 function createWindowedModuleHost(mod) {
@@ -8745,7 +8759,7 @@ function openAppLifecycleDrawer(mod) {
   populateLifecycleVersions(body, mod, { canRollback }).catch((error) => {
     console.warn('[business-os] lifecycle versions failed', error);
     const list = body.querySelector('[data-lifecycle-version-list]');
-    if (list) list.textContent = 'Versionen konnten nicht geladen werden.';
+    if (list) list.textContent = '';
   });
 }
 
@@ -9082,7 +9096,7 @@ function renderLoginGate(session, options = {}) {
     writeAccountPrefs({ loginUser: user });
     const originalLabel = submitBtn.textContent;
     submitBtn.disabled = true;
-    submitBtn.textContent = "Verbindung wird hergestellt...";
+    submitBtn.textContent = "Anmelden …";
 
     const restoreSubmit = () => {
       submitBtn.disabled = false;

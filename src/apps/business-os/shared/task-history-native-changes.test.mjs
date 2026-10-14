@@ -222,6 +222,6 @@ test('actual cockpit exposes denied history access without warnings or claiming 
   assert.deepEqual([...state.taskHistoryUnavailable],['ctox_runs','ctox_harness_events']);assert.deepEqual(calls,['render']);
   const notice=Function('labels','escapeAttr','escapeHtml',body('taskHistoryPermissionNotice')+'\nreturn taskHistoryPermissionNotice;')(
     {de:{timeline:'Verlauf',notPermittedForRole:'für deine Rolle nicht freigegeben'}},x=>x,x=>x);
-  assert.match(notice(state),/data-task-history-unavailable role="status"/);assert.match(notice(state),/COLLECTION_READ_FORBIDDEN: ctox_runs, ctox_harness_events/);
+  assert.match(notice(state),/data-task-history-unavailable role="status"/);assert.doesNotMatch(notice(state),/COLLECTION_READ_FORBIDDEN|ctox_runs|ctox_harness_events/);
   assert.match(notice(state),/Verlauf: für deine Rolle nicht freigegeben/);assert.equal(notice({...state,taskHistoryUnavailable:new Set()}),'');stop();await settle();
 });

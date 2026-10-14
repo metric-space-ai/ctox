@@ -4,18 +4,9 @@ import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } f
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de', compact = false, contextKey, sessionKey, nowMs = Date.now() } = {}) {
   if (!warning) return;
   if (compact) return renderCompactFreshness(warning, { collections, diagnostics, language, contextKey, sessionKey, nowMs });
-  const pending = collections.map((collection) => collectionFreshnessFromDiagnostics(
-    collection, diagnostics?.collections?.[collection], { syncMode: diagnostics?.mode },
-  )).filter((entry) => entry.requiresPullConfirmation && !entry.ready);
-  warning.hidden = pending.length === 0;
-  if (!pending.length) {
-    warning.textContent = '';
-    return;
-  }
-  const offline = pending.some((entry) => entry.state === 'offline-pending');
-  warning.textContent = language === 'de'
-    ? (offline ? 'Offline: angezeigte Daten können veraltet sein' : 'Daten werden abgeglichen: angezeigter Stand noch nicht bestätigt')
-    : (offline ? 'Offline: displayed data may be out of date' : 'Syncing data: displayed state is not yet confirmed');
+  // No state text, ever: cached data stays visible while sync retries.
+  warning.hidden = true;
+  warning.textContent = '';
 }
 
 const compactStates = new WeakMap();
@@ -26,23 +17,19 @@ export function compactFreshnessPresentation({ collections = [], diagnostics, la
   )).filter((entry) => entry.requiresPullConfirmation);
   const pullAt = (entry) => Number(diagnostics?.collections?.[entry.collection]?.frameTransport?.lastSuccessfulPullAtMs || 0);
   const pending = entries.filter((entry) => !entry.ready || !online || pullAt(entry) <= confirmedAfterMs);
-  const de = language === 'de';
+  // Freshness drives retries and state only; it never renders text (owner
+  // rule 14.10.2026: no state prose for users).
   if (!pending.length) return {
-    state: collections.length ? 'healthy' : 'idle', pending: false, label: '',
-    title: collections.length ? (de ? 'Datenstand bestätigt' : 'Data confirmed') : (de ? 'Kein Datenabgleich für diese Ansicht' : 'No data sync for this view'),
+    state: collections.length ? 'healthy' : 'idle', pending: false, label: '', title: '',
     // A quiet stream cannot leave an expired confirmation green indefinitely.
     nextRefreshMs: entries.length ? Math.max(1, Math.min(...entries.map((entry) =>
       pullAt(entry) + COLLECTION_FRESHNESS_MAX_AGE_MS + 1 - nowMs))) : null,
   };
   const offline = !online || pending.some((entry) => entry.state === 'offline-pending');
   const delayed = nowMs - pendingSince >= 30_000;
-  const title = offline
-    ? (de ? 'Offline: angezeigte Daten können veraltet sein' : 'Offline: displayed data may be out of date')
-    : (de ? 'Daten werden abgeglichen: angezeigter Stand noch nicht bestätigt' : 'Syncing data: displayed state is not yet confirmed');
   return {
     state: offline ? 'offline' : delayed ? 'unconfirmed' : 'syncing',
-    pending: true, label: delayed ? (de ? 'Stand unbestätigt' : 'Unconfirmed') : '',
-    title: title + ' · ' + pending.map((entry) => entry.collection).join(', '),
+    pending: true, label: '', title: '',
   };
 }
 
@@ -93,7 +80,6 @@ function renderCompactFreshness(warning, options) {
   warning.hidden = false;
   warning.dataset.syncState = presentation.state;
   warning.title = presentation.title;
-  warning.setAttribute('aria-label', presentation.title);
   const label = warning.querySelector('[data-sync-state-label]');
   if (label) label.textContent = presentation.label;
   const nextRefreshMs = presentation.pending

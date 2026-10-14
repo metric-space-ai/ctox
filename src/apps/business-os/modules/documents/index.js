@@ -1147,7 +1147,7 @@ async function loadSelectedVersion(state) {
       return await withDocumentVersionTimeout(
         documentCollection(state.ctx, 'document_versions').findOne(targetVersionId).exec(),
         timeoutMs,
-        `Version ${targetVersionId} konnte nicht geladen werden.`,
+        `document version ${targetVersionId} read timeout`,
       );
     }
     const fallback = await withDocumentVersionTimeout(
@@ -1182,14 +1182,14 @@ async function awaitDocumentVersionReplication(bridge, ctx) {
     bridge = await withTimeout(
       ctx.sync.startCollection('document_versions', { forceDirect: true }),
       60000,
-      'Dokumentversionen konnten nicht rechtzeitig synchronisiert werden.',
+      'document_versions start timeout',
     ) || bridge;
   }
   if (bridge?.ready) {
     bridge = await withTimeout(
       typeof bridge.ready === 'function' ? bridge.ready() : bridge.ready,
       60000,
-      'Dokumentversionen konnten nicht rechtzeitig synchronisiert werden.',
+      'document_versions start timeout',
     ) || bridge;
   }
   const replication = bridge?.state || bridge;

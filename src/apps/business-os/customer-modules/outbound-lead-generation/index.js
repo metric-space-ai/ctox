@@ -665,7 +665,6 @@ const state = {
   // frisch gestarteter Browser schrieb 13 Leads mit altem Stand zurueck).
   startLaeuft: true,
   syncError: '',
-  syncMessage: 'Daten werden verbunden',
   syncRetryTimer: null,
   syncInFlight: false,
   syncWaitingCollections: new Set(REPLICATED_COLLECTIONS),
@@ -700,18 +699,15 @@ export async function mount(ctx) {
   }
   state.syncPending = true;
   state.syncError = '';
-  state.syncMessage = navigator.onLine === false ? 'Keine Netzwerkverbindung' : 'Daten werden verbunden';
   state.collectionReadErrors = new Map();
   state.collectionsEverLoaded = new Set();
   state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
   const handleOffline = () => {
     state.syncPending = false;
     state.syncError = 'offline';
-    state.syncMessage = 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.';
     render();
   };
   const handleOnline = () => {
-    state.syncMessage = 'Netzwerk wieder verfügbar. Daten werden synchronisiert';
     void retryInitialSync();
   };
   globalThis.addEventListener('offline', handleOffline);
@@ -956,22 +952,13 @@ async function retryInitialSync() {
   state.syncRetryTimer = null;
   state.syncPending = true;
   state.syncError = '';
-  // "Netzwerk wieder verfügbar" wurde hier sofort ueberschrieben und war nie
-  // zu sehen (Klicktest P1 SYN-03a).
-  state.syncMessage = navigator.onLine === false
-    ? 'Keine Netzwerkverbindung'
-    : (String(state.syncMessage || '').startsWith('Netzwerk wieder') ? state.syncMessage : 'Daten werden synchronisiert');
   state.syncWaitingCollections = new Set(REPLICATED_COLLECTIONS);
   state.replicationBridges.clear();
   render();
   try {
     await synchronizeInitialData();
-    state.syncMessage = '';
-    // Endet ein Abgleich, waehrend das Netz schon weg ist, blieb die Fusszeile
-    // leer statt "offline" zu sagen (Klicktest P1 SYN-01a).
     if (navigator.onLine === false) {
       state.syncError = 'offline';
-      state.syncMessage = 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.';
       render();
     }
   } catch (error) {
@@ -982,11 +969,6 @@ async function retryInitialSync() {
     const transportPending = /nicht mit CTOX verbunden|offline-pending/i.test(message);
     state.syncPending = catchingUp || transportPending;
     state.syncError = offline ? 'offline' : (catchingUp || transportPending) ? '' : message;
-    state.syncMessage = offline
-      ? 'Keine Netzwerkverbindung. Vorhandene Daten bleiben sichtbar.'
-      : (catchingUp || transportPending)
-        ? 'CTOX-Verbindung wird hergestellt'
-        : 'CTOX ist gerade nicht erreichbar. Erneuter Versuch läuft.';
     ((catchingUp || transportPending) ? console.info : console.warn)('[outbound-lead-generation] synchronization delayed', { message, offline, catchingUp, transportPending });
     render();
     state.syncRetryTimer = globalThis.setTimeout(() => {
@@ -2073,19 +2055,17 @@ async function loadSelectedLeadDetails() {
   } catch (error) {
     if (state.selectedLeadId !== id || generation !== state.collectionBindingGeneration) return;
     console.warn('[outbound-lead-generation] Details', error);
-    const transient = leadReadTransient(error);
-    if (transient && state.selectedDetailRetriedKey !== key) {
-      state.selectedDetailRetriedKey = key;
-      state.selectedDetailError = '';
-      if (state.selectedDetailRetryTimer) globalThis.clearTimeout(state.selectedDetailRetryTimer);
-      state.selectedDetailRetryTimer = globalThis.setTimeout(() => {
-        state.selectedDetailRetryTimer = null;
-        if (state.uiMounted === false || state.collectionBindingGeneration !== generation) return;
-        if (state.selectedLeadId === id) void loadSelectedLeadDetails();
-      }, 1000);
-    } else {
-      state.selectedDetailError = 'Details konnten nicht geladen werden.';
-    }
+    // Retry silently with backoff while this lead stays selected; the pane
+    // keeps "Wird geladen …" instead of an error sentence.
+    state.selectedDetailError = '';
+    state.selectedDetailRetryAttempts = state.selectedDetailRetriedKey === key ? (state.selectedDetailRetryAttempts || 0) + 1 : 0;
+    state.selectedDetailRetriedKey = key;
+    if (state.selectedDetailRetryTimer) globalThis.clearTimeout(state.selectedDetailRetryTimer);
+    state.selectedDetailRetryTimer = globalThis.setTimeout(() => {
+      state.selectedDetailRetryTimer = null;
+      if (state.uiMounted === false || state.collectionBindingGeneration !== generation) return;
+      if (state.selectedLeadId === id) void loadSelectedLeadDetails();
+    }, Math.min(60_000, 1000 * 2 ** Math.min(state.selectedDetailRetryAttempts, 6)));
     renderDetail();
   } finally {
     if (state.selectedDetailLoadingKey === key) state.selectedDetailLoadingKey = '';
@@ -9948,7 +9928,7 @@ async function importPayload(payload, { resumeImportId = '', fortschritt = null 
   const vorab = await ladeLeadDokumente([...vorabIds]);
   const holeDoc = (leadId) => (vorab.has(leadId)
     ? Promise.resolve(vorab.get(leadId))
-    : withTimeout(state.collections.leads.findOne(leadId).exec(), 'Lead konnte nicht geladen werden.', 8000).catch(() => null));
+    : withTimeout(state.collections.leads.findOne(leadId).exec(), 'lead read timeout', 8000).catch(() => null));
   for (const [index, { raw, row, id: zeilenId }] of zeilen.entries()) {
     let id = zeilenId;
     if (index % 5 === 0) melde(`Firmen werden abgeglichen: ${index} / ${gesamt}`);
@@ -10091,7 +10071,7 @@ async function ladeLeadDokumente(ids) {
     try {
       const docs = await withTimeout(
         state.collections.leads.find({ selector: { id: { $in: teil } }, limit: 200 }).exec(),
-        'Vorhandene Leads konnten nicht geladen werden.',
+        'known leads read timeout',
         30_000,
       );
       for (const doc of docs || []) {
@@ -10732,7 +10712,7 @@ async function reconcileResearchCommands({ authoritative = false } = {}) {
         const ausserhalb = await inFlightLeadsOutsideWindow(async (query) => {
           const docs = await withTimeout(
             state.collections.leads.find(query).exec(),
-            'Laufende Leads konnten nicht geladen werden.',
+            'in-flight leads read timeout',
             30_000,
           );
           return (docs || []).map((doc) => doc?.toJSON?.() || doc);

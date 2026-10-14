@@ -295,13 +295,7 @@ const labels = {
     timelineUnavailableDetail: "Der Verlauf wird mit dem nächsten Arbeitsschritt verfügbar.",
     flowProjectionMissing: "Verbunden. Der Arbeitsstand wird noch geladen.",
     harnessHealth: "Crew-Status",
-    harnessCriticalTitle: "Die Crew arbeitet gerade keine Aufgaben ab",
-    harnessCriticalMessage: "Offene Aufgaben: {count}. Längste Wartezeit: {age}.",
-    harnessCriticalProjection: "Offene Aufgaben: {count}. Längste Wartezeit: {age}. Der aktuelle Arbeitsstand ist noch nicht verfügbar.",
-    harnessWarningTitle: "Aufgaben warten auf die Crew",
-    harnessWarningMessage: "Offene Aufgaben: {count}. Noch kein Arbeitsbeginn sichtbar.",
     harnessOpenTask: "Aufgabe öffnen",
-    harnessHealthy: "Die Crew bearbeitet die Aufgabenliste",
     auxShow: 'Status & Quellen',
     auxHide: 'Status & Quellen ausblenden',
     harnessKicker: "Crew",
@@ -589,13 +583,7 @@ const labels = {
     timelineUnavailableDetail: "The timeline becomes available with the next step.",
     flowProjectionMissing: "Connected. Work progress is still loading.",
     harnessHealth: "Crew status",
-    harnessCriticalTitle: "The crew is not working on tasks right now",
-    harnessCriticalMessage: "Open tasks: {count}. Longest wait: {age}.",
-    harnessCriticalProjection: "Open tasks: {count}. Longest wait: {age}. Current progress is not available yet.",
-    harnessWarningTitle: "Tasks are waiting for the crew",
-    harnessWarningMessage: "Open tasks: {count}. No work has started yet.",
     harnessOpenTask: 'Open task',
-    harnessHealthy: "The crew is working through the task list",
     auxShow: 'Status & sources',
     auxHide: 'Hide status & sources',
     harnessKicker: "Crew",
@@ -1354,33 +1342,6 @@ function syncHarnessHealthUiState(state) {
   });
 }
 
-function harnessHealthTitle(state, health) {
-  const t = labels[state.lang];
-  if (health?.reason === 'paused') return state.lang === 'de' ? 'Die Crew ist pausiert' : 'The crew is paused';
-  if (health?.severity === 'critical') return t.harnessCriticalTitle;
-  if (health?.severity === 'warning') return t.harnessWarningTitle;
-  return t.harnessHealthy;
-}
-
-function harnessHealthMessage(state, health) {
-  const t = labels[state.lang];
-  if (health?.reason === 'paused') return state.lang === 'de' ? 'Aufgaben starten, sobald du die Crew fortsetzt.' : 'Tasks start when you resume the crew';
-  const values = {
-    count: String(health?.waitingCount || 0),
-    age: formatRelativeAge(health?.oldestWaitingAgeMs || 0, state.lang),
-  };
-  if (health?.severity === 'critical' && health.flowProjectionMissing) {
-    return interpolateLabel(t.harnessCriticalProjection, values);
-  }
-  if (health?.severity === 'critical') {
-    return interpolateLabel(t.harnessCriticalMessage, values);
-  }
-  if (health?.severity === 'warning') {
-    return interpolateLabel(t.harnessWarningMessage, values);
-  }
-  return t.harnessHealthy;
-}
-
 function updateHarnessHealthAlerts(state) {
   const notifications = state.ctx?.notifications;
   if (state.harnessToastId && notifications?.close) notifications.close(state.harnessToastId);
@@ -1388,9 +1349,6 @@ function updateHarnessHealthAlerts(state) {
   state.harnessToastKey = '';
 }
 
-function interpolateLabel(template, values) {
-  return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => values[key] ?? '');
-}
 
 function formatRelativeAge(ms, lang) {
   const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
