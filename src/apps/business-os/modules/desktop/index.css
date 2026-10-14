@@ -253,174 +253,14 @@
   min-height: 16px;
 }
 
-.widget-status {
-  display: flex;
-  align-items: center;
-  align-self: center;
-  gap: 8px;
-  background: color-mix(in srgb, var(--accent-soft) 55%, rgba(0,0,0,0.05));
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  padding: 5px 12px;
-  border-radius: 99px;
-  transition: background-color 200ms ease, border-color 200ms ease;
-}
-
-.desktop-hero-widget:hover .widget-status {
-  background: color-mix(in srgb, var(--accent-soft) 80%, rgba(0,0,0,0.08));
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.status-pulse {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  position: relative;
-}
-
-.status-pulse::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: status-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
-@keyframes status-ping {
-  75%, 100% {
-    transform: scale(2.8);
-    opacity: 0;
-  }
-}
-
-.status-text {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-  color: var(--text);
-  text-transform: uppercase;
-  min-height: 13px;
-}
-
-.widget-sync {
-  margin-top: 7px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 24%, transparent);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "title count"
-    "detail detail"
-    "bar bar";
-  align-items: baseline;
-  column-gap: 14px;
-  row-gap: 8px;
-  min-width: 0;
-}
-
 @container (max-width: 1320px) {
   .desktop-widget-container {
     display: none;
   }
 }
 
-.widget-sync[hidden],
-.widget-sync[data-state="idle"] {
-  display: none;
-}
-
-.widget-sync-head {
-  display: contents;
-}
-
-.widget-sync-title,
-.widget-sync-count,
-.widget-sync-detail,
-.widget-sync-bar {
-  min-width: 0;
-}
-
-.widget-sync-title {
-  grid-area: title;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0;
-  line-height: 1.2;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.widget-sync-count {
-  grid-area: count;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.widget-sync-detail {
-  grid-area: detail;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.3;
-  min-height: 15px;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.widget-sync-bar {
-  grid-area: bar;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 32%, transparent);
-}
-
-.widget-sync-bar > i {
-  display: block;
-  width: 0;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width 220ms ease-out, background-color 180ms ease;
-}
-
-.widget-sync[data-state="ready"] .widget-sync-bar > i {
-  background: var(--accent);
-}
-
-.widget-sync[data-state="syncing"] .widget-sync-bar > i,
-.widget-sync[data-state="starting"] .widget-sync-bar > i {
-  background: color-mix(in srgb, var(--accent) 72%, var(--accent-soft));
-}
-
-.widget-sync[data-state="issue"] .widget-sync-title,
-.widget-sync[data-state="issue"] .widget-sync-count {
-  color: var(--danger);
-}
-
-.widget-sync[data-state="issue"] .widget-sync-bar > i {
-  background: var(--danger);
-}
-
 .widget-time:empty,
-.widget-date:empty,
-.status-text:empty,
-.widget-sync-title:empty,
-.widget-sync-detail:empty {
+.widget-date:empty {
   visibility: hidden;
 }
 
@@ -560,12 +400,3 @@ body[data-active-module="desktop"] .topbar {
   color: var(--shell-category-accent);
 }
 
-.desktop-module[data-workjet-category] .widget-status {
-  border-color: color-mix(in srgb, var(--shell-category-accent) 34%, var(--line));
-  background: color-mix(in srgb, var(--shell-category-soft) 76%, var(--surface));
-}
-
-.desktop-module[data-workjet-category] .status-pulse,
-.desktop-module[data-workjet-category] .status-pulse::after {
-  background: var(--shell-category-accent);
-}

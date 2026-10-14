@@ -248,8 +248,10 @@ assert.match(
 );
 const mountSource = desktopSource.slice(
   desktopSource.indexOf('export async function mount(ctx)'),
-  desktopSource.indexOf('function wireSyncStatusWidget()'),
+  desktopSource.indexOf('function createLauncher('),
 );
+assert.equal(desktopSource.indexOf('function wireSyncStatusWidget()'), -1, 'desktop must not render a sync-status widget');
+assert.doesNotMatch(desktopSource, /CTOX Plattform aktiv|Sync prüfen|Daten werden synchronisiert|Sync-Verbindung prüfen/);
 assert.ok(
   mountSource.indexOf('await readLocalDesktopLayout(') < mountSource.indexOf('await renderIcons()'),
   'first paint must use the locally saved layout',

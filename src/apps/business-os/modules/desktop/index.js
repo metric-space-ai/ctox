@@ -20,11 +20,6 @@ const LAYOUT_DOC_ID = 'layout';
 const ICON_POSITION_CACHE_KEY = 'ctox.businessOs.desktopIconPositions';
 const ICON_POSITION_CACHE_VERSION = 2;
 const ROW_MAJOR_LAYOUT_MIGRATION = 'row-major-v2';
-const DESKTOP_SYNC_COLLECTIONS = Object.freeze([
-  'desktop_icons',
-  'desktop_layout',
-  'desktop_notifications',
-]);
 const DESKTOP_ICON_PERSISTED_FIELDS = new Set([
   'id',
   'target_type',
@@ -52,12 +47,10 @@ const FALLBACK_LABELS = {
   de: {
     moduleTitle: 'Desktop',
     emptyDesktop: 'Keine Icons auf dem Desktop.',
-    syncingData: 'Daten werden synchronisiert.',
     openInModule: 'Öffnen',
-    openUnavailable: 'Diese App ist auf dieser Instanz nicht verfügbar.',
-    openUnavailableDetail: '„{label}" verweist auf {target} — dieses Modul steht im Katalog dieser Instanz nicht (mehr) zur Verfügung.',
+    openUnavailable: 'App nicht verfügbar.',
     chatWithCtox: 'Mit CTOX chatten',
-    chatNotSaved: 'Chat geöffnet, Speichern oder Sync fehlgeschlagen. Verbindung prüfen und erneut versuchen.',
+    chatNotSaved: 'Das hat nicht geklappt.',
     askCtox: 'Frage stellen',
     workWithData: 'Daten ändern',
     modifyApp: 'App ändern',
@@ -82,31 +75,21 @@ const FALLBACK_LABELS = {
     noBackup: 'Keine vorherige Desktop-Anordnung gespeichert.',
     resetConfirm: 'Alle Desktop-Verknüpfungen und eigenen Anordnungen entfernen und Standard-Icons wiederherstellen?',
     refresh: 'Desktop-Icons neu laden',
-    iconsUnavailable: 'Desktop-Icons sind noch nicht bereit. Sync-Verbindung prüfen und erneut versuchen.',
-    menuActionFailed: 'Desktop-Aktion fehlgeschlagen',
+    iconsUnavailable: 'Das hat nicht geklappt.',
+    menuActionFailed: 'Das hat nicht geklappt.',
     noMissingIcons: 'Alle verfügbaren Standard-Icons sind bereits vorhanden.',
     iconsAdded: 'Fehlende Standard-Icons wurden hinzugefügt.',
     iconsArranged: 'Desktop-Icons wurden ausgerichtet.',
     iconsSorted: 'Desktop-Icons wurden nach Namen sortiert.',
-    platformActive: 'CTOX Plattform aktiv',
-    syncReady: 'Sync aktuell',
-    syncStarting: 'Sync startet',
-    syncRunning: 'Sync läuft',
-    syncIssue: 'Sync prüfen',
-    syncNoDiagnostics: 'Warte auf Verbindungsstatus',
-    syncReadyDetail: 'Icons, Layout und Hinweise sind lokal bereit.',
-    syncWaitingOn: 'Wartet auf {collections}',
     ctoxLiveActivity: 'CTOX live',
   },
   en: {
     moduleTitle: 'Desktop',
     emptyDesktop: 'No icons on the desktop.',
-    syncingData: 'Syncing data.',
     openInModule: 'Open',
-    openUnavailable: 'This app is not available on this instance.',
-    openUnavailableDetail: '"{label}" points at {target}, which is not (or no longer) in this instance catalog.',
+    openUnavailable: 'App unavailable.',
     chatWithCtox: 'Chat with CTOX',
-    chatNotSaved: 'Chat opened, but saving or sync failed. Check the connection and try again.',
+    chatNotSaved: 'That didn’t work.',
     askCtox: 'Ask question',
     workWithData: 'Change data',
     modifyApp: 'Modify app',
@@ -131,34 +114,13 @@ const FALLBACK_LABELS = {
     noBackup: 'No previous desktop arrangement is saved.',
     resetConfirm: 'Remove all desktop shortcuts and custom positions, then restore the default icons?',
     refresh: 'Reload desktop icons',
-    iconsUnavailable: 'Desktop icons are not ready. Check sync and try again.',
-    menuActionFailed: 'Desktop action failed',
+    iconsUnavailable: 'That didn’t work.',
+    menuActionFailed: 'That didn’t work.',
     noMissingIcons: 'All available default icons are already present.',
     iconsAdded: 'Missing default icons were added.',
     iconsArranged: 'Desktop icons were arranged.',
     iconsSorted: 'Desktop icons were sorted by name.',
-    platformActive: 'CTOX platform active',
-    syncReady: 'Sync current',
-    syncStarting: 'Starting sync',
-    syncRunning: 'Sync running',
-    syncIssue: 'Check sync',
-    syncNoDiagnostics: 'Waiting for connection status',
-    syncReadyDetail: 'Icons, layout and notices are locally ready.',
-    syncWaitingOn: 'Waiting for {collections}',
     ctoxLiveActivity: 'CTOX live',
-  },
-};
-
-const SYNC_COLLECTION_LABELS = {
-  de: {
-    desktop_icons: 'Icons',
-    desktop_layout: 'Layout',
-    desktop_notifications: 'Benachrichtigungen',
-  },
-  en: {
-    desktop_icons: 'Icons',
-    desktop_layout: 'Layout',
-    desktop_notifications: 'Notifications',
   },
 };
 
@@ -179,12 +141,6 @@ export async function mount(ctx) {
     root,
     surface: root.querySelector('[data-desktop-surface]'),
     icons: root.querySelector('[data-desktop-icons]'),
-    widgetStatus: root.querySelector('[data-widget-status]'),
-    widgetSync: root.querySelector('[data-widget-sync]'),
-    widgetSyncTitle: root.querySelector('[data-widget-sync-title]'),
-    widgetSyncCount: root.querySelector('[data-widget-sync-count]'),
-    widgetSyncDetail: root.querySelector('[data-widget-sync-detail]'),
-    widgetSyncFill: root.querySelector('[data-widget-sync-fill]'),
   };
   refs.surface.tabIndex = -1;
   applyWorkjetCategory(refs.root, workjetCategoryForModule(ctx.module));
@@ -195,13 +151,11 @@ export async function mount(ctx) {
   const cleanups = [];
   const pendingActions = new Set();
   let disposed = false;
-  const mountedAtMs = Date.now();
 
   // Wire up the live clock and date widget
   let startClockTimer = null;
   const timeEl = refs.root.querySelector('[data-widget-time]');
   const dateEl = refs.root.querySelector('[data-widget-date]');
-  if (refs.widgetStatus) refs.widgetStatus.textContent = t('platformActive', 'CTOX Plattform aktiv');
   if (timeEl && dateEl) {
     const updateClock = () => {
       try {
@@ -231,7 +185,6 @@ export async function mount(ctx) {
       cleanups.push(() => clearInterval(clockInterval));
     };
   }
-  wireSyncStatusWidget();
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
@@ -311,163 +264,12 @@ export async function mount(ctx) {
 
   // ---------- helpers (closures over the mount scope) ----------
 
-  function wireSyncStatusWidget() {
-    if (!refs.widgetSync) return;
-    const render = () => {
-      if (disposed) return;
-      renderSyncStatus(syncStatusView(window.ctoxBusinessOsSyncDiagnostics || ctx.sync?.diagnostics || null));
-    };
-    render();
-    window.addEventListener('ctox-business-os-sync-diagnostics', render);
-    const interval = setInterval(render, 2000);
-    cleanups.push(() => {
-      window.removeEventListener('ctox-business-os-sync-diagnostics', render);
-      clearInterval(interval);
-    });
-  }
-
-  function syncStatusView(snapshot) {
-    const declaredCollections = Array.isArray(ctx.module?.collections)
-      ? ctx.module.collections.filter(Boolean)
-      : [];
-    const declaredSet = new Set(declaredCollections);
-    const collections = DESKTOP_SYNC_COLLECTIONS.filter((name) => !declaredSet.size || declaredSet.has(name));
-    const total = collections.length;
-    if (!snapshot || snapshot.mode !== 'webrtc' || !snapshot.collections) {
-      return {
-        hidden: true,
-        state: 'idle',
-        ready: 0,
-        total,
-        title: '',
-        detail: '',
-      };
-    }
-
-    const items = collections.map((name) => {
-      const diagnostics = snapshot.collections?.[name] || null;
-      const status = diagnostics?.connectionStatus || diagnostics?.status || 'pending';
-      return {
-        name,
-        label: syncCollectionLabel(name),
-        status,
-        diagnostics,
-        ready: isSyncCollectionReady(diagnostics),
-        issue: ['failed', 'error', 'stopped'].includes(status),
-      };
-    });
-    const ready = items.filter((item) => item.ready).length;
-    const issueItems = items.filter((item) => item.issue);
-    const pending = items.filter((item) => !item.ready);
-
-    if (issueItems.length) {
-      return {
-        state: 'issue',
-        ready,
-        total,
-        title: t('syncIssue', 'Sync prüfen'),
-        detail: `${issueItems[0].label}: ${syncStatusLabel(issueItems[0])}`,
-      };
-    }
-    if (ready >= total) {
-      return {
-        hidden: true,
-        state: 'idle',
-        ready,
-        total,
-        title: '',
-        detail: '',
-      };
-    }
-    const pendingStatuses = new Set(pending.map((item) => String(item.status || '').toLowerCase()));
-    const hasActiveSyncWork = ['connecting', 'reconnecting', 'running'].some((status) => pendingStatuses.has(status));
-    const withinStartupGrace = Date.now() - mountedAtMs < 8000;
-    if (!hasActiveSyncWork && !withinStartupGrace) {
-      return {
-        hidden: true,
-        state: 'idle',
-        ready,
-        total,
-        title: '',
-        detail: '',
-      };
-    }
-    const waiting = pending.slice(0, 2).map((item) => item.label).join(', ');
-    return {
-      state: 'syncing',
-      ready,
-      total,
-      title: t('syncRunning', 'Sync läuft'),
-      detail: t('syncWaitingOn', 'Wartet auf {collections}').replace('{collections}', waiting || 'Daten'),
-    };
-  }
-
-  function syncCollectionLabel(name) {
-    const lang = ctx.locale === 'en' ? 'en' : 'de';
-    return SYNC_COLLECTION_LABELS[lang]?.[name] || name.replace(/^desktop_/, '').replaceAll('_', ' ');
-  }
-
-  function isSyncCollectionReady(diagnostics) {
-    if (!diagnostics) return false;
-    const status = diagnostics.connectionStatus || diagnostics.status || '';
-    const activePeerCount = Number(diagnostics.frameTransport?.activePeerCount || 0);
-    if (diagnostics.frameTransport && activePeerCount === 0) return false;
-    if (diagnostics.initialReplicationAt || diagnostics.connectedAt) return true;
-    if (diagnostics.initialReplicationState === 'complete') return true;
-    return ['connected', 'running', 'reused'].includes(status);
-  }
-
-  function syncStatusLabel(item) {
-    const lastError = item?.diagnostics?.lastError?.message || item?.diagnostics?.lastError?.code || '';
-    if (lastError) return shortSyncDetail(lastError);
-    const status = item?.status || 'pending';
-    const lang = ctx.locale === 'en' ? 'en' : 'de';
-    const labels = {
-      de: {
-        connecting: 'verbindet',
-        pending: 'wartet',
-        reconnecting: 'verbindet neu',
-        error: 'Fehler',
-        failed: 'fehlgeschlagen',
-        stopped: 'gestoppt',
-      },
-      en: {
-        connecting: 'connecting',
-        pending: 'waiting',
-        reconnecting: 'reconnecting',
-        error: 'error',
-        failed: 'failed',
-        stopped: 'stopped',
-      },
-    };
-    return labels[lang]?.[status] || status;
-  }
-
-  // Writing textContent replaces the text node even when the string is
-  // identical, which costs a layout pass on every status tick. The desktop
-  // widgets tick about twice a second, so the unchanged writes were the whole
-  // visible twitch. Only write when the value actually moved.
+  // The clock rewrites the same minute string many times a second. Skip the
+  // text-node replacement unless the value actually moved.
   function setTextIfChanged(element, value) {
     const next = String(value ?? '');
     if (!element || element.textContent === next) return;
     element.textContent = next;
-  }
-
-  function shortSyncDetail(value) {
-    const text = String(value || '').replace(/\s+/g, ' ').trim();
-    if (text.length <= 72) return text;
-    return `${text.slice(0, 69)}...`;
-  }
-
-  function renderSyncStatus(view) {
-    refs.widgetSync.hidden = Boolean(view.hidden);
-    if (refs.widgetSync.dataset.state !== view.state) refs.widgetSync.dataset.state = view.state;
-    setTextIfChanged(refs.widgetSyncTitle, view.title);
-    setTextIfChanged(refs.widgetSyncCount, `${view.ready}/${view.total}`);
-    setTextIfChanged(refs.widgetSyncDetail, view.detail);
-    const percent = view.total > 0 ? Math.round((view.ready / view.total) * 100) : 0;
-    const width = `${Math.min(100, Math.max(0, percent))}%`;
-    if (refs.widgetSyncFill.style.width !== width) refs.widgetSyncFill.style.width = width;
   }
 
   function createLauncher(modules) {
@@ -538,7 +340,6 @@ export async function mount(ctx) {
         syncing.className = 'ctox-syncing';
         syncing.setAttribute('role', 'status');
         syncing.setAttribute('aria-live', 'polite');
-        syncing.textContent = t('syncingData', 'Daten werden synchronisiert.');
         refs.icons.appendChild(syncing);
         return;
       }
@@ -626,7 +427,8 @@ export async function mount(ctx) {
           iconPositionCache.delete(iconId);
           writeIconPositionCache();
           refreshIcons().catch(() => {});
-          notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+          console.warn('[desktop] icon move failed:', error);
+          notify({ type: 'error', title: t('menuActionFailed', 'Das hat nicht geklappt.') });
         }
       },
       onDragToTopbar: (iconId) => {
@@ -704,7 +506,8 @@ export async function mount(ctx) {
       if (opened === undefined) return false;
       if (opened) return true;
     } catch (error) {
-      notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+      console.warn('[desktop] open failed:', error);
+      notify({ type: 'error', title: t('menuActionFailed', 'Das hat nicht geklappt.') });
       return false;
     }
     notifyUnavailableTarget(targetModule, doc);
@@ -712,13 +515,10 @@ export async function mount(ctx) {
   }
 
   function notifyUnavailableTarget(targetModule, doc = null) {
+    console.warn('[desktop] app unavailable:', targetModule, doc?.id || '');
     notify({
       type: 'warning',
-      title: t('openUnavailable', 'Diese App ist auf dieser Instanz nicht verfügbar.'),
-      message: formatMessage(
-        t('openUnavailableDetail', '„{label}" verweist auf {target} — dieses Modul steht im Katalog dieser Instanz nicht (mehr) zur Verfügung.'),
-        { label: desktopIconLabel(doc || { target_module: targetModule }), target: targetModule || '—' },
-      ),
+      title: t('openUnavailable', 'App nicht verfügbar.'),
     });
   }
 
@@ -726,8 +526,8 @@ export async function mount(ctx) {
     return () => {
       runDesktopActionOnce(pendingActions, key || Symbol('desktop-action'), () => Promise.resolve().then(action))
         .catch((error) => {
-          console.error('[desktop] context menu action failed:', error);
-          notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+          console.warn('[desktop] context menu action failed:', error);
+          notify({ type: 'error', title: t('menuActionFailed', 'Das hat nicht geklappt.') });
         });
     };
   }
@@ -818,10 +618,6 @@ export async function mount(ctx) {
 
   function notify(notification) {
     ctx.notifications?.show?.(notification);
-  }
-
-  function formatMessage(template, values) {
-    return String(template || '').replace(/\{(\w+)\}/g, (_, key) => String(values?.[key] ?? ''));
   }
 
   async function renameIcon(doc) {
@@ -984,11 +780,13 @@ export async function mount(ctx) {
       detail,
       openBusinessChat: ctx.openBusinessChat,
       dispatchEvent: (chatDetail) => window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: chatDetail })),
-      onPersistError: (error) => notify({
-        type: 'error',
-        title: t('chatNotSaved'),
-        message: String(error?.message || error),
-      }),
+      onPersistError: (error) => {
+        console.warn('[desktop] chat persist failed:', error);
+        notify({
+          type: 'error',
+          title: t('chatNotSaved', 'Das hat nicht geklappt.'),
+        });
+      },
     });
   }
 
