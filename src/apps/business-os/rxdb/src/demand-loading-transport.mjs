@@ -47,6 +47,12 @@ const QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
 const QUERY_STREAM_LIMIT_RETRIES = 20;
 const QUERY_RATE_LIMIT_RETRY_MS = 100;
 const QUERY_RATE_LIMIT_RETRIES = 16;
+// The native peer permits 16 query fetches/s with a burst of at least 32.
+// A fast sequence of short demand windows can spend that burst before a user
+// opens a lead or saves an edit. Pace all sends in this browser realm below
+// the native rate, including retries, and leave capacity for other clients.
+const CLIENT_QUERY_RATE_PER_SECOND = 12;
+const CLIENT_QUERY_RATE_BURST = 24;
 const QUERY_PEER_RETRY_MS = 250;
 const QUERY_PEER_RETRIES = 24;
 // A missing ACK already consumed the full request deadline. Preserve one
@@ -507,6 +513,10 @@ export function createDemandLoadingTransport({
     // awaiting the original promise below still propagates the stream failure.
     promise.catch(() => {});
     try {
+      await waitForQueryRatePermit(queryStreamState, cancellationReason);
+      if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      const deferredCancelReason = consumeQueryCancelReason(requestId);
+      if (deferredCancelReason) throw createQueryCancelError(deferredCancelReason);
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
       clearCollectorTimer(queryCollectors.get(requestId));
@@ -1177,4 +1187,24 @@ function getGlobalQueryStreamState() {
     globalThis[GLOBAL_QUERY_STREAM_STATE_KEY] = { active: 0, queue: [] };
   }
   return globalThis[GLOBAL_QUERY_STREAM_STATE_KEY];
+}
+
+async function waitForQueryRatePermit(state, cancellationReason) {
+  for (;;) {
+    if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+    const now = Date.now();
+    const bucket = state.rateBucket || (state.rateBucket = {
+      tokens: CLIENT_QUERY_RATE_BURST, lastRefillAt: now,
+    });
+    const elapsed = Math.max(0, now - bucket.lastRefillAt);
+    bucket.tokens = Math.min(CLIENT_QUERY_RATE_BURST,
+      bucket.tokens + elapsed * CLIENT_QUERY_RATE_PER_SECOND / 1000);
+    bucket.lastRefillAt = now;
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve,
+      Math.max(1, Math.ceil((1 - bucket.tokens) * 1000 / CLIENT_QUERY_RATE_PER_SECOND))));
+  }
 }

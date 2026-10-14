@@ -7350,6 +7350,8 @@ var QUERY_STREAM_LIMIT_RETRY_MAX_MS = 800;
 var QUERY_STREAM_LIMIT_RETRIES = 20;
 var QUERY_RATE_LIMIT_RETRY_MS = 100;
 var QUERY_RATE_LIMIT_RETRIES = 16;
+var CLIENT_QUERY_RATE_PER_SECOND = 12;
+var CLIENT_QUERY_RATE_BURST = 24;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
 var QUERY_ACK_TIMEOUT_RETRIES = 1;
@@ -7758,7 +7760,7 @@ function createDemandLoadingTransport({
     const baseRequestId = envelope?.requestId;
     let attempt = 0;
     for (; ; ) {
-      if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+      if (cancellationReason()) throw createQueryCancelError2(cancellationReason());
       const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId }, cancellationReason);
@@ -7779,10 +7781,10 @@ function createDemandLoadingTransport({
   async function requestQueryFetchOnce(envelope, cancellationReason = () => null) {
     const requestId = envelope?.requestId;
     const cancelReason = consumeQueryCancelReason(requestId);
-    if (cancelReason) throw createQueryCancelError(cancelReason);
+    if (cancelReason) throw createQueryCancelError2(cancelReason);
     if (!peer) throw new Error("demand transport has no peer attached");
     const peerId = await waitForPeerId(AUTHORIZED_PEER_WAIT_TIMEOUT_MS, () => Boolean(cancellationReason()));
-    if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+    if (cancellationReason()) throw createQueryCancelError2(cancellationReason());
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject, peerId, bufferedBytes: 0 });
@@ -7792,6 +7794,10 @@ function createDemandLoadingTransport({
     promise.catch(() => {
     });
     try {
+      await waitForQueryRatePermit(queryStreamState, cancellationReason);
+      if (cancellationReason()) throw createQueryCancelError2(cancellationReason());
+      const deferredCancelReason = consumeQueryCancelReason(requestId);
+      if (deferredCancelReason) throw createQueryCancelError2(deferredCancelReason);
       await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope], QUERY_FETCH_REQUEST_TIMEOUT_MS);
     } catch (err) {
       clearCollectorTimer(queryCollectors.get(requestId));
@@ -7849,7 +7855,7 @@ function createDemandLoadingTransport({
       const consumer = shared.consumers.get(requestId);
       if (!consumer) return;
       shared.consumers.delete(requestId);
-      consumer?.reject(createQueryCancelError(reason));
+      consumer?.reject(createQueryCancelError2(reason));
       if (shared.consumers.size) return;
       if (coalescedQueryWindows.get(shared.key) === shared) coalescedQueryWindows.delete(shared.key);
       shared.cancelledReason = reason;
@@ -7861,7 +7867,7 @@ function createDemandLoadingTransport({
     if (!matchingRequestIds.length && !queuedRequestIds.length) {
       markQueryCancelled(requestId, reason);
     }
-    const error = createQueryCancelError(reason);
+    const error = createQueryCancelError2(reason);
     for (const activeRequestId of matchingRequestIds) {
       rejectQueryCollector(activeRequestId, error);
     }
@@ -8040,7 +8046,7 @@ function createDemandLoadingTransport({
     return cancelled;
   }
   function abortPeerRequests(peerId, reason = "peer-close") {
-    const queryError = createQueryCancelError(reason);
+    const queryError = createQueryCancelError2(reason);
     const fileError = createFileCancelError(reason);
     const rowsError = createRowsCancelError(reason);
     let rejected = 0;
@@ -8132,7 +8138,7 @@ function createDemandLoadingTransport({
     const prefix = `${raw}|`;
     const remaining = [];
     const rejectedIds = [];
-    const error = createQueryCancelError(reason);
+    const error = createQueryCancelError2(reason);
     for (const entry of queryStreamState.queue) {
       const queuedRequestId = queuedQueryRequestId(entry);
       if (entry.owner === transportOwner && queuedRequestId && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
@@ -8151,7 +8157,7 @@ function createDemandLoadingTransport({
   function rejectQueuedQueryRequestsForOwner(reason) {
     const remaining = [];
     let rejected = 0;
-    const error = createQueryCancelError(reason);
+    const error = createQueryCancelError2(reason);
     for (const entry of queryStreamState.queue) {
       if (entry?.owner === transportOwner) {
         rejected += 1;
@@ -8201,7 +8207,7 @@ function createDemandLoadingTransport({
     }
     return "";
   }
-  function createQueryCancelError(reason) {
+  function createQueryCancelError2(reason) {
     const error = new Error(`QUERY_CANCELLED: ${reason || "client-abort"}`);
     error.code = "QUERY_CANCELLED";
     error.retryable = false;
@@ -8416,6 +8422,30 @@ function getGlobalQueryStreamState() {
     globalThis[GLOBAL_QUERY_STREAM_STATE_KEY] = { active: 0, queue: [] };
   }
   return globalThis[GLOBAL_QUERY_STREAM_STATE_KEY];
+}
+async function waitForQueryRatePermit(state, cancellationReason) {
+  for (; ; ) {
+    if (cancellationReason()) throw createQueryCancelError(cancellationReason());
+    const now = Date.now();
+    const bucket = state.rateBucket || (state.rateBucket = {
+      tokens: CLIENT_QUERY_RATE_BURST,
+      lastRefillAt: now
+    });
+    const elapsed = Math.max(0, now - bucket.lastRefillAt);
+    bucket.tokens = Math.min(
+      CLIENT_QUERY_RATE_BURST,
+      bucket.tokens + elapsed * CLIENT_QUERY_RATE_PER_SECOND / 1e3
+    );
+    bucket.lastRefillAt = now;
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return;
+    }
+    await new Promise((resolve) => setTimeout(
+      resolve,
+      Math.max(1, Math.ceil((1 - bucket.tokens) * 1e3 / CLIENT_QUERY_RATE_PER_SECOND))
+    ));
+  }
 }
 
 // src/apps/business-os/rxdb/src/query-fingerprint.mjs
