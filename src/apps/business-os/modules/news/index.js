@@ -642,12 +642,10 @@ function postSources(post) {
 }
 
 function renderActions(post) {
-  const sources = postSources(post);
   const saved = post.bookmarked === true;
   return `
     <div class="news-actions">
       <span title="${esc(t('discussions'))}">${ICONS.reply}${post.discussion_count ? esc(compactCount(post.discussion_count, state.lang)) : ''}</span>
-      <span title="${esc(t('sources'))}">${ICONS.link}${sources.length}</span>
       <span class="news-hype" title="${esc(t('hype'))}">${ICONS.flame}${Math.round(Number(post.hype_score) || 0)}</span>
       <button type="button" class="news-action${saved ? ' is-on' : ''}" data-action="bookmark-post" data-post-id="${esc(post.id)}" aria-pressed="${saved}" aria-label="${esc(saved ? t('saved') : t('save'))}" title="${esc(saved ? t('saved') : t('save'))}">${ICONS.bookmark}</button>
       <button type="button" class="news-action" data-action="copy-post-link" data-post-id="${esc(post.id)}" aria-label="${esc(t('copyLink'))}" title="${esc(t('copyLink'))}">${ICONS.share}</button>
@@ -663,52 +661,50 @@ function paragraphs(text) {
     .join('');
 }
 
-// One news item renders as an X thread: the source post (intro, link card,
-// quoted discussion, action bar), the editorial long form, and the sources.
+// One news item is one post: intro, optional long form expanded in place,
+// the primary source as link card, one quoted discussion voice, and the
+// remaining sources as plain domain links (deduplicated, no repeated titles).
+function extraSourceDomains(post) {
+  const primary = domainOf(safeHref(post.link_card?.url));
+  const seen = new Set(primary ? [primary] : []);
+  const links = [];
+  for (const source of postSources(post)) {
+    const domain = domainOf(source.url);
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+    links.push({ domain, url: safeHref(source.url) });
+  }
+  return links;
+}
+
 function renderPostThread(post) {
-  const sources = postSources(post);
   const expanded = state.expandedPosts.has(post.id);
   const hasBody = Boolean(String(post.body || '').trim());
-  const replies = [];
-  if (hasBody) {
-    replies.push(`
-      <div class="news-post is-reply">
-        <div class="news-rail">${avatar('CTOX', 'ctox')}${sources.length ? '<span class="news-thread-line"></span>' : ''}</div>
-        <div class="news-post-main">
-          ${authorHead(post, { editorial: true })}
-          <div class="news-body${expanded ? ' is-expanded' : ''}">${paragraphs(post.body)}</div>
-          <button type="button" class="news-more" data-action="expand-post" data-post-id="${esc(post.id)}">${esc(expanded ? t('showLess') : t('showMore'))}</button>
-        </div>
-      </div>`);
-  }
-  if (sources.length) {
-    replies.push(`
-      <div class="news-post is-reply">
-        <div class="news-rail">${avatar('CTOX', 'ctox')}</div>
-        <div class="news-post-main">
-          ${authorHead(post, { editorial: true })}
-          <div class="news-sources">${sources.map((source) => `
-            <a class="news-source-chip" href="${esc(safeHref(source.url))}" target="_blank" rel="noopener noreferrer">
-              <span class="news-source-mark" data-tone="${toneBucket(domainOf(source.url))}"></span>${esc(source.label || domainOf(source.url))}
-            </a>`).join('')}
-          </div>
-        </div>
-      </div>`);
-  }
+  const domains = extraSourceDomains(post);
+  const body = hasBody && expanded
+    ? `<div class="news-body">${paragraphs(post.body)}</div>`
+    : '';
+  const more = hasBody
+    ? `<button type="button" class="news-more" data-action="expand-post" data-post-id="${esc(post.id)}">${esc(expanded ? t('showLess') : t('showMore'))}</button>`
+    : '';
+  const sources = domains.length
+    ? `<div class="news-sources">${domains.map((link) => `<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">${esc(link.domain)}</a>`).join('<span aria-hidden="true">·</span>')}</div>`
+    : '';
   return `
     <article class="news-thread" data-post-id="${esc(post.id)}"
       data-context-record-id="${esc(post.id)}" data-context-record-type="news_post" data-context-label="${esc(post.intro)}">
       <div class="news-post">
-        <div class="news-rail">${avatar(post.author_name || 'CTOX', post.author_handle || post.author_name)}${replies.length ? '<span class="news-thread-line"></span>' : ''}</div>
+        <div class="news-rail">${avatar(post.author_name || 'CTOX', post.author_handle || post.author_name)}</div>
         <div class="news-post-main">
           ${authorHead(post)}
-          <p class="news-text">${esc(post.intro)}</p>
+          <p class="news-text">${esc(post.intro)} ${more}</p>
+          ${body}
           ${renderLinkCard(post.link_card)}
           ${renderQuote(post.quote)}
+          ${sources}
           ${renderActions(post)}
         </div>
       </div>
-      ${replies.join('')}
     </article>`;
 }
 
