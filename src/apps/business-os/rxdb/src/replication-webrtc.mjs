@@ -3156,10 +3156,18 @@ function terminalPushRejection(result) {
     || String(result.message || '');
   const code = String(result.code || '');
   const status = String(result.status ?? '');
+  // Native bulk_write wraps validation failures as RC_PUSH -> SNH ->
+  // parameters.error. The outer result has no status or useful message.
+  // Inspect only the typed write-error envelope, never pushRows/documents:
+  // a document may itself contain a field named status with value 422.
+  const nestedSchemaStatus = Array.isArray(result.errors) && result.errors.some((entry) => (
+    String(entry?.parameters?.error?.status ?? '') === '422'
+    || String(entry?.parameters?.writeError?.status ?? '') === '422'
+  ));
   const isAuthz = /not authorized/i.test(message) || /authz/i.test(code)
     || /cannot change native-owned/i.test(message);
   const isSchema = /schema/i.test(message) || /schema/i.test(code)
-    || status === '422' || /\b422\b/.test(message) || /422/.test(code);
+    || status === '422' || nestedSchemaStatus || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
   return {
     kind: isAuthz ? 'authz' : 'schema',

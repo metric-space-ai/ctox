@@ -13271,8 +13271,9 @@ function terminalPushRejection(result) {
   const message = [result.message, ...nested].map((value) => String(value || "").trim()).filter(Boolean).find((value) => !/^\s*RxDB Error-Code:/.test(value) && !/^\n/.test(value)) || String(result.message || "");
   const code = String(result.code || "");
   const status = String(result.status ?? "");
+  const nestedSchemaStatus = Array.isArray(result.errors) && result.errors.some((entry) => String(entry?.parameters?.error?.status ?? "") === "422" || String(entry?.parameters?.writeError?.status ?? "") === "422");
   const isAuthz = /not authorized/i.test(message) || /authz/i.test(code) || /cannot change native-owned/i.test(message);
-  const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || /\b422\b/.test(message) || /422/.test(code);
+  const isSchema = /schema/i.test(message) || /schema/i.test(code) || status === "422" || nestedSchemaStatus || /\b422\b/.test(message) || /422/.test(code);
   if (!isAuthz && !isSchema) return null;
   return {
     kind: isAuthz ? "authz" : "schema",

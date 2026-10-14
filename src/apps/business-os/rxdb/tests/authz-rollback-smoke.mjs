@@ -46,6 +46,16 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     code: 'RC_WEBRTC_SCHEMA', phase: 'replication-io', direction: 'push',
     collection: 'business_records', status: '422', message: 'document failed schema validation',
   };
+  // The native masterWrite path wraps a 422 bulk-write validation error in
+  // SNH, then returns that RxError inside a replication-scope RC_PUSH value.
+  const nestedSchema = {
+    type: 'ctoxError', scope: 'replication', rxdb: true,
+    code: 'RC_PUSH', phase: 'replication-push', direction: 'push',
+    collection: 'outbound_lead_generation_leads',
+    errors: [{ code: 'SNH', parameters: {
+      error: { status: 422, message: "required field 'evidence' is missing" },
+    } }],
+  };
   const noMaster = {
     type: 'ctoxError', scope: 'replication', rxdb: true,
     code: 'RC_WEBRTC_PEER', phase: 'replication-io', direction: 'unknown',
@@ -55,11 +65,60 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert(terminalPushRejection(authzCollection)?.kind === 'authz', 'collection-level authz denial is terminal (authz)');
   assert(terminalPushRejection(authzPerDoc)?.kind === 'authz', 'per-document authz denial is terminal (authz)');
   assert(terminalPushRejection(schema)?.kind === 'schema', 'schema/422 rejection is terminal (schema)');
+  assert(terminalPushRejection(nestedSchema)?.kind === 'schema', 'nested native bulk-write 422 is terminal (schema)');
+  assert(terminalPushRejection({
+    ...nestedSchema,
+    errors: [{ code: 'SNH', parameters: { error: { status: 500 } } }],
+  }) === null, 'nested native 500 stays retryable');
+  assert(terminalPushRejection({
+    ...nestedSchema,
+    errors: [{ code: 'SNH', parameters: { pushRows: [{ status: 422 }] } }],
+  }) === null, 'document fields cannot classify a transport error as terminal');
   assert(terminalPushRejection(noMaster) === null, 'transient "no master handler" is NOT terminal (keeps retrying)');
   assert(terminalPushRejection([]) === null, 'a normal conflict ARRAY is not a rejection');
   assert(terminalPushRejection([{ id: 'x' }]) === null, 'a conflict doc array is not a rejection');
   assert(terminalPushRejection(null) === null, 'null result is not a rejection');
   assert(terminalPushRejection({ type: 'ctoxError', scope: 'control-plane' }) === null, 'control-plane errors are not push rejections');
+}
+
+// A native-shaped nested 422 must reach the existing quarantine/checkpoint
+// path, not retry the same bad lead ahead of every later document.
+{
+  const state = await makeState('outbound_lead_generation_leads');
+  let reads = 0;
+  let writes = 0;
+  let reconciled = 0;
+  let pulls = 0;
+  const rejected = { id: 'invalid-lead', updated_at_ms: 100 };
+  state.collection.storageCollection.getChangedDocumentsSince = async () => {
+    reads += 1;
+    return reads === 1
+      ? { documents: [rejected], checkpoint: { lwt: 100, id: rejected.id } }
+      : { documents: [], checkpoint: { lwt: 100, id: rejected.id } };
+  };
+  state.collection.storageCollection.reconcileRejectedLocalWrites = async (documents) => {
+    reconciled += 1;
+    assert(documents[0]?.id === rejected.id, 'the rejected lead is quarantined');
+    return [rejected.id];
+  };
+  state.remoteProtocolForPeer = () => ({ peerSession: { sessionId: 'native-1', role: 'ctox_instance' } });
+  state.pullFromRemotePeers = async () => { pulls += 1; };
+  state.shared.peer = { request: async () => {
+    writes += 1;
+    return {
+      type: 'ctoxError', scope: 'replication', rxdb: true,
+      code: 'RC_PUSH', phase: 'replication-push', direction: 'push',
+      collection: 'outbound_lead_generation_leads',
+      errors: [{ code: 'SNH', parameters: {
+        error: { status: 422, message: "required field 'evidence' is missing" },
+      } }],
+    };
+  } };
+  await state.pushToPeer('p1');
+  assert(writes === 1 && reconciled === 1 && pulls === 1,
+    'nested 422 is reconciled once and a clean pull follows');
+  assert(state.pushCheckpointsByPeer.get('p1'), 'the push checkpoint advances past the rejected lead');
+  await state.cancel();
 }
 
 // --- 2. pushToPeer wiring: terminal rejection reconciles, does not re-push ----
