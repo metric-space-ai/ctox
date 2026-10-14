@@ -100,8 +100,13 @@ pub fn hub(root: &Path) -> Result<ToolHub<CtoxSecretBackend>> {
     Ok(ToolHub::new(
         CtoxSecretBackend::new(root),
         Arc::new(UreqTransport::default()),
-        RedirectTarget::Loopback {
-            port: loopback_port()?,
+        match public_origin(root) {
+            Some(origin) => RedirectTarget::Public {
+                uri: format!("{origin}{MCP_CALLBACK_PATH}"),
+            },
+            None => RedirectTarget::Loopback {
+                port: loopback_port()?,
+            },
         },
     ))
 }
@@ -484,24 +489,111 @@ impl McpRef {
     }
 }
 
-/// Public HTTPS base URL of this instance (e.g. `https://welsch.ctox.dev`).
-/// Configured, never derived from request headers (Host is caller-controlled).
+/// Optional explicit override of the public HTTPS origin of this instance.
+/// Normally not needed: the origin is derived per instance (see [`public_origin`]).
 pub const PUBLIC_BASE_URL_ENV: &str = "CTOX_PUBLIC_BASE_URL";
-/// Instance-hosted OAuth callback route for remote MCP connectors.
+/// Instance-hosted OAuth callback route (MCP connectors and toolkit OAuth).
 pub const MCP_CALLBACK_PATH: &str = "/toolhub/oauth/callback";
+/// Per-instance record of the managed hostname, written by the managed MCP
+/// connector of THIS instance (`ctox business-os mcp connect`) on every start.
+pub const PUBLIC_ORIGIN_FILE: &str = "runtime/toolhub-public-origin";
+
+/// `https://<host>` for a managed instance alias as used by the ctox.dev
+/// control plane (`welsch.ctox.dev`, or a bare slug `welsch`).
+pub fn origin_from_instance_alias(alias: &str) -> Option<String> {
+    let host = alias.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host.len() > 253 || host == "localhost" || host.ends_with(".localhost") {
+        return None;
+    }
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        || host.starts_with(['-', '.'])
+        || host.parse::<std::net::IpAddr>().is_ok()
+    {
+        return None;
+    }
+    let host = if host.contains('.') { host } else { format!("{host}.ctox.dev") };
+    Some(format!("https://{host}"))
+}
+
+/// Remember this instance's managed hostname from its managed MCP connect URL
+/// (`wss://mcp.ctox.dev/connect/<alias>`). Provisioned per instance by the
+/// control plane; restarted with every release switch, so an update via
+/// "Core anwenden" refreshes it without manual configuration.
+pub fn record_public_origin_from_connect_url(root: &Path, connect_url: &str) -> Result<Option<String>> {
+    let parsed = url::Url::parse(connect_url).context("invalid managed MCP connect URL")?;
+    let alias = parsed
+        .path_segments()
+        .and_then(|mut s| {
+            let first = s.next()?;
+            (first == "connect").then(|| s.next()).flatten()
+        })
+        .map(|a| percent_decode(a));
+    let Some(origin) = alias.as_deref().and_then(origin_from_instance_alias) else {
+        return Ok(None);
+    };
+    let path = root.join(PUBLIC_ORIGIN_FILE);
+    if std::fs::read_to_string(&path).ok().as_deref().map(str::trim) != Some(origin.as_str()) {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, format!("{origin}\n"))?;
+        std::fs::rename(&tmp, &path)?;
+    }
+    Ok(Some(origin))
+}
+
+fn percent_decode(s: &str) -> String {
+    url::form_urlencoded::parse(format!("x={s}").as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default()
+}
+
+/// Origin from this instance's own managed-connector unit (fallback when the
+/// connector has not started since the update yet).
+fn origin_from_connector_unit() -> Option<String> {
+    let home = std::env::var_os("HOME")?;
+    let unit = std::path::Path::new(&home).join(".config/systemd/user/ctox-business-os-mcp.service");
+    let text = std::fs::read_to_string(unit).ok()?;
+    let start = text.find("/connect/")? + "/connect/".len();
+    let alias: String = text[start..]
+        .chars()
+        .take_while(|c| !matches!(c, '"' | '\'' | ' ' | '\n' | '/' | '?'))
+        .collect();
+    origin_from_instance_alias(&percent_decode(&alias))
+}
+
+/// Public HTTPS origin of THIS instance, never derived from request headers
+/// (Host is caller-controlled). Order: explicit override, the instance's own
+/// recorded managed hostname, its managed-connector unit.
+pub fn public_origin(root: &Path) -> Option<String> {
+    if let Ok(base) = std::env::var(PUBLIC_BASE_URL_ENV) {
+        let base = base.trim().trim_end_matches('/');
+        if let Ok(parsed) = url::Url::parse(base) {
+            if parsed.scheme() == "https" && parsed.host_str().is_some() {
+                return Some(base.to_string());
+            }
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join(PUBLIC_ORIGIN_FILE)) {
+        let v = text.trim();
+        if v.starts_with("https://") && url::Url::parse(v).is_ok() {
+            return Some(v.to_string());
+        }
+    }
+    origin_from_connector_unit()
+}
 
 /// Redirect URI owned by the instance: DCR registration (one per instance and
 /// provider, reused), state, PKCE verifier and tokens all belong to the
 /// instance; any client only opens the authorize URL the instance hands out.
 /// Loopback is a local-dev fallback only (`CTOX_TOOLHUB_DEV_LOOPBACK=1`).
-pub fn mcp_redirect_uri() -> Result<String> {
-    if let Ok(base) = std::env::var(PUBLIC_BASE_URL_ENV) {
-        let base = base.trim().trim_end_matches('/');
-        let parsed = url::Url::parse(base).context("invalid CTOX_PUBLIC_BASE_URL")?;
-        if parsed.scheme() != "https" || parsed.host_str().is_none() {
-            bail!("CTOX_PUBLIC_BASE_URL must be an https origin");
-        }
-        return Ok(format!("{base}{MCP_CALLBACK_PATH}"));
+pub fn mcp_redirect_uri(root: &Path) -> Result<String> {
+    if let Some(origin) = public_origin(root) {
+        return Ok(format!("{origin}{MCP_CALLBACK_PATH}"));
     }
     if std::env::var("CTOX_TOOLHUB_DEV_LOOPBACK").is_ok_and(|v| v == "1") {
         return Ok(RedirectTarget::Loopback {
@@ -509,14 +601,14 @@ pub fn mcp_redirect_uri() -> Result<String> {
         }
         .redirect_uri());
     }
-    bail!("Öffentliche Instanz-URL fehlt (CTOX_PUBLIC_BASE_URL) / instance public base URL not configured")
+    bail!("Öffentliche Instanz-URL unbekannt: der verwaltete MCP-Connector dieser Instanz ist nicht eingerichtet / instance public origin unknown: managed MCP connector not provisioned")
 }
 
 fn mcp(root: &Path) -> Result<McpRef> {
     Ok(McpRef(McpHost {
         backend: CtoxSecretBackend::new(root),
         transport: UreqTransport::default(),
-        redirect: mcp_redirect_uri().unwrap_or_default(),
+        redirect: mcp_redirect_uri(root).unwrap_or_default(),
     }))
 }
 
@@ -525,18 +617,18 @@ fn mcp(root: &Path) -> Result<McpRef> {
 pub fn handle_mcp_oauth_callback(root: &Path, url: &str) -> (u16, String) {
     let page = |ok: bool, de: &str, en: &str| {
         format!(
-            "<!doctype html><meta charset=utf-8><title>{}</title><body data-toolhub-result=\"{}\" style=\"font:15px system-ui;padding:2em\"><h1>{de}</h1><p>{en}</p></body>",
+            "<!doctype html><meta charset=utf-8><title>{}</title><body data-toolhub-result=\"{}\" style=\"font:15px system-ui;padding:2em\"><h1>{de}</h1><p>{en}</p><p><a href=\"/\">Zurück zu Business OS / Back to Business OS</a></p></body>",
             if ok { "CTOX Toolhub: verbunden" } else { "CTOX Toolhub: Fehler" },
             if ok { "connected" } else { "failed" }
         )
     };
-    match mcp(root).and_then(|h| h.complete(url, INSTANCE_SCOPE)) {
+    match complete_oauth_callback(root, url) {
         Ok(_) => (
             200,
             page(
                 true,
-                "Verbunden. Dieses Fenster schließt sich.",
-                "Connected. This window will close.",
+                "Verbunden. Du kannst dieses Fenster schließen.",
+                "Connected. You can close this window.",
             ),
         ),
         Err(e) => {
@@ -547,6 +639,26 @@ pub fn handle_mcp_oauth_callback(root: &Path, url: &str) -> (u16, String) {
             )
         }
     }
+}
+
+/// Finish an OAuth flow of THIS instance from the provider's callback URL:
+/// remote MCP connector first, then toolkit OAuth. Unknown state = error,
+/// nothing is consumed.
+pub fn complete_oauth_callback(root: &Path, url: &str) -> Result<Value> {
+    match mcp(root).and_then(|h| h.complete(url, INSTANCE_SCOPE)) {
+        Ok(info) => Ok(json!({"kind": "mcp", "connection": info})),
+        Err(mcp_err) => match hub(root).and_then(|h| h.complete_oauth(url)) {
+            Ok(account) => Ok(json!({"kind": "toolkit", "toolkit": account.toolkit, "account_id": account.id})),
+            Err(e) => Err(anyhow::anyhow!("{mcp_err:#}; {e:#}")),
+        },
+    }
+}
+
+/// True if the query of `url` looks like a provider callback (state + code/error).
+pub fn looks_like_oauth_callback(url: &str) -> bool {
+    let q = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let keys: Vec<String> = url::form_urlencoded::parse(q.as_bytes()).map(|(k, _)| k.into_owned()).collect();
+    keys.iter().any(|k| k == "state") && keys.iter().any(|k| k == "code" || k == "error")
 }
 
 fn exec_via_proxy(
@@ -643,7 +755,7 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
             if hub.0.redirect.is_empty() {
                 return err(
                     409,
-                    mcp_redirect_uri()
+                    mcp_redirect_uri(root)
                         .err()
                         .map(|e| e.to_string())
                         .unwrap_or_default(),
@@ -1130,6 +1242,74 @@ mod tests {
         let _ = std::fs::remove_dir_all(&r);
         std::fs::create_dir_all(&r).unwrap();
         r
+    }
+
+    #[test]
+    fn instance_alias_maps_to_its_own_https_origin() {
+        assert_eq!(origin_from_instance_alias("welsch.ctox.dev").as_deref(), Some("https://welsch.ctox.dev"));
+        assert_eq!(origin_from_instance_alias("Ninja").as_deref(), Some("https://ninja.ctox.dev"));
+        for bad in ["", "localhost", "a.localhost", "127.0.0.1", "evil.com/x", "-x.ctox.dev", "a b"] {
+            assert_eq!(origin_from_instance_alias(bad), None, "{bad}");
+        }
+    }
+
+    /// Two instances on one machine: public origin, callback URI, credentials
+    /// and OAuth states are per instance; nothing leaks across.
+    #[test]
+    fn two_instances_share_no_toolhub_state() {
+        assert!(std::env::var(PUBLIC_BASE_URL_ENV).is_err(), "test needs no global override");
+        let a = temp_root("iso-a");
+        let b = temp_root("iso-b");
+        // Origin comes from each instance's own managed connect URL.
+        assert_eq!(
+            record_public_origin_from_connect_url(&a, "wss://mcp.ctox.dev/connect/welsch.ctox.dev").unwrap().as_deref(),
+            Some("https://welsch.ctox.dev")
+        );
+        record_public_origin_from_connect_url(&b, "wss://mcp.ctox.dev/connect/ninja.ctox.dev").unwrap();
+        assert_eq!(mcp_redirect_uri(&a).unwrap(), "https://welsch.ctox.dev/toolhub/oauth/callback");
+        assert_eq!(mcp_redirect_uri(&b).unwrap(), "https://ninja.ctox.dev/toolhub/oauth/callback");
+
+        // Credentials: stored in A only.
+        store_token(&a, "linear", "lin_api_isolation_test", &Default::default()).unwrap();
+        assert_eq!(hub(&a).unwrap().store().list().unwrap().len(), 1);
+        assert!(hub(&b).unwrap().store().list().unwrap().is_empty(), "B must not see A's connection");
+
+        // OAuth: A's state, verifier and redirect URI live in A only.
+        let ha = hub(&a).unwrap();
+        ha.upsert_auth_config(
+            &AuthConfig {
+                id: "gh".into(),
+                toolkit: "github".into(),
+                scheme: AuthSchemeKind::OAuth2,
+                source: ClientCredentialSource::None,
+                client_id: Some("client-a".into()),
+                scopes: vec![],
+                enabled: true,
+            },
+            None,
+        )
+        .unwrap();
+        let req = ha.connect_oauth("gh", INSTANCE_SCOPE, "test").unwrap();
+        assert!(req.redirect_url.contains("redirect_uri=https%3A%2F%2Fwelsch.ctox.dev%2Ftoolhub%2Foauth%2Fcallback"), "{}", req.redirect_url);
+        let callback = format!("https://welsch.ctox.dev/toolhub/oauth/callback?code=c&state={}", req.state);
+        let err = complete_oauth_callback(&b, &callback).unwrap_err().to_string();
+        assert!(err.contains("unknown or already used OAuth state"), "{err}");
+        // B's attempt consumed nothing in A: A still holds its pending state.
+        let still = hub(&a).unwrap();
+        let acct = still.store().list().unwrap().into_iter().find(|x| x.id == req.account_id).unwrap();
+        let pending = still.store().take_pending(&acct).unwrap().expect("A's pending state intact");
+        assert_eq!(pending.state, req.state);
+        assert_eq!(pending.redirect_uri, "https://welsch.ctox.dev/toolhub/oauth/callback");
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn callback_detection_needs_state_and_code_or_error() {
+        assert!(looks_like_oauth_callback("/index.html?code=x&state=y"));
+        assert!(looks_like_oauth_callback("/?state=y&error=access_denied"));
+        assert!(!looks_like_oauth_callback("/index.html?code=x"));
+        assert!(!looks_like_oauth_callback("/index.html"));
     }
 
     #[test]

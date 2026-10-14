@@ -22,12 +22,16 @@ pub const CALLBACK_PATH: &str = "/toolhub/oauth/callback";
 pub enum RedirectTarget {
     /// Local loopback (RFC 8252 section 7.3).
     Loopback { port: u16 },
+    /// The instance's own public callback (`https://<instance>/toolhub/oauth/callback`).
+    /// Each instance owns its URI, states and verifiers; nothing is shared.
+    Public { uri: String },
 }
 
 impl RedirectTarget {
     pub fn redirect_uri(&self) -> String {
         match self {
             Self::Loopback { port } => format!("http://127.0.0.1:{port}{CALLBACK_PATH}"),
+            Self::Public { uri } => uri.clone(),
         }
     }
 }

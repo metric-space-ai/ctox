@@ -3497,6 +3497,35 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     {
         return respond_status(request, 403, "forbidden");
     }
+    if rel == "index.html"
+        && crate::execution::toolhub_host::looks_like_oauth_callback(request.url())
+    {
+        // Toolhub OAuth landing behind a managed gateway: the provider sends
+        // the browser to https://<instance>/toolhub/oauth/callback; the gateway
+        // answers every logged-in page view with this instance's index.html and
+        // forwards the query (state + code) together with the user's
+        // capability. The instance finishes its OWN flow here (state + PKCE
+        // live only on this instance). Anonymous views get the normal shell
+        // and consume nothing.
+        let session = request_session(root, &request);
+        if session.authenticated && store::session_can_manage_all(&session) {
+            let url_raw = request.url().to_owned();
+            let (_, html) =
+                crate::execution::toolhub_host::handle_mcp_oauth_callback(root, &url_raw);
+            let response = tiny_http::Response::from_string(html)
+                .with_status_code(200)
+                .with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
+                        .expect("static header"),
+                )
+                .with_header(
+                    tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..])
+                        .expect("static header"),
+                );
+            request.respond(response)?;
+            return Ok(());
+        }
+    }
     let release_request = match super::shell_assets::parse_request(rel) {
         Ok(value) => value,
         Err(_) => return respond_status(request, 400, "invalid shell release asset URL"),

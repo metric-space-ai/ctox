@@ -1,107 +1,69 @@
-# Toolhub-Deploy auf welsch.ctox.dev (nur welsch)
+# Toolhub: Rollout und Betrieb pro Instanz (ohne SSH, ohne Gateway-Änderung)
 
-Branch `feat/toolhub-activepieces-port` (PR #708). Nur auf welsch.ctox.dev, nie auf
-SKF, Thesen oder MiltonTicket, kein Merge nach main. Zwei Teile: (1) die Instanz
-bekommt den neuen Core, (2) das ctox.dev-Gateway lässt die OAuth-Rückleitung ohne
-Login durch. Ohne Teil 2 liefert `GET /toolhub/oauth/callback` die Login-Seite
-(HTTP 200, Header `x-business-os-login-required: true`). Das ist der heutige Stand.
+Die Toolhub steckt im normalen CTOX-Release: Sie ist ins `ctox`-Binary
+einkompiliert (Crate `ctox-toolhub`), die Skills sind eingebettet, und das
+Pi-Sidecar-Bundle baut der Release-Workflow (`.github/actions/build-pi-sidecar`).
+Ausgerollt wird nur über „Core anwenden“ bzw. `ctox update apply --latest`/`--version <tag>`.
+Kein SSH, keine Env-Datei, keine Änderung am ctox.dev-Gateway.
 
-## 1. Core auf der Instanz
+## Was pro Instanz gilt
 
-„Core anwenden“ in der Oberfläche spielt nur Release-Tags ein (`--latest` / `--version`),
-keinen Branch. Für #708 deshalb über die CLI auf dem welsch-Host (als CTOX-Benutzer, per SSH):
+Jede Instanz hat eigene Zugangsdaten, OAuth-States, PKCE-Verifier,
+DCR-Registrierungen und einen eigenen Callback. Alles liegt in ihrer eigenen
+Secret-Datenbank unter ihrem eigenen Root.
 
-```bash
-ctox update status | tee ~/toolhub-before.json        # current_release / previous_release für den Rollback
+- **Öffentliche URL:** wird automatisch abgeleitet. Der verwaltete MCP-Connector
+  der Instanz (`ctox-business-os-mcp.service`, vom ctox.dev-Control-Plane pro
+  Instanz eingerichtet) startet mit `wss://mcp.ctox.dev/connect/<host>`. Beim Start
+  schreibt er `https://<host>` nach `runtime/toolhub-public-origin`, nach jedem
+  Release-Wechsel also neu. Gibt es die Datei noch nicht, liest CTOX die eigene
+  Unit-Datei. Request-Header werden nie ausgewertet. `CTOX_PUBLIC_BASE_URL` bleibt
+  als Override für selbst gehostete Instanzen, ist aber nicht nötig.
+- **OAuth-Callback:** `https://<host>/toolhub/oauth/callback`. Das Gateway
+  beantwortet heute schon jeden Seitenaufruf eines angemeldeten Nutzers mit dem
+  `index.html` **dieser** Instanz. Dabei reicht es Query (`state`, `code`) und die
+  Capability des Nutzers durch. Die Instanz erkennt den Callback an `state` und
+  `code`, schließt den eigenen Flow ab (Admin/Chef nötig) und zeigt die Ergebnisseite.
+  Anonyme Aufrufe bekommen die normale Shell und verbrauchen nichts. Bei direkt
+  erreichbaren, selbst gehosteten Instanzen bedient die Instanz denselben Pfad selbst.
+- **Grenze:** Wer im Browser nicht bei der Instanz angemeldet ist, landet nach dem
+  Anbieter auf der Login-Seite. Nach dem Login geht es auf `/`, der Code ist verloren.
+  Dann einmal anmelden und „Verbinden“ erneut klicken (neuer State).
 
-git clone --branch feat/toolhub-activepieces-port --depth 1 \
-  https://github.com/metric-space-ai/ctox.git ~/src/ctox-708
-# vorhandener Klon: git -C ~/src/ctox-708 fetch origin feat/toolhub-activepieces-port && git -C ~/src/ctox-708 checkout -B feat/toolhub-activepieces-port FETCH_HEAD
+Geprüft am Gateway-Code (`ctox-dev`, `app/instance/[tenant]/[[...path]]/route.ts`,
+Stand 916c317): Pfade ohne Dateiendung außerhalb von `api/`, `login/` und den
+Asset-Präfixen gehen bei gültiger Sitzung an `nativeBusinessOsShellResponse`, das
+`index.html` mit `request.nextUrl.search` und `Authorization: Bearer <capability>`
+bei der Instanz abruft. / Verified against the gateway code: the instance receives
+`GET /index.html?state=…&code=…` with the user's capability; no gateway change needed.
 
-# Öffentliche Basis-URL für die OAuth-Rückleitung (systemd lädt die Datei)
-mkdir -p ~/.config/ctox
-grep -q '^CTOX_PUBLIC_BASE_URL=' ~/.config/ctox/business-os.env 2>/dev/null \
-  && sed -i 's#^CTOX_PUBLIC_BASE_URL=.*#CTOX_PUBLIC_BASE_URL=https://welsch.ctox.dev#' ~/.config/ctox/business-os.env \
-  || echo 'CTOX_PUBLIC_BASE_URL=https://welsch.ctox.dev' >> ~/.config/ctox/business-os.env
+## Sync-Störung (#743)
 
-# Quell-Release bauen und aktivieren. apply --source ruft install.sh auf; das baut
-# auch das Pi-Sidecar-Bundle (npm ci + npm run build in src/core/coding_agents/pi-sidecar),
-# also braucht der Host Node >= 20 und npm. Danach Symlink-Switch und Neustart der Dienste.
-ctox update apply --source ~/src/ctox-708 --release toolhub-708
+„Core anwenden“ (`POST /api/business-os/ctox/update/apply`) und alle
+Toolhub-Aufrufe (`/api/business-os/toolhub/*`, Callback) laufen über HTTP durch
+das Gateway, nicht über WebRTC/RxDB-Replikation. #743
+(`ctox_signaling_socket_not_open`) blockiert den Rollout per Update daher nicht.
+Ein Rollout über Browser-Sync wäre betroffen; der wird nicht gebraucht. /
+#743 does not block the update-based rollout; it only affects browser sync.
 
-ctox update status                                     # current_release = toolhub-708
-systemctl --user status ctox.service --no-pager | head -5
-```
+## Rollout
 
-Dauer: vor allem der Release-Build (auf einem 8-Kern-Host ~30–40 min, ~16 GB RAM
-inkl. Swap; vorher `free -g` prüfen, andere Builds anhalten).
+1. Release mit diesem Stand bauen: Tag auf main nach dem Merge von #689/#708,
+   dann baut `release.yml` die Binär-Bundles. Das macht der Maintainer (Michael),
+   nicht ein Agent.
+2. Auf der Instanz „Core anwenden“, oder für eine bestimmte Version
+   `ctox update apply --version <tag>` in der Instanz-Konsole.
+3. Prüfen: `./smoke.sh https://<instanz>.ctox.dev` (Teil A).
 
-**Ohne Build auf dem Host** (wenn der Host zu klein ist): ein Release-Tag auf dem
-#708-Stand setzen, dann baut der bestehende `release.yml`-Workflow das Binär-Bundle,
-und „Core anwenden“ bzw. `ctox update apply --version <tag>` spielt es ein. Ein Tag
-veröffentlicht ein Release und braucht deshalb Michaels Freigabe. Ein lokal
-gebautes Binary lässt sich nicht direkt einspielen: `apply --source` baut immer aus
-den Quellen, Binär-Bundles kommen nur aus Releases.
-
-## 2. ctox.dev-Gateway: Rückleitung ohne Login
-
-Repo `mkh-welsch/ctox-dev` (Vercel-Projekt `ctox-dev`, Team `metric-spaces-projects`,
-Produktionszweig `main`). Datei:
-
-`app/instance/[tenant]/[[...path]]/route.ts`, Funktion `handler`, direkt **nach** dem
-Block `if (request.method !== "GET" && request.method !== "HEAD") { … 405 … }` und
-**vor** `if (isBusinessOsStaticAssetPath(relativePath))` einfügen:
-
-```ts
-  // Toolhub-OAuth-Rückleitung: öffentlich, weil der Anbieter den Browser ohne
-  // ctox.dev-Sitzung hierher schickt. Geschützt durch das einmalige state +
-  // PKCE auf der Instanz, nicht durch das Login. Nur GET, nur dieser Pfad.
-  if (request.method === "GET" && relativePath === "toolhub/oauth/callback") {
-    try {
-      const upstream = await requestTenantBusinessOsAsset(row.id, relativePath, {
-        method: "GET",
-        search: request.nextUrl.search,
-        timeoutMs: 30000,
-      });
-      return tenantShellProxyResponse(request, row, upstream);
-    } catch {
-      return new NextResponse("Toolhub-Rückleitung: Instanz nicht erreichbar", {
-        status: 502,
-        headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
-      });
-    }
-  }
-```
-
-Warum das reicht: `requestTenantBusinessOsAsset` (`lib/ssh.ts`) leitet den Pfad samt
-Query über den bestehenden SSH-Tunnel an den nativen Instanzserver weiter.
-`normalizedBusinessOsAssetPath` lässt `toolhub/oauth/callback` durch, sperrt aber
-`api/*` und `login*`. `tenantShellProxyResponse` übernimmt Status (auch 400 bei
-ungültigem state) und die CSP der Instanz. Keine Session, kein Cookie, keine weiteren Pfade.
-Beide Funktionen gibt es in der Datei schon (Import bzw. lokal); es braucht keinen neuen Import.
-
-Danach `main` deployen (Vercel baut automatisch). Prüfen:
+## Smoke-Test (live, keine Mocks)
 
 ```bash
-curl -s -D- -o /dev/null 'https://welsch.ctox.dev/toolhub/oauth/callback?state=x&code=y' | grep -iE '^HTTP|x-business-os'
-# erwartet: HTTP/2 400 (Seite „Verbindung fehlgeschlagen“, unbekannter state), KEIN x-business-os-login-required
-```
-
-## 3. Smoke-Test (live, keine Mocks)
-
-```bash
-./smoke.sh https://welsch.ctox.dev            # Teil A, ohne Login
-SESSION_COOKIE='…' ./smoke.sh https://welsch.ctox.dev   # dazu Teil B mit Admin-Sitzung
-./smoke.sh --host                              # Teil C, auf dem Host selbst
+./smoke.sh https://welsch.ctox.dev                      # Teil A, ohne Login
+SESSION_COOKIE='…' ./smoke.sh https://welsch.ctox.dev   # Teil B, mit Admin-Sitzung: Callback erreicht die Instanz
 ```
 
 ## Rollback
 
-```bash
-ctox update rollback            # zurück auf previous_release aus ~/toolhub-before.json
-sed -i '/^CTOX_PUBLIC_BASE_URL=/d' ~/.config/ctox/business-os.env && systemctl --user restart ctox.service   # optional
-```
-
-Gateway: den `if`-Block entfernen oder in Vercel das vorherige Deployment wieder
-promoten. Gespeicherte Verbindungen bleiben verschlüsselt in der Secret-Datenbank
-der Instanz; `ctox toolhub mcp-disconnect --server <x>` entfernt sie.
+„Core anwenden“ auf das vorige Release (oder `ctox update rollback`). Gespeicherte
+Verbindungen bleiben verschlüsselt in der Secret-Datenbank der Instanz;
+`ctox toolhub mcp-disconnect --server <x>` bzw. „Trennen“ entfernt sie.

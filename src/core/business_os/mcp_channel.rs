@@ -1317,6 +1317,13 @@ pub fn connect_managed_gateway(
     root: &Path,
     options: BusinessOsMcpGatewayConnectOptions,
 ) -> anyhow::Result<()> {
+    // The managed connect URL names THIS instance's hostname; record it so the
+    // Toolhub's OAuth callback is derived per instance without manual config.
+    match crate::execution::toolhub_host::record_public_origin_from_connect_url(root, &options.url) {
+        Ok(Some(origin)) => eprintln!("[business-os-mcp] toolhub public origin: {origin}"),
+        Ok(None) => {}
+        Err(error) => eprintln!("[business-os-mcp] toolhub public origin not recorded: {error:#}"),
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(connect_managed_gateway_async(root, options))
 }
