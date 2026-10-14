@@ -5155,6 +5155,7 @@ mod tests {
                 "module": "outbound-lead-generation",
                 "research_command_id": research_command_id,
                 "gap_task_id": "",
+                "field_status": {},
                 "result": {"person_field_status": person_status}
             }),
         )
@@ -5186,6 +5187,7 @@ mod tests {
                 "record_id": record_id,
                 "module": "outbound-lead-generation",
                 "research_command_id": research_command_id,
+                "field_status": {},
                 "result": {
                     "person_records": [{"person_key": person, "person_vorname": "Michael",
                         "person_nachname": "Grabbe", "person_email": address}],
