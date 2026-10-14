@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261014-shell-v2-news-skill-binding';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261014-shell-v2-news-skill-binding';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261014-shell-v2-news-skill-binding';
+} from './sync-contract.js?v=20261014-shell-v2-lazy-schema-registration';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261014-shell-v2-lazy-schema-registration';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261014-shell-v2-lazy-schema-registration';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261014-shell-v2-news-skill-binding';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261014-shell-v2-lazy-schema-registration';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -162,6 +162,7 @@ export function createSyncRuntime({
   capabilityTokenProvider = getBusinessOsCapabilityToken,
   onNativeQueryReady = null,
   mayReadCollection = () => true,
+  ensureCollectionRegistered = null,
 }) {
   const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
@@ -892,6 +893,7 @@ export function createSyncRuntime({
           db,
           config,
           collection,
+          ensureCollectionRegistered,
           recordCollection: (name, patch) => { if (ownsBridge()) recordCollection(name, patch); },
           capabilityTokenProvider,
           onNativeQueryReady: (name, info) => { if (ownsBridge()) onNativeQueryReady?.(name, info); },
@@ -1730,13 +1732,24 @@ async function startWebRtcReplication({
   db,
   config,
   collection,
+  ensureCollectionRegistered,
   recordCollection,
   capabilityTokenProvider,
   onNativeQueryReady,
   onFatalPeerError,
   scheduleRestart,
 }) {
-  const rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
+  let rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
+  if (!rxCollection && typeof ensureCollectionRegistered === 'function') {
+    try {
+      // A module can request sync before its schema import finishes. Retrying
+      // the bridge alone cannot repair a collection missing from db.raw.
+      await ensureCollectionRegistered(collection);
+    } catch (error) {
+      recordCollection?.(collection, { lastError: serializeError(error) });
+    }
+    rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
+  }
   if (!rxCollection) {
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     // Losing the startup race produces NO event — the collection simply is not

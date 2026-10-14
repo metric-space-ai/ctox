@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { createSyncRuntime, __ctoxSyncTestHooks } from './sync.js';
 
 function fixture({ leader = false, readError = null, changeGeneration = false, startup = null,
-  cancelGate = null, onCancel = () => {}, onStart = () => {} } = {}) {
+  cancelGate = null, onCancel = () => {}, onStart = () => {},
+  missingAtStart = false, onRegister = null } = {}) {
   const browserToken = 'native-read-browser-token';
   const previousWindow = globalThis.window;
   globalThis.window = {
@@ -29,7 +30,7 @@ function fixture({ leader = false, readError = null, changeGeneration = false, s
     snapshot() { return { isLeader: leader, role: leader ? 'leader' : 'follower' }; },
     stop() {},
   };
-  const calls = { starts: 0, cancels: 0, ready: 0, queries: [] };
+  const calls = { starts: 0, cancels: 0, ready: 0, registrations: 0, queries: [] };
   let generation = 'native-generation-1';
   const document = { id: 'layout-1', pins: ['crew'] };
   const collection = {
@@ -55,9 +56,10 @@ function fixture({ leader = false, readError = null, changeGeneration = false, s
     getTransportStatus() { return {}; },
     async cancel() { calls.cancels++; onCancel(); if (cancelGate) await cancelGate; },
   };
+  const raw = missingAtStart ? {} : { desktop_layout: collection };
   const runtime = createSyncRuntime({
     db: {
-      mode: 'rxdb', name: 'native-read-test', raw: { desktop_layout: collection },
+      mode: 'rxdb', name: 'native-read-test', raw,
       rxdb: {
         getMultiTabSyncCoordinator() { return coordinator; },
         getConnectionHandlerSimplePeer(options) { return options; },
@@ -72,11 +74,29 @@ function fixture({ leader = false, readError = null, changeGeneration = false, s
       signaling_browser_token_hash: createHash('sha256').update(browserToken).digest('hex'),
       signaling_native_token_hash: createHash('sha256').update('native-token').digest('hex'),
     },
+    ensureCollectionRegistered: onRegister && (async (name) => {
+      calls.registrations++;
+      await onRegister(name, raw, collection);
+    }),
   });
   return { runtime, calls, document, state, async close() {
     await runtime.stop(); globalThis.window = previousWindow;
   } };
 }
+
+test('a missing module schema is registered before its direct bridge starts', async () => {
+  const f = fixture({
+    leader: true,
+    missingAtStart: true,
+    onRegister: async (name, raw, collection) => { raw[name] = collection; },
+  });
+  try {
+    const bridge = await f.runtime.startCollection('desktop_layout');
+    assert.notEqual(bridge.reason, 'collection-not-registered');
+    assert.equal(f.calls.registrations, 1);
+    assert.equal(f.calls.starts, 1);
+  } finally { await f.close(); }
+});
 
 for (const leader of [false, true]) {
   test(`authoritative read reaches native state in a ${leader ? 'leader' : 'follower'} tab`, async () => {

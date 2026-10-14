@@ -601,6 +601,12 @@ conformance and DB-isolation inventory guards remain release gates. Inventory
 metadata tracks the current manifests, with newly inventoried modules explicitly
 marked as source-reviewed rather than newly certified for runtime isolation.
 
+When a module starts a collection bridge before its schema is present in the
+browser database, the shell registers the declared module schema first. A cached
+registration is retried once if that collection is still absent. The existing
+bounded sync sweep remains the fallback when the manifest or import is not yet
+available; it must not treat an unregistered collection as query-ready.
+
 Generate module JSON, the native contract and hashes together, rebuild the
 browser bundle, and advance the canonical shell/loader revision. Regeneration
 also reconciles pre-existing stale crew-memory and ticket-key fields in the

@@ -1,30 +1,30 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-news-skill-binding';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-news-skill-binding';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-news-skill-binding';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-news-skill-binding';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-news-skill-binding';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-news-skill-binding';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-news-skill-binding';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-news-skill-binding';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-news-skill-binding';
-import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-news-skill-binding';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-news-skill-binding';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-news-skill-binding';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-news-skill-binding';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-news-skill-binding';
-import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-news-skill-binding';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-lazy-schema-registration';
+import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-lazy-schema-registration';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-lazy-schema-registration';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-lazy-schema-registration';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-lazy-schema-registration';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/app-lifecycle.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -33,20 +33,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/permissions.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261014-shell-v2-news-skill-binding';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/branding.js?v=20261014-shell-v2-lazy-schema-registration';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/presentation.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -57,9 +57,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-news-skill-binding';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-news-skill-binding';
-import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -67,27 +67,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/maintenance-state.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/workspace-session.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/taskbar-pins.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261014-shell-v2-news-skill-binding';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-news-skill-binding';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-news-skill-binding';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-news-skill-binding';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-news-skill-binding';
+} from './shared/workjet-theme.js?v=20261014-shell-v2-lazy-schema-registration';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-lazy-schema-registration';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-lazy-schema-registration';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-lazy-schema-registration';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -95,14 +95,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261014-shell-v2-news-skill-binding';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-news-skill-binding';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-news-skill-binding';
+} from './shared/startup-deadlines.js?v=20261014-shell-v2-lazy-schema-registration';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-lazy-schema-registration';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-lazy-schema-registration';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-news-skill-binding';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-news-skill-binding';
+} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-lazy-schema-registration';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-lazy-schema-registration';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -123,7 +123,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261014-shell-v2-news-skill-binding';
+const APP_BUILD = '20261014-shell-v2-lazy-schema-registration';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1648,6 +1648,7 @@ async function openBusinessDataPlane(syncConfig) {
       config: syncConfig,
       onDiagnostic: updateSyncDiagnostics,
       capabilityTokenProvider: commandBusModule.getBusinessOsCapabilityToken,
+      ensureCollectionRegistered: ensureDeclaredCollectionSchema,
       mayReadCollection: (collection) => roleMayReadCollection(
         businessActorFromSession(state.session, state.governance).role,
         collection,
@@ -6533,6 +6534,32 @@ async function registerModuleSchemas(mod) {
   });
   state.schemaRegistrations.set(mod.id, registration);
   return registration;
+}
+
+async function ensureDeclaredCollectionSchema(collection) {
+  const db = state.db;
+  if (!db || db.raw?.[collection]) return;
+  let lastError = null;
+  for (const mod of state.modules || []) {
+    if (state.db !== db) return;
+    if (!Array.isArray(mod?.collections) || !mod.collections.includes(collection)) continue;
+    const cachedRegistration = state.schemaRegistrations.has(mod.id);
+    try {
+      await registerModuleSchemas(mod);
+      if (state.db !== db || db.raw?.[collection]) return;
+      // A completed registration promise can belong to an earlier attempt
+      // that did not add this collection. Re-check the actual database before
+      // trusting the cache, and retry that module once.
+      if (cachedRegistration) {
+        state.schemaRegistrations.delete(mod.id);
+        await registerModuleSchemas(mod);
+        if (state.db !== db || db.raw?.[collection]) return;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
 }
 
 function withMigrationStrategies(collections, migrationStrategies = {}) {
