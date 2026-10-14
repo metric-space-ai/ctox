@@ -133,7 +133,6 @@ export async function mount(ctx) {
       await refresh(state);
       if (disposed) return;
       if (!state.ready) {
-        notify(state, 'error', tr('CV-Daten noch nicht synchronisiert', 'CV data is not synchronized yet'), tr('Import und Parsing bleiben gesperrt, bis die Business-OS Collections bereit sind.', 'Import and parsing remain locked until the Business OS collections are ready.'));
         scheduleReadinessRetry(state);
       }
     })
@@ -260,27 +259,18 @@ function onHostChange(state, event) {
 }
 
 function triggerNewCandidate(state) {
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('CVs können importiert werden, sobald die Arbeitsdaten geladen sind.', 'CVs can be imported once the workspace data is loaded.'));
-    return;
-  }
+  if (!state.ready) return;
   state.host.querySelector('[data-cv-upload]')?.click();
 }
 
 function triggerImportCandidates(state) {
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Profile können importiert werden, sobald die Arbeitsdaten geladen sind.', 'Profiles can be imported once the workspace data is loaded.'));
-    return;
-  }
+  if (!state.ready) return;
   state.host.querySelector('[data-cv-import]')?.click();
 }
 
 async function triggerReparseAll(state) {
   const candidates = reparseCandidates(state);
-  if (!state.ready && !candidates.length) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Parsing kann starten, sobald die Arbeitsdaten geladen sind.', 'Parsing can start once the workspace data is loaded.'));
-    return;
-  }
+  if (!state.ready && !candidates.length) return;
   if (!candidates.length) {
     notify(state, 'info', tr('Keine PDFs zum Parsen', 'No PDFs to parse'), tr('Es wurden keine CVs mit lokaler PDF-Quelle gefunden.', 'No CVs with a local PDF source were found.'));
     return;
@@ -297,14 +287,12 @@ async function handleUploadChange(state, input) {
   const files = Array.from(input.files || []);
   input.value = '';
   if (!files.length) return;
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
-    return;
-  }
+  if (!state.ready) return;
   try {
     await importPdfs(state, files);
   } catch (error) {
-    notify(state, 'error', tr('PDF konnte nicht importiert werden', 'PDF could not be imported'), String(error?.message || error));
+    console.warn('[cv-print-builder] PDF import failed', error);
+    notify(state, 'error', tr('PDF konnte nicht importiert werden.', 'PDF could not be imported.'), '');
   }
 }
 
@@ -312,14 +300,12 @@ async function handleImportChange(state, input) {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
-  if (!state.ready) {
-    notify(state, 'info', tr('Synchronisierung läuft', 'Synchronization in progress'), tr('Bitte kurz warten, bis die CV-Liste geladen ist.', 'Please wait until the CV list is loaded.'));
-    return;
-  }
+  if (!state.ready) return;
   try {
     await importCandidates(state, file);
   } catch (error) {
-    notify(state, 'error', tr('Import fehlgeschlagen', 'Import failed'), String(error?.message || error));
+    console.warn('[cv-print-builder] profile import failed', error);
+    notify(state, 'error', tr('Import hat nicht geklappt.', 'Import failed.'), '');
   }
 }
 
@@ -357,7 +343,8 @@ async function runWorkflowAction(state) {
     else if (phase === 'review') await approvePrint(state, item);
     else if (phase === 'approved') window.print();
   } catch (error) {
-    notify(state, 'error', tr('Aktion fehlgeschlagen', 'Action failed'), String(error?.message || error));
+    console.warn('[cv-print-builder] workflow action failed', error);
+    notify(state, 'error', tr('Das hat nicht geklappt.', 'That did not work.'), '');
   }
 }
 
@@ -544,7 +531,6 @@ function scheduleReadinessRetry(state) {
     state.ready = true;
     setModuleBusy(state, false);
     await refresh(state);
-    notify(state, 'success', tr('CV-Daten synchronisiert', 'CV data synchronized'), tr('Import und Parsing sind bereit.', 'Import and parsing are ready.'));
   }, 3000);
 }
 
@@ -972,7 +958,8 @@ function renderStage(state) {
     })
     .catch((error) => {
       const fileId = item.model.source?.desktop_file_id || '';
-      if (fileId) state.originalErrors.set(fileId, error?.message || String(error || tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.')));
+      console.warn('[cv-print-builder] original PDF could not be loaded', error);
+      if (fileId) state.originalErrors.set(fileId, 'failed');
       if (serial === state.renderSerial) renderOriginalFrame(state, item);
     });
 }
@@ -1032,19 +1019,12 @@ function renderOriginalFrame(state, item) {
   const fileId = item.model.source?.desktop_file_id || '';
   const error = state.originalErrors.get(fileId);
   if (error) {
-    body.innerHTML = `
-      <div class="ctox-empty">
-        <div>
-          <strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong>
-          <div>${escapeHtml(error)}</div>
-        </div>
-      </div>
-    `;
+    body.innerHTML = `<div class="ctox-empty"><strong>${escapeHtml(tr('Original-PDF konnte nicht geladen werden.', 'Original PDF could not be loaded.'))}</strong></div>`;
     return;
   }
   const url = state.originalUrls.get(fileId);
   if (!url) {
-    body.innerHTML = '<div class="ctox-empty">' + escapeHtml(tr('Original-PDF ist noch nicht lokal materialisiert.', 'Original PDF has not been materialized locally yet.')) + '</div>';
+    body.innerHTML = '<div class="ctox-empty">' + escapeHtml(tr('Wird geladen …', 'Loading …')) + '</div>';
     return;
   }
   body.innerHTML = `<iframe class="cv-original-frame" title="Original PDF" src="${escapeAttr(`${url}#toolbar=0&navpanes=0&view=FitH`)}"></iframe>`;
@@ -1783,7 +1763,8 @@ function exportCandidates(state) {
     anchor.remove();
     notify(state, 'success', tr('Profile exportiert', 'Profiles exported'), tr(`${source.length} CV-Profil(e) als JSON geladen.`, `${source.length} CV profile(s) downloaded as JSON.`));
   } catch (error) {
-    notify(state, 'error', tr('Export fehlgeschlagen', 'Export failed'), String(error?.message || error));
+    console.warn('[cv-print-builder] profile export failed', error);
+    notify(state, 'error', tr('Export hat nicht geklappt.', 'Export failed.'), '');
   } finally {
     if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
@@ -2067,7 +2048,8 @@ async function reparseAllPdfs(state, candidates = reparseCandidates(state)) {
     setModuleBusy(state, !state.ready);
   }
   if (failures.length) {
-    notify(state, 'error', `${started}/${candidates.length} Parser-Tasks gestartet`, failures.slice(0, 3).join('\n'));
+    console.warn('[cv-print-builder] reparse failed for some CVs', failures);
+    notify(state, 'error', tr('Erneutes Parsen hat nicht geklappt.', 'Reparse did not work.'), '');
     return;
   }
   notify(state, 'success', `${started} Parser-Tasks gestartet`, 'Alle CV-PDFs wurden erneut an CTOX uebergeben.');
@@ -2596,21 +2578,18 @@ function phaseFootnoteHtml(model) {
   const phase = workflowPhase(model);
   if (phase === 'uploaded') return tr('PDF geladen. Als Nächstes Parsing starten.', 'PDF uploaded. Start parsing next.');
   if (phase === 'parsing') {
-    if (model.workflow?.task_status === 'syncing') return tr('PDF wird an CTOX synchronisiert. Flow wird angelegt.', 'PDF is synchronizing with CTOX. The flow is being created.');
     const tracking = taskTracking(model);
     if (!tracking.taskId && !tracking.commandId) return tr('Task läuft. Flow wird angelegt.', 'Task is running. The flow is being created.');
-    const label = tracking.taskId ? shortTaskId(tracking.taskId) : shortTaskId(tracking.commandId);
-    return `${escapeHtml(tr('Task läuft', 'Task running'))} · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">${escapeHtml(tr('Flow öffnen', 'Open flow'))} <span>${escapeHtml(label)}</span></button>`;
+    return `${escapeHtml(tr('Task läuft', 'Task running'))} · <button class="cv-task-link" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}">${escapeHtml(tr('Flow öffnen', 'Open flow'))}</button>`;
   }
   if (phase === 'review') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Korrektur und Template prüfen.', 'Review corrections and template.'))}`;
   if (phase === 'approved') return `${escapeHtml(templateLabel(model.print?.template))} · ${escapeHtml(tr('Druckansicht freigegeben.', 'Print view approved.'))}`;
   if (phase === 'error') {
     const tracking = taskTracking(model);
-    const error = clipText(model.workflow?.error || tr('Parser-Task fehlgeschlagen.', 'Parser task failed.'), 74);
     const link = tracking.taskId || tracking.commandId
-      ? ` · <button class="cv-task-link is-error" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}" title="${escapeAttr([tracking.taskId, tracking.commandId].filter(Boolean).join(' · '))}">${escapeHtml(tr('Flow öffnen', 'Open flow'))}</button>`
+      ? ` · <button class="cv-task-link is-error" type="button" data-cv-open-task data-cv-task-id="${escapeAttr(tracking.taskId)}" data-cv-command-id="${escapeAttr(tracking.commandId)}">${escapeHtml(tr('Flow öffnen', 'Open flow'))}</button>`
       : '';
-    return `${escapeHtml(tr('Parsing fehlgeschlagen', 'Parsing failed'))}: ${escapeHtml(error)}${link}`;
+    return `${escapeHtml(tr('Parsing fehlgeschlagen.', 'Parsing failed.'))}${link}`;
   }
   return tr('Status prüfen.', 'Check status.');
 }
@@ -2620,18 +2599,6 @@ function taskTracking(model) {
     taskId: String(model?.workflow?.task_id || model?.workflow?.tracking_id || '').trim(),
     commandId: String(model?.workflow?.command_id || '').trim(),
   };
-}
-
-function shortTaskId(value) {
-  const text = String(value || '').trim();
-  if (!text) return 'Task';
-  const tail = text.includes('::') ? text.split('::').pop() : text;
-  return tail.length > 12 ? tail.slice(0, 6) + '…' + tail.slice(-4) : tail;
-}
-
-function clipText(value, max) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text.length > max ? text.slice(0, Math.max(0, max - 1)) + '…' : text;
 }
 
 function openCtoxTask(taskId, commandId) {
