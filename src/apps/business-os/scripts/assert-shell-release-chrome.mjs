@@ -5,26 +5,24 @@ import { readFile } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 const html = await readFile(new URL('index.html', root), 'utf8');
 const css = await readFile(new URL('app.css', root), 'utf8');
-const start = html.indexOf('<div class="topbar-status-bar">');
-const end = html.indexOf('<div class="module-nav">', start);
-assert.ok(start >= 0 && end > start, 'topbar status region must exist');
+const start = html.indexOf('<header class="topbar">');
+const end = html.indexOf('</header>', start);
+assert.ok(start >= 0 && end > start, 'topbar must exist');
 const region = html.slice(start, end);
 
-assert.match(region, /data-shell-version-label(?:\s[^>]*)?>v—</);
-assert.equal((region.match(/data-shell-release-status/g) || []).length, 1);
-assert.doesNotMatch(region, /business-os-shell-v|RxDB\/WebRTC wird|source_commit|commit/i);
-assert.ok(
-  region.indexOf('data-ctox-shell-warning') > region.indexOf('data-shell-release-panel'),
-  'runtime diagnostics must live inside the version status panel',
-);
-assert.ok(
-  region.indexOf('data-recovery-warning') > region.indexOf('data-shell-release-panel'),
-  'recovery diagnostics must live inside the version status panel',
+assert.match(region, /data-shell-start/);
+assert.match(region, /data-shell-instance-name/);
+assert.match(region, /data-module-tabs/);
+assert.match(region, /data-open-account/);
+assert.doesNotMatch(region, /data-shell-instance-toggle|aria-haspopup/);
+assert.doesNotMatch(
+  region,
+  /data-shell-recovery-pill|data-shell-release-panel|data-shell-release-status|data-shell-version-label|data-ctox-version|data-open-sync-diagnostics|data-collection-freshness-warning|data-ctox-shell-warning|data-recovery-warning|data-shell-instance-health|data-shell-instance-cause|brand-status|data-status-text|aria-live|Stand unbestätigt|Recovery|Sync-Diagnose|CTOX Verbindung|Aktualisieren/,
 );
 assert.match(
   css,
   /\.topbar-status-bar \.brand-status\s*\{[^}]*display:\s*none;/s,
-  'internal status prose must never consume header width',
+  'a reintroduced status line must stay hidden',
 );
 
-console.log('ok - shell header is short-version-only with one status action');
+console.log('ok - shell header is instance name, open apps, and account only');

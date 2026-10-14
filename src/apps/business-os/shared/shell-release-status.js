@@ -1,40 +1,23 @@
 // SPDX-License-Identifier: MIT OR AGPL-3.0-only
+// Identity helpers only. The customer shell does not paint release, recovery,
+// channel, or health prose; Workjet owns shell-pack status.
 
-const STATUS_COPY = Object.freeze({
-  current: ['✓', 'Aktuell'],
-  checking: ['…', 'Prüfung läuft'],
-  available: ['↓', 'Update verfügbar'],
-  download: ['↓', 'Download'],
-  verify: ['◌', 'Verifikation'],
-  ready: ['✓', 'Bereit zur Aktivierung'],
-  restart: ['↻', 'Neustart erforderlich'],
-  failed: ['!', 'Fehlgeschlagen'],
-  incompatible: ['!', 'Inkompatibel'],
-  blocked: ['×', 'Kein administrativer Zugriff'],
-  rollback: ['↶', 'Rollback aktiv'],
-  recovery: ['!', 'Recovery-Shell'],
-});
+const SHELL_UPDATE_STATES = new Set([
+  'current',
+  'checking',
+  'available',
+  'download',
+  'verify',
+  'ready',
+  'restart',
+  'failed',
+  'incompatible',
+  'blocked',
+  'rollback',
+  'recovery',
+]);
 
-const HEALTH_COPY = Object.freeze({
-  healthy: 'Gesund',
-  degraded: 'Beeinträchtigt',
-  unknown: 'Unbekannt',
-});
-
-const ACTION_COPY = Object.freeze({
-  current: 'Keine Aktion erforderlich',
-  checking: 'Vorgang läuft',
-  available: 'In Workjet → Business OS → Updates aktualisieren',
-  download: 'Vorgang läuft',
-  verify: 'Vorgang läuft',
-  ready: 'In Workjet → Business OS → Updates aktivieren',
-  restart: 'Workjet oder CTOX neu starten',
-  failed: 'In Workjet → Business OS → Updates erneut versuchen',
-  incompatible: 'Kompatible Version wählen',
-  blocked: 'Administratorzugriff herstellen',
-  rollback: 'In Workjet → Business OS → Updates prüfen',
-  recovery: 'In Workjet → Business OS → Updates wiederherstellen',
-});
+const SHELL_HEALTH_STATES = new Set(['healthy', 'degraded', 'unknown']);
 
 export function shellChannel(version) {
   const value = String(version || '');
@@ -50,13 +33,13 @@ export function normalizeShellVersion(value) {
 
 export function normalizeShellUpdateStatus(value) {
   const state = String(value || '');
-  return Object.hasOwn(STATUS_COPY, state) ? state : 'failed';
+  return SHELL_UPDATE_STATES.has(state) ? state : 'failed';
 }
 
 export function normalizeShellHealth(value, runtimeStatus = '') {
   if (runtimeStatus === 'ready') return 'healthy';
   if (runtimeStatus === 'failed') return 'degraded';
-  return Object.hasOwn(HEALTH_COPY, value) ? value : 'unknown';
+  return SHELL_HEALTH_STATES.has(value) ? value : 'unknown';
 }
 
 export function formatShellTimestamp(value) {
@@ -81,39 +64,6 @@ export function formatShellCompatibility(value) {
   return `${range('Workjet', workjetMin, workjetMax)} · ${range('CTOX', ctoxMin, ctoxMax)}`;
 }
 
-function render(root, detail) {
-  const version = normalizeShellVersion(detail?.version);
-  const state = normalizeShellUpdateStatus(detail?.state);
-  const channel = detail?.channel || (version ? shellChannel(version) : 'recovery');
-  const [icon, stateLabel] = STATUS_COPY[state];
-  root.dataset.shellState = state;
-  const recovery = root.querySelector('[data-shell-recovery-pill]');
-  if (recovery) recovery.hidden = state !== 'recovery';
-  const explanation = root.querySelector('[data-shell-recovery-explanation]');
-  if (explanation) {
-    explanation.hidden = state !== 'recovery';
-    explanation.querySelector('[data-shell-recovery-reason]').textContent = version
-      ? 'Die Instanz meldet den Recovery-Modus. Ein genauer Grund wurde nicht übermittelt.'
-      : 'Die geladene Oberfläche enthält keine bestätigte Shell-Paketversion.';
-  }
-  root.querySelector('[data-shell-version-label]').textContent = version ? `v${version}` : 'Recovery';
-  const statusButton = root.querySelector('[data-shell-release-status]');
-  statusButton.dataset.state = state;
-  statusButton.title = stateLabel;
-  statusButton.querySelector('[data-shell-release-icon]').textContent = icon;
-  root.querySelector('[data-shell-release-panel-version]').textContent = version ? `v${version}` : 'Recovery-Shell';
-  const offeredVersion = normalizeShellVersion(detail?.offeredVersion);
-  root.querySelector('[data-shell-release-panel-offered]').textContent = offeredVersion ? `v${offeredVersion}` : '—';
-  root.querySelector('[data-shell-release-panel-channel]').textContent = channel;
-  root.querySelector('[data-shell-release-panel-state]').textContent = stateLabel;
-  const runtimeStatus = globalThis.CTOX_BUSINESS_OS_APP?.dataPlaneReadyStatus;
-  root.querySelector('[data-shell-release-panel-health]').textContent = HEALTH_COPY[normalizeShellHealth(detail?.health, runtimeStatus)];
-  root.querySelector('[data-shell-release-panel-published]').textContent = formatShellTimestamp(detail?.publishedAt);
-  root.querySelector('[data-shell-release-panel-compatibility]').textContent = formatShellCompatibility(detail?.compatibility);
-  root.querySelector('[data-shell-release-panel-checked]').textContent = formatShellTimestamp(detail?.lastCheckedAt);
-  root.querySelector('[data-shell-release-panel-action]').textContent = ACTION_COPY[state];
-}
-
 export function readEmbeddedIdentity(documentRoot) {
   const versions = documentRoot.querySelectorAll('meta[name="ctox-shell-version"]');
   const commits = documentRoot.querySelectorAll('meta[name="ctox-shell-source-commit"]');
@@ -122,57 +72,3 @@ export function readEmbeddedIdentity(documentRoot) {
   if (!version || !/^[0-9a-f]{40}$/.test(sourceCommit)) throw new Error('Missing or ambiguous shell document identity');
   return { version, sourceCommit, channel: shellChannel(version), state: 'current' };
 }
-
-function start() {
-  // The native Workjet host supplies the verified shell-pack identity and
-  // lifecycle status across its typed bridge. A relative fetch here would be
-  // an accidental HTTP control/data fallback against appassets and must not
-  // run in the RxDB/WebRTC-only mobile host.
-  const root = document.querySelector('[data-shell-release]');
-  if (!root) return;
-  const button = root.querySelector('[data-shell-release-status]');
-  const panel = root.querySelector('[data-shell-release-panel]');
-  let lastDetail = { version: '', channel: 'recovery', state: 'recovery' };
-  const versionLabel = root.querySelector('[data-shell-version-label]');
-  const instanceButtons = root.querySelectorAll('[data-shell-instance-toggle]');
-  const togglePanel = () => {
-    panel.hidden = !panel.hidden;
-    button.setAttribute('aria-expanded', String(!panel.hidden));
-    versionLabel?.setAttribute?.('aria-expanded', String(!panel.hidden));
-    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', String(!panel.hidden)));
-    if (!panel.hidden) render(root, lastDetail);
-  };
-  button.addEventListener('click', togglePanel);
-  // The instance and Recovery controls expose the existing release menu;
-  // version identities remain available in that menu.
-  versionLabel?.addEventListener?.('click', togglePanel);
-  instanceButtons.forEach((control) => control.addEventListener('click', togglePanel));
-  root.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || panel.hidden) return;
-    panel.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-    versionLabel?.setAttribute?.('aria-expanded', 'false');
-    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', 'false'));
-    instanceButtons[0]?.focus();
-    event.preventDefault();
-  });
-  document.addEventListener('click', (event) => {
-    if (root.contains(event.target)) return;
-    panel.hidden = true;
-    button.setAttribute('aria-expanded', 'false');
-    versionLabel?.setAttribute?.('aria-expanded', 'false');
-    instanceButtons.forEach((control) => control.setAttribute('aria-expanded', 'false'));
-  });
-  window.addEventListener('workjet:shell-update-status', (event) => {
-    lastDetail = event.detail;
-    render(root, lastDetail);
-  });
-  try {
-    lastDetail = readEmbeddedIdentity(document);
-  } catch {
-    lastDetail = { version: '', channel: 'recovery', state: 'recovery' };
-  }
-  render(root, lastDetail);
-}
-
-if (typeof document !== 'undefined') start();

@@ -210,11 +210,12 @@ test('the static Workjet shell never probes a nonexistent HTTP maintenance plane
   );
   assert.match(appJs, /'local_daemon',[\s\S]*?'ssh_managed',[\s\S]*?'pairing_invite'/);
   assert.match(appJs, /fetchBusinessOsControlJson\('\/api\/business-os\/ctox\/maintenance'\)/);
-  assert.match(
+  assert.doesNotMatch(
     shellReleaseStatusJs,
-    /document\.documentElement\.dataset\.workjetMobileHost === 'true'\) return;/,
-    'the native host owns shell-pack status and must not fetch a relative manifest',
+    /\bfetch\s*\(|XMLHttpRequest|EventSource|data-shell-recovery|data-shell-release-panel/,
+    'shell identity helpers must not fetch a manifest or paint recovery chrome',
   );
+  assert.match(shellReleaseStatusJs, /export function readEmbeddedIdentity/);
 });
 
 // Responsive behaviour is the shell's, and there is exactly one of it. The

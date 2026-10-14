@@ -4,10 +4,15 @@ import { readFileSync } from 'node:fs';
 import { subscriptionModelUnavailable } from './model-access-health.js';
 
 const source = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+const index = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const definition = source.slice(source.indexOf('function shellCtoxHealthProblem(status) {'), source.indexOf('async function loadSession()', source.indexOf('function shellCtoxHealthProblem(status) {')));
 const problem = new Function('state', 'shellText', 'subscriptionModelUnavailable', definition + '; return shellCtoxHealthProblem;')(
   { lang: 'de', advancedStatusEverHealthy: true }, key => key, subscriptionModelUnavailable,
 );
+test('crew health stays internal and is not painted into the customer shell', () => {
+  assert.doesNotMatch(index, /data-ctox-shell-warning|data-shell-instance-health|data-shell-instance-cause|CTOX Verbindung prüfen|Die Crew braucht/);
+});
+
 test('shell warns about missing model access even when the daemon is running', () => {
   const healthyProcess = { ok: true, source: 'rxdb', ctox_service: { running: true }, runtime_settings: { runtime: { provider: 'openai', chat_model: 'test-model' }, diagnostics: {} } };
   assert.equal(problem(healthyProcess), '');

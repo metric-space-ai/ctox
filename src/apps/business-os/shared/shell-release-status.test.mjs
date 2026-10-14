@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR AGPL-3.0-only
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -54,6 +55,12 @@ test('release details render only validated bounded metadata', () => {
     'Workjet ≥0.0.33 · CTOX ≥0.3.22 ≤0.4.0',
   );
   assert.equal(formatShellCompatibility({ workjetMinVersion: '<script>', ctoxMinVersion: '0.3.22' }), '—');
+});
+
+test('release identity helpers do not paint recovery or version chrome', () => {
+  const source = readFileSync(new URL('./shell-release-status.js', import.meta.url), 'utf8');
+  assert.match(source, /export function readEmbeddedIdentity/);
+  assert.doesNotMatch(source, /data-shell-recovery|data-shell-release-panel|querySelector\('\[data-shell|textContent|fetch\s*\(/);
 });
 
 test('the running data plane overrides stale lifecycle health without inventing readiness', () => {

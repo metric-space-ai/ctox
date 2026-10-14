@@ -2434,13 +2434,6 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
-  document.querySelectorAll('[data-open-sync-diagnostics]').forEach((button) => button.addEventListener('click', () => {
-    if (!state.session?.authenticated
-      || document.documentElement.dataset.authState === 'locked'
-      || document.body.dataset.authState === 'locked') return;
-    els.rightDrawer.classList.remove('account-popover');
-    openDrawer('right', renderSyncDiagnosticsDrawer());
-  }));
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
     openModule('ctox');
@@ -2512,7 +2505,6 @@ function wireShellActions() {
     openSettingsDrawer({ initialTab: 'runtime' });
   });
   els.recoveryWarning?.addEventListener('click', exportBrowserRecoveryFromWarning);
-  els.ctoxVersion?.querySelector('[data-ctox-update-button]')?.addEventListener('click', installCtoxUpdateFromShell);
   els.accountButton?.addEventListener('click', openAccountDrawer);
   document.addEventListener('change', (event) => {
     const control = event.target;
@@ -2588,6 +2580,7 @@ function setupSyncToast() {
 }
 
 function renderCollectionFreshnessWarning() {
+  if (!els.collectionFreshnessWarning) return;
   renderFreshnessWarning(els.collectionFreshnessWarning, {
     collections: state.session?.authenticated && Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
     diagnostics: state.syncDiagnostics,
@@ -3797,7 +3790,6 @@ function updateSyncDiagnostics(snapshot) {
   updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
   scheduleSyncRecoveryRepairIfNeeded(snapshot);
-  refreshOpenSyncDiagnosticsDrawer();
   window.dispatchEvent(new CustomEvent('ctox-business-os-sync-diagnostics', {
     detail: snapshot,
   }));
@@ -4643,12 +4635,6 @@ async function countCollectionDocs(name) {
     console.warn(`[business-os] advanced status count failed for ${name}`, error);
     return null;
   }
-}
-
-function refreshOpenSyncDiagnosticsDrawer() {
-  if (!els.rightDrawer || els.rightDrawer.hidden) return;
-  if (els.rightDrawer.firstElementChild?.dataset?.drawerKind !== 'sync-diagnostics') return;
-  els.rightDrawer.replaceChildren(renderSyncDiagnosticsDrawer());
 }
 
 const MODULE_GLYPHS = {
@@ -9776,170 +9762,16 @@ function renderLeftContext(mod) {
 function renderRightContext(mod) {
   const wrap = document.createElement('div');
   wrap.className = 'list';
-  for (const topic of ['Activity', 'Agent context', 'WebRTC sync']) {
+  for (const topic of ['Activity', 'Agent context']) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = topic;
     button.addEventListener('click', () => {
-      if (topic === 'WebRTC sync') {
-        openDrawer('right', renderSyncDiagnosticsDrawer());
-        return;
-      }
       openDrawer('right', drawerContent(topic, `${mod.title || mod.id} topic context`));
     });
     wrap.append(button);
   }
   return wrap;
-}
-
-function renderSyncDiagnosticsDrawer() {
-  const diagnostics = state.syncDiagnostics || {};
-  const config = state.sync?.config || {};
-  const collections = Object.values(diagnostics.collections || {})
-    .sort((a, b) => String(a.collection || '').localeCompare(String(b.collection || '')));
-  const lastError = diagnostics.lastError || null;
-  const body = document.createElement('div');
-  body.className = 'drawer-body sync-diagnostics-drawer';
-  body.dataset.drawerKind = 'sync-diagnostics';
-  body.innerHTML = `
-    <header class="drawer-header-row">
-      <div>
-        <h2>WebRTC Sync</h2>
-        <p>${escapeHtml(syncDiagnosticSummary(diagnostics))}</p>
-      </div>
-      <button class="icon-button" type="button" data-close-sync-diagnostics aria-label="Schließen">×</button>
-    </header>
-    <section class="sync-diagnostics-grid">
-      <div><span>Phase</span><strong>${escapeHtml(diagnostics.phase || 'unknown')}</strong></div>
-      <div><span>Modus</span><strong>${escapeHtml(diagnostics.mode || 'webrtc')}</strong></div>
-      <div><span>Role</span><strong>${escapeHtml(config.peer_role || 'browser')}</strong></div>
-      <div><span>ICE</span><strong>${Number(diagnostics.iceServersConfigured || 0)}</strong></div>
-    </section>
-    <section class="sync-diagnostics-section">
-      <span>Sync Room</span>
-      <code>${escapeHtml(diagnostics.syncRoom || config.sync_room || 'unknown')}</code>
-    </section>
-    <section class="sync-diagnostics-section">
-      <span>Signaling</span>
-      <div class="sync-diagnostics-list">
-        ${(diagnostics.signalingUrls || []).map((url) => `<code>${escapeHtml(url)}</code>`).join('') || '<small>Keine Signaling-URL konfiguriert.</small>'}
-      </div>
-    </section>
-    ${lastError ? `
-      <section class="sync-diagnostics-error">
-        <span>Letzter Fehler</span>
-        <strong>${escapeHtml(lastError.name || 'Error')}</strong>
-        <p>${escapeHtml(lastError.message || String(lastError))}</p>
-      </section>
-    ` : ''}
-    <section class="sync-diagnostics-section">
-      <span>Collections</span>
-      <div class="sync-diagnostics-collections">
-        ${collections.map((item) => `
-          <div class="sync-diagnostics-collection">
-            <strong>${escapeHtml(item.collection || 'collection')}</strong>
-            <span>${escapeHtml(item.status || 'unknown')}${item.active !== undefined ? ` · active=${Boolean(item.active)}` : ''}</span>
-            ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}
-            ${item.lastError?.message ? `<small class="is-error">${escapeHtml(item.lastError.message)}</small>` : ''}
-          </div>
-        `).join('') || '<small>Noch keine Collection-Synchronisation gestartet.</small>'}
-      </div>
-    </section>
-  `;
-  body.querySelector('[data-close-sync-diagnostics]')?.addEventListener('click', closeDrawers);
-  return body;
-}
-
-function syncDiagnosticSummary(diagnostics) {
-  if (!diagnostics) return 'Noch keine Sync-Diagnostik verfügbar.';
-  const collectionValues = Object.values(diagnostics.collections || {});
-  const failed = collectionValues.filter((item) => ['failed', 'error'].includes(item.status)).length;
-  const running = collectionValues.filter((item) => item.status === 'running' || item.status === 'connected').length;
-  const reconnecting = collectionValues.filter((item) => item.status === 'reconnecting').length;
-  const pending = collectionValues.filter((item) => item.status === 'pending' || item.status === 'starting' || item.status === 'connecting').length;
-  if (failed) return `${failed} Collection${failed === 1 ? '' : 's'} mit Fehlern.`;
-  if (reconnecting) return `${running} Collection${running === 1 ? '' : 's'} aktiv, ${reconnecting} im Reconnect.`;
-  if (running) return `${running} Collection${running === 1 ? '' : 's'} aktiv, ${pending} im Aufbau.`;
-  return `Phase ${diagnostics.phase || 'unknown'}, ${pending} Collection${pending === 1 ? '' : 's'} im Aufbau.`;
-}
-
-async function openTemplateStoreDrawer() {
-  const body = document.createElement('div');
-  body.className = 'drawer-body template-store-drawer';
-  body.innerHTML = `
-    <header class="drawer-header-row">
-      <div>
-        <h2>Template Store</h2>
-        <p>Füge eine kopierte Modulinstanz hinzu. CTOX kann diese Kopie danach frei verändern.</p>
-      </div>
-      <button class="icon-button" type="button" data-close-template-store aria-label="Schließen">×</button>
-    </header>
-    <div class="template-store-list" data-template-store-list>
-      <div class="empty-state"><strong>Templates werden geladen</strong></div>
-    </div>
-  `;
-  body.querySelector('[data-close-template-store]')?.addEventListener('click', closeDrawers);
-  openDrawer('right', body);
-  const list = body.querySelector('[data-template-store-list]');
-  try {
-    const payload = await loadTemplates();
-    const templates = payload.templates || [];
-    list.replaceChildren(...templates.map((template) => renderTemplateStoreItem(template)));
-    if (!templates.length) {
-      list.innerHTML = '<div class="empty-state"><strong>Keine Templates gefunden</strong><span>Lege Templates unter business-os/template-store an.</span></div>';
-    }
-  } catch (error) {
-    list.innerHTML = `
-      <div class="auth-gate-panel">
-        <strong>Template Store nicht verfügbar</strong>
-        <span>${escapeHtml(error.message || error)}</span>
-      </div>
-    `;
-  }
-}
-
-function renderTemplateStoreItem(template) {
-  const card = document.createElement('article');
-  card.className = 'template-store-card';
-  const installedCount = state.modules.filter((mod) => mod.id === template.id || mod.id.startsWith(`${template.id}-`)).length;
-  const defaultTitle = template.default_title || template.title || template.id;
-  const suggestedTitle = installedCount ? `${defaultTitle} ${installedCount + 1}` : defaultTitle;
-  card.innerHTML = `
-    <div>
-      <strong>${escapeHtml(template.title || template.id)}</strong>
-      <span>${escapeHtml(template.category || 'Template')}</span>
-    </div>
-    <p>${escapeHtml(template.description || '')}</p>
-    <label>
-      <span>Name der Kopie</span>
-      <input value="${escapeHtml(suggestedTitle)}" data-template-title />
-    </label>
-    <div class="template-store-tags">
-      ${(template.tags || []).map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}
-    </div>
-    <button class="text-button account-primary" type="button" data-install-template>Hinzufügen</button>
-  `;
-  card.querySelector('[data-install-template]')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    button.textContent = 'Kopiere...';
-    try {
-      const title = card.querySelector('[data-template-title]')?.value?.trim() || suggestedTitle;
-      const result = await installTemplate({ templateId: template.id, title });
-      await refreshModules();
-      closeDrawers();
-      location.hash = result.module?.id || '';
-      await openModule(result.module?.id || state.modules[0]?.id || 'ctox');
-    } catch (error) {
-      button.disabled = false;
-      button.textContent = 'Fehlgeschlagen';
-      const message = document.createElement('small');
-      message.className = 'template-store-error';
-      message.textContent = error.message || String(error);
-      card.append(message);
-    }
-  });
-  return card;
 }
 
 async function registerCustomModuleIcons() {
@@ -10631,7 +10463,6 @@ function updateRecoveryWarningFromEvent(event) {
     ? { pendingWrites, pressureRatio, updatedAtMs: Date.now() }
     : null;
   renderBrowserRecoveryWarning();
-  renderBrowserConflictsWarning();
 }
 
 function renderBrowserRecoveryWarning() {
@@ -10697,78 +10528,6 @@ function bindCompactShellWarningNotifications() {
   state.compactWarningMediaBound = true;
 }
 
-function renderBrowserConflictsWarning() {
-  if (!els.conflictsWarning) return;
-  const count = Number(state.unresolvedConflictCount || 0);
-  els.conflictsWarning.hidden = count < 1;
-  els.conflictsWarning.textContent = count > 0
-    ? `${shellText('conflictsOpen')} (${count})`
-    : shellText('conflictsOpen');
-  els.conflictsWarning.title = count > 0 ? `${count} unresolved sync conflict(s)` : '';
-}
-
-async function openBrowserConflictsDialog(event) {
-  event?.preventDefault?.();
-  event?.stopPropagation?.();
-  if (!els.conflictsDialog || !els.conflictsList) return;
-  els.conflictsDialog.querySelector('[data-conflicts-title]').textContent = shellText('conflictsTitle');
-  els.conflictsDialog.querySelector('[data-conflicts-description]').textContent = shellText('conflictsDescription');
-  await refreshBrowserConflictsDialog();
-  if (!els.conflictsDialog.open) els.conflictsDialog.showModal?.();
-}
-
-async function refreshBrowserConflictsDialog() {
-  const conflicts = await state.db?.conflicts?.list?.() || [];
-  state.unresolvedConflictCount = conflicts.length;
-  renderBrowserConflictsWarning();
-  if (!els.conflictsList) return;
-  if (!conflicts.length) {
-    els.conflictsList.innerHTML = `<p>${escapeHtml(shellText('conflictsEmpty'))}</p>`;
-    return;
-  }
-  els.conflictsList.innerHTML = conflicts.map((conflict) => {
-    const id = String(conflict.conflictId || '');
-    const tombstoneConflict = conflict.conflictType === 'delete_vs_update';
-    const evidence = JSON.stringify({
-      base: conflict.base || null,
-      local: conflict.local || null,
-      master: conflict.master || null,
-    }, null, 2);
-    return `
-      <article class="recovery-conflict-card">
-        <div class="recovery-conflict-card__title">
-          <strong>${escapeHtml(conflict.collection || 'unknown')}</strong>
-          <small>${escapeHtml(conflict.conflictType || conflict.code || 'structured_conflict')}</small>
-        </div>
-        <details>
-          <summary>${escapeHtml(shellText('conflictDetails'))}</summary>
-          <pre>${escapeHtml(evidence)}</pre>
-        </details>
-        <div class="recovery-conflict-card__actions">
-          ${tombstoneConflict ? '' : `<button type="button" data-conflict-id="${escapeHtml(id)}" data-conflict-resolution="keep_local">${escapeHtml(shellText('conflictKeepLocal'))}</button>`}
-          <button type="button" data-conflict-id="${escapeHtml(id)}" data-conflict-resolution="keep_master">${escapeHtml(shellText('conflictKeepMaster'))}</button>
-          <button type="button" data-conflict-id="${escapeHtml(id)}" data-conflict-resolution="restore_as_copy">${escapeHtml(shellText('conflictRestoreCopy'))}</button>
-        </div>
-      </article>`;
-  }).join('');
-}
-
-async function resolveBrowserConflictFromButton(event) {
-  const button = event.target?.closest?.('[data-conflict-resolution]');
-  if (!button) return;
-  const conflictId = button.dataset.conflictId;
-  const resolution = button.dataset.conflictResolution;
-  if (!conflictId || !resolution) return;
-  button.disabled = true;
-  try {
-    await state.db?.conflicts?.resolve?.(conflictId, resolution);
-    await refreshBrowserConflictsDialog();
-  } catch (error) {
-    setStatus(error?.message || String(error), true);
-    button.disabled = false;
-  }
-}
-
 async function exportBrowserRecoveryFromWarning(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
@@ -10794,170 +10553,7 @@ async function exportBrowserRecoveryFromWarning(event) {
   }
 }
 
-function renderShellCtoxVersion(status = state.ctoxHealth) {
-  const container = els.ctoxVersion;
-  if (!container) return;
-  if (!sessionCanManageCtoxPlatform()) {
-    container.hidden = true;
-    container.removeAttribute('title');
-    return;
-  }
-  const platform = status?.runtime_settings?.platform || null;
-  const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
-  const labelEl = container.querySelector('[data-ctox-version-label]');
-  const button = container.querySelector('[data-ctox-update-button]');
-  if (!version) {
-    if (labelEl) labelEl.textContent = 'CTOX —';
-    container.title = 'Backend-Version derzeit nicht verfügbar; Runtime-Status über Sync prüfen';
-    container.hidden = false;
-    if (button) button.hidden = true;
-    return;
-  }
-  maybeRefreshCtoxUpdateCheck(platform);
-  const check = currentCtoxUpdateCheck();
-  const updateAvailable = check?.update_available === true;
-  const latest = platformDisplayVersion(check?.latest_release || '');
-  const parts = [`CTOX ${version}`];
-  // Die Versionsnummer stammt aus Cargo.toml und wird auf main nie
-  // hochgezaehlt: sie zeigt seit Monaten 0.3.22, egal wie oft aktualisiert
-  // wurde. Ein Betreiber konnte am Bildschirm nicht erkennen, ob ein Upgrade
-  // angekommen ist — auf managed production tenant lief drei Wochen ein alter Build
-  // hinter einer Zahl, die aktuell aussah. Der Build-Stand des laufenden
-  // Release ist die Angabe, die sich tatsaechlich aendert.
-  const buildStand = platformBuildStamp(platform?.current_release);
-  if (buildStand) parts.push(buildStand);
-  if (state.ctoxUpdateInstallRunning) {
-    parts.push(shellText('ctoxUpdateInstalling'));
-  } else if (updateAvailable) {
-    parts.push(latest ? `${latest} ${shellText('ctoxUpdateAvailable')}` : shellText('ctoxUpdateAvailable'));
-  } else if (state.ctoxUpdateCheckRunning) {
-    parts.push(shellText('ctoxUpdateChecking'));
-  }
-  if (labelEl) labelEl.textContent = parts.join(' · ');
-  container.title = ctoxVersionTitle(platform, check);
-  container.hidden = false;
-  if (button) {
-    button.hidden = !updateAvailable;
-    button.disabled = state.ctoxUpdateInstallRunning;
-    button.textContent = state.ctoxUpdateInstallRunning
-      ? shellText('ctoxUpdateInstalling')
-      : shellText('ctoxUpdateInstall');
-    button.title = latest
-      ? `${shellText('ctoxUpdateInstall')}: ${latest}`
-      : shellText('ctoxUpdateInstall');
-  }
-}
-
-function sessionCanManageCtoxPlatform(session = state.session) {
-  const user = session?.user || {};
-  return Boolean(
-    session?.authenticated
-    && (user.is_admin || roleCanManage(user.role || '')),
-  );
-}
-
-// Zieht den Datumsstempel aus einem Release-Namen wie
-// "branch-main-20260819T121418Z" und macht "Stand 19.08.2026" daraus.
-// Leer, wenn der Name keinen Stempel traegt (etwa bei getaggten Releases,
-// deren Nummer ohnehin aussagekraeftig ist).
-function platformBuildStamp(release) {
-  const treffer = String(release || '').match(/(20\d{2})(\d{2})(\d{2})T\d{6}Z/);
-  if (!treffer) return '';
-  const [, jahr, monat, tag] = treffer;
-  return `Stand ${tag}.${monat}.${jahr}`;
-}
-
-function platformDisplayVersion(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  return raw.startsWith('v') ? raw : `v${raw}`;
-}
-
-function currentCtoxUpdateCheck() {
-  return state.ctoxUpdateCheck?.check || null;
-}
-
-function ctoxVersionTitle(platform, check) {
-  const lines = [];
-  const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
-  if (version) lines.push(`Version: ${version}`);
-  if (platform?.current_release) lines.push(`Release: ${platform.current_release}`);
-  if (platform?.install_mode) lines.push(`Install: ${platform.install_mode}`);
-  if (check?.latest_release) lines.push(`Latest: ${check.latest_release}`);
-  if (check?.published_at) lines.push(`Published: ${check.published_at}`);
-  if (state.ctoxUpdateInstallStatus) lines.push(state.ctoxUpdateInstallStatus);
-  return lines.join('\n');
-}
-
-function shouldPollCtoxUpdateCheck(platform) {
-  return sessionCanManageCtoxPlatform()
-    && Boolean(platform?.release_channel_configured)
-    && businessOsHttpControlPlaneAvailableForUpdates();
-}
-
-function businessOsHttpControlPlaneAvailableForUpdates() {
-  const host = String(window.location?.hostname || '').trim().toLowerCase();
-  if (!host) return false;
-  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') {
-    return true;
-  }
-  if (host.endsWith('.localhost')) return true;
-  // ctox.dev instance subdomains intentionally do not expose Business OS HTTP
-  // API paths. Browser data and operational state come through RxDB/WebRTC
-  // there, so polling the admin update endpoint only creates a visible 410.
-  if (host === 'ctox.dev' || host.endsWith('.ctox.dev')) return false;
-  return true;
-}
-
-function maybeRefreshCtoxUpdateCheck(platform) {
-  if (!shouldPollCtoxUpdateCheck(platform)) return;
-  if (state.ctoxUpdateCheckRunning || state.ctoxUpdateInstallRunning) return;
-  const now = Date.now();
-  if (now - state.ctoxUpdateCheckedAtMs < CTOX_UPDATE_CHECK_POLL_MS) return;
-  state.ctoxUpdateCheckRunning = true;
-  state.ctoxUpdateCheckedAtMs = now;
-  fetchBusinessOsControlJson('/api/business-os/ctox/update/check')
-    .then((payload) => {
-      state.ctoxUpdateCheck = payload;
-      state.ctoxUpdateCheckedAtMs = Date.now();
-    })
-    .catch((error) => {
-      state.ctoxUpdateCheck = {
-        ok: false,
-        error: error?.message || String(error),
-        check: null,
-      };
-    })
-    .finally(() => {
-      state.ctoxUpdateCheckRunning = false;
-      renderShellCtoxVersion(state.ctoxHealth);
-    });
-}
-
-async function installCtoxUpdateFromShell(event) {
-  event?.preventDefault?.();
-  event?.stopPropagation?.();
-  if (!sessionCanManageCtoxPlatform() || state.ctoxUpdateInstallRunning) return;
-  if (!confirm(shellText('ctoxUpdateConfirm'))) return;
-  state.ctoxUpdateInstallRunning = true;
-  state.ctoxUpdateInstallStatus = shellText('ctoxUpdateInstalling');
-  renderShellCtoxVersion(state.ctoxHealth);
-  try {
-    const payload = await fetchBusinessOsControlJson('/api/business-os/ctox/update/apply', {
-      method: 'POST',
-      body: '{}',
-    });
-    state.ctoxUpdateInstallStatus = payload?.status === 'started'
-      ? shellText('ctoxUpdateStarted')
-      : (payload?.status || shellText('ctoxUpdateStarted'));
-    setStatus(state.ctoxUpdateInstallStatus);
-  } catch (error) {
-    state.ctoxUpdateInstallRunning = false;
-    state.ctoxUpdateInstallStatus = error?.message || String(error);
-    setStatus(state.ctoxUpdateInstallStatus, true);
-  } finally {
-    renderShellCtoxVersion(state.ctoxHealth);
-  }
+function renderShellCtoxVersion() {
 }
 
 async function loadLaunchContext() {
@@ -16310,20 +15906,9 @@ function setWorkspaceStatus() {
   renderShellInstanceStatus();
 }
 
-function renderShellInstanceStatus(status = state.ctoxHealth, problem = shellCtoxHealthProblem(status)) {
+function renderShellInstanceStatus() {
   const name = document.querySelector('[data-shell-instance-name]');
   if (name) name.textContent = workspaceStatusText();
-  const dot = document.querySelector('[data-shell-instance-health]');
-  if (dot) {
-    const healthy = status?.ok !== false && status?.ctox_service?.running === true && !problem;
-    dot.dataset.health = problem ? 'degraded' : healthy ? 'healthy' : 'unknown';
-    dot.title = problem || (healthy ? (state.lang === 'en' ? 'Instance ready' : 'Instanz bereit') : (state.lang === 'en' ? 'Connecting' : 'Verbindung wird hergestellt'));
-  }
-  const cause = document.querySelector('[data-shell-instance-cause]');
-  if (cause) {
-    cause.hidden = !problem;
-    cause.textContent = problem || '';
-  }
 }
 
 function isWorkspaceStatusText(text) {
