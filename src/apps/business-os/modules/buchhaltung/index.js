@@ -1232,7 +1232,10 @@ async function importBookingRecords(event) {
     renderActiveView();
     alert(`${inserted.reduce((sum, value) => sum + value, 0)} Datensätze importiert.`);
   } catch (error) {
-    alert(`Import fehlgeschlagen: ${error?.message || error}`);
+    console.warn('[buchhaltung] import failed', error);
+    alert(String(error?.message || '') === 'Unbekanntes Buchhaltungsformat.'
+      ? 'Unbekanntes Buchhaltungsformat.'
+      : 'Import hat nicht geklappt.');
   } finally {
     input.value = '';
   }

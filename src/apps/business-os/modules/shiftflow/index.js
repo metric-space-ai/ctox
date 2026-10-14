@@ -2590,7 +2590,8 @@ function bindEventListeners(ctx, els) {
     try {
       await importShiftRecords(file, ctx);
     } catch (error) {
-      ctx.notifications?.show?.({ type: 'error', title: t('shiftPlanList', 'Schichten & Pläne'), message: error?.message || String(error) });
+      console.warn('[shiftflow] import failed', error);
+      ctx.notifications?.show?.({ type: 'error', title: t('shiftPlanList', 'Schichten & Pläne'), message: 'Import hat nicht geklappt.' });
     } finally {
       els.shiftImportInput.value = '';
     }

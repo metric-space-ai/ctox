@@ -761,10 +761,9 @@ async function delegateTurn() {
       if (els.taskInput) els.taskInput.value = '';
     }
   } catch (error) {
-    console.error('[coding-agents] coding turn failed:', error);
-    const message = `${t('turnFailed')}: ${error?.message || error}`;
-    renderResult({ ok: false, error: error?.message || String(error), module_id: state.activeModuleId });
-    setHint(message, true);
+    console.warn('[coding-agents] coding turn failed:', error);
+    renderResult({ ok: false, error: t('turnFailed'), module_id: state.activeModuleId });
+    setHint(t('turnFailed'), true);
   } finally {
     state.running = false;
     updateFormState();

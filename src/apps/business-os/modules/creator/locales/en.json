@@ -37,7 +37,6 @@
   "deploySaving": "Creating CTOX task...",
   "deployInstalled": "App created",
   "deployFailed": "Task failed",
-  "terminalTitle": "Technical status",
   "rightKicker": "Your apps",
   "rightTitle": "Continue working",
   "installedEmpty": "No custom apps yet.",
