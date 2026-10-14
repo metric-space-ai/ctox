@@ -208,22 +208,6 @@
 .sync-dot.is-saving { background: var(--warning); animation: creator-pulse .8s infinite alternate; }
 @keyframes creator-pulse { from { opacity: .35; } to { opacity: 1; } }
 
-/* custom: technical log console — mono diagnostic stream, not kit content. */
-.creator-status-details { margin-top: 2px; }
-.console-logs {
-  max-height: 140px;
-  overflow: auto;
-  padding: 8px 0 18px;
-  color: var(--muted);
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  line-height: 1.55;
-}
-.console-log-entry { white-space: pre-wrap; overflow-wrap: anywhere; }
-.console-log-entry.success { color: var(--success); }
-.console-log-entry.warning { color: var(--warning); }
-.console-log-entry.error { color: var(--danger); }
-
 /* Library shards — pure selectors inside the kit .ctox-list well (frame,
    header, filterbar, tray, view band, well, footer and selection accent bar
    are all kit/shell-owned).
@@ -370,7 +354,6 @@
   /* The accordion summaries are the only way to reach the options/log —
      give them a full finger-height hit area. */
   .creator-module .creator-options summary,
-  .creator-module .creator-status-details summary,
   .creator-module .creator-requests-details summary {
     min-height: 44px;
     padding: 12px 0;

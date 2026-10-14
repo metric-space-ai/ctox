@@ -62,7 +62,7 @@
   "bookingHolds": "Temporary Holds",
   "bookings": "Bookings",
   "presenceEditing": "is editing right now",
-  "syncingData": "Syncing data.",
+  "syncingData": "Loading …",
   "showAsList": "Show as list",
   "showAsCards": "Show as cards",
   "visible": "Visible",

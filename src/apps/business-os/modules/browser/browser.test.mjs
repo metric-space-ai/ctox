@@ -70,8 +70,15 @@ assert.equal(
     latestSession: { runtime_status: 'error', last_error: 'Chromium executable is not available' },
     latestCommand: null,
   }),
-  'Chromium executable is not available',
-  'the empty browser surface shows the exact native runtime reason',
+  'Der Browser konnte nicht gestartet werden.',
+  'the empty browser surface stays a short sentence and does not show the native runtime reason',
+);
+assert.doesNotMatch(
+  __browserTestHooks.frameEmptyText({
+    latestSession: { runtime_status: 'error', last_error: 'Chromium executable is not available' },
+    latestCommand: null,
+  }),
+  /Chromium executable/,
 );
 assert.equal(__browserTestHooks.browserStartErrorIsRetryable({ code: 'sync_unavailable' }), true);
 assert.equal(__browserTestHooks.browserStartErrorIsRetryable({ code: 'auth_required' }), false);
@@ -592,7 +599,8 @@ assert.equal(
 );
 
 // Shard meta is a single muted selector line.
-assert.match(hooks.browserSessionShardMeta(sampleSessions[0], 2), /Persönlich · .+ · 2 Tabs/);
+assert.match(hooks.browserSessionShardMeta(sampleSessions[0], 2), /Persönlich · 2 Tabs/);
+assert.doesNotMatch(hooks.browserSessionShardMeta(sampleSessions[0], 2), /Bereit|Nicht verbunden|Verbindet|Fehler/);
 
 console.log('browser module pure contract smoke OK');
 

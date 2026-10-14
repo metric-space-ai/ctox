@@ -331,10 +331,12 @@ export async function mount(ctx) {
   renderLibrary(ctx.host);
   void startCreatorDataStreams(ctx, ctx.host, streamGeneration).catch((error) => {
     if (streamGeneration !== state.streamGeneration) return;
-    addConsoleLog(`[WARN] Creator-Daten konnten nicht geladen werden: ${error.message}`, 'warning');
+    console.warn('[creator] data stream failed', error);
+    scheduleCreatorStreamRetry(ctx, ctx.host, streamGeneration);
   });
 
   return () => {
+    if (state.streamRetryTimer) window.clearTimeout(state.streamRetryTimer);
     if (streamGeneration === state.streamGeneration) state.streamGeneration += 1;
     cleanupSubscription(state.catalogSubscription);
     cleanupSubscription(state.commandSubscription);
@@ -363,7 +365,26 @@ async function ensureStyles() {
   if (link.getAttribute('href') !== cssHref) link.href = cssHref;
 }
 
+function scheduleCreatorStreamRetry(ctx, host, streamGeneration) {
+  if (state.streamRetryTimer) return;
+  const wait = Math.min(state.streamRetryMs || 2000, 60_000);
+  state.streamRetryMs = Math.min((state.streamRetryMs || 2000) * 2, 60_000);
+  state.streamRetryTimer = window.setTimeout(() => {
+    state.streamRetryTimer = 0;
+    if (streamGeneration !== state.streamGeneration || !host?.isConnected) return;
+    startCreatorDataStreams(ctx, host, streamGeneration).catch((error) => {
+      if (streamGeneration !== state.streamGeneration) return;
+      console.warn('[creator] data stream failed', error);
+      scheduleCreatorStreamRetry(ctx, host, streamGeneration);
+    });
+  }, wait);
+}
+
 async function startCreatorDataStreams(ctx, host, streamGeneration) {
+  cleanupSubscription(state.catalogSubscription);
+  cleanupSubscription(state.commandSubscription);
+  state.catalogSubscription = null;
+  state.commandSubscription = null;
   await Promise.allSettled([
     ctx.sync?.startCollection?.('business_module_catalog'),
     ctx.sync?.startCollection?.('business_commands'),
@@ -377,16 +398,18 @@ async function startCreatorDataStreams(ctx, host, streamGeneration) {
     const catalogDoc = await catalogColl?.findOne?.('module-catalog')?.exec?.();
     if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.installedApps = normalizeCreatorInstalledApps(catalogDoc?.toJSON?.() || {});
+    state.streamRetryMs = 2000;
   } catch (error) {
-    addConsoleLog(`[WARN] Modulkatalog konnte nicht geladen werden: ${error.message}`, 'warning');
+    console.warn('[creator] catalog load failed', error);
   }
 
   try {
     const commandDocs = await commandColl?.find?.()?.exec?.();
     if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
     state.creatorRequests = normalizeCreatorRequestSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
+    state.streamRetryMs = 2000;
   } catch (error) {
-    addConsoleLog(`[WARN] CTOX App-Auftraege konnten nicht geladen werden: ${error.message}`, 'warning');
+    console.warn('[creator] requests load failed', error);
   }
 
   if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
@@ -522,7 +545,7 @@ function renderLibrary(host) {
   if (items.length) {
     listHtml = items.map((item) => renderLibraryShard(item, g.view)).join('');
   } else if (bandTotal === 0 && readiness?.ready === false) {
-    listHtml = `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('libSyncing', 'Daten werden synchronisiert.'))}</div>`;
+    listHtml = `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('libSyncing', 'Wird geladen …'))}</div>`;
   } else {
     listHtml = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
   }
@@ -713,9 +736,9 @@ function exportCreatorRequests() {
     (state.ctx?.host || document.documentElement).appendChild(a);
     a.click();
     a.remove();
-    addConsoleLog(`[INFO] ${payload.length} App-Auftraege exportiert.`, 'info');
   } catch (error) {
-    addConsoleLog(`[FEHLER] Export fehlgeschlagen: ${error.message}`, 'error');
+    console.warn('[creator] export failed', error);
+    state.ctx?.notifications?.show?.({ title: 'Export hat nicht geklappt.', message: '', type: 'error' });
   } finally {
     if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
@@ -731,21 +754,21 @@ function importCreatorRequests(host) {
     const file = input.files && input.files[0];
     if (!file) return;
     let parsed;
-    try { parsed = JSON.parse(await file.text()); } catch {
-      addConsoleLog('[FEHLER] Ungültige JSON-Datei.', 'error');
+    try { parsed = JSON.parse(await file.text()); } catch (error) {
+      console.warn('[creator] import parse failed', error);
+      state.ctx?.notifications?.show?.({ title: 'Die Datei konnte nicht gelesen werden.', message: '', type: 'error' });
       return;
     }
     const rawItems = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
     const base = state.importedRequests.length;
     const drafts = rawItems.map((raw, index) => prepareCreatorRequestImport(raw, base + index)).filter(Boolean);
     if (!drafts.length) {
-      addConsoleLog('[WARN] Keine Auftraege in der Datei gefunden.', 'warning');
+      state.ctx?.notifications?.show?.({ title: 'Keine Aufträge in der Datei.', message: '', type: 'error' });
       return;
     }
     for (const draft of drafts) {
       if (!state.importedRequests.some((r) => r.id === draft.id)) state.importedRequests.push(draft);
     }
-    addConsoleLog(`[INFO] ${drafts.length} App-Auftraege importiert (lokal).`, 'info');
     renderLibrary(host);
   });
   input.click();
@@ -892,14 +915,14 @@ function wireUi(host) {
     const newName = normalizeCollectionName(inputNewColl.value);
     if (!newName) return;
     if (state.appCollections.includes(newName)) {
-      addConsoleLog(`[WARN] Datentabelle '${newName}' existiert bereits.`, 'warning');
+      state.ctx?.notifications?.show?.({ title: 'Die Datentabelle gibt es schon.', message: '', type: 'error' });
       return;
     }
     state.appCollections.push(newName);
     inputNewColl.value = '';
     renderCollectionsList(host);
     syncStateFromInputs();
-    addConsoleLog(`[INFO] Datentabelle '${newName}' hinzugefügt.`, 'info');
+
   });
 
   inputNewColl.addEventListener('keydown', (event) => {
@@ -957,7 +980,8 @@ function wireUi(host) {
           syncStateFromInputs();
           addConsoleLog(`[INFO] App-Kontext für '${app.title || id}' aus dem Katalog geladen.`, 'info');
         } else {
-          addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
+          console.warn('[creator] upgrade load failed', err);
+          state.ctx?.notifications?.show?.({ title: 'Laden hat nicht geklappt.', message: '', type: 'error' });
         }
       }
       updateCreatorActionState();
@@ -1055,17 +1079,7 @@ function wireUi(host) {
 }
 
 function addConsoleLog(text, type = '') {
-  console.log(text);
-  const container = document.querySelector('#console-logs-container');
-  if (!container) return;
-  const el = document.createElement('div');
-  el.className = `console-log-entry ${type}`;
-  el.textContent = text;
-  // Follow the log only while the reader is at the bottom. Scrolling up to read
-  // an earlier line is an explicit intent that a new entry must not override.
-  const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 24;
-  container.appendChild(el);
-  if (wasAtBottom) container.scrollTop = container.scrollHeight;
+  console.warn('[creator]', type || 'info', text);
 }
 
 export function buildAppCreateCommand({
@@ -1221,12 +1235,11 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     updateCreatorActionState();
 
   } catch (error) {
-    addConsoleLog(`[FEHLER] App-Auftrag konnte nicht angelegt werden: ${error.message}`, 'error');
-    console.error(error);
+    console.warn('[creator] create failed', error);
 
-    state.ctx.notifications.show({
-      title: 'App-Erstellung fehlgeschlagen',
-      message: `Der CTOX-Auftrag konnte nicht angelegt werden: ${error.message}`,
+    state.ctx.notifications?.show?.({
+      title: 'App-Erstellung hat nicht geklappt.',
+      message: '',
       type: 'error'
     });
 

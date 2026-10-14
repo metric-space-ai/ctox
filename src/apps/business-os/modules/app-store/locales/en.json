@@ -24,7 +24,7 @@
   "viewShowList": "Show as list",
   "viewShowCards": "Show as cards",
   "appsCount": "{count} apps",
-  "loadingText": "Syncing GitHub discovery.",
+  "loadingText": "Loading …",
   "drawerKicker": "Catalog",
   "drawerNoSelection": "No app selected",
   "drawerCloseTitle": "Close details",

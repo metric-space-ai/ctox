@@ -62,11 +62,11 @@ const COPY = {
     dunningRun: 'Mahnlauf für diese Rechnung', address: 'Adresse', email: 'E-Mail', noAddress: 'Keine Adresse hinterlegt.',
     dependencyTitle: 'Rechnungen benötigt weitere Module', dependencyNote: 'Bitte installiere „buchhaltung“ (FIBU/Journal) und „customers“ (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.',
     reload: 'Neu laden', missingDb: 'Invoices-Modul kann nicht starten: ctx.db fehlt.', noCustomer: 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im „customers“-Modul an, dann erstelle die Rechnung hier.',
-    deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden', resizeColumn: 'Spaltenbreite anpassen',
+    deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden', actionFailed: 'Das hat nicht geklappt.', resizeColumn: 'Spaltenbreite anpassen',
     stateDraft: 'Entwurf', statePosted: 'Gebucht', statePartiallyPaid: 'Teilweise bezahlt', statePaid: 'Bezahlt', stateOverdue: 'Überfällig', stateCancelled: 'Storniert', stateCredited: 'Gutgeschrieben',
     pos: 'Pos', quantity: 'Menge (‰)', unit: 'Einheit', unitPrice: 'Einzelpreis (Cent)',
     importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine gültigen Rechnungen (Kunde + Positionen) in der Datei.', imported: '{count} importiert',
-    syncingHint: 'Daten werden synchronisiert.',
+    syncingHint: 'Wird geladen …',
   },
   en: {
     invoices: 'Invoices', kicker: 'CTOX', all: 'All', overdue: 'Overdue', open: 'Open', paid: 'Paid',
@@ -87,11 +87,11 @@ const COPY = {
     dunningRun: 'Run dunning for this invoice', address: 'Address', email: 'Email', noAddress: 'No address recorded.',
     dependencyTitle: 'Invoices requires additional modules', dependencyNote: 'Install “buchhaltung” (ledger/journal) and “customers” (party master data) from the App Store, then reload Invoices.',
     reload: 'Reload', missingDb: 'Invoices cannot start: ctx.db is missing.', noCustomer: 'No customer exists in CRM. Create a customer in “customers” before creating an invoice.',
-    deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted', resizeColumn: 'Adjust column width',
+    deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted', actionFailed: 'That did not work.', resizeColumn: 'Adjust column width',
     stateDraft: 'Draft', statePosted: 'Posted', statePartiallyPaid: 'Partially paid', statePaid: 'Paid', stateOverdue: 'Overdue', stateCancelled: 'Cancelled', stateCredited: 'Credited',
     pos: 'Pos', quantity: 'Quantity (‰)', unit: 'Unit', unitPrice: 'Unit price (cents)',
     importInvalid: 'Invalid JSON file.', importEmpty: 'No valid invoices (customer + line items) in the file.', imported: '{count} imported',
-    syncingHint: 'Syncing data.',
+    syncingHint: 'Loading …',
   },
 };
 
@@ -442,8 +442,7 @@ export async function mount(ctx) {
   try {
     await refresh();
   } catch (error) {
-    console.error('invoices error:', error);
-    STATE.lastError = error?.message || String(error);
+    reportError(error);
   }
   render();
   STATE.cleanup.push(wireRealtime());
@@ -459,6 +458,7 @@ export async function mount(ctx) {
       try { cleanup?.(); } catch {}
     }
     if (STATE.renderTimer) window.clearTimeout(STATE.renderTimer);
+    if (STATE.loadRetryTimer) window.clearTimeout(STATE.loadRetryTimer);
   };
 }
 
@@ -500,7 +500,8 @@ function resolveCollection(name) {
   try {
     return STATE.ctx.db.collection?.(name) || null;
   } catch (error) {
-    if (!STATE.lastError) STATE.lastError = error?.message || String(error);
+    console.warn('[invoices] collection unavailable', name, error);
+    if (!STATE.lastError) STATE.lastError = t('actionFailed');
     return null;
   }
 }
@@ -550,6 +551,11 @@ async function refresh() {
   STATE.parties = Object.fromEntries(parties.map((p) => [p.id, p]));
   STATE.invoices = (invoices || []).filter((inv) => !inv.is_deleted);
   STATE.lastError = null;
+  STATE.loadRetryMs = 2000;
+  if (STATE.loadRetryTimer) {
+    window.clearTimeout(STATE.loadRetryTimer);
+    STATE.loadRetryTimer = 0;
+  }
 }
 
 async function readCollection(name) {
@@ -571,7 +577,8 @@ async function submitCommand(command) {
     STATE.lastError = null;
     return outcome;
   } catch (err) {
-    STATE.lastError = err?.message || String(err);
+    console.warn('[invoices] command failed', err);
+    STATE.lastError = t('actionFailed');
     throw err;
   } finally {
     STATE.busy = false;
@@ -579,9 +586,15 @@ async function submitCommand(command) {
 }
 
 function reportError(err) {
-  console.error('invoices error:', err);
-  STATE.lastError = err?.message || String(err);
-  render();
+  console.warn('[invoices] load failed', err);
+  if (STATE.loadRetryTimer) return;
+  const wait = Math.min(STATE.loadRetryMs || 2000, 60_000);
+  STATE.loadRetryMs = Math.min((STATE.loadRetryMs || 2000) * 2, 60_000);
+  STATE.loadRetryTimer = window.setTimeout(() => {
+    STATE.loadRetryTimer = 0;
+    if (!STATE.ctx) return;
+    refresh().then(render).catch(reportError);
+  }, wait);
 }
 
 // ---------------------------------------------------------------------------
@@ -1417,7 +1430,8 @@ function renderXRechnungTab(inv) {
     });
     wrap.appendChild(download);
   } catch (err) {
-    wrap.textContent = `${t('xmlFailed')}: ${err?.message || err}`;
+    console.warn('[invoices] xrechnung failed', err);
+    wrap.textContent = t('xmlFailed');
   }
   return wrap;
 }

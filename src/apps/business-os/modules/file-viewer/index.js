@@ -49,8 +49,9 @@ export async function mount(ctx) {
     }, objectUrl, previewRange));
     ctx.setTitle?.(name);
   } catch (error) {
+    console.warn('[file-viewer] open failed', error);
     ctx.reportFileIntegrityError?.(error, fileIntegrityDetails(args, fileId, mimeType));
-    content.innerHTML = `<p class="is-error">Datei konnte nicht geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
+    content.innerHTML = '<p class="is-error">Datei konnte nicht geöffnet werden.</p>';
   }
 
   return () => {
@@ -145,7 +146,8 @@ async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
       }),
     ]);
   } catch (error) {
-    throw new Error(`Daten für ${collection} konnten nicht synchronisiert werden: ${error?.message || error}`);
+    console.warn('[file-viewer] replication wait failed', collection, error);
+    throw new Error('Datei konnte nicht geöffnet werden.');
   } finally {
     clearTimeout(timeoutId);
   }
@@ -244,8 +246,8 @@ async function waitForStoredFile(ctx, fileId, mimeType, commandId = '', options 
       if (commandId) {
         const command = await readCommandProjection(ctx.db, commandId);
         if (command?.status === 'failed') {
-          const message = command?.result?.error || command?.error || 'Datei konnte nicht materialisiert werden.';
-          throw new Error(message);
+          console.warn('[file-viewer] materialize failed', command?.result?.error || command?.error || command?.status);
+          throw new Error('Datei konnte nicht geöffnet werden.');
         }
       }
       await delay(300);

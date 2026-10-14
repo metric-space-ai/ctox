@@ -277,16 +277,7 @@ export async function mount(ctx) {
     })
     .catch((error) => {
       if (disposed) return;
-      console.error('[explorer] background initialization failed:', error);
-      state.lastLoad = {
-        ok: false,
-        reason: 'load_error',
-        total: 0,
-        visible: 0,
-        message: `${T.errorPrefix}: ${error?.message || error}`,
-      };
-      renderHeader();
-      renderRows();
+      noteAutomaticLoadFailure(error, 'init');
     });
 
   async function selectSource(source) {
@@ -302,7 +293,36 @@ export async function mount(ctx) {
     await loadRows();
   }
 
+  let loadRetryTimer = 0;
+  let loadRetryMs = 2000;
+
+  function noteAutomaticLoadFailure(error, scope) {
+    console.warn(`[explorer] ${scope}`, error);
+    if (!state.rows.length) {
+      state.lastLoad = {
+        ok: true,
+        reason: 'loading',
+        total: 0,
+        visible: 0,
+        message: '',
+      };
+    }
+    renderHeader();
+    renderRows();
+    if (disposed || loadRetryTimer) return;
+    loadRetryTimer = window.setTimeout(() => {
+      loadRetryTimer = 0;
+      if (disposed) return;
+      loadRetryMs = Math.min(loadRetryMs * 2, 60_000);
+      loadRows();
+    }, loadRetryMs);
+  }
+
   async function loadRows() {
+    if (loadRetryTimer) {
+      window.clearTimeout(loadRetryTimer);
+      loadRetryTimer = 0;
+    }
     refs.selectionActions.disabled = true;
     refs.table.replaceChildren(message(T.loadingFiles));
     refs.preview.innerHTML = emptyPreview();
@@ -312,31 +332,13 @@ export async function mount(ctx) {
       const bridge = await ctx.sync?.startCollection?.(collectionId);
       if (bridge) await waitForReplicationBridge(bridge, collectionId);
     } catch (error) {
-      state.rows = [];
-      state.lastLoad = {
-        ok: false,
-        reason: 'sync_error',
-        total: 0,
-        visible: 0,
-        message: `${T.syncFailedPrefix}: ${error?.message || error}`,
-      };
-      renderHeader();
-      renderRows();
+      noteAutomaticLoadFailure(error, 'sync');
       return;
     }
     const collectionId = sourceCollectionId(state.activeSource);
     const collection = ctx.db?.collection?.(collectionId);
     if (!collection) {
-      state.rows = [];
-      state.lastLoad = {
-        ok: false,
-        reason: 'missing_collection',
-        total: 0,
-        visible: 0,
-        message: T.collectionUnavailable(collectionId),
-      };
-      renderHeader();
-      renderRows();
+      noteAutomaticLoadFailure(collectionId, 'collection');
       return;
     }
     try {
@@ -352,6 +354,7 @@ export async function mount(ctx) {
       state.rows = state.activeSource.recentSort || (isFilesystemSource() && state.query)
         ? activeData.filter((item) => item.kind !== 'folder').map(normalizeFileRow)
         : normalizeRowsForSource(data, state.activeSource, state.currentFolderId);
+      loadRetryMs = 2000;
       state.lastLoad = {
         ok: true,
         reason: '',
@@ -363,17 +366,7 @@ export async function mount(ctx) {
       renderRows();
     } catch (error) {
       if (disposed) return;
-      console.error('[explorer] render failed:', error);
-      state.rows = [];
-      state.lastLoad = {
-        ok: false,
-        reason: 'load_error',
-        total: 0,
-        visible: 0,
-        message: `${T.errorPrefix}: ${error?.message || error}`,
-      };
-      renderHeader();
-      renderRows();
+      noteAutomaticLoadFailure(error, 'load');
     }
   }
 
@@ -420,7 +413,13 @@ export async function mount(ctx) {
     refs.selectionActions.disabled = true;
     const rows = filteredRows();
     refs.count.textContent = T.objectCount(rows.length);
-    if (state.lastLoad && !state.lastLoad.ok) {
+    if (state.lastLoad?.reason === 'loading' && !rows.length) {
+      refs.table.replaceChildren(message(T.loadingFiles));
+      refs.preview.innerHTML = emptyPreview();
+      renderFooter(rows);
+      return;
+    }
+    if (state.lastLoad && !state.lastLoad.ok && state.lastLoad.message) {
       refs.table.replaceChildren(message(state.lastLoad.message, 'error'));
       refs.preview.innerHTML = emptyPreview(state.lastLoad.message);
       renderFooter(rows);
@@ -607,7 +606,8 @@ export async function mount(ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.dragOutFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
+      console.warn('[explorer] drag-out failed', error);
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.dragOutFailedPrefix)}.</p>`;
     }
   }
 
@@ -665,7 +665,8 @@ export async function mount(ctx) {
         contentGenerationId: row.contentGenerationId,
         contentHashScheme: row.contentHashScheme,
       });
-      body.innerHTML = `<p class="app-explorer-message is-error">Vorschau konnte nicht geladen werden: ${escapeHtml(error?.message || error)}</p>`;
+      console.warn('[explorer] preview failed', error);
+      body.innerHTML = `<p class="app-explorer-message is-error">Vorschau konnte nicht geladen werden.</p>`;
     }
   }
 
@@ -754,7 +755,8 @@ export async function mount(ctx) {
     });
     const body = refs.preview.querySelector('[data-preview-body]');
     if (body) {
-      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.openInAppFailed(appTitle(appId)))}: ${escapeHtml(error?.message || error)}</p>`;
+      console.warn('[explorer] open in app failed', error);
+      body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.openInAppFailed(appTitle(appId)))}.</p>`;
     }
   }
 
@@ -779,7 +781,8 @@ export async function mount(ctx) {
       });
       const body = refs.preview.querySelector('[data-preview-body]');
       if (body) {
-        body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.downloadFailedPrefix)}: ${escapeHtml(error?.message || error)}</p>`;
+        console.warn('[explorer] download failed', error);
+        body.innerHTML = `<p class="app-explorer-message is-error">${escapeHtml(T.downloadFailedPrefix)}.</p>`;
       }
     }
   }
@@ -1014,6 +1017,7 @@ export async function mount(ctx) {
 
   return () => {
     disposed = true;
+    if (loadRetryTimer) window.clearTimeout(loadRetryTimer);
     if (state.searchTimer) window.clearTimeout(state.searchTimer);
     revokePreviewUrl();
     for (const entry of state.dragExports.values()) {

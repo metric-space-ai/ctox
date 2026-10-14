@@ -177,5 +177,5 @@
   "shiftImportDone": "Imported {0} shifts.",
   "aiGenerateSuccessPlain": "A Monday-to-Friday schedule draft was created.",
   "conflictCountResult": "Found {0} conflicts.",
-  "syncingData": "Syncing data."
+  "syncingData": "Loading …"
 }

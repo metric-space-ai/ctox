@@ -64,7 +64,7 @@ const labels = {
     save: 'Speichern',
     delete: 'Löschen',
     cancel: 'Abbrechen',
-    syncingData: 'Daten werden synchronisiert.',
+    syncingData: 'Wird geladen …',
   },
   en: {
     calendar: 'Calendar',
@@ -108,7 +108,7 @@ const labels = {
     save: 'Save',
     delete: 'Delete',
     cancel: 'Cancel',
-    syncingData: 'Syncing data.',
+    syncingData: 'Loading …',
   },
 };
 

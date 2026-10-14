@@ -13,7 +13,7 @@
   "resultTitle": "Last turn",
   "recentTitle": "Recent turns",
   "loadingApps": "Loading apps…",
-  "syncingData": "Syncing data.",
+  "syncingData": "Loading …",
   "emptyApps": "No apps available.",
   "emptyAppsHint": "Install a Business OS app to delegate coding turns.",
   "selectAppHint": "Select an app on the left to delegate a turn.",

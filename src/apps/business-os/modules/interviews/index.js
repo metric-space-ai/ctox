@@ -35,7 +35,7 @@ const COPY = {
     stateRescheduled: 'Verschoben', stateCompleted: 'Stattgefunden', stateNoShow: 'No-Show', stateCancelled: 'Abgesagt',
     viewAll: 'Alle', viewOpen: 'Offen', viewDone: 'Erledigt', collapseLabel: 'Einklappen',
     createKicker: 'Neuer Termin', importDone: 'Import abgeschlossen.', importFailed: 'Import fehlgeschlagen',
-    syncingData: 'Daten werden synchronisiert.',
+    syncingData: 'Wird geladen …',
   },
   en: {
     candidatePlaceholder: 'Candidate ID', vacancyPlaceholder: 'Vacancy ID',
@@ -58,7 +58,7 @@ const COPY = {
     stateRescheduled: 'Rescheduled', stateCompleted: 'Attended', stateNoShow: 'No-show', stateCancelled: 'Cancelled',
     viewAll: 'All', viewOpen: 'Open', viewDone: 'Done', collapseLabel: 'Collapse',
     createKicker: 'New meeting', importDone: 'Import complete.', importFailed: 'Import failed',
-    syncingData: 'Syncing data.',
+    syncingData: 'Loading …',
   },
 };
 

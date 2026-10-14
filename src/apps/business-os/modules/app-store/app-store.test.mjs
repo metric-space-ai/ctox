@@ -38,14 +38,15 @@ test('creator navigation carries App Store return context', () => {
   );
 });
 
-test('marketplace sync labels explain loading and stale counts', () => {
-  assert.equal(hooks.appCountLabel(0, 'marketplace', 'loading'), '0 Apps · Sync');
-  assert.match(
+test('marketplace labels stay neutral and hide raw refresh errors', () => {
+  assert.equal(hooks.appCountLabel(0, 'marketplace', 'loading'), '0 Apps');
+  assert.equal(hooks.appCountLabel(3, 'marketplace', 'ready'), '3 Apps');
+  assert.equal(
     hooks.marketplaceStateLabel({
       status: 'idle',
       installedCount: 20,
     }),
-    /Installed: 20/
+    'Aktualisieren'
   );
   assert.equal(
     hooks.marketplaceStateLabel({
@@ -55,16 +56,20 @@ test('marketplace sync labels explain loading and stale counts', () => {
       availableCount: 1,
       installedCount: 20,
     }),
-    '19 Katalog-Apps projiziert. 1 noch nicht lokal vorhanden. 20 installierte Apps lokal gezählt.'
+    'Aktualisieren'
   );
-  assert.match(
-    hooks.marketplaceStateLabel({
-      status: 'stale',
-      message: 'rate limited',
-      marketplaceCount: 18,
-      installedCount: 17,
-    }),
-    /Zeige letzten Stand: rate limited/
+  assert.equal(hooks.marketplaceStateLabel({ status: 'loading' }), 'Wird geladen …');
+  const stale = hooks.marketplaceStateLabel({
+    status: 'stale',
+    message: 'rate limited',
+    marketplaceCount: 18,
+    installedCount: 17,
+  });
+  assert.equal(stale, 'Aktualisieren hat nicht geklappt.');
+  assert.doesNotMatch(stale, /rate limited/);
+  assert.equal(
+    hooks.marketplaceStateLabel({ status: 'error', message: 'ECONNRESET' }),
+    'Aktualisieren hat nicht geklappt.'
   );
 });
 
@@ -142,13 +147,12 @@ test('canonical catalog item prefers installed local records over duplicate GitH
   assert.equal(hooks.chooseCanonicalCatalogItem(marketplace, local), local);
 });
 
-test('empty states distinguish sync loading from search misses', () => {
-  assert.equal(hooks.emptyCatalogTitle('marketplace', '', 'loading'), 'Katalog wird aktualisiert');
+test('empty states distinguish loading from search misses without sync prose', () => {
+  assert.equal(hooks.emptyCatalogTitle('marketplace', '', 'loading'), 'Wird geladen …');
+  assert.equal(hooks.emptyCatalogTitle('marketplace', '', 'error'), 'Aktualisieren hat nicht geklappt.');
   assert.equal(hooks.emptyCatalogTitle('all', 'zz-no-hit', 'ready'), 'Keine Apps gefunden');
-  assert.match(
-    hooks.emptyCatalogBody('marketplace', '', 'loading'),
-    /aus der Server-Projektion neu geladen/
-  );
+  assert.equal(hooks.emptyCatalogBody('marketplace', '', 'loading'), '');
+  assert.equal(hooks.emptyCatalogBody('marketplace', '', 'error', 'ECONNREFUSED'), '');
   assert.match(hooks.emptyCatalogBody('all', 'zz-no-hit', 'ready'), /zz-no-hit/);
 });
 

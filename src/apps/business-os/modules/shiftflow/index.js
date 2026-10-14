@@ -784,7 +784,7 @@ function setupReadinessSubscriptions(ctx, els) {
 // (source has rows) keep their existing markup.
 function dataDrivenEmptyHtml(collectionName, sourceLength, emptyHtml) {
   if (sourceLength === 0 && latestReadiness[collectionName]?.ready === false) {
-    return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(t('syncingData', 'Daten werden synchronisiert.'))}</div>`;
+    return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(t('syncingData', 'Wird geladen …'))}</div>`;
   }
   return emptyHtml;
 }
@@ -2590,7 +2590,8 @@ function bindEventListeners(ctx, els) {
     try {
       await importShiftRecords(file, ctx);
     } catch (error) {
-      ctx.notifications?.show?.({ type: 'error', title: t('shiftPlanList', 'Schichten & Pläne'), message: error?.message || String(error) });
+      console.warn('[shiftflow] import failed', error);
+      ctx.notifications?.show?.({ type: 'error', title: t('shiftPlanList', 'Schichten & Pläne'), message: 'Import hat nicht geklappt.' });
     } finally {
       els.shiftImportInput.value = '';
     }

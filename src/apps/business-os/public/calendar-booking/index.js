@@ -204,8 +204,20 @@ async function loadBookingPageDetails() {
   }
 }
 
-async function loadSlotsForDate(date) {
-  replaceWithMessage(els.timeslotList, copy.loadingTimes, 'spinner');
+let slotsRetryTimer = 0;
+let slotsRetryMs = 2000;
+let slotsRequestId = 0;
+
+async function loadSlotsForDate(date, attempt = 0) {
+  if (slotsRetryTimer) {
+    window.clearTimeout(slotsRetryTimer);
+    slotsRetryTimer = 0;
+  }
+  const requestId = attempt === 0 ? (slotsRequestId += 1) : slotsRequestId;
+  if (attempt === 0) {
+    slotsRetryMs = 2000;
+    replaceWithMessage(els.timeslotList, copy.loadingTimes, 'spinner');
+  }
   const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const endOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
 
@@ -213,12 +225,22 @@ async function loadSlotsForDate(date) {
     const response = await fetch(`/api/public/calendar/${encodeURIComponent(state.slug)}/slots?start=${startOfDay.getTime()}&end=${endOfDay.getTime()}`, {
       headers: { Accept: 'application/json' },
     });
+    if (requestId !== slotsRequestId) return;
     if (!response.ok) throw new Error('times-unavailable');
     const data = await response.json();
+    if (requestId !== slotsRequestId) return;
     state.slots = Array.isArray(data?.slots) ? data.slots : [];
     renderSlots();
   } catch {
-    replaceWithMessage(els.timeslotList, copy.timesUnavailable);
+    if (requestId !== slotsRequestId) return;
+    const wait = slotsRetryMs;
+    slotsRetryMs = Math.min(slotsRetryMs * 2, 60_000);
+    if (attempt >= 1) replaceWithMessage(els.timeslotList, copy.timesUnavailable);
+    slotsRetryTimer = window.setTimeout(() => {
+      slotsRetryTimer = 0;
+      if (requestId !== slotsRequestId) return;
+      void loadSlotsForDate(date, attempt + 1);
+    }, wait);
   }
 }
 

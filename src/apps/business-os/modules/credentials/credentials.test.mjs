@@ -149,19 +149,19 @@ test('data-driven empty is gated on collection readiness (syncing shell vs empty
     const html = mod.renderRecordList([], {
       emptyText: 'No credentials configured.',
       readiness: { collection: 'business_commands', state, ready: false, syncing: true, updatedAt: null },
-      syncingText: 'Syncing data.',
+      syncingText: 'Loading …',
     });
     assert.match(html, /ctox-syncing/, `${state} renders the syncing shell`);
     assert.match(html, /role="status"/, 'syncing shell is a polite status region');
     assert.match(html, /aria-live="polite"/);
-    assert.match(html, /Syncing data\./, 'syncing text is rendered');
+    assert.match(html, /Loading …/, 'syncing text is rendered');
     assert.doesNotMatch(html, /ctox-empty/, 'no premature "no data" claim while unready');
   }
   // Empty + live → the real empty state.
   const readyHtml = mod.renderRecordList([], {
     emptyText: 'No credentials configured.',
     readiness: { collection: 'business_commands', state: 'live', ready: true, syncing: false, updatedAt: 1 },
-    syncingText: 'Syncing data.',
+    syncingText: 'Loading …',
   });
   assert.match(readyHtml, /ctox-empty/, 'ready + empty renders the empty state');
   assert.match(readyHtml, /No credentials configured\./);
@@ -173,7 +173,7 @@ test('data-driven empty is gated on collection readiness (syncing shell vs empty
   // Rows always win over any readiness state.
   const rowsHtml = mod.renderRecordList(
     [{ name: 'OPENAI_API_KEY', description: '', is_set: true, updated_at: null, source: 'catalog' }],
-    { readiness: { ready: false }, syncingText: 'Syncing data.' },
+    { readiness: { ready: false }, syncingText: 'Loading …' },
   );
   assert.match(rowsHtml, /OPENAI_API_KEY/, 'rows render regardless of readiness');
   assert.doesNotMatch(rowsHtml, /ctox-syncing/);

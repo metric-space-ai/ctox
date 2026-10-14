@@ -77,8 +77,8 @@ const labels = {
     slaRisk: 'SLA-Risiko',
     snoozed: 'Zurückgestellt',
     agentDrafts: 'CTOX Entwürfe',
-    loadingTitle: 'Support wird synchronisiert',
-    loadingBody: 'Konversationen erscheinen, sobald die Support-Projektionen lokal verfügbar sind.',
+    loadingTitle: 'Wird geladen …',
+    loadingBody: '',
     emptyListTitle: 'Keine Support-Konversationen',
     emptyListBody: 'Neue Support-Fälle entstehen aus Kommunikation, Tickets und Support-Connectoren.',
     emptyTimelineTitle: 'Keine Konversation ausgewählt',
@@ -143,8 +143,8 @@ const labels = {
     slaRisk: 'SLA risk',
     snoozed: 'Snoozed',
     agentDrafts: 'CTOX drafts',
-    loadingTitle: 'Syncing support',
-    loadingBody: 'Conversations appear once support projections are available locally.',
+    loadingTitle: 'Loading …',
+    loadingBody: '',
     emptyListTitle: 'No support conversations',
     emptyListBody: 'New support cases are created from communication, tickets, and support connectors.',
     emptyTimelineTitle: 'No conversation selected',
@@ -345,7 +345,7 @@ function wireUi() {
     selectConversation(row.getAttribute('data-support-conversation-id') || '');
   });
   root.querySelector('[data-support-import]')?.addEventListener('click', () => {
-    handleImport().catch((error) => showToast(error?.message || String(error), true));
+    handleImport().catch((error) => { console.warn('[support] import failed', error); showToast('Import hat nicht geklappt.', true); });
   });
   root.querySelector('[data-support-export]')?.addEventListener('click', () => {
     handleExport();
@@ -354,11 +354,11 @@ function wireUi() {
     button.addEventListener('click', () => toggleContext());
   });
   root.querySelector('[data-support-note-submit]')?.addEventListener('click', () => {
-    createNote().catch((error) => setStatus(error?.message || String(error), true));
+    createNote().catch((error) => { console.warn('[support] note failed', error); setStatus('Notiz hat nicht geklappt.', true); });
   });
   root.querySelector('[data-support-note]')?.addEventListener('input', () => renderComposerState());
   root.querySelector('[data-support-ask-ctox]')?.addEventListener('click', () => {
-    askCtox().catch((error) => setStatus(error?.message || String(error), true));
+    askCtox().catch((error) => { console.warn('[support] ask failed', error); setStatus('Das hat nicht geklappt.', true); });
   });
   root.querySelector('[data-support-context]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -367,20 +367,20 @@ function wireUi() {
       runSuggestionAction(
         suggestionAction.getAttribute('data-support-suggestion-action') || '',
         suggestionAction.getAttribute('data-support-suggestion-id') || '',
-      ).catch((error) => setStatus(error?.message || String(error), true));
+      ).catch((error) => { console.warn('[support] suggestion failed', error); setStatus('Das hat nicht geklappt.', true); });
       return;
     }
     const action = target?.closest('[data-support-action]');
     if (!action) return;
     runConversationAction(action.getAttribute('data-support-action') || '')
-      .catch((error) => setStatus(error?.message || String(error), true));
+      .catch((error) => { console.warn('[support] action failed', error); setStatus('Das hat nicht geklappt.', true); });
   });
   root.querySelector('[data-support-context]')?.addEventListener('change', (event) => {
     const target = event.target instanceof Element ? event.target : null;
     const control = target?.closest('[data-support-control]');
     if (!control) return;
     runConversationControl(control.getAttribute('data-support-control') || '', control.value || '')
-      .catch((error) => setStatus(error?.message || String(error), true));
+      .catch((error) => { console.warn('[support] action failed', error); setStatus('Das hat nicht geklappt.', true); });
   });
 }
 
@@ -505,7 +505,7 @@ function renderConversationList() {
   if (listState === 'loading') {
     renderHtmlIfChanged(
       container,
-      renderEmptyState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
+      renderEmptyState(state.t('loadingTitle', 'Wird geladen …'), state.t('loadingBody', '')),
       { signature: 'state:loading' },
     );
     return;
@@ -513,7 +513,7 @@ function renderConversationList() {
   if (listState === 'syncing') {
     renderHtmlIfChanged(
       container,
-      renderSyncingState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
+      renderSyncingState(state.t('loadingTitle', 'Wird geladen …'), state.t('loadingBody', '')),
       { signature: 'state:syncing' },
     );
     return;

@@ -66,7 +66,7 @@ const labels = {
     resultTitle: 'Letzter Turn',
     recentTitle: 'Letzte Turns',
     loadingApps: 'Apps werden geladen…',
-    syncingData: 'Daten werden synchronisiert.',
+    syncingData: 'Wird geladen …',
     emptyApps: 'Keine Apps verfügbar.',
     emptyAppsHint: 'Installiere eine Business-OS-App, um Coding-Turns zu delegieren.',
     selectAppHint: 'Wähle links eine App aus, um einen Turn zu delegieren.',
@@ -104,7 +104,7 @@ const labels = {
     resultTitle: 'Last turn',
     recentTitle: 'Recent turns',
     loadingApps: 'Loading apps…',
-    syncingData: 'Syncing data.',
+    syncingData: 'Loading …',
     emptyApps: 'No apps available.',
     emptyAppsHint: 'Install a Business OS app to delegate coding turns.',
     selectAppHint: 'Select an app on the left to delegate a turn.',
@@ -761,10 +761,9 @@ async function delegateTurn() {
       if (els.taskInput) els.taskInput.value = '';
     }
   } catch (error) {
-    console.error('[coding-agents] coding turn failed:', error);
-    const message = `${t('turnFailed')}: ${error?.message || error}`;
-    renderResult({ ok: false, error: error?.message || String(error), module_id: state.activeModuleId });
-    setHint(message, true);
+    console.warn('[coding-agents] coding turn failed:', error);
+    renderResult({ ok: false, error: t('turnFailed'), module_id: state.activeModuleId });
+    setHint(t('turnFailed'), true);
   } finally {
     state.running = false;
     updateFormState();

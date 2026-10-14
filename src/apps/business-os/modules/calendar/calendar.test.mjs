@@ -244,13 +244,13 @@ test('left empty state shows syncing shell only when source is empty and collect
   const syncing = hooks.leftEmptyContent({
     sourceEmpty: true,
     ready: false,
-    syncingText: 'Daten werden synchronisiert.',
+    syncingText: 'Wird geladen …',
   });
   assert.equal(syncing.syncing, true);
   assert.match(syncing.html, /class="ctox-syncing"/);
   assert.match(syncing.html, /role="status"/);
   assert.match(syncing.html, /aria-live="polite"/);
-  assert.match(syncing.html, /Daten werden synchronisiert\./);
+  assert.match(syncing.html, /Wird geladen …/);
 
   // Unfiltered source empty + readiness live ⇒ plain empty (no syncing shell).
   assert.equal(hooks.leftEmptyContent({ sourceEmpty: true, ready: true, syncingText: 'x' }).syncing, false);
