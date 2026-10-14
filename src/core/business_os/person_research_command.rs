@@ -2137,6 +2137,96 @@ fn safe_runtime_source_identifier(value: &str, max_len: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+// Native callers validate the persisted command's planner, never a caller's
+// claimed owner or an arbitrary registered target. Explicit source policies
+// remain authoritative; only the default typed person-research path derives
+// its built-in source from the same country/field/privacy tables as Web Stack.
+pub(crate) fn planned_builtin_scrape_source(
+    payload: &Value,
+    target_key: &str,
+) -> anyhow::Result<Option<String>> {
+    let request: PersonResearchCommandRequest =
+        serde_json::from_value(payload.clone()).context("invalid bound person-research payload")?;
+    let country = Country::from_iso(&request.country).context("invalid bound research country")?;
+    let mode = ResearchMode::from_str(&request.mode).context("invalid bound research mode")?;
+    if matches!(
+        mode,
+        ResearchMode::HaveData | ResearchMode::UpdateInventoryGeneral
+    ) {
+        return Ok(None);
+    }
+    let fields = parse_requested_fields(&request.fields)?;
+    Ok(ctox_web_stack::sources::list()
+        .into_iter()
+        .find(|source| {
+            source.scrape_target_key() == Some(target_key)
+                && source.countries().contains(&country)
+                && (fields.is_empty()
+                    || fields
+                        .iter()
+                        .any(|field| source.authoritative_for().contains(field)))
+                && (!source.privacy_opt_in_required()
+                    || request.include_private.iter().any(|id| {
+                        source.id().eq_ignore_ascii_case(id.trim())
+                            || source
+                                .aliases()
+                                .iter()
+                                .any(|alias| alias.eq_ignore_ascii_case(id.trim()))
+                    }))
+        })
+        .map(|source| source.id().to_string()))
+}
+
+fn execute_bound_research_target(
+    root: &Path,
+    command_id: &str,
+    target_key: &str,
+    input: &Value,
+) -> anyhow::Result<Value> {
+    let context = crate::mission::channels::inspect_business_command(root, command_id)?
+        .context("research command is missing")?;
+    let command = &context["command"];
+    let authorization =
+        store::revalidate_business_command_execution_authorization(root, command_id)?;
+    let actor = authorization
+        .pointer("/actor/id")
+        .and_then(Value::as_str)
+        .context("research authorized actor is missing")?;
+    let role = authorization
+        .pointer("/actor/role")
+        .and_then(Value::as_str)
+        .context("research authorized role is missing")?;
+    let hash = command["payload_hash"]
+        .as_str()
+        .context("research payload hash is missing")?;
+    let workspace = format!("business-os-command:{command_id}");
+    let token = super::mcp_channel::issue_internal_command_session_token(
+        root,
+        command_id,
+        hash,
+        actor,
+        role,
+        &workspace,
+        &command["payload"]["writeback_contract"],
+    )?;
+    // The token stays inside the native call. The existing executor verifies
+    // it again, binds owner/task/company/country and rejects mismatched input.
+    let args = vec![
+        "--target-key".into(),
+        target_key.into(),
+        "--trigger-kind".into(),
+        "person_research".into(),
+        "--input-json".into(),
+        input.to_string(),
+        "--command-session".into(),
+        token,
+        "--allow-heal".into(),
+    ];
+    Ok(serde_json::to_value(
+        crate::capabilities::scrape::execute_scrape_with_outcome(root, &args)?,
+    )?)
+}
+
 fn verified_research_owner_user_id(client_context: &Value) -> Option<&str> {
     [
         "/owner_user_id",
@@ -2242,7 +2332,21 @@ fn execute(
         workspace: Some(workspace),
         persist_workspace: true,
     };
-    let mut result = ctox_web_stack::run_ctox_person_research_tool(root, &research_request)?;
+    let mut source_sessions = Vec::new();
+    let mut dispatch = |target_key: &str, input: &Value| {
+        let outcome = execute_bound_research_target(root, command_id, target_key, input)?;
+        if let Some(session) = outcome.get("source_session") {
+            source_sessions.push(session.clone());
+        }
+        Ok(outcome)
+    };
+    let mut result = ctox_web_stack::run_ctox_person_research_with_dispatch(
+        root,
+        &research_request,
+        None,
+        &mut dispatch,
+    )?;
+    result["source_sessions"] = serde_json::json!(source_sessions);
     result["research_instructions_len"] = serde_json::json!(research_instructions_len);
     result["workspace_root"] = Value::String(
         research_request
@@ -2631,6 +2735,171 @@ fn inject_sellify_candidates(payload: &mut Value, record: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_google_dispatch_uses_a_real_signed_command_and_rejects_foreign_input(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        for collection in ["outbound_lead_generation_leads", "business_commands"] {
+            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                root, collection,
+            )?;
+        }
+        store::upsert_rxdb_collection_record(
+            root,
+            "outbound_lead_generation_leads",
+            "lead-bound",
+            1,
+            serde_json::json!({"id":"lead-bound","data":{"firma_name":"UITEST Bound GmbH"}}),
+        )?;
+        let (capability, _) = store::issue_business_os_capability_token_for_managed_user(
+            root,
+            "bound-owner",
+            "Bound Owner",
+            "admin",
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        store::accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id":"cmd-bound-google","module":"outbound-lead-generation",
+                "command_type":"web_stack.person_research","record_id":"lead-bound",
+                "payload":{
+                    "company":"UITEST Bound GmbH","country":"DE","mode":"update_firm",
+                    "fields":["firma_name","firma_domain"],
+                    "writeback_contract":{
+                        "mechanism":"business_command","command_type":"outbound.lead.research_writeback",
+                        "collection":"outbound_lead_generation_leads","record_ids":["lead-bound"]
+                    }
+                },
+                "client_context":{"capability_token":capability}
+            }),
+            store::CommandOrigin::ReplicatedPeer,
+        )?;
+        // No real provider, login or credential: this script only records the
+        // verified executor input and emits a controlled public correlation.
+        let script = root.join("bound-google.sh");
+        std::fs::write(
+            &script,
+            r#"python3 - <<'CTOX_BOUND_FIXTURE'
+import json,os,pathlib
+i=json.loads(os.environ['CTOX_SCRAPE_INPUT_JSON'])
+p=pathlib.Path(os.environ['CTOX_SCRAPE_RUN_DIR']).parents[1]/'bound_calls.txt'
+p.write_text(p.read_text()+'x' if p.exists() else 'x')
+assert i['owner_user_id']=='bound-owner'
+assert i['task_id']=='cmd-bound-google'
+assert i['company']=='UITEST Bound GmbH'
+print(json.dumps({'records':[{'field':'firma_name','value':i['company']}],
+ 'source_session':{'source_id':i['source_id'],'session_id':'fixture-browser-session',
+ 'authenticated_login':{'status':'completed','private_token':'must-not-leak'}}}))
+CTOX_BOUND_FIXTURE
+"#,
+        )?;
+        for target in ["google-de", "maps-google-com"] {
+            let definition = root.join(format!("{target}.json"));
+            std::fs::write(
+                &definition,
+                serde_json::to_vec(&serde_json::json!({
+                    "target_key":target,"display_name":"Bound fixture",
+                    "start_url":"https://example.test/","target_kind":"company",
+                    "config":{"skip_probe":true,"expected_min_records":1,
+                        "llm_enrichment":{"enabled":false}},
+                    "output_schema":{"schema_key":"company.v1"}
+                }))?,
+            )?;
+            let setup = crate::capabilities::scrape::dispatch_capturing(
+                root,
+                &[
+                    "upsert-target".into(),
+                    "--input".into(),
+                    definition.to_string_lossy().into_owned(),
+                ],
+            )?;
+            anyhow::ensure!(setup.get("error").is_none(), "{setup}");
+            let registered = crate::capabilities::scrape::dispatch_capturing(
+                root,
+                &[
+                    "register-script".into(),
+                    "--target-key".into(),
+                    target.into(),
+                    "--script-file".into(),
+                    script.to_string_lossy().into_owned(),
+                    "--language".into(),
+                    "shell".into(),
+                ],
+            )?;
+            anyhow::ensure!(registered.get("error").is_none(), "{registered}");
+            let result = execute_bound_research_target(
+                root,
+                "cmd-bound-google",
+                target,
+                &serde_json::json!({}),
+            )?;
+            assert_eq!(result["status"], "succeeded", "{result}");
+            assert_eq!(result["records_found"], 1);
+            assert_eq!(result["source_session"]["owner_user_id"], "bound-owner");
+            assert_eq!(result["source_session"]["task_id"], "cmd-bound-google");
+            assert_eq!(
+                result["source_session"]["session_id"],
+                "fixture-browser-session"
+            );
+            assert!(!result["source_session"]
+                .to_string()
+                .contains("must-not-leak"));
+            let calls_path = std::path::Path::new(result["run_manifest_path"].as_str().unwrap())
+                .parent()
+                .unwrap()
+                .ancestors()
+                .nth(2)
+                .unwrap()
+                .join("bound_calls.txt");
+            let calls_before = std::fs::read_to_string(&calls_path)?;
+            let rejected = execute_bound_research_target(
+                root,
+                "cmd-bound-google",
+                target,
+                &serde_json::json!({"owner_user_id":"foreign-owner"}),
+            );
+            assert!(rejected.is_err());
+            assert!(execute_bound_research_target(
+                root,
+                "cmd-bound-google",
+                "unplanned-target",
+                &serde_json::json!({})
+            )
+            .is_err());
+            assert_eq!(
+                std::fs::read_to_string(&calls_path)?,
+                calls_before,
+                "rejected bindings must never reach the provider fixture"
+            );
+        }
+        // Admission alone is not authority: a later role change must stop
+        // the same persisted command before target execution.
+        let conn = store::open_store(root)?;
+        conn.execute(
+            "UPDATE business_users SET role = 'user' WHERE user_id = ?1",
+            ["bound-owner"],
+        )?;
+        drop(conn);
+        let revoked = execute_bound_research_target(
+            root,
+            "cmd-bound-google",
+            "google-de",
+            &serde_json::json!({}),
+        )
+        .expect_err("current authorization is revalidated");
+        assert!(format!("{revoked:#}").contains("role changed"));
+        assert!(execute_bound_research_target(
+            root,
+            "missing-command",
+            "google-de",
+            &serde_json::json!({})
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn completed_research_requires_durable_lead_writeback() -> anyhow::Result<()> {
