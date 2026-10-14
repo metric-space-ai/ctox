@@ -2743,7 +2743,7 @@ fn record_business_command_intake_failure_inner(
         // the open (unresolved) failures count against the retry budget.
         // Numbering from the open rows alone reused attempt 1 after a
         // resolution, the INSERT failed on the unique constraint, nothing was
-        // recorded, and intake replayed the command forever (THESEN
+        // recorded, and intake replayed the command forever (customer tenant,
         // 14.10.2026: ~2 rejections per second for one auth_assist command).
         let (attempt, open_failures) = tx.query_row(
             "SELECT COALESCE(MAX(attempt), 0) + 1,

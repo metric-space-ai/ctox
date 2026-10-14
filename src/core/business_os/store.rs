@@ -13208,7 +13208,7 @@ impl BusinessProjectionWriter {
     /// `payload` apart from the fields the writers stamp. Projection pumps use
     /// it after a restart, when their in-memory dedupe cache is empty: a full
     /// replay otherwise rewrote every unchanged record and kept
-    /// business-os.sqlite3 write-locked for half an hour (thesen 08.10.2026).
+    /// business-os.sqlite3 write-locked for half an hour (customer tenant, 08.10.2026).
     pub(crate) fn stored_projection_matches(
         &mut self,
         collection: &str,
@@ -14994,7 +14994,7 @@ pub fn refresh_business_command_queue_task_projection(
     );
     // Core reads come first: this runs on every worker progress event, and
     // holding the Business OS write lock across Core and RxDB I/O kept
-    // business-os.sqlite3 write-locked 94 % of the time (thesen 08.10.2026).
+    // business-os.sqlite3 write-locked 94 % of the time (customer tenant, 08.10.2026).
     let prepared_task = super::store_projections::prepare_queue_task_projection(
         root,
         &command_id,
@@ -19378,7 +19378,7 @@ fn ensure_legacy_collection_grants_with_ownership(
 /// an explicit, reviewed grant. Their shared collections (mail, commands) only
 /// ever had `migration.sync.*` grants for founder/user, which the shell
 /// deliberately ignores, so the Mail app could read nothing — not even for an
-/// admin (thesen 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
+/// admin (customer tenant, 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
 /// Server policy already lets admin/chef read and write all business data;
 /// this materialises exactly that for the collections the first-party apps
 /// declare. Third-party apps and ordinary roles are unchanged.
@@ -20762,7 +20762,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         )
         .optional()?
         .is_some();
-    // Owner-Befund 18.09.2026 (thesen): JEDER Recherchestart scheiterte hier.
+    // Owner-Befund 18.09.2026 (customer tenant): JEDER Recherchestart scheiterte hier.
     // `business_os.chat.task` ist kein Kontrollbefehl und durchlaeuft die
     // Kontrollbefehl-Aufnahme nicht; endet die Aufgabe terminal, bevor die
     // kanonische Zeile geschrieben ist, lehnte dieser Waechter die Projektion
@@ -27038,7 +27038,7 @@ fn command_prompt(
     }
     // The owner's research workflow (Outbound → Rechercheablauf) is the
     // agent's contract and must reach it verbatim. Inside the bounded JSON
-    // preview it sat behind the lead snapshot and was cut off: on THESEN
+    // preview it sat behind the lead snapshot and was cut off: on the customer tenant
     // (14.10.2026) a 13k-char workflow never reached the worker ("… truncated
     // 30533 chars …"), so the research ignored its contact areas and source
     // chain. It is rendered as its own block and dropped from the preview.
@@ -29786,7 +29786,7 @@ pub(super) mod tests {
 
     #[test]
     fn intake_failure_attempts_stay_distinct_after_history_resolution() -> anyhow::Result<()> {
-        // THESEN 14.10.2026: after a resolution the next failure reused
+        // Customer tenant, 14.10.2026: after a resolution the next failure reused
         // attempt 1, hit UNIQUE(command_id, attempt), was never recorded and
         // intake replayed the command about twice per second.
         let root = tempdir()?;
@@ -44194,7 +44194,7 @@ pub(super) mod tests {
     #[test]
     fn refresh_queue_projection_reads_core_before_taking_the_business_write_lock(
     ) -> anyhow::Result<()> {
-        // thesen 08.10.2026: every worker progress event refreshed its task
+        // Customer tenant, 08.10.2026: every worker progress event refreshed its task
         // projection while holding the Business OS write lock across Core reads;
         // business-os.sqlite3 stayed write-locked 94 % of the time.
         let temp = tempdir()?;
@@ -47037,7 +47037,7 @@ pub(super) mod tests {
     #[test]
     fn token_less_projection_replay_of_admitted_auth_assist_skips_capability_gate(
     ) -> anyhow::Result<()> {
-        // THESEN 14.10.2026: native projected an accepted auth_assist from its
+        // Customer tenant, 14.10.2026: native projected an accepted auth_assist from its
         // audited intent (no capability_token); background recovery re-read
         // that projection as a replicated command and the capability gate
         // rejected it on every intake pass.

@@ -2805,7 +2805,7 @@ async fn run_native_peer(
     }
     // A legacy repair must not decide whether the peer comes up. It failed with
     // SQLITE_BUSY_SNAPSHOT (517) under concurrent writes after every restart on
-    // thesen (25.09.2026: 12 failed bring-ups, five in a row after one release,
+    // customer tenant (25.09.2026: 12 failed bring-ups, five in a row after one release,
     // replication down for ~2.5 min each time). Skip it for this start instead.
     match clamp_oversized_projected_documents(&root, &database_path) {
         Ok(clamped_documents) if clamped_documents > 0 => eprintln!(
@@ -5722,7 +5722,7 @@ async fn sync_business_record_projections_slice_with_database(
                     // the channel store and never get a row in
                     // `business_records_projection_clock`. "No clock" meant
                     // "unchanged" for them, so from 19.08.2026 on no new mail
-                    // reached the Mail app (thesen: newest projected message
+                    // reached the Mail app (customer tenant: newest projected message
                     // 19.08, 38 newer inbound mails in the channel store).
                     None => !is_channel_backed_projection_collection(&collection_name),
                     Some((version, latest_updated_at_ms)) => {
@@ -11477,7 +11477,7 @@ pub(in crate::business_os) mod tests {
 
     #[test]
     fn replicated_command_without_capability_terminalizes_without_retry_loop() {
-        // THESEN 14.10.2026: an outbound auth_assist command arrived without a
+        // Customer tenant, 14.10.2026: an outbound auth_assist command arrived without a
         // valid capability token and intake rejected it ~2x per second
         // forever. It must reach one browser-visible terminal failure.
         let root = tempfile::tempdir().expect("temp root");
@@ -12898,7 +12898,7 @@ pub(in crate::business_os) mod tests {
 
     #[test]
     fn startup_clamp_waits_for_a_concurrent_writer_instead_of_failing() -> anyhow::Result<()> {
-        // thesen 25.09.2026: the clamp ran inside a deferred transaction and
+        // Customer tenant, 25.09.2026: the clamp ran inside a deferred transaction and
         // failed with 517 whenever another connection wrote during the scan,
         // which aborted peer bring-up. It must wait and still trim.
         let temp = tempfile::tempdir()?;
