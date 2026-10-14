@@ -25,7 +25,7 @@ export const SHELL_BACKGROUND_QUERY_COLLECTIONS = new Set([
 const CLIENT_BACKGROUND_QUERY_STREAM_LIMIT = Math.max(1, Math.floor(CLIENT_QUERY_STREAM_LIMIT / 2));
 // Keep one existing stream slot available for a user action that requires a
 // fresh native revision. Ordinary window hydration must not occupy all eight.
-const CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
+export const CLIENT_NON_STRICT_QUERY_STREAM_LIMIT = Math.max(1, CLIENT_QUERY_STREAM_LIMIT - 1);
 // The native peer admits max(32, streams * 8) requests initially and refills
 // 16 tokens/second. Admit fewer here so a page's parallel collection reads do
 // not spend the entire peer budget before a user's lead-detail query arrives.

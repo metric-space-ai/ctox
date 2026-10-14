@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {
   createDemandLoadingTransport, createQueryDemandLoader, createSidecarWithMemoryBackend,
 } from '../dist/ctox-rxdb-js.mjs';
-import { CLIENT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
+import { CLIENT_QUERY_STREAM_LIMIT, CLIENT_NON_STRICT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
 import { CTOX_QUERY_RPC } from '../src/protocol-contract.generated.mjs';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -212,12 +212,12 @@ const strict = token => ({ selector: {}, limit: 1, requireRevision: token });
       query: { selector: {}, limit: 1 }, window: { offset: 0, limit: 1 },
     });
   });
-  await until(() => one.requests.length + two.requests.length === CLIENT_QUERY_STREAM_LIMIT);
-  assert.equal(one.transport.diagnostics().activeQueryStreams, CTOX_QUERY_RPC.maxInFlightStreams);
-  assert.equal(one.transport.diagnostics().queuedQueryRequests, 2);
+  await until(() => one.requests.length + two.requests.length === CLIENT_NON_STRICT_QUERY_STREAM_LIMIT);
+  assert.equal(one.transport.diagnostics().activeQueryStreams, CLIENT_NON_STRICT_QUERY_STREAM_LIMIT);
+  assert.equal(one.transport.diagnostics().queuedQueryRequests, 3);
   await one.complete(one.requests[0]);
-  await until(() => one.requests.length + two.requests.length === CLIENT_QUERY_STREAM_LIMIT + 1);
-  assert.equal(one.transport.diagnostics().activeQueryStreams, CTOX_QUERY_RPC.maxInFlightStreams);
+  await until(() => one.requests.length + two.requests.length === CLIENT_NON_STRICT_QUERY_STREAM_LIMIT + 1);
+  assert.equal(one.transport.diagnostics().activeQueryStreams, CLIENT_NON_STRICT_QUERY_STREAM_LIMIT);
   for (const remote of [one, two]) for (const request of [...remote.requests]) await remote.complete(request);
   await until(() => one.requests.length + two.requests.length === CLIENT_QUERY_STREAM_LIMIT + 2);
   for (const remote of [one, two]) for (const request of remote.requests) await remote.complete(request);

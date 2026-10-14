@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createDemandLoadingTransport } from '../dist/ctox-rxdb-js.mjs';
-import { CLIENT_QUERY_QUEUE_LIMIT, CLIENT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
+import { CLIENT_QUERY_QUEUE_LIMIT, CLIENT_QUERY_STREAM_LIMIT, CLIENT_NON_STRICT_QUERY_STREAM_LIMIT } from '../src/demand-loading-transport.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -93,8 +93,8 @@ assert.equal(full.transport.diagnostics().queuedQueryRequests, 0);
 // Waiting entries cannot block already-ready entries after active slots free.
 const busy = actor('busy', true, false);
 const notReady = actor('not-ready');
-const active = Array.from({ length: CLIENT_QUERY_STREAM_LIMIT }, (_, n) => busy.transport.requestQueryFetch(envelope('active-' + n)));
-await until(() => busy.sent.length === CLIENT_QUERY_STREAM_LIMIT);
+const active = Array.from({ length: CLIENT_NON_STRICT_QUERY_STREAM_LIMIT }, (_, n) => busy.transport.requestQueryFetch(envelope('active-' + n)));
+await until(() => busy.sent.length === CLIENT_NON_STRICT_QUERY_STREAM_LIMIT);
 const behind = notReady.transport.requestQueryFetch(envelope('still-waiting')).catch(error => error);
 const lostAuthorization = actor('lost-authorization', true);
 const lostPending = lostAuthorization.transport.requestQueryFetch(envelope('was-ready'));
