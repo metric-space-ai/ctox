@@ -7535,6 +7535,27 @@ fn business_command_intake_failure_keeps_unchanged_error_without_duplicate_text(
 }
 
 #[test]
+fn business_command_intake_failure_after_resolved_series_continues_numbering() {
+    let root = business_command_test_root("ctox-business-command-intake-after-resolve");
+    let claim = business_command_claim("command-intake-after-resolve", "sha256:after-resolve");
+    for _ in 0..2 {
+        record_business_command_intake_failure(&root, claim.clone(), "first series", 2)
+            .expect("persist first series");
+    }
+    resolve_business_command_intake_failures(&root, &claim.command_id)
+        .expect("resolve first series");
+    let next = record_business_command_intake_failure(&root, claim.clone(), "second series", 2)
+        .expect("a failure after a resolved series must persist");
+    assert_eq!(next["attempt"], 3);
+    assert_eq!(next["exhausted"], false);
+    let last = record_business_command_intake_failure(&root, claim.clone(), "second series", 2)
+        .expect("exhaust the new series");
+    assert_eq!(last["attempt"], 4);
+    assert_eq!(last["exhausted"], true);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn business_command_audit_resolves_only_proven_transient_intake_failures() {
     let root = business_command_test_root("ctox-business-command-transient-intake-reconcile");
     let original = business_command_claim("command-transient-intake", "sha256:original");

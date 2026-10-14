@@ -29,7 +29,7 @@ import { createCollectionReloader } from './collection-reloader.mjs';
 import { loadLeadList, loadFullLeadRows, leadListRow, withLeadQueryAuthority } from './lead-list-loader.mjs';
 import { captureResearchExport, openResearchSnapshot } from './current-state-export.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
-import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
+import { readErrorEntry } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
@@ -1536,8 +1536,6 @@ function bindUi() {
     if (state.nurZwischenstand && actionElement && !actionAllowedOnStartupSnapshot(actionElement.dataset.action)) {
       event.preventDefault();
       event.stopPropagation();
-      state.zwischenstandHinweisAt = Date.now();
-      renderSyncLine();
       return undefined;
     }
     // Jede Aktion ist async; ein Fehler (Wartung/Schreibschutz, abgerissene
@@ -2155,7 +2153,6 @@ function render() {
   if (state.uiMounted === false) return;
   captureScrollPositions();
   ensureLayoutSkeleton();
-  renderSyncLine();
   renderCampaigns();
   renderCenter();
   renderDetail();
@@ -2191,7 +2188,7 @@ function ensureLayoutSkeleton() {
           <button class="leadgen-settings-button" type="button" data-action="open-sources" title="${tr('sourceSettings', 'Recherche-Einstellungen: Quellen, Rechercheablauf, Pflichtfelder, Update-Verteiler')}">${icon('settings')}<span>Einstellungen</span></button>
         </div>
         <div class="leadgen-scroll leadgen-campaign-list" data-campaigns-body></div>
-        <footer class="ctox-pane-footer leadgen-pane-footer"><span data-sync-line role="status" aria-live="polite"></span></footer>
+        <footer class="ctox-pane-footer leadgen-pane-footer"></footer>
       </section>
       <button class="ctox-column-resizer leadgen-resizer" type="button" data-resizer="left" data-resizer-var="--leadgen-left" data-resizer-min="220" data-resizer-max="520" aria-label="Kampagnenbreite ändern"></button>
       <section class="ctox-pane leadgen-pane leadgen-leads" data-leads-pane>
@@ -2221,36 +2218,6 @@ function ensureLayoutSkeleton() {
     </div>
     <div data-source-panel></div>
     <div data-app-dialog></div>`;
-}
-
-// Sync-Zustand als Fusszeilen-Text statt als layoutverschiebendes Banner.
-function renderSyncLine() {
-  const line = state.ctx.host.querySelector('[data-sync-line]');
-  if (!line) return;
-  const waiting = state.syncWaitingCollections.size;
-  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
-  if (visibleErrors.length) {
-    const labels = { leads: 'Leads', sources: 'Quellen', adapters: 'Adapter', imports: 'Kampagnen', researchPolicies: 'Einstellungen' };
-    const failed = visibleErrors.map(key => labels[key] || key).join(', ');
-    line.innerHTML = `${escapeHtml(failed)} konnten nicht geladen werden. Der vorhandene Stand bleibt erhalten. <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
-    line.className = 'is-error';
-  } else if (state.nurZwischenstand) {
-    const vom = new Date(state.zwischenstandVomMs || Date.now()).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    const gesperrt = Date.now() - (state.zwischenstandHinweisAt || 0) < 8000;
-    line.textContent = gesperrt
-      ? `Gespeicherter Stand vom ${vom}. Änderungen sind möglich, sobald der aktuelle Stand aus CTOX geladen ist.`
-      : `Gespeicherter Stand vom ${vom} – wird mit CTOX abgeglichen`;
-    line.className = 'is-syncing';
-  } else if (state.syncPending || state.collectionReadErrors?.size) {
-    line.textContent = `${state.syncMessage || 'Daten werden verbunden'} (${REPLICATED_COLLECTIONS.length - waiting}/${REPLICATED_COLLECTIONS.length})`;
-    line.className = 'is-syncing';
-  } else if (state.syncError) {
-    line.innerHTML = `${escapeHtml(state.syncMessage || 'Datenverbindung konnte nicht hergestellt werden.')} <button class="leadgen-approve-link" data-action="retry-sync">Neu verbinden</button>`;
-    line.className = 'is-error';
-  } else {
-    line.textContent = '';
-    line.className = '';
-  }
 }
 
 // Ein Bereich wird nur neu geschrieben, wenn der Nutzer nicht gerade darin
@@ -2337,7 +2304,7 @@ function renderCampaigns() {
             <button class="ctox-pane-icon" data-action="rename-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne umbenennen" aria-label="${escapeHtml(campaign.name)} umbenennen">${icon('edit')}</button>
             <button class="ctox-pane-icon is-danger" data-action="delete-campaign" data-campaign="${escapeHtml(campaign.name)}" title="Kampagne „${escapeHtml(campaign.name)}“ löschen" aria-label="${escapeHtml(campaign.name)} löschen">${icon('trash')}</button>
           </div>
-        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Kampagnen werden geladen …', tr('noCampaigns', 'Noch keine Kampagne.'), 'Kampagnen konnten nicht geladen werden. Neu verbinden und erneut versuchen.'))}</div>`}`;
+        </div>`).join('') || `<div class="leadgen-empty">${escapeHtml(emptyCollectionText(['leads', 'imports'], 'Kampagnen werden geladen …', tr('noCampaigns', 'Noch keine Kampagne.')))}</div>`}`;
   if (state.kampagnenHtml === kampagnenHtml && body.childElementCount) return;
   state.kampagnenHtml = kampagnenHtml;
   body.innerHTML = kampagnenHtml;
@@ -3451,8 +3418,7 @@ function renderCenter() {
   const leerText = filterAktiv && campaignListLeads(state.selectedCampaign).length
     ? 'Keine Leads passen zu Suche oder Filter.'
     : emptyCollectionText(['leads'], 'Leads werden geladen …',
-      tr('noLeads', 'Noch keine Leads importiert.'),
-      'Leads konnten nicht geladen werden. Neu verbinden und erneut versuchen.');
+      tr('noLeads', 'Noch keine Leads importiert.'));
   // Wie die Kampagnenliste: unveraenderte Liste NICHT neu schreiben, sonst
   // verliert jede Sekunde ein Klick oder der Zeiger seine Zeile
   // (Owner-Befund 18.09.2026).
@@ -12788,14 +12754,11 @@ function setzeHtmlWennGeaendert(element, html) {
 // Solange die Synchronisation noch Sammlungen nachlaedt, ist eine leere Liste
 // kein Befund. Rundgang 28.09.2026: ~50 s lang stand „Noch keine Kampagne“ und
 // „Noch keine Leads importiert“ da, obwohl 12 Kampagnen gleich kamen.
-function emptyCollectionText(keys, loadingText, emptyText, errorText) {
-  // A failed read is not a pending read, even while other collections reconnect.
-  // A transient failure during a CTOX (re)start stays "loading" for a grace period.
-  const visibleErrors = visibleReadErrorKeys(state.collectionReadErrors);
-  if (keys.some(key => visibleErrors.includes(key))) return errorText;
+function emptyCollectionText(keys, loadingText, emptyText) {
+  // Retries never stop, so a failed read is shown as loading, never as an error.
   if (keys.some(key => state.collectionReadErrors?.has(key))) return loadingText;
   if (keys.every(key => state.reloadAngewendetJeSammlung?.has(key))) return emptyText;
-  if (state.syncError) return errorText;
+  if (state.syncError) return loadingText;
   return datenLadenNoch() ? loadingText : emptyText;
 }
 
@@ -14319,7 +14282,6 @@ export const __leadgenOutboundTestHooks = {
   freitextBestaetigungAusstehend,
   vermerkPruefungErledigt,
   reload,
-  renderSyncLine,
   renderCampaigns,
   renderCenter,
   bindCollections,

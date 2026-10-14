@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  READ_ERROR_GRACE_MS, isTransientReadError, readErrorEntry, visibleReadErrorKeys,
+  isTransientReadError, readErrorEntry,
 } from '../../customer-modules/outbound-lead-generation/read-error-grace.mjs';
 
 const coded = (code, message = 'x') => Object.assign(new Error(message), { code });
@@ -15,24 +15,13 @@ test('startup read failures are transient, real failures are not', () => {
   assert.equal(isTransientReadError(new Error('permission denied')), false);
 });
 
-test('a transient failure stays hidden for the grace period, then shows', () => {
+test('a continuing failure keeps its first timestamp', () => {
   const start = 1_000_000;
-  const errors = new Map([['imports', readErrorEntry(undefined, coded('LEAD_QUERY_TIMEOUT'), start)]]);
-  assert.deepEqual(visibleReadErrorKeys(errors, start + 20_000), []);
-  // A continuing failure keeps its first timestamp.
-  errors.set('imports', readErrorEntry(errors.get('imports'), coded('LEAD_QUERY_TIMEOUT'), start + 30_000));
-  assert.equal(errors.get('imports').since, start);
-  assert.deepEqual(visibleReadErrorKeys(errors, start + READ_ERROR_GRACE_MS), ['imports']);
-});
-
-test('a real failure shows at once', () => {
-  const errors = new Map([['leads', readErrorEntry(undefined, coded('LEAD_DETAIL_INVALID'), 5)]]);
-  assert.deepEqual(visibleReadErrorKeys(errors, 5), ['leads']);
+  const first = readErrorEntry(undefined, coded('LEAD_QUERY_TIMEOUT'), start);
+  assert.equal(readErrorEntry(first, coded('LEAD_QUERY_TIMEOUT'), start + 30_000).since, start);
 });
 
 test('any failure of a never-loaded collection is a startup failure', () => {
   const entry = readErrorEntry(undefined, coded('LEAD_DETAIL_INVALID'), 10, { neverLoaded: true });
   assert.equal(entry.transient, true);
-  assert.deepEqual(visibleReadErrorKeys(new Map([['leads', entry]]), 10 + 1000), []);
-  assert.deepEqual(visibleReadErrorKeys(new Map([['leads', entry]]), 10 + READ_ERROR_GRACE_MS), ['leads']);
 });

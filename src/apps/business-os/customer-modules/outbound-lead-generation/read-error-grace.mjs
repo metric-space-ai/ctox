@@ -2,9 +2,8 @@
 // authority yet, a read times out, or a reconnect changes the query
 // generation. The collection reloader retries those reads with backoff, and on
 // thesen (07.10.2026) the app recovered by itself about 20 s after a restart.
-// Until a grace period has passed, such a failure is shown as loading, not as
-// an error with "Neu verbinden". Every other failure is shown at once.
-export const READ_ERROR_GRACE_MS = 60000;
+// No read failure is shown as text; the entry only records which collections
+// are failing and since when.
 
 const TRANSIENT_CODES = new Set([
   'LEAD_QUERY_AUTHORITY_MISSING',
@@ -28,11 +27,4 @@ export function readErrorEntry(previous, reason, now = Date.now(), { neverLoaded
     transient,
     since: previous?.transient === transient && Number.isFinite(previous?.since) ? previous.since : now,
   };
-}
-
-export function visibleReadErrorKeys(errors, now = Date.now(), graceMs = READ_ERROR_GRACE_MS) {
-  if (!errors?.size) return [];
-  return [...errors]
-    .filter(([, entry]) => !entry?.transient || now - entry.since >= graceMs)
-    .map(([key]) => key);
 }

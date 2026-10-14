@@ -224,8 +224,6 @@ try {
         return query.selector.id?.$gt ? [] : [{ toJSON: () => leadListRow(existingLead) }];
       },
     });
-    const line = { innerHTML: '', textContent: '', className: '' };
-    state.ctx.host.querySelector = selector => selector === '[data-sync-line]' ? line : null;
     state.syncPending = true;
     await assert.rejects(hooks.reload(['sources', 'leads']), error => {
       assert.deepEqual(error.failedKeys, ['leads']); return true;
@@ -234,19 +232,11 @@ try {
     assert.equal(state.leads[0], existingLead, 'a rejected query cannot erase saved full details');
     assert.equal(state.leadListRows, null, 'a rejected query is never an empty list');
     assert.deepEqual([...state.collectionReadErrors.keys()], ['leads']);
-    hooks.renderSyncLine();
-    assert.equal(line.className, 'is-syncing', 'a never-loaded collection is still starting up');
-    state.collectionReadErrors.get('leads').since -= 61_000;
-    hooks.renderSyncLine();
-    assert.match(line.innerHTML, /Leads konnten nicht geladen werden/);
-    assert.equal(line.className, 'is-error', 'after the grace period the read failure takes priority over the sync spinner');
     failed = false;
     await hooks.reload(['leads']);
-    assert.equal(state.collectionReadErrors.size, 0);
-    hooks.renderSyncLine();
-    assert.equal(line.className, 'is-syncing', 'current success clears only its own failure');
+    assert.equal(state.collectionReadErrors.size, 0, 'current success clears only its own failure');
   });
-  await test('empty lists show a failed read, then confirmed emptiness despite other pending collections', async () => {
+  await test('empty lists stay loading through a failed read, then show confirmed emptiness despite other pending collections', async () => {
     let failed = true;
     setup({ leads: async () => { if (failed) throw Error('remote request token timeout'); return []; }, imports: async () => [] });
     Object.assign(state, { leads: [], leadListRows: null, imports: [], selectedCampaign: '', selectedLeadId: '',
@@ -267,12 +257,12 @@ try {
     // A collection that never loaded is still starting: loading, not an error.
     assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
     assert.match(leadBody.innerHTML, /Leads werden geladen/);
-    // After the grace period the same failure is shown as an error.
+    // Retries continue, so a lasting failure still reads as loading, never as an error.
     state.collectionReadErrors.get('leads').since -= 61_000;
     render();
-    assert.match(campaignBody.innerHTML, /Kampagnen konnten nicht geladen werden/);
-    assert.match(leadBody.innerHTML, /Leads konnten nicht geladen werden/);
-    assert.doesNotMatch(leadBody.innerHTML + campaignBody.innerHTML, /werden geladen|Noch keine/);
+    assert.match(campaignBody.innerHTML, /Kampagnen werden geladen/);
+    assert.match(leadBody.innerHTML, /Leads werden geladen/);
+    assert.doesNotMatch(leadBody.innerHTML + campaignBody.innerHTML, /konnten nicht geladen|Noch keine/);
     failed = false;
     await hooks.reload(['leads']);
     state.collectionReadErrors.set('adapters', 'unrelated provider collection failed');
