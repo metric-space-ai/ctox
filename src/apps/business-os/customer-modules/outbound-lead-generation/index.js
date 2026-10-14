@@ -12487,7 +12487,7 @@ function enabledPrivateResearchSources(sources = state.sources) {
 }
 
 // Firmenname fuer die Anbieter-Suche: der in den Lead-Daten belegte aktuelle
-// Name (firma_name) geht vor dem Listentitel. THESEN 14.10.2026: der Lead
+// Name (firma_name) geht vor dem Listentitel. Kundeninstanz 14.10.2026: der Lead
 // "Kiesow Dr. Brinkmann" (2020 umfirmiert) wurde bei Leadfeeder und D&B nur
 // unter dem Altnamen gesucht (0 Treffer); unter dem aktuellen Namen lieferten
 // beide 20 Ansprechpartner.
