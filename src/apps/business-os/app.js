@@ -14643,14 +14643,17 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
   }
 
   if (['project.exit_model.read', 'project.exit_model.refresh', 'project.exit_model.submit'].includes(action)) {
-    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'asOf', 'resources', 'inputs']));
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'projectId', 'asOf', 'resources', 'inputs', 'confirmRunId']));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
     const verb = action.split('.').at(-1);
-    if (verb === 'read' && ['asOf', 'resources', 'inputs'].some((key) => Object.hasOwn(request, key))) throw new Error('Exit read accepts project identity only.');
-    if (verb === 'refresh' && Object.hasOwn(request, 'inputs')) throw new Error('Exit refresh cannot submit researched inputs.');
-    if (verb === 'submit' && (!request.inputs || Object.hasOwn(request, 'resources'))) throw new Error('Exit submission requires typed inputs.');
+    const confirming = Object.hasOwn(request, 'confirmRunId');
+    if (verb === 'read' && ['asOf', 'resources', 'inputs', 'confirmRunId'].some((key) => Object.hasOwn(request, key))) throw new Error('Exit read accepts project identity only.');
+    if (verb === 'refresh' && (Object.hasOwn(request, 'inputs') || confirming)) throw new Error('Exit refresh cannot submit researched inputs.');
+    if (confirming && (verb !== 'submit' || ['asOf', 'resources', 'inputs'].some((key) => Object.hasOwn(request, key)))) throw new Error('Exit confirmation cannot override the stored proposal.');
+    if (verb === 'submit' && !confirming && (!request.inputs || Object.hasOwn(request, 'resources'))) throw new Error('Exit submission requires typed inputs.');
     const payload = { project_id: projectId };
+    if (confirming) payload.confirm_run_id = boundedWorkjetProjectText(request.confirmRunId, 'confirmRunId', 256);
     if (Object.hasOwn(request, 'asOf')) {
       if (typeof request.asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(request.asOf)) throw new Error('Invalid exit assessment date.');
       payload.as_of = request.asOf;
