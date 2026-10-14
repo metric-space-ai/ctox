@@ -339,7 +339,8 @@ export async function mount(container, ctx) {
       console.warn('[source-editor] module catalog unavailable:', error);
       state.modules = state.moduleId ? [{ id: state.moduleId, title: state.moduleTitle }] : [];
       renderModuleHeader();
-      if (!state.moduleId) setStatus(`Modulkatalog nicht verfügbar: ${error?.message || error}`, true);
+      console.warn('[code-editor] module catalog unavailable', error);
+      if (!state.moduleId) setStatus('Modulkatalog nicht verfügbar.', true);
     } finally {
       state.loadingModules = false;
       renderModuleList();
@@ -408,9 +409,11 @@ export async function mount(container, ctx) {
       console.error('[source-editor] load failed:', error);
       state.files = [];
       state.activePath = '';
-      clearEditor('Source nicht verfügbar', `${state.moduleTitle}: ${error?.message || error}`);
+      console.warn('[code-editor] source unavailable', error);
+      clearEditor('Source nicht verfügbar', state.moduleTitle || '');
       renderFileList();
-      setStatus(`Source konnte nicht geladen werden: ${error?.message || error}`, true);
+      console.warn('[code-editor] source load failed', error);
+      setStatus('Source konnte nicht geladen werden.', true);
     } finally {
       state.loading = false;
       renderFileList();
@@ -555,7 +558,8 @@ export async function mount(container, ctx) {
       setStatus(`${file.path} gespeichert. Snapshot: ${result.snapshot_id || 'nicht nötig'}.`);
     } catch (error) {
       console.error('[source-editor] save failed:', error);
-      setStatus(`Speichern fehlgeschlagen: ${error?.message || error}`, true);
+      console.warn('[code-editor] save failed', error);
+      setStatus('Speichern hat nicht geklappt.', true);
     } finally {
       state.saving = false;
       updateActionState();
@@ -583,7 +587,8 @@ export async function mount(container, ctx) {
     try {
       formatted = formatSourceContent(value, file.language || languageFromPath(file.path), file.path);
     } catch (error) {
-      setStatus(`Formatieren fehlgeschlagen: ${error?.message || error}`, true);
+      console.warn('[code-editor] format failed', error);
+      setStatus('Formatieren hat nicht geklappt.', true);
       return;
     }
     if (formatted === value) {
@@ -774,7 +779,8 @@ export async function mount(container, ctx) {
     try {
       commits = await loadCommitsFromRxdb();
     } catch (error) {
-      refs.historyPanel.innerHTML = `<p class="source-editor-empty">History nicht verfügbar: ${escapeHtml(String(error?.message || error))}</p>`;
+      console.warn('[code-editor] history unavailable', error);
+      refs.historyPanel.innerHTML = '<p class="source-editor-empty">Verlauf konnte nicht geladen werden.</p>';
       return;
     }
     state.commits = commits;
@@ -816,7 +822,8 @@ export async function mount(container, ctx) {
       }
     } catch (error) {
       console.error('[source-editor] commit failed:', error);
-      setStatus(`Commit fehlgeschlagen: ${error?.message || error}`, true);
+      console.warn('[code-editor] commit failed', error);
+      setStatus('Commit hat nicht geklappt.', true);
     } finally {
       state.saving = false;
       updateActionState();
@@ -907,8 +914,9 @@ export async function mount(container, ctx) {
       }
     } catch (error) {
       console.error('[source-editor] agent turn failed:', error);
-      setAgentHint(`Fehlgeschlagen: ${error?.message || error}`, true);
-      setStatus(`Agent fehlgeschlagen: ${error?.message || error}`, true);
+      console.warn('[code-editor] agent failed', error);
+      setAgentHint('Das hat nicht geklappt.', true);
+      setStatus('Das hat nicht geklappt.', true);
     } finally {
       state.saving = false;
       updateActionState();
