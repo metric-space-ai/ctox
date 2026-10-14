@@ -10,6 +10,10 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod shopify;
+pub mod airtable;
+pub mod asana;
+pub mod salesforce;
 pub mod google_calendar;
 pub mod google_drive;
 pub mod hubspot;
@@ -36,6 +40,10 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(shopify::Shopify::default()),
+        Box::new(airtable::Airtable::default()),
+        Box::new(asana::Asana::default()),
+        Box::new(salesforce::Salesforce::default()),
         Box::new(google_calendar::GoogleCalendar::default()),
         Box::new(google_drive::GoogleDrive::default()),
         Box::new(hubspot::HubSpot::default()),
