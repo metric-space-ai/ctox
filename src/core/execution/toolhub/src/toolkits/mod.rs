@@ -10,6 +10,12 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod google_calendar;
+pub mod google_drive;
+pub mod hubspot;
+pub mod jira;
+pub mod linear;
+pub mod teams;
 
 pub trait ToolkitAdapter: Send + Sync {
     fn spec(&self) -> &ToolkitSpec;
@@ -28,6 +34,12 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(google_calendar::GoogleCalendar::default()),
+        Box::new(google_drive::GoogleDrive::default()),
+        Box::new(hubspot::HubSpot::default()),
+        Box::new(jira::Jira::default()),
+        Box::new(linear::Linear::default()),
+        Box::new(teams::Teams::default()),
     ]
 }
 
