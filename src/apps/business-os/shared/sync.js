@@ -942,7 +942,7 @@ export function createSyncRuntime({
           connectionStatus: bridge.mode === 'pending' ? 'pending' : 'connecting',
           topic: bridge.topic || null,
           reason: bridge.reason || null,
-          lastError: null,
+          lastError: bridge.registrationError || null,
           reconnectingSince: null,
           connectedAt: null,
         });
@@ -1740,18 +1740,21 @@ async function startWebRtcReplication({
   scheduleRestart,
 }) {
   let rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
+  let registrationError = null;
   if (!rxCollection && typeof ensureCollectionRegistered === 'function') {
     try {
       // A module can request sync before its schema import finishes. Retrying
       // the bridge alone cannot repair a collection missing from db.raw.
       await ensureCollectionRegistered(collection);
     } catch (error) {
-      recordCollection?.(collection, { lastError: serializeError(error) });
+      registrationError = serializeError(error);
     }
     rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
   }
   if (!rxCollection) {
-    recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
+    recordCollection?.(collection, {
+      status: 'pending', reason: 'collection-not-registered', lastError: registrationError,
+    });
     // Losing the startup race produces NO event — the collection simply is not
     // in db.raw yet and nothing fails. An event-driven repair cycle can never
     // wake for a state that never announced itself. The unconditional sweep in
@@ -1766,7 +1769,7 @@ async function startWebRtcReplication({
     // reason='collection-not-registered' while it was demonstrably present in
     // db.raw, right next to user_thread_links which had connected normally.
     scheduleRestart?.(collection);
-    return { mode: 'pending', collection, reason: 'collection-not-registered' };
+    return { mode: 'pending', collection, reason: 'collection-not-registered', registrationError };
   }
   if (collection === 'desktop_icons' && typeof rxCollection.find === 'function') {
     await repairDesktopIconsBeforeReplication(rxCollection);

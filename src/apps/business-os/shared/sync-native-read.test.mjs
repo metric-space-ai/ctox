@@ -98,6 +98,28 @@ test('a missing module schema is registered before its direct bridge starts', as
   } finally { await f.close(); }
 });
 
+test('a failed schema import stays pending and can recover on the next attempt', async () => {
+  let attempts = 0;
+  const f = fixture({
+    leader: true,
+    missingAtStart: true,
+    onRegister: async (name, raw, collection) => {
+      attempts++;
+      if (attempts === 1) throw new Error('schema import unavailable');
+      raw[name] = collection;
+    },
+  });
+  try {
+    const first = await f.runtime.startCollection('desktop_layout');
+    assert.equal(first.reason, 'collection-not-registered');
+    assert.match(first.registrationError?.message || '', /schema import unavailable/);
+    const repaired = await f.runtime.restartCollection('desktop_layout');
+    assert.notEqual(repaired.reason, 'collection-not-registered');
+    assert.equal(f.calls.registrations, 2);
+    assert.equal(f.calls.starts, 1);
+  } finally { await f.close(); }
+});
+
 for (const leader of [false, true]) {
   test(`authoritative read reaches native state in a ${leader ? 'leader' : 'follower'} tab`, async () => {
     const f = fixture({ leader });
