@@ -69,6 +69,10 @@
   --news-fill-strong: color-mix(in srgb, currentColor 11%, transparent);
   --news-hover: color-mix(in srgb, currentColor 5%, transparent);
   --news-field: color-mix(in srgb, currentColor 7%, var(--shell-v2-surface, var(--bg)));
+  /* Top-right zone held by the window controls (layout menu + close since
+     7dba740b7): two close-size buttons plus their gap, never less than the
+     two header rows the contract names. */
+  --news-controls: max(calc(var(--news-row) * 2), calc(var(--shell-v2-close-size, 44px) * 2 + 12px));
   padding: 0;
 }
 .shell-window[data-shell-contract="v2"] .news-module :is(.ctox-pane-search, .ctox-input, .ctox-select, .ctox-textarea) {
@@ -120,8 +124,11 @@
 }
 .shell-window[data-shell-contract="v2"] .news-module .ctox-column-resizer::after { display: none; }
 .shell-window[data-shell-contract="v2"] .news-module .ctox-column-resizer:is(:hover, :focus-visible, .is-active)::before { width: 6px; opacity: 1; }
-/* The drawer opens below the two header rows: the window control owns the
-   top-right 74x74 zone. */
+/* The shell's floating chat/feedback bubble sits over the window's bottom-right
+   corner; keep the drawer's primary action clear of it. */
+.shell-window[data-shell-contract="v2"] .news-module .news-drawer-foot { padding-right: 64px; }
+/* The drawer opens below the two header rows: the window controls own the
+   top-right corner. */
 .shell-window[data-shell-contract="v2"] .news-module .news-drawer { top: calc(var(--news-row) * 2 + 6px); }
 .shell-window[data-shell-contract="v2"] .news-module .news-pane {
   border: 0;
@@ -163,7 +170,7 @@
   height: calc(var(--news-row) * 2);
   min-height: calc(var(--news-row) * 2);
   padding-left: 14px;
-  padding-right: calc(var(--news-row) * 2);
+  padding-right: var(--news-controls, calc(var(--news-row) * 2));
 }
 .shell-window[data-shell-contract="v2"] .news-module .ctox-view-switch { padding-top: 8px; background: var(--news-bg); }
 
@@ -490,7 +497,7 @@
   /* The feed now reaches the window edge: both header rows step aside. */
   .shell-window[data-shell-contract="v2"] .news-module .news-center > .ctox-pane-header,
   .shell-window[data-shell-contract="v2"] .news-module .news-center > .ctox-filterbar {
-    padding-right: calc(var(--news-row) * 2);
+    padding-right: var(--news-controls, calc(var(--news-row) * 2));
   }
 }
 
@@ -509,7 +516,7 @@
   .news-module.is-detail .news-mobile-back { display: inline-flex; }
   .shell-window[data-shell-contract="v2"] .news-module .news-left > .ctox-pane-header,
   .shell-window[data-shell-contract="v2"] .news-module .news-left > .ctox-filterbar {
-    padding-right: calc(var(--news-row) * 2);
+    padding-right: var(--news-controls, calc(var(--news-row) * 2));
   }
   .shell-window[data-shell-contract="v2"] .news-module .news-center > .ctox-pane-header,
   .shell-window[data-shell-contract="v2"] .news-module .news-center > .ctox-filterbar {
