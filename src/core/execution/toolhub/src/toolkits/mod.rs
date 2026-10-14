@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod dropbox;
 pub mod zendesk;
 pub mod shopify;
 pub mod airtable;
@@ -41,6 +42,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(dropbox::Dropbox::default()),
         Box::new(zendesk::Zendesk::default()),
         Box::new(shopify::Shopify::default()),
         Box::new(airtable::Airtable::default()),
