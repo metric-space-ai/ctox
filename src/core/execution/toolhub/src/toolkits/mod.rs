@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod confluence;
 pub mod calendly;
 pub mod sharepoint;
 pub mod twilio;
@@ -63,6 +64,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(confluence::Confluence::default()),
         Box::new(calendly::Calendly::default()),
         Box::new(sharepoint::SharePoint::default()),
         Box::new(twilio::Twilio::default()),
