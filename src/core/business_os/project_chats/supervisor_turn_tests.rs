@@ -26,6 +26,10 @@ fn exit_autostart_admits_exactly_one_turn_without_resources_and_retains_reasoned
             .context("research queue")?;
     assert!(task.prompt.contains("resource_proposal_reason"));
     assert!(task.prompt.contains("never owner confirmation"));
+    assert!(task.prompt.contains("Owner project context"));
+    assert!(task
+        .prompt
+        .contains("comparison_mode MUST be equal_resources or project_specific"));
     drop(conn);
     exit::complete_research(root.path(),&research,&json!({"resource_proposal":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"},"resource_proposal_reason":"Fixture-only proposal based on the documented team and budget; requires owner confirmation.","exit_model_blocked":{"missing_inputs":["confirmed_plan"]}}).to_string())?;
     let conn = open_store(root.path())?;
@@ -35,7 +39,11 @@ fn exit_autostart_admits_exactly_one_turn_without_resources_and_retains_reasoned
     assert!(proposal["result"].is_null());
     assert_eq!(
         proposal["findings"][0]["code"],
-        "resource_proposal_requires_confirmation"
+        "resource_proposal_recorded"
+    );
+    assert_eq!(
+        proposal["missing_inputs"],
+        json!(["researched_60_month_resource_plan", "researched_inputs"])
     );
     drop(conn);
     crate::business_os::refresh_due_workjet_exit_models(root.path())?;

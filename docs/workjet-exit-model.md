@@ -34,6 +34,10 @@ returns `assessment.resource_proposal` and `assessment.plan_summary`; a complete
 plan awaiting only acceptance has `missing_inputs:["confirmed_resource_plan"]`
 and the finding `resource_proposal_requires_confirmation`. A resource-only
 proposal or genuinely missing sources/rights is not an adoptable valuation.
+Before a complete researched `Inputs` object is stored, `missing_inputs` instead
+names `researched_60_month_resource_plan` and `researched_inputs`; this is a
+research gap, not an Owner confirmation request. The Owner's one-click adoption
+requires retained `inputs_json` and the exact `confirmed_resource_plan` state.
 
 Adoption loads the retained inputs inside the existing domain-effect transaction,
 checks current project ownership, latest-run CAS and source validity at today's
