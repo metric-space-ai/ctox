@@ -82,6 +82,22 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(after["collected_at"], "old-complete-snapshot")
         detail.assert_called_once()
 
+    def test_report_keeps_full_inventory_and_delta_watermarks_distinct(self):
+        current = self.base / "terminal-evidence/current.json"
+        original = dict(prs=[], collected_at="2026-10-13T06:26:13Z",
+                        delta_updated_at="2026-10-14T08:43:49Z")
+        report.save(current, original)
+        with patch.object(report, "assessments", return_value=[]), \
+             patch.object(report, "jobs", return_value=[]), \
+             patch.object(report, "read", side_effect=lambda p: "__REPORT_DATA__" if Path(p).name == "terminal_report.html" else Path(p).read_text()):
+            data = report.build(self.base)
+            self.assertEqual(data["snapshot_at"], original["collected_at"])
+            self.assertEqual(data["delta_updated_at"], original["delta_updated_at"])
+            self.assertEqual(report.load(current), original)
+            del original["delta_updated_at"]
+            report.save(current, original)
+            self.assertIsNone(report.build(self.base)["delta_updated_at"])
+
     def test_old_terminal_events_are_not_backfilled_into_new_repository_scope(self):
         change = self.change(7, closed="2026-10-01T00:00:00Z")
         with patch.object(daily, "detail") as detail:

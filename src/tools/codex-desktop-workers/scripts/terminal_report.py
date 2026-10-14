@@ -681,6 +681,7 @@ def build(base):
             "Legacy evidence present; five-criterion review pending" if any(r["pr_url"] == p["url"] for r in legacy) else
             "PR evidence collected; assignment/actor review not yet completed")
     data = dict(schema=RUBRIC, generated_at=now(), snapshot_at=snapshot["collected_at"],
+                delta_updated_at=snapshot.get("delta_updated_at"),
                 summary=summary, weights=WEIGHTS, prs=prs, assessments=records, legacy=legacy,
                 coverage=coverage_data(prs, records),
                 non_delivery_attempts=non_delivery_attempts, non_delivery_legacy=non_delivery_legacy,
