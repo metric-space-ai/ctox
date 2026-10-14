@@ -532,8 +532,24 @@ pub fn skill_bundle_exists(root: &Path, skill_name: &str) -> Result<bool> {
 
 pub fn load_skill_body_by_name(root: &Path, skill_name: &str) -> Result<Option<String>> {
     let Some(bundle) = load_skill_bundle_by_name(root, skill_name)? else {
-        return Ok(None);
+        // The start-up import of system skills is opt-in
+        // (CTOX_SERVICE_BOOTSTRAP_SYSTEM_SKILLS), so a system skill new in this
+        // binary is missing from the catalog until something imports it. A task
+        // bound to it failed with "no readable SKILL.md body" (news-aggregation
+        // on welsch, 14.10.2026); the binary carries the body, use it.
+        return Ok(embedded_skill_body_by_name(skill_name));
     };
+    // A catalog row imported from an older binary keeps the old body after an
+    // upgrade; for system skills the running binary is the source of truth.
+    if bundle
+        .source_path
+        .as_deref()
+        .is_some_and(|path| path.starts_with("embedded:skills/system/"))
+    {
+        if let Some(body) = embedded_skill_body_by_name(skill_name) {
+            return Ok(Some(body));
+        }
+    }
     let files = list_skill_files(root, &bundle.skill_id)?;
     files
         .into_iter()
@@ -1655,6 +1671,39 @@ mod tests {
         assert!(load_skill_deliverable_contract(&root, "no-such-skill-xyz")
             .expect("load")
             .is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bound_system_skill_body_resolves_without_bootstrap_and_after_upgrade() {
+        let root =
+            std::env::temp_dir().join(format!("ctox-skill-body-binding-{}", now_epoch_string()));
+        std::fs::create_dir_all(&root).expect("create root");
+        // Never imported: the embedded body still binds.
+        let body = load_skill_body_by_name(&root, "news-aggregation")
+            .expect("load")
+            .expect("embedded body without bootstrap");
+        assert!(body.contains("name: news-aggregation"));
+        assert!(load_skill_body_by_name(&root, "no-such-skill-xyz")
+            .expect("load")
+            .is_none());
+        // A stale catalog copy from an older binary yields to the embedded body.
+        bootstrap_embedded_system_skills(&root).expect("bootstrap");
+        let bundle = load_skill_bundle_by_name(&root, "news-aggregation")
+            .expect("lookup")
+            .expect("imported");
+        let conn = open_db(&root).expect("db");
+        conn.execute(
+            &format!(
+                "UPDATE {SKILL_FILES_TABLE} SET content_blob = ?1 WHERE skill_id = ?2 AND relative_path = 'SKILL.md'"
+            ),
+            params![b"stale".to_vec(), bundle.skill_id],
+        )
+        .expect("simulate stale row");
+        assert_eq!(
+            load_skill_body_by_name(&root, "news-aggregation").expect("load"),
+            Some(body)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
