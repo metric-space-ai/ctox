@@ -14,6 +14,8 @@ use ctox_cliproxyapi::internal::config::validate_credential_weight;
 use serde::{Deserialize, Serialize};
 
 mod api_key_config;
+mod api_key_ingress;
+pub(crate) use api_key_ingress::{install_api_key_account_authorized, ApiKeyProvider};
 mod kimi_host;
 pub use api_key_config::{ApiKeyAccountConfig, ApiKeyEndpoint};
 pub(crate) use kimi_host::save_provider_integration_config;
