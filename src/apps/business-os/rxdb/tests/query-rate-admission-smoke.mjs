@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createDemandLoadingTransport } from '../dist/ctox-rxdb-js.mjs';
 
-// THESEN 14.10: a busy Outbound tab exhausted the native per-peer query rate
+// Production incident 14.10: a busy Outbound tab exhausted the native per-peer query rate
 // bucket while the owner opened and saved a lead. Every send, including a
 // retry, must pass the shared browser budget before reaching the native peer.
 let transport;
@@ -37,3 +37,18 @@ assert.ok(sentAt[24] - sentAt[0] >= 45,
 assert.ok(sentAt[32] - sentAt[0] >= 500,
   `steady demand traffic must remain below the native rate (${sentAt[32] - sentAt[0]}ms)`);
 assert.equal(transport.diagnostics().pendingQueryCollectors, 0);
+
+const rateState = globalThis[Symbol.for('ctox.rxdb.query-stream-state.v1')];
+rateState.rateBucket = { tokens: 0, lastRefillAt: Date.now() };
+const cancelled = transport.requestQueryFetch({
+  requestId: 'rate-cancel', collectionName: 'outbound_lead_generation_leads',
+  schemaVersion: 1, queryFingerprint: 'rate-cancel',
+  query: { selector: {}, sort: [], limit: 1, skip: 0 },
+  window: { offset: 0, limit: 1 },
+});
+await Promise.resolve();
+await transport.requestQueryCancel({ requestId: 'rate-cancel' });
+await assert.rejects(cancelled, /cancel|abort/i);
+assert.equal(sentAt.length, 33, 'a cancelled waiter must never reach the native peer');
+assert.equal(transport.diagnostics().pendingQueryCollectors, 0);
+delete rateState.rateBucket;
