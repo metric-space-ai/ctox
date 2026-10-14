@@ -444,6 +444,40 @@ async fn accepted_credentials_are_encrypted_and_not_replaced_by_login() {
 }
 
 #[tokio::test]
+async fn catalog_diagnostics_oversized_http_response_is_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    save_bundle(root.path(), &bundle()).unwrap();
+    let error = catalog_fixture(root.path(), 200, &" ".repeat(1024 * 1024 + 1))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, GrokCatalogErrorKind::ResponseTooLarge);
+    assert_eq!(error.http_status, Some(200));
+}
+
+#[tokio::test]
+async fn catalog_diagnostics_empty_or_invalid_bearer_is_local() {
+    let root = tempfile::tempdir().unwrap();
+    for access in ["", " ", "fixture\r\nprivate-header"] {
+        let mut stored = stored_bundle(&bundle());
+        stored.access = access.into();
+        crate::secrets::write_secret_record(
+            root.path(),
+            SCOPE,
+            NAME,
+            &serde_json::to_string(&stored).unwrap(),
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let error = discover_models_detailed(root.path()).await.unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
+        assert_eq!(error.phase, "credential");
+        assert_eq!(error.http_status, None);
+        assert!(!format!("{error:?} {error}").contains("private-header"));
+    }
+}
+
+#[tokio::test]
 async fn catalog_diagnostics_missing_account_is_local_and_has_operator_action() {
     let root = tempfile::tempdir().unwrap();
     let error = discover_models_detailed(root.path()).await.unwrap_err();
@@ -510,7 +544,12 @@ async fn catalog_fixture(
         let mut buffer = vec![0; 16384];
         let n = socket.read(&mut buffer).await.unwrap();
         assert!(String::from_utf8_lossy(&buffer[..n]).starts_with("GET /models "));
-        socket.write_all(reply.as_bytes()).await.unwrap();
+        if let Err(error) = socket.write_all(reply.as_bytes()).await {
+            assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+            ));
+        }
     });
     let result = discover_models_detailed(root).await;
     test_endpoint(root, None);
@@ -567,7 +606,9 @@ async fn catalog_diagnostics_valid_catalog_and_credential_echo_are_distinct() {
     assert_eq!(result, ["catalog-fixture"]);
     for body in [
         r#"{"data":[{"id":"fixture-access"}]}"#,
+        r#"{"data":[{"id":"catalog-fixture-access-suffix"}]}"#,
         r#"{"data":[{"id":"fixture-refresh"}]}"#,
+        r#"{"data":[{"id":"catalog-fixture-refresh-suffix"}]}"#,
         r#"{"data":[{"id":false}]}"#,
         "private-invalid-json",
     ] {

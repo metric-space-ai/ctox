@@ -598,6 +598,17 @@ async fn active_record(
     let mut record: Stored = serde_json::from_str(&encoded).map_err(|_| {
         GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCredential, "credential")
     })?;
+    if record.access.is_empty()
+        || record
+            .access
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+    {
+        return Err(GrokCatalogFailure::new(
+            GrokCatalogErrorKind::InvalidCredential,
+            "credential",
+        ));
+    }
     if record.expires_at.is_some_and(|expiry| {
         expiry
             <= std::time::SystemTime::now()
@@ -755,9 +766,15 @@ fn parse_catalog(bytes: &[u8], record: &Stored) -> Result<Vec<String>, GrokCatal
                 || !id
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"_.:/-".contains(&b))
-                || id == record.access
-                || record.refresh.as_deref() == Some(id)
-                || record.identity.as_deref() == Some(id)
+                || (!record.access.is_empty() && id.contains(&record.access))
+                || record
+                    .refresh
+                    .as_deref()
+                    .is_some_and(|token| !token.is_empty() && id.contains(token))
+                || record
+                    .identity
+                    .as_deref()
+                    .is_some_and(|token| !token.is_empty() && id.contains(token))
             {
                 return Err(invalid());
             }
