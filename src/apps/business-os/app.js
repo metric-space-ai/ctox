@@ -61,10 +61,6 @@ import {
 import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-query-ready-coalesce2';
 import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-query-ready-coalesce2';
 import {
-  CTOX_MAINTENANCE_MESSAGE,
-  CTOX_MAINTENANCE_SYNC_MESSAGE,
-  isDataEmptyStateText,
-  maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
 } from './shared/maintenance-state.js?v=20261014-shell-v2-query-ready-coalesce2';
@@ -1249,7 +1245,6 @@ const els = {
   status: document.querySelector('[data-status-text]'),
   collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
-  maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
   ctoxVersion: document.querySelector('[data-ctox-version]'),
   tabs: document.querySelector('[data-module-tabs]'),
@@ -10065,9 +10060,6 @@ function startMaintenanceMonitor() {
     applyMaintenanceState(normalizeMaintenancePayload(null));
     return;
   }
-  els.maintenanceBanner?.querySelector('[data-maintenance-retry]')?.addEventListener('click', () => {
-    refreshMaintenanceStatus({ retry: true }).then(scheduleMaintenancePoll);
-  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       refreshMaintenanceStatus().then(scheduleMaintenancePoll);
@@ -10090,7 +10082,7 @@ function isWorkjetStaticShellLaunch() {
   ].includes(source);
 }
 
-async function refreshMaintenanceStatus(options = {}) {
+async function refreshMaintenanceStatus() {
   const rememberedLease = rememberedMaintenanceLease();
   const rememberedLeaseId = rememberedLease.leaseId;
   try {
@@ -10102,11 +10094,6 @@ async function refreshMaintenanceStatus(options = {}) {
     if (!payload.active && ['completed', 'rolled_back'].includes(next.status)) {
       rememberMaintenanceLease('');
       applyMaintenanceState(normalizeMaintenancePayload(payload));
-      if (next.status === 'rolled_back') {
-        setStatus(next.error || (shellLang() === 'de'
-          ? 'Das Upgrade wurde zurückgesetzt. CTOX verwendet wieder die vorherige Version.'
-          : 'The upgrade was rolled back. CTOX is using the previous version again.'));
-      }
       return;
     }
     applyMaintenanceState(next);
@@ -10121,9 +10108,6 @@ async function refreshMaintenanceStatus(options = {}) {
         retryable: true,
         progress: {
           percent: state.maintenance?.percent || 70,
-          message: options.retry
-            ? 'Verbindung wird erneut aufgebaut'
-            : 'CTOX-Dienst startet neu · Verbindung wird wiederhergestellt',
         },
         last_error: String(error?.message || error),
       },
@@ -10136,27 +10120,11 @@ function applyMaintenanceState(next) {
   state.maintenance = next;
   document.body.dataset.maintenanceActive = next.active ? 'true' : 'false';
   document.body.dataset.maintenanceStatus = next.status || 'idle';
-  if (els.maintenanceBanner) {
-    els.maintenanceBanner.hidden = !next.active;
-    const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-    const progress = els.maintenanceBanner.querySelector('[data-maintenance-progress]');
-    const retry = els.maintenanceBanner.querySelector('[data-maintenance-retry]');
-    if (detail) detail.textContent = next.error && ['failed', 'stale'].includes(next.status)
-      ? `${maintenancePhaseLabel(next, shellLang())}: ${next.error}`
-      : maintenancePhaseLabel(next, shellLang());
-    if (progress) {
-      progress.style.width = `${Math.round(next.percent || 0)}%`;
-      progress.title = `${Math.round(next.percent || 0)}%`;
-    }
-    if (retry) retry.hidden = !next.retryable;
-  }
   if (next.active) {
-    startMaintenanceEmptyStateGuard();
     if (next.serviceActive && next.replicationUp && next.status === 'active') {
       tryAcknowledgeMaintenanceReadiness();
     }
   } else {
-    stopMaintenanceEmptyStateGuard();
     state.maintenanceAckLeaseId = '';
     if (wasActive) resumeMaintenanceInterruptedModuleMount();
   }
@@ -10177,8 +10145,7 @@ function resumeMaintenanceInterruptedModuleMount() {
       const refreshed = state.modules.find((entry) => entry.id === moduleId) || state.activeModule;
       await openModule(refreshed.id, { force: true, isNavHistory: true });
     } catch (error) {
-      console.error(`[business-os] ${moduleId} remount after maintenance failed`, error);
-      setStatus(`${moduleId}: ${error?.message || error}`);
+      console.warn(`[business-os] ${moduleId} remount after maintenance failed`, error);
     }
   });
 }
@@ -10204,21 +10171,9 @@ async function tryAcknowledgeMaintenanceReadiness() {
     const diagnostics = state.syncDiagnostics?.collections?.[name];
     return !(diagnostics?.initialReplicationAt || diagnostics?.initialReplicationState === 'complete');
   });
-  if (missing.length) {
-    if (els.maintenanceBanner) {
-      const detail = els.maintenanceBanner.querySelector('[data-maintenance-detail]');
-      // Name the collection that is holding the instance read-only. "1
-      // ausstehend" forced a reach into window.ctoxBusinessOsSyncDiagnostics
-      // to find out which one, while every user waited out the grace period
-      // (thesen 09.09.2026, four upgrades in a row).
-      if (detail) {
-        const named = missing.slice(0, 3).join(', ');
-        const rest = missing.length > 3 ? ` und ${missing.length - 3} weitere` : '';
-        detail.textContent = `${CTOX_MAINTENANCE_SYNC_MESSAGE} · wartet auf ${named}${rest}`;
-      }
-    }
-    return;
-  }
+  // Collections that have not finished their first replication keep the lease
+  // unacknowledged. The shell does not describe that wait in the customer UI.
+  if (missing.length) return;
   state.maintenanceAckLeaseId = leaseId;
   const commandId = `cmd_maintenance_ready_${crypto.randomUUID?.() || Date.now()}`;
   try {
@@ -10241,39 +10196,6 @@ async function tryAcknowledgeMaintenanceReadiness() {
     state.maintenanceAckLeaseId = '';
     console.warn('[business-os] maintenance readiness acknowledgement failed:', error);
   }
-}
-
-function startMaintenanceEmptyStateGuard() {
-  applyMaintenanceEmptyStateGuard();
-  if (state.maintenanceEmptyObserver) return;
-  state.maintenanceEmptyObserver = new MutationObserver(applyMaintenanceEmptyStateGuard);
-  state.maintenanceEmptyObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-}
-
-function applyMaintenanceEmptyStateGuard() {
-  if (!state.maintenance?.active) return;
-  const selectors = '[class*="empty"], [data-empty], td[colspan]';
-  for (const node of document.querySelectorAll(selectors)) {
-    if (isDataEmptyStateText(node.textContent)) node.dataset.maintenanceEmptyState = 'true';
-  }
-  for (const host of document.querySelectorAll('[data-module-content]')) {
-    if (!host.querySelector('[data-maintenance-empty-state="true"]')) continue;
-    if (host.querySelector('[data-maintenance-data-placeholder]')) continue;
-    const placeholder = document.createElement('div');
-    placeholder.className = 'ctox-maintenance-data-placeholder';
-    placeholder.dataset.maintenanceDataPlaceholder = '';
-    placeholder.textContent = CTOX_MAINTENANCE_SYNC_MESSAGE;
-    host.prepend(placeholder);
-  }
-}
-
-function stopMaintenanceEmptyStateGuard() {
-  state.maintenanceEmptyObserver?.disconnect?.();
-  state.maintenanceEmptyObserver = null;
-  document.querySelectorAll('[data-maintenance-empty-state]').forEach((node) => {
-    delete node.dataset.maintenanceEmptyState;
-  });
-  document.querySelectorAll('[data-maintenance-data-placeholder]').forEach((node) => node.remove());
 }
 
 function startWorkspaceBrandingMonitor() {

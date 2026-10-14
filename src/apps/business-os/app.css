@@ -237,93 +237,8 @@ button {
   overflow: hidden;
 }
 
-body[data-maintenance-active="true"] .app-shell {
-  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-}
-
 .app-shell:has(> .collection-freshness-warning:not([hidden])) {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-}
-
-body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warning:not([hidden])) {
-  grid-template-rows: var(--shell-topbar-height) auto auto minmax(0, 1fr);
-}
-
-.ctox-maintenance-banner {
-  position: relative;
-  z-index: 8;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(90px, 18vw) auto;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 38px;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line));
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
-
-.ctox-maintenance-banner[hidden] {
-  display: none;
-}
-
-.ctox-maintenance-icon {
-  color: var(--accent);
-  font-size: 18px;
-  line-height: 1;
-  animation: ctox-maintenance-spin 1.4s linear infinite;
-}
-
-.ctox-maintenance-copy {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.ctox-maintenance-copy strong,
-.ctox-maintenance-copy span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ctox-maintenance-copy strong {
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
-}
-
-.ctox-maintenance-copy span {
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-
-.ctox-maintenance-progress {
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 65%, transparent);
-}
-
-.ctox-maintenance-progress > span {
-  display: block;
-  width: 0;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width var(--motion-base) var(--ease-standard);
-}
-
-.ctox-maintenance-retry {
-  min-height: 28px;
-  padding: 3px var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--control-radius);
-  background: var(--surface);
-  color: var(--text);
-  font-size: var(--fs-meta);
-  font-weight: 700;
 }
 
 .collection-freshness-warning {
@@ -338,56 +253,6 @@ body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warn
 
 .collection-freshness-warning[hidden] {
   display: none;
-}
-
-body[data-maintenance-status="failed"] .ctox-maintenance-banner,
-body[data-maintenance-status="stale"] .ctox-maintenance-banner {
-  border-bottom-color: color-mix(in srgb, var(--danger) 70%, var(--line));
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
-}
-
-[data-maintenance-empty-state="true"] {
-  display: none !important;
-}
-
-/* Floating toast — must never sit in the content flow or it shifts the app
-   header/content down. Overlaid at the bottom of the module content instead. */
-.ctox-maintenance-data-placeholder {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  margin: 0;
-  max-width: calc(100% - 24px);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface));
-  color: var(--text);
-  font-size: var(--fs-meta);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-  pointer-events: none;
-}
-
-@keyframes ctox-maintenance-spin {
-  to { transform: rotate(360deg); }
-}
-
-@media (max-width: 720px) {
-  .ctox-maintenance-banner {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    padding-inline: var(--space-2);
-  }
-
-  .ctox-maintenance-copy span,
-  .ctox-maintenance-progress {
-    display: none;
-  }
 }
 
 .topbar {
@@ -8751,10 +8616,6 @@ button.shell-window-header-meta:focus-visible,
   /* --- Shell frame: one compact row, workspace takes the rest --- */
   .app-shell {
     grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  body[data-maintenance-active="true"] .app-shell {
-    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   /* One 48px control row plus 2x4px padding. */
