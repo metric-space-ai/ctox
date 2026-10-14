@@ -1376,7 +1376,7 @@ test('command mutation fails before local insertion when authorization is unavai
 });
 
 test('dispatch during a capability outage never inserts or pushes a token-less command', async (context) => {
-  // THESEN 14.10.2026: a replicated outbound auth_assist command without a
+  // Customer tenant 14.10.2026: a replicated outbound auth_assist command without a
   // valid capability token was rejected by native intake in a loop while the
   // Outbound app kept an empty browser window open. Every outage shape of the
   // capability endpoint must fail the dispatch itself, before local insertion.

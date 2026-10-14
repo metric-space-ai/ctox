@@ -10508,7 +10508,7 @@ async function researchLead(id, options = {}) {
         lead_id: lead.id,
         // Was der Agent über den Lead schon weiss (er hat keinen Record-Lesebefehl):
         lead_snapshot: { data: lead.data || {}, contacts: lead.contacts || [] },
-        company: lead.name,
+        company: researchCompanyName(lead),
         country: normalizedResearchCountry(lead.country),
         mode: researchMode,
         fields: nurFelder || activeResearchFields(),
@@ -12484,6 +12484,16 @@ function enabledPrivateResearchSources(sources = state.sources) {
     .map((item) => item.id)
     .filter(Boolean)
     .sort();
+}
+
+// Firmenname fuer die Anbieter-Suche: der in den Lead-Daten belegte aktuelle
+// Name (firma_name) geht vor dem Listentitel. Kundeninstanz 14.10.2026: der Lead
+// "Kiesow Dr. Brinkmann" (2020 umfirmiert) wurde bei Leadfeeder und D&B nur
+// unter dem Altnamen gesucht (0 Treffer); unter dem aktuellen Namen lieferten
+// beide 20 Ansprechpartner.
+function researchCompanyName(lead) {
+  const current = String(lead?.data?.firma_name || '').trim();
+  return current || String(lead?.name || '').trim();
 }
 
 function normalizedResearchCountry(value) {

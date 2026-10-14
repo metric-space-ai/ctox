@@ -87,13 +87,9 @@ fn admitted_preparation_and_exit(
     let exit = stable_id("workjet_exit_research", &["owner", "project", &refresh]);
     let conn = open_store(root)?;
     let mut receipts = Vec::new();
-    for (operation, source, purpose) in [
-        (&prepare, "native-workjet-jour-fixe-schedule", "jour-fix"),
-        (
-            &exit,
-            "native-workjet-exit-research",
-            "Research the 60-month exit for project project",
-        ),
+    for (operation, source) in [
+        (&prepare, "native-workjet-jour-fixe-schedule"),
+        (&exit, "native-workjet-exit-research"),
     ] {
         let admitted = store::load_business_command(&conn, operation)?;
         assert_eq!(
@@ -126,7 +122,24 @@ fn admitted_preparation_and_exit(
             queued.thread_key,
             meeting["meeting"]["supervisor"]["ctox_thread_key"]
         );
-        assert!(queued.prompt.contains(purpose), "{}", queued.prompt);
+        let goal = admitted.payload["goal"].as_str().context("admitted goal")?;
+        assert!(!goal.is_empty() && goal.len() <= 4096);
+        // Assert the exact admitted goal, not a mutable prose prefix. Receipts,
+        // scope and distinct identities above/below distinguish the two turns.
+        assert!(
+            queued.prompt.contains(goal),
+            "queued prompt lost its admitted goal: {}",
+            queued.prompt
+        );
+        if source == "native-workjet-exit-research" {
+            for rule in [
+                "exit_model_inputs",
+                "exit_model_blocked",
+                "plan.confirmed=false",
+            ] {
+                assert!(goal.contains(rule), "Exit admission missing rule: {rule}");
+            }
+        }
         // Both are admitted before either model turn runs; preparation does
         // not depend on an Exit result or wait for its completion.
         assert_eq!(queued.route_status, "pending");
