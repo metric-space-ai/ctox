@@ -45,7 +45,9 @@ let windowedStrictMs = null;
   const started = [];
   let transport;
   const peer = peerFor(started, () => transport, request =>
-    request.requestId.startsWith('ordinary-') ? ordinaryAck : undefined);
+    request.requestId.startsWith('ordinary-')
+      ? ordinaryAck
+      : new Promise(resolve => setTimeout(resolve, 600)));
   transport = createDemandLoadingTransport({ getPeerId: () => 'native' });
   transport.attach(peer);
   const ordinary = Array.from({ length: 8 }, (_, i) =>
