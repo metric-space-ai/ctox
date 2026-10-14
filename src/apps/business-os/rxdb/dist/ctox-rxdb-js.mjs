@@ -13588,6 +13588,7 @@ var COORDINATORS = /* @__PURE__ */ Symbol.for("ctox.rxdb.multi-tab-sync-coordina
 var CHANNEL_PREFIX2 = "ctox-rxdb-sync-leader-";
 var HEARTBEAT_MS = 5e3;
 var LEASE_TTL_MS = 15e3;
+var ORPHANED_LOCK_GRACE_MS = HEARTBEAT_MS + 1e3;
 var DIRTY_ACK_TIMEOUT_MS = 1e4;
 var NATIVE_REQUEST_TIMEOUT_MS = 6e3;
 function getMultiTabSyncCoordinator({ databaseName, room } = {}) {
@@ -13627,6 +13628,26 @@ function createMultiTabSyncCoordinator({
   let retryReleaseElection = false;
   let lifecycleSuspended = false;
   let resumeReleasedLeader = false;
+  let lockUnavailableSinceMs = 0;
+  let orphanRecoveryTimer = null;
+  let retryStealElection = false;
+  let heldLockClientId = "";
+  const clearOrphanRecovery = () => {
+    lockUnavailableSinceMs = 0;
+    if (orphanRecoveryTimer) clearTimeout(orphanRecoveryTimer);
+    orphanRecoveryTimer = null;
+  };
+  const scheduleOrphanRecovery = () => {
+    if (closed || lifecycleSuspended || leaderTabId || role === "leader") return;
+    if (!lockUnavailableSinceMs) lockUnavailableSinceMs = clock();
+    if (orphanRecoveryTimer) return;
+    orphanRecoveryTimer = setTimeout(() => {
+      orphanRecoveryTimer = null;
+      attemptElection().catch(() => {
+      });
+    }, Math.max(0, ORPHANED_LOCK_GRACE_MS - (clock() - lockUnavailableSinceMs)));
+    orphanRecoveryTimer.unref?.();
+  };
   const emitRole = () => {
     const status = snapshot();
     for (const listener of listeners) {
@@ -13689,11 +13710,24 @@ function createMultiTabSyncCoordinator({
   };
   const becomeLeader = (reason) => {
     if (closed) return;
+    clearOrphanRecovery();
     role = "leader";
     leaderTabId = tabId;
     leaderSeenAtMs = clock();
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    heartbeatTimer = setInterval(() => {
+    heartbeatTimer = setInterval(async () => {
+      if (heldLockClientId && globalThis.navigator?.locks?.query) {
+        try {
+          const held = (await navigator.locks.query()).held || [];
+          if (!held.some((entry) => entry.name === lockName && entry.clientId === heldLockClientId)) {
+            releaseLock?.();
+            becomeFollower("", "web-lock-lost");
+            return;
+          }
+        } catch {
+        }
+      }
+      if (role !== "leader") return;
       leaderSeenAtMs = clock();
       post({ type: "leader-heartbeat" });
     }, HEARTBEAT_MS);
@@ -13707,16 +13741,22 @@ function createMultiTabSyncCoordinator({
     const changed = role !== "follower" || leader && leader !== leaderTabId;
     role = "follower";
     if (leader) leaderTabId = leader;
+    if (leader) clearOrphanRecovery();
     if (changed) emitRole();
     if (reason) post({ type: "follower", reason });
   };
-  const tryWebLock = async (waitForRelease = false) => {
+  const tryWebLock = async (waitForRelease = false, steal = false) => {
     if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
     if (lockRequestRunning) {
-      if (waitForRelease) retryReleaseElection = true;
+      if (steal) {
+        retryStealElection = true;
+        retryReleaseElection = false;
+        releaseWaitAbort?.abort();
+      } else if (waitForRelease) retryReleaseElection = true;
       return false;
     }
     lockRequestRunning = true;
+    if (waitForRelease && !leaderTabId) scheduleOrphanRecovery();
     const abort = waitForRelease ? new AbortController() : null;
     if (abort) releaseWaitAbort = abort;
     let resolveAttempt;
@@ -13727,26 +13767,39 @@ function createMultiTabSyncCoordinator({
       if (releaseWaitAbort === abort) releaseWaitAbort = null;
       lockRequestRunning = false;
       resolveAttempt(false);
-      if (retryReleaseElection && !closed) {
+      if (retryStealElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryStealElection = false;
+        tryWebLock(false, true).catch(() => {
+        });
+      } else if (retryReleaseElection && !closed) {
         retryReleaseElection = false;
         tryWebLock(true).catch(() => {
         });
       }
     };
-    const options = waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
+    const options = steal ? { mode: "exclusive", steal: true } : waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
     navigator.locks.request(lockName, options, async (lock) => {
       if (!lock || closed || lifecycleSuspended) {
         finishFailedAttempt();
+        if (!steal) scheduleOrphanRecovery();
         return;
       }
       if (releaseWaitAbort === abort) releaseWaitAbort = null;
       retryReleaseElection = false;
-      becomeLeader("web-lock");
+      retryStealElection = false;
+      try {
+        const held = (await navigator.locks.query()).held || [];
+        heldLockClientId = held.find((entry) => entry.name === lockName)?.clientId || "";
+      } catch {
+        heldLockClientId = "";
+      }
+      becomeLeader(steal ? "web-lock-takeover" : "web-lock");
       resolveAttempt(true);
       await new Promise((resolve) => {
         releaseLock = resolve;
       });
       releaseLock = null;
+      heldLockClientId = "";
       lockRequestRunning = false;
       becomeFollower("", "web-lock-released");
       if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
@@ -13762,8 +13815,14 @@ function createMultiTabSyncCoordinator({
   const attemptElection = async () => {
     if (closed || lifecycleSuspended || role === "leader") return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
+    if (leaderTabId) {
+      leaderTabId = "";
+      leaderSeenAtMs = 0;
+      emitRole();
+    }
     if (globalThis.navigator?.locks?.request) {
-      await tryWebLock();
+      const orphaned = lockUnavailableSinceMs && clock() - lockUnavailableSinceMs >= ORPHANED_LOCK_GRACE_MS && !leaderTabId;
+      await tryWebLock(false, orphaned);
       return;
     }
     post({ type: "leader-claim" });
@@ -13779,7 +13838,8 @@ function createMultiTabSyncCoordinator({
       if (message.type === "leader-heartbeat") {
         leaderSeenAtMs = clock();
         leaderTabId = String(message.tabId || "");
-        if (role === "leader" && leaderTabId < tabId) {
+        clearOrphanRecovery();
+        if (role === "leader" && (message.reason === "web-lock-takeover" || leaderTabId < tabId)) {
           releaseLock?.();
           becomeFollower(leaderTabId, "leader-tiebreak");
         } else if (role !== "leader") {
@@ -13832,6 +13892,7 @@ function createMultiTabSyncCoordinator({
   }
   const lifecycleRelease = () => {
     lifecycleSuspended = true;
+    clearOrphanRecovery();
     retryReleaseElection = false;
     releaseWaitAbort?.abort();
     if (role === "leader") {
@@ -13953,6 +14014,7 @@ function createMultiTabSyncCoordinator({
     async close() {
       if (role === "leader") post({ type: "leader-release" });
       closed = true;
+      clearOrphanRecovery();
       lifecycleSuspended = true;
       resumeReleasedLeader = false;
       retryReleaseElection = false;

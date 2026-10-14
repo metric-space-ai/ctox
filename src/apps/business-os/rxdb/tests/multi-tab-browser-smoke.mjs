@@ -105,6 +105,69 @@ try {
   await solo.evaluate(() => globalThis.__solo.close());
   await solo.close();
 
+  // A same-origin Worker may outlive the page that created it while retaining
+  // the Web Lock. It has no sync bridge or BroadcastChannel heartbeat, so a
+  // fresh single tab must recover instead of remaining a follower forever.
+  const orphan = await context.newPage();
+  await orphan.goto(`http://127.0.0.1:${port}/`);
+  await orphan.evaluate(async () => {
+    const { multiTabSyncCoordinatorTestInternals } = await import('/bundle.mjs');
+    const room = `orphan-${Date.now()}`;
+    const lockName = `ctox-rxdb-sync:multi-tab-browser:${multiTabSyncCoordinatorTestInternals.stableHash(room)}`;
+    const source = `onmessage = ({ data }) => {
+      navigator.locks.request(data, { mode: 'exclusive' }, async () => {
+        postMessage('locked');
+        await new Promise(() => {});
+      });
+    };`;
+    globalThis.__orphanWorker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })));
+    await new Promise((resolveLocked) => {
+      globalThis.__orphanWorker.onmessage = resolveLocked;
+      globalThis.__orphanWorker.postMessage(lockName);
+    });
+    const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
+    globalThis.__orphanCoordinator = createMultiTabSyncCoordinator({ databaseName: 'multi-tab-browser', room });
+    await globalThis.__orphanCoordinator.start();
+  });
+  await waitFor(orphan, () => globalThis.__orphanCoordinator?.isLeader?.() === true,
+    'orphaned Worker Web Lock takeover', 12_000);
+  await orphan.evaluate(async () => {
+    await globalThis.__orphanCoordinator.close();
+    globalThis.__orphanWorker.terminate();
+  });
+  await orphan.close();
+
+  // A suspended former leader can still own a Web Lock. Once another tab
+  // recovers the line, the former leader must stop serving it even when its
+  // tab ID would have won the normal BroadcastChannel tie-break.
+  const silent = await context.newPage();
+  const replacement = await context.newPage();
+  await Promise.all([silent, replacement].map((page) => page.goto(`http://127.0.0.1:${port}/`)));
+  const silentRoom = `silent-${Date.now()}`;
+  await silent.evaluate(async ({ room }) => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (message) {
+      if (message?.type !== 'leader-heartbeat') post.call(this, message);
+    };
+    const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
+    globalThis.__silentCoordinator = createMultiTabSyncCoordinator({ databaseName: 'multi-tab-browser', room, tabId: 'tab-a' });
+    await globalThis.__silentCoordinator.start();
+  }, { room: silentRoom });
+  await replacement.evaluate(async ({ room }) => {
+    const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
+    globalThis.__replacementCoordinator = createMultiTabSyncCoordinator({ databaseName: 'multi-tab-browser', room, tabId: 'tab-z' });
+    await globalThis.__replacementCoordinator.start();
+  }, { room: silentRoom });
+  await waitFor(replacement, () => globalThis.__replacementCoordinator?.isLeader?.() === true,
+    'silent leader takeover', 12_000);
+  await waitFor(silent, () => globalThis.__silentCoordinator?.isLeader?.() === false,
+    'former leader fenced after takeover', 3_000);
+  await Promise.all([
+    silent.evaluate(() => globalThis.__silentCoordinator.close()),
+    replacement.evaluate(() => globalThis.__replacementCoordinator.close()),
+  ]);
+  await Promise.all([silent.close(), replacement.close()]);
+
   await context.close();
   console.log('ctox-rxdb real-browser multi-tab leader smoke OK');
 } finally {
