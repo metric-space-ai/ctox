@@ -899,8 +899,13 @@ mod tests;
 #[path = "provider_federation_catalog_tests.rs"]
 mod catalog_tests;
 
+#[path = "provider_gateway_models.rs"]
+mod gateway_models;
 #[path = "provider_models.rs"]
 mod models;
+#[cfg(test)]
+pub(crate) use gateway_models::seed_gateway_api_catalog;
+pub(crate) use gateway_models::{read as gateway_api_models, GatewayModels};
 
 pub(crate) use models::{
     capture_consumable_model, resolve_supervisor_model, with_consumable_model, ConsumableModel,

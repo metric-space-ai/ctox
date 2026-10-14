@@ -13,6 +13,7 @@ struct Wire {
     seen: Mutex<Vec<HttpRequest>>,
     root: Option<PathBuf>,
     rotate: bool,
+    retire_models: bool,
 }
 impl HostHttpClient for Wire {
     fn execute_stream<'a>(&'a self, _request: HttpRequest) -> PluginFuture<'a, HttpStreamResponse> {
@@ -31,6 +32,14 @@ impl HostHttpClient for Wire {
                 "fixture-credential-first",
                 None,
                 serde_json::json!({"purpose":"private fixture"}),
+            )
+            .unwrap();
+        }
+        if self.retire_models {
+            let conn = crate::business_os::store::open_store(self.root.as_ref().unwrap()).unwrap();
+            conn.execute(
+                "INSERT INTO business_provider_federation_models VALUES (?1,?2,?3)",
+                ["owner", "xai", "[]"],
             )
             .unwrap();
         }
@@ -257,4 +266,85 @@ async fn topology_and_credential_changes_refresh_without_a_service_restart() {
     removed.config.api_key_accounts.clear();
     save_provider_integration_config(root.path(), removed.revision, &removed.config).unwrap();
     assert!(routes.route_for("xai").unwrap().is_none());
+}
+
+fn owned_setup() -> (tempfile::TempDir, StoredProviderIntegrationConfig) {
+    let (root, mut stored) = setup();
+    stored.config.api_key_accounts.truncate(1);
+    let account = &mut stored.config.api_key_accounts[0];
+    account.owner_user_id = Some("owner".into());
+    account.creation_operation = Some(uuid::Uuid::new_v4().to_string());
+    account.models.clear();
+    save_provider_integration_config(root.path(), stored.revision, &stored.config).unwrap();
+    crate::business_os::provider_federation::seed_gateway_api_catalog(
+        root.path(),
+        &stored.config.api_key_accounts[0],
+        &[model_fixture()],
+    )
+    .unwrap();
+    stored =
+        crate::execution::cliproxyapi_integration::load_provider_integration_config(root.path())
+            .unwrap();
+    (root, stored)
+}
+#[tokio::test]
+async fn owned_api_uses_live_catalog_and_retires_remove_readd_route() {
+    let (root, stored) = owned_setup();
+    assert!(stored.config.api_key_accounts[0].models.is_empty());
+    let routes = build(root.path(), &stored, Duration::from_secs(5)).unwrap();
+    let wire = Arc::new(Wire::default());
+    *routes.http.lock().unwrap() = Some(wire.clone());
+    let first = routes.route_for("xai").unwrap().unwrap();
+    let body =
+        serde_json::to_vec(&serde_json::json!({"model":model_fixture(),"input":"Hi"})).unwrap();
+    let OpenAiResponsesRouteResponse::Buffered(ok) = first.handle_route(&body).await else {
+        panic!("buffered expected")
+    };
+    assert_eq!(ok.status(), 200);
+    let conn = crate::business_os::store::open_store(root.path()).unwrap();
+    conn.execute(
+        "INSERT INTO business_provider_federation_models VALUES (?1,?2,?3)",
+        ["owner", "xai", "[]"],
+    )
+    .unwrap();
+    let OpenAiResponsesRouteResponse::Buffered(retired) = first.handle_route(&body).await else {
+        panic!("buffered expected")
+    };
+    assert_eq!(retired.status(), 409);
+    assert!(routes.route_for("xai").unwrap().is_none());
+    conn.execute(
+        "UPDATE business_provider_federation_models SET models_json=?1 WHERE owner_user_id=?2",
+        rusqlite::params![
+            serde_json::to_string(&vec![model_fixture()]).unwrap(),
+            "owner"
+        ],
+    )
+    .unwrap();
+    let replacement = routes.route_for("xai").unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&first, &replacement));
+    let OpenAiResponsesRouteResponse::Buffered(fresh) = replacement.handle_route(&body).await
+    else {
+        panic!("buffered expected")
+    };
+    assert_eq!(fresh.status(), 200);
+    assert_eq!(wire.seen.lock().unwrap().len(), 2);
+}
+#[tokio::test]
+async fn owned_api_model_withdrawal_during_io_cannot_publish_success() {
+    let (root, stored) = owned_setup();
+    let wire = Arc::new(Wire {
+        root: Some(root.path().to_path_buf()),
+        retire_models: true,
+        ..Default::default()
+    });
+    let handlers = build_with_http(root.path(), &stored, wire.clone()).unwrap();
+    let body =
+        serde_json::to_vec(&serde_json::json!({"model":model_fixture(),"input":"Hi"})).unwrap();
+    let OpenAiResponsesRouteResponse::Buffered(response) =
+        handlers["xai"].handle_route(&body).await
+    else {
+        panic!("buffered expected")
+    };
+    assert_eq!(response.status(), 409);
+    assert_eq!(wire.seen.lock().unwrap().len(), 1);
 }

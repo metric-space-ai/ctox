@@ -11,7 +11,10 @@ use sha2::{Digest, Sha256};
 pub(super) fn supports(provider: &str) -> bool {
     matches!(provider, "zai" | "minimax" | "xai" | "kimi")
 }
-fn fingerprint(account: &ApiKeyAccountConfig, version: Option<&str>) -> anyhow::Result<String> {
+pub(super) fn fingerprint(
+    account: &ApiKeyAccountConfig,
+    version: Option<&str>,
+) -> anyhow::Result<String> {
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(account)?);
     digest.update([0]);
