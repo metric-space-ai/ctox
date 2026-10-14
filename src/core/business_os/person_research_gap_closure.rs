@@ -1890,6 +1890,7 @@ pub(super) fn handle_research_writeback(
             ));
         }
     }
+    super::contact_email_validation::align_lead_email_validation(&mut lead);
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
@@ -5203,7 +5204,7 @@ mod tests {
         let note = format!("EXPERTE.de verdict: {address} | Unbekannt");
         let verdict = super::super::contact_email_validation::EmailVerdict {
             email: address.to_string(),
-            valid: false,
+            kind: super::super::contact_email_validation::VerdictKind::Inconclusive,
             note: note.clone(),
             source_url: "https://www.experte.de/email-pruefen".to_string(),
             run_id: "scrape_run-774ef37ca16c820c".to_string(),
@@ -5216,17 +5217,20 @@ mod tests {
             "{lead}"
         );
         lead["payload"]["email_validation_receipts"] = serde_json::json!({address: {
-            "email": address, "valid": false, "run_id": "scrape_run-774ef37ca16c820c"}});
+            "email": address, "valid": false, "verdict": "unknown_catch_all",
+            "run_id": "scrape_run-774ef37ca16c820c"}});
         lead["payload"]["email_validation_pass"] = serde_json::json!({"checked": [{
-            "email": address, "valid": false, "run_id": "scrape_run-774ef37ca16c820c"}]});
+            "email": address, "valid": false, "verdict": "unknown_catch_all",
+            "run_id": "scrape_run-774ef37ca16c820c"}]});
         store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 2, lead)?;
         let stored = |root: &Path| -> anyhow::Result<Value> {
             store::load_rxdb_collection_record(root, LEAD_COLLECTION, record_id)?.context("lead")
         };
-        assert_eq!(
-            stored(temp.path())?["person_field_status"][person]["person_email_validation"]["value"],
-            "invalid"
-        );
+        // "Unbekannt" is stored as checked but inconclusive, not as invalid.
+        let native =
+            stored(temp.path())?["person_field_status"][person]["person_email_validation"].clone();
+        assert_eq!(native["status"], "action_required", "{native}");
+        assert_eq!(native["verdict"], "unknown_catch_all", "{native}");
 
         // A bare placeholder that does not cite the verdict keeps the native
         // verdict, and the worker is told so.
@@ -5301,6 +5305,101 @@ mod tests {
             "{lead}"
         );
 
+        Ok(())
+    }
+
+    // thesen lead_srkgbn, 14.10.2026: the lead-level person fields named one
+    // contact, the lead-level e-mail check carried another person's verdict
+    // (m.grabbe@kiesow.org), and the review gate rejected the closing report.
+    #[test]
+    fn the_lead_level_email_check_follows_the_lead_contact_after_a_writeback() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let (record_id, research_command_id) = ("lead-two-checks", "research-two-checks");
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["person_email", "person_email_validation"],
+        )?;
+        let (grabbe, wallbaum) = ("p-grabbe-michael", "p-wallbaum-katja");
+        let (grabbe_mail, wallbaum_mail) = ("m.grabbe@kiesow.org", "k.wallbaum@kiesow.org");
+        let first = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {},
+                "result": {
+                    "person_records": [
+                        {"person_key": grabbe, "person_vorname": "Michael",
+                            "person_nachname": "Grabbe", "person_email": grabbe_mail},
+                        {"person_key": wallbaum, "person_vorname": "Katja",
+                            "person_nachname": "Wallbaum", "person_email": wallbaum_mail}
+                    ],
+                    "person_field_status": {
+                        grabbe: {"person_email": {"status": "verified", "value": grabbe_mail,
+                            "sources": [email_source(grabbe, grabbe_mail)]}},
+                        wallbaum: {"person_email": {"status": "verified", "value": wallbaum_mail,
+                            "sources": [email_source(wallbaum, wallbaum_mail)]}}
+                    }
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &first)?;
+        assert_eq!(result["ok"], true, "{result}");
+
+        // Only Grabbe's address has been checked so far, with a definitive
+        // negative verdict; the old roll-up put it on the lead.
+        let mut lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        let negative = super::super::contact_email_validation::EmailVerdict {
+            email: grabbe_mail.to_string(),
+            kind: super::super::contact_email_validation::VerdictKind::Invalid,
+            note: format!("EXPERTE.de verdict: {grabbe_mail} | Ungültig"),
+            source_url: "https://www.experte.de/email-pruefen".to_string(),
+            run_id: "scrape_run-grabbe".to_string(),
+        };
+        super::super::contact_email_validation::apply_email_verdicts(&mut lead, &[negative]);
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["validated_email"],
+            grabbe_mail
+        );
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 2, lead)?;
+
+        // The writeback names Wallbaum as the lead contact and sends no
+        // lead-level e-mail check.
+        let second = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "field_status": {"person_email": {"status": "verified", "value": wallbaum_mail,
+                    "person_key": wallbaum, "sources": [email_source(wallbaum, wallbaum_mail)]}},
+                "result": {}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &second)?;
+        assert_eq!(result["ok"], true, "{result}");
+        let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead")?;
+        assert_eq!(
+            lead["field_status"]["person_email"]["person_key"], wallbaum,
+            "{lead}"
+        );
+        let lead_level = lead["field_status"].get("person_email_validation");
+        assert!(
+            lead_level.is_none_or(|status| status["person_key"] == wallbaum
+                && status["validated_email"] != grabbe_mail),
+            "lead-level check shows another person's verdict: {lead}"
+        );
+        // Grabbe's own verdict stays with Grabbe.
+        assert_eq!(
+            lead["person_field_status"][grabbe]["person_email_validation"]["value"],
+            "invalid"
+        );
         Ok(())
     }
 

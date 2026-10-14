@@ -26,7 +26,7 @@
 //! overwrites it on every run, so the shared store cannot say which address a
 //! verdict belongs to.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -40,14 +40,45 @@ const VALIDATION_TARGET_KEY: &str = "experte-de";
 const VALIDATION_SOURCE_ID: &str = "experte.de";
 const MAX_ADDRESSES_PER_PASS: usize = 4;
 
+/// What the validator said about one address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VerdictKind {
+    Valid,
+    Invalid,
+    /// experte.de "Unbekannt": the mail server accepts every recipient
+    /// (catch-all), so the check ran but cannot say whether the address
+    /// exists. It is no negative verdict.
+    Inconclusive,
+}
+
+/// Value of `person_email_validation` for a check that ran without a
+/// definitive answer. It marks the address as checked, so no pass repeats it.
+pub(super) const INCONCLUSIVE_LABEL: &str = "unknown_catch_all";
+
+impl VerdictKind {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Valid => "valid",
+            Self::Invalid => "invalid",
+            Self::Inconclusive => INCONCLUSIVE_LABEL,
+        }
+    }
+}
+
 /// A checked address and what the validator said about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EmailVerdict {
     pub email: String,
-    pub valid: bool,
+    pub kind: VerdictKind,
     pub note: String,
     pub source_url: String,
     pub run_id: String,
+}
+
+impl EmailVerdict {
+    pub(super) fn valid(&self) -> bool {
+        self.kind == VerdictKind::Valid
+    }
 }
 
 fn normalize_email(value: &str) -> Option<String> {
@@ -183,6 +214,7 @@ pub(super) fn is_email_verdict(value: &str) -> bool {
         "unzustellbar",
         "bestätigt",
         "bestaetigt",
+        INCONCLUSIVE_LABEL,
     ]
     .iter()
     .any(|word| value.contains(word))
@@ -210,31 +242,28 @@ pub(super) fn emails_needing_validation(lead: &Value, limit: usize) -> Vec<Strin
 }
 
 /// Reads "EXPERTE.de verdict: <address> | <label>" into the address and
-/// whether the label says the address is deliverable. "Ungültig" contains
-/// "gültig" and "invalid" contains "valid", so the negative words are checked
-/// first.
-pub(super) fn parse_verdict_note(note: &str) -> Option<(String, bool)> {
+/// the verdict. "Unbekannt" (catch-all domain, thesen 14.10.2026: stored as
+/// verified/invalid for deliverable addresses) is inconclusive, not negative.
+/// "Ungültig" contains "gültig" and "invalid" contains "valid", so the
+/// negative words are checked before the positive ones.
+pub(super) fn parse_verdict_note(note: &str) -> Option<(String, VerdictKind)> {
     let (_, rest) = note.split_once("verdict:")?;
     let (address, label) = rest.split_once('|')?;
     let email = normalize_email(address)?;
     let label = label.trim().to_lowercase();
-    let negative = [
-        "ungültig",
-        "ungueltig",
-        "invalid",
-        "unzustellbar",
-        "nicht",
-        "unbekannt",
-    ];
+    let inconclusive = ["unbekannt", "unknown", "catch-all", "catch all"];
+    let negative = ["ungültig", "ungueltig", "invalid", "unzustellbar", "nicht"];
     let positive = ["gültig", "gueltig", "valid", "zustellbar"];
-    let valid = if negative.iter().any(|word| label.contains(word)) {
-        false
+    let kind = if inconclusive.iter().any(|word| label.contains(word)) {
+        VerdictKind::Inconclusive
+    } else if negative.iter().any(|word| label.contains(word)) {
+        VerdictKind::Invalid
     } else if positive.iter().any(|word| label.contains(word)) {
-        true
+        VerdictKind::Valid
     } else {
         return None;
     };
-    Some((email, valid))
+    Some((email, kind))
 }
 
 /// The verdict for `requested` from one run's `result.json` records. A verdict
@@ -253,13 +282,13 @@ pub(super) fn verdict_from_records(
             .get("note")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let (email, valid) = parse_verdict_note(note)?;
+        let (email, kind) = parse_verdict_note(note)?;
         if email != requested {
             return None;
         }
         Some(EmailVerdict {
             email,
-            valid,
+            kind,
             note: note.trim().to_string(),
             source_url: record
                 .get("source_url")
@@ -288,7 +317,7 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
             let Some(verdict) = verdicts.iter().find(|verdict| verdict.email == email) else {
                 continue;
             };
-            let label = if verdict.valid { "valid" } else { "invalid" };
+            let label = verdict.kind.label();
             contact["person_email_validation"] = Value::String(label.to_string());
             let person_key = contact
                 .get("person_key")
@@ -314,7 +343,11 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
                 "run_id": verdict.run_id,
                 "via": "native_email_validation",
                 "label": VALIDATION_SOURCE_ID,
-                "evidence_gate": {"verification_status": "verified", "evidence_eligible": true},
+                "evidence_gate": if verdict.kind == VerdictKind::Inconclusive {
+                    json!({"verification_status": "action_required", "evidence_eligible": false})
+                } else {
+                    json!({"verification_status": "verified", "evidence_eligible": true})
+                },
             }));
         }
     }
@@ -365,7 +398,12 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
     // deliverable address wins over an undeliverable one.
     let best = matched
         .iter()
-        .find(|(_, verdict)| verdict.valid)
+        .find(|(_, verdict)| verdict.valid())
+        .or_else(|| {
+            matched
+                .iter()
+                .find(|(_, verdict)| verdict.kind == VerdictKind::Invalid)
+        })
         .or_else(|| matched.first())
         .map(|(_, verdict)| verdict)
         .expect("changed contacts have matched verdicts");
@@ -391,7 +429,7 @@ pub(super) fn apply_email_verdicts(lead: &mut Value, verdicts: &[EmailVerdict]) 
 /// address the worker did not claim for this person, or an already verified
 /// value stays as it is.
 fn promote_pattern_email(lead: &mut Value, person_key: Option<&str>, verdict: &EmailVerdict) {
-    if !verdict.valid {
+    if !verdict.valid() {
         return;
     }
     let promote = |status: &mut Value| {
@@ -453,9 +491,14 @@ fn promote_pattern_email(lead: &mut Value, person_key: Option<&str>, verdict: &E
 }
 
 fn native_email_field_status(verdict: &EmailVerdict, person_key: Option<&str>) -> Value {
+    let (status, value) = match verdict.kind {
+        VerdictKind::Inconclusive => ("action_required", Value::Null),
+        kind => ("verified", Value::String(kind.label().to_string())),
+    };
     let mut status = json!({
-        "status": "verified",
-        "value": if verdict.valid { "valid" } else { "invalid" },
+        "status": status,
+        "value": value,
+        "verdict": verdict.kind.label(),
         "sources": [{
             "source_id": VALIDATION_SOURCE_ID,
             "url": verdict.source_url,
@@ -532,14 +575,17 @@ fn merged_email_receipts(lead: &Value, verdicts: &[EmailVerdict]) -> Value {
                 .and_then(Value::as_str)
                 .is_some_and(|id| !id.is_empty())
         {
-            receipts.insert(
-                email.clone(),
-                json!({
+            receipts.insert(email.clone(), {
+                let mut receipt = json!({
                     "email": email,
                     "valid": entry["valid"],
                     "run_id": entry["run_id"],
-                }),
-            );
+                });
+                if let Some(verdict) = entry.get("verdict").filter(|v| v.is_string()) {
+                    receipt["verdict"] = verdict.clone();
+                }
+                receipt
+            });
         }
     }
     for verdict in verdicts {
@@ -548,7 +594,8 @@ fn merged_email_receipts(lead: &Value, verdicts: &[EmailVerdict]) -> Value {
                 verdict.email.clone(),
                 json!({
                     "email": verdict.email,
-                    "valid": verdict.valid,
+                    "valid": verdict.valid(),
+                    "verdict": verdict.kind.label(),
                     "run_id": verdict.run_id,
                 }),
             );
@@ -745,9 +792,30 @@ fn reconcile_receipted_email_status(lead: &mut Value) -> usize {
     matches.len()
 }
 
+/// The verdict label of a status the daemon wrote itself: `valid`/`invalid`
+/// when verified, or the inconclusive label for a check without an answer.
+fn native_status_label(status: &Value) -> Option<&'static str> {
+    if !matches!(
+        status.get("via").and_then(Value::as_str),
+        Some("native_email_validation" | "native_email_validation_receipt")
+    ) {
+        return None;
+    }
+    match (
+        status.get("status").and_then(Value::as_str),
+        status.get("value").and_then(Value::as_str),
+        status.get("verdict").and_then(Value::as_str),
+    ) {
+        (Some("verified"), Some("valid"), _) => Some("valid"),
+        (Some("verified"), Some("invalid"), _) => Some("invalid"),
+        (Some("action_required"), _, Some(INCONCLUSIVE_LABEL)) => Some(INCONCLUSIVE_LABEL),
+        _ => None,
+    }
+}
+
 /// The experte.de verdict notes a status cites in `sources[].quote` or
 /// `attempts[].result`, read as (address, deliverable).
-fn cited_verdicts(status: &Value) -> Vec<(String, bool)> {
+fn cited_verdicts(status: &Value) -> Vec<(String, VerdictKind)> {
     let quotes = status
         .get("sources")
         .and_then(Value::as_array)
@@ -781,7 +849,7 @@ fn is_cited_email_correction(status: &Value, email: &str) -> bool {
     let cited = cited_verdicts(status)
         .into_iter()
         .filter(|(address, _)| address == email)
-        .map(|(_, valid)| valid)
+        .map(|(_, kind)| kind)
         .collect::<Vec<_>>();
     if cited.is_empty() {
         return false;
@@ -789,11 +857,11 @@ fn is_cited_email_correction(status: &Value, email: &str) -> bool {
     match status.get("status").and_then(Value::as_str).map(str::trim) {
         Some("verified") => {
             let claimed = match status.get("value").and_then(Value::as_str) {
-                Some("valid") => true,
-                Some("invalid") => false,
+                Some("valid") => VerdictKind::Valid,
+                Some("invalid") => VerdictKind::Invalid,
                 _ => return false,
             };
-            cited.iter().all(|valid| *valid == claimed)
+            cited.iter().all(|kind| *kind == claimed)
         }
         Some(_) => true,
         None => false,
@@ -849,18 +917,13 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
         else {
             continue;
         };
-        if !matches!(
-            status.get("via").and_then(Value::as_str),
-            Some("native_email_validation" | "native_email_validation_receipt")
-        ) || status.get("status").and_then(Value::as_str) != Some("verified")
-            || !matches!(
-                status.get("value").and_then(Value::as_str),
-                Some("valid" | "invalid")
-            )
-            || status
-                .get("run_id")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
+        let Some(label) = native_status_label(status) else {
+            continue;
+        };
+        if status
+            .get("run_id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
             || status.get("person_key").and_then(Value::as_str) != Some(person_key.as_str())
             || status
                 .get("validated_email")
@@ -884,11 +947,15 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
             .get("run_id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let valid = status.get("value").and_then(Value::as_str) == Some("valid");
+        let valid = label == "valid";
         if !checked.iter().any(|entry| {
             entry.get("email").and_then(Value::as_str) == Some(email.as_str())
                 && entry.get("run_id").and_then(Value::as_str) == Some(run_id)
                 && entry.get("valid").and_then(Value::as_bool) == Some(valid)
+                && entry
+                    .get("verdict")
+                    .and_then(Value::as_str)
+                    .is_none_or(|verdict| verdict == label)
         }) {
             continue;
         }
@@ -896,7 +963,7 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
             contact["field_status"] = json!({});
         }
         contact["field_status"]["person_email_validation"] = status.clone();
-        contact["person_email_validation"] = status["value"].clone();
+        contact["person_email_validation"] = Value::String(label.to_string());
         restored.push((person_key, status.clone()));
     }
     if restored.is_empty() {
@@ -952,6 +1019,109 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
         lead["field_status"]["person_email_validation"] = best.clone();
     }
     restored.into_iter().map(|(key, _)| key).collect()
+}
+
+/// The person the lead-level person fields describe: the `person_key` bound
+/// to the lead-level `person_email`, otherwise the one key every other bound
+/// lead-level person field shares. Only a person among the current contacts.
+fn lead_person_key(lead: &Value) -> Option<String> {
+    let contact_keys = lead
+        .get("contacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|contact| contact.get("person_key").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .collect::<HashSet<_>>();
+    let statuses = lead.get("field_status").and_then(Value::as_object)?;
+    let bound = |status: &Value| {
+        status
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+    };
+    if let Some(key) = statuses.get("person_email").and_then(bound) {
+        return contact_keys.contains(key.as_str()).then_some(key);
+    }
+    let keys = statuses
+        .iter()
+        .filter(|(field, _)| field.starts_with("person_") && *field != "person_email_validation")
+        .filter_map(|(_, status)| bound(status))
+        .collect::<BTreeSet<_>>();
+    match keys.into_iter().collect::<Vec<_>>().as_slice() {
+        [key] if contact_keys.contains(key.as_str()) => Some(key.clone()),
+        _ => None,
+    }
+}
+
+/// The lead-level `person_email_validation` describes the lead's own contact
+/// (thesen lead_srkgbn, 14.10.2026: it named Budde as the lead contact and
+/// showed Grabbe's verdict). It mirrors that person's own status, or is
+/// removed when that person has none; an unbound status that names no
+/// address stays. A lead whose contact cannot be determined keeps the old
+/// rule. Returns whether the lead-level field changed.
+pub(super) fn align_lead_email_validation(lead: &mut Value) -> bool {
+    let Some(person_key) = lead_person_key(lead) else {
+        return false;
+    };
+    let own = lead
+        .pointer(&format!(
+            "/person_field_status/{}/person_email_validation",
+            person_key.replace('~', "~0").replace('/', "~1")
+        ))
+        .or_else(|| {
+            lead.get("contacts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|contact| {
+                    contact
+                        .get("person_key")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        == Some(person_key.as_str())
+                })
+                .and_then(|contact| contact.pointer("/field_status/person_email_validation"))
+        })
+        .filter(|status| status.is_object())
+        .cloned();
+    let current = lead
+        .pointer("/field_status/person_email_validation")
+        .cloned();
+    match own {
+        Some(mut status) => {
+            status["person_key"] = Value::String(person_key);
+            if current.as_ref() == Some(&status) {
+                return false;
+            }
+            if !lead.get("field_status").is_some_and(Value::is_object) {
+                lead["field_status"] = json!({});
+            }
+            lead["field_status"]["person_email_validation"] = status;
+            true
+        }
+        None => {
+            let Some(current) = current else {
+                return false;
+            };
+            let names_someone = ["person_key", "validated_email"].iter().any(|key| {
+                current
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+            });
+            if !names_someone {
+                return false;
+            }
+            if let Some(statuses) = lead.get_mut("field_status").and_then(Value::as_object_mut) {
+                statuses.remove("person_email_validation");
+            }
+            true
+        }
+    }
 }
 
 fn run_dir_from_envelope(envelope: &Value) -> Option<PathBuf> {
@@ -1072,7 +1242,8 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         0
     };
     let changed = repaired + apply_email_verdicts(&mut lead, &verdicts);
-    if emails.is_empty() && changed == 0 {
+    let aligned = align_lead_email_validation(&mut lead);
+    if emails.is_empty() && changed == 0 && !aligned {
         return Ok(0);
     }
     if changed > 0 {
@@ -1091,7 +1262,7 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
             "at_ms": now,
             "checked": verdicts
                 .iter()
-                .map(|verdict| json!({"email": verdict.email, "valid": verdict.valid, "run_id": verdict.run_id}))
+                .map(|verdict| json!({"email": verdict.email, "valid": verdict.valid(), "verdict": verdict.kind.label(), "run_id": verdict.run_id}))
                 .collect::<Vec<_>>(),
             "failed": failures,
         });
@@ -1213,7 +1384,11 @@ mod tests {
     fn verdict(email: &str, valid: bool) -> EmailVerdict {
         EmailVerdict {
             email: email.to_string(),
-            valid,
+            kind: if valid {
+                VerdictKind::Valid
+            } else {
+                VerdictKind::Invalid
+            },
             note: format!(
                 "EXPERTE.de verdict: {email} | {}",
                 if valid { "Gültig" } else { "Ungültig" }
@@ -1228,16 +1403,22 @@ mod tests {
         // Measured on the VM 09.09.2026.
         assert_eq!(
             parse_verdict_note("EXPERTE.de verdict: info@weicon.de | Gültig"),
-            Some(("info@weicon.de".to_string(), true))
+            Some(("info@weicon.de".to_string(), VerdictKind::Valid))
         );
         // "Ungültig" contains "gültig", "invalid" contains "valid".
         assert_eq!(
             parse_verdict_note("EXPERTE.de verdict: R.Weidling@Weicon.de | Ungültig"),
-            Some(("r.weidling@weicon.de".to_string(), false))
+            Some(("r.weidling@weicon.de".to_string(), VerdictKind::Invalid))
         );
         assert_eq!(
             parse_verdict_note("EXPERTE.de verdict: x@firma.de | invalid"),
-            Some(("x@firma.de".to_string(), false))
+            Some(("x@firma.de".to_string(), VerdictKind::Invalid))
+        );
+        // A catch-all domain answers "Unbekannt": checked, but no verdict
+        // either way (thesen 14.10.2026).
+        assert_eq!(
+            parse_verdict_note("EXPERTE.de verdict: m.grabbe@kiesow.org | Unbekannt"),
+            Some(("m.grabbe@kiesow.org".to_string(), VerdictKind::Inconclusive))
         );
         assert_eq!(parse_verdict_note("keine Aussage"), None);
         // The probe address a repair worker used overnight proves nothing.
@@ -1257,7 +1438,7 @@ mod tests {
         })];
         assert_eq!(verdict_from_records(&records, "info@weicon.de", "r1"), None);
         let found = verdict_from_records(&records, "INFO@beiersdorf.com", "r1").expect("verdict");
-        assert!(found.valid);
+        assert!(found.valid());
         assert_eq!(found.run_id, "r1");
     }
 
@@ -1455,14 +1636,23 @@ mod tests {
         );
     }
 
+    fn unknown(email: &str) -> EmailVerdict {
+        EmailVerdict {
+            email: email.to_string(),
+            kind: VerdictKind::Inconclusive,
+            note: format!("EXPERTE.de verdict: {email} | Unbekannt"),
+            source_url: "https://www.experte.de/email-pruefen".to_string(),
+            run_id: "scrape_run-test".to_string(),
+        }
+    }
+
     #[test]
     fn a_correction_citing_the_native_verdict_is_kept_but_cannot_raise_it() {
         let mut checked = json!({
             "contacts": [{"person_key": "p1", "person_email": "a@weicon.de"}],
         });
-        let mut unknown = verdict("a@weicon.de", false);
-        unknown.note = "EXPERTE.de verdict: a@weicon.de | Unbekannt".to_string();
-        apply_email_verdicts(&mut checked, &[unknown.clone()]);
+        let negative = verdict("a@weicon.de", false);
+        apply_email_verdicts(&mut checked, &[negative.clone()]);
         checked["payload"]["email_validation_pass"]["checked"] = json!([{
             "email": "a@weicon.de", "valid": false, "run_id": "scrape_run-test"
         }]);
@@ -1477,7 +1667,7 @@ mod tests {
         deliver(
             &mut corrected,
             json!({"status": "action_required", "person_key": "p1",
-                "attempts": [{"kind": "scrape", "result": unknown.note}]}),
+                "attempts": [{"kind": "scrape", "result": negative.note}]}),
         );
         assert!(restore_native_email_verdicts(&mut corrected, &previous).is_empty());
         for status in [
@@ -1493,7 +1683,7 @@ mod tests {
         deliver(
             &mut foreign,
             json!({"status": "action_required", "person_key": "p1",
-                "sources": [{"quote": "EXPERTE.de verdict: b@weicon.de | Unbekannt"}]}),
+                "sources": [{"quote": "EXPERTE.de verdict: b@weicon.de | Ungültig"}]}),
         );
         assert_eq!(
             restore_native_email_verdicts(&mut foreign, &previous),
@@ -1504,12 +1694,12 @@ mod tests {
             "native_email_validation"
         );
 
-        // Claiming "valid" from a verdict the daemon read as undeliverable.
+        // Claiming "valid" from a verdict that says undeliverable.
         let mut raised = checked.clone();
         deliver(
             &mut raised,
             json!({"status": "verified", "value": "valid", "person_key": "p1",
-                "sources": [{"quote": unknown.note}]}),
+                "sources": [{"quote": negative.note}]}),
         );
         assert_eq!(
             restore_native_email_verdicts(&mut raised, &previous),
@@ -1518,6 +1708,130 @@ mod tests {
         assert_eq!(
             raised["person_field_status"]["p1"]["person_email_validation"]["value"],
             "invalid"
+        );
+    }
+
+    #[test]
+    fn a_catch_all_unknown_is_checked_but_never_invalid_and_never_rechecked() {
+        let mut lead = json!({
+            "research_status": "needs_review",
+            "contacts": [{"person_key": "p-grabbe-michael", "person_email": "m.grabbe@kiesow.org"}],
+            "payload": {},
+        });
+        assert_eq!(
+            emails_needing_validation(&lead, 4),
+            vec!["m.grabbe@kiesow.org"]
+        );
+        let verdict = unknown("m.grabbe@kiesow.org");
+        assert_eq!(apply_email_verdicts(&mut lead, &[verdict.clone()]), 1);
+
+        let contact = &lead["contacts"][0];
+        assert_eq!(contact["person_email_validation"], INCONCLUSIVE_LABEL);
+        for status in [
+            &contact["field_status"]["person_email_validation"],
+            &lead["person_field_status"]["p-grabbe-michael"]["person_email_validation"],
+        ] {
+            assert_eq!(status["status"], "action_required", "{lead}");
+            assert_eq!(status["value"], Value::Null, "{lead}");
+            assert_eq!(status["verdict"], INCONCLUSIVE_LABEL, "{lead}");
+            assert_eq!(status["validated_email"], "m.grabbe@kiesow.org");
+        }
+        assert_ne!(
+            lead["field_status"]["person_email_validation"]["value"],
+            "invalid"
+        );
+        assert!(lead["evidence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|entry| entry["evidence_gate"]["evidence_eligible"] == false));
+
+        // The check ran: no pass and no sweep asks experte.de again.
+        assert!(emails_needing_validation(&lead, 4).is_empty());
+        lead["payload"]["email_validation_pass"] = json!({"at_ms": 0, "checked": [{
+            "email": verdict.email, "valid": false, "verdict": INCONCLUSIVE_LABEL,
+            "run_id": verdict.run_id}]});
+        assert!(!lead_due_for_sweep(&lead, RETRY_AFTER_MS * 10));
+        assert!(is_email_verdict(INCONCLUSIVE_LABEL));
+
+        // A later placeholder cannot erase it; the native status comes back.
+        let previous = lead["person_field_status"].clone();
+        let mut placeholder = lead.clone();
+        placeholder["person_field_status"]["p-grabbe-michael"]["person_email_validation"] =
+            json!({"status": "action_required", "person_key": "p-grabbe-michael"});
+        placeholder["contacts"][0]["person_email_validation"] = Value::Null;
+        assert_eq!(
+            restore_native_email_verdicts(&mut placeholder, &previous),
+            vec!["p-grabbe-michael".to_string()]
+        );
+        assert_eq!(
+            placeholder["contacts"][0]["person_email_validation"],
+            INCONCLUSIVE_LABEL
+        );
+        assert!(emails_needing_validation(&placeholder, 4).is_empty());
+    }
+
+    // thesen lead_srkgbn, 14.10.2026: every lead-level person field named
+    // Budde, the lead-level e-mail check showed Grabbe's verdict.
+    #[test]
+    fn the_lead_level_email_check_never_shows_another_persons_verdict() {
+        let mut lead = json!({
+            "contacts": [
+                {"person_key": "p-grabbe-michael", "person_email": "m.grabbe@kiesow.org"},
+                {"person_key": "p-wallbaum-katja", "person_email": "k.wallbaum@kiesow.org"}
+            ],
+            "field_status": {
+                "person_email": {"status": "verified", "value": "k.wallbaum@kiesow.org",
+                    "person_key": "p-wallbaum-katja"},
+                "person_nachname": {"status": "verified", "value": "Wallbaum",
+                    "person_key": "p-wallbaum-katja"}
+            }
+        });
+        apply_email_verdicts(&mut lead, &[verdict("m.grabbe@kiesow.org", false)]);
+        // The old roll-up puts Grabbe's verdict on the lead.
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["validated_email"],
+            "m.grabbe@kiesow.org"
+        );
+        // Wallbaum has no check of her own yet: the field is left unset.
+        assert!(align_lead_email_validation(&mut lead));
+        assert!(
+            lead["field_status"]
+                .get("person_email_validation")
+                .is_none(),
+            "{lead}"
+        );
+        assert!(!align_lead_email_validation(&mut lead));
+
+        // Once Wallbaum's own address is checked, the lead shows exactly that.
+        apply_email_verdicts(&mut lead, &[unknown("k.wallbaum@kiesow.org")]);
+        align_lead_email_validation(&mut lead);
+        let status = &lead["field_status"]["person_email_validation"];
+        assert_eq!(status["person_key"], "p-wallbaum-katja", "{lead}");
+        assert_eq!(status["validated_email"], "k.wallbaum@kiesow.org", "{lead}");
+        assert_eq!(status["verdict"], INCONCLUSIVE_LABEL, "{lead}");
+
+        // A later definitive verdict for Grabbe does not take it over.
+        apply_email_verdicts(&mut lead, &[verdict("m.grabbe@kiesow.org", true)]);
+        align_lead_email_validation(&mut lead);
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["person_key"], "p-wallbaum-katja",
+            "{lead}"
+        );
+
+        // Without a lead contact the old roll-up stays untouched.
+        let mut keyless = json!({"contacts": [
+            {"person_key": "p1", "person_email": "a@weicon.de"},
+            {"person_key": "p2", "person_email": "b@weicon.de"}
+        ]});
+        apply_email_verdicts(
+            &mut keyless,
+            &[verdict("a@weicon.de", false), verdict("b@weicon.de", true)],
+        );
+        assert!(!align_lead_email_validation(&mut keyless));
+        assert_eq!(
+            keyless["field_status"]["person_email_validation"]["value"],
+            "valid"
         );
     }
 
@@ -1728,7 +2042,7 @@ mod tests {
         lead["payload"]["email_validation_pass"]["checked"] = json!(first
             .iter()
             .map(|v| json!({
-                "email": v.email, "valid": v.valid, "run_id": v.run_id
+                "email": v.email, "valid": v.valid(), "run_id": v.run_id
             }))
             .collect::<Vec<_>>());
 
@@ -1737,7 +2051,7 @@ mod tests {
         let receipts = merged_email_receipts(&lead, &[last.clone()]);
         lead["payload"]["email_validation_receipts"] = receipts;
         lead["payload"]["email_validation_pass"]["checked"] = json!([{
-            "email": last.email, "valid": last.valid, "run_id": last.run_id
+            "email": last.email, "valid": last.valid(), "run_id": last.run_id
         }]);
         let previous = lead["person_field_status"].clone();
         for i in 0..5 {
