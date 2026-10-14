@@ -1,10 +1,15 @@
-// Versioned successor to registered maps-google-com rev31. Requires #643.
+// Versioned successor to registered maps-google-com rev32.
 // maps.google.com - provider-owned company detail extraction.
-// rev0026 (relearned 2026-08-31): restore maps-specific extraction after the
-// rev0025 generic overlay returned 0 records on consent-banner redirects.
-// Patterned on the proven rev0022 maps-specific script with an extra consent
-// button pass for the `ucbcb=1` Google consent banner, plus a small
-// robustness pass on postal-code parsing for DE/AT/CH.
+//
+// Google answers the server IP's own Maps/search requests only with its robot
+// check, signed in or not. Since 14.10.2026 (owner approval) the Google
+// business profile is read through the Bright Data SERP API (synchronous
+// `/request` endpoint, zone from the runtime store key
+// CTOX_WEB_SEARCH_BRIGHTDATA_ZONE, default `serp_api1`): first the business
+// panel of the Google web search for the company, then Google's local results
+// (tbm=lcl). The Maps endpoint itself is disabled on the SERP zone ("disabled
+// due to low success rate"). The key is read at runtime from the CTOX secret
+// store (credentials/BRIGHTDATA_API_KEY) and never printed.
 
 "use strict";
 
@@ -25,18 +30,8 @@ function readInput() {
   }
 }
 
-function runCtox(args, input) {
-  try {
-    return JSON.parse(execFileSync(process.env.CTOX_BIN || "ctox", args, {
-      encoding: "utf8",
-      input,
-      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-      maxBuffer: 32 * 1024 * 1024,
-      timeout: 95_000,
-    }));
-  } catch (error) {
-    return { ok: false, command_error: String(error && error.stderr || error && error.message || "").slice(0, 4000) };
-  }
+function ctoxBin() {
+  return process.env.CTOX_BIN || "ctox";
 }
 
 function normalized(value) {
@@ -97,7 +92,7 @@ function domainFromWebsite(value) {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
-    return url.protocol === "https:" && host && !host.includes("google.") ? host : null;
+    return ["https:", "http:"].includes(url.protocol) && host && !host.includes("google.") ? host : null;
   } catch (_error) {
     return null;
   }
@@ -135,7 +130,9 @@ function recordsFromPage(company, page) {
     records.push({ field, value: clean, confidence, source_url: sourceUrl, note });
   };
   const placeName = isMapsUiHeading(page && page.place_name) ? company : (page && page.place_name) || company;
-  push("firma_name", placeName);
+  const panelNote = `Google Maps business profile (${(page && page.provider_section) || "detail panel"}, Google SERP via Bright Data)`
+    + (page && page.opening_hours ? `; Öffnungszeiten: ${page.opening_hours}` : "");
+  push("firma_name", placeName, "high", page && page.provider_section ? panelNote : "Google Maps detail panel");
   for (const field of (page && page.extracted_fields && page.extracted_fields.fields) || []) {
     if (["firma_anschrift", "firma_plz", "firma_ort"].includes(field.field)) continue;
     push(field.field, field.value, field.confidence || "high", field.note || "Google Maps detail panel");
@@ -151,85 +148,242 @@ function recordsFromPage(company, page) {
   return records;
 }
 
-function browserPage(company, country) {
-  const countryName = { DE: "Deutschland", AT: "Oesterreich", CH: "Schweiz" }[country] || country;
-  const query = [company, countryName].filter(Boolean).join(", ");
-  const targetUrl = `${START_URL}&hl=de&gl=${encodeURIComponent(String(country).toLowerCase())}&query=${encodeURIComponent(query)}`;
-  // rev0026: extra consent patterns for the `ucbcb=1` Google consent banner,
-  // plus a short settle wait after each click so the Maps app actually mounts.
-  const consentPatterns = [
-    "alle ablehnen", "reject all", "tout refuser", "alles ablehnen",
-    "only reject", "nur ablehnen", "decline all", "use necessary cookies only",
-    "non necessari", "nur erforderliche",
-  ];
-  const patternJson = JSON.stringify(consentPatterns);
-  const companyJson = JSON.stringify(company);
-  const targetUrlJson = JSON.stringify(targetUrl);
-  const source = `
-    const expectedCompany = ${companyJson};
-    const response = await page.goto(${targetUrlJson}, { waitUntil: "domcontentloaded", timeout: 60000 });
-    const consentSeen = /[?&]ucbcb=/.test(page.url()) || /\\/consent/.test(page.url());
-    for (const pattern of ${patternJson}) {
-      const button = page.getByRole("button", { name: new RegExp(pattern, "i") }).first();
-      if (await button.count()) { await button.click({ timeout: 2500 }).catch(() => null); await page.waitForTimeout(500); break; }
-    }
-    if (consentSeen) {
-      await page.goto(${targetUrlJson}, { waitUntil: "domcontentloaded", timeout: 60000 });
-    }
-    await page.waitForFunction(
-      (value) => document.body && document.body.innerText.toLowerCase().includes(value.toLowerCase()),
-      expectedCompany,
-      { timeout: 30000 },
-    ).catch(() => null);
-    const exact = page.locator('a[href*="/maps/place/"]').filter({ hasText: expectedCompany }).first();
-    if (await exact.count()) { await exact.click({ timeout: 5000 }).catch(() => null); await page.waitForTimeout(1500); }
-    const text = await page.locator("body").innerText().catch(() => "");
-    const attr = async (selector, name) => page.locator(selector).first().getAttribute(name).catch(() => "");
-    const addressLabel = await attr('button[data-item-id="address"]', "aria-label") || "";
-    const address = addressLabel.replace(/^(?:Adresse|Address):\\s*/i, "").trim();
-    const phone = (await attr('button[data-item-id^="phone:tel:"]', "data-item-id") || "").replace(/^phone:tel:/, "");
-    const website = await attr('a[data-item-id="authority"]', "href") || await attr('a[aria-label^="Website" i]', "href");
-    const placeName = await page.locator("h1").first().innerText().catch(() => expectedCompany);
-    const postal = address.match(/\\b(?:D-|A-|CH-)?(\\d{4,5})\\s+([^,]+)/);
-    return {
-      url: page.url(), title: await page.title().catch(() => ""), http_status: response && response.status(),
-      body_text: text.slice(0, 30000), place_name: placeName, address, phone, website,
-      postal_code: postal && postal[1] || "", locality: postal && postal[2] && postal[2].trim() || "",
-      consent_seen: consentSeen,
-    };
-  `;
-  const binding = readInput();
-  if (!String(binding.owner_user_id || "").trim() || !String(binding.task_id || "").trim()) {
-    return { ok: false, detection: { markers: ["authorization_required"] } };
+const BRIGHTDATA_HOST = "api.brightdata.com";
+const BRIGHTDATA_SECRET = { scope: "credentials", name: "BRIGHTDATA_API_KEY" };
+const BRIGHTDATA_ZONE_KEY = "CTOX_WEB_SEARCH_BRIGHTDATA_ZONE";
+const BRIGHTDATA_DEFAULT_ZONE = "serp_api1";
+const SERP_ATTEMPT_TIMEOUT_MS = 40_000;
+const SERP_BUDGET_MS = 100_000;
+
+function brightDataToken() {
+  try {
+    const out = String(execFileSync(
+      ctoxBin(),
+      ["secret", "get", "--scope", BRIGHTDATA_SECRET.scope, "--name", BRIGHTDATA_SECRET.name],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 },
+    ) || "").trim();
+    if (!out.startsWith("{")) return out;
+    const parsed = JSON.parse(out);
+    return String(parsed.value || parsed.secret || parsed.data || "").trim();
+  } catch {
+    return "";
   }
-  const payload = runCtox([
-    "business-os", "web-stack", "authenticated-automation",
-    "--source-id", SOURCE_ID, "--target-url", "https://accounts.google.com/",
-    "--credential-ref", "ctox-secret://credentials/GOOGLE_BROWSER_LOGIN",
-    "--owner-user-id", String(binding.owner_user_id), "--task-id", String(binding.task_id),
-    "--timeout-ms", "90000",
-  ], source);
-  if (!payload?.ok || !payload.session_id || payload.authenticated_login?.status !== "completed") {
-    return { ok: false, detection: { markers: ["authorization_required"] } };
+}
+
+// Zone name from the CTOX runtime store (read-only); the adapter env is
+// cleared, so the store is read directly next to the scrape workspace.
+function brightDataZone() {
+  const targetDir = String(process.env.CTOX_SCRAPE_TARGET_DIR || "");
+  if (targetDir) {
+    try {
+      const db = require("path").resolve(targetDir, "..", "..", "..", "ctox-runtime.sqlite3");
+      const out = String(execFileSync("sqlite3", [
+        "-readonly", db,
+        `SELECT env_value FROM runtime_env_kv WHERE env_key = '${BRIGHTDATA_ZONE_KEY}' LIMIT 1`,
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5_000 }) || "").trim();
+      if (/^[A-Za-z0-9_-]{1,64}$/.test(out)) return out;
+    } catch {
+      // fall through to the default zone
+    }
   }
-  const result = payload;
-  return Object.assign({}, result, {
-    ok: payload && payload.ok === true,
-    detection: payload && payload.detection,
-    command_error: payload && payload.command_error,
+  return BRIGHTDATA_DEFAULT_ZONE;
+}
+
+// Variants differ only in the result count: Bright Data refuses to repeat a
+// URL that "recently failed" for a while, so a retry asks a different URL.
+const NUM_VARIANTS = ["10", "20", ""];
+
+function googleSerpUrl(query, country, local = false, variant = 0) {
+  const gl = /^[A-Z]{2}$/.test(country || "") ? country.toLowerCase() : "de";
+  const params = { q: query, hl: "de", gl, brd_json: "1" };
+  const num = NUM_VARIANTS[variant % NUM_VARIANTS.length];
+  if (num) params.num = num;
+  if (local) params.tbm = "lcl";
+  return "https://www.google.de/search?" + new URLSearchParams(params).toString();
+}
+
+// One synchronous SERP request. NOTE: no `Accept: application/json` header —
+// with it Bright Data answers HTTP 200 with an empty body.
+function brightDataRequest(token, zone, url, timeoutMs = SERP_ATTEMPT_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ zone, url, format: "raw" });
+    let settled = false;
+    const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+    let req;
+    try {
+      req = require("https").request({
+        host: BRIGHTDATA_HOST,
+        path: "/request",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+        timeout: timeoutMs,
+      }, (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { raw += chunk; });
+        res.on("end", () => done({ status: res.statusCode || 0, body: raw }));
+        res.on("error", (error) => done({ status: 0, body: "", error: String(error?.message || error) }));
+      });
+    } catch (error) {
+      done({ status: 0, body: "", error: String(error?.message || error) });
+      return;
+    }
+    req.on("timeout", () => { req.destroy(new Error("no answer within the request budget")); });
+    req.on("error", (error) => done({ status: 0, body: "", error: String(error?.message || error) }));
+    req.write(body);
+    req.end();
   });
 }
 
-function recordUnlockSignal(url, markers) {
-  runCtox([
-    "web", "unlock", "signals", "record",
-    "--source", `scrape-target:${SOURCE_ID}`,
-    "--url", isAllowedUrl(url) ? url : START_URL,
-    "--evidence", JSON.stringify({
-      source_id: SOURCE_ID, detection: "access_challenge",
-      markers: [...new Set(markers)].slice(0, 12), secret_value_in_payload: false,
-    }),
+function parseSerp(response) {
+  if (response.status !== 200) {
+    return { ok: false, status: response.status, error: String(response.error || response.body || "").slice(0, 200) };
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(response.body); } catch { parsed = null; }
+  if (!parsed || typeof parsed !== "object") {
+    return {
+      ok: false,
+      status: 200,
+      error: response.body
+        ? `unparsable SERP body (${response.body.length} bytes: ${response.body.slice(0, 80).replace(/\s+/g, " ")})`
+        : "empty SERP body",
+    };
+  }
+  // Target policy: only results reported as coming from Google count.
+  if (String(parsed.general?.search_engine || "").toLowerCase() !== "google") {
+    return { ok: false, status: 200, error: "SERP provider is not google" };
+  }
+  const knowledge = parsed.knowledge && typeof parsed.knowledge === "object" ? parsed.knowledge : null;
+  const local = (Array.isArray(parsed.snack_pack) ? parsed.snack_pack : [])
+    .concat(Array.isArray(parsed.local_results) ? parsed.local_results : [])
+    .filter((item) => item && typeof item === "object");
+  return { ok: true, status: 200, knowledge, local };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Bright Data intermittently answers HTTP 200 with an empty or non-JSON body
+// ("This query recently failed ..."), times out, or answers a transient 5xx
+// (measured 14.10.2026); such answers are retried with a URL variant while the
+// budget lasts. Authorization and account answers are final.
+async function brightSerp(token, zone, query, country, local = false, budgetMs = SERP_BUDGET_MS, attempts = 3) {
+  const deadline = Date.now() + budgetMs;
+  let last = { ok: false, status: 0, error: "no attempt" };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining < 4_000) break;
+    last = parseSerp(await brightDataRequest(token, zone, googleSerpUrl(query, country, local, attempt), Math.min(remaining, SERP_ATTEMPT_TIMEOUT_MS)));
+    if (last.ok || [400, 401, 403, 407].includes(last.status)) return last;
+    await sleep(400 + attempt * 600);
+  }
+  return last;
+}
+
+function serpFailure(searches) {
+  const statuses = searches.map((search) => search.status);
+  const detail = `Bright Data SERP failed: ${searches.map((search) => `${search.status}${search.error ? ` ${search.error}` : ""}`).join(" | ").slice(0, 400)}`;
+  if (statuses.some((status) => status === 401 || status === 403 || status === 407)) {
+    return { records: [], failure_mode: "authorization_required", detail };
+  }
+  return { records: [], failure_mode: "temporary_unreachable", detail };
+}
+
+function hoursText(value) {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map((item) => [item?.day, item?.hours].map((part) => String(part || "").trim()).filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join("; ")
+    .slice(0, 300);
+}
+
+// "https://www.google.de/maps/dir//SGS+Industrial+Services,+Gewerbepark+1,+4751+Dorf+an+der+Pram/data=..."
+// -> "Gewerbepark 1, 4751 Dorf an der Pram"
+function addressFromMapsLink(link, name) {
+  try {
+    const url = new URL(link);
+    const match = url.pathname.match(/\/maps\/dir\/\/([^/]+)/);
+    if (!match) return "";
+    const parts = decodeURIComponent(match[1].replace(/\+/g, " ")).split(",").map((part) => part.trim()).filter(Boolean);
+    if (parts.length > 1 && normalized(parts[0]) === normalized(name)) parts.shift();
+    return /\d{4,5}\s+\S/.test(parts.join(", ")) ? parts.join(", ") : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function mapsSearchUrl(company, country) {
+  const countryName = { DE: "Deutschland", AT: "Oesterreich", CH: "Schweiz" }[country] || country;
+  const query = [company, countryName].filter(Boolean).join(", ");
+  return `${START_URL}&hl=de&gl=${encodeURIComponent(String(country).toLowerCase())}&query=${encodeURIComponent(query)}`;
+}
+
+function placeFromKnowledge(company, knowledge, sourceUrl) {
+  if (!knowledge || !identityMatches(company, knowledge.name)) return null;
+  const address = String(knowledge.address || "").trim();
+  const hours = hoursText(knowledge.open_hours);
+  return {
+    ok: true,
+    url: sourceUrl,
+    title: String(knowledge.name || ""),
+    body_text: [knowledge.name, knowledge.subtitle, address].filter(Boolean).join(" "),
+    place_name: String(knowledge.name || ""),
+    address,
+    phone: String(knowledge.phone || ""),
+    website: String(knowledge.site || ""),
+    opening_hours: hours,
+    provider_section: "business panel",
+  };
+}
+
+function placeFromLocal(company, items, sourceUrl) {
+  const item = (items || []).find((entry) => identityMatches(company, entry.name || entry.title));
+  if (!item) return null;
+  const name = String(item.name || item.title || "");
+  const address = addressFromMapsLink(item.maps_link, name)
+    || (/\d{4,5}\s+\S/.test(String(item.address || "")) ? String(item.address) : "");
+  return {
+    ok: true,
+    url: sourceUrl,
+    title: name,
+    body_text: [name, item.type, address || item.address].filter(Boolean).join(" "),
+    place_name: name,
+    address,
+    phone: String(item.phone || ""),
+    website: String(item.site || item.website || item.link || ""),
+    opening_hours: "",
+    provider_section: "local results",
+  };
+}
+
+// Business profile lookup: web-search business panel first, local results second.
+async function placeLookup(company, country, city) {
+  const token = brightDataToken();
+  if (!token) {
+    return { ok: false, failure: { records: [], failure_mode: "authorization_required", detail: `credential_missing: ${BRIGHTDATA_SECRET.name} not in CTOX secret store (scope ${BRIGHTDATA_SECRET.scope})` } };
+  }
+  const zone = brightDataZone();
+  const sourceUrl = mapsSearchUrl(company, country);
+  const query = [company, city].filter(Boolean).join(" ");
+  // Both lookups run in parallel; the business panel wins when it names the company.
+  const [web, local] = await Promise.all([
+    brightSerp(token, zone, query, country),
+    brightSerp(token, zone, query, country, true),
   ]);
+  const searches = [{ status: web.status, error: web.error }, { status: local.status, error: local.error }];
+  if ([web, local].some((serp) => !serp.ok && [400, 401, 403, 407].includes(serp.status))) {
+    return { ok: false, failure: serpFailure(searches) };
+  }
+  const place = (web.ok && placeFromKnowledge(company, web.knowledge, sourceUrl))
+    || (local.ok && placeFromLocal(company, local.local, sourceUrl));
+  if (place) return place;
+  if (!web.ok && !local.ok) return { ok: false, failure: serpFailure(searches) };
+  return { ok: false, url: sourceUrl };
 }
 
 function failureResult(markers, matchingPageSeen = false) {
@@ -244,30 +398,44 @@ function failureResult(markers, matchingPageSeen = false) {
   };
 }
 
-function main() {
-  const input = readInput();
+async function run(input) {
   const company = String(input.company || "").trim();
-  const country = String(input.country || "DE").trim() || "DE";
+  const country = String(input.country || "DE").trim().toUpperCase() || "DE";
+  const city = String(input.city || input.firma_ort || input.ort || "").trim();
   if (!company) {
-    process.stdout.write(JSON.stringify({ records: [], failure_mode: "invalid_input", detail: "company missing" }));
-    return;
+    return { records: [], failure_mode: "invalid_input", detail: "company missing" };
   }
-  const page = browserPage(company, country);
-  const markers = blockingMarkers(page);
-  const matchingPageSeen = isAllowedUrl(page && page.url) && identityMatches(company, [(page && page.title) || "", (page && page.body_text) || ""].join(" "));
+  const page = await placeLookup(company, country, city);
+  if (page.failure) return page.failure;
   const records = recordsFromPage(company, page);
   if (records.length > 1) {
-    process.stdout.write(JSON.stringify({ records, source_session: { source_id: SOURCE_ID, session_id: page.session_id, authenticated_login: page.authenticated_login } }));
-    return;
+    return { records, source_session: { source_id: SOURCE_ID, provider: "google", transport: "brightdata_serp" } };
   }
-  if (markers.length > 0) recordUnlockSignal(page && page.url, markers);
-  process.stdout.write(JSON.stringify(failureResult(markers, matchingPageSeen)));
+  const matchingPageSeen = page.ok === true;
+  return failureResult([], matchingPageSeen);
+}
+
+async function main() {
+  let result;
+  try {
+    result = await run(readInput());
+  } catch (error) {
+    result = { records: [], failure_mode: "temporary_unreachable", detail: String(error && error.message || error).slice(0, 200) };
+  }
+  process.stdout.write(JSON.stringify(result));
 }
 
 if (require.main === module) main();
 
 module.exports = {
+  addressFromMapsLink,
+  googleSerpUrl,
+  hoursText,
   mapsAddressParts,
+  mapsSearchUrl,
+  parseSerp,
+  placeFromKnowledge,
+  placeFromLocal,
   blockingMarkers,
   domainFromWebsite,
   failureResult,

@@ -1,21 +1,29 @@
-// Versioned successor to registered google-de rev25. Requires #643.
-// google.de — prospect.v1 extractor (Phase B initial revision).
+// Versioned successor to registered google-de rev32 (and the reverted
+// dataset-based rev33-36).
+// google.de — prospect.v1 extractor.
 //
-// Reads CTOX_SCRAPE_INPUT_JSON for the company + country, drives the
-// owner-bound native login/capture over the live google.de SERP to discover
-// the company's own website, then parses that page for the field set
-// documented in `tools/web-stack/src/sources/EXCEL_MATRIX.md`.
+// Reads CTOX_SCRAPE_INPUT_JSON for the company + country. The Google SERP is
+// fetched through the Bright Data SERP API (synchronous `/request` endpoint,
+// zone from the runtime store key CTOX_WEB_SEARCH_BRIGHTDATA_ZONE, default
+// `serp_api1`) because Google answers the server IP's own searches only with
+// its robot check, signed in or not (owner approval 14.10.2026). The key is
+// read at runtime from the CTOX secret store (credentials/BRIGHTDATA_API_KEY)
+// and never printed.
 //
-// The Google leg only accepts payloads whose provider is verified as
-// `google` (foreign provider results are rejected by target policy) and
-// only emits evidence whose source URL is a safe public http(s) URL —
-// result URLs may be external (the company's own site).
+// Company mode: discover the company's own website among the Google organic
+// results, read it with the CTOX web stack and parse the field set documented
+// in `tools/web-stack/src/sources/EXCEL_MATRIX.md`.
+// Person mode (input.titles, input.title_groups or input.query): run
+// `linkedin "<company>" <title(s)>` Google searches in parallel and return
+// LinkedIn profile candidates whose hit names the company.
 //
-// Drift contract: if the selectors below stop matching but pages load
-// successfully, this script returns an empty records array.
-// `ctox scrape execute --allow-heal` then classifies the run as
-// `portal_drift` and enqueues a `universal-scraping` repair task that
-// will revise this very file.
+// The Google leg only accepts payloads whose search engine is reported as
+// `google` (foreign provider results are rejected by target policy) and only
+// emits evidence whose source URL is a safe public http(s) URL — result URLs
+// may be external (the company's own site).
+//
+// Drift contract: if the SERP answers but nothing matches, this script returns
+// an empty records array with failure_mode portal_drift.
 
 "use strict";
 
@@ -149,100 +157,11 @@ function isDirectoryHost(value) {
 // CTOX web-stack drivers
 // ---------------------------------------------------------------------------
 
-function searchGoogle(company, country) {
-  const args = [
-    "web", "search",
-    "--query", company,
-    "--source", SOURCE_ID,
-    "--include-sources",
-  ];
-  if (country) args.push("--country", country);
-  const payload = runCtox(args);
-  const providers = [String(payload?.provider || "").toLowerCase()];
-  const sourceFailures = Array.isArray(payload?.source_failures) ? payload.source_failures : [];
-  // Foreign provider results are rejected by target policy: only accept
-  // payloads the web stack verified as coming from Google.
-  const providerOk = providers.includes("google");
-  const results = providerOk && Array.isArray(payload?.results) ? payload.results : [];
-  return { results, sourceFailures, providerOk };
-}
-
-// Consent-aware SERP pass over the live google.de site. Mirrors the proven
-// solo probe: handle the ordinary consent dialog, wait for organic h3
-// results, extract anchors. A challenge page (unusual traffic / sorry) is
-// surfaced via the ctox detection markers, never bypassed.
-function serpBrowserSource(company) {
-  return `
-const company = ${JSON.stringify(company)};
-const url = "https://www.google.de/search?q=" + encodeURIComponent(company) + "&hl=de";
-await ctoxBrowser.goto(url, { timeoutMs: 30000 });
-await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => null);
-const consentNames = [/alle ablehnen/i, /alles ablehnen/i, /reject all/i, /alle akzeptieren/i, /alles akzeptieren/i, /accept all/i, /zustimmen/i];
-for (const name of consentNames) {
-  const button = page.getByRole("button", { name }).first();
-  if (await button.count()) {
-    await button.click({ timeout: 2500 }).catch(() => null);
-    await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => null);
-    break;
-  }
-}
-await page.waitForSelector("h3", { timeout: 15000 }).catch(() => null);
-const text = await page.locator("body").innerText().catch(() => "");
-const results = await page.evaluate(() => {
-  const out = [];
-  for (const h3 of document.querySelectorAll("h3")) {
-    const anchor = h3.closest("a[href]");
-    if (!anchor || !/^https?:/.test(anchor.href)) continue;
-    let container = anchor;
-    for (let i = 0; i < 6 && container.parentElement; i += 1) {
-      container = container.parentElement;
-      if ((container.innerText || "").length > (anchor.innerText || "").length + 60) break;
-    }
-    out.push({
-      url: anchor.href,
-      title: (h3.innerText || "").replace(/\\s+/g, " ").trim(),
-      summary: (container.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 600),
-    });
-  }
-  return out;
-});
-return {
-  url: page.url(),
-  title: await page.title().catch(() => ""),
-  page_text_excerpt: text.replace(/\\s+/g, " ").trim().slice(0, 16000),
-  results,
-};
-`;
-}
-
-function runBrowserAutomation(name, source, timeoutMs = 60_000) {
-  const authenticated = name === "portal-search-google-de";
-  const binding = readInput();
-  if (authenticated && (!String(binding.owner_user_id || "").trim()
-      || !String(binding.task_id || "").trim())) {
-    return { ok: false, markers: ["authorization_required"], result: {} };
-  }
-  const args = authenticated ? [
-    "business-os", "web-stack", "authenticated-automation",
-    "--source-id", SOURCE_ID,
-    "--target-url", "https://accounts.google.com/",
-    "--credential-ref", "ctox-secret://credentials/GOOGLE_BROWSER_LOGIN",
-    "--owner-user-id", String(binding.owner_user_id),
-    "--task-id", String(binding.task_id),
-    "--timeout-ms", String(timeoutMs),
-  ] : ["web", "browser-automation", "--timeout-ms", String(timeoutMs)];
-  const payload = runCtox(args, source, timeoutMs + 10_000);
-  if (authenticated && (!payload?.ok || !payload.session_id
-      || payload.authenticated_login?.status !== "completed")) {
-    return { ok: false, markers: ["authorization_required"], result: {} };
-  }
+function runBrowserAutomation(source, timeoutMs = 60_000) {
+  const payload = runCtox(["web", "browser-automation", "--timeout-ms", String(timeoutMs)], source, timeoutMs + 10_000);
   const markers = Array.isArray(payload?.detection?.markers) ? payload.detection.markers.map(String) : [];
   if (!payload?.ok) return { ok: false, markers };
-  return { ok: true, markers, result: authenticated ? payload : (payload.result || {}) };
-}
-
-function serpPage(company) {
-  return runBrowserAutomation("portal-search-google-de", serpBrowserSource(company), 70_000);
+  return { ok: true, markers, result: payload.result || {} };
 }
 
 function readPage(url, country) {
@@ -273,11 +192,7 @@ return {
   page_text_excerpt: text.replace(/\\s+/g, " ").trim().slice(0, 16000),
 };
 `;
-  const payload = runBrowserAutomation(
-    `source-read-${SOURCE_ID.replace(/[^a-z0-9]/gi, "-")}`,
-    source,
-    50_000,
-  );
+  const payload = runBrowserAutomation(source, 50_000);
   return payload.ok ? { ...payload.result, markers: payload.markers } : { ok: false, markers: payload.markers };
 }
 
@@ -381,33 +296,280 @@ function appendContactHeuristics(records, page, sourceUrl) {
 }
 
 // ---------------------------------------------------------------------------
-// main
+// Bright Data SERP API (Google results without the server IP's robot check)
 // ---------------------------------------------------------------------------
 
-function main() {
-  const input = readInput();
-  const company = String(input.company || "").trim();
-  const country = String(input.country || "").trim().toUpperCase();
-  if (!company) {
-    process.stdout.write(JSON.stringify({
-      records: [],
-      failure_mode: "portal_drift",
-      detail: "CTOX_SCRAPE_INPUT_JSON.company missing",
-    }));
-    return;
+const BRIGHTDATA_HOST = "api.brightdata.com";
+const BRIGHTDATA_SECRET = { scope: "credentials", name: "BRIGHTDATA_API_KEY" };
+const BRIGHTDATA_ZONE_KEY = "CTOX_WEB_SEARCH_BRIGHTDATA_ZONE";
+const BRIGHTDATA_DEFAULT_ZONE = "serp_api1";
+const SERP_ATTEMPT_TIMEOUT_MS = 40_000;
+const SERP_BUDGET_MS = 100_000;
+const PERSON_DEADLINE_MS = 55_000;
+const MAX_PERSON_QUERIES = 20;
+
+function brightDataToken() {
+  try {
+    const out = String(execFileSync(
+      ctoxBin(),
+      ["secret", "get", "--scope", BRIGHTDATA_SECRET.scope, "--name", BRIGHTDATA_SECRET.name],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20_000 },
+    ) || "").trim();
+    if (!out.startsWith("{")) return out;
+    const parsed = JSON.parse(out);
+    return String(parsed.value || parsed.secret || parsed.data || "").trim();
+  } catch {
+    return "";
   }
+}
+
+// Zone name from the CTOX runtime store (read-only); the adapter env is
+// cleared, so the store is read directly next to the scrape workspace.
+function brightDataZone() {
+  const targetDir = String(process.env.CTOX_SCRAPE_TARGET_DIR || "");
+  if (targetDir) {
+    try {
+      const db = require("path").resolve(targetDir, "..", "..", "..", "ctox-runtime.sqlite3");
+      const out = String(execFileSync("sqlite3", [
+        "-readonly", db,
+        `SELECT env_value FROM runtime_env_kv WHERE env_key = '${BRIGHTDATA_ZONE_KEY}' LIMIT 1`,
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5_000 }) || "").trim();
+      if (/^[A-Za-z0-9_-]{1,64}$/.test(out)) return out;
+    } catch {
+      // fall through to the default zone
+    }
+  }
+  return BRIGHTDATA_DEFAULT_ZONE;
+}
+
+// Variants differ only in the result count: Bright Data refuses to repeat a
+// URL that "recently failed" for a while, so a retry asks a different URL.
+const NUM_VARIANTS = ["10", "20", ""];
+
+function googleSerpUrl(query, country, variant = 0) {
+  const gl = /^[A-Z]{2}$/.test(country || "") ? country.toLowerCase() : "de";
+  const params = { q: query, hl: "de", gl, brd_json: "1" };
+  const num = NUM_VARIANTS[variant % NUM_VARIANTS.length];
+  if (num) params.num = num;
+  return "https://www.google.de/search?" + new URLSearchParams(params).toString();
+}
+
+// One synchronous SERP request. NOTE: no `Accept: application/json` header —
+// with it Bright Data answers HTTP 200 with an empty body.
+function brightDataRequest(token, zone, url, timeoutMs = SERP_ATTEMPT_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ zone, url, format: "raw" });
+    let settled = false;
+    const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+    let req;
+    try {
+      req = require("https").request({
+        host: BRIGHTDATA_HOST,
+        path: "/request",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+        timeout: timeoutMs,
+      }, (res) => {
+        let raw = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { raw += chunk; });
+        res.on("end", () => done({ status: res.statusCode || 0, body: raw }));
+        res.on("error", (error) => done({ status: 0, body: "", error: String(error?.message || error) }));
+      });
+    } catch (error) {
+      done({ status: 0, body: "", error: String(error?.message || error) });
+      return;
+    }
+    req.on("timeout", () => { req.destroy(new Error("no answer within the request budget")); });
+    req.on("error", (error) => done({ status: 0, body: "", error: String(error?.message || error) }));
+    req.write(body);
+    req.end();
+  });
+}
+
+function parseSerp(response) {
+  if (response.status !== 200) {
+    return { ok: false, status: response.status, error: String(response.error || response.body || "").slice(0, 200) };
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(response.body); } catch { parsed = null; }
+  if (!parsed || typeof parsed !== "object") {
+    return {
+      ok: false,
+      status: 200,
+      error: response.body
+        ? `unparsable SERP body (${response.body.length} bytes: ${response.body.slice(0, 80).replace(/\s+/g, " ")})`
+        : "empty SERP body",
+    };
+  }
+  // Target policy: only results reported as coming from Google count.
+  if (String(parsed.general?.search_engine || "").toLowerCase() !== "google") {
+    return { ok: false, status: 200, error: "SERP provider is not google" };
+  }
+  const organic = (Array.isArray(parsed.organic) ? parsed.organic : []).map((hit) => ({
+    url: String(hit?.link || hit?.url || ""),
+    title: String(hit?.title || ""),
+    summary: String(hit?.description || hit?.snippet || ""),
+  })).filter((hit) => hit.url);
+  const knowledge = parsed.knowledge && typeof parsed.knowledge === "object" ? parsed.knowledge : null;
+  return { ok: true, status: 200, results: organic, knowledge };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Bright Data intermittently answers HTTP 200 with an empty or non-JSON body
+// ("This query recently failed ..."), times out, or answers a transient 5xx
+// (measured 14.10.2026); such answers are retried with a URL variant while the
+// budget lasts. Authorization and account answers are final.
+async function brightSerp(token, zone, query, country, budgetMs = SERP_BUDGET_MS, attempts = 3) {
+  const deadline = Date.now() + budgetMs;
+  let last = { ok: false, status: 0, error: "no attempt" };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const remaining = deadline - Date.now();
+    if (remaining < 4_000) break;
+    last = parseSerp(await brightDataRequest(token, zone, googleSerpUrl(query, country, attempt), Math.min(remaining, SERP_ATTEMPT_TIMEOUT_MS)));
+    if (last.ok || [400, 401, 403, 407].includes(last.status)) return last;
+    await sleep(400 + attempt * 600);
+  }
+  return last;
+}
+
+function serpFailure(searches) {
+  const statuses = searches.map((search) => search.status);
+  const detail = `Bright Data SERP failed: ${searches.map((search) => `${search.status}${search.error ? ` ${search.error}` : ""}`).join(" | ").slice(0, 400)}`;
+  if (statuses.some((status) => status === 401 || status === 403 || status === 407)) {
+    return { records: [], failure_mode: "authorization_required", detail };
+  }
+  return { records: [], failure_mode: "temporary_unreachable", detail };
+}
+
+// ---------------------------------------------------------------------------
+// Person discovery (LinkedIn candidates from Google)
+// ---------------------------------------------------------------------------
+
+// "Vorname Nachname – Titel – Firma | LinkedIn" -> { name, headline }
+function parseLinkedinTitle(title) {
+  const cleaned = String(title || "").replace(/\s*[|·–-]\s*LinkedIn.*$/i, "").trim();
+  const parts = cleaned.split(/\s+[–—·-]\s+/).map((part) => part.trim()).filter(Boolean);
+  const name = (parts[0] || "").replace(/,.*$/, "").replace(/\b(Dr\.|Prof\.|Dipl\.-\S+|MBA|M\.Sc\.|B\.Sc\.)\s*/g, "").trim();
+  // Drop location parts ("Münster, Nordrhein-Westfalen, Deutschland").
+  const headline = parts.slice(1)
+    .filter((part) => !/(?:^|,\s*)(?:Deutschland|Germany|Österreich|Austria|Schweiz|Switzerland|Region)\b|\bRegion\s/i.test(part))
+    .join(" – ");
+  return { name, headline };
+}
+
+function linkedinProfileUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!/(^|\.)linkedin\.com$/i.test(url.hostname)) return "";
+    const match = url.pathname.match(/^\/in\/([^/?#]+)/);
+    if (!match) return "";
+    let slug = match[1];
+    try { slug = decodeURIComponent(slug); } catch { /* keep the raw slug */ }
+    return `https://www.linkedin.com/in/${encodeURIComponent(slug.toLowerCase())}`;
+  } catch {
+    return "";
+  }
+}
+
+// Search name without legal form: "Kiesow Dr. Brinkmann GmbH & Co. KG" -> "Kiesow Dr. Brinkmann".
+function searchName(company) {
+  return String(company || "")
+    .replace(/\b(GmbH|mbH|AG|SE|KG|KGaA|OHG|UG|e\.?\s?K\.?|Ltd\.?|Inc\.?|Holding)(?=\s|$|[,.&])/gi, " ")
+    .replace(/&\s*Co\.?/gi, " ")
+    .replace(/\(haftungsbeschr[aä]nkt\)/gi, " ")
+    .replace(/[,&]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || String(company || "").trim();
+}
+
+function quoteTerm(term) {
+  return /\s/.test(term) ? `"${term.replace(/"/g, "")}"` : term;
+}
+
+function personQueries(input, company) {
+  const queries = [];
+  const shortName = searchName(company);
+  if (String(input.query || "").trim()) queries.push(String(input.query).trim());
+  const titles = Array.isArray(input.titles) ? input.titles.map((t) => String(t || "").trim()).filter(Boolean) : [];
+  for (const title of titles) queries.push(`linkedin "${shortName}" ${quoteTerm(title)}`);
+  // title_groups: one search per group, titles OR-combined.
+  const groups = Array.isArray(input.title_groups) ? input.title_groups : [];
+  for (const group of groups) {
+    const list = (Array.isArray(group) ? group : [group]).map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8);
+    if (list.length > 0) queries.push(`linkedin "${shortName}" (${list.map(quoteTerm).join(" OR ")})`);
+  }
+  return [...new Set(queries)].slice(0, MAX_PERSON_QUERIES);
+}
+
+function wantsPersonMode(input) {
+  return Boolean(String(input.query || "").trim())
+    || (Array.isArray(input.titles) && input.titles.length > 0)
+    || (Array.isArray(input.title_groups) && input.title_groups.length > 0);
+}
+
+async function personSearch(input, company, country, token, zone) {
+  const queries = personQueries(input, company);
+  const firstToken = identityTokens(company)[0];
+  if (queries.length === 0 || !firstToken) {
+    return { records: [], failure_mode: "invalid_input", detail: "person search needs a company name token and at least one title or query" };
+  }
+  const deadline = Date.now() + PERSON_DEADLINE_MS;
+  const answers = await Promise.all(queries.map((query) =>
+    brightSerp(token, zone, query, country, Math.max(5_000, deadline - Date.now()))));
+  const records = [];
+  const searches = [];
+  const seen = new Set();
+  queries.forEach((query, index) => {
+    const serp = answers[index];
+    searches.push({ query, ok: serp.ok, status: serp.status, hits: serp.ok ? serp.results.length : 0, ...(serp.ok ? {} : { error: serp.error }) });
+    if (!serp.ok) return;
+    for (const hit of serp.results) {
+      const profile = linkedinProfileUrl(hit.url);
+      if (!profile || seen.has(profile)) continue;
+      // LinkedIn shortens company names in titles ("… bei KIESOW …"): the
+      // first distinctive name token is enough for a candidate; confirmation
+      // of the current employer is left to linkedin-com.
+      if (!normalized([hit.title, hit.summary].join(" ")).includes(firstToken)) continue;
+      const { name, headline } = parseLinkedinTitle(hit.title);
+      const nameParts = name.split(/\s+/).filter(Boolean);
+      if (nameParts.length < 2) continue;
+      seen.add(profile);
+      const note = `Google (Bright Data SERP) "${query}": ${hit.title}${hit.summary ? ` — ${hit.summary.slice(0, 220)}` : ""}`;
+      appendRecord(records, { field: "person_vorname", value: nameParts.slice(0, -1).join(" "), confidence: "medium", source_url: profile, note });
+      appendRecord(records, { field: "person_nachname", value: nameParts[nameParts.length - 1], confidence: "medium", source_url: profile, note });
+      if (headline) appendRecord(records, { field: "person_position", value: headline.slice(0, 200), confidence: "low", source_url: profile, note });
+      appendRecord(records, { field: "person_linkedin", value: profile, confidence: "medium", source_url: profile, note });
+    }
+  });
+  if (records.length > 0) return { records, searches };
+  if (searches.every((search) => !search.ok)) return { ...serpFailure(searches), searches };
+  return { records: [], failure_mode: "portal_drift", detail: "no LinkedIn profile in the Google results named the company for the searched titles", searches };
+}
+
+// ---------------------------------------------------------------------------
+// Company discovery
+// ---------------------------------------------------------------------------
+
+async function companySearch(company, country, token, zone) {
+  const serp = await brightSerp(token, zone, company, country);
+  if (!serp.ok) return serpFailure([{ status: serp.status, error: serp.error }]);
 
   const records = [];
   let blocked = false;
   let blockedUrl = "";
-  let blockedMarkers = [];
+  const blockedMarkers = [];
   const markBlocked = (url, markers) => {
     blocked = true;
     blockedUrl ||= url;
     blockedMarkers.push(...(markers || []));
   };
 
-  // Candidate discovery, provider-verified Google first.
   const candidates = [];
   const seen = new Set();
   const pushCandidate = (hit) => {
@@ -416,24 +578,15 @@ function main() {
     seen.add(url);
     candidates.push(hit);
   };
-
-
-  // Live SERP pass (consent-aware) adds organic results the search API may
-  // have missed and doubles as the challenge detector for the target.
-  const serp = serpPage(company);
-  if (serp.ok) {
-    if (looksChallenged(serp.result.url, serp.result.page_text_excerpt, serp.markers)) {
-      markBlocked(serp.result.url, serp.markers.length > 0 ? serp.markers : ["access_challenge"]);
-    } else if (serp.markers.length > 0) {
-      markBlocked(serp.result.url, serp.markers);
-    } else {
-      for (const hit of (serp.result.results || []).slice(0, MAX_HITS)) pushCandidate(hit);
-    }
-  } else if (serp.markers.length > 0) {
-    markBlocked("https://www.google.de/", serp.markers);
+  // Google's own business panel names the official website; it counts as a
+  // candidate only when the panel names the company.
+  const knowledge = serp.knowledge;
+  if (knowledge?.site && identityMatches(company, knowledge.name)) {
+    pushCandidate({ url: String(knowledge.site), title: String(knowledge.name || ""), summary: String(knowledge.summary || ""), fromPanel: true });
   }
+  for (const hit of serp.results.slice(0, MAX_HITS)) pushCandidate(hit);
 
-  for (const hit of candidates.slice(0, MAX_HITS)) {
+  for (const hit of candidates.slice(0, MAX_HITS + 1)) {
     if (isPortalOrLoginTitle(hit?.title)) continue;
     const hitCorpus = [hit?.title, hit?.summary, hit?.snippet].filter(Boolean).join(" ");
     if (!identityMatches(company, hitCorpus)) continue;
@@ -452,14 +605,22 @@ function main() {
     const finalUrl = page.url || hit.url;
     if (!safePublicHttpUrl(finalUrl)) continue;
     if (isPortalOrLoginTitle(page.title)) continue;
-    if (!identityMatches(company, pageText(page))) continue;
+    // Identity: the page names the company; or, for the website Google's own
+    // business panel links to that company, the page carries its first
+    // distinctive name token (homepages rarely spell out the legal name).
+    const panelConfirmed = hit.fromPanel === true
+      && hostOf(finalUrl) === hostOf(hit.url)
+      && normalized(pageText(page)).includes(identityTokens(company)[0]);
+    if (!identityMatches(company, pageText(page)) && !panelConfirmed) continue;
 
     appendRecord(records, {
       field: "firma_name",
       value: company,
       confidence: "high",
       source_url: finalUrl,
-      note: "Google result and company page confirm the company identity",
+      note: panelConfirmed && !identityMatches(company, pageText(page))
+        ? `Google business panel "${hit.title}" links this website`
+        : "Google result and company page confirm the company identity",
     });
     if (!records.some((record) => record.field === "firma_domain") && !isDirectoryHost(finalUrl)) {
       appendRecord(records, {
@@ -471,27 +632,63 @@ function main() {
       });
     }
     appendContactHeuristics(records, page, finalUrl);
+    // The legal notice carries the published contact data.
+    try {
+      const imprintUrl = new URL("/impressum", finalUrl).toString();
+      if (imprintUrl !== finalUrl) {
+        const imprint = readPage(imprintUrl, country);
+        const imprintFinal = imprint?.url || imprintUrl;
+        if (imprint?.ok && hostOf(imprintFinal) === hostOf(finalUrl) && safePublicHttpUrl(imprintFinal)) {
+          appendContactHeuristics(records, imprint, imprintFinal);
+        }
+      }
+    } catch {
+      // no legal notice page; homepage evidence stands
+    }
     if (records.some((record) => record.field === "firma_domain")) break;
   }
 
   if (records.length > 0) {
-    process.stdout.write(JSON.stringify({ records, source_session: { source_id: SOURCE_ID, session_id: serp.result.session_id, authenticated_login: serp.result.authenticated_login } }));
-    return;
+    return { records, source_session: { source_id: SOURCE_ID, provider: "google", transport: "brightdata_serp" } };
   }
   if (blocked) {
     recordUnlockSignal(blockedUrl, blockedMarkers.length > 0 ? blockedMarkers : ["access_challenge"]);
-    process.stdout.write(JSON.stringify({
-      records: [],
-      failure_mode: blockedMarkers.includes("authorization_required") ? "authorization_required" : "blocked",
-      detail: blockedMarkers.includes("authorization_required") ? "owner-bound Google authentication did not complete" : "google.de access challenge prevented provider evidence",
-    }));
-    return;
+    return { records: [], failure_mode: "blocked", detail: "company page access challenge prevented evidence" };
   }
-  process.stdout.write(JSON.stringify({
+  return {
     records: [],
     failure_mode: "portal_drift",
-    detail: "authenticated Google search returned no extractable company records",
-  }));
+    detail: `Google search returned no extractable company records (${serp.results.length} organic results)`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
+async function run(input) {
+  const company = String(input.company || "").trim();
+  const country = String(input.country || "").trim().toUpperCase();
+  if (!company) {
+    return { records: [], failure_mode: "portal_drift", detail: "CTOX_SCRAPE_INPUT_JSON.company missing" };
+  }
+  const token = brightDataToken();
+  if (!token) {
+    return { records: [], failure_mode: "authorization_required", detail: `credential_missing: ${BRIGHTDATA_SECRET.name} not in CTOX secret store (scope ${BRIGHTDATA_SECRET.scope})` };
+  }
+  const zone = brightDataZone();
+  if (wantsPersonMode(input)) return personSearch(input, company, country, token, zone);
+  return companySearch(company, country, token, zone);
+}
+
+async function main() {
+  let result;
+  try {
+    result = await run(readInput());
+  } catch (error) {
+    result = { records: [], failure_mode: "temporary_unreachable", detail: String(error?.message || error).slice(0, 200) };
+  }
+  process.stdout.write(JSON.stringify(result));
 }
 
 if (require.main === module) {
@@ -501,13 +698,18 @@ if (require.main === module) {
 module.exports = {
   appendContactHeuristics,
   appendRecord,
+  googleSerpUrl,
   hostOf,
   identityMatches,
   identityTokens,
   isDirectoryHost,
   isPortalOrLoginTitle,
+  linkedinProfileUrl,
   looksChallenged,
   normalized,
+  parseLinkedinTitle,
+  parseSerp,
+  personQueries,
   safePublicHttpUrl,
-  serpBrowserSource,
+  searchName,
 };
