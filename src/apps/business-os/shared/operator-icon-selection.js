@@ -18,6 +18,7 @@ export const OPERATOR_ICON_SELECTION = Object.freeze({
   "coding-agents": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg", sha256: "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3", candidateId: "candidate-09" }),
   "conversations": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/conversations.jpg", sha256: "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b", candidateId: "candidate-01" }),
   "calendar": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/calendar.jpg", sha256: "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67", candidateId: "candidate-05" }),
+  "news": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/news.jpg", sha256: "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759", candidateId: "candidate-01" }),
   "notes": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/notes.jpg", sha256: "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b", candidateId: "candidate-06" }),
   "support": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/support.jpg", sha256: "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235", candidateId: "candidate-02" }),
   "customers": Object.freeze({ asset: "shared/assets/workjet-icons/operator-selection-v1/customers.jpg", sha256: "3a03210ceaa9ce7850ebd0409bff33e09e20e0c1850d9f84805682c307c4a5f9", candidateId: "candidate-16" }),

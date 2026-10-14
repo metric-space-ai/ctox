@@ -286,7 +286,9 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 143] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
+    "news.topic.schedule",
+    "news.source.auth_assist",
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -1286,6 +1288,14 @@ impl CentralCommandPolicyRequirement {
                 BusinessOsPermission::DataRead,
                 &command.module,
             ))
+        } else if matches!(
+            command_type,
+            "news.topic.schedule" | "news.source.auth_assist"
+        ) {
+            Some(CommandPolicyRequirement::module(
+                BusinessOsPermission::DataWrite,
+                "news",
+            ))
         } else if command_type.starts_with("office.document.") {
             Some(CommandPolicyRequirement::module(
                 BusinessOsPermission::DataWrite,
@@ -2210,6 +2220,20 @@ fn dispatch_business_command(
                         "ok": false,
                         "error": error.to_string(),
                     }),
+                    error,
+                )),
+            }
+        }
+        "news.topic.schedule" | "news.source.auth_assist" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            match super::store_news_commands::handle_news_control_command(root, session, command) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(
+                    outcome,
+                    command.record_id.clone(),
+                )),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    command.record_id.clone(),
+                    serde_json::json!({ "ok": false, "error": error.to_string() }),
                     error,
                 )),
             }
