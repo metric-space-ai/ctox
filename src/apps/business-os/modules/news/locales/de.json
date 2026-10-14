@@ -42,7 +42,7 @@
   "addLabPreset": "Alle KI-Labs übernehmen",
   "addCommunityPreset": "Communities übernehmen",
   "sourceAdapter": "Scraper einrichten",
-  "sourceLogin": "Bei X anmelden",
+  "sourceLogin": "Im Browser anmelden",
   "sourceRemove": "Quelle entfernen",
   "sourceActive": "Quelle aktiv",
   "statusNeedsAuth": "Anmeldung nötig",
@@ -54,7 +54,7 @@
   "placeholderX": "Liste, Suche oder @account",
   "placeholderYoutube": "https://www.youtube.com/@kanal",
   "placeholderNewsletter": "absender@newsletter.com",
-  "placeholderCommunity": "https://www.reddit.com/r/…",
+  "placeholderCommunity": "https://news.ycombinator.com/",
   "showAsList": "Als Liste anzeigen",
   "showAsCards": "Als Karten anzeigen",
   "importDone": "{0} Themen importiert",
@@ -63,5 +63,9 @@
   "weekly": "{1} {0}",
   "deadline": "Stichtag {0}",
   "manual": "Manuell",
-  "statusAuthRequested": "Anmeldung offen"
+  "statusAuthRequested": "Anmeldung offen",
+  "groupReddit": "Reddit",
+  "addRedditPreset": "KI-Subreddits übernehmen",
+  "placeholderReddit": "r/subreddit",
+  "sourceConnect": "Konto verbinden"
 }

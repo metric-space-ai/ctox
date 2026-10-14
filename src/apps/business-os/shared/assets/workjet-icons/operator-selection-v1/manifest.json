@@ -346,13 +346,13 @@
     },
     {
       "appId": "news",
-      "candidateId": "candidate-01",
-      "sha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759",
+      "candidateId": "candidate-02",
+      "sha256": "415e717a9036ff7d996aadffdc37507af47300a234bb61dcc6db036d324a6765",
       "mediaType": "image/jpeg",
-      "asset": "shared/assets/workjet-icons/operator-selection-v1/news.jpg",
+      "asset": "shared/assets/workjet-icons/operator-selection-v1/news-2.jpg",
       "sourceArtifact": "src/apps/business-os/modules/news/icon.svg",
-      "renderAsset": "shared/assets/workjet-icons/operator-selection-v1/news.jpg",
-      "renderSha256": "08066aefae5b7b58ae2e685ba24390efd5e214ec83c65e2be149b62fc1735759"
+      "renderAsset": "shared/assets/workjet-icons/operator-selection-v1/news-2.jpg",
+      "renderSha256": "415e717a9036ff7d996aadffdc37507af47300a234bb61dcc6db036d324a6765"
     }
   ]
 }

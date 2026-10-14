@@ -6,6 +6,7 @@ import {
   ISSUE_ACTIVE_STATUSES,
   LAB_PRESET,
   SOURCE_KINDS,
+  authSourceFor,
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
@@ -23,6 +24,7 @@ import {
   normalizeTopic,
   postsForIssue,
   presetSources,
+  redditPresetSource,
   relativeTime,
   toneBucket,
   topicsForBand,
@@ -77,13 +79,16 @@ const labels = {
     deleteTopic: 'Thema löschen',
     groupLab: 'Labs',
     groupX: 'X',
+    groupReddit: 'Reddit',
     groupYoutube: 'YouTube',
     groupNewsletter: 'Newsletter',
     groupCommunity: 'Communities',
     addLabPreset: 'Alle KI-Labs übernehmen',
     addCommunityPreset: 'Communities übernehmen',
+    addRedditPreset: 'KI-Subreddits übernehmen',
     sourceAdapter: 'Scraper einrichten',
-    sourceLogin: 'Bei X anmelden',
+    sourceConnect: 'Konto verbinden',
+    sourceLogin: 'Im Browser anmelden',
     sourceRemove: 'Quelle entfernen',
     sourceActive: 'Quelle aktiv',
     statusNeedsAuth: 'Anmeldung nötig',
@@ -96,7 +101,8 @@ const labels = {
     placeholderX: 'Liste, Suche oder @account',
     placeholderYoutube: 'https://www.youtube.com/@kanal',
     placeholderNewsletter: 'absender@newsletter.com',
-    placeholderCommunity: 'https://www.reddit.com/r/…',
+    placeholderCommunity: 'https://news.ycombinator.com/',
+    placeholderReddit: 'r/subreddit',
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
     importDone: '{0} Themen importiert',
@@ -144,13 +150,16 @@ const labels = {
     deleteTopic: 'Delete topic',
     groupLab: 'Labs',
     groupX: 'X',
+    groupReddit: 'Reddit',
     groupYoutube: 'YouTube',
     groupNewsletter: 'Newsletters',
     groupCommunity: 'Communities',
     addLabPreset: 'Add all AI labs',
     addCommunityPreset: 'Add communities',
+    addRedditPreset: 'Add AI subreddits',
     sourceAdapter: 'Set up scraper',
-    sourceLogin: 'Sign in to X',
+    sourceConnect: 'Connect account',
+    sourceLogin: 'Sign in in the browser',
     sourceRemove: 'Remove source',
     sourceActive: 'Source active',
     statusNeedsAuth: 'Sign-in needed',
@@ -163,7 +172,8 @@ const labels = {
     placeholderX: 'List, search, or @account',
     placeholderYoutube: 'https://www.youtube.com/@channel',
     placeholderNewsletter: 'sender@newsletter.com',
-    placeholderCommunity: 'https://www.reddit.com/r/…',
+    placeholderCommunity: 'https://news.ycombinator.com/',
+    placeholderReddit: 'r/subreddit',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
     importDone: '{0} topics imported',
@@ -417,6 +427,7 @@ function onClick(event) {
     'add-source': addDraftSource,
     'add-lab-preset': () => addPreset('lab'),
     'add-community-preset': () => addPreset('community'),
+    'add-reddit-preset': () => addPreset('reddit'),
     'toggle-source': () => toggleDraftSource(target.dataset.sourceId),
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
@@ -642,12 +653,10 @@ function postSources(post) {
 }
 
 function renderActions(post) {
-  const sources = postSources(post);
   const saved = post.bookmarked === true;
   return `
     <div class="news-actions">
       <span title="${esc(t('discussions'))}">${ICONS.reply}${post.discussion_count ? esc(compactCount(post.discussion_count, state.lang)) : ''}</span>
-      <span title="${esc(t('sources'))}">${ICONS.link}${sources.length}</span>
       <span class="news-hype" title="${esc(t('hype'))}">${ICONS.flame}${Math.round(Number(post.hype_score) || 0)}</span>
       <button type="button" class="news-action${saved ? ' is-on' : ''}" data-action="bookmark-post" data-post-id="${esc(post.id)}" aria-pressed="${saved}" aria-label="${esc(saved ? t('saved') : t('save'))}" title="${esc(saved ? t('saved') : t('save'))}">${ICONS.bookmark}</button>
       <button type="button" class="news-action" data-action="copy-post-link" data-post-id="${esc(post.id)}" aria-label="${esc(t('copyLink'))}" title="${esc(t('copyLink'))}">${ICONS.share}</button>
@@ -663,52 +672,50 @@ function paragraphs(text) {
     .join('');
 }
 
-// One news item renders as an X thread: the source post (intro, link card,
-// quoted discussion, action bar), the editorial long form, and the sources.
+// One news item is one post: intro, optional long form expanded in place,
+// the primary source as link card, one quoted discussion voice, and the
+// remaining sources as plain domain links (deduplicated, no repeated titles).
+function extraSourceDomains(post) {
+  const primary = domainOf(safeHref(post.link_card?.url));
+  const seen = new Set(primary ? [primary] : []);
+  const links = [];
+  for (const source of postSources(post)) {
+    const domain = domainOf(source.url);
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+    links.push({ domain, url: safeHref(source.url) });
+  }
+  return links;
+}
+
 function renderPostThread(post) {
-  const sources = postSources(post);
   const expanded = state.expandedPosts.has(post.id);
   const hasBody = Boolean(String(post.body || '').trim());
-  const replies = [];
-  if (hasBody) {
-    replies.push(`
-      <div class="news-post is-reply">
-        <div class="news-rail">${avatar('CTOX', 'ctox')}${sources.length ? '<span class="news-thread-line"></span>' : ''}</div>
-        <div class="news-post-main">
-          ${authorHead(post, { editorial: true })}
-          <div class="news-body${expanded ? ' is-expanded' : ''}">${paragraphs(post.body)}</div>
-          <button type="button" class="news-more" data-action="expand-post" data-post-id="${esc(post.id)}">${esc(expanded ? t('showLess') : t('showMore'))}</button>
-        </div>
-      </div>`);
-  }
-  if (sources.length) {
-    replies.push(`
-      <div class="news-post is-reply">
-        <div class="news-rail">${avatar('CTOX', 'ctox')}</div>
-        <div class="news-post-main">
-          ${authorHead(post, { editorial: true })}
-          <div class="news-sources">${sources.map((source) => `
-            <a class="news-source-chip" href="${esc(safeHref(source.url))}" target="_blank" rel="noopener noreferrer">
-              <span class="news-source-mark" data-tone="${toneBucket(domainOf(source.url))}"></span>${esc(source.label || domainOf(source.url))}
-            </a>`).join('')}
-          </div>
-        </div>
-      </div>`);
-  }
+  const domains = extraSourceDomains(post);
+  const body = hasBody && expanded
+    ? `<div class="news-body">${paragraphs(post.body)}</div>`
+    : '';
+  const more = hasBody
+    ? `<button type="button" class="news-more" data-action="expand-post" data-post-id="${esc(post.id)}">${esc(expanded ? t('showLess') : t('showMore'))}</button>`
+    : '';
+  const sources = domains.length
+    ? `<div class="news-sources">${domains.map((link) => `<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">${esc(link.domain)}</a>`).join('<span aria-hidden="true">·</span>')}</div>`
+    : '';
   return `
     <article class="news-thread" data-post-id="${esc(post.id)}"
       data-context-record-id="${esc(post.id)}" data-context-record-type="news_post" data-context-label="${esc(post.intro)}">
       <div class="news-post">
-        <div class="news-rail">${avatar(post.author_name || 'CTOX', post.author_handle || post.author_name)}${replies.length ? '<span class="news-thread-line"></span>' : ''}</div>
+        <div class="news-rail">${avatar(post.author_name || 'CTOX', post.author_handle || post.author_name)}</div>
         <div class="news-post-main">
           ${authorHead(post)}
-          <p class="news-text">${esc(post.intro)}</p>
+          <p class="news-text">${esc(post.intro)} ${more}</p>
+          ${body}
           ${renderLinkCard(post.link_card)}
           ${renderQuote(post.quote)}
+          ${sources}
           ${renderActions(post)}
         </div>
       </div>
-      ${replies.join('')}
     </article>`;
 }
 
@@ -936,7 +943,7 @@ function syncCadenceFields() {
 
 function syncSourcePlaceholder() {
   const kind = els.newSourceKind?.value || 'lab';
-  const key = { lab: 'placeholderLab', x: 'placeholderX', youtube: 'placeholderYoutube', newsletter: 'placeholderNewsletter', community: 'placeholderCommunity' }[kind];
+  const key = { lab: 'placeholderLab', x: 'placeholderX', reddit: 'placeholderReddit', youtube: 'placeholderYoutube', newsletter: 'placeholderNewsletter', community: 'placeholderCommunity' }[kind];
   if (els.newSourceValue) els.newSourceValue.placeholder = t(key);
 }
 
@@ -953,6 +960,7 @@ function renderSourceGroups() {
   const groups = [
     ['lab', 'groupLab', 'add-lab-preset', 'addLabPreset'],
     ['x', 'groupX', '', ''],
+    ['reddit', 'groupReddit', 'add-reddit-preset', 'addRedditPreset'],
     ['youtube', 'groupYoutube', '', ''],
     ['newsletter', 'groupNewsletter', '', ''],
     ['community', 'groupCommunity', 'add-community-preset', 'addCommunityPreset'],
@@ -977,7 +985,8 @@ function renderSourceRow(source) {
   if (source.kind === 'lab' || source.kind === 'community') {
     actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-adapter" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceAdapter'))}" title="${esc(t('sourceAdapter'))}">${ICONS.wand}</button>`);
   }
-  if (source.kind === 'x') {
+  if (authSourceFor(source)) {
+    actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-adapter" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceConnect'))}" title="${esc(t('sourceConnect'))}">${ICONS.wand}</button>`);
     actions.push(`<button class="ctox-pane-icon" type="button" data-action="source-auth" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceLogin'))}" title="${esc(t('sourceLogin'))}">${ICONS.key}</button>`);
   }
   actions.push(`<button class="ctox-pane-icon" type="button" data-action="remove-source" data-source-id="${esc(source.id)}" aria-label="${esc(t('sourceRemove'))}" title="${esc(t('sourceRemove'))}">${ICONS.trash}</button>`);
@@ -1002,7 +1011,9 @@ function addDraftSource() {
   if (merged) {
     state.drawer.sources = state.drawer.sources.map((source) => (source.id === merged.id ? merged : source));
   } else {
-    state.drawer.sources.push(newSource(state.drawer.topic.id, kind, '', value || 'Home'));
+    const created = newSource(state.drawer.topic.id, kind, '', value || 'Home');
+    if (kind === 'reddit' && !created.items.length) return;
+    state.drawer.sources.push(created);
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
@@ -1010,6 +1021,12 @@ function addDraftSource() {
 
 function addPreset(kind) {
   if (!state.drawer) return;
+  if (kind === 'reddit') {
+    const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
+    state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
+    renderSourceGroups();
+    return;
+  }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
@@ -1158,7 +1175,7 @@ function importTopics() {
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);
         if (!topicId) continue;
-        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: raw.kind === 'x' ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
+        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
       }
       notify('success', t('importDone', idMap.size));
     } catch (error) {
