@@ -28,6 +28,7 @@ const classifications = new Map(Object.entries({
   process_business_chat_reply: ['execution_link', 'execution_task_id'],
   process_cv_print_parse_command: ['execution_link', 'execution_task_id'],
   process_documents_report_command: ['execution_link', 'execution_task_id'],
+  process_news_queue_command: ['execution_link', 'execution_task_id'],
   process_source_parse_command: ['execution_link', 'execution_task_id'],
   process_systematic_research_command: ['execution_link', 'execution_task_id'],
   push_repair_action: ['domain_queue_reference', 'target_task_id or a domain-specific repair-task reference'],
