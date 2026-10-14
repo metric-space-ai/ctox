@@ -20235,6 +20235,54 @@ pub(super) fn authorize_recoverable_person_research_command(
     authorize_recoverable_background_control_command(root, command)
 }
 
+/// Owner of an already admitted recoverable background control command that
+/// is being replayed from its own token-less native projection. Returns
+/// `None` whenever the replay presents a capability token (normal
+/// authentication applies), the type is not recoverable, the canonical
+/// command is missing or terminal, or its stored native authorization
+/// receipt is not a trusted, allowed receipt for this module. The replay
+/// still cannot change the immutable intent: the control claim rejects a
+/// different payload hash, and the resume path revalidates the receipt actor
+/// against current policy before any handler runs.
+pub(super) fn admitted_recoverable_replay_owner(
+    root: &Path,
+    command: &BusinessCommand,
+) -> Option<String> {
+    let client_context = business_command_client_context_value(command);
+    if presented_capability_token(&client_context) {
+        return None;
+    }
+    let permission = recoverable_background_control_permission(&command.command_type)?;
+    let command_id = command.id.as_deref()?;
+    let projection = channels::business_command_projection(root, command_id).ok()?;
+    if projection.get("execution_phase").and_then(Value::as_str) == Some("terminal")
+        || projection
+            .get("terminal_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status != "none")
+    {
+        return None;
+    }
+    let authorization = projection.get("native_authorization")?;
+    let receipt_matches = authorization.get("contract").and_then(Value::as_str)
+        == Some("ctox-business-command-authorization-v1")
+        && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+        && authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str())
+        && authorization.get("scope_type").and_then(Value::as_str) == Some("module")
+        && authorization.get("scope_id").and_then(Value::as_str) == Some(command.module.as_str());
+    if !receipt_matches {
+        return None;
+    }
+    authorization
+        .get("actor")
+        .filter(|actor| actor.get("trusted").and_then(Value::as_bool) == Some(true))?
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 pub(super) fn authorize_recoverable_background_control_command(
     root: &Path,
     command: &BusinessCommand,
@@ -46919,6 +46967,93 @@ pub(super) mod tests {
         let recovered = authorize_recoverable_background_control_command(root, &redacted)?;
         assert_eq!(recovered.origin, CommandOrigin::TrustedLocal);
         assert_eq!(recovered.client_context["actor"]["id"], "operator");
+        Ok(())
+    }
+
+    #[test]
+    fn token_less_projection_replay_of_admitted_auth_assist_skips_capability_gate(
+    ) -> anyhow::Result<()> {
+        // THESEN 14.10.2026: native projected an accepted auth_assist from its
+        // audited intent (no capability_token); background recovery re-read
+        // that projection as a replicated command and the capability gate
+        // rejected it on every intake pass.
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_leadgen_source_admitted_auth_assist";
+        seed_business_user(root, "operator", "chef")?;
+        let (capability_token, _) =
+            issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.auth_assist".to_string(),
+            record_id: Some("adapter_leadgen_dnb".to_string()),
+            payload: serde_json::json!({"adapter_id": "adapter_leadgen_dnb", "source_id": "dnb"}),
+            client_context: serde_json::json!({
+                "source_module": "outbound-lead-generation",
+                "actor": { "id": "operator" },
+                "capability_token": capability_token
+            }),
+        };
+        assert_eq!(
+            admitted_recoverable_replay_owner(root, &command),
+            None,
+            "a presented token always takes normal authentication"
+        );
+        let authorization = recoverable_background_control_authorization(root, &command)
+            .context("valid auth_assist must produce an authorization receipt")?;
+        let claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+
+        let projection = channels::business_command_projection(root, command_id)?;
+        assert!(
+            projection
+                .pointer("/client_context/capability_token")
+                .is_none(),
+            "the canonical projection carries no capability token"
+        );
+        let mut replay = command.clone();
+        replay.client_context = projection["client_context"].clone();
+        let gate = rxdb_session_from_command(root, &replay, false)
+            .expect_err("the token-less projection cannot authenticate");
+        assert_eq!(
+            business_command_capability_rejection_reason(&gate),
+            Some(CAPABILITY_MISSING_REASON)
+        );
+        assert_eq!(
+            admitted_recoverable_replay_owner(root, &replay).as_deref(),
+            Some("operator")
+        );
+        let replay_claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &replay,
+                recoverable_background_control_claim_authorization(root, &replay).as_ref(),
+            )?,
+        )?;
+        assert_eq!(replay_claim.disposition, "uncertain");
+        let recovered = authorize_recoverable_background_control_command(root, &replay)?;
+        assert_eq!(recovered.client_context["actor"]["id"], "operator");
+
+        // Never for an unknown command, a non-recoverable type or a foreign module.
+        let mut unknown = replay.clone();
+        unknown.id = Some("cmd_never_admitted".to_string());
+        assert_eq!(admitted_recoverable_replay_owner(root, &unknown), None);
+        let mut other_module = replay.clone();
+        other_module.module = "documents".to_string();
+        assert_eq!(admitted_recoverable_replay_owner(root, &other_module), None);
+        let mut other_type = replay;
+        other_type.command_type = "office.document.create".to_string();
+        assert_eq!(admitted_recoverable_replay_owner(root, &other_type), None);
         Ok(())
     }
 

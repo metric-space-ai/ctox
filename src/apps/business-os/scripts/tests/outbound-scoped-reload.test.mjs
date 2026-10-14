@@ -558,6 +558,34 @@ try {
       delete globalThis.__outboundExportProbe;
     }
   });
+  await test('a failed auth assist closes only the browser window it pre-opened', async () => {
+    // thesen 14.10.2026: the login request was rejected (no valid capability)
+    // and the pre-opened Browser window stayed empty.
+    const windows = [{ id: 'win-crm' }];
+    const destroyed = [];
+    const ctx = {
+      windowManager: {
+        listWindows: () => windows.map((win) => ({ ...win })),
+        destroy: async (id) => { destroyed.push(id); },
+      },
+      openDesktopApp: async (appId) => {
+        assert.equal(appId, 'browser');
+        windows.push({ id: 'win-browser-new' });
+        return 'win-browser-new';
+      },
+    };
+    const created = await hooks.preopenBrowserWindow(ctx);
+    assert.equal(created, 'win-browser-new');
+    assert.equal(await hooks.closePreopenedBrowserWindow(ctx, created), true);
+    assert.deepEqual(destroyed, ['win-browser-new']);
+    const reused = await hooks.preopenBrowserWindow({ ...ctx, openDesktopApp: async () => 'win-crm' });
+    assert.equal(reused, null, 'an already open browser window is never claimed');
+    assert.equal(await hooks.closePreopenedBrowserWindow(ctx, reused), false);
+    assert.deepEqual(destroyed, ['win-browser-new']);
+    const olgSource = readFileSync(join(source, 'index.js'), 'utf8');
+    assert.match(olgSource, /finally \{\s*if \(!preopened\.launched\) await closePreopenedBrowserWindow\(state\.ctx, preopened\.windowId\);/);
+    assert.match(olgSource, /preopened\.launched = await openSourceAuthorization\(item, authAssist\);/);
+  });
 } finally {
   const state = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks.testState();
   state.uiMounted = false;

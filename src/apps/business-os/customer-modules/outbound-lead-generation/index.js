@@ -7871,6 +7871,47 @@ function pruefFirma(item) {
 async function runAdapterCommand(sourceId, commandType) {
   const item = state.sources.find((entry) => entry.id === sourceId);
   if (!item) return;
+  // Ein vorab geoeffnetes Browserfenster bleibt nur, wenn die Anmeldung
+  // wirklich startet. Scheitert der Befehl (z. B. ohne gueltige Capability
+  // abgelehnt), wird genau dieses Fenster wieder geschlossen statt leer
+  // stehen zu bleiben (thesen 14.10.2026).
+  const preopened = { windowId: null, launched: false };
+  try {
+    await runAdapterCommandInner(item, commandType, preopened);
+  } finally {
+    if (!preopened.launched) await closePreopenedBrowserWindow(state.ctx, preopened.windowId);
+  }
+}
+
+async function preopenBrowserWindow(ctx) {
+  const openApp = ctx?.openApp || ctx?.openDesktopApp;
+  if (typeof openApp !== 'function') return null;
+  try {
+    const existing = new Set((ctx?.windowManager?.listWindows?.() || []).map((win) => win?.id));
+    const windowId = await openApp.call(ctx, 'browser', { title: 'Browser', mode: 'maximized' });
+    // Nur ein selbst erzeugtes Fenster darf spaeter geschlossen werden.
+    return windowId && !existing.has(windowId) ? windowId : null;
+  } catch (error) {
+    // Immediate feedback is best effort. The durable auth request must
+    // still be submitted so a transient shell/window error cannot turn
+    // the source action into a dead button.
+    console.warn('[outbound-lead-generation] Browser konnte nicht vorab geöffnet werden', error);
+    return null;
+  }
+}
+
+async function closePreopenedBrowserWindow(ctx, windowId) {
+  if (!windowId) return false;
+  try {
+    await ctx?.windowManager?.destroy?.(windowId);
+    return true;
+  } catch (error) {
+    console.warn('[outbound-lead-generation] Vorab geöffnetes Browserfenster konnte nicht geschlossen werden', error);
+    return false;
+  }
+}
+
+async function runAdapterCommandInner(item, commandType, preopened) {
   try {
   const commandId = `cmd_leadgen_source_${crypto.randomUUID()}`;
   const adapter = {
@@ -7909,17 +7950,7 @@ async function runAdapterCommand(sourceId, commandType) {
   // Kommandoergebnis. Das Browserfenster selbst muss aber sofort sichtbar
   // werden, damit der Klick niemals wie ein toter Knopf wirkt.
   if (commandType.endsWith('.auth_assist')) {
-    const openApp = state.ctx?.openApp || state.ctx?.openDesktopApp;
-    if (typeof openApp === 'function') {
-      try {
-        await openApp.call(state.ctx, 'browser', { title: 'Browser', mode: 'maximized' });
-      } catch (error) {
-        // Immediate feedback is best effort. The durable auth request must
-        // still be submitted so a transient shell/window error cannot turn
-        // the source action into a dead button.
-        console.warn('[outbound-lead-generation] Browser konnte nicht vorab geöffnet werden', error);
-      }
-    }
+    preopened.windowId = await preopenBrowserWindow(state.ctx);
   }
   const command = {
     id: commandId, command_id: commandId, module: 'outbound', command_type: commandType,
@@ -8002,7 +8033,7 @@ async function runAdapterCommand(sourceId, commandType) {
   }
   if (commandType.endsWith('.auth_assist') && result.status !== 'failed') {
     const authAssist = authAssistFromCommandResult(result);
-    await openSourceAuthorization(item, authAssist);
+    preopened.launched = await openSourceAuthorization(item, authAssist);
   }
   const serverAdapter = result?.result?.adapter || result?.result?.outcome?.adapter || result?.adapter || {};
   const now = Date.now();
@@ -8130,18 +8161,19 @@ async function openSourceAuthorization(item, authAssist) {
   const openApp = state.ctx?.openApp || state.ctx?.openDesktopApp;
   if (typeof openApp !== 'function') {
     showBusinessAlert('Die Browser-App konnte nicht geöffnet werden. Öffnen Sie „Browser“ und wählen Sie die angeforderte Anmeldung.');
-    return;
+    return false;
   }
   const args = browserAuthAssistLaunchArgs(authAssist);
   if (!args) {
     showBusinessAlert('CTOX hat keine gültige Browser-Sitzung für diese Anmeldung zurückgegeben.');
-    return;
+    return false;
   }
   await openApp.call(state.ctx, 'browser', {
     title: 'Browser',
     mode: 'maximized',
     args,
   });
+  return true;
 }
 
 async function reconcileAdapterCommands({ authoritative = false } = {}) {
@@ -14282,6 +14314,8 @@ function icon(name) {
 }
 
 export const __leadgenOutboundTestHooks = {
+  closePreopenedBrowserWindow,
+  preopenBrowserWindow,
   listLeads,
   ensureFullLeads,
   loadSelectedLeadDetails,

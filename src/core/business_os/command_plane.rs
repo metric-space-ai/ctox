@@ -856,7 +856,19 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
         && super::external_sql_sync::is_external_sql_command(&command.command_type))
     .then(|| command.clone());
     let mut verified_command_owner = None;
-    if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+    // Native projects an admitted command back into RxDB from its canonical
+    // intent, whose client context is the audited subset without the
+    // capability token. Background recovery re-reads that token-less
+    // projection; its authority is the stored native authorization receipt
+    // (revalidated by authorize_recoverable_background_control_command), not
+    // a live capability. Gating that replay on a token rejected it forever
+    // (THESEN 14.10.2026: an accepted auth_assist interrupted by an upgrade).
+    let admitted_replay_owner = matches!(command.origin, CommandOrigin::ReplicatedPeer)
+        .then(|| super::store::admitted_recoverable_replay_owner(root, &command))
+        .flatten();
+    if let Some(owner) = admitted_replay_owner {
+        verified_command_owner = Some(owner);
+    } else if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
         let session = rxdb_authenticated_session(root, &command)?;
         verified_command_owner = Some(
