@@ -330,6 +330,9 @@
 .news-card-caption { display: grid; gap: 1px; padding: 8px 12px 10px; border-top: 1px solid var(--news-line); }
 .news-card-caption small { color: var(--news-muted); font-size: var(--fs-sm, 12px); }
 .news-quote { padding: 10px 12px; }
+/* The quoted source keeps its name; only the meta line ellipsizes. */
+.news-quote .news-post-head strong { flex: 0 0 auto; }
+.news-quote .news-post-head > span { min-width: 0; }
 .news-quote p { margin: 4px 0 0; line-height: 1.45; }
 .news-actions {
   display: flex;
