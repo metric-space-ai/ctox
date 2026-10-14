@@ -34,7 +34,7 @@ impl Routes {
         stored
             .config
             .api_key_accounts
-            .retain(|a| a.endpoint.provider() == provider && !a.disabled && !a.models.is_empty());
+            .retain(|a| a.endpoint.provider() == provider && !a.disabled);
         let mut cached = self
             .cached
             .lock()
@@ -50,7 +50,7 @@ impl Routes {
                     .iter()
                     .zip(&stored.config.api_key_accounts)
                     .all(|(a, config)| {
-                        a.config == *config && current(&self.root, config, &a.version)
+                        a.config == *config && current(&self.root, config, &a.version, &a.available)
                     })
             {
                 return Ok(Some(handler.clone()));
@@ -83,6 +83,7 @@ struct Resolved {
     config: ApiKeyAccountConfig,
     key: Zeroizing<String>,
     version: String,
+    available: crate::business_os::provider_federation::GatewayModels,
     http: Arc<dyn HostHttpClient>,
 }
 pub(super) struct Handler {
@@ -92,7 +93,12 @@ pub(super) struct Handler {
     router: AccountRouter,
     executor: OpenAiCompatExecutor,
 }
-fn current(root: &Path, config: &ApiKeyAccountConfig, version: &str) -> bool {
+fn current(
+    root: &Path,
+    config: &ApiKeyAccountConfig,
+    version: &str,
+    available: &crate::business_os::provider_federation::GatewayModels,
+) -> bool {
     let _guard = crate::secrets::credential_lifecycle_guard();
     crate::execution::cliproxyapi_integration::load_provider_integration_config(root).is_ok_and(
         |s| {
@@ -107,6 +113,15 @@ fn current(root: &Path, config: &ApiKeyAccountConfig, version: &str) -> bool {
         &config.api_key_secret.name,
     )
     .is_ok_and(|v| v.as_deref() == Some(version))
+        && available_models(root, config, version).is_ok_and(|now| &now == available)
+}
+fn available_models(
+    root: &Path,
+    config: &ApiKeyAccountConfig,
+    version: &str,
+) -> anyhow::Result<crate::business_os::provider_federation::GatewayModels> {
+    let binding = super::account_controls::api_key_binding_for_config(config, version)?;
+    crate::business_os::provider_federation::gateway_api_models(root, config, &binding)
 }
 fn resolve(
     root: &Path,
@@ -127,11 +142,16 @@ fn resolve(
         !key.trim().is_empty() && key.len() <= 8192 && !key.chars().any(char::is_control),
         "API credential is invalid"
     );
-    anyhow::ensure!(current(root, config, &before), "API account changed");
+    let available = available_models(root, config, &before)?;
+    anyhow::ensure!(
+        current(root, config, &before, &available),
+        "API account changed"
+    );
     Ok(Resolved {
         config: config.clone(),
         key,
         version: before,
+        available,
         http,
     })
 }
@@ -160,10 +180,10 @@ fn build_with_http(
             continue;
         }
         // An unobserved empty catalog is not a wildcard/default-model route.
-        if config.models.is_empty() {
+        let account = resolve(root, config, http.clone())?;
+        if account.available.models.is_empty() {
             continue;
         }
-        let account = resolve(root, config, http.clone())?;
         groups
             .entry(config.endpoint.provider().to_owned())
             .or_default()
@@ -223,7 +243,7 @@ impl Handler {
                 provider: self.provider.clone(),
                 disabled: a.config.disabled,
                 priority: a.config.priority,
-                supported_models: a.config.models.clone(),
+                supported_models: a.available.models.clone(),
                 ..Default::default()
             })
             .collect::<Vec<_>>();
@@ -245,7 +265,12 @@ impl Handler {
         else {
             return error(503, "API account unavailable");
         };
-        if !current(&self.root, &account.config, &account.version) {
+        if !current(
+            &self.root,
+            &account.config,
+            &account.version,
+            &account.available,
+        ) {
             return error(409, "provider account configuration changed");
         }
         let stream = value.get("stream").and_then(serde_json::Value::as_bool) == Some(true);
@@ -269,16 +294,22 @@ impl Handler {
         if stream {
             match self.executor.execute_stream(request).await {
                 Ok(response) => {
-                    if !current(&self.root, &account.config, &account.version) {
+                    if !current(
+                        &self.root,
+                        &account.config,
+                        &account.version,
+                        &account.available,
+                    ) {
                         return error(409, "provider account configuration changed");
                     }
                     let root = self.root.clone();
                     let config = account.config.clone();
                     let version = account.version.clone();
+                    let available = account.available.clone();
                     OpenAiResponsesRouteResponse::GenericStream(Box::new(
                         OpenAiResponsesGenericStream::new(
                             response.chunks,
-                            Arc::new(move || current(&root, &config, &version)),
+                            Arc::new(move || current(&root, &config, &version, &available)),
                         ),
                     ))
                 }
@@ -287,7 +318,12 @@ impl Handler {
         } else {
             match self.executor.execute(request).await {
                 Ok(response) => {
-                    if !current(&self.root, &account.config, &account.version) {
+                    if !current(
+                        &self.root,
+                        &account.config,
+                        &account.version,
+                        &account.available,
+                    ) {
                         return error(409, "provider account configuration changed");
                     }
                     OpenAiResponsesRouteResponse::Buffered(OpenAiResponsesHttpResponse::json(

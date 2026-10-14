@@ -32,6 +32,13 @@ pub(crate) fn account_binding(
     first.fingerprint().map(Some)
 }
 
+pub(crate) fn api_key_binding_for_config(
+    account: &crate::execution::cliproxyapi_integration::ApiKeyAccountConfig,
+    version: &str,
+) -> anyhow::Result<String> {
+    api::fingerprint(account, Some(version))
+}
+
 fn legacy_provider() -> String {
     "claude".into()
 }
