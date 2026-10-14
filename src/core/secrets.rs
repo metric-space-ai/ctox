@@ -184,6 +184,17 @@ pub fn read_secret_value(root: &Path, scope: &str, name: &str) -> Result<String>
     get_secret_value(root, scope, name)
 }
 
+/// Decrypt the value and derive its private content version from the same row.
+/// A separate version read could observe a replacement credential. This is
+/// cache provenance for native adapters, not an authorization receipt.
+pub(crate) fn read_secret_value_versioned(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> Result<(String, String)> {
+    read_secret_value_optional_versioned(root, scope, name)?.context("secret not found")
+}
+
 /// Holds current encrypted-record authority through one synchronous publication
 /// callback. Enter BEFORE worker, Core, policy or controller locks. The callback
 /// must perform at most one bounded synchronous publication/protocol operation
@@ -1325,6 +1336,15 @@ pub fn read_secret_value_optional(
     scope: &str,
     name: &str,
 ) -> std::result::Result<Option<String>, SecretReadError> {
+    read_secret_value_optional_versioned(root, scope, name)
+        .map(|record| record.map(|(value, _)| value))
+}
+
+fn read_secret_value_optional_versioned(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> std::result::Result<Option<(String, String)>, SecretReadError> {
     let conn = open_secret_db(root).map_err(|_| SecretReadError::Unavailable)?;
     ensure_secret_schema(&conn).map_err(|_| SecretReadError::Unavailable)?;
     let record: Option<(String, String)> = conn
@@ -1343,12 +1363,13 @@ pub fn read_secret_value_optional(
     let Some((nonce_b64, ciphertext_b64)) = record else {
         return Ok(None);
     };
+    let version = stable_digest(&format!("{nonce_b64}:{ciphertext_b64}"));
     let (key_bytes, _) =
         load_existing_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
     let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)
         .map_err(|_| SecretReadError::DecryptionFailed)?;
     std::str::from_utf8(&value)
-        .map(|value| Some(value.to_owned()))
+        .map(|value| Some((value.to_owned(), version)))
         .map_err(|_| SecretReadError::InvalidEncoding)
 }
 

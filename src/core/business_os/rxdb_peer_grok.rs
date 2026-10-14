@@ -20,8 +20,8 @@ use std::{
 pub(super) const METHOD: &str = "ctox.workjet.grok.v1";
 pub(super) const CAPABILITY: &str = "ctox-workjet-grok-v1";
 const CHECK_KEY: &str = "grok_subscription_check";
-// Legacy checks did not require an assistant answer from the requested model.
-const CHECK_VALIDATION_VERSION: u64 = 2;
+// Legacy checks did not retain the credential actually used by inference.
+const CHECK_VALIDATION_VERSION: u64 = 3;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Request {
@@ -271,19 +271,24 @@ async fn handle(
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut models = Vec::new();
     let mut catalog_error = None;
+    let mut catalog_binding = None;
     let mut returned_check = saved_check(&authority.root)?;
     if matches!(
         request.action.as_str(),
         "instance.grok.read" | "instance.grok.check" | "instance.grok.poll"
     ) && xai::subscription_installed(&authority.root)
     {
-        match bounded_current(
-            &authority,
-            xai::discover_models(&authority.root),
-            Duration::from_secs(8),
+        let (catalog, used) = xai::observe_credential_use(
+            &authority.root,
+            bounded_current(
+                &authority,
+                xai::discover_models(&authority.root),
+                Duration::from_secs(8),
+            ),
         )
-        .await?
-        {
+        .await;
+        catalog_binding = used.map(xai::CredentialUse::into_content_version);
+        match catalog? {
             Some(Ok(live)) => models = live,
             Some(Err(error)) => {
                 catalog_error = Some(
@@ -372,6 +377,7 @@ async fn handle(
         "instance.grok.check" => {
             let model = request.model_id.as_deref().unwrap();
             let before = xai::credential_binding(&authority.root)?;
+            let mut used_binding = catalog_binding.clone();
             let started = Instant::now();
             let result = if before.is_none() {
                 Err(ProbeFailure::from("missing_credential"))
@@ -380,36 +386,57 @@ async fn handle(
             } else if !models.iter().any(|m| m == model) {
                 Err(ProbeFailure::from("model_unavailable"))
             } else {
-                bounded_current(
-                    &authority,
-                    probe(&authority.root, model),
-                    deadline.saturating_duration_since(Instant::now()),
+                let (attempt, used) = xai::observe_credential_use(
+                    &authority.root,
+                    bounded_current(
+                        &authority,
+                        probe(&authority.root, model),
+                        deadline.saturating_duration_since(Instant::now()),
+                    ),
                 )
-                .await?
-                .unwrap_or_else(|| Err(ProbeFailure::from("timeout")))
+                .await;
+                used_binding = used.map(xai::CredentialUse::into_content_version);
+                let result = attempt?.unwrap_or_else(|| Err(ProbeFailure::from("timeout")));
+                if result.is_ok() && used_binding.is_none() {
+                    Err(ProbeFailure::from("invalid_response"))
+                } else {
+                    result
+                }
             };
             authority.check()?;
             let after = xai::credential_binding(&authority.root)?;
-            // The shared route may refresh the credential. Bind to that accepted
-            // post-route version, never a renderer-supplied fingerprint.
-            ensure!(after.is_some() || before.is_none(), "credential_changed");
-            let failure = result.err();
-            let check = json!({"modelId":model,"status":if failure.is_none(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if failure.is_none(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":failure.as_ref().map(|f| f.code),"upstream":failure.and_then(|f| f.upstream)});
-            crate::persistence::store_json_payload(
-                &authority.root,
-                CHECK_KEY,
-                Some(
-                    &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":after,"check":check}),
-                ),
-            )?;
-            returned_check = check;
+            // Refresh may legitimately change the version. The private route
+            // observation identifies what was used, rather than guessing from
+            // the Secret Store after the response. Unobserved local failures
+            // can only remain attached to an unchanged pre-request version.
+            let used_binding = used_binding.or(before.filter(|_| result.is_err()));
+            if used_binding != after {
+                // Do not attach an old success or rejection to the replacement.
+                returned_check = Value::Null;
+                models.clear();
+                catalog_error = Some(ProbeFailure::from("request_failed"));
+            } else {
+                let failure = result.err();
+                let check = json!({"modelId":model,"status":if failure.is_none(){"ok"}else{"error"},"checkedAt":chrono::Utc::now().timestamp_millis(),"latencyMs":if failure.is_none(){Some(started.elapsed().as_millis() as u64)}else{None},"errorCode":failure.as_ref().map(|f| f.code),"upstream":failure.and_then(|f| f.upstream)});
+                crate::persistence::store_json_payload(
+                    &authority.root,
+                    CHECK_KEY,
+                    Some(
+                        &json!({"validationVersion":CHECK_VALIDATION_VERSION,"binding":used_binding,"check":check}),
+                    ),
+                )?;
+                returned_check = check;
+            }
         }
         _ => {}
     }
     authority.check()?;
     // Discovery can refresh the credential; never publish a cached green check
     // bound to the version that existed before that request.
-    if request.action != "instance.grok.check" || returned_check["status"] == "ok" {
+    if request.action != "instance.grok.check"
+        || xai::credential_binding(&authority.root)?.is_some()
+        || returned_check["errorCode"] != "missing_credential"
+    {
         returned_check = saved_check(&authority.root)?;
     }
     Ok(GuardedAuxiliaryResponse {
@@ -698,6 +725,215 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    async fn oauth_refresh_during_probe_certifies_only_the_refreshed_credential(
+    ) -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = tempfile::tempdir()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let expires_at = chrono::Utc::now().timestamp() + 302;
+        let record = json!({"access":"private-before-refresh","refresh":"private-refresh-fixture","identity":null,"expires_at":expires_at,"token_endpoint":format!("{endpoint}/token")});
+        crate::secrets::write_secret_record(
+            root.path(),
+            "provider-subscriptions",
+            "xai-instance-oauth",
+            &record.to_string(),
+            None,
+            json!({}),
+        )?;
+        let original_binding = xai::credential_binding(root.path())?;
+        xai::test_endpoint(root.path(), Some(endpoint));
+        let server = tokio::spawn(async move {
+            for index in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut data = vec![0; 8192];
+                let read = socket.read(&mut data).await.unwrap();
+                let request = String::from_utf8_lossy(&data[..read]);
+                let body = match index {
+                    0 => {
+                        assert!(request.starts_with("GET /models"));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-before-refresh"));
+                        // Let expiry enter the refresh window only after the
+                        // first catalog has selected the original credential.
+                        while chrono::Utc::now().timestamp() < expires_at - 300 {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        json!({"data":[{"id":"grok-4.7"}]}).to_string()
+                    }
+                    1 => {
+                        assert!(request.starts_with("POST /token"));
+                        json!({"access_token":"private-after-refresh",
+                            "refresh_token":"private-refresh-replacement",
+                            "token_type":"Bearer","expires_in":3600})
+                        .to_string()
+                    }
+                    2 => {
+                        assert!(request.starts_with("GET /models"));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-after-refresh"));
+                        json!({"data":[{"id":"grok-4.7"}]}).to_string()
+                    }
+                    _ => {
+                        assert!(request.starts_with("POST /responses"));
+                        assert!(request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer private-after-refresh"));
+                        format!(
+                            "data: {}\n\n",
+                            json!({
+                                "type":"response.completed","response":completed_reply(),
+                            })
+                        )
+                    }
+                };
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut req = request("instance.grok.check");
+        req["modelId"] = json!("grok-4.7");
+        let response = handle(
+            Arc::new(Controller::new(root.path())?),
+            auth(root.path(), "chef", Arc::new(|| true))?,
+            vec![req],
+        )
+        .await?;
+        tokio::time::timeout(Duration::from_secs(5), server).await??;
+        xai::test_endpoint(root.path(), None);
+        let refreshed_binding = xai::credential_binding(root.path())?;
+        assert_ne!(refreshed_binding, original_binding);
+        assert_eq!(response.result["check"]["status"], "ok");
+        assert_eq!(saved_check(root.path())?["status"], "ok");
+        let persisted =
+            crate::persistence::load_json_payload::<Value>(root.path(), CHECK_KEY)?.unwrap();
+        assert_eq!(persisted["binding"], json!(refreshed_binding));
+        assert!(!response.result.to_string().contains("private-"));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn replaced_inference_credential_cannot_certify_the_new_account() -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for replace_during_catalog in [true, false] {
+            let root = tempfile::tempdir()?;
+            let record = json!({"access":"private-before-inference","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
+            crate::secrets::write_secret_record(
+                root.path(),
+                "provider-subscriptions",
+                "xai-instance-oauth",
+                &record.to_string(),
+                None,
+                json!({}),
+            )?;
+            let original_binding = xai::credential_binding(root.path())?;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            xai::test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
+            let server_root = root.path().to_path_buf();
+            let (finished, mut completion) = tokio::sync::oneshot::channel::<()>();
+            let server = tokio::spawn(async move {
+                let mut inference_requests = 0;
+                for index in 0..3 {
+                    let (mut socket, _) = tokio::select! {
+                        biased;
+                        _ = &mut completion, if index == 2 && replace_during_catalog => break,
+                        accepted = listener.accept() => accepted.unwrap(),
+                    };
+                    let mut data = vec![0; 8192];
+                    let read = socket.read(&mut data).await.unwrap();
+                    let request = String::from_utf8_lossy(&data[..read]);
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer private-before-inference"));
+                    if index == 2 {
+                        inference_requests += 1;
+                        assert!(request.starts_with("POST /responses"));
+                    } else {
+                        assert!(request.starts_with("GET /models"));
+                    }
+                    if index == if replace_during_catalog { 1 } else { 2 } {
+                        let mut replacement = record.clone();
+                        replacement["access"] = json!("private-after-inference");
+                        crate::secrets::write_secret_record(
+                            &server_root,
+                            "provider-subscriptions",
+                            "xai-instance-oauth",
+                            &replacement.to_string(),
+                            None,
+                            json!({}),
+                        )
+                        .unwrap();
+                    }
+                    let body = if index < 2 {
+                        json!({"data":[{"id":"grok-4.7"}]}).to_string()
+                    } else {
+                        format!(
+                            "data: {}\n\n",
+                            json!({
+                                "type":"response.completed",
+                                "response":completed_reply(),
+                            })
+                        )
+                    };
+                    socket
+                        .write_all(
+                            format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(), body,
+                    )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                inference_requests
+            });
+            let mut req = request("instance.grok.check");
+            req["modelId"] = json!("grok-4.7");
+            let response = handle(
+                Arc::new(Controller::new(root.path())?),
+                auth(root.path(), "chef", Arc::new(|| true))?,
+                vec![req],
+            )
+            .await;
+            let _ = finished.send(());
+            let inference_requests = server.await?;
+            xai::test_endpoint(root.path(), None);
+            assert_ne!(xai::credential_binding(root.path())?, original_binding);
+            assert_ne!(
+                saved_check(root.path())?["status"],
+                "ok",
+                "the replacement account must not inherit the old account's green check"
+            );
+            if let Ok(response) = response {
+                assert_ne!(response.result["check"]["status"], "ok");
+                assert!(!response.result.to_string().contains("private-"));
+            }
+            if replace_during_catalog {
+                assert_eq!(
+                    inference_requests, 0,
+                    "replacement during route discovery must prevent dispatch"
+                );
+            } else {
+                assert_eq!(inference_requests, 1);
+            }
+        }
+        Ok(())
+    }
+    #[tokio::test]
     async fn credential_replacement_during_discovery_discards_catalog_and_old_check(
     ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -808,7 +1044,7 @@ mod tests {
         )?;
         let binding = xai::credential_binding(root.path())?;
         let check = json!({"modelId":"grok-4.7","status":"ok"});
-        for version in [None, Some(1), Some(CHECK_VALIDATION_VERSION)] {
+        for version in [None, Some(1), Some(2), Some(CHECK_VALIDATION_VERSION)] {
             let mut cached = json!({"binding":binding,"check":check});
             if let Some(version) = version {
                 cached["validationVersion"] = json!(version);
