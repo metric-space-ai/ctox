@@ -49,14 +49,14 @@ class WorkerGuards(unittest.TestCase):
             self.addCleanup(shutil.rmtree, output)
             thread = '00000000-0000-0000-0000-000000000001'
             registry = jobs / (thread + '.json')
-            args = SimpleNamespace(model='kimi-k3', repo=root, worktree=root / 'worktree',
+            args = SimpleNamespace(model='gpt-6.1-sol', repo=root, worktree=root / 'worktree',
                                    issue='https://github.com/owner/repo/issues/1',
                                    parent_thread='parent', parent_title='Parent', title='Assignment',
                                    prompt_file=root / 'assignment.md', reasoning='high')
             client = Mock(turn_id='turn-1')
             client.request.side_effect = [{}, {'thread': {'projectId': 'parent-project'}},
-                {'model': 'kimi-k3', 'thread': {'id': thread, 'projectId': 'parent-project',
-                 'modelProvider': 'cli_proxy', 'path': str(root / 'missing.jsonl')}}, {}]
+                {'model': 'gpt-6.1-sol', 'thread': {'id': thread, 'projectId': 'parent-project',
+                 'modelProvider': 'openai', 'path': str(root / 'missing.jsonl')}}, {}]
 
             def incomplete_turn(*_):
                 self.assertEqual(json.loads(registry.read_text())['preparation_status'], 'preparing')
@@ -64,7 +64,8 @@ class WorkerGuards(unittest.TestCase):
 
             client.prepare.side_effect = incomplete_turn
             process = Mock(pid=12345)
-            with patch.object(w, 'JOBS', jobs), patch.object(w, 'HOME', root), \
+            with patch.object(w.model_draw, 'selection_for_create', return_value={'model_id': 'gpt-6.1-sol', 'selection_id': 'draw'}), \
+                 patch.object(w, 'JOBS', jobs), patch.object(w, 'HOME', root), \
                  patch.object(w, 'AVAILABILITY', root / 'missing-availability.json'), \
                  patch.object(w, 'validate_worktree', return_value=(root, args.worktree, 'codex/prep', 'owner/repo')), \
                  patch.object(w, 'read', side_effect=lambda p: '' if p.name == 'config.toml' else 'Bounded assignment'), \

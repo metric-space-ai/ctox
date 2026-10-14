@@ -5,6 +5,22 @@ description: Delegate Codex Desktop coding subtasks to Grok, GLM, Kimi, or OpenA
 
 # Codex Desktop workers
 
+Michael's 2026-10-13 rule controls every new delegation: draw once, uniformly
+over unique enabled, available coding models from a fresh official Workjet
+catalog/health export. Use scripts/model_draw.py with parent, stable assignment
+ID and exact brief SHA-256. Reuse its immutable draw for corrections, quota
+failures and restarts; never create a second Worker for an existing package.
+No manual/default override. GPT uses Codex, Claude uses Claude Code; other
+models retain their verified registered home route. Missing exports/routes mean
+the parent continues its own work. Never disguise a native route as a Codex proxy.
+Keep draw and actual authoring-model evidence separately in the private registry.
+The Codex starter enforces draws and supports verified native OpenAI routes only;
+other home-harness starters and the official pool export are still pending.
+Existing Workers retain their tasks/routes. Public PRs contain implementation and
+relevant validation, not private selection receipts.
+
+Older routing examples below apply only to existing Workers; they do not authorize a new manual selection or proxy substitution.
+
 Delegate only after the parent has analyzed and bounded the task. The assignment
 must include the analysis/findings, owned files, explicit exclusions, acceptance
 criteria and validation commands. Keep unresolved architecture, ambiguous scope

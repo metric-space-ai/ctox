@@ -15,6 +15,7 @@ import uuid
 import experience
 import availability
 import preparation
+import model_draw
 
 HOME = Path.home() / '.codex'
 JOBS = HOME / 'proxy-workers' / 'jobs'
@@ -153,11 +154,10 @@ def resolve_parent_project(request, parent_thread):
 
 
 def create(args):
-    if args.model not in PROXY_MODELS and not args.model.startswith('gpt-'):
-        raise ValueError('Unregistered model; validate its provider before adding it')
+    selection = model_draw.selection_for_create(args, HOME / 'proxy-workers', JOBS)
     deferred = json.loads(read(AVAILABILITY)) if AVAILABILITY.exists() else {}
     if args.model in deferred and availability.active(deferred[args.model]):
-        raise ValueError('Model temporarily unavailable until ' + deferred[args.model]['retry_at'] + '; retry then or explicitly select another available model')
+        raise ValueError('Model temporarily unavailable until ' + deferred[args.model]['retry_at'] + '; retain the draw and retry the same assignment, never reroll')
     repo, worktree, branch, repository = validate_worktree(args.repo, args.worktree)
     issue_match = re.fullmatch(r'https://github\.com/([^/]+/[^/]+)/issues/([1-9][0-9]*)', args.issue)
     if not issue_match or issue_match[1].lower() != repository.lower():
@@ -227,6 +227,7 @@ def create(args):
                    'project_id': project_id,
                    'repository': repository, 'issue_url': issue['url'], 'repo': str(repo), 'worktree': str(worktree), 'branch': branch,
                    'model': args.model, 'provider': provider, 'reasoning': args.reasoning,
+                   'selection': selection,
                    'title': title, 'summary': args.title, 'parent_title': args.parent_title, 'worker_number': worker_number,
                    'prompt_file': str(prompt_path), 'created_at': timestamp(), 'pr_url': None,
                    'rollout_path': result['thread'].get('path'), 'preparation_status': 'preparing'}
@@ -278,8 +279,9 @@ def main():
     create_parser = sub.add_parser('create')
     for name in ['repo', 'worktree', 'prompt-file']:
         create_parser.add_argument('--' + name, type=Path, required=True)
-    for name in ['model', 'title', 'parent-thread', 'parent-title', 'issue']:
+    for name in ['title', 'parent-thread', 'parent-title', 'issue']:
         create_parser.add_argument('--' + name, required=True)
+    create_parser.add_argument('--model', help='Optional assertion of the immutable draw; never a model override')
     create_parser.add_argument('--reasoning', default='high', choices=['low', 'medium', 'high', 'xhigh', 'max'])
     bind = sub.add_parser('bind-pr')
     bind.add_argument('--thread', required=True)

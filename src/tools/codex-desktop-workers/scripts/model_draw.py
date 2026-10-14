@@ -72,6 +72,7 @@ def draw(pool, parent_id, assignment_id, brief_hash, directory, now=None, pick=N
                       route_id=route["route_id"], catalog_evidence=pool["evidence"],
                       pool_sha256=hashlib.sha256(json.dumps(pool, sort_keys=True).encode()).hexdigest(),
                       probabilities=[dict(provider=p, model_id=m, probability=1/len(keys)) for p,m in keys],
+                      execution={k:route[k] for k in ("app_server_provider", "supported_reasoning", "route_evidence") if k in route},
                       actual_authoring_model=None, worker_id=None, pr_url=None)
         stage = target.with_suffix(".writing")
         with stage.open("w") as out:
@@ -82,6 +83,44 @@ def draw(pool, parent_id, assignment_id, brief_hash, directory, now=None, pick=N
         stage.chmod(0o600)
         os.replace(stage, target)
         return record
+
+def selection_for_create(args, base, jobs):
+    """Draw before a new task; retain existing packages and native home routes."""
+    base, jobs = Path(base), Path(jobs)
+    assignment = args.issue
+    for path in sorted(jobs.glob("*.json")):
+        job = read(path)
+        if job.get("parent_thread") == args.parent_thread and job.get("issue_url") == assignment:
+            raise ValueError("Assignment already owns task " + job["thread_id"] +
+                             "; recover the same task, never create another Worker")
+    identity = hashlib.sha256((args.parent_thread+"\n"+assignment).encode()).hexdigest()
+    legacy = base/"selections"/(identity+".json")
+    existing_draw = base/"model-draws"/(identity+".json")
+    if legacy.exists() and not existing_draw.exists():
+        raise ValueError("Legacy assignment already has a selection; preserve it and recover its existing task, do not redraw")
+    brief = subprocess.check_output(["greppy", "rg", "--no-heading", "--no-line-number", "^", str(args.prompt_file)], text=True)
+    if not brief.strip():
+        raise ValueError("Assignment must not be empty")
+    # Hash file bytes rather than text output: CRLF and final-newline changes matter.
+    with Path(args.prompt_file).open("rb") as source:
+        brief_hash = hashlib.sha256(source.read()).hexdigest()
+    pool = read(base/"MODEL-POOL.json") if not existing_draw.exists() else {}
+    choice = draw(pool, args.parent_thread, assignment, brief_hash, base/"model-draws")
+    if getattr(args, "model", None) and args.model != choice["model_id"]:
+        raise ValueError("Assignment drew " + choice["model_id"] + "; --model cannot override it or request a redraw")
+    if choice["harness"] != "codex" or choice["provider"] != "openai":
+        raise ValueError("Assignment drew " + choice["model_id"] + " on " + choice["harness"] +
+                         "; this starter supports native OpenAI Codex only. Retain this draw for its registered home starter; no Codex proxy fallback")
+    execution = choice.get("execution", {})
+    if execution.get("app_server_provider") != "openai" or not execution.get("route_evidence"):
+        raise ValueError("Draw lacks a verified native Codex route; retain it without a fallback")
+    if args.reasoning not in execution.get("supported_reasoning", []):
+        raise ValueError("Reasoning effort is not supported by the drawn route; retain the draw and use its advertised effort")
+    args.model = choice["model_id"]
+    return dict(choice, id=choice["selection_id"], model=choice["model_id"],
+                issue=assignment, parent_thread=args.parent_thread,
+                task_type=getattr(args, "task_type", "unspecified"),
+                difficulty=getattr(args, "difficulty", "standard"), reasoning=args.reasoning)
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
