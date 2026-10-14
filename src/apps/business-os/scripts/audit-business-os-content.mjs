@@ -29,6 +29,58 @@ export const USER_TERMS = Object.freeze(
   contract.vocabulary.userTerms.map((term) => String(term)),
 );
 
+/**
+ * State prose: sentences that describe sync, connection, loading, health or
+ * version state instead of offering an action. Owner rule 14.10.2026: none of
+ * it reaches a normal user; the app retries silently and keeps the last known
+ * data. Matched only in user-facing literals, never in thrown errors or logs.
+ */
+export const STATE_PROSE_PATTERNS = Object.freeze([
+  /\b(?:wird|werden) (?:gerade )?synchronisiert\b/iu,
+  /\bsynchronisierung (?:läuft|fehlgeschlagen|gestört)/iu,
+  /\bwird mit CTOX abgeglichen\b/iu,
+  /\bkonnten? nicht (?:sicher |rechtzeitig )?(?:geladen|synchronisiert) werden\b/iu,
+  /\bNeu verbinden\b/u,
+  /\bStand unbestätigt\b/iu,
+  /\bRecovery-(?:Modus|Shell)\b/iu,
+  /\bDer vorhandene Stand bleibt\b/iu,
+  /\bCTOX-Datenstrom\b/iu,
+  /\bneuer Versuch in\b/iu,
+  /\bVerbindung (?:wird (?:wieder)?hergestellt|unterbrochen|ausstehend|prüfen)\b/iu,
+  /\b(?:siehe|see) (?:die )?Konsole\b/iu,
+  /\bDaten werden (?:verbunden|synchronisiert|abgeglichen)\b/iu,
+  /\bSync[- ](?:Diagnose|Fehler|läuft|prüfen|verbunden|pausiert)\b/iu,
+  /\bLetzter Fehler:/iu,
+  /\bnoch nicht (?:synchronisiert|verbunden)\b/iu,
+  /\b(?:CTOX|Sellify|Mailserver|Dienst|Server) ist (?:gerade |zurzeit )?nicht erreichbar\b/iu,
+  /\$\{\s*(?:error|err|e|reason|cause)\??\.message\b/u,
+]);
+
+/** Shell files audited for state prose only (they also hold transport code). */
+export const STATE_PROSE_SHELL_FILES = Object.freeze([
+  'src/apps/business-os/shared/business-chat.js',
+  'src/apps/business-os/shared/business-reporter.js',
+  'src/apps/business-os/shared/collection-freshness.js',
+  'src/apps/business-os/shared/maintenance-state.js',
+  'src/apps/business-os/shared/app-lifecycle.js',
+  'src/apps/business-os/shared/shell-permissions-ui.js',
+  'src/apps/business-os/shared/shell-release-status.js',
+]);
+
+/** Customer apps shipped in the repo are customer-facing too. */
+export const STATE_PROSE_EXTRA_ROOTS = Object.freeze([
+  'src/apps/business-os/customer-modules',
+]);
+
+function findStateProse(value) {
+  const findings = [];
+  for (const pattern of STATE_PROSE_PATTERNS) {
+    const match = String(value).match(pattern);
+    if (match) findings.push({ term: match[0], offset: match.index ?? 0 });
+  }
+  return findings;
+}
+
 const SOURCE_EXTENSIONS = new Set(['.css', '.html', '.js', '.mjs']);
 const LOCALE_EXTENSIONS = new Set(['.json']);
 const METADATA_EXTENSIONS = new Set(['.json']);
@@ -397,10 +449,20 @@ function makeFinding({ source, relativePath, start, term, kind }) {
 }
 
 /** Audit one source/metadata document without touching its contents. */
-export function auditSourceText(source, relativePath, { metadata = false } = {}) {
+export function auditSourceText(source, relativePath, { metadata = false, forbidden = true, stateProse = true } = {}) {
   const normalizedPath = normalizePath(relativePath);
   const findings = [];
   const seen = new Set();
+  const addStateProse = (start, value, kind) => {
+    for (const match of findStateProse(value)) {
+      const finding = makeFinding({ source, relativePath: normalizedPath, start: start + match.offset, term: match.term, kind });
+      const key = `${finding.path}:${finding.line}:${finding.term}:${finding.kind}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        findings.push(finding);
+      }
+    }
+  };
   const add = (start, value, context, kind, sourceValue = value) => {
     const diagnostic = matchingScopedCopyException(normalizedPath, context);
     for (const match of findForbiddenTerms(value)) {
@@ -426,18 +488,27 @@ export function auditSourceText(source, relativePath, { metadata = false } = {})
 
   for (const literal of scanStringLiterals(source)) {
     const copyValue = looksLikeHtml(literal.value) ? extractHtmlCopy(literal.value) : literal.value;
-    const forbidden = findForbiddenTerms(copyValue);
-    if (forbidden.length === 0) continue;
+    const forbiddenHits = forbidden ? findForbiddenTerms(copyValue) : [];
+    const proseHits = stateProse ? findStateProse(literal.value) : [];
+    if (forbiddenHits.length === 0 && proseHits.length === 0) continue;
     if (!isUserFacingLiteral(literal, normalizedPath, metadata)) continue;
-    const context = `${literal.before.slice(-220)}${literal.value}${literal.after.slice(0, 100)}`;
-    add(literal.start, copyValue, context, metadata ? 'metadata' : 'user-facing-literal', literal.value);
+    if (forbiddenHits.length > 0) {
+      const context = `${literal.before.slice(-220)}${literal.value}${literal.after.slice(0, 100)}`;
+      add(literal.start, copyValue, context, metadata ? 'metadata' : 'user-facing-literal', literal.value);
+    }
+    // Thrown errors are not rendered; raw error interpolation is caught where it is rendered.
+    const lineBefore = literal.before.slice(literal.before.lastIndexOf('\n') + 1);
+    if (proseHits.length > 0 && !ERROR_COPY_PATTERN.test(lineBefore)) {
+      addStateProse(literal.start, literal.value, 'state-prose');
+    }
   }
 
   for (const match of source.matchAll(JSX_TEXT_PATTERN)) {
     const value = match[1] ?? '';
     const start = (match.index ?? 0) + Math.max(0, match[0].indexOf(value));
     const context = `${source.slice(Math.max(0, start - 220), start)}${value}`;
-    add(start, value, context, 'rendered-text');
+    if (forbidden) add(start, value, context, 'rendered-text');
+    if (stateProse) addStateProse(start, value, 'state-prose');
   }
   return findings;
 }
@@ -608,8 +679,24 @@ export async function auditBusinessOsContent(root = REPO_ROOT) {
     const source = readFileSync(join(resolvedRoot, relativePath), 'utf8');
     findings.push(...auditSourceText(source, relativePath, {
       metadata: METADATA_EXTENSIONS.has(extname(relativePath).toLowerCase()),
+      stateProse: !/(?:^|\/)(?:tests?|qa)\/|(?:^|[./-])test\.m?js$|\.test\.m?js$|\.browser\.m?js$/u.test(relativePath),
     }));
   }
+  const proseOnly = [];
+  for (const relativePath of STATE_PROSE_SHELL_FILES) {
+    if (!existsSync(join(resolvedRoot, relativePath))) throw new Error(`Required shell surface is missing: ${relativePath}`);
+    proseOnly.push(relativePath);
+  }
+  for (const extraRoot of STATE_PROSE_EXTRA_ROOTS) {
+    if (existsSync(join(resolvedRoot, extraRoot))) proseOnly.push(...walkFiles(resolvedRoot, extraRoot));
+  }
+  const isTestPath = (path) => /(?:^|\/)(?:tests?|qa)\/|(?:^|[./-])test\.m?js$|\.test\.m?js$|\.browser\.m?js$/u.test(path);
+  for (const relativePath of [...new Set(proseOnly)].filter((path) => !files.includes(path) && !isTestPath(path)).sort()) {
+    if (METADATA_EXTENSIONS.has(extname(relativePath).toLowerCase())) continue;
+    const source = readFileSync(join(resolvedRoot, relativePath), 'utf8');
+    findings.push(...auditSourceText(source, relativePath, { forbidden: false }));
+  }
+  files.push(...proseOnly);
 
   const registry = registryMetadata(resolvedRoot, scoped.approved.map(({ id }) => id));
   for (const { id, metadata } of registry.copies) {
@@ -636,7 +723,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     const result = await auditBusinessOsContent(process.argv[2] || REPO_ROOT);
     if (result.findings.length > 0) {
-      console.error(`Business OS content guard found ${result.findings.length} forbidden UI/metadata term(s):`);
+      console.error(`Business OS content guard found ${result.findings.length} forbidden UI/metadata term(s) or state prose:`);
       console.error(formatFindings(result.findings));
       process.exitCode = 1;
     } else {
