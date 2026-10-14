@@ -326,10 +326,12 @@ pub(super) fn handle_command(
             let admitted =
                 admission.context("native model observation requires domain admission")?;
             let holder = store::existing_instance_id(root)?;
-            let target = {
+            let (target, catalog_owner, expected_binding) = {
                 let conn = store::open_store(root)?;
                 let owner = management_owner(&conn, actor)?;
-                native_catalog_target(&conn, &owner, &holder, &request)?
+                let target = native_catalog_target(&conn, &owner, &holder, &request)?;
+                let binding = native_binding(&conn, &request.account_id)?;
+                (target, owner, binding)
             };
             // Network wait is outside the policy transaction. Caller-supplied
             // endpoints, credentials and model lists are never accepted.
@@ -343,6 +345,10 @@ pub(super) fn handle_command(
             } else {
                 crate::execution::cliproxyapi_integration::observe_api_key_catalog(
                     root,
+                    &catalog_owner,
+                    expected_binding
+                        .as_deref()
+                        .context("native API catalog binding unavailable")?,
                     &target.provider,
                     &target.local_account_id,
                 )?

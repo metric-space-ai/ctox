@@ -37,12 +37,18 @@ fn failed(provider: &str, reason: &str) -> NativeModelCatalogObservation {
         inherited_selected_model: None,
     }
 }
-fn capture(root: &Path, provider: &str, id: &str) -> anyhow::Result<Option<Captured>> {
+fn capture(
+    root: &Path,
+    owner: &str,
+    expected_binding: Option<&str>,
+    provider: &str,
+    id: &str,
+) -> anyhow::Result<Option<Captured>> {
     let config = load_provider_integration_config(root)?;
     let Some(account) = config.config.api_key_accounts.into_iter().find(|a| {
         a.id == id
             && a.endpoint.provider() == provider
-            && a.owner_user_id.is_some()
+            && a.owner_user_id.as_deref() == Some(owner)
             && a.creation_operation.is_some()
     }) else {
         return Ok(None);
@@ -61,6 +67,9 @@ fn capture(root: &Path, provider: &str, id: &str) -> anyhow::Result<Option<Captu
     else {
         return Ok(None);
     };
+    if expected_binding.is_some_and(|expected| expected != binding) {
+        return Ok(None);
+    }
     let key = match crate::secrets::read_secret_value(
         root,
         &account.api_key_secret.scope,
@@ -192,10 +201,16 @@ fn observe_with(
 /// Catalog observations are metadata, never an inference permission or Hi result.
 pub(crate) fn observe(
     root: &Path,
+    owner: &str,
+    expected_binding: &str,
     provider: &str,
     id: &str,
 ) -> anyhow::Result<NativeModelCatalogObservation> {
-    observe_with(provider, || capture(root, provider, id), fetch)
+    observe_with(
+        provider,
+        || capture(root, owner, Some(expected_binding), provider, id),
+        fetch,
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -240,7 +255,15 @@ mod tests {
         let root = fixture();
         let result = observe_with(
             "xai",
-            || capture(root.path(), "xai", "api-catalog-fixture"),
+            || {
+                capture(
+                    root.path(),
+                    "verified-owner",
+                    None,
+                    "xai",
+                    "api-catalog-fixture",
+                )
+            },
             |value| {
                 crate::secrets::write_secret_record(
                     root.path(),
@@ -281,7 +304,13 @@ mod tests {
                     )
                     .unwrap();
                 }
-                capture(root.path(), "xai", "api-catalog-fixture")
+                capture(
+                    root.path(),
+                    "verified-owner",
+                    None,
+                    "xai",
+                    "api-catalog-fixture",
+                )
             },
             |_| panic!("changed account must not issue request"),
         )
@@ -291,19 +320,57 @@ mod tests {
     #[test]
     fn api_catalog_disabled_missing_or_foreign_provider_never_invokes_transport() {
         let root = fixture();
-        assert!(capture(root.path(), "kimi", "api-catalog-fixture")
-            .unwrap()
-            .is_none());
+        assert!(capture(
+            root.path(),
+            "verified-owner",
+            None,
+            "kimi",
+            "api-catalog-fixture"
+        )
+        .unwrap()
+        .is_none());
         let mut config = load_provider_integration_config(root.path()).unwrap();
         config.config.api_key_accounts[0].disabled = true;
         save_provider_integration_config(root.path(), config.revision, &config.config).unwrap();
         let result = observe_with(
             "xai",
-            || capture(root.path(), "xai", "api-catalog-fixture"),
+            || {
+                capture(
+                    root.path(),
+                    "verified-owner",
+                    None,
+                    "xai",
+                    "api-catalog-fixture",
+                )
+            },
             |_| panic!("disabled account must not issue request"),
         )
         .unwrap();
         assert_eq!(result.failure.as_deref(), Some("account_disabled"));
+    }
+    #[test]
+    fn api_catalog_rejects_wrong_owner_and_adopted_binding_before_network() {
+        let root = fixture();
+        let binding = crate::execution::cliproxyapi_host::account_controls::account_binding(
+            root.path(),
+            "xai",
+            "api-catalog-fixture",
+        )
+        .unwrap()
+        .unwrap();
+        for (owner, expected) in [
+            ("foreign-owner", binding.as_str()),
+            ("verified-owner", "stale-adopted-binding"),
+        ] {
+            let result =
+                observe(root.path(), owner, expected, "xai", "api-catalog-fixture").unwrap();
+            assert_eq!(result.failure.as_deref(), Some("account_unavailable"));
+            assert!(
+                result.http_status.is_none()
+                    && result.models.is_none()
+                    && result.private_binding.is_none()
+            );
+        }
     }
     #[test]
     fn api_catalog_actual_response_retains_binding_without_inference_claim() {
@@ -311,7 +378,15 @@ mod tests {
         let before = load_provider_integration_config(root.path()).unwrap();
         let result = observe_with(
             "xai",
-            || capture(root.path(), "xai", "api-catalog-fixture"),
+            || {
+                capture(
+                    root.path(),
+                    "verified-owner",
+                    None,
+                    "xai",
+                    "api-catalog-fixture",
+                )
+            },
             observed,
         )
         .unwrap();
