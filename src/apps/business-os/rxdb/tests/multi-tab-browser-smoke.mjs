@@ -110,6 +110,7 @@ try {
   // fresh single tab must recover instead of remaining a follower forever.
   const orphan = await context.newPage();
   await orphan.goto(`http://127.0.0.1:${port}/`);
+  const orphanStartedAt = Date.now();
   await orphan.evaluate(async () => {
     const { multiTabSyncCoordinatorTestInternals } = await import('/bundle.mjs');
     const room = `orphan-${Date.now()}`;
@@ -131,6 +132,7 @@ try {
   });
   await waitFor(orphan, () => globalThis.__orphanCoordinator?.isLeader?.() === true,
     'orphaned Worker Web Lock takeover', 12_000);
+  const orphanTakeoverMs = Date.now() - orphanStartedAt;
   await orphan.evaluate(async () => {
     await globalThis.__orphanCoordinator.close();
     globalThis.__orphanWorker.terminate();
@@ -158,8 +160,10 @@ try {
     globalThis.__replacementCoordinator = createMultiTabSyncCoordinator({ databaseName: 'multi-tab-browser', room, tabId: 'tab-z' });
     await globalThis.__replacementCoordinator.start();
   }, { room: silentRoom });
+  const silentStartedAt = Date.now();
   await waitFor(replacement, () => globalThis.__replacementCoordinator?.isLeader?.() === true,
     'silent leader takeover', 12_000);
+  const silentTakeoverMs = Date.now() - silentStartedAt;
   await waitFor(silent, () => globalThis.__silentCoordinator?.isLeader?.() === false,
     'former leader fenced after takeover', 3_000);
   await Promise.all([
@@ -169,6 +173,7 @@ try {
   await Promise.all([silent.close(), replacement.close()]);
 
   await context.close();
+  console.log(JSON.stringify({ orphanTakeoverMs, silentTakeoverMs }));
   console.log('ctox-rxdb real-browser multi-tab leader smoke OK');
 } finally {
   await browser.close();

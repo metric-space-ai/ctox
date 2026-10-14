@@ -148,7 +148,10 @@ export function createMultiTabSyncCoordinator({
           const held = (await navigator.locks.query()).held || [];
           if (!held.some((entry) => entry.name === lockName && entry.clientId === heldLockClientId)) {
             releaseLock?.();
+            leaderTabId = '';
+            leaderSeenAtMs = 0;
             becomeFollower('', 'web-lock-lost');
+            attemptElection().catch(() => {});
             return;
           }
         } catch { /* The Web Lock remains the authority if inspection fails. */ }

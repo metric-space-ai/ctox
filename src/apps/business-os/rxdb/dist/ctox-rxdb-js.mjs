@@ -13634,6 +13634,7 @@ function createMultiTabSyncCoordinator({
   let heldLockClientId = "";
   const clearOrphanRecovery = () => {
     lockUnavailableSinceMs = 0;
+    retryStealElection = false;
     if (orphanRecoveryTimer) clearTimeout(orphanRecoveryTimer);
     orphanRecoveryTimer = null;
   };
@@ -13721,7 +13722,11 @@ function createMultiTabSyncCoordinator({
           const held = (await navigator.locks.query()).held || [];
           if (!held.some((entry) => entry.name === lockName && entry.clientId === heldLockClientId)) {
             releaseLock?.();
+            leaderTabId = "";
+            leaderSeenAtMs = 0;
             becomeFollower("", "web-lock-lost");
+            attemptElection().catch(() => {
+            });
             return;
           }
         } catch {
@@ -13752,6 +13757,7 @@ function createMultiTabSyncCoordinator({
         retryStealElection = true;
         retryReleaseElection = false;
         releaseWaitAbort?.abort();
+        if (role !== "leader") releaseLock?.();
       } else if (waitForRelease) retryReleaseElection = true;
       return false;
     }
