@@ -2134,7 +2134,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         .context("usage: ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]")?;
     let target_url_override = flag_value(args, "--target-url");
     let credential_ref =
-        optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
+        web_stack_credential_ref_or_default(flag_value(args, "--credential-ref"), source_id)?
             .context("auth-assist-login requires --credential-ref <ctox-secret://scope/name>")?;
     let local_secret_ref = parse_local_ctox_secret_ref(&credential_ref)?;
     let explicit_login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"));
@@ -3269,13 +3269,25 @@ fn run_business_os_web_stack_auth_assist_signup(
     let source_id = flag_value(args, "--source-id")
         .context("usage: ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--email-selector <selector>] [--credential-selector <selector>] [--confirm-credential-selector <selector>] [--submit-selector <selector>] [--verify-selector <selector>] [--accept-terms] [--terms-selector <selector>]")?;
     let target_url_override = flag_value(args, "--target-url")
+        .or_else(|| web_stack_auth_source_defaults(source_id).and_then(|d| d.signup_url))
         .context("auth-assist-signup requires --target-url <signup-url>")?;
     let credential_ref =
-        optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
+        web_stack_credential_ref_or_default(flag_value(args, "--credential-ref"), source_id)?
             .context("auth-assist-signup requires --credential-ref <ctox-secret://scope/name>")?;
     let local_secret_ref = parse_local_ctox_secret_ref(&credential_ref)?;
-    let login_hint = optional_web_stack_login_hint(flag_value(args, "--login-hint"))
-        .context("auth-assist-signup requires --login-hint <account-email-or-username>")?;
+    if args.iter().any(|arg| arg == "--generate-credential") {
+        ensure_web_stack_signup_credential(root, &local_secret_ref, source_id)?;
+    }
+    let login_hint = match optional_web_stack_login_hint(flag_value(args, "--login-hint")) {
+        Some(hint) => Some(hint),
+        None => crate::secrets::read_secret_value_optional(
+            root,
+            &local_secret_ref.scope,
+            &local_secret_ref.name,
+        )?
+        .and_then(|secret| resolve_web_stack_credential(&secret, None).login_hint),
+    }
+    .context("auth-assist-signup requires --login-hint <account-email-or-username>")?;
     let requesting_task_id = flag_value(args, "--task-id").unwrap_or_default();
     let owner_user_id =
         resolve_web_stack_auth_owner_user_id(root, args, requesting_task_id, false)?;
@@ -4517,7 +4529,7 @@ fn business_os_usage() -> String {
         )
         .replace(
             "  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]",
-            "  ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--task-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|rocketreach.com|xing.com> --company <name> [--country <DE|AT|CH>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack authenticated-automation --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>] < automation.js",
+            "  ctox business-os web-stack auth-assist-signup --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> --login-hint <hint> --confirm-provisioning [--generate-credential] [--task-id <id>] [--timeout-ms <n>] [--dir <path>]\n  (x.com and reddit.com default target, credential and login hint from their profile)\n  ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|rocketreach.com|xing.com> --company <name> [--country <DE|AT|CH>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack authenticated-automation --source-id <id> --target-url <url> --credential-ref <ctox-secret://scope/name> [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>] [--dir <path>] [--credential-selector <selector>] [--verify-selector <selector>] < automation.js",
         )
 }
 
@@ -5318,6 +5330,66 @@ fn reusable_web_stack_auth_identifier(value: &str, prefix: &str, source_slug: &s
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+/// The credential a source signs in with when the caller names none: the
+/// profile's secret in the CTOX credential scope (`X_BROWSER_LOGIN`, ...).
+fn web_stack_credential_ref_or_default(
+    explicit: Option<&str>,
+    source_id: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(optional_web_stack_credential_ref(explicit)?.or_else(|| {
+        web_stack_auth_source_defaults(source_id).map(|defaults| {
+            format!(
+                "ctox-secret://{}/{}",
+                crate::secrets::credential_scope(),
+                defaults.secret_name
+            )
+        })
+    }))
+}
+
+/// A fresh account password: 28 characters with upper, lower, digit and
+/// symbol, so the common registration rules accept it. Never logged.
+fn generate_web_stack_account_password() -> String {
+    let entropy = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    format!("Cx{}!{}9", &entropy[..12], &entropy[32..44])
+}
+
+/// `auth-assist-signup --generate-credential`: CTOX registers with its own
+/// instance mailbox. Creates `{email, password}` under the credential ref
+/// unless it already exists (an existing account is never overwritten).
+fn ensure_web_stack_signup_credential(
+    root: &Path,
+    local_secret_ref: &LocalCtoxSecretRef,
+    source_id: &str,
+) -> anyhow::Result<bool> {
+    if crate::secrets::secret_exists(root, &local_secret_ref.scope, &local_secret_ref.name)? {
+        return Ok(false);
+    }
+    let email = crate::inference::runtime_env::get_runtime_env_value(root, "CTO_EMAIL_ADDRESS")
+        .map(|value| value.trim().to_string())
+        .filter(|value| value.contains('@'))
+        .context(
+            "--generate-credential needs the CTOX mailbox (CTO_EMAIL_ADDRESS) to register with",
+        )?;
+    let value = serde_json::json!({
+        "email": email,
+        "password": generate_web_stack_account_password(),
+        "otp_recipient": email,
+    })
+    .to_string();
+    crate::secrets::create_secret_record_if_absent(
+        root,
+        &local_secret_ref.scope,
+        &local_secret_ref.name,
+        &value,
+        serde_json::json!({
+            "source": "web_stack_signup",
+            "source_id": source_id,
+            "generated": true,
+        }),
+    )
 }
 
 fn optional_web_stack_credential_ref(value: Option<&str>) -> anyhow::Result<Option<String>> {
@@ -9427,6 +9499,33 @@ mod tests {
         assert!(source.contains("push(\"firma_domain\", website"));
         assert!(!source.contains("push(\"firma_website\", website"));
         assert!(source.contains("push(\"mitarbeiter\", employees"));
+        Ok(())
+    }
+
+    #[test]
+    fn news_sources_default_to_their_profile_credential() -> anyhow::Result<()> {
+        assert_eq!(
+            web_stack_credential_ref_or_default(None, "x.com")?.as_deref(),
+            Some("ctox-secret://credentials/X_BROWSER_LOGIN")
+        );
+        assert_eq!(
+            web_stack_credential_ref_or_default(None, "reddit.com")?.as_deref(),
+            Some("ctox-secret://credentials/REDDIT_BROWSER_LOGIN")
+        );
+        assert_eq!(
+            web_stack_credential_ref_or_default(Some("ctox-secret://credentials/OTHER"), "x.com")?
+                .as_deref(),
+            Some("ctox-secret://credentials/OTHER")
+        );
+        assert!(web_stack_credential_ref_or_default(None, "example.test")?.is_none());
+        assert!(web_stack_credential_ref_or_default(Some("hunter2 plain"), "x.com").is_err());
+        let first = generate_web_stack_account_password();
+        assert_eq!(first.len(), 28);
+        assert!(first.chars().any(|c| c.is_ascii_uppercase()));
+        assert!(first.chars().any(|c| c.is_ascii_lowercase()));
+        assert!(first.chars().any(|c| c.is_ascii_digit()));
+        assert!(first.contains('!'));
+        assert_ne!(first, generate_web_stack_account_password());
         Ok(())
     }
 
