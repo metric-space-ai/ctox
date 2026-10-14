@@ -876,6 +876,7 @@ const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-app-runtime-v1",
     "ctox-workjet-device-control-v1",
     super::rxdb_peer_speech_settings::CAPABILITY,
+    super::provider_model_checks::CAPABILITY,
     super::rxdb_peer_jour_fixe_speech::CAPABILITY,
     super::rxdb_peer_dictation::CAPABILITY,
     super::rxdb_peer_grok::CAPABILITY,
@@ -3235,6 +3236,7 @@ async fn run_native_peer(
                 super::mcp_channel::NativeSupervisorSourceHost::register(&pool, &root)?;
                 let consumer_root = root.clone();
                 super::rxdb_peer_speech_settings::register(&pool, &root)?;
+                super::provider_model_checks::register(&pool, &root)?;
                 let consumer_transport = pool.connection_handler.clone();
                 pool.register_guarded_auxiliary_request_handler(
                     super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
