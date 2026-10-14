@@ -19,7 +19,6 @@ import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from '.
 import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-query-ready-coalesce2';
 import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-query-ready-coalesce2';
 import {
-  appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
@@ -2634,6 +2633,9 @@ async function openIntegratedModuleLifecycle(moduleLike) {
     ? state.modules.find((entry) => entry.id === moduleLike)
     : moduleLike;
   if (!mod?.id) return;
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canManageVersions) return;
   const session = await ensureIntegratedModuleToolSession(mod);
   await session?.showVersions?.();
 }
@@ -2665,20 +2667,21 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
   const codingAgentAvailable = desktopAppTargetAvailable('coding-agents');
   const canOpenCodingAgent = canCode && codingAgentAvailable;
   const canRollback = canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canCode && !canRollback) return;
   const moduleTitle = moduleDisplayTitle(mod);
+  const versionLabel = lifecycle.versionLabel || mod.version || '';
   const menu = document.createElement('section');
   menu.className = 'shell-window-v2-version-menu';
   menu.setAttribute('role', 'dialog');
   menu.setAttribute('aria-label', `${moduleDisplayTitle(mod)} Versionsmenü`);
   menu.innerHTML = `
     <header class="shell-v2-version-menu-head">
-      <div><span>${escapeHtml(moduleTitle)}</span><strong>${escapeHtml(lifecycle.versionLabel || mod.version || 'Version —')}</strong></div>
-      <small>${escapeHtml(lifecycle.label || lifecycle.state || 'Status unbekannt')}</small>
+      <div><span>${escapeHtml(moduleTitle)}</span>${versionLabel ? `<strong>${escapeHtml(versionLabel)}</strong>` : ''}</div>
     </header>
     <div class="shell-v2-version-menu-actions">
       <button type="button" data-v2-menu-action="history">Versionshistorie</button>
       ${canSource ? '<button type="button" data-v2-menu-action="source">Im Source Code Editor öffnen</button>' : ''}
-      <button type="button" data-v2-menu-action="coding" ${canOpenCodingAgent ? '' : `disabled title="${canCode ? 'Coding-Agent-App ist nicht verfügbar' : 'Keine Berechtigung: apps.modify'}"`}>Im Coding Agent öffnen</button>
+      ${canOpenCodingAgent ? '<button type="button" data-v2-menu-action="coding">Im Coding Agent öffnen</button>' : ''}
     </div>
     <div class="shell-v2-version-history" data-v2-version-history aria-live="polite">
       <p>Versionshistorie auswählen, um gespeicherte Versionen zu laden.</p>
@@ -2747,7 +2750,7 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
     if (historyLoading || !menu.isConnected) return;
     historyLoading = true;
     if (historyAction) historyAction.disabled = true;
-    history.innerHTML = '<p aria-busy="true">Versionshistorie wird autorisiert geladen…</p>';
+    history.innerHTML = '<p aria-busy="true">Wird geladen …</p>';
     try {
       const terminal = await dispatchShellModuleCommand({
         commandType: 'ctox.module.list_versions',
@@ -2763,8 +2766,9 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
       renderShellV2VersionHistory({ mod, menu, history, versions, canRollback, windowId });
     } catch (error) {
       if (!menu.isConnected) return;
+      console.warn('[business-os] version history failed', error);
       history.innerHTML = `
-        <p class="is-error" role="alert">Versionshistorie nicht verfügbar: ${escapeHtml(error?.message || error)}</p>
+        <p class="is-error" role="alert">Versionshistorie konnte nicht geladen werden.</p>
         <button type="button" data-v2-version-retry>Erneut versuchen</button>
       `;
       history.querySelector('[data-v2-version-retry]')?.addEventListener('click', loadHistory, { once: true });
@@ -2779,6 +2783,9 @@ async function toggleShellV2VersionMenu(mod, context = {}) {
 
 function wireShellV2ModuleTitle(mod, win, scope) {
   if (resolveShellWindowContract(mod)?.contract !== 'v2' || !win?.id || !scope) return;
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
+  if (!canManageVersions) return;
   let trigger = scope.querySelector('.ctox-pane-header .ctox-pane-title');
   if (!trigger) {
     const shellHeader = win.element?.querySelector?.('[data-window-header]');
@@ -2789,15 +2796,13 @@ function wireShellV2ModuleTitle(mod, win, scope) {
     trigger.textContent = moduleDisplayTitle(mod);
     shellHeader.prepend(trigger);
   }
-  const lifecycle = appLifecycleState(mod, { session: state.session, governance: state.governance });
-  const version = lifecycle.versionLabel || String(mod.version || mod.app_version || 'Version —');
   trigger.classList.add('shell-v2-module-title-trigger');
   trigger.tabIndex = 0;
   trigger.setAttribute('role', 'button');
   trigger.setAttribute('aria-haspopup', 'dialog');
   trigger.setAttribute('aria-expanded', 'false');
-  trigger.setAttribute('aria-label', `${moduleDisplayTitle(mod)}; ${version}; Versionsmenü öffnen`);
-  trigger.title = `${version} · Versionsmenü öffnen`;
+  trigger.setAttribute('aria-label', `${moduleDisplayTitle(mod)}; Versionsmenü öffnen`);
+  trigger.removeAttribute('title');
   const open = (event) => toggleShellV2VersionMenu(mod, { id: win.id, trigger, event });
   trigger.addEventListener('click', open);
   trigger.addEventListener('keydown', (event) => {
@@ -2815,11 +2820,11 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
   history.innerHTML = `
     <label class="shell-v2-version-select"><span>Frühere Version</span>
       <select data-v2-version-select>
-        ${versions.map((version) => `<option value="${escapeHtml(version.version_id || '')}">#${escapeHtml(version.seq || '—')} · ${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))} · ${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</option>`).join('')}
+        ${versions.map((version) => `<option value="${escapeHtml(version.version_id || '')}">${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))} · ${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</option>`).join('')}
       </select>
     </label>
     <div class="shell-v2-restore-actions">
-      <button type="button" data-v2-restore-start ${canRollback ? '' : 'disabled title="Keine Berechtigung: apps.rollback"'}>Version wiederherstellen</button>
+      ${canRollback ? '<button type="button" data-v2-restore-start>Version wiederherstellen</button>' : ''}
     </div>
     <p data-v2-version-status role="status"></p>
   `;
@@ -2836,7 +2841,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
     const confirm = document.createElement('div');
     confirm.className = 'shell-v2-restore-confirm';
     confirm.innerHTML = `
-      <p>${escapeHtml(moduleTitle)} wirklich auf Version #${escapeHtml(selected.seq || '—')} zurücksetzen?</p>
+      <p>${escapeHtml(moduleTitle)} wirklich auf diese Version zurücksetzen?</p>
       <button type="button" data-v2-restore-confirm>Wiederherstellen</button>
       <button type="button" data-v2-restore-cancel>Abbrechen</button>
     `;
@@ -2851,7 +2856,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
       busy = true;
       for (const button of confirm.querySelectorAll('button')) button.disabled = true;
       event.currentTarget.textContent = 'Wiederherstellung läuft…';
-      status.textContent = 'Stage, Validierung und atomarer Austausch laufen…';
+      status.textContent = 'Wird wiederhergestellt…';
       try {
         await dispatchShellModuleCommand({
           commandType: 'ctox.module.rollback_version',
@@ -2861,7 +2866,7 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
           source: 'business-os-shell-v2-version-menu',
           until: 'terminal',
         });
-        status.textContent = `Version #${selected.seq || '—'} wurde vollständig wiederhergestellt.`;
+        status.textContent = 'Die Version wurde wiederhergestellt.';
         state.moduleRevisions[mod.id] = Date.now();
         state.schemaRegistrations.delete(mod.id);
         closeShellV2VersionMenu(windowId, { returnFocus: false });
@@ -2872,7 +2877,8 @@ function renderShellV2VersionHistory({ mod, menu, history, versions, canRollback
         busy = false;
         for (const button of confirm.querySelectorAll('button')) button.disabled = false;
         event.currentTarget.textContent = 'Wiederherstellen';
-        status.textContent = `Wiederherstellung fehlgeschlagen: ${error?.message || error}`;
+        console.warn('[business-os] version restore failed', error);
+        status.textContent = 'Wiederherstellen hat nicht geklappt.';
         status.classList.add('is-error');
       }
     });
@@ -2904,7 +2910,6 @@ async function ensureIntegratedModuleToolSession(mod) {
     <header class="module-integrated-tools-bar" aria-label="App-Ansicht">
       <div class="module-integrated-tools-identity">
         <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-        <span>${escapeHtml(mod.id)}</span>
       </div>
       <nav class="module-integrated-tools-tabs" aria-label="App, Source und Versionen">
         <button type="button" data-integrated-view="app">App</button>
@@ -3056,11 +3061,10 @@ async function mountIntegratedModuleSource({ mod, host, showApp }) {
 }
 
 function renderIntegratedModuleSourceError({ mod, host, error, retry }) {
-  console.error(`[module-source:${mod.id}] mount failed:`, error);
+  console.warn(`[module-source:${mod.id}] mount failed:`, error);
   host.innerHTML = `
     <div class="module-integrated-error" role="alert">
-      <strong>Source konnte nicht geladen werden</strong>
-      <span>${escapeHtml(error?.message || error)}</span>
+      <strong>Source konnte nicht geladen werden.</strong>
       <button type="button">Erneut versuchen</button>
     </div>
   `;
@@ -3089,7 +3093,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
   const versionOptions = versions.map((version) => `
     <button type="button" class="module-integrated-version-row${version.version_id === selected?.version_id ? ' is-active' : ''}"
       data-integrated-version-id="${escapeHtml(version.version_id || '')}" aria-current="${version.version_id === selected?.version_id ? 'true' : 'false'}">
-      <span><b>#${escapeHtml(version.seq || '—')}</b> ${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))}</span>
+      <span>${escapeHtml(version.label || moduleVersionOriginLabel(version.origin))}</span>
       <small>${escapeHtml(formatLifecycleTimestamp(version.created_at_ms))}</small>
     </button>
   `).join('');
@@ -3109,19 +3113,17 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       <main class="module-integrated-version-detail">
         <header class="module-integrated-version-summary">
           <div>
-            <span class="module-integrated-kicker">Aktueller Status</span>
-            <strong>${escapeHtml(lifecycle.versionLabel || 'Version fehlt')} · ${escapeHtml(lifecycle.label || lifecycle.state)}</strong>
-            <small>${escapeHtml(projection.releaseLine || lifecycle.reason || '')}</small>
+            <strong>${escapeHtml(lifecycle.versionLabel || moduleDisplayTitle(mod))}</strong>
+            ${(projection.currentVersion || projection.statusLabel) ? `<small>${escapeHtml(projection.releaseLine)}</small>` : ''}
           </div>
-          ${selected ? `
-          <button type="button" class="module-integrated-switch-version" data-integrated-version-switch
-            ${canRollback ? '' : 'disabled'} title="${canRollback ? 'Diese Version wiederherstellen' : 'Keine Rollback-Berechtigung'}">
-            Auf #${escapeHtml(selected.seq || '—')} wechseln
+          ${selected && canRollback ? `
+          <button type="button" class="module-integrated-switch-version" data-integrated-version-switch>
+            Version wiederherstellen
           </button>` : ''}
         </header>
         ${selected ? `
         <dl class="module-integrated-version-facts">
-          <div><dt>Version</dt><dd>#${escapeHtml(selected.seq || '—')} ${escapeHtml(selected.label || moduleVersionOriginLabel(selected.origin))}</dd></div>
+          <div><dt>Version</dt><dd>${escapeHtml(selected.label || moduleVersionOriginLabel(selected.origin))}</dd></div>
           <div><dt>Zeitpunkt</dt><dd>${escapeHtml(formatLifecycleTimestamp(selected.created_at_ms))}</dd></div>
           <div><dt>Quelle</dt><dd>${escapeHtml(moduleVersionOriginLabel(selected.origin))}</dd></div>
           <div><dt>Dateien</dt><dd>${escapeHtml(selected.file_count ?? '—')}</dd></div>
@@ -3140,7 +3142,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
           <label><span>Zielversion</span><input name="target_version" value="${escapeHtml(releaseVersion)}" pattern="\\d+\\.\\d+\\.\\d+" required ${canRelease ? '' : 'disabled'}></label>
           <label><span>Sichtbarkeit</span><select name="release_channel" ${canRelease ? '' : 'disabled'}><option value="team">Team</option><option value="restricted">Eingeschränkt</option></select></label>
           <label><span>Release-Notiz</span><input name="notes" placeholder="Was wurde geändert?" ${canRelease ? '' : 'disabled'}></label>
-          <button type="submit" ${canRelease ? '' : 'disabled'}>${canRelease ? 'Version freigeben' : 'Keine Release-Berechtigung'}</button>
+          ${canRelease ? '<button type="submit">Version freigeben</button>' : ''}
           <p data-integrated-release-status role="status"></p>
         </form>
       </main>
@@ -3168,15 +3170,16 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       });
       state.moduleRevisions[mod.id] = Date.now();
       state.schemaRegistrations.delete(mod.id);
-      setStatus(`${moduleDisplayTitle(mod)} wurde auf Version #${selected.seq || '—'} zurückgesetzt.`);
+      setStatus(`${moduleDisplayTitle(mod)} wurde wiederhergestellt.`);
       state.windowManager?.destroy?.(windowId);
       await delay(240);
       const refreshed = state.modules.find((entry) => entry.id === mod.id) || mod;
       await openWindowedModule(refreshed);
     } catch (error) {
       button.disabled = false;
-      button.textContent = `Auf #${selected.seq || '—'} wechseln`;
-      setStatus(`Versionswechsel fehlgeschlagen: ${error?.message || error}`, true);
+      button.textContent = 'Version wiederherstellen';
+      console.warn('[business-os] version switch failed', error);
+      setStatus('Wiederherstellen hat nicht geklappt.', true);
     }
   });
   host.querySelector('[data-integrated-release]')?.addEventListener('submit', async (event) => {
@@ -3187,7 +3190,7 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
     const status = form.querySelector('[data-integrated-release-status]');
     const data = new FormData(form);
     submit.disabled = true;
-    status.textContent = 'Release wird über den Command Bus gesendet…';
+    status.textContent = 'Version wird freigegeben…';
     try {
       await dispatchShellModuleCommand({
         commandType: 'ctox.module.release',
@@ -3202,8 +3205,9 @@ async function renderIntegratedModuleVersions({ mod, host, windowId }) {
       await renderIntegratedModuleVersions({ mod, host, windowId });
     } catch (error) {
       submit.disabled = false;
-      status.textContent = `Release fehlgeschlagen: ${error?.message || error}`;
-      setStatus(status.textContent, true);
+      console.warn('[business-os] module release failed', error);
+      status.textContent = 'Freigeben hat nicht geklappt.';
+      setStatus('Freigeben hat nicht geklappt.', true);
     }
   });
 }
@@ -4707,16 +4711,12 @@ function desktopAppDescriptorForModule(mod) {
 
 function windowHeaderOptionsForModule(mod) {
   const title = moduleDisplayTitle(mod);
-  const lifecycle = appLifecycleBadge(mod, {
-    session: state.session,
-    governance: state.governance,
-  });
-  const version = lifecycle.version || String(mod?.version || mod?.app_version || '').trim() || 'v—';
-  const status = lifecycle.text || lifecycle.label || (lifecycle.public ? 'Public' : 'Privat');
   const canOpenSource = shouldRenderModuleSourceAction({
     module: mod,
     canOpenSource: canViewModuleSource(mod),
   });
+  const canManageVersions = canUseModulePermission(mod, BusinessOsPermissions.AppsModify)
+    || canUseModulePermission(mod, BusinessOsPermissions.AppsRollback);
   if (resolveShellWindowContract(mod)?.contract === 'v2') {
     return {
       headerBadges: [],
@@ -4725,17 +4725,7 @@ function windowHeaderOptionsForModule(mod) {
     };
   }
   return {
-    headerBadges: [
-      { label: version, title: lifecycle.title || `${title}: ${version}`, state: 'version' },
-      {
-        id: 'lifecycle',
-        icon: status.slice(0, 1).toUpperCase(),
-        label: status,
-        title: lifecycle.title || `${title}: ${status}`,
-        ariaLabel: `${title}: ${version} ${status}; Versionen und Status öffnen`,
-        state: lifecycle.state || (lifecycle.public ? 'team' : 'private'),
-      },
-    ],
+    headerBadges: [],
     headerActions: [
       canOpenSource ? {
         id: 'source',
@@ -4743,14 +4733,12 @@ function windowHeaderOptionsForModule(mod) {
         label: 'Source',
         title: `Source von ${title} öffnen`,
       } : null,
-      {
+      canManageVersions ? {
         id: 'versions',
         icon: '↺',
         label: shellLang() === 'de' ? 'Versionen' : 'Versions',
-        title: shellLang() === 'de'
-          ? `Versionen, Freigabe und Rollback von ${title} öffnen`
-          : `Open versions, release and rollback for ${title}`,
-      },
+        title: shellLang() === 'de' ? 'Versionen öffnen' : 'Open versions',
+      } : null,
     ].filter(Boolean),
     onHeaderAction: (action) => {
       // Toggle: clicking the active header tool again returns to the app.
@@ -5492,20 +5480,10 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.module
-    ? appLifecycleBadge(target.module, {
-      session: state.session,
-      governance: state.governance,
-    })
-    : null;
-  const lifecycleIconAttributes = lifecycle?.state === 'preview' && !lifecycle.updateAvailable
-    ? `role="img" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(lifecycleBadgeAriaLabel(target.title || target.id, lifecycle))}"`
-    : 'aria-hidden="true"';
   button.innerHTML = `
-    <span class="module-tab-icon" ${lifecycleIconAttributes}>${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${target.id === 'threads' ? '<span class="module-tab-count" data-threads-attention hidden></span>' : ''}
-    ${lifecycle?.updateAvailable ? `<span class="module-tab-update" data-app-lifecycle-badge="${escapeHtml(target.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="Update verfügbar"></span>` : ''}
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
   button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
@@ -5541,11 +5519,6 @@ function renderModuleTab(target, options = {}) {
   button.addEventListener('contextmenu', (event) => {
     event.preventDefault();
     showTargetContextMenu(event, target);
-  });
-  button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5689,7 +5662,7 @@ function showTargetContextMenu(event, target) {
       modify: () => openModuleEditDrawer(module),
     },
   });
-  if (module) items.push({ key: 'versions', icon: '↻', label: state.lang === 'en' ? 'Versions and updates' : 'Versionen und Updates', action: () => openAppLifecycleDrawer(module) });
+  if (module && canModifyModule(module)) items.push({ key: 'versions', icon: '↻', label: state.lang === 'en' ? 'Versions and updates' : 'Versionen und Updates', action: () => openAppLifecycleDrawer(module) });
   state.contextMenu.show(event, items);
 }
 
@@ -7647,11 +7620,7 @@ function renderModulePermissionDeniedState(mod, error, host = els.host?.querySel
     <span>${escapeHtml(de
       ? 'Diese App ist sichtbar, aber die freigegebenen Daten reichen fuer diesen Bereich noch nicht aus.'
       : 'This app is visible, but the shared data access is not enough for this area.')}</span>
-    <button class="text-button" type="button" data-open-app-permissions>${escapeHtml(de ? 'App-Rechte ansehen' : 'View app permissions')}</button>
   `;
-  locked.querySelector('[data-open-app-permissions]')?.addEventListener('click', () => {
-    openAppLifecycleDrawer(mod);
-  });
   host.replaceChildren(locked);
 }
 
@@ -8366,10 +8335,6 @@ function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
   const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
-  const lifecycle = appLifecycleBadge(mod, {
-    session: state.session,
-    governance: state.governance,
-  });
   const canOpenSource = shouldRenderModuleSourceAction({
     module: mod,
     canOpenSource: canViewModuleSource(mod),
@@ -8379,7 +8344,6 @@ function renderModuleAppBar(mod) {
       <div class="module-appbar-title">
         <span class="module-appbar-icon" aria-hidden="true">${svgHtml || escapeHtml(glyphForModule(mod.id))}</span>
         <span>${title}</span>
-        ${lifecycle?.version ? `<button class="module-lifecycle-chip" type="button" data-module-lifecycle="${escapeHtml(mod.id)}" data-state="${escapeHtml(lifecycle.state)}" title="${escapeHtml(lifecycle.title)}" aria-label="${escapeHtml(`${title}: ${lifecycle.version} ${lifecycle.text}`)}"><b>${escapeHtml(lifecycle.version)}</b><span>${escapeHtml(lifecycle.text)}</span></button>` : ''}
       </div>
       <div class="module-appbar-actions">
         <select class="header-select module-appbar-select" style="display: none; width: auto; max-width: 140px; margin-right: 4px;" data-module-version-select="${escapeHtml(mod.id)}" aria-label="${escapeHtml(shellText('selectVersion') || 'Version auswählen')}">
@@ -8396,11 +8360,6 @@ function renderModuleAppBar(mod) {
       </div>
     </header>
   `;
-}
-
-function lifecycleBadgeAriaLabel(title, lifecycle) {
-  const state = [lifecycle?.version, lifecycle?.text].filter(Boolean).join(' ');
-  return [title, state].filter(Boolean).join(': ');
 }
 
 function updateActiveAppChrome(mod) {
@@ -8697,7 +8656,7 @@ function renameModule(moduleId, label) {
 }
 
 function openAppLifecycleDrawer(mod) {
-  if (!mod?.id) return;
+  if (!mod?.id || !canModifyModule(mod)) return;
   const lifecycle = appLifecycleState(mod, {
     session: state.session,
     governance: state.governance,
@@ -8716,7 +8675,12 @@ function openAppLifecycleDrawer(mod) {
     actor: state.session?.user,
     module: mod,
     lifecycle,
-    releaseProjection,
+    releaseProjection: {
+      ...releaseProjection,
+      releaseLine: (releaseProjection.currentVersion || releaseProjection.statusLabel)
+        ? releaseProjection.releaseLine
+        : '',
+    },
     dataAccess,
     permissionView,
     permissions: {
@@ -8729,11 +8693,10 @@ function openAppLifecycleDrawer(mod) {
     },
     dataPermissions: buildLifecycleDataPermissionDiagnostics(mod, dataAccess),
   });
-  const releaseFact = releaseProjection.hasReleaseState
+  const releaseFact = (releaseProjection.currentVersion || releaseProjection.statusLabel)
     ? releaseProjection.releaseLine
-    : 'Noch kein Release projiziert';
-  const rollbackFact = releaseProjection.rollbackLine || 'Noch kein Rollback-Ziel projiziert';
-  const dataAccessFact = dataAccess?.summary || 'Keine Datenbereiche deklariert';
+    : '';
+  const rollbackFact = releaseProjection.rollbackLine || '';
   const body = document.createElement('div');
   body.className = 'drawer-body module-lifecycle-drawer';
   body.dataset.lifecyclePermissionState = permissionView.state;
@@ -8741,7 +8704,6 @@ function openAppLifecycleDrawer(mod) {
     <header class="drawer-header-row">
       <div>
         <h2>${escapeHtml(moduleDisplayTitle(mod))}</h2>
-        <p>${escapeHtml(mod.id)}</p>
       </div>
       <button class="icon-button" type="button" data-close-lifecycle aria-label="Schließen">×</button>
     </header>
@@ -8749,7 +8711,7 @@ function openAppLifecycleDrawer(mod) {
       <div class="module-lifecycle-mark" aria-hidden="true">${escapeHtml(lifecycle.state === 'team' ? 'T' : (lifecycle.state === 'preview' ? 'V' : (lifecycle.state === 'restricted' ? 'S' : 'P')))}</div>
       <div>
         <strong>${escapeHtml(lifecycle.label)}</strong>
-        <span>${escapeHtml(lifecycle.versionLabel || 'Version fehlt')}</span>
+        ${lifecycle.versionLabel ? `<span>${escapeHtml(lifecycle.versionLabel)}</span>` : ''}
       </div>
     </section>
     <section class="module-lifecycle-access" data-lifecycle-permission-state="${escapeHtml(permissionView.state)}" aria-label="App-Rechte">
@@ -8765,18 +8727,9 @@ function openAppLifecycleDrawer(mod) {
         <dt>Standard nach Version</dt>
         <dd>${lifecycle.state === 'restricted' ? 'Eingeschränkte Team-Version' : (lifecycle.public ? 'Team-sichtbar' : 'Privat bis zur Team-Version')}</dd>
       </div>
-      <div>
-        <dt>Freigabe</dt>
-        <dd>${escapeHtml(releaseFact)}</dd>
-      </div>
-      <div>
-        <dt>Rollback</dt>
-        <dd>${escapeHtml(rollbackFact)}</dd>
-      </div>
-      <div>
-        <dt>Datenzugriff</dt>
-        <dd>${escapeHtml(dataAccessFact)}</dd>
-      </div>
+      ${releaseFact ? `<div><dt>Freigabe</dt><dd>${escapeHtml(releaseFact)}</dd></div>` : ''}
+      ${rollbackFact ? `<div><dt>Rollback</dt><dd>${escapeHtml(rollbackFact)}</dd></div>` : ''}
+      ${dataAccess?.summary ? `<div><dt>Datenzugriff</dt><dd>${escapeHtml(dataAccess.summary)}</dd></div>` : ''}
       ${dataAccess?.reviewNote ? `
       <div>
         <dt>Review</dt>
@@ -8817,8 +8770,9 @@ function openAppLifecycleDrawer(mod) {
   });
   openDrawer('right', body);
   populateLifecycleVersions(body, mod, { canRollback }).catch((error) => {
+    console.warn('[business-os] lifecycle versions failed', error);
     const list = body.querySelector('[data-lifecycle-version-list]');
-    if (list) list.textContent = error?.message || 'Versionen konnten nicht geladen werden.';
+    if (list) list.textContent = 'Versionen konnten nicht geladen werden.';
   });
 }
 
@@ -8834,24 +8788,23 @@ async function populateLifecycleVersions(body, mod, { canRollback = false } = {}
     return;
   }
   for (const version of versions.slice(0, 12)) {
-    const button = document.createElement('button');
-    button.type = 'button';
+    const button = document.createElement(canRollback ? 'button' : 'div');
+    if (canRollback) button.type = 'button';
     button.className = 'module-lifecycle-version';
-    button.disabled = !canRollback;
     button.dataset.versionId = String(version.version_id || '');
     const label = version.label || moduleVersionOriginLabel(version.origin);
-    button.innerHTML = `<b>#${escapeHtml(version.seq || '—')} ${escapeHtml(label)}</b><span>${escapeHtml(new Date(version.created_at_ms || 0).toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US'))}</span>`;
-    button.title = canRollback ? 'Auf diese Version zurücksetzen' : 'Keine Rollback-Berechtigung';
-    button.addEventListener('click', async () => {
-      if (!canRollback || !version.version_id) return;
-      const confirmed = confirm(`Möchtest du "${moduleDisplayTitle(mod)}" wirklich auf Version #${version.seq || '—'} zurücksetzen?`);
+    button.innerHTML = `<b>${escapeHtml(label)}</b><span>${escapeHtml(new Date(version.created_at_ms || 0).toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US'))}</span>`;
+    if (canRollback) button.addEventListener('click', async () => {
+      if (!version.version_id) return;
+      const confirmed = confirm(`Möchtest du "${moduleDisplayTitle(mod)}" wirklich auf diese Version zurücksetzen?`);
       if (!confirmed) return;
       button.disabled = true;
       try {
         await rollbackModuleSelection(mod.id, { kind: 'bundle', id: version.version_id });
         closeDrawers();
       } catch (error) {
-        setStatus(`Rollback fehlgeschlagen: ${error?.message || error}`, true);
+        console.warn('[business-os] rollback failed', error);
+        setStatus('Wiederherstellen hat nicht geklappt.', true);
         button.disabled = false;
       }
     });
@@ -16175,31 +16128,8 @@ function filterStartMenu(panel, query) {
   }
 }
 
-function renderStartMenuLifecycleBadge(target) {
-  if (!target?.module) return '';
-  const lifecycle = appLifecycleBadge(target.module, {
-    session: state.session,
-    governance: state.governance,
-  });
-  if (!lifecycle?.runtimeInstalled) return '';
-  const title = target.title || target.id;
-  const updateDot = lifecycle.updateAvailable
-    ? `<i class="start-menu-update-dot" aria-hidden="true"></i>`
-    : '';
-  return `
-    <button
-      class="start-menu-lifecycle-badge${lifecycle.updateAvailable ? ' has-update' : ''}"
-      type="button"
-      data-module-lifecycle="${escapeHtml(target.id)}"
-      data-state="${escapeHtml(lifecycle.state)}"
-      title="${escapeHtml(lifecycle.title)}"
-      aria-label="${escapeHtml(lifecycleBadgeAriaLabel(title, lifecycle))}"
-    >
-      ${updateDot}
-      ${lifecycle.version ? `<b>${escapeHtml(lifecycle.version)}</b>` : ''}
-      <span>${escapeHtml(lifecycle.text || lifecycle.label || '')}</span>
-    </button>
-  `;
+function renderStartMenuLifecycleBadge() {
+  return '';
 }
 
 function buildStartMenuItem(target) {

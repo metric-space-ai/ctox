@@ -58,17 +58,12 @@ for (const updateAvailable of [false, true]) {
     assert.equal(target.kind, 'app', 'the app still launches through the shared window');
     assert.equal(target.module, module, 'the canonical module survives descriptor projection');
     context.renderModuleTab(target, { pinned: true });
-    assert.match(button.innerHTML, /data-app-lifecycle-badge="preview-app"/);
-    assert.match(button.innerHTML, /data-state="preview"/);
-    assert.match(button.innerHTML, /Vorschau/);
-    assert.equal(/class="module-tab-update"/.test(button.innerHTML), updateAvailable,
-      'the update dot represents an actual update, not preview visibility');
-    assert.doesNotMatch(button.innerHTML, />\s*(?:Vorschau|v0\.4\.0)\s*</,
-      'lifecycle details remain in accessible labels without adding taskbar text');
+    assert.match(button.innerHTML, /Preview App/);
+    assert.doesNotMatch(button.innerHTML, /data-app-lifecycle-badge|module-tab-update|Vorschau|Update verfügbar|App-Sichtbarkeit/,
+      `taskbar stays quiet when updateAvailable=${updateAvailable}`);
     const menuBadge = context.renderStartMenuLifecycleBadge(target);
-    assert.match(menuBadge, /data-state="preview"/);
-    assert.match(menuBadge, /Vorschau/);
-    badgeListeners.get('click')({ preventDefault() {}, stopPropagation() {} });
-    assert.equal(opened, module, 'badge opens the canonical lifecycle drawer');
+    assert.equal(menuBadge, '');
+    assert.equal(badgeListeners.size, 0);
+    assert.equal(opened, null);
   });
 }

@@ -118,7 +118,7 @@ for(const collection of ['iot_realms','notes'])test(`windowed ${collection} deni
   const f=windowFailure(error);assert.equal(await f.result,'notes-window');assert.deepEqual(f.errors,[]);
   assert.equal(f.root.dataset.modulePermissionDenied,'true');assert.equal(f.root.dataset.moduleLoadFailed,undefined);
   assert.equal(f.state.qaModuleMountFailures,undefined);assert.equal(f.alerts[0].dataset.collection,collection);
-  assert.match(f.alerts[0].innerHTML,/Datenzugriff fehlt|App-Rechte ansehen/);f.opened[0]();assert.equal(f.opened[1],'notes');
+  assert.match(f.alerts[0].innerHTML,/Datenzugriff fehlt/);assert.doesNotMatch(f.alerts[0].innerHTML,/App-Rechte ansehen/);assert.equal(f.opened.length,0);
 });
 test('unexpected window mount errors keep visible recovery, console error and exact QA details',async()=>{
   const error=new Error('broken app');const f=windowFailure(error);await f.result;
