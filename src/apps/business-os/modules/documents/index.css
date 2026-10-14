@@ -308,14 +308,8 @@
   cursor: default;
 }
 
-/* Empty, loading and error states all sit on the shared .ctox-empty step
-   (shared/base.css §9) — grid, centering, padding, colour, type scale and the
-   38ch measure come from there. Only the genuinely module-specific extras stay
-   here: the error tone and the stacked action block below. */
-.documents-error strong {
-  color: var(--danger, var(--text));
-}
-
+/* Empty and loading states sit on the shared .ctox-empty / .ctox-syncing step
+   (shared/base.css). The stacked action block below is the module-specific extra. */
 .documents-empty-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

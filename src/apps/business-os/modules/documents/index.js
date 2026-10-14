@@ -129,10 +129,10 @@ function applyStaticLabels(host, t) {
   // identische "Workspace wird geladen."-Karten nebeneinander wirkten wie ein
   // Render-Duplikat (Befund 31.08.2026, Geometry-Lab-Screenshot).
   for (const placeholder of host.querySelectorAll('[data-documents-list-placeholder]')) {
-    const title = placeholder.querySelector('strong');
-    if (title) title.textContent = t('documentsTitle', 'Dokumente');
-    const copy = placeholder.querySelector('span');
-    if (copy) copy.textContent = t('listLoading', 'Dokumente werden geladen.');
+    placeholder.className = 'ctox-syncing documents-loading';
+    placeholder.replaceChildren();
+    placeholder.setAttribute('role', 'status');
+    placeholder.setAttribute('aria-busy', 'true');
   }
   for (const placeholder of host.querySelectorAll('.documents-editor-shell > .ctox-empty')) {
     const title = placeholder.querySelector('strong');
@@ -226,6 +226,8 @@ export async function mount(ctx) {
     documents: [],
     documentsReadComplete: false,
     documentsReadError: null,
+    documentsReadRetryTimer: null,
+    documentsReadRetryAttempt: 0,
     documentsReadiness: null,
     readinessCleanup: null,
     runbooks: [],
@@ -293,7 +295,8 @@ export async function mount(ctx) {
       }
       return true;
     } catch (error) {
-      ctx.notifications?.show?.({ type: 'error', message: error?.message || String(error) });
+      console.warn('[documents] draft save before close failed', error);
+      ctx.notifications?.show?.({ type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.') });
       return false;
     }
   });
@@ -318,7 +321,7 @@ export async function mount(ctx) {
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
-  Promise.all([
+  const bootDocuments = () => Promise.all([
     Promise.all([refreshDocuments(state), refreshOfficeEngineSettings(state)]).then(() => {
       if (state.disposed) return;
       renderRight(state);
@@ -336,10 +339,17 @@ export async function mount(ctx) {
       reportRequestedDocumentFocus(state);
     })
     .catch((error) => {
-      if (!state.disposed) renderError(state, error?.message || String(error));
+      console.warn('[documents] initial load failed', error);
+      if (!state.disposed) {
+        renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
+          retry: () => bootDocuments(),
+        });
+      }
     });
+  bootDocuments();
   return () => {
     state.disposed = true;
+    clearDocumentsReadRetry(state);
     unregisterCloseGuard?.();
     window.removeEventListener('beforeunload', preventUnsavedUnload);
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
@@ -363,8 +373,10 @@ function enqueueDocumentOpenFile(state, input) {
   state.openFilePromise = state.openFilePromise
     .then(() => openDocumentFile(state, input))
     .catch((error) => {
-      console.error('[documents] opening file from Files failed', error);
-      renderError(state, error?.message || String(error));
+      console.warn('[documents] opening file from Files failed', error);
+      renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
+        retry: () => openDocumentFile(state, input),
+      });
       return null;
     });
   return state.openFilePromise;
@@ -863,12 +875,15 @@ async function refreshDocuments(state, { isActive = () => !state.disposed } = {}
   try {
     rawDocuments = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
   } catch (error) {
-    state.documentsReadError = error?.message || String(error);
+    console.warn('[documents] document list read failed', error);
+    state.documentsReadError = true;
+    scheduleDocumentsReadRetry(state);
     if (isActive()) renderLeft(state);
     throw error;
   }
   state.documentsReadComplete = true;
   state.documentsReadError = null;
+  clearDocumentsReadRetry(state);
   state.documents = rawDocuments
     .map((doc) => normalizeDocumentRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
     .filter(isActiveDocumentRecord);
@@ -894,6 +909,30 @@ async function refreshDocuments(state, { isActive = () => !state.disposed } = {}
   }
   if (!state.selectedId && state.documents[0]) state.selectedId = state.documents[0].id;
   if (isActive()) renderLeft(state);
+}
+
+function scheduleDocumentsReadRetry(state) {
+  if (state.disposed || state.documentsReadRetryTimer) return;
+  const attempt = Number(state.documentsReadRetryAttempt) || 0;
+  const delayMs = Math.min(60000, 1000 * (2 ** attempt));
+  state.documentsReadRetryAttempt = attempt + 1;
+  const timer = setTimeout(() => {
+    state.documentsReadRetryTimer = null;
+    if (state.disposed) return;
+    refreshDocuments(state).catch((error) => {
+      console.warn('[documents] document list retry failed', error);
+    });
+  }, delayMs);
+  if (typeof timer?.unref === 'function') timer.unref();
+  state.documentsReadRetryTimer = timer;
+}
+
+function clearDocumentsReadRetry(state) {
+  if (state.documentsReadRetryTimer) {
+    clearTimeout(state.documentsReadRetryTimer);
+    state.documentsReadRetryTimer = null;
+  }
+  state.documentsReadRetryAttempt = 0;
 }
 
 async function refreshRunbooks(state) {
@@ -968,8 +1007,8 @@ async function createBlankWordDocument(state) {
     state.ctx.notifications?.show?.({ type: 'success', message: state.t('blankDocumentCreated', 'Leeres Word-Dokument erstellt.') });
     return record;
   } catch (error) {
-    console.error('[documents] blank Word document creation failed', error);
-    state.ctx.notifications?.show?.({ type: 'error', message: `${state.t('documentCreateFailed', 'Dokument konnte nicht erstellt werden:')} ${error?.message || error}` });
+    console.warn('[documents] blank Word document creation failed', error);
+    state.ctx.notifications?.show?.({ type: 'error', message: state.t('documentCreateFailed', 'Dokument konnte nicht erstellt werden.') });
     return null;
   } finally {
     state.creatingBlankDocument = false;
@@ -1315,10 +1354,11 @@ function renderDocumentStrip(state) {
     trigger?.setAttribute('disabled', '');
     selectMailMergeRecipient(state, requestedIndex, navigation)
       .catch((error) => {
-        console.error('[documents] mail merge recipient could not be opened', error);
+        console.warn('[documents] mail merge recipient could not be opened', error);
         renderError(
           state,
-          `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${error?.message || error}`,
+          state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'),
+          { retry: () => selectMailMergeRecipient(state, requestedIndex, navigation) },
         );
       })
       .finally(() => {
@@ -1443,9 +1483,7 @@ function documentListState(state, records) {
 }
 
 function documentListFooter(state, listState, visibleCount, activeFilterCount) {
-  if (listState === 'loading') return state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen';
-  if (listState === 'offline-pending') return state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend';
-  if (listState === 'error') return state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden';
+  if (listState === 'loading' || listState === 'offline-pending' || listState === 'error') return '';
   return `${visibleCount} ${state.lang === 'en' ? 'files' : 'Dateien'} · ${activeFilterCount ? (state.lang === 'en' ? 'Filtered' : 'Gefiltert') : (state.lang === 'en' ? 'All' : 'Alle')}`;
 }
 
@@ -1574,7 +1612,7 @@ function clearDocumentFilters(state, { resetSort = false } = {}) {
 
 function populateDocumentList(state, list, records = visibleDocuments(state)) {
   const listState = documentListState(state, records);
-  const signature = `${documentListSignature(records)}:${listState}:${listState === 'error' ? state.documentsReadError : ''}`;
+  const signature = `${documentListSignature(records)}:${listState}`;
   if (list.dataset.ctoxRenderSig === signature) {
     applyDocumentListSelection(state);
     return;
@@ -1602,8 +1640,10 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
       button.addEventListener('click', () => {
         const documentId = record.record_ids.includes(state.selectedId) ? state.selectedId : record.id;
         switchSelectedDocument(state, documentId).catch((error) => {
-          console.error('[documents] document switch failed', error);
-          renderError(state, `${state.t('documentSwitchFailed', 'Dokumentwechsel fehlgeschlagen:')} ${error?.message || error}`);
+          console.warn('[documents] document switch failed', error);
+          renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
+            retry: () => switchSelectedDocument(state, documentId),
+          });
         });
       });
       const manage = document.createElement('button');
@@ -1618,32 +1658,28 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
       list.append(card);
     }
     if (!records.length) {
-      const empty = document.createElement('div');
       // A data-driven empty state is only true after the collection's first
       // read and readiness signal. Filters still describe the local rows.
-      empty.className = listState === 'loading' || listState === 'offline-pending'
-        ? 'ctox-syncing documents-loading'
-        : listState === 'error' ? 'ctox-empty documents-error' : 'ctox-empty documents-empty';
-      if (listState === 'loading' || listState === 'offline-pending') {
+      // offline-pending: readiness already retries; no connection prose.
+      if (listState === 'loading' || listState === 'error') {
+        const empty = document.createElement('div');
+        empty.className = 'ctox-syncing documents-loading';
         empty.setAttribute('role', 'status');
-        empty.setAttribute('aria-live', 'polite');
-      }
-      if (listState === 'loading') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen'}</strong><span>${state.lang === 'en' ? 'The document collection is still synchronizing.' : 'Die Dokumentsammlung wird noch synchronisiert.'}</span>`;
-      } else if (listState === 'offline-pending') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend'}</strong><span>${state.lang === 'en' ? 'Documents will appear when synchronization resumes.' : 'Dokumente erscheinen, sobald die Synchronisierung fortgesetzt wird.'}</span>`;
-      } else if (listState === 'error') {
-        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden'}</strong><span>${escapeHtml(state.documentsReadError)}</span><div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>`;
-      } else if (listState === 'filtered') {
-        empty.innerHTML = `
+        empty.setAttribute('aria-busy', 'true');
+        list.append(empty);
+      } else if (listState !== 'offline-pending') {
+        const empty = document.createElement('div');
+        empty.className = 'ctox-empty documents-empty';
+        if (listState === 'filtered') {
+          empty.innerHTML = `
         <strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong>
         <span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>
         <div class="documents-empty-actions">
           <button class="ctox-button is-primary" type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
         </div>
       `;
-      } else {
-        empty.innerHTML = `
+        } else {
+          empty.innerHTML = `
         <strong>${escapeHtml(state.t('noDocuments', 'Keine Dokumente'))}</strong>
         <span>${escapeHtml(state.t('importPrompt', 'Ein leeres Word-Dokument erstellen oder DOCX beziehungsweise Markdown importieren.'))}</span>
         <div class="documents-empty-actions">
@@ -1651,22 +1687,14 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
           <button class="ctox-button" type="button" data-documents-empty-import>${actionIcon(state, 'upload')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
         </div>
       `;
+        }
+        empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
+        empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => { void createBlankWordDocument(state); });
+        empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
+          clearDocumentFilters(state, { resetSort: true });
+        });
+        list.append(empty);
       }
-      empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
-      empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => { void createBlankWordDocument(state); });
-      empty.querySelector('[data-documents-retry]')?.addEventListener('click', () => {
-        state.documentsReadError = null;
-        renderLeft(state);
-        refreshDocuments(state).then(() => {
-          if (state.disposed) return;
-          renderRight(state);
-          renderCenter(state);
-        }).catch((error) => console.warn('[documents] document list retry failed', error));
-      });
-      empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
-        clearDocumentFilters(state, { resetSort: true });
-      });
-      list.append(empty);
     }
   });
   list.dataset.ctoxRenderSig = signature;
@@ -1718,7 +1746,8 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
       );
     } catch (error) {
       if (state.switchSerial !== switchSerial) return;
-      state.ctx.notifications?.show?.({ type: 'error', message: error.message });
+      console.warn('[documents] draft save before switch failed', error);
+      state.ctx.notifications?.show?.({ type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.') });
       return;
     }
     if (state.switchSerial !== switchSerial) return;
@@ -1789,9 +1818,11 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
         if (state.switchSerial !== switchSerial) return;
         clearMailMergeRecipientLoading(state, documentId, versionId);
         renderSelection(state);
+        console.warn('[documents] recipient rebuild failed', rebuildError);
         renderLoadError(
           state,
-          `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${rebuildError?.message || rebuildError}`,
+          state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'),
+          { retry: () => switchSelectedDocument(state, documentId, options) },
         );
         return;
       }
@@ -1811,14 +1842,15 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
   bindDocumentBlobByteCache(state, documentId);
   renderSelection(state);
   const host = state.ctx.host.querySelector('[data-documents-editor]');
-  if (host) host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
+  if (host) host.innerHTML = '<div class="ctox-syncing documents-loading" role="status" aria-busy="true"></div>';
   try {
     await loadVersion(state);
   } catch (error) {
     if (state.switchSerial !== switchSerial) return;
     state.selectedVersion = null;
     renderSelection(state);
-    renderLoadError(state, `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${error?.message || error}`, {
+    console.warn('[documents] document version load failed', error);
+    renderLoadError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
       retry: () => switchSelectedDocument(state, documentId, options),
     });
     return;
@@ -2031,7 +2063,8 @@ function openNewDocumentDrawer(state) {
       });
       state.ctx.closeDrawers();
     } catch (error) {
-      renderError(state, `${state.t('taskCreationFailed', 'CTOX konnte den Dokument-Task nicht anlegen:')} ${error?.message || error}`);
+      console.warn('[documents] document task creation failed', error);
+      renderError(state, state.t('taskCreationFailed', 'Anlegen hat nicht geklappt.'));
       if (submit) {
         submit.disabled = false;
         submit.textContent = state.t('createWordDocument', 'Word-Dokument erstellen');
@@ -2313,7 +2346,8 @@ function bindWorkflowControls(state, wrap) {
       state.workflowPanel = null;
       renderLeft(state);
     } catch (error) {
-      renderError(state, `${state.t('taskCreationFailed', 'CTOX konnte den Dokument-Task nicht anlegen:')} ${error?.message || error}`);
+      console.warn('[documents] document task creation failed', error);
+      renderError(state, state.t('taskCreationFailed', 'Anlegen hat nicht geklappt.'));
     }
   });
 }
@@ -3630,7 +3664,7 @@ async function renderCenter(state) {
     return;
   }
   if (!version) {
-    host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
+    host.innerHTML = '<div class="ctox-syncing documents-loading" role="status" aria-busy="true"></div>';
     loadSelectedVersion(state)
       .then((loadedVersion) => {
         if (state.renderSerial !== renderSerial) return;
@@ -3638,13 +3672,14 @@ async function renderCenter(state) {
           renderCenter(state);
           return;
         }
-        renderError(state, state.t('noSavedVersionFound', 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.'), {
+        renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
           retry: () => renderCenter(state),
         });
       })
       .catch((error) => {
         if (state.renderSerial !== renderSerial) return;
-        renderError(state, `${state.t('loadVersionFailed', 'Dokumentversion konnte nicht geladen werden:')} ${error?.message || error}`, {
+        console.warn('[documents] version load failed', error);
+        renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
           retry: () => renderCenter(state),
         });
       });
@@ -3669,7 +3704,10 @@ async function renderCenter(state) {
     mountMarkdownDocument(state, host, version, formatModule, renderKey);
   }).catch((error) => {
     if (state.renderSerial !== renderSerial) return;
-    renderError(state, `${state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:')} ${error?.message || error}`);
+    console.warn('[documents] editor load failed', error);
+    renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
+      retry: () => renderCenter(state),
+    });
   });
 }
 
@@ -3709,7 +3747,7 @@ async function mountWordEditor(state, host, record, version, renderSerial, rende
       isCurrent: () => isCurrentEditorRender(state, renderSerial),
       shouldRetry: (error) => useCtoxDocuments && isTransientOfficeStartupError(error),
       onRetry: async () => {
-        host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(state.t('officeEditorRetry', 'Verbindung wird wiederhergestellt. Dokument wird erneut geöffnet.'))}</span></div>`;
+        host.innerHTML = '<div class="ctox-syncing documents-loading" role="status" aria-busy="true"></div>';
       },
       wait: delay,
       retryDelayMs: CTOX_DOCUMENTS_RECOVERY_DELAY_MS,
@@ -3717,8 +3755,10 @@ async function mountWordEditor(state, host, record, version, renderSerial, rende
     });
   } catch (error) {
     if (state.renderSerial !== renderSerial) return;
-    console.error(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
-    renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
+    console.warn(`[documents] ${useCtoxDocuments ? 'CTOX Documents' : 'SuperDoc'} mount failed`, error);
+    renderError(state, state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'), {
+      retry: () => renderCenter(state),
+    });
   }
 }
 
@@ -4044,8 +4084,9 @@ async function mountCtoxDocuments(state, host, record, version, renderSerial, re
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
     state.superdocSaveTimer = null;
     const error = payload?.error || payload;
+    console.warn('[documents] editor save failed', error);
     state.ctx.notifications?.show?.({
-      type: 'error', message: error?.message || String(error), time: 0,
+      type: 'error', message: state.t('saveFailed', 'Speichern hat nicht geklappt.'), time: 0,
       action: { label: state.t('close', 'Schließen'), callback: () => {} },
     });
   });
@@ -4733,10 +4774,16 @@ function clampNumber(value, min, max) {
 function renderError(state, message, { retry } = {}) {
   const host = state.ctx.host.querySelector('[data-documents-editor]');
   if (!host) return;
-  host.innerHTML = `<div class="ctox-empty documents-error"><strong>${escapeHtml(state.t('documentError', 'Dokumentfehler'))}</strong><span>${escapeHtml(message)}</span>${retry ? `<div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry-version>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>` : ''}</div>`;
+  const text = String(message || state.t('documentOpenFailed', 'Dokument konnte nicht geöffnet werden.'));
+  const retryLabel = state.lang === 'en' ? 'Try again' : 'Erneut versuchen';
+  host.innerHTML = `<div class="ctox-empty documents-error" role="alert"><span>${escapeHtml(text)}</span>${retry ? `<div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry-version>${escapeHtml(retryLabel)}</button></div>` : ''}</div>`;
   host.querySelector('[data-documents-retry-version]')?.addEventListener('click', () => {
     if (state.disposed) return;
-    Promise.resolve().then(retry).catch((error) => renderError(state, error?.message || String(error), { retry }));
+    host.innerHTML = '<div class="ctox-syncing documents-loading" role="status" aria-busy="true"></div>';
+    Promise.resolve().then(retry).catch((error) => {
+      console.warn('[documents] retry failed', error);
+      renderError(state, text, { retry });
+    });
   });
 }
 
