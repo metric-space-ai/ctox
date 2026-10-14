@@ -90,15 +90,43 @@ pub fn assert_full_coverage(adapter: &dyn ToolkitAdapter, cases: &[Case]) {
 /// Live call (read-only) against the real provider. Token from env
 /// `CTOX_TOOLHUB_LIVE_<SLUG>_TOKEN`; never printed. Returns None if unset.
 pub fn live(adapter: &dyn ToolkitAdapter, tool: &str, args: Value) -> Option<Result<Value, String>> {
-    let var = format!("CTOX_TOOLHUB_LIVE_{}_TOKEN", adapter.spec().slug.to_ascii_uppercase().replace('-', "_"));
-    let token = std::env::var(&var).ok()?;
+    use ctox_toolhub::AuthSchemeKind as K;
     let spec = adapter.spec().tools.iter().find(|t| t.slug == tool).expect("tool");
     assert!(!spec.mutating, "live harness is read-only; {tool} is mutating");
-    let req: HttpRequest = adapter.build_request(tool, &args).expect("build").header("authorization", format!("Bearer {token}"));
-    let resp = ctox_toolhub::http::UreqTransport::default().send(req);
-    Some(match resp {
-        Ok(r) if (200..300).contains(&r.status) => adapter.parse_response(tool, &r).map_err(|e| e.to_string()),
-        Ok(r) => Err(format!("HTTP {}", r.status)),
-        Err(e) => Err(e.to_string()),
+    let kinds: Vec<K> = adapter.spec().auth_schemes.iter().map(|s| s.kind()).collect();
+    // Token-style schemes run through the real hub exec path.
+    let scheme = [K::ApiKey, K::Bearer].into_iter().find(|k| kinds.contains(k)).unwrap_or(K::Bearer);
+    live_exec(&adapter.spec().slug, scheme, tool, args)
+}
+
+/// Live call through the real hub exec path (auth config + stored credential +
+/// header injection + response parsing), exactly as `ctox toolhub exec` does.
+/// Credential from env `CTOX_TOOLHUB_LIVE_<SLUG>_TOKEN`; never printed.
+pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str, args: Value) -> Option<Result<Value, String>> {
+    use ctox_toolhub::*;
+    let var = format!("CTOX_TOOLHUB_LIVE_{}_TOKEN", toolkit.to_ascii_uppercase().replace('-', "_"));
+    let token = std::env::var(&var).ok()?;
+    let hub = ToolHub::new(
+        MemorySecretBackend::default(),
+        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::default()),
+        ctox_toolhub::oauth2::RedirectTarget::Loopback { port: 1 },
+    );
+    let cfg = AuthConfig { id: "live".into(), toolkit: toolkit.into(), scheme, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
+    hub.upsert_auth_config(&cfg, None).expect("auth config");
+    hub.connect_with_credential("live", "_instance", "live-test", token.trim()).expect("connect");
+    Some(match hub.execute("_instance", tool, &args, None) {
+        Ok(ToolOutcome::Success { data }) => Ok(data),
+        Ok(ToolOutcome::ProviderError { status, data }) => Err(format!("provider {status}: {data}")),
+        Ok(other) => Err(format!("{other:?}")),
+        Err(e) => Err(format!("error: {e:#}")),
     })
+}
+
+/// First string value under key `key` anywhere in `v` (depth-first).
+pub fn find_str(v: &Value, key: &str) -> Option<String> {
+    match v {
+        Value::Object(m) => m.get(key).and_then(Value::as_str).map(String::from).or_else(|| m.values().find_map(|x| find_str(x, key))),
+        Value::Array(a) => a.iter().find_map(|x| find_str(x, key)),
+        _ => None,
+    }
 }

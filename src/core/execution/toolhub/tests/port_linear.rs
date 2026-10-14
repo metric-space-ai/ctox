@@ -703,9 +703,8 @@ fn graphql_errors_surface_as_tool_errors() {
     assert!(err.to_string().contains("Entity not found: Issue"), "{err}");
 }
 
-/// Live read-only calls. Skipped when `CTOX_TOOLHUB_LIVE_LINEAR_TOKEN` is unset.
-/// The shared harness sends `Bearer <key>`; Linear expects the bare key, so a
-/// transport-level failure is reported and skipped instead of failing the suite.
+/// Live read-only calls through the hub exec path (bare API key header).
+/// Full live coverage lives in tests/live_linear.rs.
 #[test]
 #[ignore]
 fn live_read_only_actions() {
@@ -715,13 +714,8 @@ fn live_read_only_actions() {
         ("LINEAR_LIST_TEAMS", json!({"limit": 1})),
         ("LINEAR_LIST_ISSUES", json!({"limit": 1})),
     ] {
-        let Some(result) = live(&a, tool, args) else {
-            eprintln!("live: {tool} skipped (no CTOX_TOOLHUB_LIVE_LINEAR_TOKEN)");
-            return;
-        };
-        match result {
-            Ok(v) => assert!(v.is_object(), "{tool}: expected an object, got {v}"),
-            Err(e) => eprintln!("live: {tool} not reachable through the test harness: {e}"),
-        }
+        let Some(result) = live(&a, tool, args) else { return };
+        let v = result.unwrap_or_else(|e| panic!("{tool}: {e}"));
+        assert!(v.is_object(), "{tool}: expected an object, got {v}");
     }
 }
