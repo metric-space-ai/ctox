@@ -44,6 +44,7 @@ export const LAB_PRESET = Object.freeze([
 
 export const COMMUNITY_PRESET = Object.freeze([
   ['Hacker News', 'https://news.ycombinator.com/'],
+  ['AlphaSignal', 'https://alphasignal.ai/'],
   ['r/LocalLLaMA', 'https://www.reddit.com/r/LocalLLaMA/'],
   ['r/MachineLearning', 'https://www.reddit.com/r/MachineLearning/'],
   ['Hugging Face Trending', 'https://huggingface.co/models?sort=trending'],
