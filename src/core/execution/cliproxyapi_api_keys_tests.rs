@@ -407,6 +407,10 @@ async fn native_api_http_pin_uses_exact_account_without_rebinding_session() {
     for (pin, expected) in [(None, "first"), (Some("second"), "second"), (None, "first")] {
         let response = scoped_http_request(handler.clone(), pin).await;
         assert!(response.starts_with("HTTP/1.1 200"));
+        assert_eq!(
+            response.contains("X-CTOX-Upstream-Status: 200\r\n"),
+            pin.is_some()
+        );
         assert!(
             response.contains(&format!("X-CTOX-Account-Selected: {expected}\r\n")),
             "selected-account acknowledgement differs from the requested account"
@@ -434,6 +438,32 @@ async fn native_api_http_unknown_or_disabled_pin_never_borrows_sibling_credentia
         let response = scoped_http_request(handlers["xai"].clone(), Some(pin)).await;
         assert!(response.starts_with("HTTP/1.1 503"));
         assert!(!response.contains("X-CTOX-Account-Selected:"));
+        assert!(!response.contains("X-CTOX-Upstream-Status:"));
+        assert!(!response.contains("X-CTOX-Error-Class:"));
     }
     assert!(wire.seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_api_http_only_received_upstream_errors_report_provider_auth() {
+    for status in [401, 0] {
+        let (root, stored) = setup();
+        let wire = Arc::new(Wire {
+            status: Some(status),
+            ..Default::default()
+        });
+        let handlers = build_with_http(root.path(), &stored, wire.clone()).unwrap();
+        let response = scoped_http_request(handlers["xai"].clone(), Some("second")).await;
+        if status == 401 {
+            assert!(response.starts_with("HTTP/1.1 401"));
+            assert!(response.contains("X-CTOX-Error-Class: auth\r\n"));
+            assert!(response.contains("X-CTOX-Upstream-Status: 401\r\n"));
+        } else {
+            assert!(response.starts_with("HTTP/1.1 502"));
+            assert!(!response.contains("X-CTOX-Error-Class:"));
+            assert!(!response.contains("X-CTOX-Upstream-Status:"));
+        }
+        assert!(response.contains("X-CTOX-Account-Selected: second\r\n"));
+        assert_eq!(wire.seen.lock().unwrap().len(), 1);
+    }
 }
