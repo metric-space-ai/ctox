@@ -1834,10 +1834,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         read_tool(
             "business_os.get_record",
-            "Use this when you need one Business OS record by collection and id.",
+            "Use this when you need one Business OS record by collection and id. For outbound_lead_generation_leads, view `compact` returns the bounded read-back of the stored lead (every company field and contact with value, status, source ids and counts; no quotes or history); a large lead is returned compact unless view `full` is requested.",
             object_schema(vec![
                 required_string("collection"),
                 required_string("record_id"),
+                optional_string("view"),
             ]),
         ),
         write_tool(
@@ -3645,7 +3646,14 @@ fn call_tool_inner(
         "business_os.get_record" => {
             let collection = required_arg(&arguments, "collection")?;
             let record_id = required_arg(&arguments, "record_id")?;
-            serde_json::to_value(get_record(root, &context, &collection, &record_id)?)?
+            let view = optional_string_arg(&arguments, "view");
+            serde_json::to_value(get_record_with_view(
+                root,
+                &context,
+                &collection,
+                &record_id,
+                view.as_deref(),
+            )?)?
         }
         "business_os.upsert_record" => {
             serde_json::to_value(upsert_record(root, &context, &arguments)?)?
@@ -4812,6 +4820,40 @@ pub fn get_record(
     collection: &str,
     record_id: &str,
 ) -> anyhow::Result<BusinessOsMcpRecordResponse> {
+    get_record_with_view(root, context, collection, record_id, None)
+}
+
+/// `view` selects the read-back of an outbound lead: `full` is the stored
+/// document, `compact` the bounded read-back (every company field and contact
+/// with value, status and source ids; no quotes, attempts or history). Without
+/// a view an outbound lead larger than the inline bound is answered compact,
+/// because a full record of that size cannot be read back by a worker (customer
+/// tenant, 14.10.2026: ~254 KB, closing report written from memory).
+pub fn get_record_with_view(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record_id: &str,
+    view: Option<&str>,
+) -> anyhow::Result<BusinessOsMcpRecordResponse> {
+    let view = view.map(str::trim).filter(|view| !view.is_empty());
+    let outbound_lead = collection == "outbound_lead_generation_leads";
+    match view {
+        None | Some("full") => {}
+        Some("compact") if outbound_lead => {}
+        Some("compact") => {
+            return Err(BusinessOsMcpError::validation(
+                "view",
+                "view `compact` is available for outbound_lead_generation_leads only",
+            )
+            .into());
+        }
+        Some(_) => {
+            return Err(
+                BusinessOsMcpError::validation("view", "view must be `full` or `compact`").into(),
+            );
+        }
+    }
     context.validate()?;
     ensure_non_empty("record_id", record_id)?;
     ensure_non_empty("collection", collection)?;
@@ -4840,7 +4882,30 @@ pub fn get_record(
     if public_crew {
         crate::crew::public_member_document(&mut payload);
     }
-    let record = record_summary_from_value(collection, payload);
+    let compact = outbound_lead
+        && match view {
+            Some("compact") => true,
+            Some(_) => false,
+            None => {
+                serde_json::to_vec(&payload)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(usize::MAX)
+                    > super::outbound_lead_readback::FULL_LEAD_RECORD_INLINE_MAX_BYTES
+            }
+        };
+    let readback = if compact {
+        Some(
+            super::outbound_lead_readback::compact_lead_readback_for_store(
+                root, record_id, &payload,
+            )?,
+        )
+    } else {
+        None
+    };
+    let mut record = record_summary_from_value(collection, payload);
+    if let Some(readback) = readback {
+        record.data = readback;
+    }
     Ok(BusinessOsMcpRecordResponse { ok: true, record })
 }
 
@@ -10519,6 +10584,49 @@ mod tests {
             projected.get("status").and_then(Value::as_str),
             Some("active")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn get_record_reads_a_large_outbound_lead_back_compact() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let collection = "outbound_lead_generation_leads";
+        write_module(root, "outbound-lead-generation", "Outbound", &[collection])?;
+        seed_default_mcp_admin(root)?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, collection,
+        )?;
+        // Above the inline bound, below the projection wire budget so the
+        // store keeps the document untrimmed.
+        let lead = super::super::outbound_lead_readback::tests::large_lead_fixture(4);
+        let size = serde_json::to_vec(&lead)?.len();
+        assert!(size > super::super::outbound_lead_readback::FULL_LEAD_RECORD_INLINE_MAX_BYTES);
+        assert!(size < store::MAX_PROJECTED_DOCUMENT_BYTES, "{size}");
+        store::upsert_projection_record(root, collection, "lead_fixture", 1, lead.clone())?;
+        let read = |view: Option<&str>| {
+            let mut arguments = serde_json::json!({"collection": collection,
+                "record_id": "lead_fixture",
+                "_context": {"actor": "chatgpt:test-user", "workspace": "test"}});
+            if let Some(view) = view {
+                arguments["view"] = Value::String(view.to_string());
+            }
+            call_tool(root, "business_os.get_record", arguments)
+        };
+        for view in [None, Some("compact")] {
+            let response = read(view)?;
+            let data = &response["record"]["data"];
+            assert_eq!(data["view"], "compact_lead_readback_v1");
+            assert_eq!(data["contacts"].as_array().map(Vec::len), Some(4));
+            assert!(
+                serde_json::to_vec(&response)?.len()
+                    < super::super::outbound_lead_readback::COMPACT_LEAD_READBACK_TARGET_BYTES
+                        + 1024
+            );
+        }
+        let full = read(Some("full"))?;
+        assert_eq!(full["record"]["data"]["evidence"], lead["evidence"]);
+        assert!(read(Some("summary")).is_err());
         Ok(())
     }
 
