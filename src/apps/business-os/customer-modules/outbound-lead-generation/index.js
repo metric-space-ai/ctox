@@ -3874,7 +3874,7 @@ function renderLeadEditor() {
   // EDT-F42a: 2 von 7 Zeichen verloren). Der Entwurf steht ohnehin im Zustand
   // (input-Handler); gleicher Lead = nichts Neues zu zeigen.
   const offenerEditor = mount.querySelector('[data-lead-editor]');
-  if (offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
+  if (!state.leadEditorSaving && offenerEditor && offenerEditor.dataset.leadId === String(state.leadEditorId || '')) {
     const aktiv = mount.ownerDocument?.activeElement;
     if (aktiv && offenerEditor.contains(aktiv)) return;
   }
@@ -3889,7 +3889,7 @@ function renderLeadEditor() {
   const fieldInput = (key, label, value, options = {}) => `
     <label class="leadgen-form-field ${options.wide ? 'is-wide' : ''}">
       <span>${escapeHtml(label)}</span>
-      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
+      <input data-lead-edit-field="${escapeHtml(key)}" value="${escapeHtml(value || '')}" ${options.required ? 'required' : ''}${state.leadEditorSaving ? ' disabled' : ''}${suggestions[key] ? ` list="leadgen-suggest-${escapeHtml(key)}"` : ''}>
       ${suggestions[key] ? `<datalist id="leadgen-suggest-${escapeHtml(key)}">${suggestions[key].map((item) => `<option value="${escapeHtml(item)}"></option>`).join('')}</datalist>` : ''}
     </label>`;
   // firma_land hat im Editor genau EIN Feld ("Land (Länderkennzeichen)" =
@@ -3906,7 +3906,7 @@ function renderLeadEditor() {
       <section class="leadgen-lead-editor" role="dialog" aria-modal="true" aria-label="Lead bearbeiten" data-lead-editor data-lead-id="${escapeHtml(String(state.leadEditorId || ''))}">
         <header class="ctox-pane-header ctox-pane-band leadgen-header">
           <div><span class="ctox-pane-kicker">Lead</span><h2 class="ctox-pane-title">Bearbeiten</h2></div>
-          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen">${icon('close')}</button>
+          <button class="ctox-pane-icon" data-action="close-lead-editor" title="Schließen" aria-label="Schließen" ${state.leadEditorSaving ? 'disabled' : ''}>${icon('close')}</button>
         </header>
         <div class="leadgen-lead-form">
           ${fieldInput('name', 'Organisation', draft.name, { required: true, wide: true })}
@@ -3929,8 +3929,8 @@ function renderLeadEditor() {
           </details>` : ''}
         </div>
         <footer class="leadgen-dialog-actions">
-          <button class="ctox-button" data-action="close-lead-editor">Abbrechen</button>
-          <button class="ctox-button is-primary" data-action="save-lead-editor">Speichern</button>
+          <button class="ctox-button" data-action="close-lead-editor" ${state.leadEditorSaving ? 'disabled' : ''}>Abbrechen</button>
+          <button class="ctox-button is-primary" data-action="save-lead-editor" ${state.leadEditorSaving ? 'disabled' : ''}>${state.leadEditorSaving ? 'Wird gespeichert …' : 'Speichern'}</button>
         </footer>
       </section>
     </div>`;
@@ -8613,6 +8613,7 @@ function openLeadEditor(id) {
 }
 
 function closeLeadEditor() {
+  if (state.leadEditorSaving) return;
   state.leadEditorOpen = false;
   state.leadEditorId = '';
   state.leadEditorContactId = '';
@@ -8622,6 +8623,7 @@ function closeLeadEditor() {
 }
 
 async function saveLeadEditor() {
+  if (state.leadEditorSaving) return;
   const lead = state.leads.find((entry) => entry.id === state.leadEditorId);
   const draft = state.leadDraft;
   if (!lead || !draft) return;
@@ -8767,13 +8769,12 @@ async function saveLeadEditor() {
       label: tr('operatorEdited', 'Vom Nutzer geändert'),
     });
   }
-  // Das Fenster schliesst sofort; gespeichert wird im Hintergrund mit sichtbarer
-  // Rueckmeldung. Vorher blieb es offen, bis Datenbankabfrage und Schreiben
-  // durch den Abgleich waren - unter Last sah "Speichern" tot aus (25.09.2026).
-  state.selectedCampaign = campaign;
-  closeLeadEditor();
+  // Die Maske darf erst nach einer bestaetigten Schreiboperation schliessen.
+  // Scheitert der vorausgehende native Read (z. B. RATE_LIMITED), bleibt der
+  // Entwurf samt Ansprechpartner im Editor fuer einen erneuten Versuch erhalten.
+  state.leadEditorSaving = true;
   zeigeHinweis(`„${name}“ wird gespeichert …`, 0);
-  render();
+  renderLeadEditor();
   const speichern = patchLead(lead.id, {
     ...(personChanges.length ? { contacts: nextContacts } : {}),
     name,
@@ -8793,10 +8794,16 @@ async function saveLeadEditor() {
   });
   try {
     await speichern;
+    state.leadEditorSaving = false;
+    state.selectedCampaign = campaign;
+    closeLeadEditor();
     zeigeHinweis(`„${name}“ gespeichert.`, 6000);
   } catch (error) {
+    state.leadEditorSaving = false;
+    renderLeadEditor();
     zeigeHinweis(`Speichern von „${name}“ fehlgeschlagen.`, 30000);
     await showBusinessAlert(`Die Änderungen an „${name}“ konnten nicht gespeichert werden: ${String(error?.message || error)}`);
+    return;
   }
   await reload().catch(() => {});
   render();
@@ -12766,7 +12773,7 @@ function deduplicateEvidence(entries) {
 // zurueck und loeschten zwischenzeitlich Geschriebenes (Klicktest P2 V15).
 async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } = {}) {
   const doc = await state.collections.leads.findOne(id).exec();
-  if (!doc) return;
+  if (!doc) throw new Error('LEAD_NOT_FOUND: Der Lead wurde zwischenzeitlich entfernt.');
   const current = doc.toJSON?.() || doc;
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
@@ -14347,6 +14354,7 @@ export const __leadgenOutboundTestHooks = {
   researchAnsweredNotFound,
   setEmptyFieldRelease,
   patchLead,
+  saveLeadEditor,
   freitextPruefungPrompt,
   freitextPakete,
   freitextLeadDaten,
