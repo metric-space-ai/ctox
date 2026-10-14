@@ -76,7 +76,11 @@ impl HostHttpClient for Http {
 #[tokio::test]
 async fn quota_host_uses_actual_process_and_only_account_bound_http_authority() {
     #[cfg(unix)]
-    let base = PathBuf::from("/tmp");
+    let base = PathBuf::from(if cfg!(target_os = "macos") {
+        "/Volumes/tmp"
+    } else {
+        "/tmp"
+    });
     #[cfg(windows)]
     let base = std::env::temp_dir();
     let root = tempfile::Builder::new()

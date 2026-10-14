@@ -32,7 +32,11 @@ fn hanging_call(deadline_unix_ms: Option<u64>) -> PluginCall {
 }
 fn short_root() -> tempfile::TempDir {
     #[cfg(unix)]
-    let parent = PathBuf::from("/tmp");
+    let parent = PathBuf::from(if cfg!(target_os = "macos") {
+        "/Volumes/tmp"
+    } else {
+        "/tmp"
+    });
     #[cfg(windows)]
     let parent = std::env::temp_dir();
     tempfile::Builder::new()
