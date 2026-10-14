@@ -6401,7 +6401,7 @@ textarea::placeholder {
    Module shell chrome that app.js (commit a47f2f2ca) introduced WITHOUT its CSS.
    renderModuleAppBar()  -> .module-appbar
    renderModuleFrame()   -> auto-derived .module-loading-shadow (replaced the old
-                            per-module .module-loading-shell) + .module-loading-note
+                            per-module .module-loading-shell)
    declarative resizing  -> .ctox-column-resizer inside [data-resize-frame]
    Without these rules the app bar, the loading shell, and the resize handles
    render unstyled — a blank loading screen and ungrabbable dividers.
@@ -6552,36 +6552,13 @@ textarea::placeholder {
 .mls-icon { width: 60px; height: 60px; border-radius: 16px !important; }
 .mls-icon-label { width: 68px; height: 10px; }
 
-/* OS-snappy rule: loaders must be invisible in normal operation. The shadow
-   and note only become visible if a module switch takes longer than the
-   reveal delay (cold first load, slow network) — fast mounts never flash a
-   skeleton. CSS animations beat normal declarations, hence the !important on
-   the note-fade rule below. */
-.module-loading-shadow,
-.module-loading-note {
+/* OS-snappy rule: the skeleton stays invisible in normal operation and only
+   appears if a module switch takes longer than the reveal delay. */
+.module-loading-shadow {
   opacity: 0;
   animation: ctox-loader-reveal 1ms linear 280ms both;
 }
 @keyframes ctox-loader-reveal { to { opacity: 1; } }
-
-/* "<App> wird geladen" note, centered over the shadow; fades once the real
-   markup shadow has been injected (is-pending removed). */
-.module-loading-note {
-  position: absolute;
-  inset-block-start: 16px;
-  inset-inline: 0;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  text-align: center;
-  color: var(--muted);
-  pointer-events: none;
-}
-.module-loading-note strong { color: var(--text); font-size: var(--fs-base); }
-.module-loading-note span { font-size: var(--fs-sm); }
-.module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0 !important; animation: none !important; }
 
 /* Declarative column resizer handle. Modules put a
    `.ctox-column-resizer[data-resizer-var]` inside a `[data-resize-frame]` grid

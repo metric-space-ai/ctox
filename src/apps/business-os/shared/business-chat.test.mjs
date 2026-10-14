@@ -576,8 +576,9 @@ test('business chat reports an unconfirmed connection timeout without claiming r
       assert.equal(submission.command_id, 'cmd-timeout');
       assert.equal(submission.task_id, '');
       assert.equal(chat.messages[1].trackable, true);
-      assert.match(chat.messages[1].text, /noch nicht bestätigt/);
-      assert.doesNotMatch(chat.messages[1].text, /Task an CTOX übergeben|konnte nicht an CTOX übergeben/);
+      assert.equal(chat.messages[1].text, 'Aufgabe wird an die Crew gesendet.');
+      assert.equal(chat.messages[0].text, 'Kontrolltest');
+      assert.doesNotMatch(chat.messages[1].text, /noch nicht bestätigt|WebRTC|business_commands|konnte nicht/);
       assert.equal(chat.lastTrackingId, 'cmd-timeout');
     }
   } finally {
@@ -1229,7 +1230,8 @@ test('business chat resolves failed queue task by command id when command has no
   assert.equal(chat.messages[0].taskId, 'queue:system::usage-limit');
   assert.equal(chat.messages[0].status, 'failed');
   assert.equal(chat.messages.at(-1).role, 'ctox');
-  assert.match(chat.messages.at(-1).text, /Usage limit exceeded/);
+  assert.equal(chat.messages.at(-1).text, 'Die Crew konnte die Aufgabe nicht abschließen.');
+  assert.doesNotMatch(chat.messages.at(-1).text, /Usage limit exceeded/);
   assert.equal(state.activeChatId, 'chat-visible-error');
   assert.equal(state.dockCollapsed, false);
   assert.equal(commands.stats.findCalls, 1);

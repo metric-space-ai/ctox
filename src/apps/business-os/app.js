@@ -1042,7 +1042,6 @@ const shellMessages = {
     context: 'Kontext',
     topics: 'Themen',
     loadingWorkspace: 'Workspace wird geladen',
-    loadingModule: 'Modul-Workspace wird geladen.',
     localWorkspace: 'Lokaler Workspace',
     syncingContent: 'Inhalte werden synchronisiert',
     syncComplete: 'Inhalte synchronisiert',
@@ -1121,7 +1120,6 @@ const shellMessages = {
     gateSso: 'Mit SSO einloggen',
     gateFooter: 'Sichere Ende-zu-Ende verschlüsselte Verbindung.',
     gateInvalidCredentials: 'Ungültiger Benutzername oder Passwort.',
-    drawerLoginHint: 'Bei Desktop-Start wird die CTOX-Instanz automatisch übernommen.',
     drawerLoginSubmit: 'Einloggen',
     drawerLoginExternal: 'Extern einloggen',
     moduleTitles: {
@@ -1142,7 +1140,6 @@ const shellMessages = {
     context: 'Context',
     topics: 'Topics',
     loadingWorkspace: 'Loading workspace',
-    loadingModule: 'Loading module workspace.',
     localWorkspace: 'Local workspace',
     syncingContent: 'Syncing content',
     syncComplete: 'Content synced',
@@ -1221,7 +1218,6 @@ const shellMessages = {
     gateSso: 'Sign in with SSO',
     gateFooter: 'Secure end-to-end encrypted connection.',
     gateInvalidCredentials: 'Invalid username or password.',
-    drawerLoginHint: 'On desktop start the CTOX instance is taken over automatically.',
     drawerLoginSubmit: 'Sign in',
     drawerLoginExternal: 'External sign-in',
     moduleTitles: {
@@ -5068,10 +5064,6 @@ function createWindowedModuleHost(mod) {
     <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
       ${renderLoadingShadowFallback(mod)}
     </div>
-    <div class="module-loading-note" aria-hidden="true">
-      <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-      <span>${escapeHtml(shellText('loadingModule'))}</span>
-    </div>
   `;
   const right = document.createElement('aside');
   right.className = 'module-context shell-window-module-pane shell-window-module-pane--right';
@@ -8183,10 +8175,6 @@ function renderModuleFrame(mod) {
       <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
         ${renderLoadingShadowFallback(mod)}
       </div>
-      <div class="module-loading-note" aria-hidden="true">
-        <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-        <span>${escapeHtml(shellText('loadingModule'))}</span>
-      </div>
     </div>
   `;
   return root;
@@ -8347,8 +8335,9 @@ function renderModuleAppBar(mod) {
 }
 
 function updateActiveAppChrome(mod) {
-  const instanz = getInstanceName();
-  document.title = `${moduleDisplayTitle(mod)} · CTOX Business OS (${instanz})`;
+  const workspace = String(workspaceStatusText() || '').trim();
+  const title = moduleDisplayTitle(mod);
+  document.title = workspace ? `${title} · ${workspace}` : title;
 }
 
 function taskbarMarkForModule(mod) {
@@ -9241,7 +9230,6 @@ function renderLoginDrawer(session) {
     <header class="drawer-header-row">
       <div>
         <h2>Login</h2>
-        <p>${escapeHtml(shellText('drawerLoginHint'))}</p>
       </div>
       <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
@@ -9285,7 +9273,7 @@ function renderProfileDrawer() {
     <header class="drawer-header-row">
       <div>
         <h2>Konto</h2>
-        <p>${escapeHtml(user.display_name || user.id || 'CTOX User')} · ${escapeHtml(roleDisplayName(role))}</p>
+        <p>${escapeHtml(displayName || 'Konto')} · ${escapeHtml(roleDisplayName(role))}</p>
       </div>
       <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
@@ -9310,7 +9298,7 @@ function renderProfileDrawer() {
         <button class="text-button account-primary" type="submit">Speichern</button>
         <button class="text-button" type="button" data-logout>Abmelden</button>
       </div>
-      <small data-profile-status>Anzeigename wird im Team gespeichert. Sprache bleibt lokal und wird beim Laden der Module angewendet.</small>
+      <small data-profile-status></small>
     </form>
     <form class="account-form account-password-form" data-password-form>
       <label>
@@ -9362,7 +9350,8 @@ function renderProfileDrawer() {
       statusEl.dataset.state = 'ok';
       closeDrawers();
     } catch (error) {
-      statusEl.textContent = error?.message || 'Account konnte nicht gespeichert werden.';
+      console.warn('[business-os] account save failed', error);
+      statusEl.textContent = 'Speichern hat nicht geklappt.';
       statusEl.dataset.state = 'error';
     } finally {
       submit.disabled = false;
@@ -16571,11 +16560,11 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
   const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
   const missingMsgLabel = lang === 'de' ? 'Nachricht fehlt.' : 'Message is missing.';
   const missingReviewerLabel = lang === 'de' ? 'Reviewer fehlt.' : 'Reviewer is missing.';
-  const chatNotReadyLabel = lang === 'de' ? 'Die Crew ist noch nicht bereit.' : 'The crew is not ready.';
+  const sendFailedLabel = lang === 'de' ? 'Senden hat nicht geklappt.' : 'Sending did not work.';
   const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Crew...' : 'Opening crew...');
   const commandOpeningLabel = lang === 'de' ? 'Sende an Threads...' : 'Sending to Threads...';
   const reviewerLabel = lang === 'de' ? 'Reviewer' : 'Reviewer';
-  const reviewerPlaceholder = lang === 'de' ? 'reviewer-user-id' : 'reviewer-user-id';
+  const reviewerPlaceholder = lang === 'de' ? 'Name oder E-Mail' : 'Name or email';
   const initialUserOptions = renderBusinessUserDatalistOptions([], { session: state.session });
 
   const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
@@ -16760,6 +16749,31 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
     textarea.style.boxShadow = 'none';
   });
 
+  const retryContextSend = (attempt = 0) => {
+    if (form.dataset.crewRetry !== '1') return;
+    if (globalCtoxContextMenuEl?.querySelector('form') !== form) return;
+    if (state.commandBus?.dispatch) {
+      form.dataset.crewRetry = '';
+      if (statusEl) statusEl.textContent = '';
+      form.requestSubmit();
+      return;
+    }
+    if (attempt >= 16) {
+      form.dataset.crewRetry = '';
+      console.warn('[business-os] crew handoff gave up waiting for the command bus');
+      if (statusEl) statusEl.textContent = sendFailedLabel;
+      return;
+    }
+    window.setTimeout(() => retryContextSend(attempt + 1), Math.min(60_000, 1000 * 2 ** Math.min(16, attempt)));
+  };
+  const waitForContextSend = () => {
+    if (form.dataset.crewRetry === '1') return;
+    form.dataset.crewRetry = '1';
+    console.warn('[business-os] crew handoff waiting for the command bus');
+    if (statusEl) statusEl.textContent = '';
+    retryContextSend(0);
+  };
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const prompt = textarea.value.trim();
@@ -16779,7 +16793,7 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         return;
       }
       if (!state.commandBus?.dispatch) {
-        if (statusEl) statusEl.textContent = chatNotReadyLabel;
+        waitForContextSend();
         return;
       }
       if (statusEl) statusEl.textContent = commandOpeningLabel;
@@ -16843,13 +16857,14 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
         }, { until: 'local' });
         hideSubmittedMenu();
       } catch (error) {
-        if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
+        console.warn('[business-os] approval request failed', error);
+        if (statusEl) statusEl.textContent = sendFailedLabel;
       }
       return;
     }
 
     if (!state.commandBus?.dispatch) {
-      if (statusEl) statusEl.textContent = chatNotReadyLabel;
+      waitForContextSend();
       return;
     }
 
@@ -16895,7 +16910,8 @@ function showGlobalCtoxContextMenu(context, x, y, crew = null) {
       });
       hideSubmittedMenu();
     } catch (error) {
-      if (statusEl) statusEl.textContent = error?.message || chatNotReadyLabel;
+      console.warn('[business-os] crew handoff failed', error);
+      if (statusEl) statusEl.textContent = sendFailedLabel;
     }
   });
 
