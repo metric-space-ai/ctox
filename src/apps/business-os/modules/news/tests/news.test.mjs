@@ -208,3 +208,18 @@ test('a failed run replaced on the same day leaves the issue list; same-day runs
   assert.equal(model.issueNodeLabel(listed[0], listed, 'de', today), 'Heute · 17:00');
   assert.equal(model.issueNodeLabel(listed[2], listed, 'de', today), 'Gestern');
 });
+
+test('legacy subreddit scrape targets fold into one Reddit account source', async () => {
+  const model = await import('../core/news-model.mjs');
+  const hn = model.newSource('t', 'community', 'Hacker News', 'https://news.ycombinator.com/');
+  const a = model.newSource('t', 'community', 'r/LocalLLaMA', 'https://www.reddit.com/r/LocalLLaMA/');
+  const b = model.newSource('t', 'community', 'r/MachineLearning', 'https://www.reddit.com/r/MachineLearning/');
+  const { sources, removedIds } = model.migrateLegacyRedditSources([hn, a, b], 't');
+  assert.deepEqual(removedIds, [a.id, b.id]);
+  const reddit = sources.find((source) => source.kind === 'reddit');
+  assert.deepEqual(reddit.items, ['r/LocalLLaMA', 'r/MachineLearning']);
+  assert.equal(reddit.status, 'needs_auth');
+  assert.ok(sources.includes(hn));
+  const again = model.migrateLegacyRedditSources(sources, 't');
+  assert.deepEqual(again.removedIds, []);
+});

@@ -213,6 +213,22 @@ export function redditPresetSource(sources, topicId, now = Date.now()) {
   return { ...base, items, updated_at_ms: now };
 }
 
+// Subreddits used to be community scrape targets, which Reddit blocks from
+// server IPs. Fold them into the topic's Reddit account source; the caller
+// removes the returned legacy ids when it saves.
+export function migrateLegacyRedditSources(sources, topicId, now = Date.now()) {
+  const legacy = sources.filter((source) => source.topic_id === topicId
+    && source.kind === 'community' && redditItem(source.url));
+  if (!legacy.length) return { sources, removedIds: [] };
+  let reddit = sources.find((source) => source.topic_id === topicId && source.kind === 'reddit')
+    || newSource(topicId, 'reddit', 'Reddit', redditItem(legacy[0].url), now);
+  const items = [...new Set([...(reddit.items || []), ...legacy.map((source) => redditItem(source.url))])];
+  reddit = { ...reddit, items, updated_at_ms: now };
+  const removedIds = legacy.map((source) => source.id);
+  const rest = sources.filter((source) => !removedIds.includes(source.id) && source.id !== reddit.id);
+  return { sources: [...rest, reddit], removedIds };
+}
+
 export function presetSources(topicId, preset, kind, existing = [], now = Date.now()) {
   const known = new Set(existing.filter((source) => source.topic_id === topicId).map((source) => source.url));
   return preset

@@ -19,6 +19,7 @@ import {
   issueNodeLabel,
   issuesForTopic,
   mergeIntoAccountSource,
+  migrateLegacyRedditSources,
   monogram,
   newId,
   newSource,
@@ -890,6 +891,9 @@ function openDrawer(topic) {
     removed: new Set(),
     tab: 'topic',
   };
+  const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
+  state.drawer.sources = migrated.sources;
+  migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
   const form = els.form;
   form.elements.title.value = draft.title || '';
