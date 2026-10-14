@@ -115,6 +115,8 @@ pub struct Capabilities {
     pub stream_chunk_interceptor: Option<Arc<dyn StreamChunkInterceptor>>,
     pub thinking_applier: Option<Arc<dyn ThinkingApplier>>,
     pub usage_plugin: Option<Arc<dyn UsagePlugin>>,
+    // ref: sdk/pluginapi/types.go (v8.0.28 candidate); host RPC wiring is separate.
+    pub quota_provider: Option<Arc<dyn super::QuotaProvider>>,
     pub command_line_plugin: Option<Arc<dyn CommandLinePlugin>>,
     pub management_api: Option<Arc<dyn ManagementApi>>,
 }

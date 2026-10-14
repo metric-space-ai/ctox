@@ -193,7 +193,16 @@ async fn quota_provider_uses_only_the_retained_host_http_capability() {
         ..Default::default()
     };
     assert!(Arc::ptr_eq(request.http_client.as_ref().unwrap(), &client));
-    let response = FixtureQuota.fetch_quota(request).await.unwrap();
+    let capabilities = Capabilities {
+        quota_provider: Some(Arc::new(FixtureQuota)),
+        ..Default::default()
+    };
+    let response = capabilities
+        .quota_provider
+        .unwrap()
+        .fetch_quota(request)
+        .await
+        .unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
     assert_eq!(response.subscription.unwrap().plan, "paid");
     let reset = FixtureQuota
@@ -210,4 +219,52 @@ async fn quota_provider_uses_only_the_retained_host_http_capability() {
             .supported_providers,
         vec!["quota-fixture"]
     );
+}
+
+#[test]
+fn quota_wire_matches_the_frozen_go_reference() {
+    fn numbers(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Number(number) => serde_json::json!(number.as_f64().unwrap()),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(numbers).collect())
+            }
+            serde_json::Value::Object(items) => serde_json::Value::Object(
+                items
+                    .into_iter()
+                    .map(|(key, value)| (key, numbers(value)))
+                    .collect(),
+            ),
+            value => value,
+        }
+    }
+    fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::from_value::<T>(input).and_then(serde_json::to_value)
+    }
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("quota_wire_reference.json")).unwrap();
+    assert_eq!(cases.len(), 23);
+    for case in cases {
+        let input = case["input"].clone();
+        let actual = match case["kind"].as_str().unwrap() {
+            "fetch" => round_trip::<QuotaFetchResponse>(input),
+            "bucket" => round_trip::<QuotaBucket>(input),
+            "metric" => round_trip::<QuotaMetric>(input),
+            "describe" => round_trip::<QuotaDescribeResponse>(input),
+            "reset" => round_trip::<QuotaResetResponse>(input),
+            kind => panic!("unknown reference kind {kind}"),
+        };
+        if case["reject"].as_bool().unwrap_or(false) {
+            assert!(actual.is_err(), "{}", case["name"]);
+        } else {
+            assert_eq!(
+                numbers(actual.unwrap()),
+                numbers(case["expected"].clone()),
+                "{}",
+                case["name"]
+            );
+        }
+    }
 }

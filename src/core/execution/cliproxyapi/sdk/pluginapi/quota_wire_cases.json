@@ -1,0 +1,217 @@
+[
+  {
+    "name": "empty-fetch",
+    "kind": "fetch",
+    "input": {}
+  },
+  {
+    "name": "fetch-null-optionals",
+    "kind": "fetch",
+    "input": {
+      "subscription": null,
+      "summary": null,
+      "groups": null,
+      "serverTimeOffsetMs": null
+    }
+  },
+  {
+    "name": "canonical-and-alias",
+    "kind": "fetch",
+    "input": {
+      "subscription": {
+        "plan": "paid",
+        "tierName": "primary",
+        "tier_name": "alias",
+        "tierId": "",
+        "tier_id": "fallback"
+      },
+      "serverTimeOffsetMs": 0,
+      "server_time_offset_ms": -123,
+      "groups": [
+        {
+          "displayName": "primary",
+          "display_name": "alias",
+          "buckets": [
+            {
+              "remainingFraction": 0,
+              "remaining_fraction": 0.75,
+              "resetTime": "",
+              "reset_time": "tomorrow"
+            },
+            {
+              "remainingFraction": null,
+              "remaining_fraction": 0.25
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "canonical-offset-wins",
+    "kind": "fetch",
+    "input": {
+      "serverTimeOffsetMs": 123,
+      "server_time_offset_ms": 456
+    }
+  },
+  {
+    "name": "summary-zero",
+    "kind": "fetch",
+    "input": {
+      "summary": [
+        {
+          "key": "balance",
+          "label": "Balance",
+          "value": 0,
+          "format": "currency",
+          "currency": "EUR"
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown-fields",
+    "kind": "fetch",
+    "input": {
+      "unknown": {
+        "ignored": true
+      },
+      "subscription": {
+        "unknown": true,
+        "plan": "paid"
+      }
+    }
+  },
+  {
+    "name": "null-bucket-members",
+    "kind": "bucket",
+    "input": {
+      "window": null,
+      "description": null,
+      "resetTime": null,
+      "remainingFraction": null
+    }
+  },
+  {
+    "name": "empty-bucket",
+    "kind": "bucket",
+    "input": {}
+  },
+  {
+    "name": "negative-fraction",
+    "kind": "bucket",
+    "input": {
+      "remaining_fraction": -0.5
+    }
+  },
+  {
+    "name": "larger-fraction",
+    "kind": "bucket",
+    "input": {
+      "remainingFraction": 2.5
+    }
+  },
+  {
+    "name": "numeric-string",
+    "kind": "bucket",
+    "input": {
+      "remainingFraction": "0.5"
+    }
+  },
+  {
+    "name": "boolean",
+    "kind": "bucket",
+    "input": {
+      "remainingFraction": true
+    }
+  },
+  {
+    "name": "array",
+    "kind": "bucket",
+    "input": {
+      "remainingFraction": []
+    }
+  },
+  {
+    "name": "object",
+    "kind": "bucket",
+    "input": {
+      "remainingFraction": {}
+    }
+  },
+  {
+    "name": "invalid-group-shape",
+    "kind": "fetch",
+    "input": {
+      "groups": "invalid"
+    }
+  },
+  {
+    "name": "invalid-summary-value",
+    "kind": "metric",
+    "input": {
+      "key": "balance",
+      "label": "Balance",
+      "value": "1"
+    }
+  },
+  {
+    "name": "null-metric",
+    "kind": "metric",
+    "input": {
+      "key": null,
+      "label": null,
+      "value": null,
+      "unit": null,
+      "format": null,
+      "currency": null
+    }
+  },
+  {
+    "name": "empty-reset",
+    "kind": "reset",
+    "input": {}
+  },
+  {
+    "name": "reset-accepted",
+    "kind": "reset",
+    "input": {
+      "success": true,
+      "message": "done"
+    }
+  },
+  {
+    "name": "reset-null",
+    "kind": "reset",
+    "input": {
+      "success": null,
+      "message": null
+    }
+  },
+  {
+    "name": "empty-describe",
+    "kind": "describe",
+    "input": {}
+  },
+  {
+    "name": "describe-populated",
+    "kind": "describe",
+    "input": {
+      "supported_providers": [
+        "quota-fixture"
+      ],
+      "display_name": "Fixture",
+      "supports_reset": true
+    }
+  },
+  {
+    "name": "describe-null",
+    "kind": "describe",
+    "input": {
+      "supported_providers": null,
+      "display_name": null,
+      "supports_reset": null
+    }
+  }
+]
