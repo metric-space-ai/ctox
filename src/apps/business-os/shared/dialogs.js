@@ -214,6 +214,9 @@ function installDialogStyles() {
     }
     .business-dialog-layer[data-scope="shell"] {
       position: fixed;
+      /* Above the settings / module drawer overlay (z-index 2300), otherwise
+         a confirm opened from settings renders behind the panel. */
+      z-index: 2350;
     }
     .business-dialog-layer.is-open {
       opacity: 1;
