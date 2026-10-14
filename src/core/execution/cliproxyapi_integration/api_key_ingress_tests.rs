@@ -192,22 +192,29 @@ fn revocation_before_config_commit_removes_only_the_new_secret() {
         models: vec![model_fixture()],
         attempts: Vec::new(),
     };
-    assert!(commit_discovered(root.path(), KEY, found, || {
-        anyhow::ensure!(checks.fetch_add(1, Ordering::SeqCst) < 2, "retired");
-        Ok(())
-    })
+    let id = uuid::Uuid::new_v4();
+    assert!(commit_discovered_with_id(
+        root.path(),
+        KEY,
+        found,
+        || {
+            anyhow::ensure!(checks.fetch_add(1, Ordering::SeqCst) < 2, "retired");
+            Ok(())
+        },
+        id,
+    )
     .is_err());
     assert!(super::super::load_provider_integration_config(root.path())
         .unwrap()
         .config
         .api_key_accounts
         .is_empty());
-    assert_eq!(
-        crate::secrets::list_secrets(root.path(), Some("provider-api-keys"))
-            .unwrap()
-            .len(),
-        1
-    );
+    assert!(!crate::secrets::secret_exists(
+        root.path(),
+        "provider-api-keys",
+        &format!("api-key-{id}")
+    )
+    .unwrap());
     assert_eq!(
         crate::secrets::read_secret_value(root.path(), "provider-api-keys", "retained-existing")
             .unwrap(),
