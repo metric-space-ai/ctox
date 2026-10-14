@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod brevo;
 pub mod box_storage;
 pub mod onedrive;
 pub mod todoist;
@@ -59,6 +60,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(brevo::Brevo::default()),
         Box::new(box_storage::BoxStorage::default()),
         Box::new(onedrive::OneDrive::default()),
         Box::new(todoist::Todoist::default()),
