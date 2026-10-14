@@ -176,7 +176,6 @@ fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
 /// Read only holder-private configuration and secret generation metadata. Legacy
 /// unowned accounts are never silently adopted by an arbitrary administrator.
 fn owned_api_observations(root: &Path) -> Result<Vec<(String, NativeAccountObservation)>> {
-    use sha2::{Digest, Sha256};
     let config = crate::execution::cliproxyapi_integration::load_provider_integration_config(root)?;
     ensure!(
         config.config.api_key_accounts.len() <= MAX_ACCOUNTS,
@@ -194,14 +193,12 @@ fn owned_api_observations(root: &Path) -> Result<Vec<(String, NativeAccountObser
                 &account.api_key_secret.scope,
                 &account.api_key_secret.name,
             )?;
-            let account_bytes = serde_json::to_vec(account)?;
-            let fingerprint = version.as_ref().map(|version| {
-                let mut digest = Sha256::new();
-                digest.update(&account_bytes);
-                digest.update([0]);
-                digest.update(version.as_bytes());
-                format!("{:x}", digest.finalize())
-            });
+            let fingerprint =
+                crate::execution::cliproxyapi_host::account_controls::account_binding(
+                    root,
+                    account.endpoint.provider(),
+                    &account.id,
+                )?;
             Ok((
                 owner.clone(),
                 NativeAccountObservation {

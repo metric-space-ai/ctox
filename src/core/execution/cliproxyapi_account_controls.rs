@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[path = "cliproxyapi_account_controls_tests.rs"]
 mod tests;
 
+#[path = "cliproxyapi_account_control_api.rs"]
+mod api;
 #[path = "cliproxyapi_account_control_binding.rs"]
 mod binding;
 
@@ -18,6 +20,9 @@ pub(crate) fn account_binding(
     provider: &str,
     id: &str,
 ) -> anyhow::Result<Option<String>> {
+    if api::supports(provider) {
+        return api::binding(root, provider, id);
+    }
     let Some(first) = binding::capture(root, provider, id)? else {
         return Ok(None);
     };
@@ -45,6 +50,12 @@ pub(crate) struct Effect {
     pub(crate) after_binding: Option<String>,
     pub(crate) config_revision: u64,
     keys: Vec<(String, String, String)>,
+    #[serde(default)]
+    api_key: bool,
+    #[serde(default)]
+    api_absent_keys: Vec<(String, String)>,
+    #[serde(default)]
+    pub(crate) configured: Option<bool>,
 }
 fn schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {TABLE} (command_id TEXT PRIMARY KEY, effect_json TEXT NOT NULL)"))?;
@@ -62,9 +73,12 @@ fn read(conn: &Connection, id: &str) -> anyhow::Result<Option<Effect>> {
         .transpose()
 }
 pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
-    let Some(conn) = open_instance_proxy_config_db_read_only(root)? else {
+    let path = crate::inference::runtime_env::runtime_config_path(root);
+    if !path.exists() {
         return Ok(false);
-    };
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
         [TABLE],
@@ -114,6 +128,19 @@ pub(crate) fn apply_account(
     enabled: Option<bool>,
     validate_current_authority: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    if api::supports(provider) {
+        return api::apply(
+            root,
+            id,
+            hash,
+            actor,
+            provider,
+            local,
+            expected_binding,
+            enabled,
+            validate_current_authority,
+        );
+    }
     let _guard = crate::secrets::credential_lifecycle_guard();
     let mut stored =
         load_instance_proxy_config(root)?.context("provider topology is unavailable")?;
@@ -168,6 +195,9 @@ pub(crate) fn apply_account(
         after_binding,
         config_revision: revision,
         keys,
+        api_key: false,
+        api_absent_keys: Vec::new(),
+        configured: None,
     };
     let mut conn = open_instance_proxy_config_db(root)?;
     schema(&conn)?;
@@ -208,6 +238,9 @@ pub(crate) fn finish(root: &Path, id: &str, hash: &str, actor: &str) -> anyhow::
         effect.payload_hash == hash && effect.actor == actor,
         "holder account effect identity mismatch"
     );
+    if effect.api_key {
+        return api::finish(root, effect);
+    }
     let binding = account_binding(root, &effect.provider, &effect.local_id)?;
     anyhow::ensure!(
         binding == effect.after_binding,

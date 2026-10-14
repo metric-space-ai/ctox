@@ -42,7 +42,8 @@ use super::{
     DEFAULT_KIMI_SUBSCRIPTION_MODEL,
 };
 
-const INTEGRATION_CONFIG_TABLE: &str = "cliproxyapi_provider_integration_config";
+pub(in crate::execution) const INTEGRATION_CONFIG_TABLE: &str =
+    "cliproxyapi_provider_integration_config";
 const KIMI_STATE_SCHEMA: &str = "ctox.kimi-subscription-state.v1";
 const PROVIDER_SECRET_SCOPE: &str = "provider-subscriptions";
 const MAX_KIMI_HTTP_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
@@ -112,7 +113,7 @@ impl StoredKimiState {
     }
 }
 
-fn open_config_db(root: &Path) -> anyhow::Result<Connection> {
+pub(in crate::execution) fn open_config_db(root: &Path) -> anyhow::Result<Connection> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -203,6 +204,18 @@ pub(crate) fn save_provider_integration_config(
         .unwrap_or(0);
     if current != expected_revision {
         return Err(anyhow::Error::new(ProviderIntegrationRevisionConflict));
+    }
+    // A committed removal retires this private identity. Late creation retries
+    // cannot resurrect it; a new add operation receives a new native identity.
+    let effects_exist: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='cliproxyapi_account_control_effects')",[],|r|r.get(0))?;
+    if effects_exist {
+        for account in &config.api_key_accounts {
+            let retired:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM cliproxyapi_account_control_effects WHERE json_extract(effect_json,'$.api_key')=1 AND json_extract(effect_json,'$.local_id')=?1 AND json_extract(effect_json,'$.enabled') IS NULL)",[&account.id],|r|r.get(0))?;
+            anyhow::ensure!(
+                !retired,
+                "API account was explicitly removed; use a new creation operation"
+            );
+        }
     }
     let revision = current
         .checked_add(1)
