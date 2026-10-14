@@ -44,7 +44,7 @@ const COPY = {
     expiredAgo: 'abgelaufen vor', daysRemaining: 'noch', days: 'Tage', noExpiry: 'kein Ablauf', verifiedBy: 'verifiziert von',
     deploymentCheck: 'Einsatz prüfen', deploymentBlocking: 'Einsatz blockierend', credential: 'Nachweis',
     statusValid: 'gültig', statusExpiring: 'läuft ab', statusExpired: 'abgelaufen', statusNotYetValid: 'noch nicht gültig', statusUnverified: 'nicht verifiziert',
-    syncing: 'Daten werden synchronisiert.',
+    syncing: 'Wird geladen …',
   },
   en: {
     title: 'Credentials', kicker: 'ATS', listTitle: 'Credentials', newTitle: 'New credential',
@@ -70,7 +70,7 @@ const COPY = {
     expiredAgo: 'expired', daysRemaining: 'expires in', days: 'days', noExpiry: 'no expiry', verifiedBy: 'verified by',
     deploymentCheck: 'Check deployment', deploymentBlocking: 'Blocks deployment', credential: 'Credential',
     statusValid: 'valid', statusExpiring: 'expiring', statusExpired: 'expired', statusNotYetValid: 'not yet valid', statusUnverified: 'unverified',
-    syncing: 'Syncing data.',
+    syncing: 'Loading …',
   },
 };
 let text = COPY.de;

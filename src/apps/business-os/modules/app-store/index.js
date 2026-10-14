@@ -412,11 +412,10 @@ async function loadCatalog() {
 }
 
 function applyCatalogMarketplaceState() {
+  // Aktualisierung startet nur manuell — mount must not call refreshMarketplace.
   if (state.marketplaceStatus === 'loading') return;
   state.marketplaceStatus = state.marketplace.length ? 'ready' : 'idle';
-  state.marketplaceMessage = state.marketplace.length
-    ? `${state.marketplace.length} projizierte Marketplace-Module geladen`
-    : 'Katalog kommt aus der Server-Projektion; Aktualisierung startet nur manuell.';
+  state.marketplaceMessage = '';
 }
 
 function mergeShellModulesIntoCatalog(catalog) {
@@ -444,17 +443,16 @@ function mergeShellModulesIntoCatalog(catalog) {
 async function refreshMarketplace({ force = false } = {}) {
   if (state.marketplaceStatus === 'loading' && !force) return;
   state.marketplaceStatus = 'loading';
-  state.marketplaceMessage = 'Katalogprojektion wird neu geladen';
+  state.marketplaceMessage = 'Wird geladen …';
   render();
   try {
     await loadCatalog();
     state.marketplaceStatus = state.marketplace.length ? 'ready' : 'empty';
-    state.marketplaceMessage = state.marketplace.length
-      ? `${state.marketplace.length} Apps im offiziellen Katalog`
-      : 'Keine Apps im offiziellen Katalog projiziert.';
+    state.marketplaceMessage = '';
   } catch (error) {
     state.marketplaceStatus = state.marketplace.length ? 'stale' : 'error';
-    state.marketplaceMessage = error?.message || String(error);
+    state.marketplaceMessage = '';
+    console.warn('[app-store] Katalog-Refresh fehlgeschlagen:', error);
   }
   render();
 }
@@ -674,15 +672,8 @@ function syncGrammarSurfaces(items, searched) {
     const node = els.centerPane?.querySelector(`[data-pg-count="${key}"]`);
     if (node) node.textContent = ` (${value})`;
   }
-  // The standing sync-state line is gone; the compact discovery signal folds
-  // into this one footer line (full state text rides on the refresh icon's
-  // tooltip via marketplaceStateLabel).
-  const marketplaceSuffix = state.scope === 'marketplace'
-    && ['ready', 'stale'].includes(state.marketplaceStatus)
-    && state.marketplace.length
-    ? ` · ${state.marketplace.length} GitHub`
-    : '';
-  const footerText = `${appCountLabel(items.length, state.scope, state.marketplaceStatus)}${marketplaceSuffix}`;
+  // Footer is a content count only — no discovery/sync counters.
+  const footerText = appCountLabel(items.length, state.scope, state.marketplaceStatus);
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = els.centerPane?.querySelector('[data-pg-footer]');
@@ -1934,7 +1925,8 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
     state.status = { kind: 'success', text: success, result };
     render();
   } catch (error) {
-    const text = error?.message || String(error);
+    console.warn('[app-store] store command failed:', error);
+    const text = 'Das hat nicht geklappt.';
     setOperation(moduleId, {
       kind: 'error',
       text,
@@ -1953,7 +1945,7 @@ function setBusy(busy, text = '') {
   const showLoading = busy || state.marketplaceStatus === 'loading';
   if (els.loading) els.loading.hidden = !showLoading;
   if (els.loadingText) {
-    els.loadingText.textContent = text || state.marketplaceMessage || 'Katalogprojektion wird geladen.';
+    els.loadingText.textContent = text || 'Wird geladen …';
   }
   if (els.refresh) els.refresh.disabled = busy || state.marketplaceStatus === 'loading';
 }
@@ -2010,10 +2002,9 @@ function availableMarketplaceCount() {
 
 function renderMarketplaceState() {
   const counts = countsByScope();
-  // No standing sync-state line: the full discovery state rides on the
-  // refresh header icon's tooltip (marketplaceStateLabel), the compact
-  // signal folds into the center pane footer, and progress surfaces through
-  // the loading overlay while a sync actually runs.
+  // No standing sync-state line. The refresh icon tooltip is an action
+  // label (or a short failure after a manual refresh); progress is only the
+  // neutral loading overlay.
   if (els.refresh) {
     const refreshBusy = state.marketplaceStatus === 'loading' || state.busy;
     els.refresh.disabled = refreshBusy;
@@ -2028,7 +2019,7 @@ function renderMarketplaceState() {
   const showLoading = state.marketplaceStatus === 'loading' || state.busy;
   if (els.loading) els.loading.hidden = !showLoading;
   if (els.loadingText && showLoading) {
-    els.loadingText.textContent = state.marketplaceMessage || 'Katalogprojektion wird geladen.';
+    els.loadingText.textContent = 'Wird geladen …';
   }
   if (state.ctx?.host) {
     const root = state.ctx.host.querySelector('[data-app-store-root]');
@@ -2435,42 +2426,29 @@ function statusLabel(status) {
 }
 
 function appCountLabel(count, scope, marketplaceStatus) {
-  const label = state.t('appsCount', '{count} Apps').replace('{count}', String(count));
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') {
-    return `${label} · Sync`;
-  }
-  return label;
+  void scope;
+  void marketplaceStatus;
+  return state.t('appsCount', '{count} Apps').replace('{count}', String(count));
 }
 
 function marketplaceStateLabel({
   status,
-  message,
-  marketplaceCount = 0,
-  discoveredCount = marketplaceCount,
-  availableCount = marketplaceCount,
-  installedCount,
-}) {
-  if (status === 'loading') return message || `Katalogprojektion wird neu geladen. Installierte Apps bleiben sichtbar.`;
-  if (status === 'ready') {
-    const base = message || `${discoveredCount} Katalog-Apps projiziert.`;
-    return `${base} ${availableCount} noch nicht lokal vorhanden. ${installedCount} installierte Apps lokal gezählt.`;
-  }
-  if (status === 'empty') return message || 'Keine Katalog-Apps projiziert. Installierte Apps bleiben lokal verfügbar.';
-  if (status === 'stale') return `Katalog-Refresh fehlgeschlagen. Zeige letzten Stand: ${message || 'Unbekannter Fehler'}`;
-  if (status === 'error') return `Katalog-Refresh fehlgeschlagen: ${message || 'Unbekannter Fehler'}`;
-  return `Der offizielle Katalog kommt aus der Server-Projektion. Installed: ${installedCount}.`;
+} = {}) {
+  if (status === 'loading') return 'Wird geladen …';
+  if (status === 'stale' || status === 'error') return 'Aktualisieren hat nicht geklappt.';
+  return 'Aktualisieren';
 }
 
 function emptyCatalogTitle(scope, query, marketplaceStatus) {
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Katalog wird aktualisiert';
-  if (scope === 'marketplace' && marketplaceStatus === 'error') return 'Katalog-Refresh fehlgeschlagen';
+  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Wird geladen …';
+  if (scope === 'marketplace' && marketplaceStatus === 'error') return 'Aktualisieren hat nicht geklappt.';
   if (query) return 'Keine Apps gefunden';
   return 'Keine Apps in dieser Kategorie';
 }
 
 function emptyCatalogBody(scope, query, marketplaceStatus, marketplaceMessage = '') {
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Der Katalog wird gerade aus der Server-Projektion neu geladen.';
-  if (scope === 'marketplace' && marketplaceStatus === 'error') return marketplaceMessage || 'Der letzte Katalog-Refresh konnte nicht geladen werden.';
+  void marketplaceMessage;
+  if (scope === 'marketplace' && (marketplaceStatus === 'loading' || marketplaceStatus === 'error')) return '';
   if (query) return `Kein Katalogeintrag passt zu "${query}".`;
   return 'Wechsle die Kategorie oder aktualisiere den Katalog.';
 }

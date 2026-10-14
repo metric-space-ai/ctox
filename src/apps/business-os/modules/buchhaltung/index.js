@@ -212,7 +212,7 @@ const labels = {
     balancedAlert: 'Ausgeglichen (Soll = Haben)',
     unbalancedAlert: 'Ungleichgewicht! Soll und Haben müssen übereinstimmen.',
     gobdLockAlert: 'Dieses Dokument ist GoBD-festgeschrieben und schreibgeschützt.',
-    syncingData: 'Daten werden synchronisiert.',
+    syncingData: 'Wird geladen …',
   },
   en: {
     skrExplorer: 'Chart of Accounts Explorer',
@@ -228,7 +228,7 @@ const labels = {
     balancedAlert: 'Balanced (Debit = Credit)',
     unbalancedAlert: 'Imbalance! Debit and Credit must match.',
     gobdLockAlert: 'This document is GoBD-locked and read-only.',
-    syncingData: 'Syncing data.',
+    syncingData: 'Loading …',
   }
 };
 

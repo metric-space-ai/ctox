@@ -6,7 +6,7 @@
   "bandSignals": "Signals",
   "bandAlarms": "Alarms",
   "search": "Search...",
-  "syncing": "Syncing data.",
+  "syncing": "Loading …",
   "assetsWord": "assets",
   "signalsWord": "signals",
   "tree.emptyTitle": "No assets yet",

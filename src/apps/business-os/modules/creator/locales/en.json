@@ -55,7 +55,7 @@
   "statusAll": "All statuses",
   "libEntries": "entries",
   "libEmptyFiltered": "No entry matches the filter.",
-  "libSyncing": "Syncing data.",
+  "libSyncing": "Loading …",
   "requestKicker": "Request",
   "status_pending": "pending",
   "status_running": "running",

@@ -55,7 +55,7 @@
   "statusAll": "Alle Status",
   "libEntries": "Einträge",
   "libEmptyFiltered": "Kein Eintrag passt zum Filter.",
-  "libSyncing": "Daten werden synchronisiert.",
+  "libSyncing": "Wird geladen …",
   "requestKicker": "Auftrag",
   "status_pending": "offen",
   "status_running": "in Arbeit",

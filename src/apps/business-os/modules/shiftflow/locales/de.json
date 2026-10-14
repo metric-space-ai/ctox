@@ -177,5 +177,5 @@
   "shiftImportDone": "{0} Schichten importiert.",
   "aiGenerateSuccessPlain": "Dienstplanentwurf für Montag bis Freitag wurde angelegt.",
   "conflictCountResult": "{0} Konflikte gefunden.",
-  "syncingData": "Daten werden synchronisiert."
+  "syncingData": "Wird geladen …"
 }

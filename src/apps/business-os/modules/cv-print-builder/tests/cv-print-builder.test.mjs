@@ -239,8 +239,8 @@ assert.match(source, /state\.disposers\.push\(unsubscribe\)/);
 assert.match(source, /function renderListEmptyState\(state\)/);
 assert.match(source, /state\.listReadiness\?\.ready === false/);
 assert.match(source, /<div class="ctox-syncing" role="status" aria-live="polite">/);
-assert.match(source, /Daten werden synchronisiert\./);
-assert.match(source, /Syncing data\./);
+assert.match(source, /Wird geladen …/);
+assert.match(source, /Loading …/);
 // Filter empties and selection empties stay plain ctox-empty (not gated).
 assert.match(source, /Keine Kandidaten für diesen Filter\./);
 assert.match(source, /Kein CV ausgewählt/);

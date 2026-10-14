@@ -343,8 +343,8 @@ test('data-driven library empties are gated on canonical collection readiness', 
   assert.match(js, /cleanupSubscription\(state\.catalogReadinessSubscription\)/);
   assert.match(js, /cleanupSubscription\(state\.commandReadinessSubscription\)/);
   // Sync hint is translated in both locales.
-  assert.equal(localeDe.libSyncing, 'Daten werden synchronisiert.');
-  assert.equal(localeEn.libSyncing, 'Syncing data.');
+  assert.equal(localeDe.libSyncing, 'Wird geladen …');
+  assert.equal(localeEn.libSyncing, 'Loading …');
   // Filter-empties (band has data, filter hides it) are NOT gated.
   assert.match(js, /state\.t\('libEmptyFiltered'/);
 });

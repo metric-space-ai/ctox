@@ -438,7 +438,7 @@ function collectionSyncing(name) {
   return snapshot ? snapshot.ready === false : false;
 }
 function syncingShell() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${esc(t('syncing', 'Daten werden synchronisiert.'))}</div>`;
+  return `<div class="ctox-syncing" role="status" aria-live="polite">${esc(t('syncing', 'Wird geladen …'))}</div>`;
 }
 
 function render() {

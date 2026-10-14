@@ -77,8 +77,8 @@ const labels = {
     slaRisk: 'SLA-Risiko',
     snoozed: 'Zurückgestellt',
     agentDrafts: 'CTOX Entwürfe',
-    loadingTitle: 'Support wird synchronisiert',
-    loadingBody: 'Konversationen erscheinen, sobald die Support-Projektionen lokal verfügbar sind.',
+    loadingTitle: 'Wird geladen …',
+    loadingBody: '',
     emptyListTitle: 'Keine Support-Konversationen',
     emptyListBody: 'Neue Support-Fälle entstehen aus Kommunikation, Tickets und Support-Connectoren.',
     emptyTimelineTitle: 'Keine Konversation ausgewählt',
@@ -143,8 +143,8 @@ const labels = {
     slaRisk: 'SLA risk',
     snoozed: 'Snoozed',
     agentDrafts: 'CTOX drafts',
-    loadingTitle: 'Syncing support',
-    loadingBody: 'Conversations appear once support projections are available locally.',
+    loadingTitle: 'Loading …',
+    loadingBody: '',
     emptyListTitle: 'No support conversations',
     emptyListBody: 'New support cases are created from communication, tickets, and support connectors.',
     emptyTimelineTitle: 'No conversation selected',
@@ -505,7 +505,7 @@ function renderConversationList() {
   if (listState === 'loading') {
     renderHtmlIfChanged(
       container,
-      renderEmptyState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
+      renderEmptyState(state.t('loadingTitle', 'Wird geladen …'), state.t('loadingBody', '')),
       { signature: 'state:loading' },
     );
     return;
@@ -513,7 +513,7 @@ function renderConversationList() {
   if (listState === 'syncing') {
     renderHtmlIfChanged(
       container,
-      renderSyncingState(state.t('loadingTitle', 'Support wird synchronisiert'), state.t('loadingBody', '')),
+      renderSyncingState(state.t('loadingTitle', 'Wird geladen …'), state.t('loadingBody', '')),
       { signature: 'state:syncing' },
     );
     return;

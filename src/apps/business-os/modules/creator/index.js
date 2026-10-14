@@ -522,7 +522,7 @@ function renderLibrary(host) {
   if (items.length) {
     listHtml = items.map((item) => renderLibraryShard(item, g.view)).join('');
   } else if (bandTotal === 0 && readiness?.ready === false) {
-    listHtml = `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('libSyncing', 'Daten werden synchronisiert.'))}</div>`;
+    listHtml = `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('libSyncing', 'Wird geladen …'))}</div>`;
   } else {
     listHtml = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
   }

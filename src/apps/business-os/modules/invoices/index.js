@@ -66,7 +66,7 @@ const COPY = {
     stateDraft: 'Entwurf', statePosted: 'Gebucht', statePartiallyPaid: 'Teilweise bezahlt', statePaid: 'Bezahlt', stateOverdue: 'Überfällig', stateCancelled: 'Storniert', stateCredited: 'Gutgeschrieben',
     pos: 'Pos', quantity: 'Menge (‰)', unit: 'Einheit', unitPrice: 'Einzelpreis (Cent)',
     importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine gültigen Rechnungen (Kunde + Positionen) in der Datei.', imported: '{count} importiert',
-    syncingHint: 'Daten werden synchronisiert.',
+    syncingHint: 'Wird geladen …',
   },
   en: {
     invoices: 'Invoices', kicker: 'CTOX', all: 'All', overdue: 'Overdue', open: 'Open', paid: 'Paid',
@@ -91,7 +91,7 @@ const COPY = {
     stateDraft: 'Draft', statePosted: 'Posted', statePartiallyPaid: 'Partially paid', statePaid: 'Paid', stateOverdue: 'Overdue', stateCancelled: 'Cancelled', stateCredited: 'Credited',
     pos: 'Pos', quantity: 'Quantity (‰)', unit: 'Unit', unitPrice: 'Unit price (cents)',
     importInvalid: 'Invalid JSON file.', importEmpty: 'No valid invoices (customer + line items) in the file.', imported: '{count} imported',
-    syncingHint: 'Syncing data.',
+    syncingHint: 'Loading …',
   },
 };
 

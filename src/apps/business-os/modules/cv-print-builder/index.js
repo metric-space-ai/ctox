@@ -718,7 +718,7 @@ function renderListEmptyState(state) {
     return '<div class="ctox-empty">' + escapeHtml(tr('Keine Kandidaten für diesen Filter.', 'No candidates for this filter.')) + '</div>';
   }
   if (state.listReadiness?.ready === false) {
-    return '<div class="ctox-syncing" role="status" aria-live="polite">' + escapeHtml(tr('Daten werden synchronisiert.', 'Syncing data.')) + '</div>';
+    return '<div class="ctox-syncing" role="status" aria-live="polite">' + escapeHtml(tr('Wird geladen …', 'Loading …')) + '</div>';
   }
   return '<div class="ctox-empty">' + escapeHtml(tr('Noch keine CVs. Über „Neu" ein PDF anlegen.', 'No CVs yet. Add a PDF via "New".')) + '</div>';
 }
