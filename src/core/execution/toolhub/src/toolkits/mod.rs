@@ -10,6 +10,7 @@ pub mod common;
 pub mod github;
 pub mod gmail;
 pub mod slack;
+pub mod telegram;
 pub mod discord;
 pub mod clickup;
 pub mod gitlab;
@@ -45,6 +46,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(github::GitHub::default()),
         Box::new(gmail::Gmail::default()),
         Box::new(slack::Slack::default()),
+        Box::new(telegram::Telegram::default()),
         Box::new(discord::Discord::default()),
         Box::new(clickup::ClickUp::default()),
         Box::new(gitlab::GitLab::default()),
