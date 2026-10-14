@@ -236,3 +236,67 @@ fn native_private_catalog_binding_cannot_enter_public_metadata() -> Result<()> {
     assert!(!public.to_string().contains(&"a".repeat(64)));
     Ok(())
 }
+
+#[test]
+fn native_api_catalog_target_requires_verified_api_binding_and_current_owner_holder_revision(
+) -> Result<()> {
+    use crate::execution::cliproxyapi_integration::{
+        load_provider_integration_config, save_provider_integration_config, ApiKeyAccountConfig,
+        ApiKeyEndpoint, ProviderSecretRef,
+    };
+    let f = Fixture::new()?;
+    crate::secrets::write_secret_record(
+        f.root.path(),
+        "provider-api-keys",
+        "api-catalog-fixture-key",
+        "synthetic-api-catalog-key",
+        None,
+        json!({}),
+    )?;
+    let mut config = load_provider_integration_config(f.root.path())?;
+    config.config.api_key_accounts.push(ApiKeyAccountConfig {
+        id: "private-api-catalog-account".into(),
+        endpoint: ApiKeyEndpoint::Xai,
+        api_key_secret: ProviderSecretRef::new("provider-api-keys", "api-catalog-fixture-key"),
+        owner_user_id: Some("owner".into()),
+        creation_operation: Some(uuid::Uuid::new_v4().to_string()),
+        disabled: false,
+        priority: 0,
+        models: Vec::new(),
+    });
+    save_provider_integration_config(f.root.path(), config.revision, &config.config)?;
+    let binding = crate::execution::cliproxyapi_host::account_controls::account_binding(
+        f.root.path(),
+        "xai",
+        "private-api-catalog-account",
+    )?;
+    let state = f.adopt(&[NativeAccountObservation {
+        provider: "xai".into(),
+        local_account_id: "private-api-catalog-account".into(),
+        enabled: true,
+        credential_ready: true,
+        private_binding: binding,
+    }])?;
+    let request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: account_id(&state).into(),
+        expected_account_revision: 1,
+    };
+    let selected = native_catalog_target(&f.conn, "owner", "native-instance", &request)?;
+    assert_eq!(selected.provider, "xai");
+    assert_eq!(selected.local_account_id, "private-api-catalog-account");
+    assert!(native_catalog_target(&f.conn, "foreign", "native-instance", &request).is_err());
+    assert!(native_catalog_target(&f.conn, "owner", "foreign-holder", &request).is_err());
+    let stale = ObserveNativeRequest {
+        expected_account_revision: 2,
+        ..request
+    };
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &stale).is_err());
+    set_native_binding(&f.conn, &stale.account_id, Some("foreign-source-binding"))?;
+    let current = ObserveNativeRequest {
+        expected_account_revision: 1,
+        ..stale
+    };
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &current).is_err());
+    Ok(())
+}

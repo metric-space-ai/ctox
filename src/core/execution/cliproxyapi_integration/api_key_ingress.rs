@@ -102,7 +102,7 @@ fn failure(reason: CatalogFailure) -> DiscoveryError {
         attempts: Vec::new(),
     }
 }
-fn parse_models(body: &[u8], key: &str) -> Option<Vec<String>> {
+pub(super) fn parse_models(body: &[u8], key: &str) -> Option<Vec<String>> {
     if body.len() > 1024 * 1024 {
         return None;
     }
