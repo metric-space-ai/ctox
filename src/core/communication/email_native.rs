@@ -2382,8 +2382,14 @@ fn synced_message_direction_in_folder(
 fn normalize_provider(value: &str) -> String {
     let normalized = value.trim().to_lowercase();
     match normalized.as_str() {
-        "" | "classic" | "smtp" | "imap-smtp" | "one" | "one.com" | "onecom" => "imap".to_string(),
-        "m365" | "graph-cloud" | "exchange-online" => "graph".to_string(),
+        // The Business OS wizard ids (gmail, apple, imap-standard, custom)
+        // are IMAP/SMTP presets; without this the core rejected them as
+        // "Unsupported email provider".
+        "" | "classic" | "smtp" | "imap-smtp" | "one" | "one.com" | "onecom" | "gmail"
+        | "google" | "google-workspace" | "apple" | "icloud" | "imap-standard" | "custom" => {
+            "imap".to_string()
+        }
+        "m365" | "graph-cloud" | "exchange-online" | "microsoft365" => "graph".to_string(),
         "outlook" | "exchange" => "ews".to_string(),
         "owa" => "owa".to_string(),
         "eas" => "activesync".to_string(),
@@ -5061,6 +5067,16 @@ fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn business_os_wizard_providers_map_to_core_transports() {
+        for id in ["gmail", "apple", "imap-standard", "custom", "", "IMAP"] {
+            assert_eq!(super::normalize_provider(id), "imap", "{id}");
+        }
+        assert_eq!(super::normalize_provider("microsoft365"), "graph");
+        assert_eq!(super::normalize_provider("owa"), "owa");
+        assert_eq!(super::normalize_provider("activesync"), "activesync");
+    }
+
     use super::{
         acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
         effective_graph_username, extract_address, imap_fetch_message_id_headers_command,

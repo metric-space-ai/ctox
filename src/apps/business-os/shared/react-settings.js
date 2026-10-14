@@ -4123,7 +4123,8 @@ const EMAIL_PROVIDERS = [
   {
     id: 'gmail',
     title: 'Gmail / Google Workspace',
-    short: 'OAuth über Google',
+    short: 'IMAP + SMTP mit App-Passwort',
+    shortEn: 'IMAP + SMTP with an app password',
     glyph: 'G',
   },
   {
@@ -4148,21 +4149,148 @@ const EMAIL_PROVIDERS = [
     id: 'apple',
     title: 'Apple iCloud / Mail',
     short: 'IMAP + SMTP mit App-Passwort',
+    shortEn: 'IMAP + SMTP with an app password',
     glyph: '',
   },
   {
     id: 'imap-standard',
     title: 'One.com / 1&1 / All-Inkl',
     short: 'Standard-IMAP/SMTP eines Hosters',
+    shortEn: 'Standard IMAP/SMTP of a hosting provider',
     glyph: '@',
   },
   {
     id: 'custom',
     title: 'Anderer Anbieter',
+    titleEn: 'Other provider',
     short: 'IMAP/SMTP-Felder manuell ausfüllen',
+    shortEn: 'Fill in IMAP/SMTP fields by hand',
     glyph: '⚙',
   },
 ];
+
+// Server presets for providers that speak plain IMAP + SMTP. The core picks
+// the transport from the port: 993/465 = SSL/TLS, 587 = STARTTLS.
+const EMAIL_SERVER_PRESETS = {
+  gmail: { imapHost: 'imap.gmail.com', imapPort: '993', smtpHost: 'smtp.gmail.com', smtpPort: '465' },
+  apple: { imapHost: 'imap.mail.me.com', imapPort: '993', smtpHost: 'smtp.mail.me.com', smtpPort: '587' },
+  'imap-standard': { imapHost: '', imapPort: '993', smtpHost: '', smtpPort: '465' },
+  custom: { imapHost: '', imapPort: '993', smtpHost: '', smtpPort: '587' },
+};
+
+// The wizard offers friendly provider ids; the CTOX core only knows its
+// transport ids (imap, graph, owa, activesync). Sending `custom` or `gmail`
+// made the core answer "Unsupported email provider".
+function emailCoreProvider(id) {
+  switch (id) {
+    case 'gmail':
+    case 'apple':
+    case 'imap-standard':
+    case 'custom':
+      return 'imap';
+    case 'microsoft365':
+      return 'graph';
+    default:
+      return id || 'imap';
+  }
+}
+
+function emailLang() {
+  return typeof document !== 'undefined' && document.documentElement?.lang === 'en' ? 'en' : 'de';
+}
+
+function emailCopy() {
+  return emailLang() === 'en'
+    ? {
+        title: 'Set up email',
+        whichProvider: 'Which email provider?',
+        test: 'Test connection',
+        testing: (proto) => `CTOX is testing ${proto} …`,
+        testingNote: 'The connection test is running on the CTOX instance.',
+        connected: 'Email is connected',
+        address: 'Email address',
+        password: 'Password',
+        appPassword: 'App password',
+        provider: 'Provider',
+        imapHost: 'IMAP server',
+        imapPort: 'IMAP port',
+        smtpHost: 'SMTP server',
+        smtpPort: 'SMTP port',
+        ok: 'OK',
+        fail: 'Error',
+        done: 'Done',
+        servers: 'Adjust server settings',
+        tlsNote: 'Encryption follows the port: 993 and 465 use SSL/TLS, 587 uses STARTTLS.',
+        gmailIntro: 'Sign in with your Gmail or Google Workspace address and a Google app password. Your normal Google password does not work here.',
+        gmailHowTo: 'Create an app password at Google →',
+        gmailNeeds2fa: 'App passwords require 2-Step Verification on the Google account. In Google Workspace the admin may have to allow IMAP.',
+        appleHowTo: 'How do I create an app password at Apple? →',
+        messages: (n) => `CTOX found ${n} incoming messages in the mailbox.`,
+        failed: 'Connection test failed',
+        missing: 'Please fill in email address, password, IMAP server and SMTP server.',
+      }
+    : {
+        title: 'E-Mail einrichten',
+        whichProvider: 'Welcher E-Mail-Anbieter?',
+        test: 'Verbindung testen',
+        testing: (proto) => `CTOX testet ${proto} …`,
+        testingNote: 'Der Verbindungstest läuft auf der CTOX-Instanz.',
+        connected: 'E-Mail ist verbunden',
+        address: 'E-Mail-Adresse',
+        password: 'Passwort',
+        appPassword: 'App-Passwort',
+        provider: 'Anbieter',
+        imapHost: 'IMAP-Server',
+        imapPort: 'IMAP-Port',
+        smtpHost: 'SMTP-Server',
+        smtpPort: 'SMTP-Port',
+        ok: 'OK',
+        fail: 'Fehler',
+        done: 'Fertig',
+        servers: 'Server-Einstellungen anpassen',
+        tlsNote: 'Die Verschlüsselung richtet sich nach dem Port: 993 und 465 nutzen SSL/TLS, 587 nutzt STARTTLS.',
+        gmailIntro: 'Melde dich mit deiner Gmail- oder Google-Workspace-Adresse und einem App-Passwort von Google an. Dein normales Google-Passwort funktioniert hier nicht.',
+        gmailHowTo: 'App-Passwort bei Google erstellen →',
+        gmailNeeds2fa: 'App-Passwörter setzen die Bestätigung in zwei Schritten voraus. Bei Google Workspace muss der Admin IMAP eventuell erst freigeben.',
+        appleHowTo: 'Wie erstelle ich ein App-Passwort bei Apple? →',
+        messages: (n) => `CTOX hat ${n} Eingangsnachrichten im Postfach erkannt.`,
+        failed: 'Verbindungstest fehlgeschlagen',
+        missing: 'Bitte E-Mail-Adresse, Passwort, IMAP-Server und SMTP-Server ausfüllen.',
+      };
+}
+
+function emailField(state, key, fallback = '') {
+  const value = state.data?.[key];
+  return escapeHtml(value === undefined || value === null || value === '' ? fallback : String(value));
+}
+
+function emailAlert(state) {
+  return state.error
+    ? `<div class="channels-alert channels-alert--err" role="alert">${escapeHtml(state.error)}</div>`
+    : '';
+}
+
+function emailTestDetails(testResult, copy) {
+  const adapter = testResult?.adapter_result || testResult || {};
+  const rows = [];
+  const imapOk = adapter.imap_ok ?? testResult?.imap_ok;
+  const smtpOk = adapter.smtp_ok ?? testResult?.smtp_ok;
+  if (imapOk !== undefined) rows.push(`<div class="channels-confirm-detail"><span>IMAP</span><strong>${imapOk ? copy.ok : copy.fail}</strong></div>`);
+  if (smtpOk !== undefined) rows.push(`<div class="channels-confirm-detail"><span>SMTP</span><strong>${smtpOk ? copy.ok : copy.fail}</strong></div>`);
+  return rows.join('');
+}
+
+// Pull a readable reason out of a failed ctox.channel.test answer. The core
+// puts the adapter error under adapter_result, not at the top level.
+function channelFailureMessage(body) {
+  const adapter = body?.adapter_result || {};
+  const candidates = [
+    body?.error, body?.message, adapter.error, adapter.message, adapter.detail,
+    adapter.imap_error, adapter.smtp_error, body?.status,
+  ];
+  const found = candidates.find((value) => typeof value === 'string' && value.trim());
+  return found ? found.trim() : 'channel command failed';
+}
 
 const BOT_CHAT_CHANNELS = {
   slack: {
@@ -4699,20 +4827,22 @@ function jamiWizard(state) {
 
 // ---- Email wizard ----
 function emailWizard(state) {
+  const copy = emailCopy();
+  const en = emailLang() === 'en';
   const step = state.step || 'provider';
   if (step === 'provider') {
     return wizardShell({
-      title: 'E-Mail einrichten',
+      title: copy.title,
       step: 1, totalSteps: 3,
       body: `
         <div class="channels-explain">
-          <p>Welcher E-Mail-Anbieter?</p>
+          <p>${escapeHtml(copy.whichProvider)}</p>
           <div class="channels-provider-grid">
             ${EMAIL_PROVIDERS.map((p) => `
-              <button type="button" class="channels-provider-card" data-channel-action="email:provider:${escapeHtml(p.id)}">
+              <button type="button" class="channels-provider-card${p.id === 'gmail' ? ' is-recommended' : ''}" data-channel-action="email:provider:${escapeHtml(p.id)}">
                 <span class="channels-provider-glyph">${escapeHtml(p.glyph || '📧')}</span>
-                <strong>${escapeHtml(p.title)}</strong>
-                <small>${escapeHtml(p.short)}</small>
+                <strong>${escapeHtml((en && p.titleEn) || p.title)}</strong>
+                <small>${escapeHtml((en && p.shortEn) || p.short)}</small>
               </button>
             `).join('')}
           </div>
@@ -4722,67 +4852,106 @@ function emailWizard(state) {
   }
   if (step === 'form') {
     return wizardShell({
-      title: 'E-Mail einrichten',
+      title: copy.title,
       step: 2, totalSteps: 3,
-      body: emailProviderForm(state),
-      nextLabel: 'Verbindung testen',
+      body: `${emailProviderForm(state)}${emailAlert(state)}${state.data?.testResult && state.error ? `<div class="channels-confirm">${emailTestDetails(state.data.testResult, copy)}</div>` : ''}`,
+      nextLabel: copy.test,
       nextAction: 'email:test',
     });
   }
   if (step === 'testing') {
     return wizardShell({
-      title: 'E-Mail einrichten',
+      title: copy.title,
       step: 2, totalSteps: 3,
       body: `
         <div class="channels-testing">
-          <div class="channels-testing-step is-active">⏳ CTOX testet ${escapeHtml(emailTestProtocolLabel(state.provider || state.data?.emailProvider))} …</div>
-          <small class="channels-form-note">Backend führt den Verbindungstest aus.</small>
+          <div class="channels-testing-step is-active">⏳ ${escapeHtml(copy.testing(emailTestProtocolLabel(state.provider || state.data?.emailProvider)))}</div>
+          <small class="channels-form-note">${escapeHtml(copy.testingNote)}</small>
         </div>
       `,
     });
   }
   const testResult = state.data?.testResult || null;
+  const messageCount = testResult?.adapter_result?.message_count ?? testResult?.message_count;
   return wizardShell({
-    title: 'E-Mail einrichten',
+    title: copy.title,
     step: 3, totalSteps: 3,
     body: `
       <div class="channels-confirm">
         <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
-        <h4>E-Mail ist verbunden</h4>
+        <h4>${escapeHtml(copy.connected)}</h4>
         <div class="channels-confirm-detail">
-          <span>Adresse</span><strong>${escapeHtml(state.data?.emailAddress || state.data?.connectedAddress || '—')}</strong>
+          <span>${escapeHtml(copy.address)}</span><strong>${escapeHtml(state.data?.emailAddress || state.data?.connectedAddress || '—')}</strong>
         </div>
         <div class="channels-confirm-detail">
-          <span>Anbieter</span><strong>${escapeHtml(emailProviderLabel(state.data?.emailProvider))}</strong>
+          <span>${escapeHtml(copy.provider)}</span><strong>${escapeHtml(emailProviderLabel(state.data?.emailProvider))}</strong>
         </div>
-        ${testResult?.imap_ok !== undefined ? `<div class="channels-confirm-detail"><span>IMAP</span><strong>${testResult.imap_ok ? 'OK' : 'Fehler'}</strong></div>` : ''}
-        ${testResult?.smtp_ok !== undefined ? `<div class="channels-confirm-detail"><span>SMTP</span><strong>${testResult.smtp_ok ? 'OK' : 'Fehler'}</strong></div>` : ''}
-        ${testResult?.message_count !== undefined ? `<small class="channels-confirm-note">CTOX hat ${testResult.message_count} Eingangsnachrichten im Postfach erkannt.</small>` : ''}
+        ${emailTestDetails(testResult, copy)}
+        ${messageCount !== undefined ? `<small class="channels-confirm-note">${escapeHtml(copy.messages(messageCount))}</small>` : ''}
+        ${emailAlert(state)}
       </div>
     `,
     backLabel: '',
-    nextLabel: 'Fertig',
+    nextLabel: copy.done,
     nextAction: 'wizard:done',
   });
 }
 
 function emailProviderLabel(id) {
-  return EMAIL_PROVIDERS.find((p) => p.id === id)?.title || 'E-Mail';
+  const provider = EMAIL_PROVIDERS.find((p) => p.id === id);
+  if (!provider) return 'E-Mail';
+  return (emailLang() === 'en' && provider.titleEn) || provider.title;
 }
 
 function emailTestProtocolLabel(id) {
   if (id === 'owa') return 'EWS/OWA';
   if (id === 'activesync') return 'ActiveSync';
+  if (id === 'microsoft365') return 'Microsoft Graph';
   return 'IMAP + SMTP';
 }
 
+function emailServerFields(state, provider, copy) {
+  const preset = EMAIL_SERVER_PRESETS[provider] || EMAIL_SERVER_PRESETS.custom;
+  return `
+    <div class="channels-form-grid">
+      <label class="channels-field"><span>${escapeHtml(copy.imapHost)}</span><input type="text" data-channel-input="email:imapHost" placeholder="imap.example.com" value="${emailField(state, 'emailImapHost', preset.imapHost)}" /></label>
+      <label class="channels-field"><span>${escapeHtml(copy.imapPort)}</span><input type="number" data-channel-input="email:imapPort" value="${emailField(state, 'emailImapPort', preset.imapPort)}" /></label>
+      <label class="channels-field"><span>${escapeHtml(copy.smtpHost)}</span><input type="text" data-channel-input="email:smtpHost" placeholder="smtp.example.com" value="${emailField(state, 'emailSmtpHost', preset.smtpHost)}" /></label>
+      <label class="channels-field"><span>${escapeHtml(copy.smtpPort)}</span><input type="number" data-channel-input="email:smtpPort" value="${emailField(state, 'emailSmtpPort', preset.smtpPort)}" /></label>
+    </div>
+    <p class="channels-form-note">${escapeHtml(copy.tlsNote)}</p>
+  `;
+}
+
+function emailCredentialFields(state, copy, { placeholder = 'name@firma.de', passwordLabel = copy.password, passwordPlaceholder = '' } = {}) {
+  return `
+    <label class="channels-field">
+      <span>${escapeHtml(copy.address)}</span>
+      <input type="email" data-channel-input="email:address" placeholder="${escapeHtml(placeholder)}" value="${emailField(state, 'emailAddress')}" autocomplete="username" />
+    </label>
+    <label class="channels-field">
+      <span>${escapeHtml(passwordLabel)}</span>
+      <input type="password" data-channel-input="email:password" placeholder="${escapeHtml(passwordPlaceholder)}" value="${emailField(state, 'emailPassword')}" autocomplete="off" />
+    </label>
+  `;
+}
+
 function emailProviderForm(state) {
+  const copy = emailCopy();
   const provider = state.provider || state.data?.emailProvider || 'custom';
   if (provider === 'gmail') {
     return `
       <div class="channels-form">
-        <p>CTOX leitet dich gleich zur Google-Anmeldung weiter. Dort meldest du dich mit der E-Mail-Adresse an, die CTOX nutzen soll.</p>
-        <p class="channels-form-note">Stelle sicher, dass dein Browser Pop-ups für diese Seite zulässt.</p>
+        <p>${escapeHtml(copy.gmailIntro)}</p>
+        ${emailCredentialFields(state, copy, { placeholder: 'name@gmail.com', passwordLabel: copy.appPassword, passwordPlaceholder: 'xxxx xxxx xxxx xxxx' })}
+        <p class="channels-form-note">
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">${escapeHtml(copy.gmailHowTo)}</a>
+        </p>
+        <p class="channels-form-note">${escapeHtml(copy.gmailNeeds2fa)}</p>
+        <details class="channels-advanced">
+          <summary>${escapeHtml(copy.servers)}</summary>
+          ${emailServerFields(state, provider, copy)}
+        </details>
       </div>
     `;
   }
@@ -4810,8 +4979,7 @@ function emailProviderForm(state) {
         ` : ''}
       </div>
     `;
-  }
-  if (provider === 'owa') {
+  }  if (provider === 'owa') {
     return `
       <div class="channels-form">
         <label class="channels-field">
@@ -4831,8 +4999,7 @@ function emailProviderForm(state) {
         <p class="channels-form-note">CTOX leitet aus der OWA-URL automatisch <code>/EWS/Exchange.asmx</code> ab.</p>
       </div>
     `;
-  }
-  if (provider === 'activesync') {
+  }  if (provider === 'activesync') {
     return `
       <div class="channels-form">
         <label class="channels-field">
@@ -4853,63 +5020,35 @@ function emailProviderForm(state) {
         </div>
       </div>
     `;
-  }
-  if (provider === 'apple') {
+  }  if (provider === 'apple') {
     return `
       <div class="channels-form">
-        <label class="channels-field">
-          <span>iCloud-E-Mail</span>
-          <input type="email" data-channel-input="email:address" placeholder="name@icloud.com" value="${escapeHtml(state.data?.emailAddress || '')}" />
-        </label>
-        <label class="channels-field">
-          <span>App-spezifisches Passwort</span>
-          <input type="password" data-channel-input="email:password" placeholder="xxxx xxxx xxxx xxxx" />
-        </label>
+        ${emailCredentialFields(state, copy, { placeholder: 'name@icloud.com', passwordLabel: copy.appPassword, passwordPlaceholder: 'xxxx-xxxx-xxxx-xxxx' })}
         <p class="channels-form-note">
-          <a href="https://support.apple.com/de-de/102654" target="_blank" rel="noopener noreferrer">Wie erstelle ich ein App-Passwort bei Apple? →</a>
+          <a href="https://support.apple.com/${emailLang() === 'en' ? 'en-us' : 'de-de'}/102654" target="_blank" rel="noopener noreferrer">${escapeHtml(copy.appleHowTo)}</a>
         </p>
+        <details class="channels-advanced">
+          <summary>${escapeHtml(copy.servers)}</summary>
+          ${emailServerFields(state, provider, copy)}
+        </details>
       </div>
     `;
   }
   if (provider === 'imap-standard') {
     return `
       <div class="channels-form">
-        <label class="channels-field">
-          <span>E-Mail-Adresse</span>
-          <input type="email" data-channel-input="email:address" placeholder="name@firma.de" value="${escapeHtml(state.data?.emailAddress || '')}" />
-        </label>
-        <label class="channels-field">
-          <span>Passwort</span>
-          <input type="password" data-channel-input="email:password" />
-        </label>
-        <details class="channels-advanced">
-          <summary>Server-Einstellungen anpassen</summary>
-          <div class="channels-form-grid">
-            <label class="channels-field"><span>IMAP-Host</span><input type="text" data-channel-input="email:imapHost" placeholder="imap.one.com" /></label>
-            <label class="channels-field"><span>IMAP-Port</span><input type="number" data-channel-input="email:imapPort" value="993" /></label>
-            <label class="channels-field"><span>SMTP-Host</span><input type="text" data-channel-input="email:smtpHost" placeholder="send.one.com" /></label>
-            <label class="channels-field"><span>SMTP-Port</span><input type="number" data-channel-input="email:smtpPort" value="465" /></label>
-          </div>
+        ${emailCredentialFields(state, copy)}
+        <details class="channels-advanced" open>
+          <summary>${escapeHtml(copy.servers)}</summary>
+          ${emailServerFields(state, provider, copy)}
         </details>
       </div>
     `;
   }
   return `
     <div class="channels-form">
-      <label class="channels-field">
-        <span>E-Mail-Adresse</span>
-        <input type="email" data-channel-input="email:address" placeholder="name@firma.de" value="${escapeHtml(state.data?.emailAddress || '')}" />
-      </label>
-      <label class="channels-field">
-        <span>Passwort</span>
-        <input type="password" data-channel-input="email:password" />
-      </label>
-      <div class="channels-form-grid">
-        <label class="channels-field"><span>IMAP-Host</span><input type="text" data-channel-input="email:imapHost" /></label>
-        <label class="channels-field"><span>IMAP-Port</span><input type="number" data-channel-input="email:imapPort" value="993" /></label>
-        <label class="channels-field"><span>SMTP-Host</span><input type="text" data-channel-input="email:smtpHost" /></label>
-        <label class="channels-field"><span>SMTP-Port</span><input type="number" data-channel-input="email:smtpPort" value="587" /></label>
-      </div>
+      ${emailCredentialFields(state, copy)}
+      ${emailServerFields(state, provider, copy)}
     </div>
   `;
 }
@@ -5092,7 +5231,8 @@ function wireChannelHandlers(
     }
   }
 
-  async function postChannelEndpoint(path, payload) {
+  async function postChannelEndpoint(path, payload, options = {}) {
+    const shouldRender = options.render !== false;
     try {
       const command = channelCommandForEndpoint(path, payload || {});
       const result = await dispatchModuleCommand({
@@ -5104,16 +5244,15 @@ function wireChannelHandlers(
       });
       const body = result.result || result;
       if (body?.ok === false) {
-        const message = body?.error || body?.message || body?.status || 'channel command failed';
-        channels.error = `${command.commandType}: ${message}`;
-        render();
-        return null;
+        channels.error = `${command.commandType}: ${channelFailureMessage(body)}`;
+        if (shouldRender) render();
+        return options.keepBody ? body : null;
       }
       channels.error = '';
       return body;
     } catch (error) {
       channels.error = `${path}: ${error?.message || error}`;
-      render();
+      if (shouldRender) render();
       return null;
     }
   }
@@ -5412,15 +5551,25 @@ async function handleChannelAction(action, ctx) {
     return;
   }
   if (action === 'email:test') {
+    const copy = emailCopy();
+    const payload = emailConfigPayload(channels);
+    if (payload.provider === 'imap'
+      && (!payload.address || !payload.password || !payload.imap_host || !payload.smtp_host)) {
+      channels.error = copy.missing;
+      channels.step = 'form';
+      render();
+      return;
+    }
     channels.step = 'testing';
     channels.error = '';
+    channels.data.testResult = null;
     render();
-    const payload = emailConfigPayload(channels);
-    // Save settings first, then run the adapter test command.
+    // Save settings first, then run the adapter test command. On any failure
+    // the form comes back with every entered value and the reason visible.
     const saveResult = await postChannelEndpoint('channel.settings.save', {
       channel: 'email',
       config: payload,
-    });
+    }, { render: false });
     if (!saveResult) {
       channels.step = 'form';
       render();
@@ -5429,13 +5578,19 @@ async function handleChannelAction(action, ctx) {
     const testResult = await postChannelEndpoint('channel.test', {
       channel: 'email',
       account_key: payload.address ? `email:${payload.address}` : '',
-    });
-    if (!testResult) {
+    }, { render: false, keepBody: true });
+    if (!testResult || testResult.ok === false) {
+      if (testResult) channels.data.testResult = testResult;
+      channels.error = `${copy.failed}: ${channels.error || channelFailureMessage(testResult)}`
+        .replace(/ctox\.channel\.test: /, '');
       channels.step = 'form';
       render();
       return;
     }
     channels.data.testResult = testResult;
+    channels.data.connectedAddress = payload.address;
+    channels.step = 'confirm';
+    render();
     pollAccountAppearance('email', payload.address);
     return;
   }
@@ -5482,14 +5637,19 @@ async function handleChannelAction(action, ctx) {
 function emailConfigPayload(channels) {
   const data = channels.data || {};
   const provider = channels.provider || data.emailProvider || 'custom';
+  const preset = EMAIL_SERVER_PRESETS[provider] || {};
+  const pick = (value, fallback) => String(value ?? '').trim() || fallback || '';
+  // Google shows app passwords in groups of four; IMAP wants them without blanks.
+  const rawPassword = String(data.emailPassword || '');
+  const password = provider === 'gmail' ? rawPassword.replace(/\s+/g, '') : rawPassword;
   return {
-    provider,
-    address: data.emailAddress || '',
-    password: data.emailPassword || '',
-    imap_host: data.emailImapHost || '',
-    imap_port: parseInt(data.emailImapPort, 10) || 0,
-    smtp_host: data.emailSmtpHost || '',
-    smtp_port: parseInt(data.emailSmtpPort, 10) || 0,
+    provider: emailCoreProvider(provider),
+    address: String(data.emailAddress || '').trim(),
+    password,
+    imap_host: pick(data.emailImapHost, preset.imapHost),
+    imap_port: parseInt(pick(data.emailImapPort, preset.imapPort), 10) || 0,
+    smtp_host: pick(data.emailSmtpHost, preset.smtpHost),
+    smtp_port: parseInt(pick(data.emailSmtpPort, preset.smtpPort), 10) || 0,
     owa_url: data.emailOwaUrl || '',
     ews_url: data.emailEwsUrl || '',
     ews_auth_type: data.emailEwsAuthType || '',
@@ -5576,6 +5736,10 @@ export const __reactSettingsTestHooks = {
   waitForSubscriptionConnection,
   providerLogoHtml,
   providerLogoSpec,
+  emailWizard,
+  emailConfigPayload,
+  emailCoreProvider,
+  channelFailureMessage,
   runtimeModelOptions,
   runtimeReasoningOptions,
   runtimeSettingsPreservingPendingSubscription,
