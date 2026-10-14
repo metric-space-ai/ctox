@@ -15,6 +15,7 @@ pub mod google_drive;
 pub mod hubspot;
 pub mod jira;
 pub mod linear;
+pub mod notion;
 pub mod outlook;
 pub mod teams;
 
@@ -42,6 +43,7 @@ pub fn builtin() -> Vec<Box<dyn ToolkitAdapter>> {
         Box::new(linear::Linear::default()),
         Box::new(teams::Teams::default()),
         Box::new(outlook::Outlook::default()),
+        Box::new(notion::Notion::default()),
     ]
 }
 
