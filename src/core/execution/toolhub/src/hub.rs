@@ -395,6 +395,7 @@ impl<B: SecretBackend> ToolHub<B> {
             AuthSchemeKind::OAuth2 | AuthSchemeKind::Bearer => {
                 request.header("authorization", format!("Bearer {}", secret.access_token))
             }
+            AuthSchemeKind::None => request,
             AuthSchemeKind::Basic => request.header(
                 "authorization",
                 format!(
@@ -468,6 +469,23 @@ impl<B: SecretBackend> ToolHub<B> {
             }
         }
         let toolkit = spec.toolkit.clone();
+        if adapter.spec().auth_schemes == [AuthScheme::None] {
+            // Public API: no account, no credential. Only allowed with an egress
+            // policy (hot-plug specs), so the allowed-hosts rule still applies.
+            let policy = adapter.egress_policy().ok_or_else(|| anyhow!("credential-free toolkit `{toolkit}` has no egress policy"))?;
+            let request = adapter.build_request(tool_slug, args)?;
+            policy.check_url(&request.url)?;
+            let response = self.transport.send_restricted(request)?;
+            return Ok(if (200..300).contains(&response.status) {
+                match adapter.parse_response(tool_slug, &response) {
+                    Ok(data) => ToolOutcome::Success { data },
+                    Err(e) => ToolOutcome::ProviderError { status: response.status, data: serde_json::json!({"error": e.to_string()}) },
+                }
+            } else {
+                let text: String = String::from_utf8_lossy(&response.body).chars().take(500).collect();
+                ToolOutcome::ProviderError { status: response.status, data: response.json().ok().filter(|v| !v.is_null()).unwrap_or_else(|| serde_json::json!({"error": text})) }
+            });
+        }
         let Some(account) = self.select_account(project, &toolkit, account_id)? else {
             return Ok(self.credential_required(&toolkit, None));
         };

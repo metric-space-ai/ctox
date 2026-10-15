@@ -122,7 +122,10 @@ pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str
         let v = store.install(&spec).expect("install spec");
         store.activate(&v.slug, &v.version, "live-test").expect("activate spec");
         let rep = hub.reload_specs(&store).expect("reload specs");
-        assert!(rep.replaced_builtins.contains(&toolkit.to_string()), "spec not loaded: {rep:?}");
+        // Brand-new services (no compiled adapter) are just loaded; known ones are replaced.
+        let has_builtin = ctox_toolhub::toolkits::builtin().iter().any(|a| a.spec().slug == toolkit);
+        assert!(rep.loaded.iter().any(|(s, _)| s == toolkit), "spec not loaded: {rep:?}");
+        assert_eq!(rep.replaced_builtins.contains(&toolkit.to_string()), has_builtin, "{rep:?}");
         assert!(hub.is_spec_toolkit(toolkit));
     }
     let cfg = AuthConfig { id: "live".into(), toolkit: toolkit.into(), scheme, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
@@ -153,4 +156,34 @@ pub fn find_str(v: &Value, key: &str) -> Option<String> {
         Value::Array(a) => a.iter().find_map(|x| find_str(x, key)),
         _ => None,
     }
+}
+
+/// Pure hot-plug path for a brand-new service (no compiled adapter, no credential):
+/// install the spec into a fresh instance store, activate it, let the running hub
+/// pick it up via `reload_specs_if_changed`, then execute. `None` when
+/// `CTOX_TOOLHUB_LIVE_PUBLIC` is unset (live calls stay opt-in).
+pub fn live_hotplug_public(spec_json: &str, calls: &[(&str, Value)]) -> Option<Vec<Result<Value, String>>> {
+    use ctox_toolhub::*;
+    std::env::var("CTOX_TOOLHUB_LIVE_PUBLIC").ok()?;
+    let mut hub = ToolHub::new(
+        MemorySecretBackend::default(),
+        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::with_options(ctox_toolhub::http::TransportOptions { fake_ip_egress: true })),
+    );
+    let root = std::env::temp_dir().join(format!("ctox-live-hotplug-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = ctox_toolhub::spec::SpecStore::for_instance_root(&root);
+    assert!(hub.reload_specs_if_changed(&store).expect("initial load").is_some());
+    let v = store.install(spec_json).expect("install spec");
+    assert!(hub.tool(calls[0].0).is_err(), "not served before activation");
+    store.activate(&v.slug, &v.version, "live-test").expect("activate spec");
+    let rep = hub.reload_specs_if_changed(&store).expect("reload").expect("store changed");
+    assert!(rep.replaced_builtins.is_empty() && rep.loaded.iter().any(|(s, _)| s == &v.slug), "{rep:?}");
+    let out = calls.iter().map(|(tool, args)| match hub.execute("_instance", tool, args, None) {
+        Ok(ToolOutcome::Success { data }) => Ok(data),
+        Ok(ToolOutcome::ProviderError { status, data }) => Err(format!("provider {status}: {data}")),
+        Ok(other) => Err(format!("{other:?}")),
+        Err(e) => Err(format!("error: {e:#}")),
+    }).collect();
+    let _ = std::fs::remove_dir_all(&root);
+    Some(out)
 }

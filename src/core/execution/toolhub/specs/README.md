@@ -26,6 +26,8 @@ adapters (739 differential cases, identical live results).
 
 Calendly (`calendly.json`) is the first spec-only build (no compiled code changes; live test `live_calendly`). It added `uri_prefix` / `uri_tail` for resource-URI references.
 
+`zippopotam.json` is a brand-new service (no compiled adapter) with auth `none`: it is loaded only through the store and hot reload (`spec_adapters` test, live test `live_hotplug_public`).
+
 Known limits of v1 (use a compiled adapter for these): multipart uploads, request signing
 (HMAC/AWS SigV4), binary downloads, multi-step calls (e.g. upload session then commit),
 per-tool response logic beyond pick/list/object/merge/const.

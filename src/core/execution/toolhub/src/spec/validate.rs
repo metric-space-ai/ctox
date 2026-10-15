@@ -564,6 +564,9 @@ pub fn compile(doc: &Value) -> Result<Compiled> {
     if auth_schemes.is_empty() {
         bail!("spec: auth_schemes must not be empty");
     }
+    if auth_schemes.contains(&AuthScheme::None) && auth_schemes.len() > 1 {
+        bail!("spec: auth scheme `none` must be the only scheme");
+    }
     let mut auth_headers = Vec::new();
     for a in &auth_schemes {
         match a {

@@ -58,6 +58,9 @@ pub enum AuthScheme {
     },
     Basic,
     Bearer,
+    /// Public API without any credential (hot-plug specs only; must be the
+    /// only scheme). Requests still go through the spec's egress policy.
+    None,
 }
 
 impl AuthScheme {
@@ -67,6 +70,7 @@ impl AuthScheme {
             Self::ApiKey { .. } => AuthSchemeKind::ApiKey,
             Self::Basic => AuthSchemeKind::Basic,
             Self::Bearer => AuthSchemeKind::Bearer,
+            Self::None => AuthSchemeKind::None,
         }
     }
 }
@@ -79,6 +83,7 @@ pub enum AuthSchemeKind {
     ApiKey,
     Basic,
     Bearer,
+    None,
 }
 
 /// A tool (Composio: Tool / Action) with JSON-schema input.

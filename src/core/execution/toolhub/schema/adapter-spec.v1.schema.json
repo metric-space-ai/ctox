@@ -32,7 +32,7 @@
     },
     "auth_scheme": {
       "type": "object", "required": ["type"],
-      "properties": {"type": {"enum": ["oauth2", "api_key", "basic", "bearer"]}},
+      "properties": {"type": {"enum": ["oauth2", "api_key", "basic", "bearer", "none"]}},
       "description": "Same shape as ctox_toolhub::model::AuthScheme. Never contains secrets; OAuth client credentials live in the instance secret store."
     },
     "error_check": {

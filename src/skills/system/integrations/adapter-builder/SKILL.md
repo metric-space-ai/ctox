@@ -84,6 +84,11 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   api.calendly.com; get/list invitees, get event and cancel event are list-only
   covered (free account has no bookings). Needed one minimal format extension:
   `uri_prefix` (args) and `uri_tail` (path encoding).
+- **Brand-new services (2026-10-15):** a spec for a service with no compiled
+  adapter loads purely through `SpecStore` install → activate →
+  `reload_specs_if_changed` on a running hub (offline test + live test
+  `live_hotplug_public` against `specs/zippopotam.json`). Auth scheme `none` exists
+  for public APIs.
 - **Not wired yet:** the toolhub is not part of the `ctox` binary on main, so there
   is no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,
@@ -121,3 +126,20 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 - **Live harness:** `support::use_spec(include_str!("../specs/<slug>.json"))` works
   for spec-only toolkits too as long as `replaces_builtin` matches an existing
   compiled slug; a brand-new slug needs a harness path without that assert.
+- **Auth `none` (public APIs):** `"auth_schemes": [{"type": "none"}]`, and it must be the
+  only scheme. The hub then executes without an auth config, account or secret, but only
+  for toolkits with an egress policy (specs), always over the restricted transport
+  (allowed hosts, https, public IPs, no redirects). Credential-based toolkits still
+  answer "credential required" without an account. Use it only for truly public,
+  read-only data; never to call an authenticated API "anonymously".
+- **Brand-new vs replacing:** `replaces_builtin` is only for slugs that already have a
+  compiled adapter; a new slug simply appears in `SpecReload.loaded`. The live
+  harness now checks exactly that (`replaced_builtins` contains the slug iff a builtin
+  exists), so `support::use_spec` works for new token services too.
+- **Hot-reload lifecycle to test for every new service:** not served after install, only
+  after activate; `reload_specs_if_changed` returns `None` when nothing changed; after
+  deactivate the tools disappear without restart.
+- **Path params with spaces** (city names): `path_encoding: component` gives `%20`;
+  the default `segment` rejects them. Path traversal (`../x`) is refused either way.
+- **Live tests without a token** need an explicit opt-in (`CTOX_TOOLHUB_LIVE_PUBLIC=1`),
+  so offline CI never reaches the network.

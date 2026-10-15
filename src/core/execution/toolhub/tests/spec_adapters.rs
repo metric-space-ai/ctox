@@ -414,3 +414,51 @@ fn uri_prefix_and_uri_tail_handle_resource_uri_references() {
         v["actions"][0]["request"]["query"] = json!({"x": {"arg": "id", "uri_prefix": "http://api.acme.io/x/"}});
     }, "uri_prefix must be an https URL");
 }
+
+// ------------------------------------------------------------------ brand-new service, auth `none`
+
+const ZIPPOPOTAM: &str = include_str!("../specs/zippopotam.json");
+
+#[test]
+fn brand_new_spec_dropped_into_store_is_served_after_hot_reload_without_credential() {
+    assert!(!toolkits::builtin().iter().any(|a| a.spec().slug == "zippopotam"), "must be a brand-new service");
+    let root = tmpdir("newsvc");
+    let store = SpecStore::for_instance_root(&root);
+    let mock = Arc::new(Mock { calls: Mutex::new(vec![]) });
+    let mut hub = ToolHub::new(MemorySecretBackend::default(), mock.clone());
+    hub.reload_specs_if_changed(&store).unwrap();
+    assert!(hub.tool("ZIPPOPOTAM_LOOKUP_POSTAL_CODE").is_err());
+    // Runtime drop-in: install + activate while the hub keeps running.
+    let v = store.install(ZIPPOPOTAM).unwrap();
+    store.activate(&v.slug, &v.version, "test").unwrap();
+    let rep = hub.reload_specs_if_changed(&store).unwrap().expect("store changed");
+    assert_eq!(rep.loaded, vec![("zippopotam".to_string(), "1.0.0".to_string())]);
+    assert!(rep.replaced_builtins.is_empty() && hub.is_spec_toolkit("zippopotam"));
+    // No auth config, no account: auth `none` executes directly, restricted transport.
+    let out = hub.execute("p", "zippopotam.lookup_postal_code", &json!({"country": "de", "postal_code": "10115"}), None).unwrap();
+    assert!(matches!(out, ToolOutcome::Success { .. }), "{out:?}");
+    let out = hub.execute("p", "ZIPPOPOTAM_FIND_POSTAL_CODES", &json!({"country": "us", "state": "ma", "city": "New York"}), None).unwrap();
+    assert!(matches!(out, ToolOutcome::Success { .. }));
+    assert_eq!(*mock.calls.lock().unwrap(), vec![
+        (true, "https://api.zippopotam.us/de/10115".to_string()),
+        (true, "https://api.zippopotam.us/us/ma/New%20York".to_string()),
+    ]);
+    assert!(hub.execute("p", "ZIPPOPOTAM_LOOKUP_POSTAL_CODE", &json!({"country": "../x", "postal_code": "1"}), None).is_err());
+    // Deactivate: gone again without restart.
+    store.deactivate("zippopotam", "test").unwrap();
+    hub.reload_specs_if_changed(&store).unwrap().unwrap();
+    assert!(hub.tool("ZIPPOPOTAM_LOOKUP_POSTAL_CODE").is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn auth_none_must_be_the_only_scheme_and_builtins_still_need_credentials() {
+    rejects(|v| v["auth_schemes"] = json!([{"type": "none"}, {"type": "bearer"}]), "must be the only scheme");
+    let mut v = minimal();
+    v["auth_schemes"] = json!([{"type": "none"}]);
+    assert!(SpecAdapter::from_json(&v.to_string()).is_ok());
+    // A credential-based toolkit without account still asks for a credential.
+    let hub = ToolHub::new(MemorySecretBackend::default(), Arc::new(Mock { calls: Mutex::new(vec![]) }));
+    let out = hub.execute("p", "TODOIST_GET_CURRENT_USER", &json!({}), None).unwrap();
+    assert!(!matches!(out, ToolOutcome::Success { .. }));
+}
