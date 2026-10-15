@@ -1366,13 +1366,15 @@ fn upsert_attached_rxdb_record(
     let table_columns = attached_rxdb_table_columns(conn, &table)?;
     business_store_adapter::write_legacy_projection(
         conn,
-        &qualified_table,
-        &table_columns,
-        record_id,
-        &payload,
-        rev,
-        now_ms() as f64,
-        canonical_rxdb_table_upsert_guard_sql(&table, "data"),
+        business_store_adapter::LegacyProjection {
+            qualified_table: &qualified_table,
+            table_columns: &table_columns,
+            id: record_id,
+            payload: &payload,
+            revision: rev,
+            write_time: now_ms() as f64,
+            guard: canonical_rxdb_table_upsert_guard_sql(&table, "data"),
+        },
     )
 }
 

@@ -140,16 +140,29 @@ impl BusinessStoreAdapter {
 /// attached writes use this builder; V4 sinks use their target transaction and
 /// schema/change-log triggers instead. `write_time` is assigned by the host,
 /// never taken from the document's updated_at_ms.
-pub(super) fn write_legacy_projection(
+pub struct LegacyProjection<'a> {
+    pub qualified_table: &'a str,
+    pub table_columns: &'a HashSet<String>,
+    pub id: &'a str,
+    pub payload: &'a Value,
+    pub revision: String,
+    pub write_time: f64,
+    pub guard: Option<String>,
+}
+
+pub fn write_legacy_projection(
     conn: &Connection,
-    qualified_table: &str,
-    table_columns: &HashSet<String>,
-    id: &str,
-    payload: &Value,
-    revision: String,
-    write_time: f64,
-    guard: Option<String>,
+    projection: LegacyProjection<'_>,
 ) -> anyhow::Result<()> {
+    let LegacyProjection {
+        qualified_table,
+        table_columns,
+        id,
+        payload,
+        revision,
+        write_time,
+        guard,
+    } = projection;
     let mut document = payload.clone();
     if table_columns.contains("lastWriteTime") {
         let object = document
@@ -189,9 +202,7 @@ pub(super) fn write_legacy_projection(
         updates[0] = "data = json_set(excluded.data, '$._meta.lwt', MAX(lastWriteTime + 1, excluded.lastWriteTime))".into();
         columns.push("lastWriteTime".into());
         values.push(SqlValue::Real(write_time));
-        updates.push(format!(
-            "lastWriteTime = MAX(lastWriteTime + 1, excluded.lastWriteTime)"
-        ));
+        updates.push("lastWriteTime = MAX(lastWriteTime + 1, excluded.lastWriteTime)".into());
     }
     let placeholders = (1..=columns.len())
         .map(|i| format!("?{i}"))
@@ -330,13 +341,15 @@ mod tests {
         for time in [1000.0, 1.0] {
             write_legacy_projection(
                 &conn,
-                "projection",
-                &columns,
-                "task",
-                &serde_json::json!({"id":"task","updated_at_ms":-999}),
-                "1-native".into(),
-                time,
-                None,
+                LegacyProjection {
+                    qualified_table: "projection",
+                    table_columns: &columns,
+                    id: "task",
+                    payload: &serde_json::json!({"id":"task","updated_at_ms":-999}),
+                    revision: "1-native".into(),
+                    write_time: time,
+                    guard: None,
+                },
             )
             .unwrap();
         }
