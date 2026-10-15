@@ -435,10 +435,25 @@ export function createKernel(opts = {}) {
         await deliver();schedulePump();
       }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}});
   }
+  // §16.50 Nr. 3: Leitermeldung an den SW – beim Start, bei jedem Leiterwechsel (Erwerb und Verlust) und nach
+  // controllerchange. Nur ein Hinweis für das Routing von Lib-Misses, keine Autorität (die Generation bleibt im IDB).
+  // Ohne navigator.serviceWorker (Node, Worker) oder ohne controller ein No-op.
+  const swContainer = (() => { try { return globalThis.navigator?.serviceWorker ?? null; } catch { return null; } })();
+  let swHintStarted = false, swHintLast = null;
+  function sendLeaderHint(force = false) {
+    if (!swContainer || (!force && (!swHintStarted || swHintLast === isLeader))) return;
+    let controller = null;
+    try { controller = swContainer.controller; } catch { /* kein SW */ }
+    if (!controller) return;
+    try { controller.postMessage({ type: 'ctox:kernel', leader: isLeader }); swHintLast = isLeader; } catch { /* SW weg */ }
+  }
+  const onControllerChange = () => { if (!closed && swHintStarted) sendLeaderHint(true); };
+  try { swContainer?.addEventListener?.('controllerchange', onControllerChange); } catch { /* kein SW */ }
   async function becomeLeader() {
     if (closed) return;
     myGen = await acquireGeneration(db);
     isLeader = true;
+    sendLeaderHint();
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
     for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
@@ -457,6 +472,7 @@ export function createKernel(opts = {}) {
     isLeader = false;
     for (const op of inflightOps) inflightOps.delete(op);
     inflight.clear();
+    sendLeaderHint();
     notify('leader');
     const rel = releaseLock; releaseLock = null;
     if (rel) rel();
@@ -2216,6 +2232,8 @@ export function createKernel(opts = {}) {
     lockAbort?.abort();
     const rel = releaseLock; releaseLock = null; rel?.();
     isLeader = false;
+    sendLeaderHint(); // Schließen ist ein Leiterverlust (§16.50 Nr. 3)
+    try { swContainer?.removeEventListener?.('controllerchange', onControllerChange); } catch { /* kein SW */ }
     for (const l of [...allLives]) l.dispose();
     allLives.clear();
     activationListeners.clear();
@@ -2307,6 +2325,8 @@ export function createKernel(opts = {}) {
     }
     await elect();
     guardAlive();
+    swHintStarted = true;
+    sendLeaderHint(true); // §16.50 Nr. 3: Startmeldung, auch für Leser (leader:false)
     if (!isLeader) post({ type: 'hello' });
     loaded = true;
     for (const r of preReady.splice(0)) r();
