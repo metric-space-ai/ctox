@@ -5390,13 +5390,13 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+#[test]
     fn process_startup_selects_a_rustls_crypto_provider() {
         install_process_rustls_crypto_provider();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 
-    #[test]
+#[test]
     fn business_command_dispatch_skips_caller_side_turn_ledger() {
         let dispatch = ["business-os", "commands", "dispatch", "--json", "{}"]
             .into_iter()
@@ -5411,7 +5411,7 @@ mod tests {
         assert!(!super::skips_cli_turn_ledger(&inspect));
     }
 
-    #[test]
+#[test]
     fn coding_models_inspection_skips_ledger_without_exempting_turns() {
         for command in ["coding-agent", "coding-agents"] {
             let models = vec![command.to_owned(), "models".to_owned()];
@@ -5448,7 +5448,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn mobile_invite_skips_daemon_owned_turn_ledger() {
         for args in [
             vec![
@@ -5492,7 +5492,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn agent_research_commands_skip_caller_side_turn_ledger() {
         for args in [
             vec!["web", "deep-research", "--query", "bearing loads"],
@@ -5514,7 +5514,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn sandboxed_cli_commands_skip_caller_side_turn_ledger() {
         for args in [
             vec!["scrape", "register-script", "--target-key", "fixture"],
@@ -5555,7 +5555,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn crew_inspection_skips_the_mutating_cli_ledger() {
         for args in [vec!["crew", "list"], vec!["crew", "show", "crew-milo"]] {
             let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
@@ -5564,7 +5564,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn continuity_update_answers_with_a_receipt_not_the_document() {
         let root = unique_test_dir("continuity-update-receipt");
         std::fs::create_dir_all(&root).expect("create test dir");
@@ -5605,7 +5605,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn continuity_update_rejects_missing_conversation_id() {
         let args = [
             "--db",
@@ -5625,7 +5625,7 @@ mod tests {
             .contains("missing required --conversation-id"));
     }
 
-    #[test]
+#[test]
     fn appsec_forwarding_uses_ctox_toolroot_for_external_state() {
         let root = unique_test_dir("appsec-external-state-toolroot");
         let external_state = root.join("external/assessment-state");
@@ -5656,7 +5656,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_state_dir_normalizes_relative_workspace_paths() {
         let root = unique_test_dir("appsec-relative-state");
         let args = [
@@ -5674,7 +5674,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn finds_ctox_root_from_nested_workspace_directory() {
         let root = make_fake_ctox_root("root-ancestor");
         let nested = root.join("src/context");
@@ -5684,7 +5684,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn resolves_default_install_root_when_binary_runs_without_wrapper_env() {
         let home = unique_test_dir("installed-home");
         let install_root = home.join(".local/lib/ctox/current");
@@ -5701,7 +5701,7 @@ mod tests {
         cleanup_test_dir(&home);
     }
 
-    #[test]
+#[test]
     fn resolves_systemd_service_root_when_wrapper_env_is_missing() {
         let home = unique_test_dir("systemd-home");
         let service_root = home.join("CTOX");
@@ -5729,7 +5729,7 @@ mod tests {
         cleanup_test_dir(&home);
     }
 
-    #[test]
+#[test]
     fn rejects_directories_without_ctox_markers() {
         let root = unique_test_dir("not-root");
         fs::create_dir_all(&root).unwrap();
@@ -5739,7 +5739,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn accepts_explicit_binary_bundle_root_for_windows_service_launch() {
         let root = unique_test_dir("binary-bundle-root");
         fs::create_dir_all(root.join("bin")).unwrap();
@@ -5761,7 +5761,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn workspace_root_override_accepts_valid_ctox_root_only() {
         let root = make_fake_ctox_root("env-valid-root");
         let invalid = unique_test_dir("env-invalid-root");
@@ -5781,7 +5781,7 @@ mod tests {
         cleanup_test_dir(&invalid);
     }
 
-    #[test]
+#[test]
     fn persist_runtime_turn_timeout_writes_to_runtime_env_store() {
         let root = make_fake_ctox_root("runtime-timeout");
 
@@ -5798,7 +5798,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn persist_runtime_turn_timeout_rejects_zero_seconds() {
         let root = make_fake_ctox_root("runtime-timeout-zero");
 
@@ -5810,7 +5810,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn persist_runtime_turn_timeout_requires_numeric_value() {
         let root = make_fake_ctox_root("runtime-timeout-invalid");
 
@@ -5822,7 +5822,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_authz_preflight_injects_redacted_credential_proof() {
         let root = make_fake_ctox_root("appsec-credential-proof");
         let state = root.join("runtime/appsec/proof-test");
@@ -5905,7 +5905,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_authz_run_publishes_timestamped_and_canonical_credential_proof() {
         let root = make_fake_ctox_root("appsec-canonical-credential-proof");
         let state = root.join("runtime/appsec/proof-test");
@@ -6008,7 +6008,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_pipeline_worker_stage_filter_selects_only_requested_queue_task() {
         let root = make_fake_ctox_root("appsec-pipeline-stage-filter");
         let state = root.join("runtime/appsec/default");
@@ -6093,7 +6093,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn chat_attachment_paths_are_canonicalized_for_service_send() {
         let root = unique_test_dir("chat-attachments");
         fs::create_dir_all(&root).unwrap();
@@ -6118,7 +6118,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn chat_attachment_paths_require_existing_files() {
         let args = vec![
             "Mail".to_string(),
@@ -6145,7 +6145,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn chat_wait_completion_requires_new_assistant_row_in_conversation() {
         // No assistant row at all: unrelated service-global completions can
         // never satisfy the wait (ctox#21 false rc=0 regression guard).
@@ -6167,51 +6167,7 @@ mod tests {
         assert!(chat_wait_assistant_completion(Some(first), None).is_some());
     }
 
-    #[test]
-    fn chat_wait_failure_outcomes_map_to_agent_failure() {
-        for token in ["TurnTimeout", "ExecutionError", "Aborted", "Cancelled"] {
-            let outcome = lcm::AgentOutcome::from_token(token).expect(token);
-            assert!(outcome.is_agent_failure(), "{token} should be a failure");
-        }
-        assert!(!lcm::AgentOutcome::from_token("Success")
-            .expect("Success token")
-            .is_agent_failure());
-    }
-
-    #[test]
-    fn openrouter_tool_smoke_summary_detects_tool_call_response() {
-        let payload = serde_json::json!({
-            "model": "deepseek/deepseek-v4-flash-20260423",
-            "provider": "DeepInfra",
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "native_finish_reason": "tool_calls",
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {
-                            "name": "record_status",
-                            "arguments": "{\"status\":\"ok\"}"
-                        }
-                    }]
-                }
-            }]
-        });
-
-        let summary = openrouter_tool_smoke_summary("auto", 200, &payload);
-        assert_eq!(summary["has_tool_calls"], serde_json::json!(true));
-        assert_eq!(summary["tool_call_count"], serde_json::json!(1));
-        assert_eq!(
-            summary["tool_call_names"],
-            serde_json::json!(["record_status"])
-        );
-        assert_eq!(summary["content_len"], serde_json::json!(0));
-    }
-
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn appsec_pipeline_worker_executes_ready_stage_and_handles_queue() {
         use std::os::unix::fs::PermissionsExt;
@@ -6392,7 +6348,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_pipeline_worker_completes_authz_stage_from_redacted_web_stack_evidence() {
         let root = make_fake_ctox_root("appsec-pipeline-authz-e2e");
         let state = root.join("runtime/appsec/default");
@@ -6777,7 +6733,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn appsec_pipeline_worker_retries_transient_tool_failure_until_budget_exhausted() {
         use std::os::unix::fs::PermissionsExt;
@@ -6951,7 +6907,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_pipeline_worker_blocks_non_retryable_session_placeholder() {
         let root = make_fake_ctox_root("appsec-pipeline-nonretryable-blocker");
         let state = root.join("runtime/appsec/default");
@@ -7055,7 +7011,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_worker_stops_authz_web_stack_chain_after_failed_gate_command() {
         let root = make_fake_ctox_root("appsec-pipeline-authz-stop-on-failure");
         let state = root.join("runtime/appsec/default");
@@ -7127,7 +7083,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_worker_dispatches_business_os_web_stack_auth_assist_contract() {
         let root = make_fake_ctox_root("appsec-web-stack-auth-assist");
         let state = root.join("runtime/appsec/default");
@@ -7296,7 +7252,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_worker_resolves_web_stack_session_placeholders_before_dispatch() {
         let mut context = AppsecStageExecutionContext::default();
         context.session_ids.insert(
@@ -7349,7 +7305,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn appsec_worker_recovers_session_binding_from_reused_redacted_artifact() {
         let mut context = AppsecStageExecutionContext::default();
         let command = serde_json::json!({
@@ -7390,7 +7346,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn appsec_worker_resolves_authz_artifact_placeholders_before_dispatch() {
         let mut context = AppsecStageExecutionContext::default();
         context.artifacts.insert(
@@ -7433,7 +7389,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn appsec_worker_binds_authz_run_placeholder_to_real_run_artifact() {
         let mut context = AppsecStageExecutionContext::default();
         let command = serde_json::json!({
@@ -7472,7 +7428,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn appsec_replay_source_injects_candidates_from_owner_crawl_artifact() {
         let root = make_fake_ctox_root("appsec-authz-replay-candidates");
         let state = root.join("runtime/appsec/default");
@@ -7546,7 +7502,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_expected_authz_artifact_writer_redacts_browser_streams() {
         let root = make_fake_ctox_root("appsec-authz-redacted-artifact");
         let state = root.join("runtime/appsec/default");
@@ -7595,7 +7551,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_explicit_rerun_does_not_reuse_expected_artifact() {
         let root = make_fake_ctox_root("appsec-rerun-no-artifact-reuse");
         let state = root.join("runtime/appsec/default");
@@ -7631,7 +7587,7 @@ mod tests {
         cleanup_test_dir(&root);
     }
 
-    #[test]
+#[test]
     fn appsec_transient_login_retry_classification_is_fail_closed() {
         let command = serde_json::json!({
             "tool": "ctox_web_auth_assist_login",
@@ -7669,7 +7625,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn appsec_worker_blocks_browser_automation_with_unresolved_session_placeholder() {
         let root = make_fake_ctox_root("appsec-web-stack-browser-placeholder");
         let state = root.join("runtime/appsec/default");

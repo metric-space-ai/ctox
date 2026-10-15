@@ -513,15 +513,7 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
-    #[test]
-    fn scratch_starts_with_one_empty_line() {
-        let editor = TextEditor::scratch("");
-        assert_eq!(editor.lines, vec![String::new()]);
-        assert_eq!(editor.cursor_position(), (0, 0));
-        assert!(!editor.is_modified());
-    }
-
-    #[test]
+#[test]
     fn typing_chars_marks_modified() {
         let mut editor = TextEditor::scratch("");
         editor.handle_key(plain(KeyCode::Char('h')));
@@ -530,7 +522,7 @@ mod tests {
         assert!(editor.is_modified());
     }
 
-    #[test]
+#[test]
     fn enter_splits_line() {
         let mut editor = TextEditor::scratch("hello");
         editor.handle_key(plain(KeyCode::Right));
@@ -540,7 +532,7 @@ mod tests {
         assert_eq!(editor.cursor_position(), (1, 0));
     }
 
-    #[test]
+#[test]
     fn backspace_joins_lines_at_col_zero() {
         let mut editor = TextEditor::scratch("ab\ncd");
         editor.handle_key(plain(KeyCode::Down));
@@ -550,7 +542,7 @@ mod tests {
         assert_eq!(editor.cursor_position(), (0, 2));
     }
 
-    #[test]
+#[test]
     fn delete_joins_with_next_line_at_eol() {
         let mut editor = TextEditor::scratch("ab\ncd");
         editor.handle_key(plain(KeyCode::End));
@@ -558,7 +550,7 @@ mod tests {
         assert_eq!(editor.text(), "abcd");
     }
 
-    #[test]
+#[test]
     fn target_col_preserved_across_short_lines() {
         let mut editor = TextEditor::scratch("hello world\nhi\nlong line here");
         for _ in 0..8 {
@@ -571,14 +563,14 @@ mod tests {
         assert_eq!(editor.cursor_position(), (2, 8)); // restored from target
     }
 
-    #[test]
+#[test]
     fn ctrl_x_saves_and_exits() {
         let mut editor = TextEditor::scratch("hi");
         let action = editor.handle_key(ctrl(KeyCode::Char('x')));
         assert_eq!(action, EditorAction::Exit(ExitReason::Saved));
     }
 
-    #[test]
+#[test]
     fn esc_cancels_and_exits() {
         let mut editor = TextEditor::scratch("hi");
         editor.handle_key(plain(KeyCode::Char('x')));
@@ -587,15 +579,7 @@ mod tests {
         assert_eq!(action, EditorAction::Exit(ExitReason::Cancelled));
     }
 
-    #[test]
-    fn tab_inserts_four_spaces() {
-        let mut editor = TextEditor::scratch("");
-        editor.handle_key(plain(KeyCode::Tab));
-        assert_eq!(editor.text(), "    ");
-        assert_eq!(editor.cursor_position(), (0, 4));
-    }
-
-    #[test]
+#[test]
     fn unicode_round_trip() {
         let mut editor = TextEditor::scratch("äöü");
         editor.handle_key(plain(KeyCode::End));

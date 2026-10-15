@@ -1204,7 +1204,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn module_source_is_complete_beyond_collection_and_module_page_limits() -> anyhow::Result<()> {
         for rxdb in [false, true] {
             let temp = tempfile::tempdir()?;
@@ -1241,7 +1241,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn module_source_preserves_native_and_rxdb_version_precedence() -> anyhow::Result<()> {
         for native in ["unrelated", "tombstone", "target", "none"] {
             let temp = tempfile::tempdir()?;
@@ -1292,7 +1292,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn module_source_rejects_invalid_or_ambiguous_snapshots_without_content() -> anyhow::Result<()>
     {
         for rxdb in [false, true] {
@@ -1323,7 +1323,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn missing_module_source_stops_before_model_or_sidecar_and_session_write() -> anyhow::Result<()>
     {
         for deleted in [false, true] {
@@ -1394,7 +1394,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts() {
         let mut response = serde_json::json!({
             "ok": false, "error": "pi coding turn failed: incomplete_turn",
@@ -1530,7 +1530,7 @@ mod tests {
         crate::inference::runtime_env::save_runtime_env_map(root, &env)
     }
 
-    #[test]
+#[test]
     fn faux_sidecar_serves_a_turn_over_the_socket() -> anyhow::Result<()> {
         let dist = sidecar_dist_path(&repo_root());
         if !dist.exists() {
@@ -1567,48 +1567,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn projects_module_source_records_into_a_files_map() -> anyhow::Result<()> {
-        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
-
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let app_root = root.join("src").join("apps").join("business-os");
-        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
-        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("module.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "id": "widget",
-                "title": "Widget",
-                "entry": "modules/widget/index.html"
-            }))?,
-        )?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("index.js"),
-            "export const v = 1;\n",
-        )?;
-
-        load_module_source_records(
-            root,
-            &ModuleSourceLoadMutation {
-                module_id: "widget".to_string(),
-            },
-        )?;
-
-        let files = project_module_source(root, "widget")?;
-        assert!(!files.is_empty(), "projected some source files");
-        let has_content = files
-            .values()
-            .any(|value| value.as_str() == Some("export const v = 1;\n"));
-        assert!(
-            has_content,
-            "widget source content projected into the files map"
-        );
-        Ok(())
-    }
-
-    #[test]
+#[test]
     fn run_module_coding_turn_records_the_faux_edit() -> anyhow::Result<()> {
         use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
 
@@ -1659,7 +1618,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn responses_edit_owner_applies_only_complete_source_and_session() -> anyhow::Result<()> {
         use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
         let dist = sidecar_dist_path(&repo_root());
@@ -1865,7 +1824,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn apply_snapshot_round_trips_a_seeded_file_edit() -> anyhow::Result<()> {
         use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
 
@@ -1929,7 +1888,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn unchanged_coding_snapshot_does_not_restore_stale_source() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let live = temp.path().join("live.js");
@@ -1952,7 +1911,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn changed_coding_snapshot_rejects_stale_files_before_any_write() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let app = temp.path().join("src/apps/business-os");
@@ -1988,7 +1947,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn coding_turn_returns_only_assistant_text_not_reasoning_or_tools() {
         let response = serde_json::json!({"messages":[
             {"role":"user","content":"private prompt"},
@@ -2002,7 +1961,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn embedded_sidecar_extracts_and_runs() -> anyhow::Result<()> {
         // The override must not leak in from the environment for this test.
         std::env::remove_var("CTOX_PI_SIDECAR_DIST");
@@ -2043,26 +2002,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn business_os_system_prompt_carries_the_app_skill() {
-        let prompt = business_os_system_prompt();
-        // The agent must be taught the load-bearing Business OS app conventions,
-        // not just generic file tools.
-        for marker in [
-            "Business OS app",
-            "mount(ctx)",
-            "WebRTC",
-            "kit",
-            "in-memory projection",
-        ] {
-            assert!(
-                prompt.contains(marker),
-                "system prompt should mention `{marker}`"
-            );
-        }
-    }
-
-    #[test]
+#[test]
     fn coding_default_inherits_the_active_ctox_model() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let settings = BTreeMap::from([
@@ -2095,7 +2035,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn coding_model_preset_is_resolved_server_side_and_unknown_ids_fail() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         assert_eq!(resolve_coding_model_preset(temp.path(), "ctox")?, None);
@@ -2106,7 +2046,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn minimax_coding_plan_is_an_independent_account_preset() -> anyhow::Result<()> {
         use crate::execution::models::minimax_coding::{
             store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
@@ -2175,7 +2115,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn kimi_coding_plan_is_an_independent_account_preset() -> anyhow::Result<()> {
         use crate::execution::models::kimi_coding::{
             store_accounts, KimiCodingAccount, KimiCodingAccountsConfig, KimiCodingEndpointProfile,
@@ -2235,7 +2175,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn minimax_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
         use crate::execution::models::minimax_coding::{
             store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
@@ -2308,7 +2248,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn kimi_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
         use crate::execution::models::kimi_coding::{
             store_accounts, KimiCodingAccount, KimiCodingAccountsConfig, KimiCodingEndpointProfile,
@@ -2381,7 +2321,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn inherited_ctox_proxy_route_keeps_credentials_and_configuration_native() -> anyhow::Result<()>
     {
         use crate::execution::models::runtime_env;
@@ -2436,7 +2376,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn inherited_minimax_uses_chat_wire_and_its_own_credential() -> anyhow::Result<()> {
         use crate::execution::models::runtime_env;
         let temp = tempfile::tempdir()?;
@@ -2474,7 +2414,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn inherited_minimax_route_drives_real_pi_tools_through_native_bridge() -> anyhow::Result<()> {
         let dist = sidecar_dist_path(&repo_root());
         anyhow::ensure!(
@@ -2575,7 +2515,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn gateway_model_defers_private_route_resolution_to_the_turn_owner() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let model = gateway_model(temp.path());

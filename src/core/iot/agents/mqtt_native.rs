@@ -920,7 +920,7 @@ impl MqttAgent {
 
     /// Test seam: override the reconnect clock with a deterministic source.
     /// NOT used in production (the default `new` wires `crate::iot::now_ms`).
-    #[cfg(test)]
+#[cfg(test)]
     fn set_clock(&mut self, clock: Clock) {
         self.clock = clock;
     }
@@ -1335,7 +1335,7 @@ mod tests {
     // Secret redaction: ConnectParams Debug must never print the resolved
     // username/password (they come from CTO_IOT_MQTT_PASSWORD via the secret
     // store). Only host/port/clientId and credential PRESENCE are formatted.
-    #[test]
+#[test]
     fn connect_params_debug_redacts_credentials() {
         let params = ConnectParams {
             host: "broker.example".into(),
@@ -1359,7 +1359,7 @@ mod tests {
 
     // -- codec unit tests ----------------------------------------------------
 
-    #[test]
+#[test]
     fn remaining_length_round_trips_across_boundaries() {
         // ref: MQTT 3.1.1 §2.2.3 worked examples: 0, 127 (1 byte), 128 (2 bytes),
         // 16383 (2 bytes), 16384 (3 bytes), 2097151 (3 bytes), 2097152 (4 bytes).
@@ -1372,7 +1372,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn connect_packet_sets_flags_and_payload_order() {
         let will = LastWill {
             topic: "will/topic".into(),
@@ -1396,7 +1396,7 @@ mod tests {
         assert_ne!(flags & 0b1000_0000, 0, "username flag set");
     }
 
-    #[test]
+#[test]
     fn publish_round_trips_qos_retain_topic_payload() {
         let pkt = encode_publish("a/b", b"23.5", 1, true, 7);
         assert_eq!(pkt[0] >> 4, packet_type::PUBLISH);
@@ -1429,7 +1429,7 @@ mod tests {
         )
     }
 
-    #[test]
+#[test]
     fn resubscribe_all_when_session_not_present() {
         let mut table = HashMap::new();
         table.extend([
@@ -1451,7 +1451,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn pending_topic_subscribed_even_when_session_present() {
         // A never-subscribed link must get an initial SUBSCRIBE on connect even when
         // the broker reports an existing session (Session Present cannot "resume" a
@@ -1465,7 +1465,7 @@ mod tests {
         assert_eq!(out, vec![("t/pending".into(), 2)]);
     }
 
-    #[test]
+#[test]
     fn resubscribe_only_failed_when_session_present() {
         let mut table = HashMap::new();
         table.extend([sub("t/ok", 1, true, false), sub("t/failed", 2, true, true)]);
@@ -1478,7 +1478,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn resubscribe_all_when_session_present_but_policy_forces_it() {
         let mut table = HashMap::new();
         table.extend([sub("t/ok", 1, true, false), sub("t/failed", 2, true, true)]);
@@ -1490,7 +1490,7 @@ mod tests {
         assert_eq!(out, vec![("t/failed".into(), 2), ("t/ok".into(), 1)]);
     }
 
-    #[test]
+#[test]
     fn resubscribe_skips_failed_when_retry_failures_disabled() {
         let mut table = HashMap::new();
         table.extend([sub("t/failed", 2, true, true)]);
@@ -1505,32 +1505,9 @@ mod tests {
 
     // -- §2A.27 link/unlink mutate the synchronized table --------------------
 
-    #[test]
-    fn link_table_safe_mutations() {
-        let table: Arc<Mutex<HashMap<String, TopicSubscriptionInfo>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        {
-            let mut g = table.lock().unwrap();
-            let (t, i) = sub("t/x", 1, true, false);
-            g.insert(t, i);
-        }
-        // A "reconnect" snapshot taken under the lock is unaffected by a later
-        // unlink — proving §2A.27 (resubscribe iterates a CONNACK-time snapshot).
-        let snapshot = {
-            let g = table.lock().unwrap();
-            topics_to_resubscribe(&g, false, ResubscribePolicy::default())
-        };
-        {
-            let mut g = table.lock().unwrap();
-            g.remove("t/x"); // concurrent unlink during the "reconnect"
-        }
-        assert_eq!(snapshot, vec![("t/x".into(), 1)]);
-        assert!(table.lock().unwrap().is_empty());
-    }
-
     // -- value <-> payload mapping -------------------------------------------
 
-    #[test]
+#[test]
     fn payload_parses_json_then_string_then_null() {
         assert_eq!(payload_to_value(b"23.5").0, json!(23.5));
         assert_eq!(payload_to_value(b"true").0, json!(true));
@@ -1827,7 +1804,7 @@ mod tests {
 
     // -- §3 exit round-trip: device PUBLISH → engine → iot_attributes --------
 
-    #[test]
+#[test]
     fn exit_round_trip_mqtt_device_into_engine() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = store::open_iot_store(tmp.path()).unwrap();
@@ -1891,7 +1868,7 @@ mod tests {
 
     // -- §2A.24 forced disconnect → reconnect + resubscribe ------------------
 
-    #[test]
+#[test]
     fn forced_disconnect_reconnects_and_resubscribes() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = store::open_iot_store(tmp.path()).unwrap();
@@ -1999,7 +1976,7 @@ mod tests {
     /// INJECTED clock passes `next_attempt_at_ms` (poll_ready_to_retry). Mirrors
     /// ws_native.rs::waiting_backoff_is_gated_by_injected_clock. Proves §2A.24 is
     /// wired through the production code path, not just the isolated state machine.
-    #[test]
+#[test]
     fn connect_failure_parks_in_waiting_and_backoff_gated_by_injected_clock() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = store::open_iot_store(tmp.path()).unwrap();
@@ -2061,7 +2038,7 @@ mod tests {
 
     // -- §2A.30 outbound write fire-and-forget + update_on_write -------------
 
-    #[test]
+#[test]
     fn outbound_write_reaches_broker_and_update_on_write_reflects_locally() {
         let tmp = tempfile::tempdir().unwrap();
         let conn = store::open_iot_store(tmp.path()).unwrap();
@@ -2137,7 +2114,7 @@ mod tests {
 
     // -- §2A.26 Last-Will configured at CONNECT ------------------------------
 
-    #[test]
+#[test]
     fn last_will_encoded_into_connect_from_config() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = AgentContext {

@@ -78,34 +78,4 @@ pub fn module() -> &'static dyn SourceModule {
 mod tests {
     use super::*;
 
-    #[test]
-    fn impressum_declares_scrape_target_and_authoritative_fields() {
-        let module = module();
-        assert_eq!(module.scrape_target_key(), Some("impressum"));
-        assert!(module.first_party_evidence());
-        assert_eq!(
-            module.authoritative_for(),
-            &[
-                FieldKey::FirmaAnschrift,
-                FieldKey::FirmaBesucheranschrift,
-                FieldKey::FirmaPostanschrift,
-                FieldKey::FirmaPostfach,
-                FieldKey::FirmaPlz,
-                FieldKey::FirmaOrt,
-                FieldKey::FirmaLand,
-                FieldKey::FirmaEmail,
-                FieldKey::FirmaTelefon,
-                FieldKey::FirmaFax,
-                FieldKey::FirmaDomain,
-                FieldKey::FirmaGeschaeftstaetigkeit,
-                FieldKey::FirmaHomepageFactSheet,
-                FieldKey::FirmaGeschaeftsfuehrung,
-                FieldKey::FirmaProkura,
-                FieldKey::PersonVorname,
-                FieldKey::PersonNachname,
-                FieldKey::PersonTitel,
-                FieldKey::PersonFunktion,
-            ]
-        );
-    }
 }

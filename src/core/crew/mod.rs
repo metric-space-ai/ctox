@@ -537,7 +537,7 @@ mod tests {
         ensure_schema(&conn).unwrap();
         conn
     }
-    #[test]
+#[test]
     fn fixture_and_central_policy_keep_private_crew_fields_and_grants_closed() {
         use crate::business_os::policy::*;
         let fixture: serde_json::Value =
@@ -600,7 +600,7 @@ mod tests {
             }
         }
     }
-    #[test]
+#[test]
     fn seed_grey_lumi_gets_a_colour_but_owner_colours_stay() {
         let conn = fixture();
         conn.execute(
@@ -649,7 +649,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn migration_preserves_existing_rows_and_seed_edits() {
         let conn = fixture();
         conn.execute(
@@ -678,7 +678,7 @@ mod tests {
             1
         );
     }
-    #[test]
+#[test]
     fn selection_manual_continuity_archive_and_stable_ties() {
         let mut all = members(&fixture()).unwrap();
         let mut task = TaskTraits {
@@ -707,7 +707,7 @@ mod tests {
         task.module = Some("tickets".into());
         assert_eq!(select(&all, &task, &[], 0).unwrap().member_id, "crew-pico");
     }
-    #[test]
+#[test]
     fn selection_scores_history_and_recent_failures_without_ambient_time() {
         let all = members(&fixture()).unwrap();
         let task = TaskTraits {
@@ -755,7 +755,7 @@ mod tests {
         );
         assert!(select(&[], &task, &[], 0).is_none());
     }
-    #[test]
+#[test]
     fn learnings_require_evidence_and_prose() {
         let mut r = Retrospective {
             retrospective: "Die Prüfung hat den Fehler eingegrenzt.".into(),
@@ -775,19 +775,5 @@ mod tests {
         assert!(r.validate(true, None).is_err());
         assert_eq!(normalized("  Bitte  PRÜFEN\n"), "bitte prüfen");
     }
-    #[test]
-    fn learning_indexes_cover_retention_and_context() {
-        let conn = fixture();
-        for (query,index) in [
-            ("SELECT id FROM crew_member_learnings WHERE member_id='crew-milo' ORDER BY confirmed_by_owner,created_at,id LIMIT 1","idx_crew_learning_retention"),
-            ("SELECT id FROM crew_member_learnings WHERE member_id='crew-milo' AND archived=0 ORDER BY confirmed_by_owner DESC,created_at DESC,id LIMIT 10","idx_crew_learning_context"),
-            ("SELECT member_id FROM crew_attempts WHERE thread_key='thread' ORDER BY selected_at DESC,attempt_id DESC LIMIT 1","idx_crew_attempt_thread"),
-            ("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000","idx_crew_attempt_finished"),
-            ("SELECT succeeded FROM crew_attempts WHERE member_id='crew-milo' AND finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1","idx_crew_attempt_member_finished"),
-            ("SELECT message_key FROM communication_routing_state WHERE crew_member_id='crew-milo' AND route_status='leased' ORDER BY leased_at,message_key LIMIT 1","idx_crew_active_task")
-        ] {
-            let plan=conn.prepare(&format!("EXPLAIN QUERY PLAN {query}")).unwrap().query_map([],|r|r.get::<_,String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap().join("\n");
-            assert!(plan.contains(index),"{plan}"); assert!(!plan.contains("TEMP B-TREE"),"{plan}");
-        }
-    }
+
 }

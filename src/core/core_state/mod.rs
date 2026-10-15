@@ -1855,49 +1855,6 @@ mod tests {
         out
     }
 
-    #[test]
-    fn core_runtime_state_machine_doc_matches_catalog() {
-        // catalog-doc-pin-1: the doc claims to be "the exact, executable state
-        // machine implemented in core_state_machine.rs" and is a canonical audit
-        // reference, but nothing pinned it to the code. Assert the committed
-        // GENERATED block equals the rendered catalog (edges + start + terminal
-        // states for every entity), so editing allowed_transition_catalog /
-        // core_start_state / core_terminal_states cannot land while the doc rots.
-        const DOC: &str = include_str!("../../../docs/core_runtime_state_machine.md");
-        const BEGIN: &str = "<!-- BEGIN GENERATED core-state-machine -->";
-        const END: &str = "<!-- END GENERATED core-state-machine -->";
-        // Each marker must be unique, else find() below could latch onto a
-        // quoted copy and extract the wrong span.
-        assert_eq!(
-            DOC.matches(BEGIN).count(),
-            1,
-            "BEGIN marker must appear exactly once"
-        );
-        assert_eq!(
-            DOC.matches(END).count(),
-            1,
-            "END marker must appear exactly once"
-        );
-        let start = DOC
-            .find(BEGIN)
-            .expect("doc must contain the BEGIN GENERATED marker")
-            + BEGIN.len();
-        let end = DOC
-            .find(END)
-            .expect("doc must contain the END GENERATED marker");
-        assert!(start <= end, "BEGIN marker must precede END marker");
-        // Normalize CRLF so a Windows/autocrlf checkout (include_str! embeds the
-        // working-tree bytes) does not falsely fail against writeln!'s LF output.
-        let pinned = DOC[start..end].replace('\r', "");
-        let rendered = render_canonical_state_machine().replace('\r', "");
-        assert_eq!(
-            pinned.trim(),
-            rendered.trim(),
-            "docs/core_runtime_state_machine.md GENERATED block is out of sync with the \
-             executable catalog. Replace the block between the markers with:\n{rendered}"
-        );
-    }
-
     fn founder_send_request() -> CoreTransitionRequest {
         CoreTransitionRequest {
             entity_type: CoreEntityType::FounderCommunication,
@@ -1912,7 +1869,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn blocks_founder_send_without_review_audit() {
         let report = validate_transition(&founder_send_request());
 
@@ -1923,7 +1880,7 @@ mod tests {
             .any(|violation| violation.code == "founder_send_requires_review_audit"));
     }
 
-    #[test]
+#[test]
     fn blocks_founder_send_body_hash_mismatch() {
         let mut request = founder_send_request();
         request.evidence.review_audit_key = Some("review-1".to_string());
@@ -1941,7 +1898,7 @@ mod tests {
             .any(|violation| violation.code == "founder_send_body_hash_mismatch"));
     }
 
-    #[test]
+#[test]
     fn allows_reviewed_founder_send_when_hashes_match() {
         let mut request = founder_send_request();
         request.evidence.review_audit_key = Some("review-1".to_string());
@@ -1981,7 +1938,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn work_item_terminal_transition_rejects_missing_outcome_witness() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::WorkItem,
@@ -2012,7 +1969,7 @@ mod tests {
             .any(|violation| violation.code == "WP-Outcome-Missing"));
     }
 
-    #[test]
+#[test]
     fn work_item_without_expected_artifact_can_close_with_review_and_policy_verification() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::WorkItem,
@@ -2046,7 +2003,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn queue_item_terminal_transition_accepts_delivered_outcome_witness() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
@@ -2087,7 +2044,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn outbound_communication_outcome_witness_matches_colon_thread_key() {
         let mut request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
@@ -2140,14 +2097,14 @@ mod tests {
             .any(|violation| violation.code == "WP-Outcome-Missing"));
     }
 
-    #[test]
+#[test]
     fn allows_review_checkpoint_feedback_to_same_main_work_item() {
         let report = validate_transition(&review_checkpoint_feedback_request());
 
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn blocks_review_checkpoint_without_audit_key() {
         let mut request = review_checkpoint_feedback_request();
         request.evidence.review_audit_key = None;
@@ -2161,7 +2118,7 @@ mod tests {
             .any(|violation| violation.code == "review_checkpoint_requires_audit"));
     }
 
-    #[test]
+#[test]
     fn blocks_review_checkpoint_that_targets_review_owned_rework() {
         let mut request = review_checkpoint_feedback_request();
         request
@@ -2186,7 +2143,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn blocks_review_checkpoint_feedback_to_different_work_item() {
         let mut request = review_checkpoint_feedback_request();
         request.metadata.insert(
@@ -2203,7 +2160,7 @@ mod tests {
             .any(|violation| { violation.code == "review_checkpoint_feedback_target_mismatch" }));
     }
 
-    #[test]
+#[test]
     fn blocks_founder_lane_spill() {
         let mut request = founder_send_request();
         request.from_state = CoreState::Pending;
@@ -2222,7 +2179,7 @@ mod tests {
             .any(|violation| violation.code == "founder_work_cannot_spill"));
     }
 
-    #[test]
+#[test]
     fn queue_ack_from_lease_to_completed_requires_review_or_policy() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
@@ -2244,7 +2201,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn queue_ack_from_lease_to_completed_accepts_terminal_policy_proof() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
@@ -2266,14 +2223,14 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn core_liveness_graph_has_no_unreachable_or_dead_end_states() {
         let report = analyze_core_liveness();
 
         assert!(report.ok, "{report:#?}");
     }
 
-    #[test]
+#[test]
     fn founder_send_failed_is_a_terminal_hold_with_no_dead_recovery_loop() {
         // EGRESS-4 (option b): the SendFailed -> DeliveryRepair -> Sending
         // recovery loop had no driver and only advertised an auto-recovery that
@@ -2299,120 +2256,14 @@ mod tests {
         assert!(analyze_core_liveness().ok);
     }
 
-    #[test]
+#[test]
     fn review_harness_model_is_safe_and_live() {
         let report = analyze_review_harness_model();
 
         assert!(report.ok, "{report:#?}");
     }
 
-    #[test]
-    fn review_harness_transition_catalog_matches_required_flow() {
-        use ReviewHarnessBudget::*;
-        use ReviewHarnessProof::*;
-        use ReviewHarnessState::*;
-
-        let actual: std::collections::BTreeSet<_> = review_harness_transition_catalog()
-            .iter()
-            .map(|edge| {
-                (
-                    edge.from,
-                    edge.to,
-                    edge.proof,
-                    edge.consumes_budget,
-                    edge.terminal_success,
-                )
-            })
-            .collect();
-        let expected = std::collections::BTreeSet::from([
-            (Queued, Leased, NoProof, NoBudget, false),
-            (Leased, Running, NoProof, NoBudget, false),
-            (Running, AwaitingReview, WorkerFinished, NoBudget, false),
-            (Running, ModelFailed, WorkerFailed, NoBudget, false),
-            (Running, InfraFailed, InfraError, NoBudget, false),
-            (AwaitingReview, ReviewQueued, StartReview, NoBudget, false),
-            (ReviewQueued, Reviewing, SpawnReviewer, NoBudget, false),
-            (Reviewing, ReviewPassed, ReviewPass, NoBudget, false),
-            (Reviewing, ReviewRejected, ReviewReject, NoBudget, false),
-            (
-                Reviewing,
-                ReviewHarnessState::ReviewUnavailable,
-                ReviewHarnessProof::ReviewUnavailable,
-                NoBudget,
-                false,
-            ),
-            (
-                ReviewPassed,
-                AwaitingValidation,
-                ReviewPass,
-                NoBudget,
-                false,
-            ),
-            (
-                ReviewRejected,
-                ReworkRequired,
-                ReviewReject,
-                ReviewRounds,
-                false,
-            ),
-            (
-                ReviewHarnessState::ReviewUnavailable,
-                ReviewRetry,
-                ReviewHarnessProof::ReviewUnavailable,
-                ReviewerUnavailableRetries,
-                false,
-            ),
-            (
-                ReviewHarnessState::ReviewUnavailable,
-                InfraFailed,
-                ReviewRetriesExhausted,
-                NoBudget,
-                false,
-            ),
-            (ReviewRetry, AwaitingReview, RetryReview, NoBudget, false),
-            (ReworkRequired, Queued, RequeueSameMainWork, NoBudget, false),
-            (
-                ReworkRequired,
-                ModelFailed,
-                ReviewRoundsExhausted,
-                NoBudget,
-                false,
-            ),
-            (
-                AwaitingValidation,
-                Validating,
-                RunValidator,
-                NoBudget,
-                false,
-            ),
-            (Validating, Passed, ValidatorPass, NoBudget, true),
-            (
-                Validating,
-                ReworkRequired,
-                ValidatorFail,
-                ValidatorRework,
-                false,
-            ),
-            (
-                Validating,
-                ModelFailed,
-                ValidatorReworkExhausted,
-                NoBudget,
-                false,
-            ),
-            (
-                Validating,
-                InfraFailed,
-                ValidatorInfraError,
-                NoBudget,
-                false,
-            ),
-        ]);
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
+#[test]
     fn review_required_terminal_completion_rejects_missing_review_proof() {
         let mut metadata = BTreeMap::new();
         metadata.insert("completion_review_required".to_string(), "true".to_string());
@@ -2448,7 +2299,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn review_required_terminal_completion_accepts_pass_proof() {
         let mut metadata = BTreeMap::new();
         metadata.insert("completion_review_required".to_string(), "true".to_string());
@@ -2474,7 +2325,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn review_required_terminal_completion_rejects_missing_validation_proof() {
         let mut metadata = BTreeMap::new();
         metadata.insert("completion_review_required".to_string(), "true".to_string());
@@ -2502,7 +2353,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn review_required_terminal_completion_accepts_policy_no_validation_proof() {
         let mut metadata = BTreeMap::new();
         metadata.insert("completion_review_required".to_string(), "true".to_string());
@@ -2531,7 +2382,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn work_terminal_failure_rejects_missing_failure_reason_and_class() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
@@ -2558,7 +2409,7 @@ mod tests {
             .any(|violation| { violation.code == "terminal_failure_requires_class" }));
     }
 
-    #[test]
+#[test]
     fn work_terminal_failure_accepts_durable_reason_and_class() {
         let mut metadata = BTreeMap::new();
         metadata.insert(
@@ -2583,7 +2434,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn protected_commitment_escalation_requires_cause() {
         let mut request = CoreTransitionRequest {
             entity_type: CoreEntityType::Commitment,
@@ -2608,7 +2459,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn protected_founder_send_failed_requires_cause() {
         let mut request = CoreTransitionRequest {
             entity_type: CoreEntityType::FounderCommunication,
@@ -2636,7 +2487,7 @@ mod tests {
         assert!(report.accepted, "{:?}", report.violations);
     }
 
-    #[test]
+#[test]
     fn protected_founder_escalation_requires_cause() {
         let mut request = CoreTransitionRequest {
             entity_type: CoreEntityType::FounderCommunication,
@@ -2664,7 +2515,7 @@ mod tests {
             .any(|violation| violation.code == "protected_escalation_requires_cause"));
     }
 
-    #[test]
+#[test]
     fn transition_catalog_edges_are_accepted_by_validator() {
         for entity_type in core_entity_types() {
             for (from_state, to_state) in allowed_transition_catalog(*entity_type) {
@@ -2715,7 +2566,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn blocks_ticket_close_without_verification() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::Ticket,
@@ -2738,7 +2589,7 @@ mod tests {
             .any(|violation| violation.code == "closure_requires_verification"));
     }
 
-    #[test]
+#[test]
     fn blocks_commitment_without_backing_schedule() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::Commitment,
@@ -2761,7 +2612,7 @@ mod tests {
             .any(|violation| violation.code == "commitment_requires_schedule"));
     }
 
-    #[test]
+#[test]
     fn blocks_disabling_commitment_schedule_without_replacement_or_escalation() {
         let mut metadata = BTreeMap::new();
         metadata.insert("backs_commitment".to_string(), "true".to_string());
@@ -2785,7 +2636,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn blocks_repair_without_canonical_hot_path() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::Repair,

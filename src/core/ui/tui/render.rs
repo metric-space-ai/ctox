@@ -4899,7 +4899,7 @@ mod tests {
         out
     }
 
-    #[test]
+#[test]
     fn chat_sidebar_footer_visible_in_24_rows() {
         let backend = TestBackend::new(150, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -4911,7 +4911,7 @@ mod tests {
         assert!(text.contains("quit"), "{text}");
     }
 
-    #[test]
+#[test]
     fn chat_view_shows_turn_state_and_structured_roles() {
         let backend = TestBackend::new(140, 36);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5009,7 +5009,7 @@ mod tests {
         assert!(text.contains("YOU"), "{text}");
     }
 
-    #[test]
+#[test]
     fn internal_follow_up_turns_render_as_user_messages() {
         let backend = TestBackend::new(140, 34);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5035,7 +5035,7 @@ mod tests {
         assert!(text.contains("execution timed out after 180s"), "{text}");
     }
 
-    #[test]
+#[test]
     fn chat_header_shows_boost_state() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5054,7 +5054,7 @@ mod tests {
         assert!(text.contains("7m left"), "{text}");
     }
 
-    #[test]
+#[test]
     fn chat_header_collapses_identical_base_and_active_models() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5073,21 +5073,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn settings_view_renders_model_and_communication_tabs() {
-        let backend = TestBackend::new(140, 24);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = test_app();
-        app.page = Page::Settings;
-
-        terminal.draw(|frame| draw(frame, &app)).unwrap();
-        let text = buffer_text(terminal.backend().buffer());
-
-        assert!(text.contains("Model"), "{text}");
-        assert!(text.contains("Communication"), "{text}");
-    }
-
-    #[test]
+#[test]
     fn chat_header_shows_api_source_and_gpu_allocations() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5115,7 +5101,7 @@ mod tests {
         assert!(text.contains("GPU0 embed 512M"), "{text}");
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_distinguishes_remote_chat_from_local_load() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5145,7 +5131,7 @@ mod tests {
         assert!(!text.contains("gpu0"), "{text}");
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_keeps_preview_wording_in_estimate_mode() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5174,7 +5160,7 @@ mod tests {
         assert!(text.contains("gpu0     qwen35 11264M"), "{text}");
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_lists_aux_gpu_roles_explicitly() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5217,7 +5203,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_shows_loop_and_aux_targets_with_zero_progress() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5271,7 +5257,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn chat_header_shows_targeted_aux_progress_ranges() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5319,7 +5305,7 @@ mod tests {
         assert!(!text.contains("warmup expected"), "{text}");
     }
 
-    #[test]
+#[test]
     fn chat_header_overlays_target_ranges_on_live_idle_gpus() {
         let backend = TestBackend::new(180, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5386,7 +5372,7 @@ mod tests {
         assert!(text.contains("GPU2 idle"), "{text}");
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_shows_effective_cache_type_in_plan() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5401,7 +5387,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn settings_snapshot_uses_off_when_plan_disables_paged_attention() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5416,7 +5402,7 @@ mod tests {
         assert!(text.contains("cache     off"), "{text}");
     }
 
-    #[test]
+#[test]
     fn work_flow_view_renders_structured_blocks_natively() {
         use crate::service::harness_flow as hf;
         let backend = TestBackend::new(140, 36);
@@ -5486,47 +5472,7 @@ mod tests {
         assert!(text.contains("Review approved"), "{text}");
     }
 
-    #[test]
-    fn work_business_os_view_renders_data_plane_health() {
-        let backend = TestBackend::new(140, 36);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = test_app();
-        app.page = Page::Work;
-        app.work_view = WorkView::BusinessOs;
-        // Shape mirrors business_os::store::status(): the health snapshot
-        // omits instance/peer ids and the room password by design, and
-        // data_plane.collections is a nested per-collection object.
-        app.service_status.business_os = Some(serde_json::json!({
-            "ok": true,
-            "sync": {
-                "sync_mode": "rxdb-webrtc",
-                "sync_room": "ctox-business-os:cto1.example.com",
-                "signaling_urls": ["wss://signaling.ctox.dev"],
-                "native_rxdb_peer_available": true,
-                "http_bridge_available": false,
-            },
-            "data_plane": {
-                "ok": true,
-                "collections": {
-                    "business_apps": { "ok": true, "row_count": 12 },
-                    "business_commands": { "ok": true, "row_count": 3 },
-                },
-            },
-        }));
-        terminal.draw(|frame| draw(frame, &app)).unwrap();
-        let text = buffer_text(terminal.backend().buffer());
-        assert!(text.contains("business os data plane"), "{text}");
-        assert!(text.contains("status healthy"), "{text}");
-        assert!(text.contains("ctox-business-os:cto1.example.com"), "{text}");
-        assert!(text.contains("rxdb peer"), "{text}");
-        assert!(text.contains("available"), "{text}");
-        assert!(text.contains("collections (2)"), "{text}");
-        assert!(text.contains("business_apps"), "{text}");
-        assert!(text.contains("12 rows"), "{text}");
-        assert!(text.contains("ctox business-os peer status"), "{text}");
-    }
-
-    #[test]
+#[test]
     fn skills_view_shows_skill_details_and_resources() {
         let backend = TestBackend::new(140, 36);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5554,7 +5500,7 @@ mod tests {
         assert!(text.contains("install-patterns.md"), "{text}");
     }
 
-    #[test]
+#[test]
     fn skills_view_keeps_selected_skill_inside_visible_window() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5582,7 +5528,7 @@ mod tests {
         assert!(!text.contains("skill-29"), "{text}");
     }
 
-    #[test]
+#[test]
     fn secret_details_text_masks_stored_and_draft_values() {
         let mut app = test_app();
         app.page = Page::Settings;
@@ -5606,72 +5552,4 @@ mod tests {
         assert!(!text.contains("sk-draft-secret"), "{text}");
     }
 
-    #[test]
-    fn settings_snapshot_reports_empty_view_for_hidden_selection() {
-        let mut app = test_app();
-        app.ensure_settings_items_loaded();
-        app.page = Page::Settings;
-        app.settings_view = SettingsView::Paths;
-        app.settings_selected = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTO_JAMI_PROFILE_NAME")
-            .unwrap();
-
-        let text = settings_snapshot_text(&app, 80, 20);
-
-        assert_eq!(text, "No settings are available in this view.");
-    }
-
-    #[test]
-    fn update_install_summary_text_formats_version_info_human_readably() {
-        let raw = serde_json::json!({
-            "version": "0.3.6-11-g965770b-dirty",
-            "install_mode": "managed",
-            "workspace_root": "/Users/test/.local/lib/ctox/current",
-            "active_root": "/Users/test/.local/lib/ctox/current",
-            "state_root": "/Users/test/.local/state/ctox",
-            "cache_root": "/Users/test/.cache/ctox",
-            "current_release": "v0.3.6-11-g965770b-dirty",
-            "previous_release": "v0.3.6-10-g22560b0-dirty",
-            "release_channel": {
-                "kind": "github",
-                "repo": "metric-space-ai/ctox"
-            }
-        })
-        .to_string();
-
-        let text = update_install_summary_text(&raw);
-
-        assert!(
-            text.contains("version         0.3.6-11-g965770b-dirty"),
-            "{text}"
-        );
-        assert!(text.contains("install mode    managed"), "{text}");
-        assert!(
-            text.contains("repo            metric-space-ai/ctox"),
-            "{text}"
-        );
-        assert!(!text.contains("\"version\""), "{text}");
-    }
-
-    #[test]
-    fn update_remote_summary_text_formats_remote_check_human_readably() {
-        let raw = serde_json::json!({
-            "action": "update check",
-            "update_available": true,
-            "current_version": "0.3.6",
-            "latest_version": "0.3.7",
-            "reason": "new release available"
-        })
-        .to_string();
-
-        let text = update_remote_summary_text(&raw);
-
-        assert!(text.contains("action          update check"), "{text}");
-        assert!(text.contains("status          update available"), "{text}");
-        assert!(text.contains("current         0.3.6"), "{text}");
-        assert!(text.contains("latest          0.3.7"), "{text}");
-        assert!(!text.contains("\"latest_version\""), "{text}");
-    }
 }

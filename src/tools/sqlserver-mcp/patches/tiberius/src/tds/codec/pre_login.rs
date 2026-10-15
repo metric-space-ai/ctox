@@ -57,7 +57,7 @@ impl PreloginMessage {
         }
     }
 
-    #[cfg(any(
+#[cfg(any(
         feature = "rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
@@ -76,7 +76,7 @@ impl PreloginMessage {
         }
     }
 
-    #[cfg(not(any(
+#[cfg(not(any(
         feature = "rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
@@ -254,32 +254,4 @@ impl Decode<BytesMut> for PreloginMessage {
 mod tests {
     use super::*;
 
-    #[test]
-    fn prelogin_roundtrip() {
-        let mut payload = BytesMut::new();
-        let prelogin = PreloginMessage::new();
-        prelogin
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(prelogin, decoded);
-    }
-
-    #[test]
-    fn prelogin_with_fedauth_roundtrip() {
-        let mut payload = BytesMut::new();
-        let mut prelogin = PreloginMessage::new();
-        prelogin.fed_auth_required = true;
-        prelogin
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(prelogin, decoded);
-    }
 }

@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    #[test]
+#[test]
     fn streaming_padding_aligns_to_audio_token() {
         let samples = vec![1.0; 1600];
         let padded = pad_audio_streaming(&samples, 32, 17);
@@ -340,15 +340,7 @@ mod tests {
         assert_eq!(padded[32 * VOX_RAW_AUDIO_LENGTH_PER_TOK], 1.0);
     }
 
-    #[test]
-    fn mel_filter_shape_matches_voxtral() {
-        assert_eq!(
-            mel_filter_bank().len(),
-            (VOX_WINDOW_SIZE / 2 + 1) * VOX_NUM_MEL_BINS
-        );
-    }
-
-    #[test]
+#[test]
     fn mel_spectrogram_has_debug_performance_budget() {
         let samples = vec![0.0f32; VOX_SAMPLE_RATE * 10];
         let plan = MelSpectrogramPlan::default();

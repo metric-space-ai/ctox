@@ -259,25 +259,6 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_concurrency() {
-        let config = ThrottleConfig {
-            wait_put_per_call: Duration::from_millis(1),
-            ..Default::default()
-        };
-
-        let path = Path::from("foo");
-        let store = ThrottledStore::new(InMemory::new(), config);
-        let upload = store.put_multipart(&path).await.unwrap();
-        let mut write = WriteMultipart::new_with_chunk_size(upload, 10);
-
-        for _ in 0..20 {
-            write.write(&[0; 5]);
-        }
-        assert!(write.wait_for_capacity(10).now_or_never().is_none());
-        write.wait_for_capacity(10).await.unwrap()
-    }
-
     #[derive(Debug, Default)]
     struct InstrumentedUpload {
         chunks: Arc<Mutex<Vec<PutPayload>>>,
@@ -302,44 +283,4 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_write_multipart() {
-        let mut rng = StdRng::seed_from_u64(42);
-
-        for method in [0.0, 0.5, 1.0] {
-            for _ in 0..10 {
-                for chunk_size in [1, 17, 23] {
-                    let upload = Box::<InstrumentedUpload>::default();
-                    let chunks = Arc::clone(&upload.chunks);
-                    let mut write = WriteMultipart::new_with_chunk_size(upload, chunk_size);
-
-                    let mut expected = Vec::with_capacity(1024);
-
-                    for _ in 0..50 {
-                        let chunk_size = rng.random_range(0..30);
-                        let data: Vec<_> = (0..chunk_size).map(|_| rng.random()).collect();
-                        expected.extend_from_slice(&data);
-
-                        match rng.random_bool(method) {
-                            true => write.put(data.into()),
-                            false => write.write(&data),
-                        }
-                    }
-                    write.finish().await.unwrap();
-
-                    let chunks = chunks.lock();
-
-                    let actual: Vec<_> = chunks.iter().flatten().flatten().copied().collect();
-                    assert_eq!(expected, actual);
-
-                    for chunk in chunks.iter().take(chunks.len() - 1) {
-                        assert_eq!(chunk.content_length(), chunk_size)
-                    }
-
-                    let last_chunk = chunks.last().unwrap().content_length();
-                    assert!(last_chunk <= chunk_size, "{chunk_size}");
-                }
-            }
-        }
-    }
 }

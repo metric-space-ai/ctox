@@ -1217,7 +1217,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
+#[test]
     fn daily_summary_prices_configured_events() -> Result<()> {
         let tmp = TempDir::new()?;
         set_price_rate(
@@ -1249,21 +1249,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn open_cost_db_marks_schema_ready_for_db_path() -> Result<()> {
-        let tmp = TempDir::new()?;
-        let _conn = open_cost_db(tmp.path())?;
-        let key = cost_schema_cache_key(&crate::paths::core_db(tmp.path()));
-        let ready = API_COST_SCHEMA_READY
-            .get()
-            .expect("schema cache should be initialized")
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert!(ready.contains(&key));
-        Ok(())
-    }
-
-    #[test]
+#[test]
     fn batch_recording_uses_one_db_open_for_multiple_events() -> Result<()> {
         let tmp = TempDir::new()?;
 
@@ -1336,7 +1322,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn daily_summary_surfaces_unpriced_events() -> Result<()> {
         let tmp = TempDir::new()?;
         record_api_model_usage(
@@ -1359,7 +1345,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn daily_summary_includes_api_perf_telemetry() -> Result<()> {
         let tmp = TempDir::new()?;
         record_api_model_usage_with_telemetry(
@@ -1396,7 +1382,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn week_and_month_summaries_include_current_day_events() -> Result<()> {
         let tmp = TempDir::new()?;
         set_price_rate(

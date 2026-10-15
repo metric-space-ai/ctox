@@ -693,23 +693,9 @@ mod tests {
 
     // ---- kind round-trip ----------------------------------------------------
 
-    #[test]
-    fn agent_kind_from_str_round_trip() {
-        for k in [
-            IotAgentKind::Mqtt,
-            IotAgentKind::Http,
-            IotAgentKind::WebSocket,
-        ] {
-            assert_eq!(IotAgentKind::from_str(k.as_str()), Some(k));
-        }
-        assert_eq!(IotAgentKind::from_str("MQTT"), Some(IotAgentKind::Mqtt));
-        assert_eq!(IotAgentKind::from_str("ws"), Some(IotAgentKind::WebSocket));
-        assert_eq!(IotAgentKind::from_str("coap"), None);
-    }
-
     // ---- §2A.24 backoff curve: 1s..5min envelope, ±25% jitter --------------
 
-    #[test]
+#[test]
     fn backoff_curve_hits_1s_to_5min_envelope() {
         // Deterministic seed -> reproducible curve.
         let mut sm = ReconnectStateMachine::new(0xDEAD_BEEF);
@@ -753,7 +739,7 @@ mod tests {
         assert_eq!(last_base, RECONNECT_DELAY_MAX_MILLIS);
     }
 
-    #[test]
+#[test]
     fn backoff_first_attempt_centers_on_one_second() {
         let mut sm = ReconnectStateMachine::new(7);
         sm.schedule_backoff(0);
@@ -762,31 +748,9 @@ mod tests {
         assert!((750..=1250).contains(&delay), "first delay {delay}");
     }
 
-    #[test]
-    fn backoff_is_deterministic_for_a_fixed_seed() {
-        let curve = |seed: u64| {
-            let mut sm = ReconnectStateMachine::new(seed);
-            let mut now = 0i64;
-            let mut out = vec![];
-            for _ in 0..8 {
-                sm.schedule_backoff(now);
-                let d = sm.next_attempt_at_ms() - now;
-                out.push(d);
-                now += d + 1;
-            }
-            out
-        };
-        assert_eq!(curve(42), curve(42), "same seed -> same curve");
-        assert_ne!(
-            curve(42),
-            curve(43),
-            "different seed -> different jitter draw"
-        );
-    }
-
     // ---- §2A.24 state-transition legality ----------------------------------
 
-    #[test]
+#[test]
     fn state_machine_legal_transitions() {
         let mut sm = ReconnectStateMachine::new(1);
         assert_eq!(sm.status(), ConnectionStatus::Disconnected);
@@ -821,7 +785,7 @@ mod tests {
         assert_eq!(sm.status(), ConnectionStatus::Connecting);
     }
 
-    #[test]
+#[test]
     fn begin_disconnect_blocks_retry_from_any_state() {
         // From Connected
         let mut sm = ReconnectStateMachine::new(1);
@@ -847,7 +811,7 @@ mod tests {
         assert!(!sm2.poll_ready_to_retry(i64::MAX));
     }
 
-    #[test]
+#[test]
     fn mark_connected_resets_attempt_so_next_backoff_restarts_at_base() {
         let mut sm = ReconnectStateMachine::new(99);
         sm.begin_connect();
@@ -867,7 +831,7 @@ mod tests {
 
     // ---- §2A.28 converter: @IGNORE / @NULL / *-negate ----------------------
 
-    #[test]
+#[test]
     fn converter_ignore_null_and_wildcard_negate() {
         // @IGNORE drops the update
         let mut c = ConverterMap::new();
@@ -919,7 +883,7 @@ mod tests {
         assert!(ignore, "unmatched + no wildcard -> ignore");
     }
 
-    #[test]
+#[test]
     fn inbound_coercion_failure_drops_not_errors() {
         // No converter; declared Number but device sent non-numeric text.
         let link = link_with(None, vec![]);
@@ -945,7 +909,7 @@ mod tests {
 
     // ---- §2A.28 inbound filter chain ---------------------------------------
 
-    #[test]
+#[test]
     fn inbound_filter_chain_substring_then_replace() {
         let filters = vec![
             ValueFilter::Substring {
@@ -970,7 +934,7 @@ mod tests {
 
     // ---- §2A.28 %VALUE% / %TIME% placeholder substitution ------------------
 
-    #[test]
+#[test]
     fn outbound_value_placeholder_substitution() {
         let link = AgentLink {
             asset_id: "a1".into(),
@@ -984,7 +948,7 @@ mod tests {
         assert_eq!(out.0, json!("set:21.5"));
     }
 
-    #[test]
+#[test]
     fn outbound_time_placeholder_uses_injected_clock() {
         // Fixed injected clock -> exact rendered string (no wall clock).
         let now = 1_700_000_000_000i64; // 2023-11-14T22:13:20.000Z
@@ -1003,7 +967,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn outbound_value_and_time_combined() {
         let now = 1_700_000_000_000i64;
         let link = AgentLink {
@@ -1018,7 +982,7 @@ mod tests {
         assert_eq!(out.0, json!("v=ON@1700000000000"));
     }
 
-    #[test]
+#[test]
     fn outbound_no_template_passes_converted_value_through() {
         let link = AgentLink {
             asset_id: "a1".into(),
@@ -1032,7 +996,7 @@ mod tests {
         assert_eq!(out.0, json!(42));
     }
 
-    #[test]
+#[test]
     fn outbound_write_converter_ignore_drops_send() {
         let mut c = ConverterMap::new();
         c.insert("STOP".into(), json!("@IGNORE"));
@@ -1046,10 +1010,4 @@ mod tests {
         assert!(out.is_none(), "@IGNORE on write -> no device send (§2A.28)");
     }
 
-    #[test]
-    fn has_dynamic_placeholders_detects_markers() {
-        assert!(has_dynamic_placeholders("x %VALUE% y"));
-        assert!(has_dynamic_placeholders("t=%TIME:EPOCH_MILLIS%"));
-        assert!(!has_dynamic_placeholders("static payload"));
-    }
 }

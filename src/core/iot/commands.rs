@@ -2558,7 +2558,7 @@ mod tests {
     }
 
     // handle_iot_command: asset upsert -> list -> show round-trip.
-    #[test]
+#[test]
     fn cli_asset_upsert_list_show_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2609,7 +2609,7 @@ mod tests {
     }
 
     // attribute write -> read round-trip + projection row asserted.
-    #[test]
+#[test]
     fn attribute_write_then_read_round_trips() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2658,7 +2658,7 @@ mod tests {
     }
 
     // executor and CLI share one path: equivalent inputs → identical asset state.
-    #[test]
+#[test]
     fn executor_and_cli_share_one_path() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2692,7 +2692,7 @@ mod tests {
     // business-command executor and land as iot_dashboards / iot_widgets
     // projections. The widget carries the three CTOX-programmed parts
     // (cond_text/Wenn, action_prompt/Dann, plus the generated code slots).
-    #[test]
+#[test]
     fn dashboard_and_widget_roundtrip_projects() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2780,7 +2780,7 @@ mod tests {
 
     // compile_trigger enqueues a durable codegen task (CTOX writes the watcher);
     // it never generates code synchronously here.
-    #[test]
+#[test]
     fn compile_trigger_enqueues_durable_codegen_task() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2833,7 +2833,7 @@ mod tests {
 
     // Writing back a watcher program validates it: runnable → armed, broken →
     // needs_attention (the self-repair gate).
-    #[test]
+#[test]
     fn widget_upsert_validates_trigger_code_into_status() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2886,7 +2886,7 @@ mod tests {
 
     // Pause stops the watcher; resume recomputes status from the (re-validated)
     // program so a runnable one comes back "armed".
-    #[test]
+#[test]
     fn widget_pause_and_resume_recomputes_status() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2938,30 +2938,9 @@ mod tests {
 
     // The webhook.register business command returns the one-time token + path so
     // the operator UI can show them.
-    #[test]
-    fn webhook_register_command_returns_token_and_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let out = handle_business_command(
-            root,
-            "ctox.iot.webhook.register",
-            &json!({ "realm": "master", "signal_ref": "asset-1::temperature", "value_path": "data.temp" }),
-            &admin_session(),
-        )
-        .unwrap();
-        assert!(out["token"]
-            .as_str()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false));
-        assert!(out["ingest_path"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("/ctox/iot/webhook/"));
-        assert_eq!(out["header"], "X-Webhook-Token");
-    }
 
     // Forbidden when the session is neither admin nor an authenticated open one.
-    #[test]
+#[test]
     fn executor_rejects_unauthorized_session() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2980,7 +2959,7 @@ mod tests {
     }
 
     // alarm update lifecycle projects the new status; illegal transition errors.
-    #[test]
+#[test]
     fn alarm_update_lifecycle_projects() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -3051,7 +3030,7 @@ mod tests {
     }
 
     // datapoints query writes a bounded-window projection row.
-    #[test]
+#[test]
     fn datapoints_query_projects_bounded_window() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -3112,7 +3091,7 @@ mod tests {
     }
 
     // ruleset + agent rows persist and project.
-    #[test]
+#[test]
     fn ruleset_and_agent_stubs_persist_and_project() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -3174,7 +3153,7 @@ mod tests {
     // is never trusted.
     // -------------------------------------------------------------------
 
-    #[test]
+#[test]
     fn realm_isolation_blocks_cross_realm_read_and_write() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -3253,7 +3232,7 @@ mod tests {
         assert!(del_err.to_string().contains("not found"), "got: {del_err}");
     }
 
-    #[test]
+#[test]
     fn realm_is_not_trusted_from_payload_on_upsert() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();

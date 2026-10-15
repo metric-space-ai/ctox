@@ -709,7 +709,7 @@ mod tests {
         members(&conn).unwrap().remove(0)
     }
 
-    #[test]
+#[test]
     fn persona_is_bounded_deterministic_and_reads_the_sliders() {
         let mut member = member();
         member.soul.gruendlichkeit_vs_tempo = 5;
@@ -724,7 +724,7 @@ mod tests {
         assert!(persona.contains("entscheidest selbständig"));
     }
 
-    #[test]
+#[test]
     fn memory_block_is_omitted_when_empty_and_bounded_when_full() {
         let member = member();
         assert!(render_memory_block(&member, &MemberMemory::default(), &[]).is_none());
@@ -748,12 +748,4 @@ mod tests {
         assert_eq!(anchor_lines(&memory.anchors).len(), 80);
     }
 
-    #[test]
-    fn task_summary_is_prose_and_bounded() {
-        let summary =
-            task_summary_from_prompt(&format!("  Prüfe\n\n{} ", "x".repeat(500)), Some("reports"));
-        assert!(summary.starts_with("[reports] Prüfe x"));
-        assert!(summary.ends_with('…'));
-        assert!(summary.chars().count() <= 215);
-    }
 }

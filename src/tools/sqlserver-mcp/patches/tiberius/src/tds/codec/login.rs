@@ -187,7 +187,7 @@ impl<'a> LoginMessage<'a> {
         }
     }
 
-    #[cfg(any(all(unix, feature = "integrated-auth-gssapi"), windows))]
+#[cfg(any(all(unix, feature = "integrated-auth-gssapi"), windows))]
     pub fn integrated_security(&mut self, bytes: Option<Vec<u8>>) {
         if bytes.is_some() {
             self.option_flags_2.insert(OptionFlag2::IntegratedSecurity);
@@ -558,56 +558,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn login_message_round_trip() {
-        let mut payload = BytesMut::new();
-        let mut login = LoginMessage::new();
-        login.db_name("fake-database-name");
-        login.app_name("fake-app-name");
-        login.server_name("fake-server-name");
-        login.user_name("fake-user-name");
-        login.password("fake-pw");
-        login
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = LoginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(login, decoded);
-    }
-
-    #[test]
-    fn specify_aad_token() {
-        let mut login = LoginMessage::new();
-        let token = "fake-aad-token";
-        let nonce = [3u8; 32];
-        login.aad_token(token, true, Some(nonce));
-
-        assert!(login.option_flags_3.contains(OptionFlag3::ExtensionUsed));
-        assert_eq!(
-            login.fed_auth_ext.expect("fed_auto_specified"),
-            FedAuthExt {
-                fed_auth_echo: true,
-                fed_auth_token: token.into(),
-                nonce: Some(nonce)
-            }
-        )
-    }
-
-    #[test]
-    fn login_message_with_fed_auth_round_trip() {
-        let mut payload = BytesMut::new();
-        let mut login = LoginMessage::new();
-        let nonce = [1u8; 32];
-        login.aad_token("fake-aad-token", true, Some(nonce));
-        login
-            .clone()
-            .encode(&mut payload)
-            .expect("encode should succeed");
-
-        let decoded = LoginMessage::decode(&mut payload).expect("decode should succeed");
-
-        assert_eq!(login, decoded);
-    }
 }

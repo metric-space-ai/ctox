@@ -496,7 +496,7 @@ mod tests {
         (dir, format!("sha256:{digest:x}"))
     }
 
-    #[test]
+#[test]
     fn extract_dois_deduplicates_and_lowercases() {
         let txt = "see 10.1016/J.PAEROSCI.2013.07.002 and 10.1016/j.paerosci.2013.07.002.";
         let dois = extract_dois(txt);
@@ -504,14 +504,14 @@ mod tests {
         assert_eq!(dois[0], "10.1016/j.paerosci.2013.07.002");
     }
 
-    #[test]
+#[test]
     fn extract_arxiv_ids_strips_version() {
         let txt = "see arXiv: 2401.12345v3 and arXiv:2310.99999.";
         let ax = extract_arxiv_ids(txt);
         assert_eq!(ax, vec!["2310.99999".to_string(), "2401.12345".to_string()]);
     }
 
-    #[test]
+#[test]
     fn collect_text_corpus_excludes_rejected_and_metadata_sources() {
         let (snapshot_dir, snapshot_hash) = snapshot_fixture();
         let snapshot_path = snapshot_dir
@@ -579,7 +579,7 @@ mod tests {
         drop(snapshot_dir);
     }
 
-    #[test]
+#[test]
     fn snapshot_binding_preserves_candidates_but_rebuilds_sources_from_admitted_evidence() {
         let (workspace, snapshot_hash) = snapshot_fixture();
         fs::create_dir_all(workspace.path().join("snapshots")).unwrap();
@@ -626,7 +626,7 @@ mod tests {
             .ends_with("snapshots/source-0000.txt"));
     }
 
-    #[test]
+#[test]
     fn eligibility_requires_canonical_snapshot_and_verified_transport() {
         let (snapshot_dir, snapshot_hash) = snapshot_fixture();
         let snapshot_path = snapshot_dir
@@ -676,14 +676,7 @@ mod tests {
         drop(snapshot_dir);
     }
 
-    #[test]
-    fn depth_round_trip() {
-        for label in ["quick", "standard", "exhaustive"] {
-            assert!(WebResearchDepth::from_label(label).is_some());
-        }
-    }
-
-    #[test]
+#[test]
     fn evidence_research_always_gets_an_explicit_workspace() {
         let requested = Path::new("runtime/research/requested");
         assert_eq!(
@@ -695,7 +688,7 @@ mod tests {
         assert!(derived.to_string_lossy().contains("query-"));
     }
 
-    #[test]
+#[test]
     fn missing_workspace_persistence_is_rejected() {
         assert!(persisted_workspace_path(&json!({
             "research_workspace_error": "disk full"

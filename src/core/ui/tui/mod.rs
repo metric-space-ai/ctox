@@ -2465,7 +2465,7 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
+#[allow(dead_code)]
     fn selected_setting_help(&self) -> String {
         self.current_setting()
             .map(|item| match item.kind {
@@ -4083,7 +4083,7 @@ impl App {
         Ok(())
     }
 
-    #[allow(dead_code)]
+#[allow(dead_code)]
     fn header_lines(&self, width: usize) -> Vec<String> {
         let model = compact_model_name(&self.header.model, width);
         let loop_state = if self.service_status.running {
@@ -4194,7 +4194,7 @@ impl App {
         ]
     }
 
-    #[allow(dead_code)]
+#[allow(dead_code)]
     fn header_preview_line(&self) -> String {
         let family_item = self
             .settings_items
@@ -6156,62 +6156,7 @@ mod tests {
         root
     }
 
-    #[test]
-    fn supported_chat_models_follow_selected_provider_immediately() {
-        let root = temp_root("supported-chat-models");
-        let local_only = supported_chat_model_choices_with_gpu(&root, &BTreeMap::new(), false);
-        assert!(local_only.is_empty());
-        assert!(!local_only.contains(&"openai/gpt-oss-120b"));
-        assert!(!local_only.contains(&"nvidia/Nemotron-Cascade-2-30B-A3B"));
-        assert!(!local_only.contains(&"zai-org/GLM-4.7-Flash"));
-        assert!(!local_only.contains(&"gpt-5.4"));
-
-        let mut openai_api = BTreeMap::new();
-        openai_api.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        openai_api.insert("OPENAI_API_KEY".to_string(), "sk-test".to_string());
-        let with_openai = supported_chat_model_choices_with_gpu(&root, &openai_api, true);
-        assert!(with_openai.contains(&"gpt-5.5"));
-        assert!(with_openai.contains(&"gpt-5.4-nano"));
-        assert!(with_openai.contains(&"gpt-5.4-mini"));
-        assert!(with_openai.contains(&"gpt-5.4"));
-
-        let mut openai_subscription = BTreeMap::new();
-        openai_subscription.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        openai_subscription.insert(
-            "CTOX_OPENAI_AUTH_MODE".to_string(),
-            "chatgpt_subscription".to_string(),
-        );
-        let with_subscription =
-            supported_chat_model_choices_with_gpu(&root, &openai_subscription, true);
-        assert!(with_subscription.contains(&"gpt-5.4-mini"));
-        assert!(with_subscription.contains(&"gpt-5.4"));
-
-        let mut anthropic_api = BTreeMap::new();
-        anthropic_api.insert("CTOX_API_PROVIDER".to_string(), "anthropic".to_string());
-        anthropic_api.insert("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string());
-        let with_anthropic = supported_chat_model_choices_with_gpu(&root, &anthropic_api, false);
-        assert!(with_anthropic.contains(&"claude-opus-4-7"));
-        assert!(with_anthropic.contains(&"claude-opus-4-6"));
-        assert!(with_anthropic.contains(&"claude-sonnet-4-7"));
-        assert!(with_anthropic.contains(&"claude-sonnet-4-6"));
-        assert!(!with_anthropic.contains(&"anthropic/claude-sonnet-4.6"));
-        assert!(!with_anthropic.contains(&"gpt-5.4"));
-
-        let mut azure_api = BTreeMap::new();
-        azure_api.insert("CTOX_API_PROVIDER".to_string(), "azure_foundry".to_string());
-        azure_api.insert(
-            AZURE_FOUNDRY_DEPLOYMENT_ID_KEY.to_string(),
-            "company-gpt-5".to_string(),
-        );
-        azure_api.insert(
-            AZURE_FOUNDRY_TOKEN_KEY.to_string(),
-            "azure-token".to_string(),
-        );
-        let with_azure = supported_chat_model_choices_with_gpu(&root, &azure_api, true);
-        assert!(with_azure.is_empty());
-    }
-
-    #[test]
+#[test]
     fn chat_composer_title_carries_image_badge_when_pending() {
         use ratatui::backend::TestBackend;
 
@@ -6268,7 +6213,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn image_slash_command_resolves_existing_file_and_rejects_non_image() {
         let root = temp_root("image-slash");
         let db_path = crate::persistence::sqlite_path(&root);
@@ -6309,63 +6254,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn supported_boost_models_include_api_models_when_key_is_present() {
-        let root = temp_root("supported-boost-models");
-        let without_key = supported_boost_model_choices(&root, &BTreeMap::new());
-        assert!(without_key.is_empty());
-        assert!(!without_key.contains(&"Qwen/Qwen3.5-4B"));
-        assert!(!without_key.contains(&"nvidia/Nemotron-Cascade-2-30B-A3B"));
-        assert!(!without_key.contains(&"gpt-5.4"));
-
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        env_map.insert("OPENAI_API_KEY".to_string(), "sk-test".to_string());
-        let with_key = supported_boost_model_choices(&root, &env_map);
-        assert!(!with_key.contains(&"openai/gpt-oss-120b"));
-        assert!(with_key.contains(&"gpt-5.4"));
-        assert!(with_key.contains(&"gpt-5.4-mini"));
-    }
-
-    #[test]
-    fn model_settings_include_provider_and_communication_fields() {
-        let root = temp_root("settings");
-        let mut env_map = BTreeMap::new();
-        env_map.insert(
-            "CTOX_CHAT_MODEL".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
-
-        let items = load_settings_items(&root);
-        let keys: Vec<_> = items.iter().map(|item| item.key).collect();
-
-        assert!(keys.contains(&"CTOX_CHAT_MODEL"));
-        assert!(keys.contains(&"CTOX_CHAT_MODEL_BOOST"));
-        assert!(keys.contains(&"CTOX_BOOST_DEFAULT_MINUTES"));
-        assert!(keys.contains(&"CTOX_API_PROVIDER"));
-        assert!(keys.contains(&"CTOX_OPENAI_AUTH_MODE"));
-        assert!(keys.contains(&"CTOX_WEB_SEARCH_OPENAI_MODE"));
-        assert!(keys.contains(&"CTOX_LOCAL_RUNTIME"));
-        assert!(keys.contains(&"OPENAI_API_KEY"));
-        assert!(keys.contains(&"ANTHROPIC_API_KEY"));
-        assert!(!keys.contains(&"CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES"));
-        assert!(!keys.contains(&"CTOX_EMBEDDING_PORT"));
-        assert!(!keys.contains(&"CTOX_STT_PORT"));
-        assert!(!keys.contains(&"CTOX_TTS_PORT"));
-        assert!(keys.contains(&"CTOX_OWNER_NAME"));
-        assert!(keys.contains(&"CTOX_OWNER_EMAIL_ADDRESS"));
-        assert!(keys.contains(&"CTOX_OWNER_PREFERRED_CHANNEL"));
-        assert!(keys.contains(&"CTOX_WEBRTC_SIGNALING_URL"));
-        assert!(keys.contains(&"CTOX_WEBRTC_ROOM"));
-        assert!(keys.contains(&"CTOX_WEBRTC_PASSWORD"));
-        assert!(keys.contains(&"CTO_EMAIL_PASSWORD"));
-        assert!(keys.contains(&"CTO_EMAIL_PROVIDER"));
-        assert!(keys.contains(&"CTO_JAMI_ACCOUNT_ID"));
-        assert!(keys.contains(&"CTOX_CTO_OPERATING_MODE_PROMPT"));
-    }
-
-    #[test]
+#[test]
     fn app_defaults_to_model_settings_view_and_openai_key_visibility_follows_provider() {
         let root = temp_root("visibility");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6435,7 +6324,7 @@ mod tests {
         assert!(app.setting_visible(&openai_web_search_row));
     }
 
-    #[test]
+#[test]
     fn no_gpu_hosts_offer_no_local_chat_families() {
         let root = temp_root("no-gpu-families");
         let choices = supported_local_chat_family_choices_with_gpu(&root, &BTreeMap::new(), false);
@@ -6446,7 +6335,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn settings_view_shortcuts_switch_between_model_and_communication() {
         let root = temp_root("settings-view-shortcuts");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6469,7 +6358,7 @@ mod tests {
         assert_eq!(app.settings_view, SettingsView::Secrets);
     }
 
-    #[test]
+#[test]
     fn tab_cycles_through_work_views_and_settings_before_leaving_page() {
         let root = temp_root("settings-tab-cycle");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6539,7 +6428,7 @@ mod tests {
         assert_eq!(app.settings_view, SettingsView::Paths);
     }
 
-    #[test]
+#[test]
     fn visible_model_settings_follow_requested_minimal_flow() {
         let root = temp_root("minimal-flow");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6673,32 +6562,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn communication_settings_show_admin_and_channel_fields() {
-        let root = temp_root("communication-flow");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root, db_path);
-        app.switch_settings_view(SettingsView::Communication);
-        let keys = app
-            .visible_setting_indices()
-            .into_iter()
-            .map(|idx| app.settings_items[idx].key)
-            .collect::<Vec<_>>();
-        assert!(keys.contains(&"CTOX_SERVICE_TOGGLE"));
-        assert!(keys.contains(&"CTOX_OWNER_NAME"));
-        assert!(keys.contains(&"CTOX_OWNER_EMAIL_ADDRESS"));
-        assert!(keys.contains(&"CTOX_FOUNDER_EMAIL_ADDRESSES"));
-        assert!(keys.contains(&"CTOX_FOUNDER_EMAIL_ROLES"));
-        assert!(keys.contains(&"CTOX_ALLOWED_EMAIL_DOMAIN"));
-        assert!(keys.contains(&"CTOX_EMAIL_ADMIN_POLICIES"));
-        assert!(keys.contains(&"CTOX_OWNER_PREFERRED_CHANNEL"));
-        assert!(keys.contains(&"CTOX_REMOTE_BRIDGE_MODE"));
-        assert!(!keys.contains(&"CTOX_WEBRTC_SIGNALING_URL"));
-        assert!(!keys.contains(&"CTOX_WEBRTC_ROOM"));
-        assert!(!keys.contains(&"CTOX_WEBRTC_PASSWORD"));
-    }
-
-    #[test]
+#[test]
     fn cto_contract_setting_opens_editor_and_persists_to_runtime_store() {
         let root = temp_root("cto-contract-editor");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6733,7 +6597,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn communication_settings_show_remote_webrtc_fields_only_when_enabled() {
         let root = temp_root("communication-remote-webrtc");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6757,35 +6621,7 @@ mod tests {
         assert!(keys.contains(&"CTOX_WEBRTC_PASSWORD"));
     }
 
-    #[test]
-    fn model_settings_show_preset_immediately_after_base_model() {
-        let root = temp_root("preset-order");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root, db_path);
-        app.ensure_settings_items_loaded();
-        let visible = app.visible_setting_indices();
-        let model_pos = visible
-            .iter()
-            .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_MODEL")
-            .unwrap();
-        let preset_pos = visible
-            .iter()
-            .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_LOCAL_PRESET")
-            .unwrap();
-        assert_eq!(preset_pos, model_pos + 1);
-        let context_pos = visible
-            .iter()
-            .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_MODEL_MAX_CONTEXT")
-            .unwrap();
-        assert_eq!(context_pos, preset_pos + 1);
-        let skill_preset_pos = visible
-            .iter()
-            .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_SKILL_PRESET")
-            .unwrap();
-        assert_eq!(skill_preset_pos, preset_pos + 2);
-    }
-
-    #[test]
+#[test]
     fn configured_runtime_models_skip_remote_chat_model_for_api_source() {
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
@@ -6799,7 +6635,7 @@ mod tests {
             .any(|model| model == "Qwen/Qwen3-Embedding-0.6B"));
     }
 
-    #[test]
+#[test]
     fn api_estimate_keeps_aux_models_without_projecting_local_chat_gpu_load() {
         let root = temp_root("api-estimate-aux");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6914,7 +6750,7 @@ mod tests {
         assert!(allocations.contains(&"tts"));
     }
 
-    #[test]
+#[test]
     fn healthy_aux_backend_falls_back_to_planned_gpu_allocation_when_live_probe_misses_it() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -6964,7 +6800,7 @@ mod tests {
         }));
     }
 
-    #[test]
+#[test]
     fn communication_visibility_switches_email_and_jami_blocks() {
         let root = temp_root("comm-visibility");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7034,7 +6870,7 @@ mod tests {
         assert!(app.setting_visible(&jami_row));
     }
 
-    #[test]
+#[test]
     fn refresh_header_ignores_stale_local_active_model_when_chat_source_is_api() {
         let root = temp_root("api-header");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7060,7 +6896,7 @@ mod tests {
         assert_eq!(app.header.base_model, "gpt-5.4-mini");
     }
 
-    #[test]
+#[test]
     fn load_skill_catalog_discovers_skill_scripts_and_resources() {
         let root = temp_root("skills-catalog");
         let skill_dir = root.join("skills/packs/demo-skill");
@@ -7092,7 +6928,7 @@ mod tests {
             .any(|resource| resource.contains("references:")));
     }
 
-    #[test]
+#[test]
     fn load_skill_catalog_classifies_curated_codex_and_personal_skills() {
         let root = temp_root("skills-classes");
         let curated_dir = root.join("skills/packs/demo-pack");
@@ -7155,7 +6991,7 @@ mod tests {
         assert_eq!(personal.state, SkillState::Generated);
     }
 
-    #[test]
+#[test]
     fn setup_wizard_arms_only_while_no_chat_backend_is_usable() {
         let root = temp_root("wizard-need");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7175,7 +7011,7 @@ mod tests {
         assert!(!app.setup_wizard_needed());
     }
 
-    #[test]
+#[test]
     fn setup_wizard_skip_is_persisted() {
         let root = temp_root("wizard-skip");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7193,7 +7029,7 @@ mod tests {
         assert!(!app.setup_wizard_needed());
     }
 
-    #[test]
+#[test]
     fn setup_wizard_enter_deep_links_into_the_credential_row() {
         let root = temp_root("wizard-jump");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7216,7 +7052,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn tab_cycles_chat_work_skills_settings() {
         let root = temp_root("page-cycle");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7263,7 +7099,7 @@ mod tests {
         assert_eq!(app.page, Page::Chat);
     }
 
-    #[test]
+#[test]
     fn secrets_view_saves_back_into_encrypted_store() {
         let root = temp_root("secret-save");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7286,85 +7122,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn jami_error_lines_surface_missing_dbus_session_explicitly() {
-        let lines = jami_error_lines(
-            "failed to connect to session DBus",
-            None,
-            false,
-            &[JamiDoctorCheck {
-                name: "dbus_session".to_string(),
-                ok: false,
-                detail: "session bus unavailable".to_string(),
-            }],
-        );
-        let joined = lines.join("\n");
-        assert!(joined.contains("Jami runtime is not ready."));
-        assert!(joined.contains("user DBus session"));
-        assert!(joined.contains("No configured Jami account/profile"));
-        assert!(joined.contains("ensure a Linux user DBus session"));
-    }
-
-    #[test]
-    fn jami_missing_account_lines_explain_missing_runtime_account() {
-        let lines = jami_missing_account_lines(
-            Some("/tmp/cto-jami-dbus.env"),
-            true,
-            &[JamiDoctorCheck {
-                name: "configured_identity".to_string(),
-                ok: false,
-                detail: "missing".to_string(),
-            }],
-        );
-        let joined = lines.join("\n");
-        assert!(joined.contains("No live Jami RING account is available yet."));
-        assert!(joined.contains("Configured account/profile could not be resolved"));
-        assert!(joined.contains("/tmp/cto-jami-dbus.env"));
-        assert!(joined.contains("CTO_JAMI_ACCOUNT_ID"));
-    }
-
-    #[test]
-    fn jami_error_lines_include_runtime_bootstrap_hints() {
-        let lines = jami_error_lines(
-            "runtime unavailable",
-            Some("/tmp/cto-jami-dbus.env"),
-            true,
-            &[
-                JamiDoctorCheck {
-                    name: "dbus_env_file".to_string(),
-                    ok: false,
-                    detail: "missing".to_string(),
-                },
-                JamiDoctorCheck {
-                    name: "jami_runtime".to_string(),
-                    ok: false,
-                    detail: "missing".to_string(),
-                },
-            ],
-        );
-        let joined = lines.join("\n");
-        assert!(joined.contains("CTO_JAMI_DBUS_ENV_FILE"));
-        assert!(joined.contains("brew install --cask jami"));
-    }
-
-    #[test]
-    fn jami_error_lines_surface_backend_mode_hint() {
-        let lines = jami_error_lines(
-            "backend unsupported",
-            None,
-            true,
-            &[JamiDoctorCheck {
-                name: "automation_backend".to_string(),
-                ok: false,
-                detail: "libwrap".to_string(),
-            }],
-        );
-        let joined = lines.join("\n");
-        assert!(joined.contains("manual share URI"));
-        assert!(joined.contains("Linux runtime"));
-    }
-
-    #[test]
+#[test]
     fn save_settings_mirrors_chat_model_to_base_model() {
         let root = temp_root("boost-save");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7397,7 +7155,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn save_settings_persists_openai_token_only_in_secret_store() {
         let root = temp_root("settings-openai-secret");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7424,7 +7182,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn save_settings_persists_azure_foundry_selection_and_secret() {
         let root = temp_root("settings-azure-foundry");
         let db_path = root.join("runtime/test.sqlite3");

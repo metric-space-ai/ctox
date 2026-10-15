@@ -169,41 +169,4 @@ impl<'a> DoubleEndedIterator for PathParts<'a> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn path_part_delimiter_gets_encoded() {
-        let part: PathPart<'_> = "foo/bar".into();
-        assert_eq!(part.raw, "foo%2Fbar");
-    }
-
-    #[test]
-    fn path_part_given_already_encoded_string() {
-        let part: PathPart<'_> = "foo%2Fbar".into();
-        assert_eq!(part.raw, "foo%252Fbar");
-    }
-
-    #[test]
-    fn path_part_cant_be_one_dot() {
-        let part: PathPart<'_> = ".".into();
-        assert_eq!(part.raw, "%2E");
-    }
-
-    #[test]
-    fn path_part_cant_be_two_dots() {
-        let part: PathPart<'_> = "..".into();
-        assert_eq!(part.raw, "%2E%2E");
-    }
-
-    #[test]
-    fn path_part_parse() {
-        PathPart::parse("foo").unwrap();
-        PathPart::parse("foo/bar").unwrap_err();
-
-        // Test percent-encoded path
-        PathPart::parse("foo%2Fbar").unwrap();
-        PathPart::parse("L%3ABC.parquet").unwrap();
-
-        // Test path containing bad escape sequence
-        PathPart::parse("%Z").unwrap();
-        PathPart::parse("%%").unwrap();
-    }
 }

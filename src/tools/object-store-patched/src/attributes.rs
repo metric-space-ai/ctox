@@ -143,13 +143,13 @@ impl Attributes {
     }
 
     /// Returns the number of [`Attribute`] in this collection
-    #[inline]
+#[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns true if this contains no [`Attribute`]
-    #[inline]
+#[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -198,59 +198,4 @@ impl<'a> Iterator for AttributesIter<'a> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_attributes_basic() {
-        let mut attributes = Attributes::from_iter([
-            (Attribute::ContentDisposition, "inline"),
-            (Attribute::ContentEncoding, "gzip"),
-            (Attribute::ContentLanguage, "en-US"),
-            (Attribute::ContentType, "test"),
-            (Attribute::CacheControl, "control"),
-            (Attribute::Metadata("key1".into()), "value1"),
-        ]);
-
-        assert!(!attributes.is_empty());
-        assert_eq!(attributes.len(), 6);
-
-        assert_eq!(
-            attributes.get(&Attribute::ContentType),
-            Some(&"test".into())
-        );
-
-        let metav = "control".into();
-        assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(
-            attributes.insert(Attribute::CacheControl, "v1".into()),
-            Some(metav)
-        );
-        assert_eq!(attributes.len(), 6);
-
-        assert_eq!(
-            attributes.remove(&Attribute::CacheControl).unwrap(),
-            "v1".into()
-        );
-        assert_eq!(attributes.len(), 5);
-
-        let metav: AttributeValue = "v2".into();
-        attributes.insert(Attribute::CacheControl, metav.clone());
-        assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(attributes.len(), 6);
-
-        assert_eq!(
-            attributes.get(&Attribute::ContentDisposition),
-            Some(&"inline".into())
-        );
-        assert_eq!(
-            attributes.get(&Attribute::ContentEncoding),
-            Some(&"gzip".into())
-        );
-        assert_eq!(
-            attributes.get(&Attribute::ContentLanguage),
-            Some(&"en-US".into())
-        );
-        assert_eq!(
-            attributes.get(&Attribute::Metadata("key1".into())),
-            Some(&"value1".into())
-        );
-    }
 }

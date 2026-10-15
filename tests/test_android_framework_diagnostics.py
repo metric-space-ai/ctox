@@ -27,11 +27,9 @@ REAL_THREADTIME = (
     b"09-10 12:00:00.200  1201  1201 I unknown : account=topsecret path=/private/value\n"
 )
 
-
 class StaticScriptTest(unittest.TestCase):
     def test_source_compiles_without_execution_side_effects(self):
         compile(SCRIPT.read_text(encoding="utf-8"), str(SCRIPT), "exec")
-
 
 class BoundedChildTest(unittest.TestCase):
     def test_output_overflow_terminates_and_reaps_child(self):
@@ -72,7 +70,6 @@ class BoundedChildTest(unittest.TestCase):
                 timer.join()
             self.assertEqual("stopped", result.status)
             self.assertIsNotNone(result.returncode)
-
 
     def test_terminate_child_escalates_and_confirms_reap(self):
         process = mock.Mock(pid=1234, poll=lambda: None, stdout=None)
@@ -186,7 +183,6 @@ class FakeExecutor:
         self.last_was_stopped = result.status == "stopped"
         return result
 
-
 def healthy_results():
     return [
         diagnostics.CommandResult("ok", b"device", 0),
@@ -197,7 +193,6 @@ def healthy_results():
         diagnostics.CommandResult("ok", b"1200", 0),
         diagnostics.CommandResult("ok", REAL_THREADTIME, 0),
     ]
-
 
 class SamplingTest(unittest.TestCase):
     def test_binder_services_are_observed_without_app_probes(self):
@@ -353,7 +348,6 @@ class SamplingTest(unittest.TestCase):
             self.assertIsNone(completion)
             self.assertEqual(1, rejected["oversize_records"])
 
-
 def _namespace(**overrides):
     values = {
         "ownership": "ownership.json",
@@ -366,7 +360,6 @@ def _namespace(**overrides):
     }
     values.update(overrides)
     return argparse.Namespace(**values)
-
 
 class StrictMetadataParsingTest(unittest.TestCase):
     def test_enum_wrong_types_return_fixed_default(self):
@@ -441,7 +434,6 @@ class StrictMetadataParsingTest(unittest.TestCase):
             path.write_bytes(b"x" * (diagnostics.MAX_OUTPUT_BYTES + 1))
             self.assertIsNone(diagnostics._load_ownership(path))
 
-
 class CoverageReportingTest(unittest.TestCase):
     def _observed_sample(self):
         sample, _, _ = diagnostics.sample_once(
@@ -500,7 +492,6 @@ class CoverageReportingTest(unittest.TestCase):
         self.assertFalse(result["coverage"]["coverage_complete"])
         self.assertEqual("output_truncated", result["coverage"]["gap_reason"])
 
-
 def _fake_adb(directory: Path, broken: bool = False, slow: bool = False) -> Path:
     executable = directory / "adb-fixture"
     if broken:
@@ -535,7 +526,6 @@ time.sleep(3)
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return executable
 
-
 def _wait_for_file(path: Path, timeout: float = 4) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -544,7 +534,6 @@ def _wait_for_file(path: Path, timeout: float = 4) -> bool:
         time.sleep(0.02)
     return False
 
-
 def _wait_for_completion(path: Path, timeout: float = 5) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -552,7 +541,6 @@ def _wait_for_completion(path: Path, timeout: float = 5) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("monitor did not write a bounded completion record")
-
 
 class OwnershipLifecycleTest(unittest.TestCase):
     def setUp(self):
@@ -774,7 +762,6 @@ class OwnershipLifecycleTest(unittest.TestCase):
         self.assertEqual([(999998, "424242")], stopped)
         self.assertEqual("", stdout.getvalue())
 
-
 class WorkflowIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.workflow = (
@@ -829,7 +816,6 @@ class WorkflowIntegrationTest(unittest.TestCase):
         ):
             self.assertIn(expected, self.workflow)
         self.assertNotIn("continue-on-error", self.workflow)
-
 
 if __name__ == "__main__":
     unittest.main()

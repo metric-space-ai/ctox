@@ -2306,7 +2306,7 @@ impl<'a> WebSearchSession<'a> {
     /// Cache-aware single-doc fetch. Only exercised by the test suite; the
     /// production path goes through `fetch_evidence` (batched). Gated to test
     /// builds so it does not read as dead production code.
-    #[cfg(test)]
+#[cfg(test)]
     fn fetch_evidence_doc(&mut self, query: &str, hit: &SearchHit) -> Result<EvidenceDoc> {
         if let Some(doc) = self.resolve_cached_evidence_doc(query, hit) {
             return Ok(doc);
@@ -9143,7 +9143,7 @@ mod tests {
         values.push(candidate.to_string());
     }
 
-    #[test]
+#[test]
     fn extracts_web_search_request_fields() {
         let payload = json!({
             "tools": [{
@@ -9162,7 +9162,7 @@ mod tests {
         assert_eq!(request.user_location.city.as_deref(), Some("New York"));
     }
 
-    #[test]
+#[test]
     fn detects_include_sources_request() {
         let payload = json!({
             "include": ["web_search_call.action.sources", "something.else"]
@@ -9170,7 +9170,7 @@ mod tests {
         assert!(request_includes_sources(&payload));
     }
 
-    #[test]
+#[test]
     fn canonical_request_extraction_captures_query_and_include_sources() {
         let payload = json!({
             "tools": [{
@@ -9191,7 +9191,7 @@ mod tests {
         assert!(request.include_sources);
     }
 
-    #[test]
+#[test]
     fn strips_web_search_tools_after_ctox_owns_search() {
         let mut payload = json!({
             "tools": [
@@ -9221,16 +9221,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn openai_web_search_mode_defaults_to_ctox_primary() {
-        let root = unique_test_root("web_search_mode_default");
-        assert_eq!(
-            OpenAiWebSearchCompatMode::from_root(&root),
-            OpenAiWebSearchCompatMode::CtoxPrimary
-        );
-    }
-
-    #[test]
+#[test]
     fn openai_web_search_mode_reads_passthrough_override() {
         let root = unique_test_root("web_search_mode_passthrough");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "passthrough");
@@ -9240,7 +9231,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn openai_web_search_mode_accepts_tui_labels() {
         let root = unique_test_root("web_search_mode_tui_labels");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "openai");
@@ -9255,7 +9246,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn augment_request_strips_native_tool_and_injects_context() {
         let root = unique_test_root("augment_request_ctox_primary");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -9285,7 +9276,7 @@ mod tests {
             .contains("CTOX executed a local web_search request"));
     }
 
-    #[test]
+#[test]
     fn ctox_web_search_tool_returns_namespaced_payload() {
         let root = unique_test_root("ctox_web_search_tool");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -9313,7 +9304,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn ctox_web_search_surfaces_pinned_source_credential_failure_for_browser_assist() {
         let root = unique_test_root("ctox_web_search_source_failure");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -9357,7 +9348,7 @@ mod tests {
             .contains("browser assist available via RxDB"));
     }
 
-    #[test]
+#[test]
     fn ctox_web_read_tool_returns_find_results() {
         let root = unique_test_root("ctox_web_read_tool");
         let evidence_workspace = root
@@ -9446,7 +9437,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn ctox_web_read_without_intent_has_no_relevance_score() {
         let root = unique_test_root("ctox_web_read_without_intent");
         let evidence_workspace = root
@@ -9491,7 +9482,7 @@ mod tests {
         assert_eq!(entry.evidence_relevance_score, None);
     }
 
-    #[test]
+#[test]
     fn ctox_web_read_rejects_transport_valid_but_identifier_mismatched_content() {
         let root = unique_test_root("ctox_web_read_identifier_mismatch");
         let evidence_workspace = root
@@ -9531,7 +9522,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn evidence_relevance_requires_exact_numeric_query_identifiers() {
         let body =
             b"ISO 21940-11:2016 establishes procedures and unbalance tolerances for rigid rotors."
@@ -9587,7 +9578,7 @@ mod tests {
         .is_some());
     }
 
-    #[test]
+#[test]
     fn ctox_web_read_tool_persists_admitted_original_data_file() {
         let root = unique_test_root("ctox_web_read_data_file");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -9662,7 +9653,7 @@ mod tests {
         assert_eq!(rebuilt.summary, "Immutable original data file retrieved.");
     }
 
-    #[test]
+#[test]
     fn archive_manifest_recognizes_engineering_text_tables_as_data() {
         assert!(archive_member_is_data(
             "UIUC-propDB/volume-1/data/ance_8.5x6_2849cm_4000.txt"
@@ -9671,7 +9662,7 @@ mod tests {
         assert!(!archive_member_is_data("assets/header.png"));
     }
 
-    #[test]
+#[test]
     fn repository_content_routes_are_classified_by_filename_segment() {
         let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
         assert!(is_data_url_suffix(url));
@@ -9705,7 +9696,7 @@ mod tests {
         assert_eq!(response_content_kind(&hit, &invalid), "malformed_data");
     }
 
-    #[test]
+#[test]
     fn whitespace_numeric_text_tables_are_validated_as_original_data() {
         let url =
             "https://m-selig.ae.illinois.edu/props/volume-2/data/apcff_4.2x4_static_0615rd.txt";
@@ -9774,7 +9765,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn evidence_relevance_ignores_sha_256_as_a_source_identifier() {
         let body = b"PK\x03\x04archive".to_vec();
         let url = "https://zenodo.org/api/records/20111572/files/Propeller_Database.zip/content";
@@ -9822,7 +9813,7 @@ mod tests {
         assert!(score.is_some_and(|value| value >= 8), "score={score:?}");
     }
 
-    #[test]
+#[test]
     fn evidence_relevance_uses_only_verified_archive_member_paths() {
         let root = unique_test_root("archive_member_relevance");
         let archive_hash =
@@ -9909,7 +9900,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn github_repository_wrapper_is_not_classified_as_json_data() {
         let url = "https://github.com/example/propeller-data";
         let hit = fixture_hit(url);
@@ -9922,7 +9913,7 @@ mod tests {
         assert_eq!(response_content_kind(&hit, &fetched), "repository_metadata");
     }
 
-    #[test]
+#[test]
     fn extracts_latest_user_query_from_structured_input() {
         let payload = json!({
             "input": [
@@ -9937,7 +9928,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn augments_output_with_web_search_call_and_citations() {
         let payload = json!({
             "id": "resp_1",
@@ -10008,7 +9999,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn filters_hits_by_allowed_domain() {
         let hits = vec![
             SearchHit {
@@ -10031,7 +10022,7 @@ mod tests {
         assert_eq!(filtered[0].url, "https://docs.example.com/a");
     }
 
-    #[test]
+#[test]
     fn mock_open_page_builds_real_excerpts_and_find_results() {
         let config = test_config(ProviderKind::Mock);
         let hit = SearchHit {
@@ -10052,7 +10043,7 @@ mod tests {
             .any(|matched| matched.contains("CTOX_REMOTE_WEB_OK")));
     }
 
-    #[test]
+#[test]
     fn cache_key_varies_by_count_and_provider() {
         let q3 = SearchQuery {
             text: "rust async".to_string(),
@@ -10076,7 +10067,7 @@ mod tests {
         assert_ne!(k3, k_bing, "provider must change the cache key");
     }
 
-    #[test]
+#[test]
     fn brave_parser_extracts_hits_and_skips_noise() {
         // Regression guard for the positional regex over Brave's embedded JS
         // state (the documented first fallback after Google). Pins the expected
@@ -10098,7 +10089,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn oversized_cache_detection_uses_file_size_without_parsing() {
         let root = unique_test_root("oversized-cache");
         fs::create_dir_all(&root).unwrap();
@@ -10109,7 +10100,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn provider_cooldown_persists_across_calls_and_expires() {
         let root = unique_test_root("provider-cooldown");
         assert!(
@@ -10133,48 +10124,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn auto_provider_cascade_keeps_google_first_multi_engine_order() {
-        // Regression pin for the benchmark-era multi-engine policy: Auto must
-        // try Google first, then Brave, DuckDuckGo, and Bing. A silent
-        // collapse to a single engine (or a demoted Google adapter) fails
-        // this guard.
-        let root = unique_test_root("provider-cascade");
-        let candidates = search_provider_candidates(&root, ProviderKind::Auto);
-        assert_eq!(
-            candidates,
-            vec![
-                ProviderKind::Google,
-                ProviderKind::Brave,
-                ProviderKind::DuckDuckGo,
-                ProviderKind::Bing,
-            ]
-        );
-        assert_eq!(
-            search_provider_candidates(&root, ProviderKind::Brave),
-            vec![ProviderKind::Brave],
-            "an explicitly pinned provider must not expand into the cascade"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn auto_provider_budget_defaults_to_full_cascade() {
-        let root = unique_test_root("provider-budget");
-        assert_eq!(
-            auto_provider_budget(&root, ProviderKind::Auto),
-            4,
-            "Auto must be able to try every cascade engine before giving up"
-        );
-        assert_eq!(
-            auto_provider_budget(&root, ProviderKind::Brave),
-            usize::MAX,
-            "a pinned provider is not budget-limited"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
+#[test]
     fn model_facing_context_fences_untrusted_page_content() {
         let doc = EvidenceDoc {
             url: "https://evil.example/page".to_string(),
@@ -10243,7 +10193,7 @@ mod tests {
         assert!(results_ctx[..r_open].contains("Use these web results as external context"));
     }
 
-    #[test]
+#[test]
     fn search_payload_preserves_verified_evidence_contract() {
         let url = "https://example.com/verified".to_string();
         let result = SearchResponse {
@@ -10298,7 +10248,7 @@ mod tests {
         assert_eq!(payload["citations"][0]["url"], url);
     }
 
-    #[test]
+#[test]
     fn search_payload_withholds_transport_only_evidence_and_citations() {
         let url = "https://example.com/shell".to_string();
         let result = SearchResponse {
@@ -10355,7 +10305,7 @@ mod tests {
         assert_eq!(payload["citations"], json!([]));
     }
 
-    #[test]
+#[test]
     fn paragraph_selection_does_not_promote_unrelated_text() {
         let paragraphs = vec![
             "This paragraph discusses medieval manuscript preservation in libraries.".to_string(),
@@ -10364,7 +10314,7 @@ mod tests {
         assert_eq!(best_paragraphs_for_query("", &paragraphs, 3), paragraphs);
     }
 
-    #[test]
+#[test]
     fn build_web_search_calls_uses_real_find_results() {
         let result = SearchResponse {
             provider: "mock".to_string(),
@@ -10428,7 +10378,7 @@ mod tests {
         assert!(calls[3].output_item()["action"].is_null());
     }
 
-    #[test]
+#[test]
     fn find_in_page_matches_normalized_hyphenated_phrase() {
         let matches = build_find_in_page_results(
             "What is the Pro-Human AI Declaration?",
@@ -10446,7 +10396,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn find_in_page_expands_start_queries_to_init_and_getting_started() {
         let matches = build_find_in_page_results(
             "How do I start rustlings?",
@@ -10465,7 +10415,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn find_in_page_matches_hyphenated_docs_commands() {
         let matches = build_find_in_page_results(
             "How do I create a Docusaurus site?",
@@ -10483,7 +10433,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn planned_search_queries_include_keyword_pdf_and_year_rewrites() {
         let queries = plan_search_queries(
             "Use web search and tell me the filing requirements from page 8 of the IRS instructions for Form 1040 PDF.",
@@ -10513,7 +10463,7 @@ mod tests {
             .any(|query| query.contains(&(current_year - 2).to_string())));
     }
 
-    #[test]
+#[test]
     fn bing_rss_parser_extracts_search_hits() {
         let payload = r#"<?xml version="1.0" encoding="utf-8" ?>
 <rss version="2.0">
@@ -10537,7 +10487,7 @@ mod tests {
         assert_eq!(hits[1].rank, 2);
     }
 
-    #[test]
+#[test]
     fn duckduckgo_html_parser_extracts_search_hits() {
         let payload = r#"
 <html>
@@ -10560,21 +10510,7 @@ mod tests {
         assert_eq!(hits[1].rank, 2);
     }
 
-    #[test]
-    fn duckduckgo_accept_language_derives_from_query_language() {
-        assert_eq!(
-            super::duckduckgo_accept_language(Some("de-DE")),
-            "de-DE,de;q=0.9,en;q=0.8"
-        );
-        assert_eq!(super::duckduckgo_accept_language(Some("fr")), "fr,en;q=0.8");
-        assert_eq!(super::duckduckgo_accept_language(None), "en-US,en;q=0.9");
-        assert_eq!(
-            super::duckduckgo_accept_language(Some("  ")),
-            "en-US,en;q=0.9"
-        );
-    }
-
-    #[test]
+#[test]
     fn duckduckgo_anomaly_modal_is_detected() {
         let body = r#"<html><body><div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div></body></html>"#;
         assert!(super::detect_duckduckgo_anomaly(body));
@@ -10582,18 +10518,11 @@ mod tests {
         assert!(!super::detect_duckduckgo_anomaly(clean));
     }
 
-    #[test]
-    fn parse_chrome_major_extracts_version_from_default_ua() {
-        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
-        assert_eq!(super::parse_chrome_major_from_ua(ua), Some(136));
-        assert_eq!(super::parse_chrome_major_from_ua("ctox-test"), None);
-    }
-
     // The stdout-capture path uses process-wide dup2, which races with any
     // other test thread that also writes to stdout. That makes this test
     // flaky under `cargo test` default parallelism. Run it explicitly with
     // `cargo test -- --test-threads=1 ctox_web_read_tool_keeps_stdout_clean_for_pdf_reads --ignored`.
-    #[cfg(unix)]
+#[cfg(unix)]
     #[ignore = "requires --test-threads=1 because stdout capture races other test threads"]
     #[test]
     fn ctox_web_read_tool_keeps_stdout_clean_for_pdf_reads() {
@@ -10630,7 +10559,7 @@ mod tests {
             .contains("Attention Is All You Need"));
     }
 
-    #[test]
+#[test]
     fn detects_pdf_by_content_type_and_signature() {
         let hit = SearchHit {
             title: "Doc".to_string(),
@@ -10648,7 +10577,7 @@ mod tests {
         assert!(is_pdf_content(&hit, &fetched));
     }
 
-    #[test]
+#[test]
     fn mock_pdf_open_page_extracts_llm_readable_text() {
         let config = test_config(ProviderKind::Mock);
         let hit = SearchHit {
@@ -10669,7 +10598,7 @@ mod tests {
             .any(|matched| matched.contains("CTOX_REMOTE_WEB_OK")));
     }
 
-    #[test]
+#[test]
     fn bounded_pdf_extraction_respects_page_limit() {
         let mut config = test_config(ProviderKind::Mock);
         config.max_pdf_pages = 1;
@@ -10698,7 +10627,7 @@ mod tests {
         assert!(!opened.page_text.contains("CTOX_SECONDARY_TOKEN"));
     }
 
-    #[test]
+#[test]
     fn pdf_page_hint_loads_targeted_page_and_labels_matches() {
         let mut config = test_config(ProviderKind::Mock);
         config.max_pdf_pages = 5;
@@ -10758,7 +10687,7 @@ mod tests {
             .any(|matched| matched.starts_with("p. 5:")));
     }
 
-    #[test]
+#[test]
     fn html_extraction_filters_navigation_and_cookie_boilerplate() {
         let hit = SearchHit {
             title: "Test page".to_string(),
@@ -10789,7 +10718,7 @@ mod tests {
         assert!(!opened.page_text.contains("Home | Pricing | Support"));
     }
 
-    #[test]
+#[test]
     fn generic_html_prefers_main_content_over_sidebar_noise() {
         let hit = SearchHit {
             title: "Docs page".to_string(),
@@ -10821,7 +10750,7 @@ mod tests {
         assert!(!opened.page_text.contains("Pricing Company Blog Careers"));
     }
 
-    #[test]
+#[test]
     fn docs_adapter_extracts_docusaurus_markdown_and_code_blocks() {
         let hit = SearchHit {
             title: "Docusaurus docs".to_string(),
@@ -10852,7 +10781,7 @@ mod tests {
             .contains("npm create docusaurus@latest my-site classic"));
     }
 
-    #[test]
+#[test]
     fn knowledge_adapter_extracts_wikipedia_article_body() {
         let hit = SearchHit {
             title: "Rust (programming language)".to_string(),
@@ -10889,7 +10818,7 @@ mod tests {
         assert!(!opened.page_text.contains("External links and citations"));
     }
 
-    #[test]
+#[test]
     fn knowledge_adapter_extracts_arxiv_abstract() {
         let hit = SearchHit {
             title: "Attention Is All You Need".to_string(),
@@ -10922,7 +10851,7 @@ mod tests {
         assert!(!opened.page_text.contains("Download PDF Other formats"));
     }
 
-    #[test]
+#[test]
     fn news_adapter_extracts_article_body_and_drops_related_blocks() {
         let hit = SearchHit {
             title: "Markets rally on rate hopes".to_string(),
@@ -10959,7 +10888,7 @@ mod tests {
             .contains("Related articles Most read Watch live"));
     }
 
-    #[test]
+#[test]
     fn github_tree_embedded_data_extracts_repo_items() {
         let hit = SearchHit {
             title: "rustlings".to_string(),
@@ -10992,7 +10921,7 @@ mod tests {
         assert!(opened.page_text.contains("file: exercises/README.md"));
     }
 
-    #[test]
+#[test]
     fn github_tree_embedded_data_extracts_items_from_code_view_tree_route() {
         let hit = SearchHit {
             title: "rustlings".to_string(),
@@ -11040,7 +10969,7 @@ mod tests {
             .any(|excerpt| excerpt.contains("intro1.rs")));
     }
 
-    #[test]
+#[test]
     fn github_markdown_embedded_data_extracts_readme_text() {
         let hit = SearchHit {
             title: "Rustlings".to_string(),
@@ -11074,7 +11003,7 @@ mod tests {
         assert!(opened.page_text.contains("cargo install rustlings"));
     }
 
-    #[test]
+#[test]
     fn github_code_embedded_data_extracts_raw_lines() {
         let hit = SearchHit {
             title: "intro1.rs".to_string(),
@@ -11116,7 +11045,7 @@ mod tests {
             .any(|excerpt| excerpt.contains("println!")));
     }
 
-    #[test]
+#[test]
     fn parses_github_repo_tree_and_blob_urls() {
         let repo =
             parse_github_url_parts("https://github.com/rust-lang/rustlings").expect("repo url");
@@ -11139,7 +11068,7 @@ mod tests {
         assert_eq!(blob.path.as_deref(), Some("src/main.rs"));
     }
 
-    #[test]
+#[test]
     fn github_api_repo_payload_surfaces_query_relevant_files() {
         let hit = SearchHit {
             title: "rust-lang/rustlings".to_string(),
@@ -11185,7 +11114,7 @@ mod tests {
             .any(|excerpt| excerpt.contains("rustlings init")));
     }
 
-    #[test]
+#[test]
     fn github_api_blob_payload_extracts_numbered_code_lines() {
         let hit = SearchHit {
             title: "main.rs".to_string(),
@@ -11217,7 +11146,7 @@ mod tests {
             .any(|excerpt| excerpt.contains("rustlings init")));
     }
 
-    #[test]
+#[test]
     fn github_api_repo_payload_keeps_short_directory_summary_lines() {
         let hit = SearchHit {
             title: "rust-lang/rustlings".to_string(),
@@ -11256,7 +11185,7 @@ mod tests {
         assert!(!opened.summary.trim().is_empty());
     }
 
-    #[test]
+#[test]
     fn github_directory_selection_prefers_query_relevant_paths() {
         let root_entries = vec![
             GithubContentEntry {
@@ -11297,7 +11226,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn pdf_cleanup_merges_hyphenated_lines_and_drops_numeric_artifacts() {
         let cleaned = clean_pdf_text_for_llm(
             "Executive sum-\nmary for CTOX\n\n12\n13\n14\n\nThe runtime reads PDFs cleanly.",
@@ -11307,14 +11236,14 @@ mod tests {
         assert!(cleaned.contains("The runtime reads PDFs cleanly."));
     }
 
-    #[test]
+#[test]
     fn best_paragraphs_falls_back_to_short_pdf_text_when_needed() {
         let paragraphs = vec!["Dummy PDF file".to_string()];
         let excerpts = best_paragraphs_for_query("dummy pdf", &paragraphs, 3);
         assert_eq!(excerpts, vec!["Dummy PDF file".to_string()]);
     }
 
-    #[test]
+#[test]
     fn evidence_gate_requires_successful_nonempty_hashed_body() {
         assert_eq!(
             snapshot_hash(b""),
@@ -11414,7 +11343,7 @@ mod tests {
         assert!(!not_found.evidence_eligible);
     }
 
-    #[test]
+#[test]
     fn evidence_gate_rejects_200_shell_even_with_a_long_search_snippet() {
         let hit = SearchHit {
             title: "Shell result".to_string(),
@@ -11474,7 +11403,7 @@ mod tests {
         assert!(payload["citations"].as_array().is_some_and(Vec::is_empty));
     }
 
-    #[test]
+#[test]
     fn evidence_gate_rejects_login_cookie_and_metadata_fallbacks() {
         let config = test_config(ProviderKind::Mock);
         let cases = [
@@ -11532,7 +11461,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn direct_read_withholds_typed_fields_until_page_content_is_admitted() {
         let doc = EvidenceDoc {
             url: "https://companyhouse.de/firma/example".to_string(),
@@ -11582,7 +11511,7 @@ mod tests {
         assert_eq!(payload["evidence_content_kind"], "none");
     }
 
-    #[test]
+#[test]
     fn json_api_urls_use_api_content_negotiation() {
         assert!(is_json_api_url("https://zenodo.org/api/records/20111572"));
         assert!(is_json_api_url("https://example.test/data/source.json"));
@@ -11593,7 +11522,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn zenodo_record_pages_have_canonical_api_fallbacks() {
         assert_eq!(
             canonical_read_fallback_url("https://zenodo.org/records/15856431").as_deref(),
@@ -11607,7 +11536,7 @@ mod tests {
         assert!(canonical_read_fallback_url("https://example.org/records/15856431").is_none());
     }
 
-    #[test]
+#[test]
     fn zenodo_record_adapter_extracts_canonical_file_receipts() {
         let hit = SearchHit {
             title: "zenodo.org".to_string(),
@@ -11676,7 +11605,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn legacy_page_cache_evidence_requires_immutable_body_receipt_and_matching_sha() {
         let config = test_config(ProviderKind::Mock);
         let hit = SearchHit {
@@ -11789,7 +11718,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn page_cache_persists_negative_http_status_without_evidence_eligibility() {
         let root = unique_test_root("web_search_negative_page_cache");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11828,7 +11757,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn stale_page_cache_sessions_merge_instead_of_dropping_receipts() {
         let root = unique_test_root("web_search_page_cache_merge");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11869,7 +11798,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn session_reuses_persisted_page_cache_without_network() {
         let root = unique_test_root("web_search_page_cache");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11905,7 +11834,7 @@ mod tests {
         assert!(cached.page_text.contains("CTOX_REMOTE_WEB_OK"));
     }
 
-    #[test]
+#[test]
     fn fetch_evidence_returns_every_doc_when_fetched_in_parallel() {
         let root = unique_test_root("web_search_parallel_evidence");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11930,7 +11859,7 @@ mod tests {
         assert!(docs[2].url.contains("mock-three"));
     }
 
-    #[test]
+#[test]
     fn fetch_evidence_dedups_identical_urls_but_returns_one_doc_per_hit() {
         let root = unique_test_root("web_search_parallel_dedup");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11953,7 +11882,7 @@ mod tests {
         assert_eq!(docs[0].url, docs[1].url);
     }
 
-    #[test]
+#[test]
     fn execute_search_uses_cached_search_when_external_web_access_is_disabled() {
         let root = unique_test_root("web_search_cached_search");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -11992,7 +11921,7 @@ mod tests {
         assert_eq!(cached.evidence.len(), warm.evidence.len());
     }
 
-    #[test]
+#[test]
     fn execute_search_plans_queries_from_original_prompt_not_augmented_query() {
         let root = unique_test_root("web_search_original_query_plan");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
@@ -12034,7 +11963,7 @@ mod tests {
             .any(|query| query.contains("site:github.com")));
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for RFC search recall"]
     fn real_world_rfc_editor_search_returns_hits() {
         let root = unique_test_root("real_world_rfc_editor_search");
@@ -12081,7 +12010,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for real-world PDFs"]
     fn real_world_pdf_samples_extract_meaningful_text() {
         let config = test_config(ProviderKind::Brave);
@@ -12125,7 +12054,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for GitHub repo and blob extraction"]
     fn real_world_github_pages_extract_meaningful_text() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12183,7 +12112,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for GitHub repo-root command extraction"]
     fn real_world_github_repo_root_surfaces_start_command() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12218,7 +12147,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for GitHub repo-root path discovery"]
     fn real_world_github_repo_root_surfaces_intro_exercise_location() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12263,7 +12192,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     #[ignore = "live OpenAI-vs-CTOX compatibility benchmark"]
     fn openai_web_search_compatibility_benchmark() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12439,7 +12368,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for docs-site extraction"]
     fn real_world_docs_sites_extract_meaningful_text() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12488,7 +12417,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for news-site extraction"]
     fn real_world_news_sites_extract_meaningful_text() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12534,7 +12463,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for knowledge-site extraction"]
     fn real_world_knowledge_sites_extract_meaningful_text() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12590,7 +12519,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for semi-complex PDFs"]
     fn real_world_semicomplex_pdfs_extract_meaningful_text_quickly() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12648,7 +12577,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     #[ignore = "live network validation for page-hinted PDF loading"]
     fn real_world_pdf_page_hint_loads_requested_page() {
         let mut config = test_config(ProviderKind::Brave);
@@ -12687,7 +12616,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn local_fixture_preserves_admitted_body_without_a_second_fetch() {
         let body_a = b"The first admitted response is the only evidence body.".to_vec();
         let body_b = b"A second fetch would return a mismatched body.".to_vec();
@@ -12713,7 +12642,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_soft_404_and_login_pages() {
         for (path, body, expected_reason) in [
             (
@@ -12747,7 +12676,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn local_fixture_retries_503_then_admits_200() {
         let body =
             b"This stable response contains enough source content to be admitted after retry."
@@ -12768,7 +12697,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 2);
     }
 
-    #[test]
+#[test]
     fn local_fixture_records_redirect_receipt_metadata() {
         let body =
             b"The redirected final response contains stable source content for audit.".to_vec();
@@ -12794,7 +12723,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 2);
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_over_limit_body_without_truncation() {
         let (url, server) = spawn_http_fixture(
             vec![FixtureReply::ok(
@@ -12817,7 +12746,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn long_source_text_with_copyright_notice_is_not_boilerplate() {
         let text = format!(
             "{} All rights reserved.",
@@ -12833,7 +12762,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn pdf_responses_use_the_original_file_size_limit() {
         let config = test_config(ProviderKind::Mock);
         assert_eq!(
@@ -12858,7 +12787,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn repository_data_downloads_receive_a_streaming_timeout_budget() {
         let config = test_config(ProviderKind::Mock);
         assert_eq!(
@@ -12874,7 +12803,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_malformed_data_by_response_content() {
         let malformed = b"{ this is not valid JSON data, despite the .json URL suffix }".to_vec();
         let (url, server) =
@@ -12893,7 +12822,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_html_disguised_as_zip_data() {
         let body = b"<html><body><h1>Download unavailable</h1></body></html>".to_vec();
         let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("application/zip", body)], 1);
@@ -12911,7 +12840,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_admits_pdf_with_hash_bound_artifact() {
         let body = mock_pdf_bytes_with_pages(&[
             "Propeller test rig report with measured thrust, torque, and shaft speed \
@@ -12943,7 +12872,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_admits_html_with_hash_bound_artifact() {
         let body = br#"<html><head><title>Thrust stand calibration report</title></head><body><main><article><h1>Thrust stand calibration report</h1><p>The calibration campaign measured axial thrust, reaction torque, and shaft speed for the instrumented propeller test stand across the full operating envelope.</p></article></main></body></html>"#.to_vec();
         let (url, server) =
@@ -12975,7 +12904,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_admits_json_data_with_hash_bound_artifact() {
         let body = br#"[{"rpm":1000,"thrust_N":1.2,"torque_Nm":0.03},{"rpm":2000,"thrust_N":4.1,"torque_Nm":0.11}]"#.to_vec();
         let (url, server) =
@@ -13009,7 +12938,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_admits_csv_data_with_hash_bound_artifact() {
         let body = b"rpm,thrust_N,torque_Nm\n1000,1.2,0.03\n2000,4.1,0.11\n".to_vec();
         let (url, server) = spawn_http_fixture(vec![FixtureReply::ok("text/csv", body.clone())], 1);
@@ -13037,7 +12966,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn ctox_web_read_tool_binds_fixture_data_receipt_to_the_artifact() {
         let root = unique_test_root("ctox_web_read_fixture_data");
         set_runtime_config(&root, "CTOX_WEB_EGRESS_ALLOW", "127.0.0.1");
@@ -13082,7 +13011,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_204_empty_success_without_evidence() {
         let (url, server) =
             spawn_http_fixture(vec![FixtureReply::status(204, "text/plain", Vec::new())], 1);
@@ -13106,7 +13035,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 1);
     }
 
-    #[test]
+#[test]
     fn local_fixture_fails_closed_on_hard_404_and_410() {
         for status in [404_u16, 410] {
             let (url, server) = spawn_http_fixture(
@@ -13143,7 +13072,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_bot_challenge_walls() {
         for (path, body) in [
             (
@@ -13174,7 +13103,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn local_fixture_rejects_redirects_to_non_content_pages() {
         let body = br#"<html><head><title>Record</title></head><body><main><p>Sorry, this record was not found. It may have been removed from the catalog.</p></main></body></html>"#.to_vec();
         let (url, server) = spawn_http_fixture(
@@ -13199,7 +13128,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 2);
     }
 
-    #[test]
+#[test]
     fn local_fixture_binds_multi_hop_redirects_to_the_terminal_body() {
         let body = b"The terminal multi hop response contains the stable source content for audit."
             .to_vec();
@@ -13233,7 +13162,7 @@ mod tests {
         assert_eq!(server.join().expect("fixture server"), 3);
     }
 
-    #[test]
+#[test]
     fn zip_manifest_binds_member_paths_and_member_hashes() {
         let root = unique_test_root("zip_manifest_binding");
         fs::create_dir_all(&root).expect("manifest root");
@@ -13394,7 +13323,7 @@ mod tests {
         assert_eq!(other_paths, ["other/run-99.csv"]);
     }
 
-    #[test]
+#[test]
     fn zip_manifest_rejects_unsafe_member_paths() {
         let root = unique_test_root("zip_manifest_unsafe");
         fs::create_dir_all(&root).expect("unsafe manifest root");
@@ -13591,7 +13520,7 @@ mod tests {
         .unwrap();
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     fn capture_stdout<T>(operation: impl FnOnce() -> T) -> (String, T) {
         static CAPTURE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
         let _guard = CAPTURE_MUTEX

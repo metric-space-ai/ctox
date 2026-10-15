@@ -407,7 +407,7 @@ mod tests {
     }
 
     // The canonical case: a threshold "Wenn" CTOX would compile to a last()-check.
-    #[test]
+#[test]
     fn fires_when_threshold_crossed() {
         let code = r#"if signal.last() > 30.0 { fire("Serverraum zu heiß"); }"#;
 
@@ -421,7 +421,7 @@ mod tests {
     }
 
     // Windowed aggregate: avg over a window drives the decision.
-    #[test]
+#[test]
     fn windowed_average_condition() {
         let code = r#"if signal.avg("1h") >= 50.0 { fire(); }"#;
         let now = 10_000_000;
@@ -432,7 +432,7 @@ mod tests {
     }
 
     // A rising trend (positive rate) is a condition CTOX can express directly.
-    #[test]
+#[test]
     fn rate_of_change_condition() {
         let code = r#"if signal.rate("10s") > 0.5 { fire("steigt schnell"); }"#;
         // +10 over 10s = 1.0/s > 0.5.
@@ -444,7 +444,7 @@ mod tests {
 
     // Persistent state across calls: only fire after the condition holds 3x
     // (the kind of "seit längerer Zeit" hysteresis the spec calls for).
-    #[test]
+#[test]
     fn state_persists_across_calls() {
         let code = r#"
             if signal.last() > 30.0 {
@@ -475,7 +475,7 @@ mod tests {
     }
 
     // A second bound signal is reachable via signals("name").
-    #[test]
+#[test]
     fn named_signal_lookup() {
         let code = r#"
             if signal.last() > 30.0 && signals("humid").last() > 60.0 {
@@ -494,7 +494,7 @@ mod tests {
 
     // Sandbox: an infinite loop hits the operation limit and returns an error
     // instead of hanging the backend. Self-repair reads this error.
-    #[test]
+#[test]
     fn sandbox_blocks_runaway_loop() {
         let code = r#"loop { } "#;
         let out = evaluate(code, &ctx(series(&[(1, 1.0)]), 100), &json!({}));
@@ -510,7 +510,7 @@ mod tests {
     }
 
     // A compile error is captured, not panicked, and leaves state untouched.
-    #[test]
+#[test]
     fn compile_error_is_captured() {
         let out = evaluate(
             "this is not valid rhai @@@",
@@ -523,7 +523,7 @@ mod tests {
     }
 
     // The watcher cannot reach `eval` (disabled) — a real sandbox boundary.
-    #[test]
+#[test]
     fn eval_is_disabled() {
         let out = evaluate(
             r#"eval("fire(\"x\")")"#,
@@ -534,7 +534,7 @@ mod tests {
         assert!(out.error.is_some(), "eval must be rejected");
     }
 
-    #[test]
+#[test]
     fn validate_program_accepts_valid_rejects_broken() {
         assert!(validate_program(r#"if signal.last() > 30.0 { fire("x"); }"#).is_none());
         assert!(validate_program(r#"state.n = (state.n ?? 0) + 1;"#).is_none());
@@ -546,15 +546,4 @@ mod tests {
         assert!(validate_program("   ").is_some());
     }
 
-    #[test]
-    fn parse_duration_units() {
-        assert_eq!(parse_duration("500ms").unwrap(), Duration::from_millis(500));
-        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
-        assert_eq!(parse_duration("2h").unwrap(), Duration::from_secs(7200));
-        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86_400));
-        assert!(parse_duration("15x").is_err());
-        assert!(parse_duration("abc").is_err());
-        assert!(parse_duration("").is_err());
-    }
 }

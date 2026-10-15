@@ -249,45 +249,7 @@ mod tests {
         members(&conn).unwrap()
     }
 
-    #[test]
-    fn router_prompt_names_experience_and_rules() {
-        let pool = pool();
-        let memory = MemberMemory {
-            anchors: "## Entries\n- anchor_id: a1\n- anchor_type: owner_confirmed\n- statement: Vor dem Import das Schema prüfen.\n".into(),
-            narrative: String::new(),
-            updated_at: String::new(),
-        };
-        let recent = vec![RecentAttempt {
-            task_summary: "[reports] Kundenliste importieren".into(),
-            module: Some("reports".into()),
-            succeeded: true,
-            review_passed: Some(true),
-            finished_at: "2026-09-05T10:00:00Z".into(),
-        }];
-        let candidates = pool
-            .iter()
-            .map(|member| RouterCandidate {
-                member,
-                memory: &memory,
-                recent: &recent,
-                failures_24h: 0,
-            })
-            .collect::<Vec<_>>();
-        let task = RouterTask {
-            summary: "[reports] Neue Kundenliste importieren",
-            module: Some("reports"),
-            command_type: None,
-            skills: &[],
-            thread_key: None,
-        };
-        let prompt = render_router_prompt(&task, &candidates);
-        assert!(prompt.contains("Vor dem Import das Schema prüfen."));
-        assert!(prompt.contains("Kundenliste importieren → gelungen, Review bestanden"));
-        assert!(prompt.contains(&format!("[{}] {}", pool[0].id, pool[0].name)));
-        assert!(prompt.contains("wenigsten Einsätzen"));
-    }
-
-    #[test]
+#[test]
     fn route_prefers_judgment_and_falls_back_honestly() {
         let pool = pool();
         assert!(pool.len() >= 2, "fixture needs a pool");

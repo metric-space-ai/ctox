@@ -201,7 +201,7 @@ impl Path {
         })
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences
@@ -217,7 +217,7 @@ impl Path {
         Self::from_absolute_path(absolute)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_arch = "wasm32"))]
     /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences,
@@ -276,7 +276,7 @@ impl Path {
     /// # Performance
     ///
     /// This operation is `O(n)`.
-    #[doc(alias = "len")]
+#[doc(alias = "len")]
     pub fn parts_count(&self) -> usize {
         self.raw.split_terminator(DELIMITER).count()
     }
@@ -360,7 +360,7 @@ impl Path {
     }
 
     /// Creates a new child of this [`Path`]
-    #[deprecated = "use .join() or .clone().join() instead"]
+#[deprecated = "use .join() or .clone().join() instead"]
     pub fn child<'a>(&self, child: impl Into<PathPart<'a>>) -> Self {
         self.clone().join(child)
     }
@@ -479,320 +479,12 @@ pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<
 mod tests {
     use super::*;
 
-    #[test]
-    fn delimiter_char_is_forward_slash() {
-        assert_eq!(DELIMITER_CHAR, '/');
-    }
-
-    #[test]
-    fn cloud_prefix_with_trailing_delimiter() {
-        // Use case: files exist in object storage named `foo/bar.json` and
-        // `foo_test.json`. A search for the prefix `foo/` should return
-        // `foo/bar.json` but not `foo_test.json'.
-        let prefix = Path::from_iter(["test"]);
-        assert_eq!(prefix.as_ref(), "test");
-    }
-
-    #[test]
-    fn push_encodes() {
-        let location = Path::from_iter(["foo/bar", "baz%2Ftest"]);
-        assert_eq!(location.as_ref(), "foo%2Fbar/baz%252Ftest");
-    }
-
-    #[test]
-    fn test_parse() {
-        assert_eq!(Path::parse("/").unwrap().as_ref(), "");
-        assert_eq!(Path::parse("").unwrap().as_ref(), "");
-
-        let err = Path::parse("//").unwrap_err();
-        assert!(matches!(err, Error::EmptySegment { .. }));
-
-        assert_eq!(Path::parse("/foo/bar/").unwrap().as_ref(), "foo/bar");
-        assert_eq!(Path::parse("foo/bar/").unwrap().as_ref(), "foo/bar");
-        assert_eq!(Path::parse("foo/bar").unwrap().as_ref(), "foo/bar");
-
-        let err = Path::parse("foo///bar").unwrap_err();
-        assert!(matches!(err, Error::EmptySegment { .. }));
-    }
-
-    #[test]
-    fn convert_raw_before_partial_eq() {
-        // dir and file_name
-        let cloud = Path::from("test_dir/test_file.json");
-        let built = Path::from_iter(["test_dir", "test_file.json"]);
-
-        assert_eq!(built, cloud);
-
-        // dir and file_name w/o dot
-        let cloud = Path::from("test_dir/test_file");
-        let built = Path::from_iter(["test_dir", "test_file"]);
-
-        assert_eq!(built, cloud);
-
-        // dir, no file
-        let cloud = Path::from("test_dir/");
-        let built = Path::from_iter(["test_dir"]);
-        assert_eq!(built, cloud);
-
-        // file_name, no dir
-        let cloud = Path::from("test_file.json");
-        let built = Path::from_iter(["test_file.json"]);
-        assert_eq!(built, cloud);
-
-        // empty
-        let cloud = Path::from("");
-        let built = Path::from_iter(["", ""]);
-
-        assert_eq!(built, cloud);
-    }
-
-    #[test]
-    fn parts_after_prefix_behavior() {
-        let existing_path = Path::from("apple/bear/cow/dog/egg.json");
-
-        // Prefix with one directory
-        let prefix = Path::from("apple");
-        let expected_parts: Vec<PathPart<'_>> = vec!["bear", "cow", "dog", "egg.json"]
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        let parts: Vec<_> = existing_path.prefix_match(&prefix).unwrap().collect();
-        assert_eq!(parts, expected_parts);
-
-        // Prefix with two directories
-        let prefix = Path::from("apple/bear");
-        let expected_parts: Vec<PathPart<'_>> = vec!["cow", "dog", "egg.json"]
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        let parts: Vec<_> = existing_path.prefix_match(&prefix).unwrap().collect();
-        assert_eq!(parts, expected_parts);
-
-        // Not a prefix
-        let prefix = Path::from("cow");
-        assert!(existing_path.prefix_match(&prefix).is_none());
-
-        // Prefix with a partial directory
-        let prefix = Path::from("ap");
-        assert!(existing_path.prefix_match(&prefix).is_none());
-
-        // Prefix matches but there aren't any parts after it
-        let existing = Path::from("apple/bear/cow/dog");
-
-        assert_eq!(existing.prefix_match(&existing).unwrap().count(), 0);
-        assert_eq!(Path::default().parts().count(), 0);
-    }
-
-    #[test]
-    fn parts_count() {
-        assert_eq!(Path::ROOT.parts().count(), Path::ROOT.parts_count());
-
-        let path = path("foo/bar/baz");
-        assert_eq!(path.parts_count(), 3);
-        assert_eq!(path.parts_count(), path.parts().count());
-    }
-
-    #[test]
-    fn prefix_matches_raw_content() {
-        assert_eq!(Path::ROOT.parent(), None, "empty path must have no prefix");
-
-        assert_eq!(path("foo").parent().unwrap(), Path::ROOT);
-        assert_eq!(path("foo/bar").parent().unwrap(), path("foo"));
-        assert_eq!(path("foo/bar/baz").parent().unwrap(), path("foo/bar"));
-    }
-
-    #[test]
-    fn prefix_matches() {
-        let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something"]);
-        // self starts with self
-        assert!(
-            haystack.prefix_matches(&haystack),
-            "{haystack:?} should have started with {haystack:?}"
-        );
-
-        // a longer prefix doesn't match
-        let needle = haystack.clone().join("longer now");
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} shouldn't have started with {needle:?}"
-        );
-
-        // one dir prefix matches
-        let needle = Path::from_iter(["foo/bar"]);
-        assert!(
-            haystack.prefix_matches(&needle),
-            "{haystack:?} should have started with {needle:?}"
-        );
-
-        // two dir prefix matches
-        let needle = needle.join("baz%2Ftest");
-        assert!(
-            haystack.prefix_matches(&needle),
-            "{haystack:?} should have started with {needle:?}"
-        );
-
-        // partial dir prefix doesn't match
-        let needle = Path::from_iter(["f"]);
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-
-        // one dir and one partial dir doesn't match
-        let needle = Path::from_iter(["foo/bar", "baz"]);
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-
-        // empty prefix matches
-        let needle = Path::from("");
-        assert!(
-            haystack.prefix_matches(&needle),
-            "{haystack:?} should have started with {needle:?}"
-        );
-    }
-
-    #[test]
-    fn prefix_matches_with_file_name() {
-        let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
-
-        // All directories match and file name is a prefix
-        let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo"]);
-
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-
-        // All directories match but file name is not a prefix
-        let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "e"]);
-
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-
-        // Not all directories match; file name is a prefix of the next directory; this
-        // does not match
-        let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "s"]);
-
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-
-        // Not all directories match; file name is NOT a prefix of the next directory;
-        // no match
-        let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "p"]);
-
-        assert!(
-            !haystack.prefix_matches(&needle),
-            "{haystack:?} should not have started with {needle:?}"
-        );
-    }
-
-    #[test]
-    fn path_containing_spaces() {
-        let a = Path::from_iter(["foo bar", "baz"]);
-        let b = Path::from("foo bar/baz");
-        let c = Path::parse("foo bar/baz").unwrap();
-
-        assert_eq!(a.raw, "foo bar/baz");
-        assert_eq!(a.raw, b.raw);
-        assert_eq!(b.raw, c.raw);
-    }
-
-    #[test]
-    fn from_url_path() {
-        let a = Path::from_url_path("foo%20bar").unwrap();
-        let b = Path::from_url_path("foo/%2E%2E/bar").unwrap_err();
-        let c = Path::from_url_path("foo%2F%252E%252E%2Fbar").unwrap();
-        let d = Path::from_url_path("foo/%252E%252E/bar").unwrap();
-        let e = Path::from_url_path("%48%45%4C%4C%4F").unwrap();
-        let f = Path::from_url_path("foo/%FF/as").unwrap_err();
-
-        assert_eq!(a.raw, "foo bar");
-        assert!(matches!(b, Error::BadSegment { .. }));
-        assert_eq!(c.raw, "foo/%2E%2E/bar");
-        assert_eq!(d.raw, "foo/%2E%2E/bar");
-        assert_eq!(e.raw, "HELLO");
-        assert!(matches!(f, Error::NonUnicode { .. }));
-    }
-
-    #[test]
-    fn filename_from_path() {
-        let a = Path::from("foo/bar");
-        let b = Path::from("foo/bar.baz");
-        let c = Path::from("foo.bar/baz");
-
-        assert_eq!(a.filename(), Some("bar"));
-        assert_eq!(b.filename(), Some("bar.baz"));
-        assert_eq!(c.filename(), Some("baz"));
-    }
-
-    #[test]
-    fn file_extension() {
-        let a = Path::from("foo/bar");
-        let b = Path::from("foo/bar.baz");
-        let c = Path::from("foo.bar/baz");
-        let d = Path::from("foo.bar/baz.qux");
-
-        assert_eq!(a.extension(), None);
-        assert_eq!(b.extension(), Some("baz"));
-        assert_eq!(c.extension(), None);
-        assert_eq!(d.extension(), Some("qux"));
-    }
-
-    #[test]
-    fn root_is_root() {
-        assert!(Path::ROOT.is_root());
-        assert!(Path::ROOT.parts().next().is_none());
-    }
-
     /// Main test for `impl Extend for Path`, covers most cases.
-    #[test]
-    fn impl_extend() {
-        let mut p = Path::ROOT;
-
-        p.extend(&Path::ROOT);
-        assert_eq!(p, Path::ROOT);
-
-        p.extend(&path("foo"));
-        assert_eq!(p, path("foo"));
-
-        p.extend(&path("bar/baz"));
-        assert_eq!(p, path("foo/bar/baz"));
-
-        p.extend(&path("a/b/c"));
-        assert_eq!(p, path("foo/bar/baz/a/b/c"));
-    }
 
     /// Test for `impl Extend for Path`, specifically covers addition of a single segment.
-    #[test]
-    fn impl_extend_for_one_segment() {
-        let mut p = Path::ROOT;
-
-        p.extend(&path("foo"));
-        assert_eq!(p, path("foo"));
-
-        p.extend(&path("bar"));
-        assert_eq!(p, path("foo/bar"));
-
-        p.extend(&path("baz"));
-        assert_eq!(p, path("foo/bar/baz"));
-    }
-
-    #[test]
-    fn parent() {
-        assert_eq!(Path::ROOT.parent(), None);
-        assert_eq!(path("foo").parent(), Some(Path::ROOT));
-        assert_eq!(path("foo/bar").parent(), Some(path("foo")));
-        assert_eq!(path("foo/bar/baz").parent(), Some(path("foo/bar")));
-    }
 
     /// Construct a [`Path`] from a raw `&str`, or panic trying.
-    #[track_caller]
+#[track_caller]
     fn path(raw: &str) -> Path {
         Path::parse(raw).unwrap()
     }

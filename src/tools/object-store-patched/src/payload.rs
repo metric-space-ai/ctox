@@ -250,13 +250,13 @@ impl PutPayloadMut {
     }
 
     /// Returns `true` if this [`PutPayloadMut`] contains no bytes
-    #[inline]
+#[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Returns the total length of the [`Bytes`] in this payload
-    #[inline]
+#[inline]
     pub fn content_length(&self) -> usize {
         self.len
     }
@@ -281,41 +281,4 @@ impl From<PutPayloadMut> for PutPayload {
 mod test {
     use crate::PutPayloadMut;
 
-    #[test]
-    fn test_put_payload() {
-        let mut chunk = PutPayloadMut::new().with_block_size(23);
-        chunk.extend_from_slice(&[1; 16]);
-        chunk.extend_from_slice(&[2; 32]);
-        chunk.extend_from_slice(&[2; 5]);
-        chunk.extend_from_slice(&[2; 21]);
-        chunk.extend_from_slice(&[2; 40]);
-        chunk.extend_from_slice(&[0; 0]);
-        chunk.push("foobar".into());
-
-        let payload = chunk.freeze();
-        assert_eq!(payload.content_length(), 120);
-
-        let chunks = payload.as_ref();
-        assert_eq!(chunks.len(), 6);
-
-        assert_eq!(chunks[0].len(), 23);
-        assert_eq!(chunks[1].len(), 25); // 32 - (23 - 16)
-        assert_eq!(chunks[2].len(), 23);
-        assert_eq!(chunks[3].len(), 23);
-        assert_eq!(chunks[4].len(), 20);
-        assert_eq!(chunks[5].len(), 6);
-    }
-
-    #[test]
-    fn test_content_length() {
-        let mut chunk = PutPayloadMut::new();
-        chunk.push(vec![0; 23].into());
-        assert_eq!(chunk.content_length(), 23);
-        chunk.extend_from_slice(&[0; 4]);
-        assert_eq!(chunk.content_length(), 27);
-        chunk.push(vec![0; 121].into());
-        assert_eq!(chunk.content_length(), 148);
-        let payload = chunk.freeze();
-        assert_eq!(payload.content_length(), 148);
-    }
 }

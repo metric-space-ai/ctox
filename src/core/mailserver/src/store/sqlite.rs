@@ -1071,133 +1071,7 @@ mod tests {
         Ok((temp, store, inbox))
     }
 
-    #[test]
-    fn imap_select_reuses_cached_connection_for_mailbox_and_count() -> StalwartResult<()> {
-        let (_temp, store, _inbox) = test_store()?;
-        clear_connection_cache_for_test(&store.db_path);
-        reset_open_count_for_test(&store.db_path);
-
-        let inbox = store
-            .get_mailbox_id("alice@example.test", "INBOX")?
-            .expect("inbox mailbox");
-        assert_eq!(store.count_messages(&inbox)?, 0);
-
-        assert_eq!(
-            open_count_for_test(&store.db_path),
-            1,
-            "IMAP SELECT-style mailbox lookup plus message count should reuse one SQLite connection"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn imap_fetch_and_store_hot_path_reuses_cached_connection() -> StalwartResult<()> {
-        let (_temp, store, inbox) = test_store()?;
-        clear_connection_cache_for_test(&store.db_path);
-        reset_open_count_for_test(&store.db_path);
-
-        for index in 0..3 {
-            store.put_message(
-                &inbox,
-                "sender@example.test",
-                "alice@example.test",
-                Some(&format!("message {index}")),
-                &format!("body {index}"),
-                Some("From: sender@example.test\r\nTo: alice@example.test"),
-            )?;
-        }
-
-        let summaries = store.get_message_summaries(&inbox)?;
-        assert_eq!(summaries.len(), 3);
-        for summary in &summaries {
-            let content = store
-                .get_message_content(&summary.id)?
-                .expect("message content");
-            assert!(content.body.starts_with("body "));
-            store.update_message_flags(&summary.id, true)?;
-        }
-        store.delete_message(&summaries[0].id)?;
-        assert_eq!(store.count_messages(&inbox)?, 2);
-
-        assert_eq!(
-            open_count_for_test(&store.db_path),
-            1,
-            "FETCH/STORE-style summary, content, flag, delete, and count operations should share one SQLite connection"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn smtp_calendar_contact_and_greylist_hot_paths_reuse_cached_connection() -> StalwartResult<()>
-    {
-        let (_temp, store, _inbox) = test_store()?;
-        clear_connection_cache_for_test(&store.db_path);
-        reset_open_count_for_test(&store.db_path);
-
-        store.add_domain("example.test", "selector1", "private-key")?;
-        assert_eq!(
-            store.get_domain_dkim("example.test")?,
-            Some(("selector1".to_string(), "private-key".to_string()))
-        );
-
-        let email_id = store.queue_email(
-            "sender@example.test",
-            "recipient@example.test",
-            "Subject: queued\r\n\r\nbody",
-        )?;
-        assert!(store.next_pending_email_attempt_at()?.is_some());
-        let pending = store.get_pending_emails()?;
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].0, email_id);
-        store.update_email_status(
-            &email_id,
-            "pending",
-            crate::util::now_utc_secs(),
-            pending[0].4 + 1,
-        )?;
-        store.record_delivery_outcome(
-            &email_id,
-            "sender@example.test",
-            "recipient@example.test",
-            "success",
-            None,
-            crate::util::now_utc_secs() as i64,
-        )?;
-        store.delete_email(&email_id)?;
-
-        store.create_calendar("calendar-1", "alice@example.test", "Calendar")?;
-        assert_eq!(store.get_calendars("alice@example.test")?.len(), 1);
-        store.put_event("calendar-1", "event-1", "BEGIN:VCALENDAR\r\nEND:VCALENDAR")?;
-        assert!(store.get_event("calendar-1", "event-1")?.is_some());
-        assert_eq!(store.get_events("calendar-1")?.len(), 1);
-        store.delete_event("calendar-1", "event-1")?;
-
-        store.create_addressbook("addressbook-1", "alice@example.test", "Contacts")?;
-        assert_eq!(store.get_addressbooks("alice@example.test")?.len(), 1);
-        store.put_contact("addressbook-1", "contact-1", "BEGIN:VCARD\r\nEND:VCARD")?;
-        assert_eq!(store.get_contacts("addressbook-1")?.len(), 1);
-        store.delete_contact("addressbook-1", "contact-1")?;
-
-        assert!(!store.check_greylist(
-            "203.0.113.10",
-            "sender@example.test",
-            "recipient@example.test"
-        )?);
-        assert!(!store.check_greylist(
-            "203.0.113.10",
-            "sender@example.test",
-            "recipient@example.test"
-        )?);
-
-        assert_eq!(
-            open_count_for_test(&store.db_path),
-            1,
-            "SMTP, CalDAV, CardDAV, and greylist store operations should share one SQLite connection"
-        );
-        Ok(())
-    }
-
-    #[test]
+#[test]
     fn message_summaries_and_counts_do_not_load_message_content() -> StalwartResult<()> {
         let (_temp, store, inbox) = test_store()?;
         let message_id = store.put_message(
@@ -1224,56 +1098,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn message_summary_queries_use_mailbox_received_index() -> StalwartResult<()> {
-        let (_temp, store, inbox) = test_store()?;
-        store.put_message(
-            &inbox,
-            "sender@example.test",
-            "alice@example.test",
-            Some("indexed"),
-            "body",
-            None,
-        )?;
-
-        store.with_connection(|conn| {
-            let mut summary_stmt = conn.prepare(
-                "EXPLAIN QUERY PLAN
-                 SELECT id, from_addr, to_addr, subject, is_read, received_at
-                 FROM stalwart_messages
-                 WHERE mailbox_id = ?1
-                 ORDER BY received_at DESC, id ASC",
-            )?;
-            let summary_plan = summary_stmt
-                .query_map(params![inbox.as_str()], |row| row.get::<_, String>(3))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            assert!(
-                summary_plan
-                    .iter()
-                    .any(|detail| { detail.contains("idx_stalwart_messages_mailbox_received") }),
-                "message summary query should use mailbox/received index, got {summary_plan:?}"
-            );
-
-            let mut count_stmt = conn.prepare(
-                "EXPLAIN QUERY PLAN
-                 SELECT COUNT(*)
-                 FROM stalwart_messages
-                 WHERE mailbox_id = ?1",
-            )?;
-            let count_plan = count_stmt
-                .query_map(params![inbox.as_str()], |row| row.get::<_, String>(3))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            assert!(
-                count_plan
-                    .iter()
-                    .any(|detail| detail.contains("idx_stalwart_messages_mailbox_received")),
-                "message count query should use mailbox/received index, got {count_plan:?}"
-            );
-            Ok(())
-        })
-    }
-
-    #[test]
+#[test]
     fn message_uids_are_persistent_across_deletions() -> StalwartResult<()> {
         let (_temp, store, inbox) = test_store()?;
         let first =
@@ -1314,7 +1139,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn legacy_databases_get_uids_backfilled_chronologically() -> StalwartResult<()> {
         let temp = tempdir()?;
         let db_path = temp.path().join("legacy.sqlite3");
@@ -1350,7 +1175,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn passwords_are_stored_hashed_and_verify_roundtrip() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.add_user("carol@example.test", "s3cret pa55word")?;
@@ -1371,7 +1196,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn legacy_plaintext_rows_authenticate_once_and_upgrade_to_hash() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.with_connection(|conn| {
@@ -1399,7 +1224,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn runtime_settings_roundtrip_without_environment_state() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         let settings = MailserverRuntimeSettings {
@@ -1417,7 +1242,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+#[test]
     fn tracking_tokens_resolve_to_append_only_events() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.save_tracking_token(

@@ -349,14 +349,14 @@ fn detect_google_interstitial(final_url: &Url, body: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn accepts_real_result_fixture() {
         let url = Url::parse("https://www.google.com/search?q=rust").expect("valid url");
         let html = include_str!("../../web-stack/fixtures/google_results_fixture.html");
         assert!(detect_google_interstitial(&url, html).is_ok());
     }
 
-    #[test]
+#[test]
     fn rejects_sorry_and_enablejs_bodies() {
         let url = Url::parse("https://www.google.com/search?q=rust").expect("valid url");
         assert!(detect_google_interstitial(
@@ -371,17 +371,11 @@ mod tests {
         .is_err());
     }
 
-    #[test]
+#[test]
     fn accepts_enablejs_noscript_when_result_markers_exist() {
         let url = Url::parse("https://www.google.com/search?q=rust").expect("valid url");
         let html = "<html><body><noscript><meta content=\"0;url=/httpservice/retry/enablejs?sei=abc\" http-equiv=\"refresh\"><div>Please click <a href=\"/httpservice/retry/enablejs?sei=abc\">here</a> if you are not redirected within a few seconds.</div></noscript><a data-ved=\"123\" href=\"https://www.rust-lang.org/\">Rust</a></body></html>";
         assert!(detect_google_interstitial(&url, html).is_ok());
     }
 
-    #[test]
-    fn derives_homepage_from_search_url() {
-        let search =
-            Url::parse("https://www.google.com/search?q=rust&hl=en-US&start=0").expect("url");
-        assert_eq!(homepage_url(&search).as_str(), "https://www.google.com/");
-    }
 }

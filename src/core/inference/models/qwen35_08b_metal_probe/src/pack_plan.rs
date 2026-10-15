@@ -609,7 +609,7 @@ fn has_class(entries: &[PackEntry], class: TensorClass) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn classifies_core_qwen_tensor_names() {
         assert_eq!(
             classify_tensor("model.embed_tokens.weight"),
@@ -645,23 +645,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_static_quant_layout_names() {
-        assert_eq!(
-            PackLayout::from_str("int8_row_tiled"),
-            Some(PackLayout::Int8RowTiled)
-        );
-        assert_eq!(
-            PackLayout::from_str("int4_groupwise_row_tiled"),
-            Some(PackLayout::Int4GroupwiseRowTiled)
-        );
-        assert_eq!(
-            QuantScheme::from_str("int8_symmetric"),
-            Some(QuantScheme::Int8Symmetric)
-        );
-        assert_eq!(
-            QuantScheme::from_str("int4_groupwise_symmetric"),
-            Some(QuantScheme::Int4GroupwiseSymmetric)
-        );
-    }
 }

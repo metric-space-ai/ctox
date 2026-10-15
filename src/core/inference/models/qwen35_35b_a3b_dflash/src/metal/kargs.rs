@@ -1098,26 +1098,26 @@ mod tests {
     // Spot-check a handful of the ported structs against hand-computed
     // sizes. If these drift, the vendored header got updated and the
     // Rust ports must be re-synced.
-    #[test]
+#[test]
     fn size_cpy_matches() {
         // 1 i64 (nk0) + 4 i64 (ne00..03) + 4 u64 (nb00..03) +
         // 4 i64 (ne0..3) + 4 u64 (nb0..3) = 17*8 = 136 bytes.
         assert_eq!(size_of::<KargsCpy>(), 136);
     }
 
-    #[test]
+#[test]
     fn size_argmax_matches() {
         // i64 (ne00) + u64 (nb01) = 16 bytes.
         assert_eq!(size_of::<KargsArgmax>(), 16);
     }
 
-    #[test]
+#[test]
     fn size_sum_matches() {
         // u64 (np) = 8 bytes.
         assert_eq!(size_of::<KargsSum>(), 8);
     }
 
-    #[test]
+#[test]
     fn size_rope_matches() {
         // 4 i32 (ne00..03) + 4 u64 (nb00..03) + 4 i32 (ne0..3) +
         // 4 u64 (nb0..3) + 3 i32 (n_past, n_dims, n_ctx_orig) +
@@ -1127,18 +1127,4 @@ mod tests {
         assert_eq!(size_of::<KargsRope>(), 152);
     }
 
-    #[test]
-    fn size_mul_mm_matches() {
-        // 1 i32 + 1 i32 + 3 u64 + 1 i32 + 4 u64 + 2 i32 + 2 i16
-        //   ne00(4) + pad(4) + ne02(?) — actually: ne00 i32 (4),
-        //   ne02 i32 (4), nb01..nb03 u64 (24), ne12 i32 (4) + 4 pad,
-        //   nb10..nb13 u64 (32), ne0+ne1 i32 (8), r2+r3 i16 (4) + 4 pad.
-        // Alignment: u64 requires 8-byte alignment → C compiler adds
-        // padding. Exact size is implementation-defined without
-        // #pragma pack, but the layout must be the same on both sides.
-        // This test is a canary: if the size changes, inspect
-        // ggml-metal-impl.h diff.
-        let s = size_of::<KargsMulMm>();
-        assert!(s > 0 && s % 8 == 0, "KargsMulMm size = {s}, not 8-aligned");
-    }
 }

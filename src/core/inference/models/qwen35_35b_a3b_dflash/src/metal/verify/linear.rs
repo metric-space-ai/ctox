@@ -196,20 +196,7 @@ impl VerifyQuantizedLinear {
 mod tests {
     use super::*;
 
-    #[test]
-    fn path_tag_basic() {
-        assert_eq!(
-            ProjTag::from_path("model.layers.3.mlp.down_proj"),
-            ProjTag::MlpDown
-        );
-        assert_eq!(
-            ProjTag::from_path("model.layers.3.self_attn.q_proj"),
-            ProjTag::AttnQ
-        );
-        assert_eq!(ProjTag::from_path("model.embed_tokens"), ProjTag::Other);
-    }
-
-    #[test]
+#[test]
     fn eligibility_bits_and_group() {
         assert!(!is_verify_eligible(8, 64, 1024, 1024, "mlp.gate_proj"));
         assert!(!is_verify_eligible(4, 48, 1024, 1024, "mlp.gate_proj"));

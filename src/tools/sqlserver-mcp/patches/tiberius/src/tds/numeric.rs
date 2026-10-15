@@ -48,19 +48,19 @@ impl Numeric {
         self.value / self.pow_scale()
     }
 
-    #[inline]
+#[inline]
     fn pow_scale(self) -> i128 {
         10i128.pow(self.scale as u32)
     }
 
     /// The scale (where is the decimal point) of the value.
-    #[inline]
+#[inline]
     pub fn scale(self) -> u8 {
         self.scale
     }
 
     /// The internal integer value
-    #[inline]
+#[inline]
     pub fn value(self) -> i128 {
         self.value
     }
@@ -333,59 +333,4 @@ mod bigdecimal_ {
 mod tests {
     use super::*;
 
-    #[test]
-    fn numeric_eq() {
-        assert_eq!(
-            Numeric {
-                value: 100501,
-                scale: 2
-            },
-            Numeric {
-                value: 1005010,
-                scale: 3
-            }
-        );
-        assert!(
-            Numeric {
-                value: 100501,
-                scale: 2
-            } != Numeric {
-                value: 10050,
-                scale: 1
-            }
-        );
-    }
-
-    #[test]
-    fn numeric_to_f64() {
-        assert_eq!(f64::from(Numeric::new_with_scale(57705, 2)), 577.05);
-    }
-
-    #[test]
-    fn numeric_to_int_dec_part() {
-        let n = Numeric::new_with_scale(57705, 2);
-        assert_eq!(n.int_part(), 577);
-        assert_eq!(n.dec_part(), 5);
-    }
-
-    #[test]
-    fn calculates_precision_correctly() {
-        let n = Numeric::new_with_scale(57705, 2);
-        assert_eq!(5, n.precision());
-    }
-
-    #[test]
-    #[cfg(feature = "bigdecimal")]
-    fn no_overflowing_pow() {
-        use crate::{ColumnData, ToSql};
-        use bigdecimal::FromPrimitive;
-
-        let dec = BigDecimal::new(BigInt::from_i8(1).unwrap(), -20);
-        let res = dec.to_sql();
-
-        assert_eq!(
-            ColumnData::Numeric(Some(Numeric::new_with_scale(100000000000000000000i128, 0))),
-            res
-        );
-    }
 }

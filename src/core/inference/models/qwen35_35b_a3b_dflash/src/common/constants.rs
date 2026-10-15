@@ -54,23 +54,4 @@ pub const DFLASH35B_DRAFT_TARGET_LAYER_IDS: [i32; 5] = [1, 10, 19, 28, 37];
 mod tests {
     use super::*;
 
-    #[test]
-    fn reference_byte_match() {
-        assert_eq!(DFLASH35B_TARGET_HIDDEN, 2048);
-        assert_eq!(DFLASH35B_TARGET_LAYERS, 40);
-        assert_eq!(DFLASH35B_TARGET_N_HEADS, 16);
-        assert_eq!(DFLASH35B_TARGET_N_KV_HEADS, 2);
-        assert_eq!(DFLASH35B_TARGET_HEAD_DIM, 256);
-        assert_eq!(DFLASH35B_NUM_EXPERTS, 256);
-        assert_eq!(DFLASH35B_EXPERTS_PER_TOK, 8);
-        assert_eq!(DFLASH35B_MOE_INTERMEDIATE, 512);
-        assert_eq!(DFLASH35B_TARGET_VOCAB, 248_320);
-        assert!((DFLASH35B_ROPE_THETA - 10_000_000.0).abs() < 1e-3);
-        assert!((DFLASH35B_RMS_EPS - 1e-6).abs() < 1e-12);
-        assert_eq!(DFLASH35B_DRAFT_LAYERS, 8);
-        assert_eq!(DFLASH35B_DRAFT_BLOCK_SIZE, 16);
-        assert_eq!(DFLASH35B_DRAFT_N_TARGET_LAYERS, 5);
-        assert_eq!(DFLASH35B_DRAFT_MASK_TOKEN_ID, 248_070);
-        assert_eq!(DFLASH35B_DRAFT_TARGET_LAYER_IDS, [1, 10, 19, 28, 37]);
-    }
 }

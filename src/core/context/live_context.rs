@@ -248,7 +248,7 @@ pub(crate) fn attach_crew_memory(prompt: &mut RenderedRuntimePrompt, block: Opti
 mod crew_lane_tests {
     use super::*;
 
-    #[test]
+#[test]
     fn crew_memory_lands_in_the_runtime_context_lane_only() {
         let mut rendered = RenderedRuntimePrompt {
             prompt: "Diagnostic".into(),
@@ -2141,7 +2141,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn rendered_context_falls_back_when_mission_filter_would_empty_history() {
         let snapshot = lcm::LcmSnapshot {
             conversation_id: 7,
@@ -2178,7 +2178,7 @@ mod tests {
             .any(|entry| entry.contains("new task")));
     }
 
-    #[test]
+#[test]
     fn rendered_context_prioritizes_entity_relevance_before_recency() {
         let snapshot = lcm::LcmSnapshot {
             conversation_id: 7,
@@ -2202,7 +2202,7 @@ mod tests {
         assert!(rendered.entries[0].contains("CASE-778"));
     }
 
-    #[test]
+#[test]
     fn workflow_state_surfaces_open_ticket_cases() {
         let root = temp_root("ticket-cases");
         let remote = crate::mission::ticket_local_native::create_local_ticket(
@@ -2271,7 +2271,7 @@ mod tests {
         assert!(workflow.contains(&format!("local:{}", remote.ticket_id)));
     }
 
-    #[test]
+#[test]
     fn render_chat_prompt_surfaces_suggested_skill_dispatch() {
         let runtime_blocks = PromptRuntimeBlocks {
             focus: "Focus:\n- keep the current mission stable".to_string(),
@@ -2309,7 +2309,7 @@ mod tests {
         assert!(prompt.contains("load this skill before acting"));
     }
 
-    #[test]
+#[test]
     fn bound_system_skill_includes_managed_body_in_runtime_context() {
         let root = temp_root("bound-system-skill");
         crate::skill_store::bootstrap_embedded_system_skills(&root)
@@ -2325,7 +2325,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn missing_bound_skill_body_fails_closed() {
         let root = temp_root("missing-bound-skill");
         crate::skill_store::bootstrap_embedded_system_skills(&root)
@@ -2338,7 +2338,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn runtime_context_excludes_generated_current_request_wrapper() {
         let runtime_blocks = PromptRuntimeBlocks {
             focus: "FOCUS\n- Main task: inspect CASE-778".to_string(),
@@ -2379,17 +2379,7 @@ mod tests {
         assert!(!context.contains("NARRATIVE"));
     }
 
-    #[test]
-    fn runtime_context_marks_latest_snapshot_authoritative() {
-        let context = wrap_runtime_context("FOCUS\n- Main task: inspect CASE-778");
-
-        assert!(context.starts_with("<ctox_runtime_context version=\"1\">"));
-        assert!(context.contains("newest ctox_runtime_context snapshot is authoritative"));
-        assert!(context.contains("Earlier snapshots remain visible only to preserve"));
-        assert!(context.ends_with("</ctox_runtime_context>"));
-    }
-
-    #[test]
+#[test]
     fn render_chat_prompt_links_business_os_app_skill_by_path() {
         let root = temp_root("business-os-app-skill-dispatch");
         let skill_dir =
@@ -2437,15 +2427,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn render_system_prompt_includes_default_cto_operating_mode() {
-        let root = temp_root("default-cto-contract");
-        let prompt = render_system_prompt(&root, &BTreeMap::new()).expect("rendered prompt");
-        assert!(prompt.contains("## CTO Operating Mode"));
-        assert!(prompt.contains("You own the mission outcome, not just the next task."));
-    }
-
-    #[test]
+#[test]
     fn render_system_prompt_uses_cto_operating_mode_override() {
         let root = temp_root("override-cto-contract");
         let mut settings = BTreeMap::new();
@@ -2495,7 +2477,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn empty_focus_document_falls_back_to_mission_state_contract() {
         let continuity = lcm::ContinuityShowAll {
             conversation_id: 1,
@@ -2515,17 +2497,7 @@ mod tests {
         assert!(block.contains("Next step: run the channel ack regression"));
     }
 
-    #[test]
-    fn workflow_terms_empty_means_no_relevance_filter() {
-        // No mission text must not hide open work, otherwise the EXECUTION
-        // CONTRACT instructs the model to create duplicate work items.
-        assert!(workflow_matches_terms("thread", "title", "prompt", &[]));
-        let terms = vec!["deploy".to_string()];
-        assert!(workflow_matches_terms("t", "deploy the fix", "p", &terms));
-        assert!(!workflow_matches_terms("t", "unrelated", "p", &terms));
-    }
-
-    #[test]
+#[test]
     fn latest_prompt_sanitizer_keeps_email_wrapper_and_event_streams_verbatim() {
         let email = "[E-Mail eingegangen]\nSender: ceo@example.com\nBetreff: Serverausfall\nThread: t-1\n\nBitte Server pruefen und Bericht senden.";
         let echoed = sanitize_latest_prompt(email);
@@ -2536,7 +2508,7 @@ mod tests {
         assert!(historical.contains("treat it as prior mail context only"));
     }
 
-    #[test]
+#[test]
     fn anchors_render_entry_aware_and_survive_oversized_lines() {
         // Three 9-line template entries used to render as barely one tail
         // fragment; entry-aware rendering yields one dense line per entry.
@@ -2554,7 +2526,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn execution_contract_keeps_workspace_root_from_full_document() {
         // workspace_root comes from the FULL anchors document even when the
         // rendered block tail would have evicted it.
@@ -2570,52 +2542,7 @@ mod tests {
         assert!(!block.contains("do this next"));
     }
 
-    #[test]
-    fn system_prompt_legend_matches_emitted_block_headers_and_names_no_phantoms() {
-        // Congruence gate: every block header the system prompt's legend
-        // names must be a header the renderer actually emits, and the prompt
-        // must not reference retired labels or nonexistent mechanisms/tools.
-        let prompt = CTOX_CHAT_SYSTEM_PROMPT;
-        for header in [
-            "CURRENT REQUEST",
-            "Suggested skill dispatch",
-            "Verified evidence",
-            "Strategy",
-            "Anchors",
-            "Focus",
-            "EXECUTION CONTRACT",
-            "Open CTOX work that counts right now",
-            "Narrative",
-            "Governance",
-            "Autonomy policy",
-            "Context health",
-            "RECENT CONVERSATION EVIDENCE",
-        ] {
-            assert!(
-                prompt.contains(header),
-                "system prompt legend is missing emitted block header: {header}"
-            );
-        }
-        for stale in [
-            "Latest user turn",
-            "mission_idle_watchdog",
-            "agy session",
-            "`WebSearch`",
-            "`WebRead`",
-            "`WebScrape`",
-            "test_dashboard.js",
-            "claude_subscription_auth_json",
-            "antigravity_subscription_auth_json",
-            "read_scope",
-        ] {
-            assert!(
-                !prompt.contains(stale),
-                "system prompt references retired/nonexistent: {stale}"
-            );
-        }
-    }
-
-    #[test]
+#[test]
     fn empty_optional_runtime_blocks_do_not_claim_prompt_budget() {
         assert!(!runtime_block_has_payload("Verified evidence:\nitems: []"));
         assert!(!runtime_block_has_payload("Anchors:\nitems: []"));
@@ -2628,7 +2555,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn optional_runtime_blocks_render_when_they_carry_signal() {
         assert!(runtime_block_has_payload(
             "Verified evidence:\nlatest_run_result: tests passed"

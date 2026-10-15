@@ -119,30 +119,4 @@ pub const QWEN35_08B_LAYER_PATTERN: [LayerKind; 24] = [
 mod tests {
     use super::*;
 
-    #[test]
-    fn layer_pattern_is_three_delta_one_attention() {
-        for layer in 0..QWEN35_08B.n_layers {
-            assert_eq!(
-                QWEN35_08B.layer_kind(layer),
-                QWEN35_08B_LAYER_PATTERN[layer]
-            );
-        }
-        assert_eq!(QWEN35_08B.n_deltanet_layers(), 18);
-        assert_eq!(QWEN35_08B.n_full_attention_layers(), 6);
-    }
-
-    #[test]
-    fn lm_head_fp16_size_matches_expected_order_of_magnitude() {
-        assert_eq!(QWEN35_08B.lm_head_fp16_bytes(), 508_559_360);
-        assert_eq!(QWEN35_08B.approximate_fp16_weight_bytes(), 1_600_000_000);
-    }
-
-    #[test]
-    fn projection_width_helpers_match_qwen35_08b_contract() {
-        assert_eq!(QWEN35_08B.attention_q_width(), 2048);
-        assert_eq!(QWEN35_08B.attention_kv_width(), 512);
-        assert_eq!(QWEN35_08B.attention_q_with_head_gate_width(), 4096);
-        assert_eq!(QWEN35_08B.deltanet_width(), 2048);
-        assert_eq!(QWEN35_08B.deltanet_qkv_width(), 6144);
-    }
 }

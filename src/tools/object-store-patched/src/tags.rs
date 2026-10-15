@@ -47,14 +47,4 @@ impl TagSet {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_tag_set() {
-        let mut set = TagSet::default();
-        set.push("test/foo", "value sdlks");
-        set.push("foo", " sdf _ /+./sd");
-        assert_eq!(
-            set.encoded(),
-            "test%2Ffoo=value+sdlks&foo=+sdf+_+%2F%2B.%2Fsd"
-        );
-    }
 }

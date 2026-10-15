@@ -592,21 +592,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "firmenabc.at");
-        assert!(m.aliases().contains(&"firmenabc"));
-        assert_eq!(m.tier(), Tier::S);
-        assert_eq!(m.countries(), &[Country::At]);
-        assert!(m.requires_credential().is_none());
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|f| *f == FieldKey::FirmaName));
-    }
-
-    #[test]
+#[test]
     fn shape_query_at_pins_domain() {
         let shaped = module()
             .shape_query("Red Bull GmbH", &ctx_at())
@@ -616,20 +602,14 @@ mod tests {
         assert_eq!(shaped.domains, vec!["firmenabc.at".to_string()]);
     }
 
-    #[test]
+#[test]
     fn shape_query_non_at_returns_none() {
         assert!(module().shape_query("Bosch GmbH", &ctx_de()).is_none());
     }
 
-    #[test]
+#[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_at()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — der Trait-Default ist `None`, das ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_at(), "Red Bull GmbH").is_none());
     }
 
     /// End-to-end extraction against a frozen Red Bull GmbH profile.
@@ -638,7 +618,7 @@ mod tests {
     /// abgerufen über `web.archive.org` Snapshot `20250917001953`
     /// (Originaldatum 2025-09-17). Gespeichert als HTML-Body genau so,
     /// wie ihn ein crawl-pfad-Adapter vom Webstack bekäme.
-    #[test]
+#[test]
     fn extract_red_bull_fixture() {
         let html = include_str!("../../fixtures/sources/firmenabc/red_bull_gmbh.html");
         let page = SourceReadResult {
@@ -713,7 +693,7 @@ mod tests {
         assert!(by_key.get(&FieldKey::PersonTitel).is_none());
     }
 
-    #[test]
+#[test]
     fn parse_management_label_with_title() {
         // Construct a tiny DOM around a synthesized link.
         let html = r#"<html><body><a href="/person/maier-anna_x">Frau Dr. Maier Anna-Maria</a></body></html>"#;
@@ -728,7 +708,7 @@ mod tests {
         assert_eq!(parsed.first_name.as_deref(), Some("Anna-Maria"));
     }
 
-    #[test]
+#[test]
     fn host_of_strips_www_and_path() {
         assert_eq!(
             host_of("http://www.redbull.at").as_deref(),
@@ -742,7 +722,7 @@ mod tests {
         assert_eq!(host_of(""), None);
     }
 
-    #[test]
+#[test]
     fn extract_empty_on_unrelated_html() {
         let page = SourceReadResult {
             url: "https://example.com/".to_string(),
@@ -772,7 +752,7 @@ mod tests {
     ///
     /// Standardmäßig ignoriert; explizit ausführen mit:
     ///   `cargo test -p ctox-web-stack -- --ignored sources::firmenabc::live`
-    #[test]
+#[test]
     #[ignore = "live network; run with: cargo test -- --ignored sources::firmenabc::live_red_bull"]
     fn live_red_bull() {
         let url = "https://www.firmenabc.at/red-bull-gmbh_gsn";

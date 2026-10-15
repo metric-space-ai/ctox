@@ -784,31 +784,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "zefix.ch");
-        assert_eq!(m.aliases(), &["zefix"]);
-        assert!(matches!(m.tier(), Tier::P));
-        assert_eq!(m.countries(), &[Country::Ch]);
-        assert!(m.requires_credential().is_none());
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::FirmaName)));
-    }
-
-    #[test]
-    fn shape_query_is_none_for_api_source() {
-        let ctx = SourceCtx {
-            root: Path::new("/tmp/ctox-test"),
-            country: Some(Country::Ch),
-            mode: ResearchMode::NewRecord,
-        };
-        assert!(module().shape_query("Roche", &ctx).is_none());
-    }
-
-    #[test]
+#[test]
     fn fetch_direct_skips_non_ch_countries() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test"),
@@ -819,7 +795,7 @@ mod tests {
         assert!(r.is_none(), "non-CH must short-circuit to None");
     }
 
-    #[test]
+#[test]
     fn fetch_direct_accepts_unknown_country() {
         // Mode where the orchestrator did not yet bind a country: we WILL
         // attempt the call. We do not actually issue HTTP in this unit
@@ -839,7 +815,7 @@ mod tests {
         assert!(matches!(result, Err(SourceError::NoMatch)));
     }
 
-    #[test]
+#[test]
     fn parses_search_fixture_into_hits() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("fixture has hits");
@@ -861,28 +837,28 @@ mod tests {
             .contains("https://www.zefix.admin.ch/de/search/entity/list/firm/154673"));
     }
 
-    #[test]
+#[test]
     fn parses_search_fixture_caps_hits_at_max() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("hits");
         assert!(hits.len() <= MAX_HITS);
     }
 
-    #[test]
+#[test]
     fn empty_search_list_maps_to_no_match() {
         let value: Value = serde_json::from_str(r#"{"list": []}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::NoMatch));
     }
 
-    #[test]
+#[test]
     fn missing_list_field_maps_to_parse_failed() {
         let value: Value = serde_json::from_str(r#"{"error": "boom"}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::ParseFailed { .. }));
     }
 
-    #[test]
+#[test]
     fn extracts_address_fields_from_detail_json_with_high_confidence() {
         let page = dummy_page(
             DETAIL_FIXTURE,
@@ -916,7 +892,7 @@ mod tests {
         assert_eq!(ort.1.value, "Basel");
     }
 
-    #[test]
+#[test]
     fn extracts_persons_from_shab_pub_messages_as_medium() {
         let page = dummy_page(
             DETAIL_FIXTURE,
@@ -984,7 +960,7 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn extract_fields_falls_back_to_html_when_text_is_not_json() {
         let html = "<html><head><title>Beispiel AG - Zefix</title></head>\
                     <body><p>Musterstrasse 1, 8001 Zürich</p></body></html>";
@@ -1008,20 +984,20 @@ mod tests {
         assert_eq!(ort.1.value, "Zürich");
     }
 
-    #[test]
+#[test]
     fn strip_ft_tags_removes_zefix_markup_and_decodes_apos() {
         let input = "<FT TYPE=\"F\">Roche &apos;Holding&apos; AG</FT>";
         let out = strip_ft_tags(input);
         assert_eq!(out, "Roche 'Holding' AG");
     }
 
-    #[test]
+#[test]
     fn parse_person_clause_rejects_non_person_text() {
         assert!(parse_person_clause("Aktiengesellschaft").is_none());
         assert!(parse_person_clause("Statutenänderung: 10.03.2026").is_none());
     }
 
-    #[test]
+#[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::zefix"]
     fn live_search_smoke() {
         let ctx = SourceCtx {

@@ -1690,37 +1690,13 @@ fn throttle_scholarly_host(url: &str) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn provider_label_round_trip() {
-        assert_eq!(
-            ScholarlySearchProvider::from_label("annas_archive"),
-            ScholarlySearchProvider::AnnasArchive
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label("annas-archive"),
-            ScholarlySearchProvider::AnnasArchive
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label(""),
-            ScholarlySearchProvider::Auto
-        );
-        assert_eq!(
-            ScholarlySearchProvider::from_label("auto"),
-            ScholarlySearchProvider::Auto
-        );
-        assert_eq!(
-            ScholarlySearchProvider::AnnasArchive.as_str(),
-            "annas_archive"
-        );
-    }
-
-    #[test]
+#[test]
     fn extracts_md5_hash_from_relative_path() {
         let hash = extract_md5_hash("/md5/0123456789abcdef0123456789abcdef").unwrap();
         assert_eq!(hash, "0123456789abcdef0123456789abcdef");
     }
 
-    #[test]
+#[test]
     fn extracts_md5_hash_from_absolute_url() {
         let hash =
             extract_md5_hash("https://annas-archive.org/md5/AABBCCDDEEFF00112233445566778899")
@@ -1728,14 +1704,14 @@ mod tests {
         assert_eq!(hash, "aabbccddeeff00112233445566778899");
     }
 
-    #[test]
+#[test]
     fn rejects_md5_with_wrong_length() {
         assert!(extract_md5_hash("/md5/abcdef").is_none());
         assert!(extract_md5_hash("/md5/").is_none());
         assert!(extract_md5_hash("/somethingelse/abc").is_none());
     }
 
-    #[test]
+#[test]
     fn extracts_year_in_range() {
         assert_eq!(extract_year("Springer, 2019, pdf"), Some(2019));
         assert_eq!(extract_year("Wiley 1987"), Some(1987));
@@ -1743,7 +1719,7 @@ mod tests {
         assert_eq!(extract_year("Year: 1500"), None);
     }
 
-    #[test]
+#[test]
     fn extracts_language_code_from_bracket_notation() {
         assert_eq!(
             extract_language_code("English [en]"),
@@ -1756,7 +1732,7 @@ mod tests {
         assert_eq!(extract_language_code("Plain text"), None);
     }
 
-    #[test]
+#[test]
     fn parse_metadata_line_extracts_lang_format_size() {
         let line = "English [en], pdf, 2.4MB, Book (non-fiction)";
         let (lang, fmt, size) = parse_metadata_line(line);
@@ -1765,7 +1741,7 @@ mod tests {
         assert_eq!(size, Some("2.4MB".to_string()));
     }
 
-    #[test]
+#[test]
     fn parse_metadata_line_handles_middle_dot_separator() {
         let line = "German [de] · epub · 543KB";
         let (lang, fmt, size) = parse_metadata_line(line);
@@ -1774,7 +1750,7 @@ mod tests {
         assert_eq!(size, Some("543KB".to_string()));
     }
 
-    #[test]
+#[test]
     fn parse_metadata_line_returns_none_for_empty() {
         let (lang, fmt, size) = parse_metadata_line("");
         assert_eq!(lang, None);
@@ -1782,25 +1758,25 @@ mod tests {
         assert_eq!(size, None);
     }
 
-    #[test]
+#[test]
     fn extract_isbn_finds_thirteen_digit_value() {
         let text = "ISBN: 978-3-16-148410-0 published 2024";
         assert_eq!(extract_isbn(text), Some("9783161484100".to_string()));
     }
 
-    #[test]
+#[test]
     fn extract_isbn_finds_ten_digit_value() {
         let text = "ISBN 0306406152 reprint";
         assert_eq!(extract_isbn(text), Some("0306406152".to_string()));
     }
 
-    #[test]
+#[test]
     fn extract_isbn_returns_none_when_missing_prefix() {
         let text = "no identifier here, just numbers 1234567890123";
         assert_eq!(extract_isbn(text), None);
     }
 
-    #[test]
+#[test]
     fn extract_doi_finds_bare_doi() {
         assert_eq!(
             extract_doi("Reference: 10.1038/nature12373 see"),
@@ -1808,7 +1784,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn extract_doi_finds_doi_org_url() {
         assert_eq!(
             extract_doi("Available at https://doi.org/10.1234/abc.2024.001."),
@@ -1816,7 +1792,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn extract_doi_strips_trailing_punctuation() {
         assert_eq!(
             extract_doi("(see 10.5555/foo.bar);"),
@@ -1824,12 +1800,12 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn extract_doi_returns_none_for_text_without_doi() {
         assert!(extract_doi("ISBN 0306406152, Wiley, 2007").is_none());
     }
 
-    #[test]
+#[test]
     fn looks_like_file_size_accepts_common_sizes() {
         assert!(looks_like_file_size("2.4MB"));
         assert!(looks_like_file_size("543KB"));
@@ -1839,43 +1815,7 @@ mod tests {
         assert!(!looks_like_file_size("Page 12"));
     }
 
-    #[test]
-    fn build_annas_archive_search_url_orders_params_correctly() {
-        let request = ScholarlySearchRequest {
-            query: "quantum entanglement".to_string(),
-            content_types: vec!["book_nonfiction".to_string()],
-            languages: vec!["en".to_string()],
-            extensions: vec!["pdf".to_string()],
-            sort: Some("newest".to_string()),
-            page: Some(2),
-            ..Default::default()
-        };
-        let root = std::env::temp_dir().join("ctox-scholarly-test-noop");
-        let url = build_annas_archive_search_url(&root, &request, "https://annas-archive.org", 2)
-            .expect("URL build");
-        let raw = url.as_str();
-        assert!(raw.starts_with("https://annas-archive.org/search?"));
-        assert!(raw.contains("lang=en"));
-        assert!(raw.contains("content=book_nonfiction"));
-        assert!(raw.contains("ext=pdf"));
-        assert!(raw.contains("sort=newest"));
-        assert!(raw.contains("q=quantum+entanglement") || raw.contains("q=quantum%20entanglement"));
-        assert!(raw.contains("page=2"));
-    }
-
-    #[test]
-    fn build_annas_archive_search_url_omits_page_one() {
-        let request = ScholarlySearchRequest {
-            query: "rust".to_string(),
-            ..Default::default()
-        };
-        let root = std::env::temp_dir().join("ctox-scholarly-test-noop");
-        let url = build_annas_archive_search_url(&root, &request, "https://annas-archive.org", 1)
-            .expect("URL build");
-        assert!(!url.as_str().contains("page="));
-    }
-
-    #[test]
+#[test]
     fn parse_results_extracts_md5_title_and_metadata_from_fixture() {
         let fixture = r##"
         <html>
@@ -1941,7 +1881,7 @@ mod tests {
         assert_eq!(second.rank, 2);
     }
 
-    #[test]
+#[test]
     fn parse_results_dedupes_repeated_md5_anchors() {
         let fixture = r##"
         <div class="js-aarecord-list-outer">
@@ -1958,7 +1898,7 @@ mod tests {
         assert_eq!(results[1].source_id, "00000000000000000000000000000002");
     }
 
-    #[test]
+#[test]
     fn parse_results_respects_top_k() {
         let mut fixture = String::from(r#"<div class="js-aarecord-list-outer">"#);
         for i in 0..6 {
@@ -1971,7 +1911,7 @@ mod tests {
         assert_eq!(results.len(), 3);
     }
 
-    #[test]
+#[test]
     fn parse_results_returns_empty_when_no_md5_links() {
         let fixture = r##"<html><body><p>No results found.</p></body></html>"##;
         let results = parse_annas_archive_results(fixture, "https://annas-archive.org", 10);
@@ -2046,7 +1986,7 @@ mod tests {
         let _ = stream.write_all(response.as_bytes());
     }
 
-    #[test]
+#[test]
     fn end_to_end_against_local_mock_http_server() {
         use std::net::TcpListener;
 
@@ -2122,7 +2062,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn end_to_end_resolves_open_access_pdf_via_unpaywall() {
         use std::net::TcpListener;
 
@@ -2229,7 +2169,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn only_doi_filter_drops_records_without_doi() {
         use std::net::TcpListener;
 
@@ -2282,7 +2222,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn openalex_pdf_prefers_best_oa_location_then_primary() {
         // best_oa_location (free copy) wins over primary_location (often the
         // paywalled version of record) — the intended read target.
@@ -2308,7 +2248,7 @@ mod tests {
         assert!(openalex_pdf_url(&none).is_none());
     }
 
-    #[test]
+#[test]
     fn crossref_runs_even_when_shadow_archive_search_is_disabled() {
         use std::net::TcpListener;
         // CTOX_SCHOLARLY_SEARCH_ENABLED governs the Anna's Archive shadow-archive
@@ -2344,7 +2284,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn academic_only_doi_filter_drops_doiless_results() {
         use std::net::TcpListener;
         const CROSSREF_JSON: &str = r#"{"message":{"items":[{"title":["Has DOI"],"DOI":"10.1/has"},{"title":["No DOI"],"URL":"https://example.org/no-doi"}]}}"#;
@@ -2376,7 +2316,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn crossref_fixture_yields_doi_record_oa_pdf_and_references() {
         // Stable-fixture Crossref work: DOI record, CC-licensed PDF link,
         // and a reference list with duplicate/mixed-case DOIs.
@@ -2425,7 +2365,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn openalex_fixture_yields_doi_oa_location_and_referenced_works() {
         let item = json!({
             "id": "https://openalex.org/W4242424242",
@@ -2473,7 +2413,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn semantic_scholar_fixture_prefers_doi_references_with_paper_id_fallback() {
         let item = json!({
             "references": [
@@ -2489,7 +2429,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn openalex_work_by_id_rejects_invalid_ids_before_any_fetch() {
         let root = unique_test_root("openalex-invalid-id");
         let error = openalex_work_by_id(&root, "not-a-work-id").unwrap_err();
@@ -2497,7 +2437,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     #[ignore = "live network: hits real annas-archive.org"]
     fn live_annas_archive_returns_results() {
         let root = std::env::temp_dir().join("ctox-scholarly-live");

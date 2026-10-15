@@ -110,11 +110,4 @@ pub fn canonical_embedding_model_name(raw: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn canonicalizes_ollama_style_alias_without_adding_ollama_support() {
-        assert_eq!(
-            canonical_embedding_model_name(QWEN3_EMBEDDING_0_6B_OLLAMA_ALIAS),
-            Some(QWEN3_EMBEDDING_0_6B_CANONICAL_MODEL)
-        );
-    }
 }

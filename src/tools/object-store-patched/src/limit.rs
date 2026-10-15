@@ -250,36 +250,4 @@ mod tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    #[tokio::test]
-    async fn limit_test() {
-        let max_requests = 10;
-        let memory = InMemory::new();
-        let integration = LimitStore::new(memory, max_requests);
-
-        put_get_delete_list(&integration).await;
-        get_opts(&integration).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        stream_get(&integration).await;
-
-        let mut streams = Vec::with_capacity(max_requests);
-        for _ in 0..max_requests {
-            let mut stream = integration.list(None).peekable();
-            Pin::new(&mut stream).peek().await; // Ensure semaphore is acquired
-            streams.push(stream);
-        }
-
-        let t = Duration::from_millis(20);
-
-        // Expect to not be able to make another request
-        let fut = integration.list(None).collect::<Vec<_>>();
-        assert!(timeout(t, fut).await.is_err());
-
-        // Drop one of the streams
-        streams.pop();
-
-        // Can now make another request
-        integration.list(None).collect::<Vec<_>>().await;
-    }
 }

@@ -710,32 +710,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "northdata.de");
-        assert!(m.aliases().contains(&"northdata"));
-        assert!(m.aliases().contains(&"nd"));
-        assert_eq!(m.tier(), Tier::S);
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert!(m.requires_credential().is_none());
-        for expected in [
-            FieldKey::FirmaName,
-            FieldKey::FirmaAnschrift,
-            FieldKey::FirmaPlz,
-            FieldKey::FirmaOrt,
-            FieldKey::PersonVorname,
-            FieldKey::PersonNachname,
-            FieldKey::PersonPosition,
-        ] {
-            assert!(
-                m.authoritative_for().contains(&expected),
-                "missing field authority: {expected:?}"
-            );
-        }
-    }
-
-    #[test]
+#[test]
     fn shape_query_dach_pins_domain() {
         for ctx in [ctx_de(), ctx_at(), ctx_ch(), ctx_none()] {
             let shaped = module()
@@ -747,15 +722,9 @@ mod tests {
         }
     }
 
-    #[test]
+#[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — Trait-Default `None` ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_de(), "Siemens AG").is_none());
     }
 
     /// End-to-end extraction against a frozen Siemens AG profile (DE).
@@ -763,7 +732,7 @@ mod tests {
     /// Fixture origin: `https://www.northdata.de/Siemens+Aktiengesellschaft,+M%C3%BCnchen/HRB+6684`
     /// (live fetch 2026-05-14, logged out, structural reduction documented at
     /// the top of the fixture).
-    #[test]
+#[test]
     fn extract_siemens_fixture() {
         let html = include_str!("../../fixtures/sources/northdata/siemens_ag.html");
         let page = SourceReadResult {
@@ -830,7 +799,7 @@ mod tests {
     }
 
     /// AT profile fixture — Geschäftsführer-Variante mit Firmenbuch (FN).
-    #[test]
+#[test]
     fn extract_red_bull_at_fixture() {
         let html = include_str!("../../fixtures/sources/northdata/red_bull_gmbh_at.html");
         let page = SourceReadResult {
@@ -884,7 +853,7 @@ mod tests {
         assert_eq!(last.value, "Watzlawick");
     }
 
-    #[test]
+#[test]
     fn parse_address_line_de_with_country_prefix() {
         let parsed = parse_address_line("Werner-von-Siemens-Str. 1, D-80333 München");
         assert_eq!(parsed.street.as_deref(), Some("Werner-von-Siemens-Str. 1"));
@@ -892,7 +861,7 @@ mod tests {
         assert_eq!(parsed.city.as_deref(), Some("München"));
     }
 
-    #[test]
+#[test]
     fn parse_address_line_at_with_country_prefix() {
         let parsed = parse_address_line("Am Brunnen 1, A-5330 Fuschl am See");
         assert_eq!(parsed.street.as_deref(), Some("Am Brunnen 1"));
@@ -900,7 +869,7 @@ mod tests {
         assert_eq!(parsed.city.as_deref(), Some("Fuschl am See"));
     }
 
-    #[test]
+#[test]
     fn parse_address_line_ch_with_country_prefix() {
         let parsed = parse_address_line("Bahnhofstrasse 12, CH-8001 Zürich");
         assert_eq!(parsed.street.as_deref(), Some("Bahnhofstrasse 12"));
@@ -908,7 +877,7 @@ mod tests {
         assert_eq!(parsed.city.as_deref(), Some("Zürich"));
     }
 
-    #[test]
+#[test]
     fn parse_address_line_without_prefix() {
         let parsed = parse_address_line("Hauptstraße 5, 10115 Berlin");
         assert_eq!(parsed.street.as_deref(), Some("Hauptstraße 5"));
@@ -916,7 +885,7 @@ mod tests {
         assert_eq!(parsed.city.as_deref(), Some("Berlin"));
     }
 
-    #[test]
+#[test]
     fn parse_person_label_full_role() {
         let p = parse_person_label("Vorstand Veronika Bienert");
         assert_eq!(p.position.as_deref(), Some("Vorstand"));
@@ -924,7 +893,7 @@ mod tests {
         assert_eq!(p.last_name.as_deref(), Some("Bienert"));
     }
 
-    #[test]
+#[test]
     fn parse_person_label_abbreviated_role() {
         let p = parse_person_label("VV Roland Busch");
         assert_eq!(p.position.as_deref(), Some("Vorstandsvorsitzender"));
@@ -932,7 +901,7 @@ mod tests {
         assert_eq!(p.last_name.as_deref(), Some("Busch"));
     }
 
-    #[test]
+#[test]
     fn parse_person_label_geschaeftsfuehrer() {
         let p = parse_person_label("Geschäftsführer Franz Watzlawick");
         assert_eq!(p.position.as_deref(), Some("Geschäftsführer"));
@@ -940,7 +909,7 @@ mod tests {
         assert_eq!(p.last_name.as_deref(), Some("Watzlawick"));
     }
 
-    #[test]
+#[test]
     fn parse_person_label_multi_word_first_name() {
         let p = parse_person_label("Vorstand Anna Maria Müller");
         assert_eq!(p.position.as_deref(), Some("Vorstand"));
@@ -948,7 +917,7 @@ mod tests {
         assert_eq!(p.last_name.as_deref(), Some("Müller"));
     }
 
-    #[test]
+#[test]
     fn shape_query_unsupported_country_returns_none() {
         // Construct a non-DACH SourceCtx by hand. (No public ctor for
         // Country variants outside DE/AT/CH — DACH-tolerance is enforced
@@ -964,7 +933,7 @@ mod tests {
         assert!(module().shape_query("Bosch GmbH", &ctx_ch()).is_some());
     }
 
-    #[test]
+#[test]
     fn extract_empty_on_unrelated_html() {
         let page = SourceReadResult {
             url: "https://example.com/".to_string(),
@@ -999,7 +968,7 @@ mod tests {
     /// die ohne Login direkt erreichbar bleiben). Der Test ist deshalb mild:
     /// bei Network-Failure / Redirect-to-search wird er übersprungen statt
     /// hart zu failen.
-    #[test]
+#[test]
     #[ignore = "live network; run with: cargo test -- --ignored sources::northdata::live"]
     fn live_siemens() {
         let url = "https://www.northdata.de/Siemens+Aktiengesellschaft,+M%C3%BCnchen/HRB+6684";

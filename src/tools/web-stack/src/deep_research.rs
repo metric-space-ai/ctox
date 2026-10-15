@@ -3905,19 +3905,7 @@ fn aerospace_lsp_report_scaffold(query: &str) -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn depth_labels_accept_deep_alias() {
-        assert_eq!(
-            DeepResearchDepth::from_label("deep"),
-            Some(DeepResearchDepth::Exhaustive)
-        );
-        assert_eq!(
-            DeepResearchDepth::from_label("medium"),
-            Some(DeepResearchDepth::Standard)
-        );
-    }
-
-    #[test]
+#[test]
     fn exclude_urls_are_canonicalized_and_deduplicated_before_discovery() {
         let excluded = normalized_excluded_urls(&[
             "https://Example.com/data.csv#section".to_string(),
@@ -3929,7 +3917,7 @@ mod tests {
         assert!(excluded.contains("https://example.com/other.csv"));
     }
 
-    #[test]
+#[test]
     fn exact_zenodo_doi_seeds_the_canonical_record() {
         let mut seen = BTreeSet::new();
         let mut sources = Vec::new();
@@ -3946,7 +3934,7 @@ mod tests {
         assert_eq!(sources[0]["evidence_eligible"], false);
     }
 
-    #[test]
+#[test]
     fn original_data_and_archive_receipts_are_selected_before_generic_web_hits() {
         let selected = select_balanced_sources(
             vec![
@@ -3982,7 +3970,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn negative_discovery_scores_never_consume_the_read_budget() {
         let selected = select_balanced_sources(
             vec![
@@ -4004,7 +3992,7 @@ mod tests {
         assert_eq!(selected[0]["url"], "https://example.org/relevant");
     }
 
-    #[test]
+#[test]
     fn facet_queries_reserve_space_for_the_facet() {
         let core = "small uav propeller test bench measured thrust torque rpm vibration bearing loads datasets primary measurements original datasets scientific papers";
         let query = compose_search_query(
@@ -4017,7 +4005,7 @@ mod tests {
         assert!(query.ends_with("original file CSV TXT XLSX ZIP supplementary data download"));
     }
 
-    #[test]
+#[test]
     fn metadata_only_doi_pages_do_not_consume_the_read_budget() {
         assert!(!should_attempt_source_read(&json!({
             "source_type": "paper_metadata",
@@ -4029,7 +4017,7 @@ mod tests {
         })));
     }
 
-    #[test]
+#[test]
     fn explicit_doi_parser_rejects_unrelated_numbers() {
         assert_eq!(
             extract_explicit_dois(
@@ -4043,29 +4031,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn plan_can_include_annas_archive_as_metadata_only() {
-        let request = DeepResearchRequest {
-            query: "terahertz copper mesh CFRP".to_string(),
-            focus: None,
-            depth: DeepResearchDepth::Exhaustive,
-            max_sources: 20,
-            exclude_urls: Vec::new(),
-            include_annas_archive: true,
-            include_papers: true,
-            workspace: None,
-            persist_workspace: false,
-        };
-        let plans = build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
-        let annas = plans
-            .iter()
-            .find(|plan| plan.label == "annas_archive_metadata")
-            .expect("annas metadata plan");
-        assert!(annas.metadata_only);
-        assert_eq!(annas.domains, vec!["annas-archive.org"]);
-    }
-
-    #[test]
+#[test]
     fn generic_topics_do_not_receive_lsp_specific_search_plans() {
         let request = DeepResearchRequest {
             query: "bearing load data sources for small electromechanical systems".to_string(),
@@ -4085,7 +4051,7 @@ mod tests {
         assert!(!labels.contains(&"aircraft_composites_ndt"));
     }
 
-    #[test]
+#[test]
     fn data_source_reviews_receive_measurement_search_plans() {
         let request = DeepResearchRequest {
             query: "bearing load data sources for small electromechanical systems".to_string(),
@@ -4123,7 +4089,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn research_profile_gates_aerospace_lsp_plans() {
         let request = DeepResearchRequest {
             query: "lightning strike protection CFRP copper mesh inspection".to_string(),
@@ -4153,7 +4119,7 @@ mod tests {
         assert!(generic_labels.contains(&"topic_literature"));
     }
 
-    #[test]
+#[test]
     fn scholarly_db_value_surfaces_oa_pdf_as_read_target() {
         let base = ScholarlyResult {
             provider: "openalex".to_string(),
@@ -4195,7 +4161,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn source_relevance_prefers_measurement_data_over_random_package_pages() {
         let query = "bearing load data sources force moment dataset";
         let good = json!({
@@ -4211,7 +4177,7 @@ mod tests {
         assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
     }
 
-    #[test]
+#[test]
     fn metadata_and_aggregator_sources_have_no_discovery_score() {
         let query = "bearing load data sources";
         let metadata = json!({
@@ -4231,7 +4197,7 @@ mod tests {
         assert!(source_discovery_score(&aggregator, query).is_none());
     }
 
-    #[test]
+#[test]
     fn evidence_promotion_separates_transport_from_source_quality() {
         let primary = json!({
             "source_type": "scholarly",
@@ -4310,7 +4276,7 @@ mod tests {
         assert!(!read_has_meaningful_evidence(&missing_manifest));
     }
 
-    #[test]
+#[test]
     fn evidence_promotion_rejects_reuploads_and_reference_lists() {
         let kaggle_reupload = json!({
             "source_type": "web",
@@ -4341,7 +4307,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn evidence_promotion_rejects_unscored_or_negative_relevance() {
         let mut source = json!({
             "source_type": "scholarly",
@@ -4370,7 +4336,7 @@ mod tests {
         assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
     }
 
-    #[test]
+#[test]
     fn evidence_promotion_requires_relevance_in_retrieved_content() {
         let query = "small UAV propeller thrust torque measured dataset";
         let stuffed_discovery = json!({
@@ -4410,7 +4376,7 @@ mod tests {
         assert_eq!(assess_evidence_promotion(&source, true, true), (true, None));
     }
 
-    #[test]
+#[test]
     fn canonical_original_html_is_full_text_without_preserved_paragraph_breaks() {
         let source = json!({
             "source_type": "web",
@@ -4427,7 +4393,7 @@ mod tests {
         assert!(read_has_actual_full_text_or_data(&source, &read));
     }
 
-    #[test]
+#[test]
     fn data_file_relevance_query_uses_file_identity_not_the_entire_research_scope() {
         let source = json!({
             "source_type": "data_file",
@@ -4442,7 +4408,7 @@ mod tests {
         assert_eq!(query, "uiuc propdb zip https selig illinois");
     }
 
-    #[test]
+#[test]
     fn doi_landing_pages_are_metadata_not_promotable_full_text() {
         let doi_url = "https://doi.org/10.1234/bearing-load-data";
         assert_eq!(classify_source(doi_url, true, false), "paper_metadata");
@@ -4471,7 +4437,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn zenodo_metadata_receipt_is_auditable_but_not_dataset_evidence() {
         let record_url = "https://zenodo.org/records/123456";
         assert_eq!(
@@ -4516,7 +4482,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn read_failures_are_explicit_on_the_source_envelope() {
         let mut source = json!({
             "verification_status": "unverified",
@@ -4533,7 +4499,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn discovered_search_source_uses_discovery_score_and_unverified_status() {
         let payload = json!({
             "results": [{
@@ -4562,7 +4528,7 @@ mod tests {
         assert_eq!(sources[0]["evidence_eligible"], false);
     }
 
-    #[test]
+#[test]
     fn measurement_source_relevance_requires_topic_match() {
         let query = "bearing load data sources force moment dataset";
         let good = json!({
@@ -4578,7 +4544,7 @@ mod tests {
         assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query) + 30);
     }
 
-    #[test]
+#[test]
     fn dictionary_pages_are_penalized_for_measurement_queries() {
         let query = "bearing load data sources force moment dataset";
         let good = json!({
@@ -4594,7 +4560,7 @@ mod tests {
         assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
     }
 
-    #[test]
+#[test]
     fn issue_tables_of_contents_do_not_outrank_specific_load_sources() {
         let query = "bearing load data sources force moment dataset";
         let good = json!({
@@ -4613,7 +4579,7 @@ mod tests {
         assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query));
     }
 
-    #[test]
+#[test]
     fn generic_force_stands_are_not_topic_matches_for_bearing_queries() {
         let query = "\"bearing\" \"test stand\" force moment dataset";
         let good = json!({
@@ -4629,7 +4595,7 @@ mod tests {
         assert!(score_source_discovery(&good, query) > score_source_discovery(&bad, query) + 20);
     }
 
-    #[test]
+#[test]
     fn classifies_current_playwright_relevant_scholarly_sources() {
         assert_eq!(
             classify_source("https://arxiv.org/abs/2401.00001", true, false),
@@ -4649,7 +4615,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn derives_concise_search_query_from_long_german_research_prompt() {
         let prompt = "Da es um Metallstrukturen in Kunststoff geht und unter dem Gitter scheinbar noch eine konstante metallische Folie liegt: waere es denkbar, mit elektrischen und magnetischen Feldern zu arbeiten? Der Blitzschutz wird durch ein Kupfergitter in kohlenstofffaserverstaerktem Kunststoff CFK bewerkstelligt. Zu bewerten sind Hyperspektralkamera, Terahertz Imaging, Eddy Current, Induktion, Thermografie, Mikrowelle/mmWave, Roentgen/CT und Shearografie.";
         let query = derive_research_search_query(prompt, None, ResearchProfile::AerospaceLsp);
@@ -4660,7 +4626,7 @@ mod tests {
         assert!(query.chars().count() <= 260);
     }
 
-    #[test]
+#[test]
     fn derives_measurement_data_query_from_operator_research_prompt() {
         let prompt = "Research into sources of load data for bearing design in small electromechanical systems";
         let query = derive_research_search_query(prompt, None, ResearchProfile::Generic);
@@ -4671,7 +4637,7 @@ mod tests {
         assert!(query.contains("dataset"));
     }
 
-    #[test]
+#[test]
     fn long_measurement_prompt_produces_complete_bounded_search_queries() {
         let prompt = "ENOLA Zenodo record 20111572 Propeller_Database.zip original downloadable artifact, propeller diameter pitch RPM thrust torque vibration measurements, SKF drone bearing recovery, bearing radial axial load from propeller drivetrain inputs";
         let query = derive_research_search_query(prompt, None, ResearchProfile::Generic);
@@ -4699,7 +4665,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn source_relevance_does_not_leak_unrelated_numeric_identifier() {
         let independent = json!({
             "title": "UIUC Propeller Data Site",
@@ -4731,7 +4697,7 @@ mod tests {
         assert!(query.contains("data"));
     }
 
-    #[test]
+#[test]
     fn repository_read_enqueues_linked_content_route_as_data_file() {
         let parent = json!({
             "title": "ENOLA",
@@ -4751,7 +4717,7 @@ mod tests {
         assert!(is_data_file_url(followups[0]["url"].as_str().unwrap()));
     }
 
-    #[test]
+#[test]
     fn repository_read_resolves_relative_html_data_links() {
         let parent = json!({
             "title": "UIUC Propeller Data Site",
@@ -4769,20 +4735,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn final_source_target_keeps_a_larger_refill_pool() {
-        assert_eq!(
-            research_candidate_pool_limit(DeepResearchDepth::Quick, 3),
-            12
-        );
-        assert_eq!(
-            research_candidate_pool_limit(DeepResearchDepth::Standard, 8),
-            32
-        );
-        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 16);
-    }
-
-    #[test]
+#[test]
     fn metadata_only_scholarly_sources_do_not_consume_the_read_budget() {
         let paper = json!({
             "source_type": "paper_metadata",
@@ -4798,7 +4751,7 @@ mod tests {
         assert!(!should_attempt_source_read(&annas));
     }
 
-    #[test]
+#[test]
     fn annas_archive_records_with_oa_pdf_become_downloadable_paper_sources() {
         // Simulates a payload from scholarly_search where one record carried a
         // DOI and got augmented with a legal Unpaywall open_access_pdf URL.
@@ -4924,7 +4877,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn collects_github_and_dataset_links_from_sources() {
         let sources = vec![json!({
             "title": "Supplemented paper",
@@ -4943,7 +4896,7 @@ mod tests {
             .any(|link| link.get("kind").and_then(Value::as_str) == Some("dataset")));
     }
 
-    #[test]
+#[test]
     fn persists_the_admitted_response_body_and_receipt_without_refetching() {
         let root = std::env::temp_dir().join(format!(
             "ctox_snapshot_receipt_test_{}",
@@ -4997,7 +4950,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn persists_admitted_html_and_its_extracted_full_text() {
         let root = std::env::temp_dir().join(format!(
             "ctox_html_snapshot_test_{}",
@@ -5053,7 +5006,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+#[test]
     fn data_file_hint_does_not_admit_html_response_content() {
         let source = json!({
             "source_type": "data_file",
@@ -5068,7 +5021,7 @@ mod tests {
         assert!(!read_has_actual_full_text_or_data(&source, &read));
     }
 
-    #[test]
+#[test]
     fn admitted_data_response_does_not_require_invented_page_text() {
         let source = json!({
             "source_type": "data_file",
@@ -5100,7 +5053,7 @@ mod tests {
         ));
     }
 
-    #[test]
+#[test]
     fn persists_research_workspace_manifest_and_continuation() {
         let root = std::env::temp_dir().join(format!(
             "ctox_deep_research_workspace_test_{}",

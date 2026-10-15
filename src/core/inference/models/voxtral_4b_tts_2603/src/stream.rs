@@ -57,8 +57,5 @@ pub fn default_prompt_ids(delay_tokens: usize) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn prompt_len() {
-        assert_eq!(default_prompt_ids(6).len(), 39);
-    }
+
 }

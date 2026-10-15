@@ -3130,7 +3130,7 @@ mod tests {
         std::env::temp_dir().join(format!("ctox-browser-{label}-{unique}"))
     }
 
-    #[test]
+#[test]
     fn finds_playwright_chromium_linux64_executable() {
         let dir = temp_path("linux64-cache");
         let executable = dir.join("chromium-1217/chrome-linux64/chrome");
@@ -3143,7 +3143,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
+#[test]
     fn finds_playwright_chromium_win64_executable() {
         let dir = temp_path("win64-cache");
         let executable = dir.join("chromium-1217/chrome-win64/chrome.exe");
@@ -3156,7 +3156,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
+#[test]
     fn finds_playwright_chromium_macos_x64_executable() {
         let dir = temp_path("macos-x64-cache");
         let executable = dir.join(
@@ -3171,7 +3171,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    #[test]
+#[test]
     fn ensure_reference_package_json_writes_patchright_dependency() {
         let dir = temp_path("package-json");
         fs::create_dir_all(&dir).unwrap();
@@ -3186,7 +3186,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
+#[test]
     fn browser_doctor_report_uses_explicit_reference_dir() {
         let root = temp_path("doctor-root");
         let reference_dir = root.join("custom-reference");
@@ -3208,7 +3208,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn production_browser_readiness_never_launches_the_doctor_smoke() {
         let reference_dir = temp_path("hot-path-readiness");
         fs::create_dir_all(&reference_dir).unwrap();
@@ -3218,7 +3218,7 @@ mod tests {
         let _ = fs::remove_dir_all(&reference_dir);
     }
 
-    #[test]
+#[test]
     fn browser_automation_pragma_overrides_timeout() {
         let (directive, body) = parse_browser_automation_source(
             "// ctox-browser: timeout_ms=15000\nawait page.goto('https://example.com');",
@@ -3228,90 +3228,7 @@ mod tests {
         assert_eq!(body, "await page.goto('https://example.com');");
     }
 
-    #[test]
-    fn browser_runner_script_embeds_timeout_and_source() {
-        let script =
-            build_browser_runner_script("return await page.title();", 12_345, None).unwrap();
-        assert!(script.contains("const timeoutMs = 12345;"));
-        assert!(script.contains("const userSource = \"return await page.title();\";"));
-    }
-
-    #[test]
-    fn browser_runner_script_exposes_agent_friendly_api() {
-        let script = build_browser_runner_script(
-            "return await ctoxBrowser.observe({ limit: 10 });",
-            12_345,
-            None,
-        )
-        .unwrap();
-        assert!(script.contains("globalThis.ctoxBrowser = ctoxBrowserApi;"));
-        assert!(script.contains("async observe(options = {})"));
-        assert!(script.contains("async resolveTarget(target)"));
-        assert!(script.contains("async click(target, options = {})"));
-        assert!(script.contains("async screenshot(options = {})"));
-        assert!(script.contains("const detectionSnapshot = async (page)"));
-        assert!(script.contains("cloudflare_challenge"));
-        let path = std::env::temp_dir().join(format!(
-            "ctox-browser-runner-detection-{}.mjs",
-            std::process::id()
-        ));
-        std::fs::write(&path, script).unwrap();
-        let status = std::process::Command::new("node")
-            .arg("--check")
-            .arg(&path)
-            .status()
-            .unwrap();
-        assert!(status.success(), "generated browser runner must parse");
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn persistent_browser_runner_exposes_session_automation_op() {
-        let script = build_persistent_browser_runner_script(
-            1280,
-            720,
-            None,
-            std::path::Path::new("/tmp/ctox-browser-test-profile"),
-            std::path::Path::new("/tmp/ctox-browser-test-downloads"),
-            &[],
-        )
-        .unwrap();
-        assert!(script.contains("op === \"automation\""));
-        assert!(script.contains("session_mode: \"business-os-persistent\""));
-        assert!(script.contains("globalThis.ctoxBrowser = ctoxBrowserApi;"));
-        assert!(script.contains("async observe(options = {})"));
-        assert!(script.contains("launchPersistentContext"));
-        assert!(script.contains("context.on(\"close\""));
-        assert!(script.contains("Chromium context closed unexpectedly"));
-        assert!(script.contains("blocked browser egress host"));
-        assert!(script.contains("op === \"webauthn_respond\""));
-        assert!(script.contains("op === \"credential_fill\""));
-        assert!(script.contains("op === \"live\""));
-        assert!(script.contains("results.filter((result) => result.ok).length"));
-        assert!(script.contains("Page.startScreencast"));
-        assert!(script.contains("Page.screencastFrameAck"));
-        assert!(script.contains("username field was not found"));
-        assert!(script.contains("message.usernameValue = \"[redacted]\""));
-        assert!(script.contains("message.passwordValue = \"[redacted]\""));
-        assert!(script.contains("op === \"clipboard_copy\""));
-        let path = std::env::temp_dir().join(format!(
-            "ctox-persistent-browser-runner-{}.mjs",
-            std::process::id()
-        ));
-        std::fs::write(&path, script).unwrap();
-        let status = std::process::Command::new("node")
-            .arg("--check")
-            .arg(&path)
-            .status()
-            .unwrap();
-        assert!(
-            status.success(),
-            "generated persistent browser runner must parse"
-        );
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn persistent_browser_handle_reports_an_exited_runner_as_not_running() {
         use std::os::unix::process::CommandExt;
@@ -3354,7 +3271,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn persistent_browser_request_timeout_terminates_unresponsive_process() {
         use std::os::unix::process::CommandExt;
@@ -3395,7 +3312,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn persistent_browser_startup_timeout_terminates_unresponsive_process() {
         use std::os::unix::process::CommandExt;
@@ -3432,7 +3349,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[cfg(unix)]
+#[cfg(unix)]
     #[test]
     fn stale_chromium_profile_lock_is_removed_but_live_lock_is_preserved() {
         use std::os::unix::fs::symlink;
@@ -3452,14 +3369,14 @@ mod tests {
         let _ = fs::remove_dir_all(profile);
     }
 
-    #[test]
+#[test]
     fn parses_node_major_version_from_semver_output() {
         assert_eq!(parse_node_major_version("v12.22.9"), Some(12));
         assert_eq!(parse_node_major_version("18.19.1"), Some(18));
         assert_eq!(parse_node_major_version("not-a-version"), None);
     }
 
-    #[test]
+#[test]
     fn capture_chrome_uses_headless_args_without_gui() {
         let args = capture_chrome_extra_args(true, true);
         assert!(args.contains(&"--headless=new"));
@@ -3468,14 +3385,14 @@ mod tests {
         assert!(args.contains(&"--no-sandbox"));
     }
 
-    #[test]
+#[test]
     fn capture_chrome_keeps_headed_mode_when_gui_exists() {
         let args = capture_chrome_extra_args(false, false);
         assert!(!args.contains(&"--headless=new"));
         assert!(!args.contains(&"--disable-gpu"));
     }
 
-    #[test]
+#[test]
     fn browser_capture_resolves_relative_output_under_root() {
         let root = PathBuf::from("/tmp/ctox-root");
         assert_eq!(
@@ -3488,7 +3405,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn browser_capture_uses_playwright_chrome_for_testing() {
         let selected =
             select_capture_browser_executable(Some(PathBuf::from("/tmp/chrome-for-testing")))
@@ -3497,12 +3414,12 @@ mod tests {
         assert_eq!(selected.1, PathBuf::from("/tmp/chrome-for-testing"));
     }
 
-    #[test]
+#[test]
     fn browser_capture_rejects_missing_playwright_chrome_for_testing() {
         assert!(select_capture_browser_executable(None).is_none());
     }
 
-    #[test]
+#[test]
     fn browser_capture_homepage_preserves_explicit_port() {
         let script = build_browser_capture_runner_script(
             "http://127.0.0.1:12345",

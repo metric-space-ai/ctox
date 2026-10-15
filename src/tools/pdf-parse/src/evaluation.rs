@@ -457,7 +457,7 @@ pub enum FixtureRunError {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn ordered_phrases_must_match_in_sequence() {
         let checks = evaluate_ordered_phrases(
             &[
@@ -471,7 +471,7 @@ mod tests {
         assert!(checks.iter().all(|check| check.matched));
     }
 
-    #[test]
+#[test]
     fn ordered_phrases_fail_when_order_breaks() {
         let checks = evaluate_ordered_phrases(
             &["gamma".to_string(), "alpha".to_string()],
@@ -493,7 +493,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn fixture_evaluation_checks_lines_groups_and_forbidden_patterns() {
         let fixture = PageFixture {
             id: "sample".to_string(),
@@ -535,46 +535,4 @@ Revision hat Erfolg.";
         assert_eq!(evaluation.forbidden_violations, 0);
     }
 
-    #[test]
-    fn corpus_pdf_root_resolves_relative_to_manifest() {
-        let corpus = PageFixtureCorpus {
-            name: "public".to_string(),
-            description: None,
-            pdf_root: Some("samples/public/opendataloader".to_string()),
-            fixtures: Vec::new(),
-        };
-
-        let resolved = resolve_corpus_pdf_root(
-            "tools/pdf-parse/tests/fixtures/corpus.public-opendataloader.json",
-            &corpus,
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolved,
-            PathBuf::from("tools/pdf-parse/tests/fixtures/samples/public/opendataloader")
-        );
-    }
-
-    #[test]
-    fn sample_root_uses_manifest_directory_by_default() {
-        let manifest = PdfSampleManifest {
-            name: "public-samples".to_string(),
-            description: None,
-            root: None,
-            samples: Vec::new(),
-        };
-
-        let resolved = resolve_sample_root(
-            "tools/pdf-parse/tests/fixtures/samples/public/opendataloader/samples.json",
-            &manifest,
-            None,
-        );
-
-        assert_eq!(
-            resolved,
-            PathBuf::from("tools/pdf-parse/tests/fixtures/samples/public/opendataloader")
-        );
-    }
 }

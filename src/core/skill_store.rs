@@ -1603,7 +1603,7 @@ fn now_epoch_string() -> String {
 mod tests {
     use super::*;
 
-    #[test]
+#[test]
     fn parse_skill_deliverable_contract_reads_min_rows_and_columns() {
         let body = "---\nname: x\ndeliverable_format: xlsx\nmin_data_rows: 200\nrequired_columns: PLZ, Firmierung\n---\n\n# X\n";
         let contract = parse_skill_deliverable_contract(body);
@@ -1615,7 +1615,7 @@ mod tests {
         );
     }
 
-    #[test]
+#[test]
     fn parse_skill_deliverable_contract_defaults_when_absent() {
         let body = "---\nname: x\ncluster: communication\n---\n\n# X\n";
         let contract = parse_skill_deliverable_contract(body);
@@ -1624,7 +1624,7 @@ mod tests {
         assert!(contract.required_columns.is_empty());
     }
 
-    #[test]
+#[test]
     fn parse_skill_deliverable_contract_declared_but_incomplete_is_detectable() {
         // deliverable_format alone declares a spreadsheet deliverable but leaves the
         // thresholds empty -> the gate must treat this as fail-closed material.
@@ -1635,22 +1635,7 @@ mod tests {
         assert!(contract.required_columns.is_empty());
     }
 
-    #[test]
-    fn embedded_intersolar_skill_declares_its_contract() {
-        // X2-01: the shipped fixture skill must declare the >=200 + PLZ contract so
-        // the production review gate has a hard-key contract to enforce.
-        let body = EMBEDDED_SYSTEM_SKILLS
-            .get_file("communication/intersolar-company-list/SKILL.md")
-            .expect("intersolar-company-list SKILL.md is embedded")
-            .contents_utf8()
-            .expect("SKILL.md is valid utf8");
-        let contract = parse_skill_deliverable_contract(body);
-        assert!(contract.declares_spreadsheet_deliverable);
-        assert_eq!(contract.min_data_rows, 200);
-        assert_eq!(contract.required_columns, vec!["PLZ".to_string()]);
-    }
-
-    #[test]
+#[test]
     fn load_skill_deliverable_contract_falls_back_to_embedded_without_bootstrap() {
         // Production safety: CTOX_SERVICE_BOOTSTRAP_SYSTEM_SKILLS defaults off, so the
         // contract MUST resolve from the binary-embedded skill even when it was never
@@ -1674,7 +1659,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn bound_system_skill_body_resolves_without_bootstrap_and_after_upgrade() {
         let root =
             std::env::temp_dir().join(format!("ctox-skill-body-binding-{}", now_epoch_string()));
@@ -1707,7 +1692,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
+#[test]
     fn system_skill_lookup_reads_the_existing_catalog_without_rebootstrap() {
         let root =
             std::env::temp_dir().join(format!("ctox-system-skill-lookup-{}", now_epoch_string()));

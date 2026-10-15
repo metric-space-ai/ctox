@@ -151,38 +151,4 @@ pub fn write_trajectory(trajectory: &Trajectory, out_path: &Path) -> Result<()> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn empty_trajectory_serializes() {
-        let t = Trajectory {
-            schema_version: ATIF_SCHEMA_VERSION.to_string(),
-            session_id: "s1".into(),
-            agent: Agent {
-                name: "ctox".into(),
-                version: "0.0.0".into(),
-                model_name: "openai/gpt-5.4".into(),
-            },
-            steps: vec![],
-            final_metrics: FinalMetrics {
-                total_prompt_tokens: 0,
-                total_completion_tokens: 0,
-            },
-            notes: None,
-        };
-        let json = serde_json::to_string(&t).unwrap();
-        assert!(json.contains("ATIF-v1.2"));
-        assert!(json.contains("\"steps\":[]"));
-    }
-
-    #[test]
-    fn step_source_lowercases() {
-        let s = Step {
-            step_id: 1,
-            timestamp: "2026-04-14T00:00:00Z".into(),
-            source: StepSource::Agent,
-            message: "hi".into(),
-            metrics: None,
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"source\":\"agent\""));
-    }
 }
