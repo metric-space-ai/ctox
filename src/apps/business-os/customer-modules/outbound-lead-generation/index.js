@@ -35,6 +35,7 @@ import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { mergeStoredContacts } from './contact-merge.mjs';
 import { hebePruefdienstRegelAn } from './policy-migration.mjs';
+import { berichtAusBefehl, berichtHtml } from './research-report.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -13405,6 +13406,11 @@ function researchFieldReview(lead) {
     groups,
     fields,
     total: researchFields.length,
+    // Owner 15.10.2026: der Zaehler soll die Pflichtfelder meinen, nicht alle
+    // Felder einschliesslich der optionalen.
+    requiredTotal: researchFields.filter((field) => !field.optional).length,
+    researchedRequiredCount: researchFields.filter((field) => !field.optional && field.filled
+      && researchedKeys.has(field.key)).length,
     maintenanceCount: fields.length - researchFields.length,
     filledCount: researchFields.filter((field) => field.filled).length,
     // Owner-Befund 07.09.2026: "nichts ist recherchiert obwohl Felder belegt
@@ -13779,14 +13785,54 @@ function renderResearchReviewSummary(review, lead) {
     ${review.evidenceUnloaded ? `<p class="leadgen-review-notice">${escapeHtml(tr('evidenceUnloadedTitle', 'Belege werden noch geladen'))}</p>` : ''}
     ${letzterRechercheFehler(lead) ? `<p class="leadgen-review-notice">${escapeHtml(letzterRechercheFehler(lead))}</p>` : ''}
     <div class="leadgen-review-metrics" aria-label="Recherchefortschritt">
-      <div><strong>${untouched ? 0 : review.researchedCount}<span> / ${review.total}</span></strong><small>recherchiert</small></div>
+      <div><strong>${untouched ? 0 : review.researchedRequiredCount}<span> / ${review.requiredTotal}</span></strong><small>Pflichtfelder recherchiert</small></div>
       <div><strong>${review.filledCount}</strong><small>Werte vorhanden (inkl. Import)</small></div>
       <div><strong>${review.sufficientCount}</strong><small>ausreichend belegt</small></div>
       <div><strong>${untouched ? '—' : openCount}</strong><small>offene Prüfungen</small></div>
     </div>
     ${untouched ? '' : `<p class="leadgen-muted">${nichtGefunden} Feld(er) von der Recherche begründet „nicht gefunden“${optionalOffen ? ` · ${optionalOffen} optionale(s) Feld(er) ohne Wert` : ''} – blockieren die Freigabe nicht.</p>`}
     <p class="leadgen-muted">${escapeHtml(tr('campaignLabel', 'Kampagne'))}: ${escapeHtml(lead?.campaign || tr('annualResearch', 'Jahresrecherche'))}</p>
+    ${renderResearchReport(lead)}
   </section>`;
+}
+// Abschlussbericht der letzten Recherche, aus dem Ergebnis ihres Befehls.
+// Gelesen wird zuerst der lokale Speicher; ohne Treffer bleibt der Bereich weg.
+function renderResearchReport(lead) {
+  const commandId = String(lead?.command_id || '');
+  if (!commandId) return '';
+  if (!(state.researchReports instanceof Map)) state.researchReports = new Map();
+  const eintrag = state.researchReports.get(commandId);
+  if (eintrag === undefined || (eintrag?.erneutAb && Date.now() >= eintrag.erneutAb)) {
+    state.researchReports.set(commandId, { erneutAb: Date.now() + 30_000 });
+    void ladeRechercheBericht(commandId);
+    return '';
+  }
+  const text = typeof eintrag === 'string' ? eintrag : '';
+  if (!text) return '';
+  return `<details class="leadgen-research-report"><summary>${escapeHtml(tr('researchReport', 'Abschlussbericht der Recherche'))}</summary><div class="leadgen-research-report-body">${berichtHtml(text)}</div></details>`;
+}
+async function ladeRechercheBericht(commandId) {
+  const collection = state.ctx?.db?.collection?.('business_commands');
+  let befehl = null;
+  try {
+    const gespeichert = await collection?.storageCollection?.findDocumentsById?.([commandId], false);
+    befehl = Array.isArray(gespeichert) ? gespeichert[0] : (gespeichert?.[commandId] || null);
+    if (!befehl && collection?.findOne) {
+      const doc = await collection.findOne(commandId).exec();
+      befehl = doc?.toJSON?.() || doc || null;
+    }
+  } catch (error) {
+    console.warn('[outbound-lead-generation] Abschlussbericht nicht lesbar', error);
+  }
+  const text = befehlAbgeschlossen(befehl) ? berichtAusBefehl(befehl) : '';
+  // Laufende Recherche: der Eintrag haelt die Wartezeit, das naechste Zeichnen
+  // nach 30 s liest erneut.
+  if (!text) return;
+  state.researchReports.set(commandId, text);
+  render();
+}
+function befehlAbgeschlossen(befehl) {
+  return ['completed', 'failed', 'cancelled'].includes(String(befehl?.status || ''));
 }
 function renderContactRecipientSelection(lead) {
   const normalized = normalizeLeadRecipientShape(lead || {});
