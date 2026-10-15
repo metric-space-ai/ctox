@@ -141,6 +141,22 @@ impl CapabilityHost for CoreCapabilityHost<'_> {
             ));
         }
         let full = format!("{name}.{function}");
+        if name == "agent.task" && function == "enqueue" {
+            let request = crate::core_host::capability_request(args);
+            for key in ["on_complete", "on_failed"] {
+                if let Some(target) = request.get(key) {
+                    if target
+                        .as_str()
+                        .is_none_or(|t| self.binding["manifest"]["handlers"].get(t).is_none())
+                    {
+                        return Err(CtoxError::new(
+                            ErrorCode::Forbidden,
+                            "Completion must name an own-app command type",
+                        ));
+                    }
+                }
+            }
+        }
         if !self.authority.capability_available(&full) {
             return Err(CtoxError::new(
                 ErrorCode::Unavailable,

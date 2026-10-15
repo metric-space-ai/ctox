@@ -198,6 +198,19 @@ pub(crate) fn capability_call_id(binding: &Value) -> Result<String> {
         )
     ))
 }
+/// CAP-1's envelope is internal; a flat task request may itself have payload.
+pub(crate) fn capability_request(args: &Value) -> &Value {
+    if args.as_object().is_some_and(|m| {
+        m.keys()
+            .all(|k| matches!(k.as_str(), "payload" | "action" | "record_id"))
+    }) {
+        args.get("payload")
+            .filter(|v| v.is_object())
+            .unwrap_or(args)
+    } else {
+        args
+    }
+}
 #[derive(Clone)]
 struct PendingTransaction {
     invocation: String,
@@ -473,14 +486,18 @@ impl CoreRuntimeHost {
             args.len() == 1 && args[0].is_object(),
             "invalid: native capability takes one request object"
         );
-        let options = args[0]
-            .get("payload")
-            .filter(|v| v.is_object())
-            .unwrap_or(&args[0]);
+        let options = capability_request(&args[0]);
         let callbacks = if name == "agent.task.enqueue" {
             let mut refs = json!({});
             for key in ["on_complete", "on_failed"] {
                 if let Some(reference) = options.get(key) {
+                    let target = reference
+                        .as_str()
+                        .context("invalid: completion reference")?;
+                    if binding["manifest"]["handlers"].get(target).is_some() {
+                        refs[key] = reference.clone();
+                        continue;
+                    }
                     let file = crate::reference_file(
                         reference
                             .as_str()
@@ -519,7 +536,16 @@ impl CoreRuntimeHost {
                 outcome,
             } if request_id == id => match outcome {
                 CapOutcome::Ok { value } => {
-                    if callbacks.as_object().is_some_and(|m| !m.is_empty()) {
+                    // Generic agent.task owns atomic publication of its own-app
+                    // completion command. Only legacy export callbacks use this ledger.
+                    if callbacks.as_object().is_some_and(|m| {
+                        !m.is_empty()
+                            && m.values().any(|target| {
+                                binding["manifest"]["handlers"]
+                                    .get(target.as_str().unwrap())
+                                    .is_none()
+                            })
+                    }) {
                         let task_id = value["task_id"].as_str().ok_or_else(|| {
                             failure(
                                 "unavailable",

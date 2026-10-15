@@ -32,8 +32,8 @@ test('CAS generations invalidate relative-library cache, and reject import escap
 });
 test('transactions atomically commit, roll back errors and prohibit outer-context effects', async () => {
   let effects=0;
-  const fixture={collections:{rows:[{id:'a',rev:'1',n:1}]},grants:['http'],http:()=>{effects++;return{};}};
-  const ctx=createContext(app({capabilities_required:['http']}),fixture);
+  const fixture={collections:{rows:[{id:'a',rev:'1',n:1}]},grants:['net.http'],http:()=>{effects++;return{};}};
+  const ctx=createContext(app({capabilities_required:['net.http']}),fixture);
   await assert.rejects(ctx.transaction(async tx=>{await tx.patch('rows','a',{n:2});await tx.put('rows',{id:'b'});throw Error('rollback');}),/rollback/);
   assert.deepEqual(await ctx.read('rows'),[{id:'a',rev:'1',n:1}]);
   await assert.rejects(ctx.transaction(async tx=>{await tx.remove('rows','a');await ctx.http({});}),{code:'forbidden'});

@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createContext, runHandler, runMigration, mango, CtoxError } from './index.mjs';
+import { handlerContext } from './context.mjs';
 
 const manifest = overrides => ({ app_id: 'test-app', collections: { records: {} }, handlers: { 'test.run': 'handler.mjs' }, capabilities_required: [], ...overrides });
 const denied = code => error => error instanceof CtoxError && error.code === code;
@@ -93,13 +94,18 @@ test('declared and approved capabilities support namespaced methods and live gra
   await assert.rejects(ctx.cap.document.render({}), denied('forbidden'));
 });
 test('model, HTTP and commands use explicit fixture callbacks and log app attribution', async () => {
+  // The embedded worker and the kit share this context. Their fallback wire
+  // calls must use catalog functions, without a fixture-only alias.
+  const wire = handlerContext({ capability:(name,args) => ({name,args}) });
+  assert.deepEqual(await wire.model({prompt:'hello'}), {name:'model.run',args:[{prompt:'hello'}]});
+  assert.deepEqual(await wire.http({method:'GET'}), {name:'net.http.fetch',args:[{method:'GET'}]});
   const calls = [];
   const fixtures = {
-    grants: ['model', 'http'], model: req => { calls.push(req); return { answer: 'fixture' }; },
+    grants: ['model', 'net.http'], model: req => { calls.push(req); return { answer: 'fixture' }; },
     http: req => ({ status: req.method === 'GET' ? 200 : 400 }),
     command: (type, payload) => ({ id:'next', status:'accepted', task_id:'task', type, payload }),
   };
-  const ctx = createContext(manifest({ capabilities_required: ['model', 'http'] }), fixtures);
+  const ctx = createContext(manifest({ capabilities_required: ['model', 'net.http'] }), fixtures);
   assert.deepEqual(await ctx.model({ prompt: 'hello' }), { answer: 'fixture' });
   assert.equal((await ctx.http({ method: 'GET' })).status, 200);
   assert.deepEqual(await ctx.command('test.run', { n: 1 }), { id:'next', status:'accepted',task_id:'task',type:'test.run',payload:{n:1} });

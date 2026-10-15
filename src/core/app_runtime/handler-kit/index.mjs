@@ -114,8 +114,8 @@ export function createContext(manifest, fixtures = {}, { migration = false } = {
       return { status:'accepted', id, rev };
     },
     capability: cap,
-    model: req => cap('model',[req],fixtures.model),
-    http: req => cap('http',[req],fixtures.http),
+    model: req => cap('model.run',[req],fixtures.model),
+    http: req => cap('net.http.fetch',[req],fixtures.http),
     async command(type,payload,opts) {
       if (!own(manifest.handlers,type)) fail('forbidden','Command is not declared by this app');
       await policy({ operation:'command',type, options:opts });
@@ -216,7 +216,7 @@ export async function runHandler(manifest,handlerPath,input,{fixtures = {}} = {}
   if (!Object.values(manifest.handlers ?? {}).includes(handlerPath) && !(manifest.triggers ?? []).some(t => t.handler === handlerPath) && !fixtures.completion) fail('forbidden','Handler is not declared');
   for (const name of manifest.capabilities_required ?? []) {
     if (!declared(fixtures.grants ?? [],name)) fail('forbidden','Required capability not approved');
-    const implementation = name === 'model' ? fixtures.model : name === 'http' ? fixtures.http : resolveCapability(fixtures.capabilities,name);
+    const implementation = ['model','model.run'].includes(name) ? fixtures.model : ['net.http','net.http.fetch'].includes(name) ? fixtures.http : resolveCapability(fixtures.capabilities,name);
     if (typeof implementation !== 'function' && !object(implementation)) fail('unavailable','Required capability needs native update');
   }
   const type = Object.keys(manifest.handlers ?? {}).find(key => manifest.handlers[key] === handlerPath);

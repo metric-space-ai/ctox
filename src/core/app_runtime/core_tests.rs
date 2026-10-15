@@ -739,13 +739,52 @@ fn core_capability_host_binds_identity_and_requires_the_retained_effect_fence() 
     let f = Fixture::new();
     let mut binding = f.binding();
     binding["callback_id"] = json!(1);
-    binding["manifest"]["capabilities_required"] = json!(["agent.queue"]);
+    binding["manifest"]["capabilities_required"] = json!(["agent.queue", "agent.task"]);
+    binding["manifest"]["handlers"] = json!({"task.done":"handlers/done.js"});
     let host = CoreCapabilityHost::for_bound_call(f.authority.as_ref(), &binding).unwrap();
     let ctx = f
         .authority
         .capability_context(&binding, &capability_call_id(&binding).unwrap())
         .unwrap();
     let args = json!({"payload":{}});
+    assert!(host
+        .authorize(
+            &ctx,
+            "agent.task",
+            "enqueue",
+            &json!({"payload":{"on_complete":"task.done"}})
+        )
+        .is_ok());
+    assert_eq!(
+        host.authorize(
+            &ctx,
+            "agent.task",
+            "enqueue",
+            &json!({"payload":{"on_complete":"handlers/done.js#reply"}})
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::Forbidden
+    );
+    assert!(host
+        .authorize(
+            &ctx,
+            "agent.task",
+            "enqueue",
+            &json!({"title":"work","payload":{"value":1},"on_complete":"task.done"})
+        )
+        .is_ok());
+    assert_eq!(
+        host.authorize(
+            &ctx,
+            "agent.task",
+            "enqueue",
+            &json!({"title":"work","payload":{"value":1},"on_complete":"foreign.done"})
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::Forbidden
+    );
     assert!(host
         .authorize(&ctx, "agent.queue", "capacity", &args)
         .is_ok());

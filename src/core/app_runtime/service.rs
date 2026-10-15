@@ -312,6 +312,8 @@ impl AppRuntimeService {
         )?;
         result
     }
+    /// Legacy export callbacks only. Generic agent.task completion is published
+    /// by Core as an own-app business command and enters through command().
     /// Core supplies the stored task binding, not an app-provided callback path.
     /// claim is one durable CAS per task; failures/uncertain calls are not replayed.
     pub fn completed(

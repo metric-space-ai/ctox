@@ -69,6 +69,8 @@ impl AppRuntimeDaemon {
     pub async fn tick(&self) -> Result<Vec<Value>> {
         self.call(AppRuntimeService::tick).await
     }
+    /// Legacy export callbacks only. Generic task completion is published by
+    /// Core as an own-app business command and enters through command().
     pub async fn completed(
         &self,
         binding: Value,

@@ -50,8 +50,8 @@ export function handlerContext(bindings, { migration = false, transaction = fals
       if (!result || typeof result.id !== 'string' || !['accepted','rejected'].includes(result.status)) error('invalid', 'Core command must return an acceptance result');
       return result;
     },
-    model(req) { effect(); return bindings.model ? bindings.model(req) : bindings.capability('model', [req]); },
-    http(req) { effect(); return bindings.http ? bindings.http(req) : bindings.capability('http', [req]); },
+    model(req) { effect(); return bindings.model ? bindings.model(req) : bindings.capability('model.run', [req]); },
+    http(req) { effect(); return bindings.http ? bindings.http(req) : bindings.capability('net.http.fetch', [req]); },
     cap: namespace(''),
     now: () => bindings.now(),
     uuid: () => bindings.uuid(),
