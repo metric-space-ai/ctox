@@ -279,8 +279,8 @@ pub enum WritePermission {
     Reject(String),
 }
 pub trait WriteAuthority: Send + Sync {
-    /// Bind the sender app from authenticated native context, not app_id supplied
-    /// by the document. Enforce active commands_out/in and the actor's target right.
+    /// Use the command document's app_id as sender, never a payload claim (§16.40).
+    /// Enforce active commands_out/in and the authenticated actor's target right.
     fn authorize_command_intent(
         &self,
         _tx: &Transaction<'_>,
