@@ -235,7 +235,7 @@ export type Activation = {
   activated_ver: string | null;
   target_ver: string | null;
   previous_ver?: string | null;
-  /** Stub: zuletzt erfolgreich aktivierte Versionen (für reportFailed). */
+  /** zuletzt erfolgreich aktivierte Versionen (für reportFailed). */
   good_vers?: string[];
   state: ActivationState | null;
   error: string | null;
@@ -265,17 +265,57 @@ export type AppManifest = {
   created_at: string;
 };
 
+/** K-1b: Artefaktinhalt; Text bleibt UTF-8, Binärinhalt wird als Bytes gehasht und gespeichert. */
+export type ArtifactContent = string | Blob | ArrayBuffer | ArrayBufferView;
+/** §16.22 A9: Inhalt von collections.schema.json. */
+export type CollectionsFile = {
+  collections?: Record<string, object | { schema: object; indexes?: unknown[]; class?: string; rights?: unknown; client_limit?: number; byte_budget?: number }>;
+  migrations?: Record<string, { from_ver: string; migrate_fn: string } | { from_ver: string; steps: MigrationStep[] }>;
+};
+/** Stub-Teilmenge deklarativer Migrationsschritte. */
+export type MigrationStep =
+  | { op: 'rename'; from: string; to: string }
+  | { op: 'add'; field: string; value?: unknown }
+  | { op: 'remove'; field: string }
+  | { op: 'cast'; field: string; to: 'string' | 'number' | 'boolean' };
+export type CollectionDiff = {
+  name: string;
+  kind: 'unchanged' | 'compatible' | 'new' | 'generation' | 'removed';
+  reasons: string[];
+  needsMigration: boolean;
+  migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
+};
+/** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number };
+
+/** §10.2a Nr. 7 + §16.22. Entwürfe je (App, Nutzer); im Kernel lokal in IDB meta `draft:<app>` (IDB je Instanz+Nutzer, §16.7). */
 export interface SourceApi {
-  /** Recht apps.source.view. Ohne `ver`: aktive Version plus Entwurfsdateien. */
+  /** Recht apps.source.view. Ohne `ver`: Basis des eigenen Entwurfs (sonst aktive Version) überlagert mit dem Entwurf. */
   list(ver?: string): Promise<string[]>;
-  /** Recht apps.source.view. Ohne `ver`: Entwurf, falls vorhanden, sonst aktive Version. */
-  read(path: string, ver?: string): Promise<string>;
+  /** Recht apps.source.view. Ohne `ver`: Entwurfsfassung, sonst Basis. Gelöschte Datei → not_found. */
+  read(path: string, ver?: string): Promise<string | Uint8Array>;
   draft: {
-    /** Recht apps.source.edit. */
-    write(path: string, text: string): Promise<void>;
-    setCollections(schemaDiff: unknown): Promise<void>;
-    /** Vergleich-und-Setzen gegen die aktive Version; result.rev = neue Version. Gründe: forbidden | stale_base | busy. */
-    publish(opts: { base_app_ver: string }): WriteHandle;
+    /** A4 – null, wenn kein eigener Entwurf. */
+    info(): Promise<DraftInfo | null>;
+    /** Recht apps.source.edit (gilt für alle schreibenden Entwurfsaufrufe). `manifest.json` → invalid (§16.26). */
+    write(path: string, content: ArtifactContent): Promise<void>;
+    /** A7 – not_found, wenn die Datei nicht existiert. */
+    remove(path: string): Promise<void>;
+    /** A7 – not_found (Quelle fehlt), conflict (Ziel existiert). Verweise im Manifest (entry, handlers, styles) wandern mit (§16.26). */
+    rename(from: string, to: string): Promise<void>;
+    /** A5/§16.26 – einzige Quelle der Manifest-Felder im Entwurf (title, entry, handlers, …); null entfernt ein Feld bzw. einen Handler. */
+    setManifest(fields: Record<string, unknown>): Promise<void>;
+    /** A6 – vollständiger Inhalt von collections.schema.json; liefert den Diff gegen die Entwurfsbasis. */
+    setCollections(content: string | CollectionsFile): Promise<{ base_app_ver: string | null; diff: CollectionDiff[] }>;
+    discard(): Promise<void>;
+    /** Basis des Entwurfs umsetzen (Änderungen bleiben). */
+    rebase(ver: string | null): Promise<void>;
+    /**
+     * A2/A3 – Vergleich-und-Setzen gegen die aktive Version; base_app_ver = null legt eine neue App an; ohne Angabe gilt
+     * die Basis des Entwurfs. result.rev = neue Version. Gründe: forbidden | stale_base | invalid (kein busy: eine laufende Veröffentlichung wird abgewartet, K-1c; detail z. B.
+     * „Migration fehlt: <coll>“ oder „Verweis auf fehlende Datei: …“, §16.26). Bei Ablehnung bleibt der Entwurf erhalten.
+     */
+    publish(opts?: { base_app_ver?: string | null }): WriteHandle<{ diff?: Array<{ name: string; kind: CollectionDiff['kind'] }> }>;
   };
 }
 
@@ -312,7 +352,25 @@ export interface ShellKernelApi {
   artifacts: {
     read(hash: string): Promise<Blob>;
     manifest(appId: string, ver: string): Promise<AppManifest | null>;
+    /** §16.39 Nr. 1 (A6), synchron: /~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<path>; sv = opts.shellVer, sonst aktuell aktive Shell.
+     *  lib:<name> mit "<M.m>" → /~a/lib:<name>@<M.m>[~lib:…]/<path>; Shell: /~a/shell@<sv>~lib:…/<path>. Merkt sich nichts je app@ver. */
+    url(appId: string, ver: string, path: string, opts?: { shellVer?: string; libs?: Record<string, string> }): string;
+    /** §16.39 Bindung je MOUNT: beim Mount einmal aufrufen; eingefroren (Shell-Version + Lib-Minors), url(path) synchron. */
+    bind(appId: string, ver: string, opts?: { shellVer?: string; libs?: Record<string, string> }): ArtifactBinding;
   };
+  /** §16.39 Nr. 2: SW-Nachrichten; im Browser automatisch an navigator.serviceWorker gebunden. */
+  libs: {
+    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
+    resolve(name: string, major: string | number): string | null;
+    enforceBudget(): Promise<string[]>;
+    readonly byteBudget: number;
+  };
+  /** K-1c Punkt 7, §16.29 B / §16.33: App-Store-Wege. Ablehnung im write_result: stale_base | migration_required | locally_modified | forbidden | not_found. */
+  publishApp(appId: string, opts: { base_app_ver: string | null; draft_id?: string }): CommandHandle;
+  updateApp(appId: string, opts: { base_app_ver: string | null; release_ver: string; discard_local?: boolean }): CommandHandle;
+  rollbackApp(appId: string, opts: { base_app_ver: string; target_ver: string }): CommandHandle;
+  releaseApp(appId: string, opts: { base_app_ver: string; channel?: string }): CommandHandle;
+  removeApp(appId: string, opts: { base_app_ver: string }): CommandHandle;
   source(appId: string): SourceApi;
   metrics: LiveDoc<Metrics>;
   leader: LiveDoc<{ isLeader: boolean; leader_gen: number; tab_id: string }>;
@@ -325,10 +383,11 @@ export interface ShellKernelApi {
     switchInstance(next: { instanceId?: string; userId?: string }): Promise<StubKernel>;
   };
   status: StatusStream;
-  /** @deprecated Alias für `status` (seit §16.19, siehe CHANGES.md). */
+  /** @deprecated Alias für `status` (seit §16.19). */
   statusZone: StatusStream;
+  /** §16.19 Nr. 3 */
   windowState: WindowStateApi;
-  /** Stub: Fensterdaten, die Apps über api.shell setzen (Titel, Header-Element, …). Rendern macht die Shell. */
+  /** Stub-Komfort: Fensterzustand je App (Titel/Header kommen aus api.shell). */
   window(appId: string): {
     state: LiveDoc<WindowState>;
     setSize(size: { width: number; height: number }): void;
@@ -363,14 +422,26 @@ export interface StubKernelOptions {
   generationGraceMs?: number;
   /** Tab-Identität für windowState (Standard: sessionStorage, sonst je Kernel neu). */
   tabKey?: string;
+  /** K-1c Punkt 4: ein Fake-Core je Instanz für mehrere Nutzer (eigene DB je Nutzer); der Core setzt Rechte durch. */
+  coreNamespace?: string;
+  /** Nutzer, wie der Core ihn kennt (Rolle/Rechte überstimmen die Behauptung des Clients). */
+  coreUser?: Partial<{ role: string; permissions: string[] }>;
+  /** Takt der every-Trigger im Fake-Core (Test), Standard: Manifestwert, mindestens 60 s. */
+  everyMs?: number;
+  /** Laufzeit eines Fake-Harness-Agentenlaufs (Standard 100 ms). */
+  agentDelayMs?: number;
+  /** §16.37: Byte-Budget der Bibliotheksdateien (LRU), Standard 512 MiB. */
+  libByteBudget?: number;
   /** false = Ein-Tab-Betrieb erzwingen. */
   multiTab?: boolean;
 }
 
 export interface PublishOptions {
   /** Pfad → Inhalt (UTF-8). In-Memory-Module registriert testkit/app-host.mjs, nicht der Kernel. */
-  files?: Record<string, string>;
+  files?: Record<string, ArtifactContent>;
   entry?: string;
+  /** Weitere Manifest-Felder (triggers, command_rights, libs, …). */
+  manifestExtra?: Record<string, unknown>;
   title?: string;
   layout?: Partial<AppLayout>;
   styles?: string[];
@@ -425,6 +496,13 @@ export interface StubSim {
   outbox(): Promise<any[]>;
   archiveLocal(): Promise<any[]>;
   windowStateRows(): Promise<any[]>;
+  artifactRows(): Promise<any[]>;
+  inspectMeta(key: string): Promise<any>;
+  /** Fake-Core: Zeilen einer Collection im Core (auch nicht abonnierte wie _audit). */
+  coreRows(collection: string): Promise<any[]>;
+  /** Fake-Harness: Ergebnis der nächsten Agentenläufe. */
+  agentOutcome(fn: ((task: unknown) => { status: 'done' | 'failed'; result?: unknown } | Promise<{ status: 'done' | 'failed'; result?: unknown }>) | null): void;
+  coreLog(): Array<{ app_id: string; level: string; msg: string; at: number }>;
   /** @deprecated Alias für `windowStateRows` (seit §16.19). */
   windowState(): Promise<any[]>;
   coreHead(): Promise<number>;
@@ -449,13 +527,14 @@ export interface StubKernel {
   readonly isLeader: boolean;
   readonly storageKind: 'indexeddb' | 'memory' | null;
   appApi(appId: string, appVer: string): CtoxAppApi;
+  readonly tabKey: string;
   // Shell-Kernel-Schnittstelle direkt am Kernel (§16.15, §16.19) – identisch mit kernel.shell
   apps: ShellKernelApi['apps'];
   activation: ShellKernelApi['activation'];
   metrics: ShellKernelApi['metrics'];
   leader: ShellKernelApi['leader'];
   status: StatusStream;
-  /** @deprecated Alias für `status` (seit §16.19, siehe CHANGES.md). */
+  /** @deprecated Alias für `status` (seit §16.19). */
   statusZone: StatusStream;
   windowState: WindowStateApi;
   artifacts: ShellKernelApi['artifacts'];
@@ -475,6 +554,10 @@ export declare function runCompiledQuery<T>(docs: T[], compiled: unknown): T[];
 export declare function uuidv7(): string;
 export declare function sha256Hex(content: string | Blob | ArrayBuffer | ArrayBufferView): Promise<string>;
 export declare function mergePatch<T>(target: T, patch: object): T;
+export declare const SCHEMA_FILE: 'collections.schema.json';
+export declare function parseCollectionsFile(input: string | CollectionsFile): { collections: Record<string, { schema: any; indexes: unknown[]; class: string | null; rights: unknown; client_limit: number | null; byte_budget: number | null }>; migrations: CollectionsFile['migrations'] };
+export declare function classifyCollections(base: ReturnType<typeof parseCollectionsFile>, next: ReturnType<typeof parseCollectionsFile>, opts?: { baseVer?: string | null }): CollectionDiff[];
+export declare function applyMigrationSteps<T extends object>(doc: T, steps: MigrationStep[]): T;
 
 // Real local kernel. The stub-only entry selects an explicit MemoryCoreTransport.
 export interface KernelOptions extends Omit<StubKernelOptions, 'instanceId'|'userId'> {
@@ -572,3 +655,12 @@ export declare function createReliableChannels(peer:RTCPeerConnection):Record<nu
 export declare const PLATFORM_APP_ID:'ctox-platform';
 export declare const PLATFORM_COLLECTIONS:readonly string[];
 export declare function collectionOwner(collection:string,appId:string):string;
+
+export interface ArtifactBinding {
+  readonly appId: string;
+  readonly ver: string;
+  readonly shellVer: string | null;
+  readonly libs: Readonly<Record<string, string>>;
+  readonly root: string;
+  url(path: string): string;
+}

@@ -14,11 +14,23 @@ q=lambda s:'"'+s.replace('"','""')+'"'
 name='e2e_leads'; table='ctox_business_os__'+name+'__v0'
 if a.operation=='commands':
  c=sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True); c.execute('PRAGMA query_only=ON')
- exists=c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",('ctox_business_os__business_commands__v0',)).fetchone()
- if not exists: print(json.dumps({'rows':[],'available':False})); raise SystemExit
- rows=c.execute('SELECT data FROM ctox_business_os__business_commands__v0').fetchall()
+ tables=[x[0] for x in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'ctox_business_os__business_commands__v[0-9]*'")]
+ if len(tables)!=1: print(json.dumps({'rows':[],'available':False,'tables':tables,'reason':'active command table is absent or ambiguous'})); raise SystemExit
+ rows=c.execute('SELECT data FROM '+q(tables[0])).fetchall()
  docs=[json.loads(x[0]) for x in rows];docs=[d for d in docs if d.get('command_type')=='ctox.workjet.project.list']
- print(json.dumps({'available':True,'rows':[{k:d.get(k) for k in ['id','status','created_at_ms','updated_at_ms','error_code','execution_phase']} for d in docs]})); raise SystemExit
+ def timing(d,depth=0):
+  if depth>4:return None
+  if isinstance(d,str):
+   try:d=json.loads(d)
+   except (ValueError,TypeError):return None
+  if not isinstance(d,dict):return None
+  t=d.get('command_timing')
+  if isinstance(t,dict):return {k:t.get(k) for k in ['native_dispatch_entered','native_handler_completed','native_rxdb_projection_committed']}
+  for k in ['result','result_json','output','payload']:
+   t=timing(d.get(k),depth+1)
+   if t:return t
+  return None
+ print(json.dumps({'available':True,'table':tables[0],'rows':[{**{k:d.get(k) for k in ['id','status','created_at_ms','updated_at_ms','error_code','execution_phase']},'nativeTiming':timing(d)} for d in docs]})); raise SystemExit
 if a.operation=='pressure':
  import threading
  assert 1<=a.seconds<=1800 and 1<=a.writers<=8 and 25<=a.interval_ms<=1000

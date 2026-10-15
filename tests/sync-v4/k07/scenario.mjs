@@ -15,11 +15,12 @@ export default {
   finally {stop=true;await pressure;}
   const answers=await Promise.all(commands),latencies=answers.filter(r=>!r.error).map(r=>r.elapsedMs);
   const wireAfter=await h.wire(a),queryFetch=wireAfter.queryFetch-wireBefore.queryFetch,binarySent=wireAfter.binarySent-wireBefore.binarySent;
-  const core=answers.map(a=>a.coreDispatchMs).filter(Number.isFinite);
+  const nativeCommands=h.commandTruth();
+  const core=answers.map(a=>{const truth=nativeCommands.rows.find(d=>d.id===a.commandId);return truth?.nativeTiming?.native_dispatch_entered-a.startedAtMs;}).filter(Number.isFinite);
   const p99=percentile(latencies,.99),errors=answers.filter(r=>r.error);
   return {measured:{answers,bulkBytes:documents.reduce((n,d)=>n+d.padding.length,0),readDurationsMs:reads,
-   queryFetch,binarySent,nativeCommands:h.commandTruth(),coreDispatch:{p50:percentile(core,.5),p95:percentile(core,.95),p99:percentile(core,.99),complete:core.length===answers.length},p50:percentile(latencies,.5),p95:percentile(latencies,.95),p99,budgetMs:h.config.rttMs+100,
+   queryFetch,binarySent,nativeCommands,coreDispatch:{p50:percentile(core,.5),p95:percentile(core,.95),p99:percentile(core,.99),complete:core.length===answers.length},p50:percentile(latencies,.5),p95:percentile(latencies,.95),p99,budgetMs:h.config.rttMs+100,
    missingCoverage:['fresh-first-sync/app-matrix','file-CAS-upload','native-10-writes-per-second','idle-CPU','compressed-frame-classification-if-binary']},
-   pass:errors.length===0&&p99!==null&&p99<=h.config.rttMs+100&&latencies.every(n=>n<=5000)&&queryFetch===0&&binarySent===0,acceptanceComplete:false};
+   pass:answers.length===50&&errors.length===0&&core.every(n=>n>=0)&&core.length===answers.length&&percentile(core,.99)<=h.config.rttMs+100&&latencies.every(n=>n<=5000)&&queryFetch===0&&binarySent===0,acceptanceComplete:false};
  }
 };

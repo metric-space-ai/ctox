@@ -4,7 +4,7 @@ export function completeReload(m) {
     && m.preQueryLocalCount === m.rows && m.missing.length === 0 && m.duplicates === 0;
 }
 export function completeFirstWindow(m) {
-  return Number.isFinite(m.visibleMs) && m.visibleMs <= 1000 && !m.emptyRender && m.missing.length === 0;
+  return Number.isFinite(m.visibleMs) && m.visibleMs <= 1000 && m.receivesEvents === true && !m.emptyRender && m.missing.length === 0;
 }
 export function checkpointDelivered(observation, control, nativeRow, injected) {
   return observation.found === true && control.found === true && control.nativeConfirmed === true
