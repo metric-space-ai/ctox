@@ -175,7 +175,7 @@ impl Worker {
         tokio::pin!(check);
         let mut ticker = tokio::time::interval(Duration::from_millis(100));
         loop {
-            if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+            if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
                 return Ok(false);
             }
             tokio::select! {
@@ -216,13 +216,13 @@ impl Worker {
             .read(true)
             .write(true)
             .open(&partial)?;
-        let mut offset = self.store.get(&request.id)?.completed_bytes;
+        let mut offset = self.get(&request.id).await?.completed_bytes;
         ensure!(offset <= request.size, "invalid durable peer offset");
         // A write that reached disk before its SQLite checkpoint is retried.
         // Missing/truncated staging can never inherit a stale durable offset.
         if file.metadata()?.len() < offset {
             offset = 0;
-            self.peer_checkpoint(&request.id, offset)?;
+            self.checkpoint(&request.id, offset).await?;
         }
         file.set_len(offset)?;
         file.sync_all()?;
@@ -231,7 +231,7 @@ impl Worker {
         // Even an empty file must perform an authorized remote exchange.
         let mut empty_read = request.size == 0;
         while offset < request.size || empty_read {
-            if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+            if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
                 return Ok(None);
             }
             let length = (request.size - offset).min(RANGE_BYTES);
@@ -244,7 +244,7 @@ impl Worker {
                 tokio::select! {
                     result = &mut read => break result?,
                     _ = ticker.tick() => {
-                        if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+                        if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
                             return Ok(None);
                         }
                     }
@@ -259,23 +259,16 @@ impl Worker {
             file.sync_all()?;
             offset += length;
             // FULL-synchronous SQLite commits only after the corresponding bytes.
-            self.peer_checkpoint(&request.id, offset)?;
+            self.checkpoint(&request.id, offset).await?;
             empty_read = false;
         }
         drop(file);
         if verify_file(&partial, request).is_err() {
             quarantine_partial(&staging)?;
-            self.peer_checkpoint(&request.id, 0)?;
+            self.checkpoint(&request.id, 0).await?;
             bail!("content identity mismatch");
         }
         Ok(Some(partial))
     }
 
-    fn peer_checkpoint(&self, id: &str, offset: u64) -> Result<()> {
-        self.store.connection()?.execute(
-            "UPDATE ctox_transfer_jobs SET completed_bytes=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'",
-            params![id, offset],
-        )?;
-        Ok(())
-    }
 }

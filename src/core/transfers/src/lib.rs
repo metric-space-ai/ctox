@@ -317,20 +317,12 @@ impl Store {
         peer: Option<Arc<dyn PeerRangeSource>>,
         storage: Option<Arc<dyn StorageResolver>>,
     ) -> Result<Worker> {
-        let lease_path = self.artifacts.join("worker.lock");
-        regular_or_absent(&lease_path)?;
-        let lease = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lease_path)?;
-        lease
-            .try_lock_exclusive()
-            .context("transfer worker already owns this store")?;
+        let lease = worker_lease(&self.artifacts)?;
         self.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END, updated_at=unixepoch() WHERE state='running'", [])?;
         Ok(Worker {
-            store: self.clone(),
+            metadata: WorkerMetadata::Legacy(self.clone()),
+            artifacts: self.artifacts.clone(),
+            owner_stop: None,
             _lease: lease,
             run_gate: tokio::sync::Mutex::new(()),
             poll: std::sync::Mutex::new(None),
@@ -438,6 +430,48 @@ impl TransferOwnerJob {
     }
 }
 
+/// Worker metadata always executes on the same FULL Core writer as commands.
+pub enum TransferWorkerJob {
+    Recover,
+    HasRunnable,
+    Claim,
+    Desired(String),
+    Checkpoint { id: String, bytes: u64 },
+    Settle(String),
+    Fail { id: String, code: String },
+    Commit { request: DownloadRequest, receipt: Receipt, stop: Arc<AtomicBool> },
+}
+pub enum TransferWorkerValue { Done, Bool(bool), Desired(String), Claim(Option<Transfer>) }
+pub type TransferWorkerReply = std::pin::Pin<Box<dyn std::future::Future<Output=Result<TransferWorkerValue>> + Send>>;
+impl TransferWorkerJob {
+    pub fn apply(self, tx: &rusqlite::Transaction<'_>) -> Result<TransferWorkerValue> {
+        let sync: i64 = tx.pragma_query_value(None, "synchronous", |r| r.get(0))?;
+        ensure!(sync == 2, "transfer worker requires FULL durability");
+        match self {
+            Self::Recover => { tx.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE state='running'", [])?; }
+            Self::HasRunnable => return Ok(TransferWorkerValue::Bool(tx.query_row("SELECT EXISTS(SELECT 1 FROM ctox_transfer_jobs WHERE state='queued' AND desired='run')", [], |r| r.get(0))?)),
+            Self::Claim => {
+                let id: Option<String> = tx.query_row("SELECT id FROM ctox_transfer_jobs WHERE state='queued' AND desired='run' ORDER BY created_at,id LIMIT 1", [], |r| r.get(0)).optional()?;
+                let transfer = if let Some(id) = id { tx.execute("UPDATE ctox_transfer_jobs SET state='running',error_code=NULL,updated_at=unixepoch() WHERE id=?1", [&id])?; Some(read_owned_transfer(tx, &id)?) } else { None };
+                return Ok(TransferWorkerValue::Claim(transfer));
+            }
+            Self::Desired(id) => return Ok(TransferWorkerValue::Desired(tx.query_row("SELECT desired FROM ctox_transfer_jobs WHERE id=?1", [id], |r| r.get(0))?)),
+            Self::Checkpoint { id, bytes } => { tx.execute("UPDATE ctox_transfer_jobs SET completed_bytes=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![id, bytes])?; }
+            Self::Settle(id) => { tx.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1 AND state='running'", [id])?; }
+            Self::Fail { id, code } => { tx.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'failed' END,error_code=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![id,code])?; }
+            Self::Commit { request, receipt, stop } => {
+                let saved = read_owned_transfer(tx, &request.id)?;
+                ensure!(saved.request == request, "transfer request changed before receipt");
+                let desired: String = tx.query_row("SELECT desired FROM ctox_transfer_jobs WHERE id=?1", [&request.id], |r| r.get(0))?;
+                if desired == "run" && !stop.load(Ordering::Acquire) {
+                    tx.execute("UPDATE ctox_transfer_jobs SET state='completed',completed_bytes=?2,receipt=?3,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![request.id,request.size,serde_json::to_string(&receipt)?])?;
+                } else { tx.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1", [&request.id])?; }
+            }
+        }
+        Ok(TransferWorkerValue::Done)
+    }
+}
+
 pub type TransferOwnerReply =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Transfer>> + Send>>;
 
@@ -446,6 +480,9 @@ pub type TransferOwnerReply =
 /// second Core connection or wait synchronously on a Tokio worker.
 pub trait TransferOwner: Send + Sync {
     fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply;
+    fn worker(&self, _job: TransferWorkerJob) -> TransferWorkerReply {
+        Box::pin(async { bail!("Core owner does not provide worker metadata jobs") })
+    }
 }
 
 #[derive(Clone)]
@@ -511,6 +548,35 @@ impl OwnedTransferStore {
         }
     }
 
+    async fn worker_job(&self, job: TransferWorkerJob) -> Result<TransferWorkerValue> {
+        match &self.backend {
+            TransferBackend::Shared(owner) => owner.worker(job).await,
+            TransferBackend::Dedicated(owner) => Ok(owner.call(move |connection| {
+                let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(std::io::Error::other)?;
+                let value = job.apply(&tx).map_err(std::io::Error::other)?;
+                tx.commit().map_err(std::io::Error::other)?;
+                Ok(value)
+            }).await?),
+        }
+    }
+
+    /// Composition supplies its existing Core owner and shared stop flag. No
+    /// SQLite handle is created here, including recovery and idle polling.
+    pub async fn worker_with_sources(
+        &self, artifacts: PathBuf, peer: Option<Arc<dyn PeerRangeSource>>,
+        storage: Option<Arc<dyn StorageResolver>>, stop: Arc<AtomicBool>,
+    ) -> Result<Worker> {
+        private_directory(&artifacts)?;
+        let artifacts = artifacts.canonicalize()?;
+        private_directory(&artifacts.join("staging"))?;
+        private_directory(&artifacts.join("objects"))?;
+        let lease = worker_lease(&artifacts)?;
+        self.worker_job(TransferWorkerJob::Recover).await?;
+        Ok(Worker { metadata: WorkerMetadata::Owned(self.clone()), artifacts,
+            _lease: lease, run_gate: tokio::sync::Mutex::new(()),
+            poll: std::sync::Mutex::new(None), peer, storage, owner_stop: Some(stop) })
+    }
+
     pub async fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
         self.execute(TransferOwnerJob::Enqueue(request)).await
     }
@@ -528,6 +594,10 @@ impl TransferOwner for OwnedTransferStore {
     fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply {
         let store = self.clone();
         Box::pin(async move { store.execute(job).await })
+    }
+    fn worker(&self, job: TransferWorkerJob) -> TransferWorkerReply {
+        let store = self.clone();
+        Box::pin(async move { store.worker_job(job).await })
     }
 }
 
@@ -547,8 +617,27 @@ fn read_owned_transfer(connection: &Connection, id: &str) -> Result<Transfer> {
     })
 }
 
+fn worker_lease(artifacts: &Path) -> Result<File> {
+        let lease_path = artifacts.join("worker.lock");
+        regular_or_absent(&lease_path)?;
+        let lease = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lease_path)?;
+        lease
+            .try_lock_exclusive()
+            .context("transfer worker already owns this store")?;
+        Ok(lease)
+}
+
+enum WorkerMetadata { Legacy(Store), Owned(OwnedTransferStore) }
+
 pub struct Worker {
-    store: Store,
+    metadata: WorkerMetadata,
+    artifacts: PathBuf,
+    owner_stop: Option<Arc<AtomicBool>>,
     _lease: File,
     run_gate: tokio::sync::Mutex<()>,
     // Idle polling reads through one kept connection: the worker polls every
@@ -566,87 +655,94 @@ enum SourceOutcome {
 }
 
 impl Worker {
-    /// One bounded attempt. Failed jobs require explicit resume; no unbounded retries.
-    /// Read-only check through the kept poll connection; the claim below still
-    /// re-reads under its write lock.
-    fn has_runnable_job(&self) -> Result<bool> {
-        let mut poll = self.poll.lock().unwrap_or_else(|error| error.into_inner());
-        if poll.is_none() {
-            *poll = Some(self.store.connection()?);
+    async fn desired(&self, id: &str) -> Result<String> {
+        match &self.metadata {
+            WorkerMetadata::Legacy(store) => store.desired(id),
+            WorkerMetadata::Owned(owner) => match owner.worker_job(TransferWorkerJob::Desired(id.into())).await? {
+                TransferWorkerValue::Desired(value) => Ok(value), _ => bail!("unexpected owner reply"),
+            },
         }
-        let found = poll.as_ref().expect("poll connection").query_row(
-            "SELECT EXISTS(SELECT 1 FROM ctox_transfer_jobs WHERE state='queued' AND desired='run')",
-            [],
-            |row| row.get::<_, bool>(0),
-        );
-        match found {
-            Ok(found) => Ok(found),
-            Err(error) => {
-                *poll = None;
-                Err(error.into())
+    }
+    async fn get(&self, id: &str) -> Result<Transfer> {
+        match &self.metadata { WorkerMetadata::Legacy(store) => store.get(id), WorkerMetadata::Owned(owner) => owner.get(id.into()).await }
+    }
+    async fn checkpoint(&self, id: &str, bytes: u64) -> Result<()> {
+        match &self.metadata {
+            WorkerMetadata::Legacy(store) => { store.connection()?.execute("UPDATE ctox_transfer_jobs SET completed_bytes=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![id,bytes])?; }
+            WorkerMetadata::Owned(owner) => { owner.worker_job(TransferWorkerJob::Checkpoint { id:id.into(), bytes }).await?; }
+        }
+        Ok(())
+    }
+    async fn has_runnable_job(&self) -> Result<bool> {
+        match &self.metadata {
+            WorkerMetadata::Owned(owner) => match owner.worker_job(TransferWorkerJob::HasRunnable).await? { TransferWorkerValue::Bool(value) => Ok(value), _ => bail!("unexpected owner reply") },
+            WorkerMetadata::Legacy(store) => {
+                let mut poll = self.poll.lock().unwrap_or_else(|error| error.into_inner());
+                if poll.is_none() { *poll = Some(store.connection()?); }
+                let found = poll.as_ref().expect("poll connection").query_row("SELECT EXISTS(SELECT 1 FROM ctox_transfer_jobs WHERE state='queued' AND desired='run')", [], |row| row.get::<_,bool>(0));
+                match found { Ok(found) => Ok(found), Err(error) => { *poll = None; Err(error.into()) } }
             }
         }
     }
-
     pub async fn run_next(&self, stop: &AtomicBool) -> Result<bool> {
+        // Owned workers use the same flag at every phase, including the commit.
+        let stop = self.owner_stop.as_deref().unwrap_or(stop);
         let _run = self.run_gate.lock().await;
-        if stop.load(Ordering::Acquire) {
-            return Ok(false);
-        }
-        if !self.has_runnable_job()? {
-            return Ok(false);
-        }
-        let mut c = self.store.connection()?;
-        let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let id: Option<String> = tx.query_row("SELECT id FROM ctox_transfer_jobs WHERE state='queued' AND desired='run' ORDER BY created_at,id LIMIT 1", [], |r| r.get(0)).optional()?;
-        let Some(id) = id else {
-            return Ok(false);
+        if stop.load(Ordering::Acquire) || !self.has_runnable_job().await? { return Ok(false); }
+        let request = match &self.metadata {
+            WorkerMetadata::Owned(owner) => match owner.worker_job(TransferWorkerJob::Claim).await? {
+                TransferWorkerValue::Claim(Some(transfer)) => transfer.request,
+                TransferWorkerValue::Claim(None) => return Ok(false), _ => bail!("unexpected owner reply"),
+            },
+            WorkerMetadata::Legacy(store) => {
+                let mut c = store.connection()?;
+                let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let id:Option<String> = tx.query_row("SELECT id FROM ctox_transfer_jobs WHERE state='queued' AND desired='run' ORDER BY created_at,id LIMIT 1", [], |r|r.get(0)).optional()?;
+                let Some(id)=id else { return Ok(false) };
+                tx.execute("UPDATE ctox_transfer_jobs SET state='running',error_code=NULL,updated_at=unixepoch() WHERE id=?1", [&id])?;
+                let request = read_owned_transfer(&tx,&id)?.request;
+                tx.commit()?;
+                request
+            }
         };
-        tx.execute("UPDATE ctox_transfer_jobs SET state='running',error_code=NULL,updated_at=unixepoch() WHERE id=?1", [&id])?;
-        tx.commit()?;
-        let request = self.store.get(&id)?.request;
-        let result = self.download(&request, stop).await;
-        if let Err(error) = result {
-            // Raw engine errors may include URLs or remote response material; persist codes only.
-            let code = if error.to_string() == "content identity mismatch" {
-                "CONTENT_IDENTITY_MISMATCH"
-            } else if let Some(failure) = error.downcast_ref::<PeerReadFailure>() {
-                failure.code()
-            } else {
-                "TRANSFER_FAILED"
-            };
-            self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'failed' END,error_code=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![id, code])?;
+        if let Err(error) = self.download(&request, stop).await {
+            let code = if error.to_string() == "content identity mismatch" { "CONTENT_IDENTITY_MISMATCH" }
+                else if let Some(failure) = error.downcast_ref::<PeerReadFailure>() { failure.code() } else { "TRANSFER_FAILED" };
+            match &self.metadata {
+                WorkerMetadata::Owned(owner) => { owner.worker_job(TransferWorkerJob::Fail {id:request.id,code:code.into()}).await?; }
+                WorkerMetadata::Legacy(store) => { store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'failed' END,error_code=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'",params![request.id,code])?; }
+            }
         }
         Ok(true)
     }
 
     async fn download(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<()> {
         if request.storage.is_some() {
-            return self.transfer_storage(request, stop);
+            return self.transfer_storage(request, stop).await;
         }
-        let staging = self.store.artifacts.join("staging").join(&request.id);
+        let staging = self.artifacts.join("staging").join(&request.id);
         private_directory(&staging)?;
-        let object = self.store.artifacts.join("objects").join(&request.sha256);
+        let object = self.artifacts.join("objects").join(&request.sha256);
         if request.peer_source.is_some() && !self.authorize_peer(request, stop).await? {
-            return self.settle_interruption(&request.id);
+            return self.settle_interruption(&request.id).await;
         }
         // Recover publication-before-receipt crashes without redownloading, but never trust existence.
         if object.try_exists()? {
             verify_file(&object, request)?;
             if request.peer_source.is_some() && !self.authorize_peer(request, stop).await? {
-                return self.settle_interruption(&request.id);
+                return self.settle_interruption(&request.id).await;
             }
-            return self.publish_receipt(request, &object, stop);
+            return self.publish_receipt(request, &object, stop).await;
         }
         if request.peer_source.is_some() {
             let partial = self.download_peer(request, &staging, stop).await?;
             let Some(partial) = partial else {
-                return self.settle_interruption(&request.id);
+                return self.settle_interruption(&request.id).await;
             };
             if !self.authorize_peer(request, stop).await? {
-                return self.settle_interruption(&request.id);
+                return self.settle_interruption(&request.id).await;
             }
-            return self.publish_partial(request, &partial, &object, stop);
+            return self.publish_partial(request, &partial, &object, stop).await;
         }
         // Shared ranges have their own immutable-request staging area. A failed
         // assembly never contaminates the independent single-mirror fallbacks.
@@ -658,9 +754,9 @@ impl Worker {
                 .await?
             {
                 SourceOutcome::Ready(partial) => {
-                    return self.publish_partial(request, &partial, &object, stop);
+                    return self.publish_partial(request, &partial, &object, stop).await;
                 }
-                SourceOutcome::Interrupted => return self.settle_interruption(&request.id),
+                SourceOutcome::Interrupted => return self.settle_interruption(&request.id).await,
                 SourceOutcome::Failed => {}
             }
         }
@@ -672,16 +768,16 @@ impl Worker {
                 .await?
             {
                 SourceOutcome::Ready(partial) => {
-                    return self.publish_partial(request, &partial, &object, stop);
+                    return self.publish_partial(request, &partial, &object, stop).await;
                 }
-                SourceOutcome::Interrupted => return self.settle_interruption(&request.id),
+                SourceOutcome::Interrupted => return self.settle_interruption(&request.id).await,
                 SourceOutcome::Failed => continue,
             }
         }
         bail!("all sources failed identity or transport validation")
     }
 
-    fn publish_partial(
+    async fn publish_partial(
         &self,
         request: &DownloadRequest,
         partial: &Path,
@@ -698,11 +794,14 @@ impl Worker {
         }
         fs::remove_file(partial)?;
         sync_directory(partial.parent().unwrap())?;
-        self.publish_receipt(request, object, stop)
+        self.publish_receipt(request, object, stop).await
     }
 
-    fn settle_interruption(&self, id: &str) -> Result<()> {
-        self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1 AND state='running'", [id])?;
+    async fn settle_interruption(&self, id: &str) -> Result<()> {
+        match &self.metadata {
+            WorkerMetadata::Owned(owner) => { owner.worker_job(TransferWorkerJob::Settle(id.into())).await?; }
+            WorkerMetadata::Legacy(store) => { store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1 AND state='running'", [id])?; }
+        }
         Ok(())
     }
 
@@ -713,7 +812,7 @@ impl Worker {
         staging: &Path,
         stop: &AtomicBool,
     ) -> Result<SourceOutcome> {
-        if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+        if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
             return Ok(SourceOutcome::Interrupted);
         }
         let partial = staging.join("payload");
@@ -771,18 +870,18 @@ impl Worker {
             tokio::select! {
                 result = &mut download => break result,
                 _ = ticker.tick() => {
-                    if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+                    if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
                         interrupted = true;
                         let _ = cancel.send(true);
                     }
                     let bytes = progress.completed.load(Ordering::Relaxed).min(request.size);
-                    self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET completed_bytes=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![request.id, bytes])?;
+                    self.checkpoint(&request.id, bytes).await?;
                 }
             }
         };
         // Do not drop a live engine future or release its lease when cancellation is requested.
         // The pinned engine owns all range futures; its auto-save task is disabled.
-        if interrupted || stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run"
+        if interrupted || stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run"
         {
             return Ok(SourceOutcome::Interrupted);
         }
@@ -802,7 +901,7 @@ impl Worker {
         Ok(SourceOutcome::Ready(partial))
     }
 
-    fn publish_receipt(
+    async fn publish_receipt(
         &self,
         request: &DownloadRequest,
         object: &Path,
@@ -827,16 +926,24 @@ impl Worker {
             }
             .into(),
         };
-        self.commit_receipt(request, receipt, stop)
+        self.commit_receipt(request, receipt, stop).await
     }
 
-    fn commit_receipt(
+    async fn commit_receipt(
         &self,
         request: &DownloadRequest,
         receipt: Receipt,
         stop: &AtomicBool,
     ) -> Result<()> {
-        let mut c = self.store.connection()?;
+        let store = match &self.metadata {
+            WorkerMetadata::Owned(owner) => {
+                let stop = self.owner_stop.as_ref().context("owner worker stop flag missing")?.clone();
+                owner.worker_job(TransferWorkerJob::Commit { request:request.clone(), receipt, stop }).await?;
+                return Ok(());
+            }
+            WorkerMetadata::Legacy(store) => store,
+        };
+        let mut c = store.connection()?;
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let desired: String = tx.query_row(
             "SELECT desired FROM ctox_transfer_jobs WHERE id=?1",

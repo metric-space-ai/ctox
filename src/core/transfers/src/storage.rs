@@ -76,7 +76,7 @@ pub trait StorageResolver: Send + Sync {
 /// One attempt owns the connection. Each operation must have a network deadline;
 /// writes include server flush acknowledgement before SQLite progress commits.
 /// Paths are relative to the resolved root; adapters reject links/reparse points.
-pub trait StorageConnection {
+pub trait StorageConnection: Send {
     fn length(&mut self, path: &str) -> Result<Option<u64>>;
     fn read(&mut self, path: &str, offset: u64, length: usize) -> Result<Vec<u8>>;
     fn create(&mut self, path: &str) -> Result<()>;
@@ -122,38 +122,45 @@ impl Store {
     }
 }
 
+// A dropped async attempt still closes its authenticated transport before the
+// worker/OS lease can disappear. Normal completion reports close failures.
+struct ClosingStorage(Option<Box<dyn StorageConnection>>);
+impl Drop for ClosingStorage {
+    fn drop(&mut self) { if let Some(mut remote)=self.0.take() { let _=remote.close(); } }
+}
+
 impl Worker {
-    fn storage_continue(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<bool> {
-        if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+    async fn storage_continue(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<bool> {
+        if stop.load(Ordering::Acquire) || self.desired(&request.id).await? != "run" {
             return Ok(false);
         }
         self.storage
             .as_ref()
             .context("storage resolver unavailable")?
             .authorize(request)?;
-        Ok(!stop.load(Ordering::Acquire) && self.store.desired(&request.id)? == "run")
+        Ok(!stop.load(Ordering::Acquire) && self.desired(&request.id).await? == "run")
     }
 
-    pub(super) fn transfer_storage(
+    pub(super) async fn transfer_storage(
         &self,
         request: &DownloadRequest,
         stop: &AtomicBool,
     ) -> Result<()> {
-        if !self.storage_continue(request, stop)? {
-            return self.settle_interruption(&request.id);
+        if !self.storage_continue(request, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
-        let mut remote = self
+        let mut remote = ClosingStorage(Some(self
             .storage
             .as_ref()
             .context("storage resolver unavailable")?
-            .connect(request)?;
+            .connect(request)?));
         // Always close the actual attempt before the worker releases its lease.
-        let outcome = self.storage_attempt(request, remote.as_mut(), stop);
-        let closed = remote.close();
+        let outcome = self.storage_attempt(request, remote.0.as_mut().expect("active transport").as_mut(), stop).await;
+        let closed = remote.0.take().expect("active transport").close();
         outcome.and(closed)
     }
 
-    fn storage_attempt(
+    async fn storage_attempt(
         &self,
         request: &DownloadRequest,
         remote: &mut dyn StorageConnection,
@@ -163,9 +170,8 @@ impl Worker {
             .storage
             .as_ref()
             .context("storage request missing")?;
-        let object = self.store.artifacts.join("objects").join(&request.sha256);
+        let object = self.artifacts.join("objects").join(&request.sha256);
         let staging = self
-            .store
             .artifacts
             .join("staging")
             .join(&request.id)
@@ -179,10 +185,10 @@ impl Worker {
             // Current remote authority and source existence are checked even for cache reuse.
             if object.try_exists()? {
                 verify_file(&object, request)?;
-                if !self.storage_continue(request, stop)? {
-                    return self.settle_interruption(&request.id);
+                if !self.storage_continue(request, stop).await? {
+                    return self.settle_interruption(&request.id).await;
                 }
-                return self.publish_receipt(request, &object, stop);
+                return self.publish_receipt(request, &object, stop).await;
             }
             let partial = staging.join("payload");
             regular_or_absent(&partial)?;
@@ -192,18 +198,18 @@ impl Worker {
                 .read(true)
                 .write(true)
                 .open(&partial)?;
-            let mut offset = self.store.get(&request.id)?.completed_bytes;
+            let mut offset = self.get(&request.id).await?.completed_bytes;
             ensure!(offset <= request.size, "invalid storage checkpoint");
             if file.metadata()?.len() < offset {
                 offset = 0;
-                self.storage_checkpoint(&request.id, 0)?;
+                self.checkpoint(&request.id, 0).await?;
             }
             file.set_len(offset)?;
             file.sync_all()?;
             sync_directory(&staging)?;
             while offset < request.size {
-                if !self.storage_continue(request, stop)? {
-                    return self.settle_interruption(&request.id);
+                if !self.storage_continue(request, stop).await? {
+                    return self.settle_interruption(&request.id).await;
                 }
                 let length = (request.size - offset).min(CHUNK) as usize;
                 let bytes = remote.read(&storage.relative_path, offset, length)?;
@@ -212,31 +218,31 @@ impl Worker {
                 file.write_all(&bytes)?;
                 file.sync_all()?;
                 offset += length as u64;
-                self.storage_checkpoint(&request.id, offset)?;
+                self.checkpoint(&request.id, offset).await?;
             }
             drop(file);
             if verify_file(&partial, request).is_err() {
                 quarantine_partial(&staging)?;
-                self.storage_checkpoint(&request.id, 0)?;
+                self.checkpoint(&request.id, 0).await?;
                 bail!("content identity mismatch");
             }
-            if !self.storage_continue(request, stop)? {
-                return self.settle_interruption(&request.id);
+            if !self.storage_continue(request, stop).await? {
+                return self.settle_interruption(&request.id).await;
             }
-            return self.publish_partial(request, &partial, &object, stop);
+            return self.publish_partial(request, &partial, &object, stop).await;
         }
 
         verify_file(&object, request)?;
         // Recover publication-before-receipt crashes without ever overwriting a target.
         if remote.length(&storage.relative_path)?.is_some() {
-            if !self.verify_storage_remote(request, remote, &storage.relative_path, stop)? {
-                return self.settle_interruption(&request.id);
+            if !self.verify_storage_remote(request, remote, &storage.relative_path, stop).await? {
+                return self.settle_interruption(&request.id).await;
             }
-            return self.storage_receipt(request, stop);
+            return self.storage_receipt(request, stop).await;
         }
         let encoded = serde_json::to_vec(request)?;
         let temporary = format!(".ctox-transfer-{:x}.part", Sha256::digest(encoded));
-        let mut offset = self.store.get(&request.id)?.completed_bytes;
+        let mut offset = self.get(&request.id).await?.completed_bytes;
         ensure!(offset <= request.size, "invalid storage checkpoint");
         match remote.length(&temporary)? {
             None => {
@@ -251,8 +257,8 @@ impl Worker {
         // A saved offset alone cannot bless a replaced/truncated remote prefix.
         let mut checked = 0;
         while checked < offset {
-            if !self.storage_continue(request, stop)? {
-                return self.settle_interruption(&request.id);
+            if !self.storage_continue(request, stop).await? {
+                return self.settle_interruption(&request.id).await;
             }
             let n = (offset - checked).min(CHUNK) as usize;
             let mut expected = vec![0; n];
@@ -263,43 +269,43 @@ impl Worker {
             );
             checked += n as u64;
         }
-        if !self.storage_continue(request, stop)? {
-            return self.settle_interruption(&request.id);
+        if !self.storage_continue(request, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
         remote.truncate(&temporary, offset)?;
-        self.storage_checkpoint(&request.id, offset)?;
+        self.checkpoint(&request.id, offset).await?;
         while offset < request.size {
-            if !self.storage_continue(request, stop)? {
-                return self.settle_interruption(&request.id);
+            if !self.storage_continue(request, stop).await? {
+                return self.settle_interruption(&request.id).await;
             }
             let n = (request.size - offset).min(CHUNK) as usize;
             let mut bytes = vec![0; n];
             input.read_exact(&mut bytes)?;
             remote.write(&temporary, offset, &bytes)?;
             offset += n as u64;
-            self.storage_checkpoint(&request.id, offset)?;
+            self.checkpoint(&request.id, offset).await?;
         }
-        if !self.verify_storage_remote(request, remote, &temporary, stop)? {
-            return self.settle_interruption(&request.id);
+        if !self.verify_storage_remote(request, remote, &temporary, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
-        if !self.storage_continue(request, stop)? {
-            return self.settle_interruption(&request.id);
+        if !self.storage_continue(request, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
         remote.publish(&temporary, &storage.relative_path)?;
-        if !self.verify_storage_remote(request, remote, &storage.relative_path, stop)? {
-            return self.settle_interruption(&request.id);
+        if !self.verify_storage_remote(request, remote, &storage.relative_path, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
-        self.storage_receipt(request, stop)
+        self.storage_receipt(request, stop).await
     }
 
-    fn verify_storage_remote(
+    async fn verify_storage_remote(
         &self,
         request: &DownloadRequest,
         remote: &mut dyn StorageConnection,
         path: &str,
         stop: &AtomicBool,
     ) -> Result<bool> {
-        if !self.storage_continue(request, stop)? {
+        if !self.storage_continue(request, stop).await? {
             return Ok(false);
         }
         ensure!(
@@ -309,7 +315,7 @@ impl Worker {
         let mut digest = Sha256::new();
         let mut offset = 0;
         while offset < request.size {
-            if !self.storage_continue(request, stop)? {
+            if !self.storage_continue(request, stop).await? {
                 return Ok(false);
             }
             let n = (request.size - offset).min(CHUNK) as usize;
@@ -322,12 +328,12 @@ impl Worker {
             format!("{:x}", digest.finalize()) == request.sha256,
             "content identity mismatch"
         );
-        self.storage_continue(request, stop)
+        self.storage_continue(request, stop).await
     }
 
-    fn storage_receipt(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<()> {
-        if !self.storage_continue(request, stop)? {
-            return self.settle_interruption(&request.id);
+    async fn storage_receipt(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<()> {
+        if !self.storage_continue(request, stop).await? {
+            return self.settle_interruption(&request.id).await;
         }
         let storage = request.storage.as_ref().unwrap();
         self.commit_receipt(
@@ -341,11 +347,7 @@ impl Worker {
                 transport: "ctox-storage-v1".into(),
             },
             stop,
-        )
+        ).await
     }
 
-    fn storage_checkpoint(&self, id: &str, offset: u64) -> Result<()> {
-        self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET completed_bytes=?2,updated_at=unixepoch() WHERE id=?1 AND state='running'", params![id, offset])?;
-        Ok(())
-    }
 }
