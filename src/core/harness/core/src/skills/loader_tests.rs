@@ -81,7 +81,7 @@ fn normalized(path: &Path) -> PathBuf {
 }
 
 #[test]
-fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to_admin()
+fn skill_roots_from_layer_stack_maps_user_and_admin_without_removed_system_cache()
 -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
 
@@ -123,10 +123,6 @@ fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to
             (
                 SkillScope::User,
                 home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system")
             ),
             (SkillScope::Admin, system_folder.join("skills")),
         ]
@@ -182,10 +178,6 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
             (
                 SkillScope::User,
                 home_folder.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME)
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system")
             ),
         ]
     );
@@ -248,15 +240,6 @@ fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -
     write_skill_at(&codex_home.path().join("skills"), dir, name, description)
 }
 
-fn write_system_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
-    write_skill_at(
-        &codex_home.path().join("skills/.system"),
-        dir,
-        name,
-        description,
-    )
-}
-
 fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
     let skill_dir = root.join(dir);
     fs::create_dir_all(&skill_dir).unwrap();
@@ -287,9 +270,6 @@ fn write_skill_metadata_at(skill_dir: &Path, contents: &str) -> PathBuf {
     fs::write(&path, contents).unwrap();
     path
 }
-
-
-
 
 #[tokio::test]
 async fn loads_skill_policy_from_yaml() {
@@ -434,17 +414,6 @@ permissions: {}
     assert_eq!(outcome.skills.len(), 1);
     assert_eq!(outcome.skills[0].permission_profile, None);
 }
-
-
-
-
-
-
-
-
-
-
-
 
 #[cfg(unix)]
 fn symlink_dir(target: &Path, link: &Path) {
@@ -763,8 +732,6 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
         }]
     );
 }
-
-
 
 #[tokio::test]
 async fn enforces_short_description_length_limits() {
@@ -1298,38 +1265,6 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
 }
 
 #[tokio::test]
-async fn loads_skills_from_system_cache_when_present() {
-    let codex_home = tempfile::tempdir().expect("tempdir");
-    let work_dir = tempfile::tempdir().expect("tempdir");
-
-    let skill_path = write_system_skill(&codex_home, "system", "system-skill", "from system");
-
-    let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
-
-    let outcome = load_skills_for_test(&cfg);
-    assert!(
-        outcome.errors.is_empty(),
-        "unexpected errors: {:?}",
-        outcome.errors
-    );
-    assert_eq!(
-        outcome.skills,
-        vec![SkillMetadata {
-            name: "system-skill".to_string(),
-            description: "from system".to_string(),
-            short_description: None,
-            interface: None,
-            dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: normalized(&skill_path),
-            scope: SkillScope::System,
-        }]
-    );
-}
-
-#[tokio::test]
 async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
@@ -1338,7 +1273,8 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         .into_iter()
         .map(|root| root.scope)
         .collect();
-    let mut expected = vec![SkillScope::User, SkillScope::System];
+    // Managed system skills come from SQLite, not a filesystem root.
+    let mut expected = vec![SkillScope::User];
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
     }
