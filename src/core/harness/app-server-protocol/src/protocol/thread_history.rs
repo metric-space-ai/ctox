@@ -1138,7 +1138,7 @@ mod tests {
     use ctox_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use ctox_protocol::items::TurnItem as CoreTurnItem;
     use ctox_protocol::items::UserMessageItem as CoreUserMessageItem;
-    use ctox_protocol::models::MessagePhase as CoreMessagePhase;
+
     use ctox_protocol::models::WebSearchAction as CoreWebSearchAction;
     use ctox_protocol::parse_command::ParsedCommand;
     use ctox_protocol::protocol::AgentMessageEvent;

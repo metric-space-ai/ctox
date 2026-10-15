@@ -5808,7 +5808,7 @@ mod tests {
     use ctox_protocol::items::UserMessageItem;
     use ctox_protocol::items::WebSearchItem;
     use ctox_protocol::models::WebSearchAction as CoreWebSearchAction;
-    use ctox_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+
     use ctox_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
     use ctox_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;

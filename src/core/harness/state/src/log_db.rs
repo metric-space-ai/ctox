@@ -335,59 +335,11 @@ impl Visit for MessageVisitor {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::time::Duration;
-
-    use tokio::time::Instant;
     use tracing_subscriber::filter::Targets;
-    use tracing_subscriber::fmt::writer::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
     use super::*;
-
-    #[derive(Clone, Default)]
-    struct SharedWriter {
-        bytes: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl SharedWriter {
-        fn snapshot(&self) -> String {
-            String::from_utf8(self.bytes.lock().expect("writer mutex poisoned").clone())
-                .expect("valid utf-8")
-        }
-    }
-
-    struct SharedWriterGuard {
-        bytes: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl<'a> MakeWriter<'a> for SharedWriter {
-        type Writer = SharedWriterGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            SharedWriterGuard {
-                bytes: Arc::clone(&self.bytes),
-            }
-        }
-    }
-
-    impl io::Write for SharedWriterGuard {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.bytes
-                .lock()
-                .expect("writer mutex poisoned")
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
 
     #[tokio::test]
     async fn flush_persists_logs_for_query() {

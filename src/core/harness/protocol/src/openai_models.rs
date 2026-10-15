@@ -556,48 +556,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
-        ModelInfo {
-            slug: "test-model".to_string(),
-            display_name: "Test Model".to_string(),
-            description: None,
-            default_reasoning_level: None,
-            supported_reasoning_levels: vec![],
-            shell_type: ConfigShellToolType::ShellCommand,
-            visibility: ModelVisibility::List,
-            supported_in_api: true,
-            priority: 1,
-            availability_nux: None,
-            upgrade: None,
-            base_instructions: "base".to_string(),
-            model_messages: spec,
-            supports_reasoning_summaries: false,
-            default_reasoning_summary: ReasoningSummary::Auto,
-            support_verbosity: false,
-            default_verbosity: None,
-            apply_patch_tool_type: None,
-            web_search_tool_type: WebSearchToolType::Text,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
-            supports_parallel_tool_calls: false,
-            supports_image_detail_original: false,
-            context_window: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: 95,
-            experimental_supported_tools: vec![],
-            input_modalities: default_input_modalities(),
-            prefer_websockets: false,
-            used_fallback_model_metadata: false,
-            supports_search_tool: false,
-        }
-    }
 
-    fn personality_variables() -> ModelInstructionsVariables {
-        ModelInstructionsVariables {
-            personality_default: Some("default".to_string()),
-            personality_friendly: Some("friendly".to_string()),
-            personality_pragmatic: Some("pragmatic".to_string()),
-        }
-    }
 
     #[test]
     fn reasoning_effort_from_str_accepts_known_values() {

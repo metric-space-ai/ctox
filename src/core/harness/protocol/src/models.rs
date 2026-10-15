@@ -1502,13 +1502,13 @@ impl std::fmt::Display for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::SandboxMode;
-    use crate::protocol::AskForApproval;
-    use crate::protocol::GranularApprovalConfig;
+
+
+
     use anyhow::Result;
-    use ctox_execpolicy::Policy;
+
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
+
     use tempfile::tempdir;
 
     #[test]
@@ -1673,37 +1673,7 @@ mod tests {
 
 
 
-    fn granular_categories_section(title: &str, categories: &[&str]) -> String {
-        format!("{title}\n{}", categories.join("\n"))
-    }
 
-    fn granular_prompt_expected(
-        prompted_categories: &[&str],
-        rejected_categories: &[&str],
-        include_shell_permission_request_instructions: bool,
-        include_request_permissions_tool_section: bool,
-    ) -> String {
-        let mut sections = vec![granular_prompt_intro_text().to_string()];
-        if !prompted_categories.is_empty() {
-            sections.push(granular_categories_section(
-                "These approval categories may still prompt the user when needed:",
-                prompted_categories,
-            ));
-        }
-        if !rejected_categories.is_empty() {
-            sections.push(granular_categories_section(
-                "These approval categories are automatically rejected instead of prompting the user:",
-                rejected_categories,
-            ));
-        }
-        if include_shell_permission_request_instructions {
-            sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
-        }
-        if include_request_permissions_tool_section {
-            sections.push(request_permissions_tool_prompt_section().to_string());
-        }
-        sections.join("\n\n")
-    }
 
 
 

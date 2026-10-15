@@ -623,13 +623,13 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
     use bytes::Bytes;
-    use ctox_client::StreamResponse;
+
     use ctox_protocol::models::MessagePhase;
     use ctox_protocol::models::ResponseItem;
     use futures::stream;
-    use http::HeaderMap;
-    use http::HeaderValue;
-    use http::StatusCode;
+
+
+
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -1137,5 +1137,4 @@ mod tests {
         assert_eq!(delay, Some(Duration::from_secs(35)));
     }
 
-    const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
 }

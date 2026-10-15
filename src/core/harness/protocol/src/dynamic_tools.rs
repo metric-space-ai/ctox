@@ -77,7 +77,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
 #[cfg(test)]
 mod tests {
     use super::DynamicToolSpec;
-    use pretty_assertions::assert_eq;
+
     use serde_json::json;
 
 
