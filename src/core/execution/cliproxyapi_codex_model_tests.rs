@@ -8,6 +8,79 @@ use ctox_cliproxyapi::internal::{
     auth::codex::{CodexSecretStore, CodexStoredCredentials, SecretString},
     config::RuntimeSecretRef,
 };
+fn inherited_fixture() -> Result<(tempfile::TempDir, CodexSubscriptionAccountConfig, String)> {
+    use base64::Engine;
+    let root = tempfile::tempdir()?;
+    let payload = serde_json::json!({"https://api.openai.com/auth":{"chatgpt_plan_type":"pro","chatgpt_account_id":"fixture-native-account"}});
+    let jwt = format!(
+        "e30.{}.signature",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?)
+    );
+    let snapshot = serde_json::json!({"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":jwt,"access_token":"fixture-access","refresh_token":"fixture-refresh","account_id":"fixture-native-account"},"last_refresh":null}).to_string();
+    crate::secrets::write_secret_record(
+        root.path(),
+        "ctox-auth",
+        "chatgpt_subscription_auth_json",
+        &snapshot,
+        None,
+        serde_json::json!({"test":true}),
+    )?;
+    let (account, _) = super::super::cliproxyapi_host::account_controls::codex_model_metadata(
+        root.path(),
+        "codex-instance-primary",
+    )?
+    .context("inherited fixture unavailable")?;
+    Ok((root, account, snapshot))
+}
+#[test]
+fn codex_model_inherited_snapshot_is_readable_but_never_mutable() -> Result<()> {
+    let (root, account, snapshot) = inherited_fixture()?;
+    let controls = &super::super::cliproxyapi_host::account_controls::account_binding;
+    let metadata = &super::super::cliproxyapi_host::account_controls::codex_model_metadata;
+    let (_, before) = metadata(root.path(), &account.id)?.unwrap();
+    assert!(before.starts_with("codex-inherited:v1:"));
+    assert!(!before.contains("fixture-access"));
+    assert!(controls(root.path(), "codex", &account.id)?.is_none());
+    let check = NativeCodexPublicationCheck::open(root.path(), &account)?;
+    check.records(|| Ok(()))?;
+    crate::secrets::write_secret_record(
+        root.path(),
+        "ctox-auth",
+        "chatgpt_subscription_auth_json",
+        &snapshot,
+        None,
+        serde_json::json!({}),
+    )?;
+    assert_ne!(metadata(root.path(), &account.id)?.unwrap().1, before);
+    let mut published = false;
+    assert!(check
+        .records(|| {
+            published = true;
+            Ok(())
+        })
+        .is_err());
+    assert!(!published);
+    Ok(())
+}
+#[test]
+fn codex_model_inherited_same_id_override_retires_checks_without_granting_controls() -> Result<()> {
+    let (root, account, _) = inherited_fixture()?;
+    let check = NativeCodexPublicationCheck::open(root.path(), &account)?;
+    let mut configured = account.clone();
+    configured.disabled = true;
+    let runtime: CliproxyRuntimeConfig =
+        serde_json::from_value(serde_json::json!({"codex_accounts":[configured]}))?;
+    save_instance_proxy_config(root.path(), 0, "codex", runtime)?;
+    assert!(
+        super::super::cliproxyapi_host::account_controls::codex_model_metadata(
+            root.path(),
+            &account.id
+        )?
+        .is_none()
+    );
+    assert!(check.records(|| Ok(())).is_err());
+    Ok(())
+}
 #[test]
 fn known_dormant_subscription_defaults_survive_load_but_unknown_defaults_are_rejected() -> Result<()>
 {

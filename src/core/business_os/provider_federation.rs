@@ -271,15 +271,20 @@ pub(super) fn handle_command(
                 .iter_mut()
                 .filter(|account| matches!(account.provider.as_str(), "claude" | "codex"))
             {
-                account.private_binding =
+                account.private_binding = if account.provider == "codex" {
+                    crate::execution::cliproxyapi_host::account_controls::codex_model_metadata(
+                        root,
+                        &account.local_account_id,
+                    )?
+                    .map(|(_, binding)| binding)
+                } else {
                     crate::execution::cliproxyapi_host::account_controls::account_binding(
                         root,
                         &account.provider,
                         &account.local_account_id,
-                    )?;
-                if account.provider == "claude" {
-                    account.credential_ready &= account.private_binding.is_some();
-                }
+                    )?
+                };
+                account.credential_ready &= account.private_binding.is_some();
             }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);

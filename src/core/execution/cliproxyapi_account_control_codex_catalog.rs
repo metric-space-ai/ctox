@@ -1,8 +1,9 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Bounded, exact-account live Codex catalog. No token refresh or inference.
-use super::binding::{capture, Captured};
+use super::binding::{capture_for_models as capture, Captured};
 use crate::coding_agents::pi_sidecar::NativeModelCatalogObservation;
+use ctox_cliproxyapi::internal::config::{CodexSubscriptionAccountConfig, RuntimeSecretRef};
 use std::{
     collections::BTreeSet,
     io::Read,
@@ -10,6 +11,59 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) fn is_inherited(account: &CodexSubscriptionAccountConfig) -> bool {
+    account.id == super::super::INSTANCE_CODEX_ACCOUNT_ID
+        && account
+            .credential_handles()
+            .is_ok_and(|h| super::super::is_instance_codex_handles(&h))
+        && account.proxy_url_secret.is_none()
+}
+pub(crate) fn credential_refs(account: &CodexSubscriptionAccountConfig) -> Vec<RuntimeSecretRef> {
+    if is_inherited(account) {
+        return vec![RuntimeSecretRef {
+            scope: super::super::INSTANCE_CHATGPT_AUTH_SCOPE.into(),
+            name: super::super::INSTANCE_CHATGPT_AUTH_NAME.into(),
+        }];
+    }
+    let mut keys = vec![
+        account.id_token_secret.clone(),
+        account.access_token_secret.clone(),
+        account.refresh_token_secret.clone(),
+    ];
+    keys.extend(account.proxy_url_secret.clone());
+    keys
+}
+/// Private, stable account metadata. No credential leaves this module.
+pub(crate) fn metadata(
+    root: &Path,
+    id: &str,
+) -> anyhow::Result<Option<(CodexSubscriptionAccountConfig, String)>> {
+    let Some(first) = capture(root, "codex", id)? else {
+        return Ok(None);
+    };
+    if capture(root, "codex", id)?.as_ref() != Some(&first) {
+        return Ok(None);
+    }
+    let binding = first.fingerprint()?;
+    let Captured::Codex { account, .. } = first else {
+        return Ok(None);
+    };
+    let binding = if is_inherited(&account) {
+        format!("codex-inherited:v1:{binding}")
+    } else {
+        binding
+    };
+    Ok(Some((account, binding)))
+}
+fn model_binding(captured: &Captured) -> anyhow::Result<String> {
+    let binding = captured.fingerprint()?;
+    Ok(match captured {
+        Captured::Codex { account, .. } if is_inherited(account) => {
+            format!("codex-inherited:v1:{binding}")
+        }
+        _ => binding,
+    })
+}
 fn failed(reason: &str) -> NativeModelCatalogObservation {
     NativeModelCatalogObservation {
         provider: "codex".into(),
@@ -157,7 +211,7 @@ fn observe_with(
     if read()?.as_ref() != Some(&first) {
         return Ok(failed("account_changed"));
     }
-    result.private_binding = Some(first.fingerprint()?);
+    result.private_binding = Some(model_binding(&first)?);
     Ok(result)
 }
 pub(crate) fn observe(root: &Path, id: &str) -> anyhow::Result<NativeModelCatalogObservation> {

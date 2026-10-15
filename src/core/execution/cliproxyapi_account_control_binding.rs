@@ -93,6 +93,53 @@ pub(super) fn capture(root: &Path, provider: &str, id: &str) -> anyhow::Result<O
     }))
 }
 
+/// Model reads may consume the existing native CTOX auth snapshot. Mutation
+/// callers retain capture(), which rejects this shared inherited account.
+pub(super) fn capture_for_models(
+    root: &Path,
+    provider: &str,
+    id: &str,
+) -> anyhow::Result<Option<Captured>> {
+    if provider != "codex" || id != INSTANCE_CODEX_ACCOUNT_ID {
+        return capture(root, provider, id);
+    }
+    if load_instance_proxy_config(root)?
+        .is_some_and(|c| c.runtime.codex_accounts.iter().any(|a| a.id == id))
+    {
+        return Ok(None);
+    }
+    let version = || {
+        crate::secrets::secret_record_content_version(
+            root,
+            INSTANCE_CHATGPT_AUTH_SCOPE,
+            INSTANCE_CHATGPT_AUTH_NAME,
+        )
+    };
+    let Some(before) = version()? else {
+        return Ok(None);
+    };
+    let Some(config) = instance_codex_runtime_config(root)? else {
+        return Ok(None);
+    };
+    let Some(account) = config.codex_accounts().iter().find(|a| a.id == id).cloned() else {
+        return Ok(None);
+    };
+    let handles = account
+        .credential_handles()
+        .map_err(|_| anyhow::anyhow!("inherited Codex credential references unavailable"))?;
+    let credentials = CtoxCodexSecretStore::new(root)
+        .load_credentials(&handles)
+        .map_err(|_| anyhow::anyhow!("inherited Codex credential unavailable"))?;
+    if version()?.as_deref() != Some(before.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(Captured::Codex {
+        account,
+        credentials,
+        versions: vec![before],
+    }))
+}
+
 impl Captured {
     pub(super) fn fingerprint(&self) -> anyhow::Result<String> {
         match self {

@@ -16,7 +16,10 @@ mod api;
 mod binding;
 #[path = "cliproxyapi_account_control_codex_catalog.rs"]
 mod codex_catalog;
-pub(crate) use codex_catalog::observe as observe_codex_catalog;
+pub(crate) use codex_catalog::{
+    credential_refs as codex_model_credential_refs, is_inherited as codex_model_is_inherited,
+    metadata as codex_model_metadata, observe as observe_codex_catalog,
+};
 
 pub(crate) fn account_binding(
     root: &Path,

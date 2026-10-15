@@ -1,6 +1,6 @@
 # Native Codex account model checks
 
-Owned, explicitly configured Codex OAuth accounts use the existing admitted
+Owned Codex OAuth accounts and the existing native CTOX auth snapshot use the admitted
 `ctox.workjet.models.check.v1` path and the instance Responses gateway. The
 request pins the private account and provider. Success still requires the real
 upstream status, selected-account acknowledgement, requested model and completed
@@ -20,11 +20,14 @@ credential, consumer or model-policy changes retire publication. Runtime writes
 are excluded during the bounded physical send; there is no network I/O or
 credential decryption inside the publication fence.
 
-Inherited ChatGPT auth snapshots, shared credential references and remote holder
-forwarding are deliberately unsupported here. They need their own existing
-owner-authorized transport; this path does not read app-protected authentication
-files or substitute another account. A token refresh during a probe invalidates
-that generation; account metadata/discovery must be refreshed before retrying.
+The inherited native account reads only the existing CTOX secret-store auth
+snapshot. Its encrypted snapshot generation is pinned in place of synthetic
+individual token references. A same-ID configured override retires that binding.
+Its model-only binding never grants account enable/remove authority; native auth
+remains managed by its existing owner. No app-protected authentication file is
+read. Shared credential aliases and remote holder forwarding remain unsupported.
+A token refresh during a probe invalidates that generation; account discovery
+must be refreshed before retrying.
 
 This is backend support. An installed Workjet green check, OAuth operator
 acceptance and all-provider federation still require installed-stack testing.
