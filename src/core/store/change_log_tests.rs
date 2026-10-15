@@ -1,4 +1,3 @@
-
 #[test]
 fn invalid_column_binding_cannot_replace_a_working_trigger_or_read_source() {
     let mut db = Connection::open_in_memory().unwrap();
@@ -7,11 +6,15 @@ fn invalid_column_binding_cannot_replace_a_working_trigger_or_read_source() {
     let valid = TableBinding::generic("a", 1, "c_a__g1", 1, "1");
     for is_data in [false, true] {
         let mut bad = valid.clone();
-        if is_data { bad.data_column = "missing_data".into(); }
-        else { bad.rev_column = "missing_rev".into(); }
+        if is_data {
+            bad.data_column = "missing_data".into();
+        } else {
+            bad.rev_column = "missing_rev".into();
+        }
         assert!(install_triggers(&tx, &bad).is_err());
     }
-    tx.execute("INSERT INTO c_a__g1 VALUES('ok','r',1,'{}',0)", []).unwrap();
+    tx.execute("INSERT INTO c_a__g1 VALUES('ok','r',1,'{}',0)", [])
+        .unwrap();
     let page = read_page(&tx, "a", 1, 0, 10).unwrap();
     assert_eq!(page.docs.len(), 1);
     assert_eq!(page.docs[0].id, "ok");
