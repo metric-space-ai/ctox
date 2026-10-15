@@ -12,6 +12,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+#[cfg(feature = "legacy-store")]
+pub mod legacy_store;
 #[path = "../execution/models/local_transport.rs"]
 pub mod local_transport;
 use local_transport::{LocalStream, LocalTransport};

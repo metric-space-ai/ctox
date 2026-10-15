@@ -32,7 +32,13 @@ function context(callId) {
   });
   const logs = [];
   return { logs, ctx: Object.freeze({
-    read: (collection, query = { selector: {} }) => { const normalized = normalizeMango(query); mango([], normalized); return rpc(callId, 'read', [collection, normalized]); },
+    read: async (collection, query = { selector: {} }) => {
+      const normalized = normalizeMango(query); mango([], normalized);
+      const response = await rpc(callId, 'read', [collection, normalized]);
+      if (Array.isArray(response)) return response;
+      if (response?.kind === 'ctox.authorized_snapshot.v1' && Array.isArray(response.documents)) return mango(response.documents, normalized);
+      throw Object.assign(new Error('Invalid Core read response'), { code: 'invalid' });
+    },
     write: (collection, op) => rpc(callId, 'write', [collection, op]),
     command: (type, payload) => rpc(callId, 'command', [type, payload]),
     model: req => rpc(callId, 'capability', ['model', [req]]),

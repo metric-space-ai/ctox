@@ -24,6 +24,8 @@ sha256sum src/core/app_runtime/{lib.rs,worker.mjs,Cargo.toml,Cargo.lock} \
   src/core/app_runtime/handler-kit/{index.mjs,mango.mjs,handler-kit.test.mjs} \
   src/core/execution/models/local_transport.rs
 cargo fmt --manifest-path src/core/app_runtime/Cargo.toml --check
-cargo test --locked --manifest-path src/core/app_runtime/Cargo.toml -- --test-threads=2
+feature_args=()
+if [ "${1:-}" = legacy-store ]; then feature_args=(--features legacy-store); fi
+cargo test --locked --manifest-path src/core/app_runtime/Cargo.toml "${feature_args[@]}" -- --test-threads=2
 "$runtime_node" --test --test-concurrency=2 src/core/app_runtime/handler-kit/handler-kit.test.mjs
 git diff --check

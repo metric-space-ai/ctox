@@ -102,3 +102,41 @@ Lesen/Schreiben, Prozesswiederverwendung, CPU-Schleifenabbruch, Neustart,
 Rechteentzug, Foreign-Exports, Migrationen und Ressourcenentzug.
 Linux ist das erste geprüfte Ziel; Windows-Named-Pipes und macOS müssen zusätzlich
 auf ihren nativen Hosts geprüft werden.
+
+## Übergangsadapter zum bestehenden Core-Store
+
+Mit Cargo-Feature `legacy-store` steht
+`legacy_store::LegacyStoreAdapter` zur Verfügung. Der Core übergibt seine
+bereits laufende `Arc<RxDatabase>`, seinen Tokio-Handle und eine
+`Arc<dyn LegacyStorePolicy>`. Es entsteht keine zweite Datenbank, Replik,
+Schreibdienst oder HTTP-Verbindung.
+
+Die Policy hat keine erlaubenden Standardimplementierungen:
+`project_read` muss Zeilensichtbarkeit und Feldmasken anwenden;
+`prepare_write` muss aktuelle Rollen, geschützte Felder und Schema prüfen
+und das erlaubte Dokument zurückgeben (bei erlaubtem Entfernen: None).
+Die normalen RuntimeHost-Prüfungen bleiben zusätzlich wirksam.
+Diese Implementierung kommt vom Core, niemals aus dem App-Bundle.
+
+Autorisierte Snapshots werden als `ctox.authorized_snapshot.v1` an den
+vertrauenswürdigen Node-Einstieg übergeben und dort mit demselben Mango-Code
+wie im Handler-Kit ausgewertet. Nicht freigegebene Zeilen/Felder erreichen
+den Kindprozess nicht. Es gibt keine implizite Zeilengrenze; ein Snapshot
+über 6 MiB schlägt mit quota fehl und wird nicht abgeschnitten. Für größere
+Bestände ersetzt der V4-Store diese Übergangsabfrage durch seinen Query-Adapter.
+
+Änderungen laufen über die bestehende native
+`RxCollection::incremental_write_queue`. Basisrevision und Dokument-Policy
+werden im Modifier bei jedem Konflikt-Retry erneut geprüft. Inserts verwenden
+den vorhandenen Insert-Pfad; Entfernen erzeugt einen nativen Tombstone.
+Native Fehlerparameter werden nicht zum Kindprozess weitergereicht, da sie
+ungemaskte Dokumente enthalten können.
+
+Prüfung des Adapters (ebenfalls nur in der Build-Lane):
+```sh
+bash src/core/app_runtime/verify.sh legacy-store
+```
+Der Core muss den Pool dauerhaft halten, registrierte Releases beim
+Publish/Uninstall austauschen und seine tatsächliche Actor-/Capability-Policy
+anbinden. Die Bibliothek aktiviert sich nicht selbst gegen eine installierte
+Instanz oder gegen das alte App-Manifest.
