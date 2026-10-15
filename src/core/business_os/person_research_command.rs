@@ -1166,16 +1166,14 @@ fn contacts_match(left: &Value, right: &Value) -> bool {
 }
 
 fn profiles_match(left: &Value, right: &Value) -> bool {
+    // Nur Personenprofile identifizieren einen Menschen. Eine Beleg-URL
+    // (Registerseite, Impressum, Teamseite) nennt viele Personen; als
+    // Identitaet gelesen hat sie zwei Ansprechpartner derselben Seite zu
+    // einem verschmolzen.
     let profile = |contact: &Value| {
         normalized_profile(&contact_string(
             contact,
-            &[
-                "person_linkedin",
-                "person_xing",
-                "linkedin",
-                "xing",
-                "source_url",
-            ],
+            &["person_linkedin", "person_xing", "linkedin", "xing"],
         ))
     };
     let left = profile(left);
