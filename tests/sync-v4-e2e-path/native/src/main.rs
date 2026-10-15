@@ -68,7 +68,9 @@ fn hello_template(
         },
     }
 }
-fn v4_config(source: Arc<store_source::Source>) -> rxdb::plugins::replication_webrtc::index_mod::v4_router::V4RouterConfig {
+fn v4_config(
+    source: Arc<store_source::Source>,
+) -> rxdb::plugins::replication_webrtc::index_mod::v4_router::V4RouterConfig {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use ring::signature::KeyPair;
     use rxdb::plugins::replication_webrtc::index_mod::{
@@ -91,7 +93,7 @@ fn v4_config(source: Arc<store_source::Source>) -> rxdb::plugins::replication_we
             Box::pin(async move { Ok(hello_template(nonce, "native-fixture".into(), 42)) })
         }),
         authenticate: Arc::new(move |peer, hello| {
-            let source=source.clone();
+            let source = source.clone();
             Box::pin(async move {
                 let invalid = || {
                     HelloReject::new(
@@ -125,8 +127,15 @@ fn v4_config(source: Arc<store_source::Source>) -> rxdb::plugins::replication_we
                     .verify(hello.device_proof.nonce.as_bytes(), &signature)
                     .map_err(|_| invalid())?;
                 source.admit(peer);
-                let (epoch,head)=source.head().await.map_err(|_| invalid())?;
-                let token=store_source::scope::SignedScope::issue(&store_source::Key,"e2e-fixture",&hello.device_proof.device_id,&store_source::resolved(),store_source::now()/1000).map_err(|_| invalid())?;
+                let (epoch, head) = source.head().await.map_err(|_| invalid())?;
+                let token = store_source::scope::SignedScope::issue(
+                    &store_source::Key,
+                    "e2e-fixture",
+                    &hello.device_proof.device_id,
+                    &store_source::resolved(),
+                    store_source::now() / 1000,
+                )
+                .map_err(|_| invalid())?;
                 Ok(AuthorizedSession {
                     instance_id: hello.instance_id,
                     device_id: hello.device_proof.device_id,
@@ -140,33 +149,77 @@ fn v4_config(source: Arc<store_source::Source>) -> rxdb::plugins::replication_we
     }
 }
 
-#[tokio::main(flavor="multi_thread",worker_threads=2)]
-async fn main()->Result<(),Box<dyn std::error::Error>>{
- let mut lines=BufReader::new(tokio::io::stdin()).lines();
- let config:Value=serde_json::from_str(&lines.next_line().await?.ok_or("configuration required")?)?;
- let source=store_source::Source::open(config["db"].as_str().ok_or("db")?).await?;
- let signaling=SignalingClient::connect(config["signalingUrl"].as_str().ok_or("signal")?).await?;
- let mut options=WebRTCRsConfig::new(signaling.clone(),config["room"].as_str().ok_or("room")?);
- options.ice_servers=vec![RTCIceServer{urls:vec![config["turnUrl"].as_str().ok_or("turn")?.into()],username:"bench".into(),credential:"bench".into(),..Default::default()}];
- options.udp_bind_addr="127.0.0.1:0".into();
- let handler=WebRTCRsConnectionHandler::prepare_with_signaling(options).await?;
- handler.configure_v4(v4_config(source.clone()))?;
- let connections:Arc<Mutex<HashMap<String,WebRTCRsConnection>>>=Arc::new(Mutex::new(HashMap::new()));
- let mut connected=handler.connect_stream();let table=connections.clone();
- tokio::spawn(async move{while let Some(peer)=connected.next().await{table.lock().unwrap().insert(peer.peer_id().to_owned(),peer.clone());emit(json!({"kind":"connected","peer":peer.peer_id()}));}});
- let mut errors=handler.error_stream();tokio::spawn(async move{while let Some(e)=errors.next().await{emit(json!({"kind":"error","code":e.code()}));}});
- signaling.join(config["room"].as_str().unwrap().into()).await?;
- emit(json!({"kind":"ready"}));
- while let Some(line)=lines.next_line().await?{
-  let request:Value=serde_json::from_str(&line)?;
-  match request["kind"].as_str(){
-   Some("shutdown")=>break,
-   Some("arm_drop")=>{source.drop_next.store(true,std::sync::atomic::Ordering::SeqCst);emit(json!({"kind":"drop_armed"}));},
-   Some("drop")=>{let peers:Vec<_>=connections.lock().unwrap().values().cloned().collect();for p in peers{handler.close_peer(&p).await;}emit(json!({"kind":"dropped"}));},
-   Some("push")=>{source.writer.submit(ctox_store::WriteJob::new(ctox_store::JobOptions::default(),|tx|{tx.execute("UPDATE c_notes SET rev='r-live',data='{\"id\":\"seed\",\"title\":\"live from writer\"}' WHERE id='seed'",[])?;Ok(())}))?.await?;emit(json!({"kind":"pushed"}));},
-   Some("status")=>{let status=source.writer.submit(ctox_store::WriteJob::new(ctox_store::JobOptions::default(),|tx|{let ops:u64=tx.query_row("SELECT count(*) FROM _ops",[],|r|r.get(0))?;let rows:u64=tx.query_row("SELECT count(*) FROM c_notes WHERE id='resend'",[],|r|r.get(0))?;let activations:u64=tx.query_row("SELECT count(*) FROM e2e_activations",[],|r|r.get(0))?;Ok(json!({"kind":"status","ops":ops,"resend_rows":rows,"activations":activations,"head_seq":ctox_store::change_log::head(tx)?.head_seq.to_string()}))}))?.await?;emit(status);},
-   _=>return Err("unknown controller message".into()),
-  }
- }
- handler.close().await?;source.shutdown().await;Ok(())
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let config: Value =
+        serde_json::from_str(&lines.next_line().await?.ok_or("configuration required")?)?;
+    let source = store_source::Source::open(config["db"].as_str().ok_or("db")?).await?;
+    let signaling =
+        SignalingClient::connect(config["signalingUrl"].as_str().ok_or("signal")?).await?;
+    let mut options =
+        WebRTCRsConfig::new(signaling.clone(), config["room"].as_str().ok_or("room")?);
+    options.ice_servers = vec![RTCIceServer {
+        urls: vec![config["turnUrl"].as_str().ok_or("turn")?.into()],
+        username: "bench".into(),
+        credential: "bench".into(),
+        ..Default::default()
+    }];
+    options.udp_bind_addr = "127.0.0.1:0".into();
+    let handler = WebRTCRsConnectionHandler::prepare_with_signaling(options).await?;
+    handler.configure_v4(v4_config(source.clone()))?;
+    let connections: Arc<Mutex<HashMap<String, WebRTCRsConnection>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let mut connected = handler.connect_stream();
+    let table = connections.clone();
+    tokio::spawn(async move {
+        while let Some(peer) = connected.next().await {
+            table
+                .lock()
+                .unwrap()
+                .insert(peer.peer_id().to_owned(), peer.clone());
+            emit(json!({"kind":"connected","peer":peer.peer_id()}));
+        }
+    });
+    let mut errors = handler.error_stream();
+    tokio::spawn(async move {
+        while let Some(e) = errors.next().await {
+            emit(json!({"kind":"error","code":e.code()}));
+        }
+    });
+    signaling
+        .join(config["room"].as_str().unwrap().into())
+        .await?;
+    emit(json!({"kind":"ready"}));
+    while let Some(line) = lines.next_line().await? {
+        let request: Value = serde_json::from_str(&line)?;
+        match request["kind"].as_str() {
+            Some("shutdown") => break,
+            Some("arm_drop") => {
+                source
+                    .drop_next
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                emit(json!({"kind":"drop_armed"}));
+            }
+            Some("drop") => {
+                let peers: Vec<_> = connections.lock().unwrap().values().cloned().collect();
+                for p in peers {
+                    handler.close_peer(&p).await;
+                }
+                emit(json!({"kind":"dropped"}));
+            }
+            Some("push") => {
+                source.writer.submit(ctox_store::WriteJob::new(ctox_store::JobOptions::default(),|tx|{tx.execute("UPDATE c_notes SET rev='r-live',data='{\"id\":\"seed\",\"title\":\"live from writer\"}' WHERE id='seed'",[])?;Ok(())}))?.await?;
+                emit(json!({"kind":"pushed"}));
+            }
+            Some("status") => {
+                let status=source.writer.submit(ctox_store::WriteJob::new(ctox_store::JobOptions::default(),|tx|{let ops:u64=tx.query_row("SELECT count(*) FROM _ops",[],|r|r.get(0))?;let rows:u64=tx.query_row("SELECT count(*) FROM c_notes WHERE id='resend'",[],|r|r.get(0))?;let activations:u64=tx.query_row("SELECT count(*) FROM e2e_activations",[],|r|r.get(0))?;let command_ids:Vec<String>=tx.prepare("SELECT id FROM c_business_commands WHERE deleted=0 ORDER BY id")?.query_map([],|r|r.get(0))?.collect::<rusqlite::Result<_>>()?;Ok(json!({"kind":"status","ops":ops,"resend_rows":rows,"activations":activations,"command_rows":command_ids.len(),"command_ids":command_ids,"head_seq":ctox_store::change_log::head(tx)?.head_seq.to_string()}))}))?.await?;
+                emit(status);
+            }
+            _ => return Err("unknown controller message".into()),
+        }
+    }
+    handler.close().await?;
+    source.shutdown().await;
+    Ok(())
 }
