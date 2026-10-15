@@ -1,4 +1,6 @@
 use super::*;
+#[path = "cliproxyapi_xai_probe_tests.rs"]
+mod probe_witness;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]

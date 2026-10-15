@@ -18,6 +18,86 @@ fn model_observation(time: i64) -> crate::coding_agents::pi_sidecar::NativeModel
 }
 
 #[test]
+fn native_xai_catalog_target_requires_oauth_binding_and_preserves_owner_holder_fences() -> Result<()>
+{
+    let f = Fixture::new()?;
+    let mut native = account(crate::execution::cliproxyapi_xai::ACCOUNT_ID);
+    native.provider = "xai".into();
+    let state = f.adopt(std::slice::from_ref(&native))?;
+    let mut request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: account_id(&state).into(),
+        expected_account_revision: 1,
+    };
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &request).is_err());
+    native.private_binding = Some("xai-oauth:v1:holder-private-generation".into());
+    let state = f.adopt(&[native])?;
+    request.expected_account_revision = state["accounts"][0]["revision"].as_i64().unwrap();
+    let target = native_catalog_target(&f.conn, "owner", "native-instance", &request)?;
+    assert_eq!(target.provider, "xai");
+    assert_eq!(
+        target.local_account_id,
+        crate::execution::cliproxyapi_xai::ACCOUNT_ID
+    );
+    assert!(native_catalog_target(&f.conn, "foreign", "native-instance", &request).is_err());
+    assert!(native_catalog_target(&f.conn, "owner", "foreign-holder", &request).is_err());
+    assert_eq!(
+        state["accounts"][0]["controls"],
+        json!({"canEnable":false,"canRemove":false})
+    );
+    request.expected_account_revision += 1;
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &request).is_err());
+    Ok(())
+}
+#[test]
+fn native_xai_adoption_accepts_authenticated_configuration_without_claiming_health() -> Result<()> {
+    let f = Fixture::new()?;
+    store::stable_instance_id(f.root.path()).context("initialize isolated native identity")?;
+    let raw=json!({"access":"fixture-access","refresh":"fixture-refresh","identity":null,"expires_at":null,"token_endpoint":"https://auth.x.ai/token"}).to_string();
+    crate::secrets::write_secret_record(
+        f.root.path(),
+        "provider-subscriptions",
+        "xai-instance-oauth",
+        &raw,
+        None,
+        json!({}),
+    )?;
+    let mut cmd = command("ctox.workjet.providers.adopt_native", json!({}));
+    cmd.id = Some(uuid::Uuid::new_v4().to_string());
+    let claim = store::business_command_core_claim(cmd.id.as_deref().unwrap(), &cmd)?;
+    let admission = DomainEffectAdmission::newly_claimed(
+        cmd.id.as_deref().unwrap(),
+        &claim.payload_hash,
+        "owner",
+    )?;
+    crate::channels::claim_business_control_command(f.root.path(), claim)?;
+    let result = handle_command(f.root.path(), &cmd, "owner", Some(&admission))?;
+    let row = result["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "xai")
+        .context("native Grok not adopted")?;
+    let id = row["id"].as_str().unwrap();
+    let (configured,binding):(bool,String)=f.conn.query_row("SELECT a.credential_ready,b.fingerprint FROM business_provider_federation_accounts a JOIN business_provider_federation_native_bindings b ON b.account_id=a.account_id WHERE a.account_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+    assert!(configured);
+    assert!(binding.starts_with("xai-oauth:v1:"));
+    let request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: id.into(),
+        expected_account_revision: row["revision"].as_i64().unwrap(),
+    };
+    native_catalog_target(
+        &f.conn,
+        "owner",
+        &store::existing_instance_id(f.root.path())?,
+        &request,
+    )?;
+    let public = serde_json::to_string(&result)?;
+    assert!(!public.contains("fixture-access") && !public.contains("xai-oauth:v1:"));
+    Ok(())
+}
+#[test]
 fn native_codex_catalog_target_requires_private_binding_owner_holder_and_revision() -> Result<()> {
     let f = Fixture::new()?;
     let mut native = account("codex-owned-holder");

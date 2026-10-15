@@ -1,11 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Instance-owned Grok device login. Only public progress crosses this seam.
+#[path = "cliproxyapi_xai_catalog.rs"]
+mod model_catalog;
 #[cfg(test)]
 #[path = "cliproxyapi_xai_tests.rs"]
 mod tests;
 use ctox_cliproxyapi::internal::auth::xai::*;
 use ctox_cliproxyapi::sdk::auth::LoginCancellation;
+pub(crate) use model_catalog::{model_binding, observe_model_catalog};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -16,8 +19,8 @@ use std::{
 use zeroize::Zeroizing;
 
 static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-const SCOPE: &str = "provider-subscriptions";
-const NAME: &str = "xai-instance-oauth";
+pub(super) const SCOPE: &str = "provider-subscriptions";
+pub(super) const NAME: &str = "xai-instance-oauth";
 pub const ACCOUNT_ID: &str = "xai-instance-primary";
 pub fn subscription_installed(root: &Path) -> bool {
     crate::secrets::secret_exists(root, SCOPE, NAME).unwrap_or(false)
@@ -692,7 +695,7 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let data = bounded_response_kind(upstream.send().await?, 32 * 1024 * 1024, true).await?;
     let data = if stream {
         data
     } else {
@@ -722,10 +725,24 @@ async fn bounded_response(
     response: native_http::Response,
     limit: usize,
 ) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(
-        response.status().is_success(),
-        "Grok upstream rejected request"
-    );
+    bounded_response_kind(response, limit, false).await
+}
+async fn bounded_response_kind(
+    response: native_http::Response,
+    limit: usize,
+    inference: bool,
+) -> anyhow::Result<Vec<u8>> {
+    let status = response.status().as_u16();
+    if inference {
+        ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(status, &[]);
+    }
+    // Error bodies are read only to derive the existing closed error class.
+    // Catalog responses never become an inference witness.
+    let limit = if (200..300).contains(&status) {
+        limit
+    } else {
+        limit.min(65_536)
+    };
     use futures_util::StreamExt as _;
     let mut response = response.bytes_stream();
     let mut body = Vec::new();
@@ -736,6 +753,13 @@ async fn bounded_response(
         );
         body.extend_from_slice(&chunk);
     }
+    if inference {
+        ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(status, &body);
+    }
+    anyhow::ensure!(
+        (200..300).contains(&status),
+        "Grok upstream rejected request"
+    );
     Ok(body)
 }
 impl Drop for Stored {

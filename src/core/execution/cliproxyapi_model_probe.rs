@@ -26,11 +26,13 @@ pub(crate) enum ModelReservation {
     Claude(super::cliproxyapi_claude_sdk::NativeClaudeSdkAccountReservation),
     Api(super::cliproxyapi_api_model::NativeApiModelReservation),
     Codex(super::cliproxyapi_codex_model::NativeCodexModelReservation),
+    Xai(super::cliproxyapi_xai_model::NativeXaiModelReservation),
 }
 pub(crate) enum ModelPublicationCheck {
     Claude(super::cliproxyapi_claude_sdk::NativeClaudeSdkPublicationCheck),
     Api(super::cliproxyapi_api_model::NativeApiPublicationCheck),
     Codex(super::cliproxyapi_codex_model::NativeCodexPublicationCheck),
+    Xai(super::cliproxyapi_xai_model::NativeXaiPublicationCheck),
 }
 impl ModelReservation {
     pub(crate) fn prepare_model_check(
@@ -47,6 +49,16 @@ impl ModelReservation {
                 authority, id, revision, model,
             )
             .map(Self::Claude),
+            "xai"
+                if selected
+                    .private_configuration_binding()
+                    .is_some_and(|b| b.starts_with("xai-oauth:v1:")) =>
+            {
+                super::cliproxyapi_xai_model::NativeXaiModelReservation::prepare_model_check(
+                    authority, id, revision, model,
+                )
+                .map(Self::Xai)
+            }
             "zai" | "minimax" | "xai" | "kimi" => {
                 super::cliproxyapi_api_model::NativeApiModelReservation::prepare_model_check(
                     authority, id, revision, model,
@@ -67,6 +79,7 @@ impl ModelReservation {
             Self::Claude(r) => &r.selected,
             Self::Api(r) => &r.selected,
             Self::Codex(r) => &r.selected,
+            Self::Xai(r) => &r.selected,
         }
     }
     fn with_current<T>(
@@ -78,6 +91,7 @@ impl ModelReservation {
             Self::Claude(r) => r.with_current_configuration(authority, |_| publish()),
             Self::Api(r) => r.with_current(authority, publish),
             Self::Codex(r) => r.with_current(authority, publish),
+            Self::Xai(r) => r.with_current(authority, publish),
         }
     }
     pub(crate) fn release(&self) {
@@ -85,6 +99,7 @@ impl ModelReservation {
             Self::Claude(r) => r.release(),
             Self::Api(r) => r.release(),
             Self::Codex(r) => r.release(),
+            Self::Xai(r) => r.release(),
         }
     }
 }
@@ -101,6 +116,9 @@ impl ModelPublicationCheck {
             }
             ModelReservation::Api(r) => {
                 super::cliproxyapi_api_model::NativeApiPublicationCheck::prepare(r).map(Self::Api)
+            }
+            ModelReservation::Xai(r) => {
+                super::cliproxyapi_xai_model::NativeXaiPublicationCheck::prepare(r).map(Self::Xai)
             }
         }
     }
@@ -119,6 +137,9 @@ impl ModelPublicationCheck {
                 c.with_current_in_held_policy(r, facts, policy, publish)
             }
             (Self::Codex(c), ModelReservation::Codex(r)) => {
+                c.with_current_in_held_policy(r, facts, policy, publish)
+            }
+            (Self::Xai(c), ModelReservation::Xai(r)) => {
                 c.with_current_in_held_policy(r, facts, policy, publish)
             }
             _ => anyhow::bail!("model check reservation type changed"),
