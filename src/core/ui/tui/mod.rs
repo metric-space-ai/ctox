@@ -6502,6 +6502,7 @@ mod tests {
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_LOCAL_PRESET",
+                "CTOX_CHAT_MODEL_MAX_CONTEXT",
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
