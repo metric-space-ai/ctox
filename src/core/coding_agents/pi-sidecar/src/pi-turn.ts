@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { posix as path } from "node:path";
 import {
   createBashTool,
@@ -274,6 +275,9 @@ export async function runVercelPiCodingAgentTurn(
     context,
     {
       model,
+      // One bounded coding turn has several model/tool rounds. Keep its cache
+      // lane stable, but never reuse a module/request label for a fresh context.
+      sessionId: randomUUID(),
       // pi-ai requires an API-key-shaped value before opening an OpenAI
       // Responses stream. This public sentinel is permitted only for the
       // credential-free local CTOX gateway; subscription credentials remain

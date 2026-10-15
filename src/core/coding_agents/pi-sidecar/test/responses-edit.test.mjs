@@ -66,7 +66,10 @@ async function runFixture(steps, maxAssistantTurns = 8) {
     }, defaultStreamFn());
     assert.equal(failures.length, 0, failures.map(error => error.message).join('\n'));
     assert.equal(requests.length, steps.length);
-    return result;
+    const sessionId = requests[0].prompt_cache_key;
+    assert.match(sessionId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, 'real Responses adapter receives an opaque per-turn cache key');
+    assert.ok(requests.every(request => request.prompt_cache_key === sessionId), 'READ, EDIT and STOP stay in the same provider cache lane');
+    return { ...result, fixtureSessionId: sessionId };
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
@@ -83,6 +86,15 @@ test('real bundled Responses READ → EDIT → STOP publishes the exact memory e
   assert.equal(result.messages.filter(message => message.role === 'toolResult').length, 2);
   assert.equal(result.messages.filter(message => message.role === 'toolResult' && message.isError).length, 0);
   assert.equal(result.snapshot.find(file => file.path.endsWith('/index.js')).content, after);
+});
+
+test('independent coding turns with the same request label have separate cache lanes', { timeout: 15000 }, async () => {
+  const steps = [read, edit, { text: 'Done' }];
+  const first = await runFixture(steps);
+  const second = await runFixture(steps);
+  assert.equal(first.ok, true, first.error);
+  assert.equal(second.ok, true, second.error);
+  assert.notEqual(first.fixtureSessionId, second.fixtureSessionId);
 });
 
 for (const [name, steps, limit, reason, terminalCalls, toolErrors] of [
