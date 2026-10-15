@@ -32,6 +32,7 @@ const cases=[
  ['reconnect-address','transport-webrtc.mjs','this.options={...this.options,address,channels:undefined,peer:undefined}','this.options={...this.options,channels:undefined,peer:undefined}','kernel-v4.test.mjs','real transport'],
  ['clock-start','transport-webrtc.mjs','async startHello(){this.started=this.now();','async startHello(){','webrtc.test.mjs','P4 hello'],
  ['shell-failure-report','loader.mjs',"else await kernel.activation.reportFailed('shell',String(ver),outcome.error??'shell_start_failed');",'','loader.test.mjs','loader follows shell activation'],
+ ['wire-endian','framing.mjs','d.setUint32(0,MAGIC);','d.setUint32(0,MAGIC,true);','webrtc.test.mjs','P4 hello'],
 ];
 const receipts=[];
 try{for(const [id,file,before,after,test,pattern]of cases){const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Mutation anchor missing: ${id}`);const line=original.slice(0,original.indexOf(before)).split('\n').length;
