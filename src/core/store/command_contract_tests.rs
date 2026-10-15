@@ -331,13 +331,17 @@ async fn command_terminal_outcome_commits_once_and_command_id_deduplicates() {
     )
     .await;
     assert_eq!(changed.reason.as_deref(), Some("command_terminal"));
-    let replay = send(
-        &ingress,
-        "client",
-        command(2, 914, None, "queued", None, Value::Null),
-        NOW,
-    )
-    .await;
+    let replay_batch = ingress
+        .submit(
+            "client".into(),
+            command(2, 914, None, "queued", None, Value::Null),
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert!(replay_batch.results[0].requires_page);
+    let replay = replay_batch.results[0].result.clone();
+    assert_eq!(replay.status, WriteStatus::Merged);
     assert_eq!(replay.seq, done.seq);
     assert_eq!(replay.rev, done.rev);
     let body: Value = readers

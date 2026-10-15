@@ -535,7 +535,7 @@ pub(crate) fn apply_write(
             )?;
             let result = WriteResult {
                 op_id: request.op_id.clone(),
-                status: WriteStatus::Accepted,
+                status: WriteStatus::Merged,
                 seq: Some(Seq(seq)),
                 rev: Some(rev.clone()),
                 gen: current.gen,
@@ -723,7 +723,7 @@ pub(crate) fn apply_write(
                     )?;
                     let result = WriteResult {
                         op_id: request.op_id.clone(),
-                        status: WriteStatus::Accepted,
+                        status: WriteStatus::Merged,
                         seq: Some(Seq(seq)),
                         rev: Some(prior_rev.clone()),
                         gen: current.gen,

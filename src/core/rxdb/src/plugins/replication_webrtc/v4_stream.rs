@@ -265,6 +265,9 @@ pub struct OrderedWriteResult {
     /// Merged/migrated results carry no unmasked business payload. The consumer MUST
     /// wait for the authoritative normal page (seq >= result.seq), rather than stamp
     /// its own optimistic body with this revision/seq. Keep the outbox until then.
+    /// This includes no-write command replays: the producer must replay the normal
+    /// signed read path from at most result.seq-1 even if its live cursor passed it.
+    /// Recipients retain their monotonic checkpoint while admitting that document.
     pub requires_page: bool,
     #[serde(flatten)]
     pub result: WriteResult,
