@@ -141,8 +141,8 @@ impl TableBinding {
     fn validate(&self) -> Result<()> {
         if self.collection.is_empty()
             || self.collection.len() > 256
+            || self.table.starts_with('_')
             || self.gen == 0
-            || self.schema_ver == 0
             || self.app_ver.is_empty()
         {
             return Err(invalid("invalid change-log table binding"));

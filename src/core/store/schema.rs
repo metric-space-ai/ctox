@@ -93,7 +93,6 @@ fn validate(def: &CollectionDefinition) -> Result<()> {
     name(&def.name)?;
     if def.app_id.is_empty()
         || def.app_ver.is_empty()
-        || def.schema_ver == 0
         || !def.schema_json.is_object()
         || !matches!(
             def.class.as_str(),
@@ -122,6 +121,10 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<()> {
          CREATE UNIQUE INDEX IF NOT EXISTS _collections_active ON _collections(name) WHERE state='active';
          CREATE TABLE IF NOT EXISTS _schema_apps(
           app_id TEXT PRIMARY KEY,app_ver TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS _schema_updates(
+          publication_id TEXT NOT NULL,collection TEXT NOT NULL,gen INTEGER NOT NULL,
+          definition_json TEXT NOT NULL CHECK(json_valid(definition_json)),
+          PRIMARY KEY(publication_id,collection));
          CREATE TABLE IF NOT EXISTS publish_lock(
           app_id TEXT PRIMARY KEY,base_app_ver TEXT NOT NULL,target_app_ver TEXT NOT NULL,
           operation_id TEXT NOT NULL UNIQUE,created_at INTEGER NOT NULL DEFAULT(unixepoch()));
@@ -230,6 +233,12 @@ fn indexes(schema: &Value) -> Result<Vec<Vec<String>>> {
     }
     Ok(result)
 }
+/// Generated column name for a declared dotted JSON index field.
+pub fn indexed_column(field: &str) -> Result<String> {
+    indexes(&serde_json::json!({"indexes":[field]}))?;
+    Ok(format!("j_{}", encoded(field)))
+}
+
 fn encoded(field: &str) -> String {
     field.bytes().map(|b| format!("{b:02x}")).collect()
 }
@@ -333,6 +342,15 @@ fn create_generation(
 pub fn create_collection(tx: &Transaction<'_>, def: &CollectionDefinition) -> Result<Collection> {
     atomic(tx, || {
         initialize(tx)?;
+        let held: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM publish_lock WHERE app_id=?1)",
+            [&def.app_id],
+            |r| r.get(0),
+        )?;
+        if held {
+            return Err(invalid("busy: collection creation overlaps publication"));
+        }
+
         tx.execute(
             "INSERT INTO _schema_apps VALUES(?1,?2) ON CONFLICT(app_id) DO NOTHING",
             params![def.app_id, def.app_ver],
@@ -419,8 +437,8 @@ pub fn classify_change(
     })
 }
 
-/// Same-generation metadata change, no document rewrite or cursor reset.
-/// The publication owner calls this in its final transaction after held-lock validation.
+/// Stage a compatible definition under its durable reservation; active metadata
+/// and documents remain untouched until activate_publication's atomic cutover.
 pub fn update_compatible(
     tx: &Transaction<'_>,
     lock: &PublishLock,
@@ -436,34 +454,123 @@ pub fn update_compatible(
         if classify_change(&old.definition, def)? != SchemaChange::Compatible {
             return Err(invalid("incompatible change requires a new generation"));
         }
+        let migrating: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM _migrations
+            WHERE publication_id=?1 AND collection=?2)",
+            params![lock.operation_id, def.name],
+            |r| r.get(0),
+        )?;
+        if migrating {
+            return Err(invalid("collection already has a generation migration"));
+        }
+        // A native SQLite index on a populated table cannot be built incrementally
+        // through &Transaction. The dedicated online-index runner must prepare it.
+        ensure_index_build_safe(tx, &old.table, &def.schema_json)?;
+        tx.execute(
+            "INSERT INTO _schema_updates(publication_id,collection,gen,definition_json)
+            VALUES(?1,?2,?3,?4) ON CONFLICT(publication_id,collection) DO NOTHING",
+            params![
+                lock.operation_id,
+                def.name,
+                integer(old.gen)?,
+                serde_json::to_string(def).map_err(|e| invalid(e.to_string()))?
+            ],
+        )?;
+        let saved: String = tx.query_row(
+            "SELECT definition_json FROM _schema_updates
+            WHERE publication_id=?1 AND collection=?2",
+            params![lock.operation_id, def.name],
+            |r| r.get(0),
+        )?;
+        let saved: CollectionDefinition =
+            serde_json::from_str(&saved).map_err(|e| invalid(e.to_string()))?;
+        if saved != *def {
+            return Err(invalid("compatible preparation binding differs"));
+        }
+        Ok(old)
+    })
+}
+
+fn ensure_index_build_safe(tx: &Transaction<'_>, table: &str, schema: &Value) -> Result<()> {
+    let populated: bool = tx.query_row(
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
+            identifier(table)?
+        ),
+        [],
+        |r| r.get(0),
+    )?;
+    if !populated {
+        return Ok(());
+    }
+    for fields in indexes(schema)? {
+        let index_name = format!(
+            "i_{table}_{}",
+            fields
+                .iter()
+                .map(|f| encoded(f))
+                .collect::<Vec<_>>()
+                .join("_")
+        );
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='index' AND name=?1)",
+            [&index_name],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(invalid("online_index_build_required: populated generation must use the bounded index runner"));
+        }
+    }
+    Ok(())
+}
+
+fn activate_compatible(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
+    let mut statement = tx.prepare(
+        "SELECT collection,gen,definition_json FROM _schema_updates
+        WHERE publication_id=?1 ORDER BY collection",
+    )?;
+    let rows = statement
+        .query_map([&lock.operation_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    for (name, gen, json) in rows {
+        let def: CollectionDefinition =
+            serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?;
+        let old = active_collection(tx, &name)?
+            .ok_or_else(|| invalid("prepared collection no longer active"))?;
+        if old.gen != gen
+            || def.app_id != lock.app_id
+            || def.app_ver != lock.target_app_ver
+            || classify_change(&old.definition, &def)? != SchemaChange::Compatible
+        {
+            return Err(invalid("prepared schema base changed"));
+        }
         create_indexes(tx, &old.table, &def.schema_json)?;
         tx.execute(
             "UPDATE _collections SET schema_ver=?3,schema_json=?4,class=?5,
-            client_limit=?6,byte_budget=?7,rights_ver=?8,app_ver=?9 WHERE name=?1 AND gen=?2",
+            client_limit=?6,byte_budget=?7,rights_ver=?8 WHERE name=?1 AND gen=?2",
             params![
-                def.name,
-                integer(old.gen)?,
+                name,
+                integer(gen)?,
                 def.schema_ver,
                 def.schema_json.to_string(),
                 def.class,
                 integer(def.client_limit)?,
                 integer(def.byte_budget)?,
-                integer(def.rights_ver)?,
-                old.definition.app_ver
+                integer(def.rights_ver)?
             ],
         )?;
-        change_log::install_triggers(
-            tx,
-            &TableBinding::generic(
-                &def.name,
-                old.gen,
-                &old.table,
-                def.schema_ver,
-                &old.definition.app_ver,
-            ),
-        )?;
-        collection(tx, &def.name, old.gen)
-    })
+    }
+    tx.execute(
+        "DELETE FROM _schema_updates WHERE publication_id=?1",
+        [&lock.operation_id],
+    )?;
+    Ok(())
 }
 
 fn check_base(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
@@ -509,7 +616,7 @@ pub fn reserve_publish(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
         verify_publish(tx, lock)
     })
 }
-pub fn verify_publish(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
+fn held_publish(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
     let held: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM publish_lock WHERE app_id=?1
         AND base_app_ver=?2 AND target_app_ver=?3 AND operation_id=?4)",
@@ -524,6 +631,10 @@ pub fn verify_publish(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
     if !held {
         return Err(invalid("busy: publication reservation is not held"));
     }
+    Ok(())
+}
+pub fn verify_publish(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {
+    held_publish(tx, lock)?;
     check_base(tx, lock)
 }
 pub fn migration(tx: &Transaction<'_>, publication: &str, name: &str) -> Result<Migration> {
@@ -572,6 +683,11 @@ pub fn prepare_migration(
                 return Err(invalid("migration binding differs"));
             }
             return Ok(saved);
+        }
+        let staged:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM _schema_updates WHERE publication_id=?1 AND collection=?2)",
+            params![lock.operation_id,def.name],|r|r.get(0))?;
+        if staged {
+            return Err(invalid("collection already has a compatible preparation"));
         }
         let old = active_collection(tx, &def.name)?;
         if old
@@ -855,6 +971,7 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
                 }
             }
         }
+        activate_compatible(tx, lock)?;
         let watermark = change_log::head(tx)?.head_seq;
         let retire = now
             .checked_add(GENERATION_RESERVE_SECONDS)
@@ -914,7 +1031,7 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
 
 pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> Result<()> {
     atomic(tx, || {
-        verify_publish(tx, lock)?;
+        held_publish(tx, lock)?;
         let mut statement = tx.prepare(
             "SELECT collection,gen FROM _migrations WHERE publication_id=?1 AND state<>'committed'",
         )?;
@@ -925,11 +1042,12 @@ pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> 
             .collect::<Result<Vec<_>>>()?;
         for (name, gen) in rows {
             let value = collection(tx, &name, gen)?;
-            tx.execute_batch(&format!("DROP TABLE {}", identifier(&value.table)?))?;
-            tx.execute(
-                "DELETE FROM _changes WHERE collection=?1 AND gen=?2",
-                params![name, integer(gen)?],
-            )?;
+            if value.state != "preparing" {
+                return Err(invalid("only unpublished generation can be aborted"));
+            }
+            // Revoke its read binding now; retire potentially large tables through
+            // purge_generation_page rather than blocking the writer on DROP.
+
             tx.execute(
                 "DELETE FROM _change_sources WHERE collection=?1 AND gen=?2",
                 params![name, integer(gen)?],
@@ -946,6 +1064,10 @@ pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> 
             [&lock.operation_id],
         )?;
         tx.execute(
+            "DELETE FROM _schema_updates WHERE publication_id=?1",
+            [&lock.operation_id],
+        )?;
+        tx.execute(
             "DELETE FROM publish_lock WHERE app_id=?1 AND operation_id=?2",
             params![lock.app_id, lock.operation_id],
         )?;
@@ -954,8 +1076,30 @@ pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> 
 }
 
 /// Removing a collection is archival, never DROP. Existing data remains exportable for 30 days.
-pub fn archive_collection(tx: &Transaction<'_>, name: &str, now: i64) -> Result<()> {
+pub fn archive_collection(
+    tx: &Transaction<'_>,
+    lock: &PublishLock,
+    name: &str,
+    now: i64,
+) -> Result<()> {
     atomic(tx, || {
+        verify_publish(tx, lock)?;
+        let pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM _migrations WHERE collection=?1
+            AND state IN ('preparing','backfilling','ready')) OR EXISTS(SELECT 1 FROM _schema_updates
+            WHERE publication_id=?2 AND collection=?1)",params![name,lock.operation_id],|r|r.get(0))?;
+        if pending {
+            return Err(invalid("collection has pending schema preparation"));
+        }
+        let foreign: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM _collections WHERE name=?1
+            AND state='active' AND app_id<>?2)",
+            params![name, lock.app_id],
+            |r| r.get(0),
+        )?;
+        if foreign {
+            return Err(invalid("foreign collection"));
+        }
+
         let old =
             active_collection(tx, name)?.ok_or_else(|| invalid("active collection missing"))?;
         // Archive the generation itself, rather than copying an unbounded collection
