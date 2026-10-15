@@ -1,5 +1,7 @@
 //! App-independent native capability boundary (V4 CAP-1).
 //! The runtime supplies a Core-owned host; child-process context is never authority.
+#[path = "caps/office.rs"]
+pub mod cap2;
 pub mod caps;
 pub mod native;
 pub mod policy;

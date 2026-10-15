@@ -20,14 +20,174 @@ const PAYLOAD_TABLE: &str = "ctox_payload_store";
 const KV_TABLE: &str = "ctox_kv_store";
 const LEASE_TABLE: &str = "ctox_lease_store";
 
-pub fn sqlite_path(root: &Path) -> PathBuf {
-    if let Some(state_root) = std::env::var_os("CTOX_STATE_ROOT")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        return state_root.join("ctox.sqlite3");
+/// First Core owner adapter (P3-17). The daemon supplies its existing writer;
+/// CLI uses P3-08 IPC. Synchronous callers below remain migration inventory.
+#[derive(Clone)]
+pub(crate) struct CorePersistence {
+    writer: ctox_store::writer::WriterHandle,
+    readers: ctox_store::read_pool::ReadPool,
+}
+
+impl CorePersistence {
+    /// The composition root supplies both handles once per DbId. Attaching or
+    /// cloning an adapter must never create another reader pool or file owner.
+    pub(crate) async fn attach(
+        writer: ctox_store::writer::WriterHandle,
+        readers: ctox_store::read_pool::ReadPool,
+    ) -> Result<Self> {
+        writer.ready().await?;
+        anyhow::ensure!(
+            readers.generation() == writer.generation().0,
+            "Core reader pool does not belong to this owner generation"
+        );
+        let reader_file: String = readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), |conn| {
+                Ok(conn.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            }))
+            .await?;
+        anyhow::ensure!(
+            std::path::Path::new(&reader_file) == writer.db_id().path(),
+            "Core reader pool belongs to another database"
+        );
+        write_transaction::owner_write(&writer, "core.schema", Default::default(), |tx| {
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_payload_store (payload_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS ctox_kv_store (kv_key TEXT PRIMARY KEY, kv_value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS ctox_lease_store (lease_key TEXT PRIMARY KEY, lease_value TEXT NOT NULL, updated_at INTEGER NOT NULL);")?;
+            Ok(())
+        }).await?;
+        Ok(Self { writer, readers })
     }
-    root.join(DEFAULT_SQLITE_RELATIVE_PATH)
+
+    pub(crate) async fn load_json_payload<T: DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let key = key.to_owned();
+        let raw: Option<String> = self
+            .readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT payload_json FROM ctox_payload_store WHERE payload_key=?1",
+                        [key],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            }))
+            .await?;
+        raw.map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .context("decode owner payload")
+    }
+
+    pub(crate) async fn store_json_payload<T: Serialize>(
+        &self,
+        key: &str,
+        payload: Option<&T>,
+    ) -> Result<()> {
+        let key = key.to_owned();
+        // Serialization stays outside the writer's SQLite lock window.
+        let raw = payload.map(serde_json::to_string_pretty).transpose()?;
+        write_transaction::owner_write(&self.writer, "payload.store", Default::default(), move |tx| {
+            match raw {
+                Some(raw) => { tx.execute("INSERT INTO ctox_payload_store VALUES(?1,?2,?3) ON CONFLICT(payload_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at", params![key, raw, now_epoch_secs()])?; }
+                None => { tx.execute("DELETE FROM ctox_payload_store WHERE payload_key=?1", [key])?; }
+            }
+            Ok(())
+        }).await?;
+        Ok(())
+    }
+
+    /// The prepared candidate never overwrites a canonical row, including empty
+    /// JSON. Preparation may do I/O, so it must happen before writer admission.
+    pub(crate) async fn load_or_insert_json_payload<T: Serialize + DeserializeOwned>(
+        &self,
+        key: &str,
+        candidate: &T,
+    ) -> Result<T> {
+        let key = key.to_owned();
+        let candidate = serde_json::to_string_pretty(candidate)?;
+        let raw: String = write_transaction::owner_write(
+            &self.writer,
+            "payload.legacy_import",
+            Default::default(),
+            move |tx| {
+                tx.execute(
+                    "INSERT OR IGNORE INTO ctox_payload_store VALUES(?1,?2,?3)",
+                    params![key, candidate, now_epoch_secs()],
+                )?;
+                Ok(tx.query_row(
+                    "SELECT payload_json FROM ctox_payload_store WHERE payload_key=?1",
+                    [key],
+                    |row| row.get(0),
+                )?)
+            },
+        )
+        .await?;
+        serde_json::from_str(&raw).context("decode canonical owner payload")
+    }
+
+    pub(crate) async fn try_acquire_lease(&self, key: &str, value: &str) -> Result<bool> {
+        let (key, value) = (key.to_owned(), value.to_owned());
+        Ok(write_transaction::owner_write(
+            &self.writer,
+            "lease.acquire",
+            Default::default(),
+            move |tx| {
+                Ok(tx.execute(
+                    "INSERT OR IGNORE INTO ctox_lease_store VALUES(?1,?2,?3)",
+                    params![key, value, now_epoch_secs()],
+                )? > 0)
+            },
+        )
+        .await?)
+    }
+
+    pub(crate) async fn load_lease_value(&self, key: &str) -> Result<Option<String>> {
+        let key = key.to_owned();
+        Ok(self
+            .readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT lease_value FROM ctox_lease_store WHERE lease_key=?1",
+                        [key],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            }))
+            .await?)
+    }
+
+    pub(crate) async fn release_lease(&self, key: &str) -> Result<()> {
+        let key = key.to_owned();
+        write_transaction::owner_write(
+            &self.writer,
+            "lease.release",
+            Default::default(),
+            move |tx| {
+                tx.execute("DELETE FROM ctox_lease_store WHERE lease_key=?1", [key])?;
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<()> {
+        self.writer.stop_admission();
+        self.readers.shutdown().await?;
+        self.writer.shutdown().await?;
+        Ok(())
+    }
+}
+
+pub fn sqlite_path(root: &Path) -> PathBuf {
+    crate::paths::core_db(root)
 }
 
 pub fn sqlite_busy_timeout_duration() -> Duration {
@@ -352,5 +512,136 @@ mod sqlite_build_flags_tests {
         assert_eq!(used("ENABLE_MEMORY_MANAGEMENT"), 0);
         assert_eq!(used("DEFAULT_MEMSTATUS=0"), 1);
         assert_eq!(used("THREADSAFE=1"), 1);
+    }
+}
+
+#[cfg(test)]
+mod owner_adapter_tests {
+    use super::*;
+    use ctox_store::{testkit::StoreFixture, DbId, JobOptions, StoreError};
+
+    async fn adapter(path: &Path) -> Result<CorePersistence> {
+        let (writer, readers) = StoreFixture::open(DbId::new(path)?).await?.into_parts();
+        CorePersistence::attach(writer, readers).await
+    }
+
+    #[tokio::test]
+    async fn payload_commit_import_delete_and_reopen_use_owner() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("core.sqlite3");
+        let core = adapter(&path).await?;
+        core.store_json_payload("payload", Some(&vec![1, 2]))
+            .await?;
+        assert_eq!(
+            core.load_json_payload::<Vec<i32>>("payload").await?,
+            Some(vec![1, 2])
+        );
+        assert_eq!(
+            core.load_or_insert_json_payload("payload", &vec![9])
+                .await?,
+            vec![1, 2]
+        );
+        assert_eq!(
+            core.load_or_insert_json_payload("empty", &Vec::<i32>::new())
+                .await?,
+            Vec::<i32>::new()
+        );
+        assert_eq!(
+            core.load_or_insert_json_payload("empty", &vec![9]).await?,
+            Vec::<i32>::new()
+        );
+        core.store_json_payload::<Vec<i32>>("payload", None).await?;
+        assert_eq!(core.load_json_payload::<Vec<i32>>("payload").await?, None);
+        core.shutdown().await?;
+        assert!(core.store_json_payload("closed", Some(&1)).await.is_err());
+        let reopened = adapter(&path).await?;
+        assert_eq!(
+            reopened.load_json_payload::<Vec<i32>>("empty").await?,
+            Some(vec![])
+        );
+        reopened.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_lease_admission_has_one_winner() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let core = adapter(&dir.path().join("core.sqlite3")).await?;
+        let mut jobs = Vec::new();
+        for index in 0..16 {
+            let core = core.clone();
+            jobs.push(tokio::spawn(async move {
+                let value = index.to_string();
+                Ok::<_, anyhow::Error>((core.try_acquire_lease("lease", &value).await?, value))
+            }));
+        }
+        let mut winners = Vec::new();
+        for job in jobs {
+            let (won, value) = job.await??;
+            if won {
+                winners.push(value);
+            }
+        }
+        assert_eq!(winners.len(), 1);
+        assert_eq!(
+            core.load_lease_value("lease").await?,
+            Some(winners.remove(0))
+        );
+        core.release_lease("lease").await?;
+        assert_eq!(core.load_lease_value("lease").await?, None);
+        assert!(core.try_acquire_lease("lease", "next").await?);
+        core.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attaching_another_owners_readers_fails_without_cross_store_access() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let first = adapter(&dir.path().join("first.sqlite3")).await?;
+        let second = adapter(&dir.path().join("second.sqlite3")).await?;
+        second
+            .store_json_payload("identity", Some(&"second"))
+            .await?;
+        let mixed = CorePersistence::attach(first.writer.clone(), second.readers.clone()).await;
+        assert!(mixed.is_err());
+        assert_eq!(first.load_json_payload::<String>("identity").await?, None);
+        assert_eq!(
+            second
+                .load_json_payload::<String>("identity")
+                .await?
+                .as_deref(),
+            Some("second")
+        );
+        first.shutdown().await?;
+        second.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn owner_failure_and_cancelled_admission_leave_no_partial_payload() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let core = adapter(&dir.path().join("core.sqlite3")).await?;
+        let result: std::result::Result<(), StoreError> = write_transaction::owner_write(
+            &core.writer,
+            "fixture.rollback",
+            Default::default(),
+            |tx| {
+                tx.execute("INSERT INTO ctox_payload_store VALUES('partial','1',0)", [])?;
+                Err(StoreError::Invalid("fixture rejection".into()))
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(StoreError::Invalid(_))));
+        assert_eq!(core.load_json_payload::<i32>("partial").await?, None);
+        let options = JobOptions::default();
+        options.cancellation.cancel();
+        let cancelled =
+            write_transaction::owner_write(&core.writer, "fixture.cancel", options, |_| Ok(()))
+                .await;
+        assert_eq!(cancelled, Err(StoreError::Cancelled));
+        core.store_json_payload("after", Some(&3)).await?;
+        assert_eq!(core.load_json_payload::<i32>("after").await?, Some(3));
+        core.shutdown().await?;
+        Ok(())
     }
 }
