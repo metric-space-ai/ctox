@@ -401,20 +401,21 @@ route_test!(
     "ctox.coding.models"
 );
 route_test!(coding_turn, "agent.coding", "turn", "ctox.coding.turn");
+route_test!(coding_cancel, "agent.coding", "cancel", "ctox.coding.cancel");
 route_test!(schedule_upsert, "schedule", "upsert", "news.topic.schedule");
 route_test!(knowledge_query, "knowledge", "query", "knowledge.command");
 
 #[test]
 fn app_capabilities_registry_is_exact_and_duplicate_registration_preserves_original() {
     let mut registry = CapabilityRegistry::cap1();
-    assert_eq!(caps::all_routes().count(), 46);
-    assert_eq!(registry.descriptors().as_array().unwrap().len(), 49);
+    assert_eq!(caps::all_routes().count(), 47);
+    assert_eq!(registry.descriptors().as_array().unwrap().len(), 50);
     let route = *caps::all_routes().next().unwrap();
     assert_eq!(
         registry.register(route).unwrap_err().code,
         ErrorCode::Conflict
     );
-    assert_eq!(registry.descriptors().as_array().unwrap().len(), 49);
+    assert_eq!(registry.descriptors().as_array().unwrap().len(), 50);
 }
 #[test]
 fn app_capabilities_manifest_and_role_denials_never_enter_effect() {
