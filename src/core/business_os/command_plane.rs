@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 149] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 150] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -311,6 +311,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 149] = [
     "ctox.machine.enroll.cancel",
     "ctox.machine.enroll.step",
     "ctox.machine.heartbeat",
+    "ctox.device.unbind",
     "ctox.business_os.audit.list",
     "ctox.business_os.audit.retention",
     "ctox.business_os.audit.retention_policy.set",
@@ -1750,6 +1751,9 @@ fn dispatch_business_command(
         | "ctox.machine.enroll.cancel"
         | "ctox.machine.enroll.step"
         | "ctox.machine.heartbeat" => super::machine_enrollment::handle_command(root, command)
+            .map(BusinessCommandDispatchOutcome::Returned),
+        // §16.43: explicit admin unbind of a device-proof edge, never automatic.
+        "ctox.device.unbind" => super::devices::handle_command(root, command)
             .map(BusinessCommandDispatchOutcome::Returned),
         "web_stack.person_research" => super::person_research_command::start(root, command.clone())
             .map(BusinessCommandDispatchOutcome::Returned),

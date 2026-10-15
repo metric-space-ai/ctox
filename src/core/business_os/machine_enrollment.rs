@@ -658,7 +658,12 @@ pub(super) fn handle_command(
                 let id = enrollment_id(payload)?;
                 let conn = super::store::open_store(root)?;
                 let doc = if command.command_type == HEARTBEAT {
-                    heartbeat(&conn, &actor, active, &id, now)?
+                    let doc = heartbeat(&conn, &actor, active, &id, now)?;
+                    // §16.43: a machine heartbeat is presence of its device.
+                    if let Ok(Some(device)) = super::devices::device_id_for_user(&conn, &actor) {
+                        super::devices::presence(root, &device, true, now).ok();
+                    }
+                    doc
                 } else {
                     let instance = super::store::sync_config(root)?.instance_id;
                     let token = payload.get("join_proof").and_then(Value::as_str);
