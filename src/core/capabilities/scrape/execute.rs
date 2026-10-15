@@ -1289,6 +1289,9 @@ pub(super) fn execute_registered_script(
     if let Ok(self_exe) = std::env::current_exe() {
         child.env("CTOX_BIN", self_exe.to_string_lossy().to_string());
     }
+    // Scrape scripts may read their login secret with `$CTOX_BIN secret get
+    // --reveal`; the value stays inside this child, whose output is captured.
+    child.env("CTOX_SECRET_REVEAL_ALLOWED", "1");
     if let Some(text) = input_json {
         child.env("CTOX_SCRAPE_INPUT_JSON", text);
     }
