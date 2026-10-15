@@ -251,6 +251,14 @@ fn initialize_commands(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 fn state(doc: &Value) -> &str {
     doc["status"].as_str().unwrap_or("")
 }
+fn executable_command(doc: &Value, id: &str) -> bool {
+    doc["id"].as_str() == Some(id)
+        && doc["app_id"].as_str().is_some_and(|s| !s.is_empty())
+        && doc["type"].as_str().is_some_and(|s| !s.is_empty())
+        && doc["payload"].is_object()
+        && transition(state(doc), state(doc))
+        && !TERMINAL.contains(&state(doc))
+}
 fn lifecycle_rejection(old: &Value, next: &Value) -> Option<String> {
     if !transition(state(old), state(next)) {
         return Some("invalid_transition".into());
@@ -383,6 +391,9 @@ pub fn claim_command(
         if TERMINAL.contains(&state(&doc)) {
             return Ok(Err(failure("command_terminal")));
         }
+        if !executable_command(&doc, command_id) {
+            return Ok(Err(failure("invalid_command")));
+        }
         let old: Option<(String,u64,u64,u64)> = tx.query_row("SELECT participant,fence,expires_at_core,last_now_ms FROM _command_leases WHERE command_id=?1",[command_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
         let now = old.as_ref().map_or(now_ms, |r| now_ms.max(r.3));
         let fence = match old {
@@ -429,7 +440,7 @@ pub fn check_executor_fence(
     )?;
     if command_document(tx, command_id)?
         .as_ref()
-        .is_none_or(|doc| TERMINAL.contains(&state(doc)))
+        .is_none_or(|doc| !executable_command(doc, command_id))
     {
         return Ok(Err(failure("stale_fence")));
     }

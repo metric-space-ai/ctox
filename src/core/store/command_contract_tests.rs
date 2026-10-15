@@ -40,6 +40,17 @@ async fn command_projection_feeds_native_readers_atomically_without_legacy_fallb
         .unwrap()
         .await
         .unwrap();
+    let standalone = rusqlite::Connection::open_with_flags(
+        _dir.path().join("sync.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        native_projection_reads::projected_command_status(&standalone, "command-1").unwrap(),
+        Some("completed".into())
+    );
+    assert!(standalone.is_autocommit());
+    drop(standalone);
     let expected = done.clone();
     readers
         .read(move |tx| {
@@ -466,6 +477,22 @@ async fn command_stale_fence_is_a_typed_conflict_after_takeover() {
     )
     .await;
     assert_eq!(replay, stale);
+    writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        tx.execute("UPDATE c_business_commands SET data=json_set(data,'$.status','invalid-import-state') WHERE id='command-1'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    let invalid = ingress
+        .claim_command(
+            "executor-b".into(),
+            "command-1".into(),
+            Some(next.fence),
+            NOW + 30_002,
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(invalid.code, "invalid");
+    assert_eq!(invalid.reason, "invalid_command");
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
