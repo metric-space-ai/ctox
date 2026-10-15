@@ -89,8 +89,8 @@ pub(super) const ROUTES: &[NativeRoute] = &[
         "agent.queue",
         "task.delete",
         "cap.queue.delete",
-        "channels::update_queue_task",
-        "src/core/mission/channels/mod.rs:3773",
+        "queue::execute",
+        "src/core/app_capabilities/caps/queue.rs:155",
     ),
 ];
 #[derive(Clone)]
