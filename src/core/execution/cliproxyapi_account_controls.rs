@@ -221,6 +221,7 @@ pub(crate) fn finish(root: &Path, id: &str, hash: &str, actor: &str) -> anyhow::
             "Claude account was reconfigured; reconciliation required"
         );
         crate::secrets::delete_secret_records_if_versions(root, &effect.keys)?;
+        super::account_quotas::remove_under_lifecycle(root, "claude", &effect.local_id, &_guard)?;
     }
     tx.commit()?;
     Ok(effect)

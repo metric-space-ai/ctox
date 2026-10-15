@@ -7018,6 +7018,7 @@ mod tests {
             content: Some(json!({
                 "confirmed": true,
             })),
+            meta: None,
         };
 
         let v2_response = McpServerElicitationRequestResponse::from(rmcp_result.clone());

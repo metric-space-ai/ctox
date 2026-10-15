@@ -49,3 +49,95 @@ fn server_tool_name_protects_ambiguous_history_reference() {
     assert_eq!(root["messages"][0]["content"][0]["name"], "shared");
     assert_eq!(reverse.len(), 1);
 }
+
+fn upstream_mcp_request(
+    stream: bool,
+) -> (
+    crate::internal::runtime::executor::claude_executor::ClaudeMessagesRequest,
+    String,
+) {
+    use crate::internal::runtime::executor::claude_executor::{
+        ClaudeCredentialMode, ClaudeMessagesRequest, ClaudeUpstreamTarget,
+    };
+    let body=br#"{"tools":[{"name":"Bash"},{"name":"mcp__docs-search__search-pages"},{"name":"mcp__docs-search__search-issues"}]}"#;
+    let (body, reverse) = remap_claude_oauth_tool_names_with_secret(body, "fixture-oauth");
+    let server = reverse
+        .keys()
+        .next()
+        .unwrap()
+        .strip_prefix("mcp__")
+        .unwrap()
+        .split_once("__")
+        .unwrap()
+        .0
+        .to_owned();
+    let request = ClaudeMessagesRequest::new(
+        ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap(),
+        ClaudeCredentialMode::OAuth,
+        &crate::internal::auth::claude::SecretString::new("fixture-oauth".to_owned()).unwrap(),
+        body,
+        stream,
+    )
+    .unwrap()
+    .with_upstream_metadata(Vec::new(), reverse);
+    (request, server)
+}
+#[test]
+fn upstream_mcp_wrapped_passthrough_unary_returns_declared_name() {
+    use crate::internal::runtime::executor::{
+        claude_executor::ClaudeMessagesResponse,
+        claude_executor_buffered::prepare_claude_buffered_response,
+    };
+    let (request, server) = upstream_mcp_request(false);
+    for suffix in [
+        "mcp__docs-search__search-pages",
+        "docs-search__search-pages",
+        "search-pages",
+    ] {
+        let body=serde_json::to_vec(&serde_json::json!({"content":[{"type":"tool_use","name":format!("mcp__{server}__{suffix}")}]})).unwrap();
+        let response =
+            prepare_claude_buffered_response(ClaudeMessagesResponse::new(200, body), &request)
+                .unwrap();
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(body["content"][0]["name"], "mcp__docs-search__search-pages");
+    }
+}
+#[test]
+fn upstream_mcp_wrapped_passthrough_buffered_sse_returns_declared_name() {
+    use crate::internal::runtime::executor::{
+        claude_executor::ClaudeMessagesResponse,
+        claude_executor_buffered::prepare_claude_buffered_response,
+    };
+    let (request, server) = upstream_mcp_request(true);
+    let catalog = crate::internal::registry::embedded_models_catalog().unwrap();
+    let model = crate::internal::registry::models_for_channel(&catalog, "claude")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .id;
+    for suffix in [
+        "mcp__docs-search__search-pages",
+        "docs-search__search-pages",
+        "search-pages",
+    ] {
+        let frames = [
+            serde_json::json!({"type":"message_start","message":{"id":"fixture-message","model":model}}),
+            serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":format!("mcp__{server}__{suffix}")}}),
+            serde_json::json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        ];
+        let body = frames
+            .iter()
+            .map(|v| format!("data: {v}\n\n"))
+            .collect::<String>()
+            .into_bytes();
+        let response =
+            prepare_claude_buffered_response(ClaudeMessagesResponse::new(200, body), &request)
+                .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = String::from_utf8(response.body().to_vec()).unwrap();
+        assert!(body.contains("\"name\":\"mcp__docs-search__search-pages\""));
+        assert!(!body.contains(&format!("mcp__{server}__")));
+    }
+}

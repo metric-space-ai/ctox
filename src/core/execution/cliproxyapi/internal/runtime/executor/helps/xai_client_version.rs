@@ -12,13 +12,15 @@ pub const XAI_CLIENT_VERSION_SERVER_FLOOR: &str = "1.0.13";
 pub const XAI_VERSION_REFRESH_INTERVAL: Duration = Duration::from_secs(3 * 60 * 60);
 pub const XAI_VERSION_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 pub const XAI_VERSION_MAX_BODY_BYTES: usize = 1 << 20;
-pub const XAI_NPM_REGISTRY_URL: &str = "https://registry.npmjs.org/@xai-official/grok/latest";
+/// Proposed owned source; the native host does not bind it before publication.
+pub const XAI_OWNED_METADATA_URL: &str = "https://llm.ctox.dev/v1/provider-client-metadata/xai";
+pub const XAI_OWNED_METADATA_SCHEMA: &str = "ctox.provider-client-metadata.v1";
 
 pub type VersionFetchFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<u8>, VersionFetchError>> + Send + 'a>>;
 
-/// Anonymous npm metadata only. Implementations must bound the body while
-/// receiving it; no provider token, account identity or model prompt is passed.
+/// Anonymous CTOX-owned metadata only. Implementations must bound the body
+/// while receiving it; no provider token, account identity or model prompt is passed.
 pub trait XaiVersionFetcher: Send + Sync {
     fn fetch(&self) -> VersionFetchFuture<'_>;
 }
@@ -35,7 +37,7 @@ impl std::fmt::Display for VersionFetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Transport => "Grok client version metadata request failed",
-            Self::HttpStatus => "Grok client version registry rejected the request",
+            Self::HttpStatus => "CTOX client version metadata source rejected the request",
             Self::BodyTooLarge => "Grok client version metadata exceeds its size limit",
             Self::Malformed => "Grok client version metadata is invalid",
         })
@@ -204,6 +206,11 @@ fn parse_version(body: &[u8]) -> Result<String, VersionFetchError> {
     }
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| VersionFetchError::Malformed)?;
+    if value.get("schema").and_then(serde_json::Value::as_str) != Some(XAI_OWNED_METADATA_SCHEMA)
+        || value.get("provider").and_then(serde_json::Value::as_str) != Some("xai")
+    {
+        return Err(VersionFetchError::Malformed);
+    }
     let raw = value
         .get("version")
         .and_then(serde_json::Value::as_str)
@@ -224,7 +231,7 @@ fn parse_version(body: &[u8]) -> Result<String, VersionFetchError> {
 ))]
 pub struct HttpXaiVersionFetcher {
     client: wreq::Client,
-    registry_url: String,
+    metadata_url: String,
 }
 
 #[cfg(any(
@@ -232,8 +239,10 @@ pub struct HttpXaiVersionFetcher {
     feature = "codex-http-transport"
 ))]
 impl HttpXaiVersionFetcher {
-    /// Proxy URL comes from the existing typed host config. Invalid proxy
-    /// configuration fails closed; ambient proxy variables are never used.
+    /// Uses the proposed CTOX-owned public metadata source. Embedding owners
+    /// bind this capability only after their source is published and verified.
+    /// Proxy URL comes from existing typed host config. Invalid configuration
+    /// fails closed; ambient proxy variables are never used.
     pub fn new(proxy_url: Option<&str>) -> Result<Self, VersionFetchError> {
         let (transport, _) = crate::sdk::proxyutil::build_http_transport(proxy_url.unwrap_or(""))
             .map_err(|_| VersionFetchError::Transport)?;
@@ -247,7 +256,7 @@ impl HttpXaiVersionFetcher {
         }
         Ok(Self {
             client: builder.build().map_err(|_| VersionFetchError::Transport)?,
-            registry_url: XAI_NPM_REGISTRY_URL.to_owned(),
+            metadata_url: XAI_OWNED_METADATA_URL.to_owned(),
         })
     }
 }
@@ -265,7 +274,7 @@ impl XaiVersionFetcher for HttpXaiVersionFetcher {
                 ("User-Agent".to_owned(), "CLIProxyAPI".to_owned()),
             ]
             .into();
-            let mut response = HttpDoer::get(&self.client, &self.registry_url, &headers)
+            let mut response = HttpDoer::get(&self.client, &self.metadata_url, &headers)
                 .await
                 .map_err(|_| VersionFetchError::Transport)?;
             if response.status != 200 {

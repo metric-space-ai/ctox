@@ -132,6 +132,11 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         cancellation_token: CancellationToken,
     ) -> Option<String>;
 
+    /// Deterministically exercise the gap between cancellation observation and
+    /// the atomic completion claim. No hook or await is present in production.
+    #[cfg(test)]
+    async fn before_completion_claim(&self, _token: &CancellationToken) {}
+
     /// Gives the task a chance to perform cleanup after an abort.
     ///
     /// The default implementation is a no-op; override this if additional
@@ -164,6 +169,7 @@ impl Session {
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
+        let (registered_tx, registered_rx) = tokio::sync::oneshot::channel();
 
         let timer = turn_context
             .session_telemetry
@@ -175,6 +181,8 @@ impl Session {
             let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
             let ctx = Arc::clone(&turn_context);
             let task_for_run = Arc::clone(&task);
+            #[cfg(test)]
+            let task_for_completion_hook = Arc::clone(&task_for_run);
             let task_cancellation_token = cancellation_token.child_token();
             // Task-owned turn spans keep a core-owned span open for the
             // full task lifecycle after the submission dispatch span ends.
@@ -187,6 +195,11 @@ impl Session {
             );
             tokio::spawn(
                 async move {
+                    // A fast task must not finish before its active-turn entry exists.
+                    if registered_rx.await.is_err() || task_cancellation_token.is_cancelled() {
+                        done_clone.notify_waiters();
+                        return;
+                    }
                     let ctx_for_finish = Arc::clone(&ctx);
                     let last_agent_message = task_for_run
                         .run(
@@ -199,6 +212,10 @@ impl Session {
                     let sess = session_ctx.clone_session();
                     sess.flush_rollout().await;
                     if !task_cancellation_token.is_cancelled() {
+                        #[cfg(test)]
+                        task_for_completion_hook
+                            .before_completion_claim(&task_cancellation_token)
+                            .await;
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
@@ -220,6 +237,7 @@ impl Session {
         };
         self.register_new_active_task(running_task, token_usage_at_turn_start)
             .await;
+        let _ = registered_tx.send(());
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -261,28 +279,39 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
-
         let mut active = self.active_turn.lock().await;
         let mut pending_input = Vec::<ResponseInputItem>::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
+        let mut completion_handle = None;
         if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
+            && at.tasks.get(&turn_context.sub_id).is_some_and(|task| {
+                Arc::ptr_eq(&task.turn_context, &turn_context)
+                    && !task.cancellation_token.is_cancelled()
+            })
         {
-            let mut ts = at.turn_state.lock().await;
-            pending_input = ts.take_pending_input();
-            turn_tool_calls = ts.tool_calls;
-            token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
-            should_clear_active_turn = true;
+            // This lock is also abort_turn's linearization point. Taking the
+            // actual task gives only one side the right to publish a terminal event.
+            completion_handle = Some(Arc::clone(&at.tasks[&turn_context.sub_id].handle));
+            if at.remove_task(&turn_context.sub_id) {
+                let mut ts = at.turn_state.lock().await;
+                pending_input = ts.take_pending_input();
+                turn_tool_calls = ts.tool_calls;
+                token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
+                should_clear_active_turn = true;
+            }
+        }
+        if completion_handle.is_none() {
+            return;
         }
         if should_clear_active_turn {
             *active = None;
         }
         drop(active);
+        turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -392,6 +421,9 @@ impl Session {
             last_agent_message,
         });
         self.send_event(turn_context.as_ref(), event).await;
+        // Retain our AbortOnDropHandle across awaits: dropping it while publishing
+        // would abort this very runner before its terminal event / done receipt.
+        drop(completion_handle);
     }
 
     async fn register_new_active_task(
