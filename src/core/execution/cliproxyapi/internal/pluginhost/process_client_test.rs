@@ -38,6 +38,7 @@ async fn callback_case(
     lease_plugin: &str,
     wrong_context: bool,
     expect_allowed: bool,
+    streaming: bool,
 ) {
     let contexts = CallbackContextRegistry::new();
     let lease = contexts.open(CallbackAuthority::new(lease_plugin, None));
@@ -88,6 +89,20 @@ async fn callback_case(
         } else {
             assert_eq!(envelope.error.unwrap().code, "callback_denied");
         }
+        if streaming {
+            write_process_message(
+                &mut child,
+                &ProcessMessage::StreamEnd {
+                    protocol_version: PROCESS_PROTOCOL_VERSION,
+                    request_id,
+                    next_sequence: 0,
+                    error: None,
+                },
+            )
+            .await
+            .unwrap();
+            return;
+        }
         write_process_message(
             &mut child,
             &ProcessMessage::Response {
@@ -104,27 +119,48 @@ async fn callback_case(
         deadline_unix_ms: None,
         payload: to_raw_value(&json!({"host_callback_id":id})).unwrap(),
     };
-    assert!(
-        exchange_unary(&mut host, call, parent_plugin, &router)
-            .await
-            .unwrap()
-            .ok
-    );
+    if streaming {
+        let (chunks, _receiver) = tokio::sync::mpsc::channel(1);
+        assert!(super::process_client_stream::exchange_stream(
+            &mut host,
+            call,
+            parent_plugin,
+            &router,
+            &chunks
+        )
+        .await
+        .unwrap()
+        .is_none());
+    } else {
+        assert!(
+            exchange_unary(&mut host, call, parent_plugin, &router)
+                .await
+                .unwrap()
+                .ok
+        );
+    }
     peer.await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), usize::from(expect_allowed));
 }
 
 #[tokio::test]
 async fn process_callback_uses_bound_call_and_strips_context_before_handler() {
-    callback_case("quota", "quota", false, true).await;
+    callback_case("quota", "quota", false, true, false).await;
 }
 #[tokio::test]
 async fn process_callback_rejects_another_live_call_in_same_plugin() {
-    callback_case("quota", "quota", true, false).await;
+    callback_case("quota", "quota", true, false, false).await;
 }
 #[tokio::test]
 async fn process_callback_rejects_other_plugin_identity() {
-    callback_case("foreign", "quota", false, false).await;
+    callback_case("foreign", "quota", false, false, false).await;
+}
+
+#[tokio::test]
+async fn process_stream_callback_reuses_only_its_bound_authority() {
+    callback_case("quota", "quota", false, true, true).await;
+    callback_case("quota", "quota", true, false, true).await;
+    callback_case("foreign", "quota", false, false, true).await;
 }
 
 #[tokio::test]

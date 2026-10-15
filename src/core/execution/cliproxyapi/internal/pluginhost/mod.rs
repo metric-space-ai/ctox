@@ -29,6 +29,8 @@ pub mod model_stream_bridge;
 pub mod platform;
 #[cfg(any(unix, windows))]
 pub mod process_client;
+#[cfg(any(unix, windows))]
+mod process_client_stream;
 pub mod process_transport;
 pub mod quota_provider;
 pub mod rpc_client;

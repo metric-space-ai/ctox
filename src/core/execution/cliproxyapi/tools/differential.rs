@@ -1340,6 +1340,37 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                 }).await?;
                 continue;
             }
+            if method == "fixture.stream" {
+                let request: Value = decode_upstream_json(&payload)?;
+                let mode = request["mode"].as_str().unwrap_or("normal");
+                let count = if mode == "flood" { 1024 } else if mode == "normal" { 3 } else { 1 };
+                if mode == "truncated" {
+                    use tokio::io::AsyncWriteExt;
+                    stream.write_all(&8_u32.to_be_bytes()).await?;
+                    stream.write_all(b"{").await?;
+                    return Ok(());
+                }
+                for sequence in 0..count {
+                    write_process_message(&mut stream, &ProcessMessage::StreamChunk {
+                        protocol_version: PROCESS_PROTOCOL_VERSION,
+                        request_id: if mode == "wrong_id" { "foreign".into() } else { request_id.clone() },
+                        sequence: if mode == "bad_sequence" { sequence + 1 } else { sequence },
+                        payload: encode_upstream_json(&serde_json::json!({"index":sequence,"pid":std::process::id()}))?,
+                    }).await?;
+                }
+                if matches!(mode, "stall" | "flood") { std::future::pending::<()>().await; }
+                if mode == "missing_end" { return Ok(()); }
+                write_process_message(&mut stream, &ProcessMessage::StreamEnd {
+                    protocol_version: PROCESS_PROTOCOL_VERSION, request_id,
+                    next_sequence: count,
+                    error: (mode == "application_error").then(|| ctox_cliproxyapi::sdk::pluginabi::Error {
+                        code: "fixture_rate_limit".into(), message: "fixture limit".into(),
+                        http_status: 429, retryable: true,
+                        ..Default::default()
+                    }),
+                }).await?;
+                continue;
+            }
             if method == ctox_cliproxyapi::sdk::pluginabi::METHOD_EXECUTOR_IDENTIFIER {
                 if !registered {
                     return Err("executor call before registration".into());

@@ -2,6 +2,18 @@
 
 ## State
 
+- The explicitly injected `ProcessPluginLoader` supports ordered process streams
+  as well as unary calls. It reuses the versioned frame sequencer and the same
+  call/plugin-bound callback authority. Two data chunks are buffered; a reserved
+  terminal slot preserves timeout and protocol errors under backpressure.
+  Streams have a 180-second total ceiling including queue time and honor an
+  earlier caller deadline. Dropping a stream, malformed/truncated frames or a
+  deadline kills and reaps the child; a provider's normal error end preserves
+  the healthy process. Explicit shutdown interrupts an active stream and
+  acknowledges only after cleanup. Unary calls keep their 30-second bound.
+  This loader remains opt-in; native credential/config/startup composition,
+  Windows runtime acceptance and installed provider acceptance remain open.
+
 - The Grok client-version slice from v8.0.23, immutable upstream
   `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, now has the upstream 1.0.46
   fallback and strict numeric 1.0.13 floor. An anonymous npm metadata fetch is
