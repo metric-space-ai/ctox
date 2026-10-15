@@ -164,6 +164,10 @@ pub struct AppCommand {
     pub actor_id: String,
     pub command_type: String,
     pub payload: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_context: Option<Value>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalResult {
@@ -195,6 +199,13 @@ pub trait Resources {
         command: &AppCommand,
     ) -> Result<Value, CtoxError>;
     fn terminal_command(&self, command_id: &str) -> Result<Option<TerminalResult>, CtoxError>;
+    /// Core row policy for the global queue (including tasks predating app artifacts).
+    /// Capability admission alone does not grant access to another app or actor.
+    fn authorize_queue_task(
+        &self,
+        ctx: &CapCallContext,
+        task: &QueueTaskView,
+    ) -> Result<(), CtoxError>;
 }
 
 pub struct Backend<'a> {
@@ -240,6 +251,30 @@ impl<'a> Backend<'a> {
             ));
         }
         Ok(task)
+    }
+    pub(super) fn queue_task(
+        &self,
+        ctx: &CapCallContext,
+        id: &str,
+    ) -> Result<QueueTaskView, CtoxError> {
+        identifier(id)?;
+        let task = channels::load_queue_task(self.root, id)
+            .map_err(native)?
+            .ok_or_else(|| CtoxError::new(ErrorCode::NotFound, "task not found"))?;
+        self.resources.authorize_queue_task(ctx, &task)?;
+        Ok(task)
+    }
+    pub(super) fn queue_callback(
+        &self,
+        ctx: &CapCallContext,
+        task: &QueueTaskView,
+    ) -> Result<(), CtoxError> {
+        if owns(ctx, task) {
+            self.settle_task(ctx, task)?;
+        }
+        // Foreign task completion is routed by the runtime using its ORIGINAL
+        // app/actor binding. The queue administrator does not become its origin.
+        Ok(())
     }
     pub(super) fn view(&self, task: &QueueTaskView) -> Value {
         json!({"task_id":task.message_key,"title":task.title,"instruction":task.prompt,"priority":task.priority,"status":task.route_status,
@@ -289,8 +324,9 @@ impl<'a> Backend<'a> {
             if !path.starts_with("prompts/") {
                 return Err(invalid());
             }
-            assets.insert(path.clone(), artifact.files[path].clone());
-            prompt.push_str(&artifact.text(path)?);
+            let text = artifact.text(path)?;
+            assets.insert(path.clone(), text.as_bytes().to_vec());
+            prompt.push_str(&text);
             prompt.push('\n');
         }
         if let Some(skill) = &r.skill {
@@ -316,8 +352,9 @@ impl<'a> Backend<'a> {
             if !path.starts_with("skills/") || !path.ends_with("/SKILL.md") {
                 return Err(invalid());
             }
-            assets.insert(path.to_string(), artifact.files[path].clone());
-            prompt.push_str(&artifact.text(path)?);
+            let text = artifact.text(path)?;
+            assets.insert(path.to_string(), text.as_bytes().to_vec());
+            prompt.push_str(&text);
             prompt.push('\n');
             let prefix = path.strip_suffix("SKILL.md").expect("suffix checked");
             for (path, bytes) in &artifact.files {
@@ -512,7 +549,7 @@ impl<'a> Backend<'a> {
             .and_then(Value::as_str);
         let result = channels::inspect_business_command_for_task(self.root, &task.message_key)
             .map_err(native)?
-            .and_then(|v| v.get("result").cloned())
+            .and_then(|v| v.pointer("/command/result").cloned())
             .unwrap_or(Value::Null);
         let refs = task
             .metadata
@@ -541,6 +578,8 @@ impl<'a> Backend<'a> {
             actor_id: ctx.actor.id.clone(),
             command_type: kind.into(),
             payload,
+            record_id: None,
+            client_context: None,
         });
         conn.execute("INSERT OR IGNORE INTO capability_callback_outbox(source,source_id,app_id,actor_id,command_json) VALUES(?1,?2,?3,?4,?5)",params![source,id,ctx.app_id,ctx.actor.id,serde_json::to_string(&command).map_err(native)?]).map_err(native)?;
         let (app,actor,body,delivered,receipt):(String,String,String,bool,Option<String>)=conn.query_row("SELECT app_id,actor_id,command_json,delivered,receipt_json FROM capability_callback_outbox WHERE source=?1 AND source_id=?2",params![source,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(native)?;
@@ -698,7 +737,12 @@ struct Workspace {
 fn read_workspace(root: &Path, path: &str) -> Result<Vec<u8>, CtoxError> {
     use std::os::fd::{AsRawFd, FromRawFd};
     relative(path)?;
-    let mut directory = std::fs::File::open(root).map_err(native)?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(root)
+        .map_err(native)?;
     let parts = Path::new(path)
         .components()
         .map(|c| c.as_os_str())
@@ -866,4 +910,529 @@ pub fn handle(
         request_id,
         outcome,
     })
+}
+
+#[cfg(test)]
+mod cap4_tests {
+    use super::*;
+    use crate::app_capabilities::registry::AuditEntry;
+    use crate::app_capabilities::{Actor, CapabilityGrant, ExecutorFence};
+    use rusqlite::OptionalExtension;
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+    struct Runtime {
+        root: std::path::PathBuf,
+        artifacts: RefCell<BTreeMap<String, AppArtifact>>,
+    }
+    impl Runtime {
+        fn new(root: &Path) -> Self {
+            let a = AppArtifact {
+                app_id: "a".into(),
+                version: "1".into(),
+                manifest: json!({"handlers":{"done":"done.js","failed":"failed.js","tick":"tick.js","ask":"ask.js"},"skills":[{"name":"sample","path":"skills/sample/SKILL.md"}],"commands_out":[{"app":"b","type":"ask"}]}),
+                files: BTreeMap::from([
+                    (
+                        "skills/sample/SKILL.md".into(),
+                        b"Use the app-owned sample skill".to_vec(),
+                    ),
+                    ("skills/sample/references/data.bin".into(), vec![0, 255, 7]),
+                    (
+                        "prompts/run.md".into(),
+                        b"Pinned app prompt template".to_vec(),
+                    ),
+                ]),
+            };
+            let mut b = a.clone();
+            b.app_id = "b".into();
+            b.manifest["commands_in"] = json!([{"type":"ask","from":["a"]}]);
+            Self {
+                root: root.into(),
+                artifacts: RefCell::new(BTreeMap::from([("a".into(), a), ("b".into(), b)])),
+            }
+        }
+        fn conn(&self) -> rusqlite::Connection {
+            let conn = channels::open_channel_db(&crate::paths::core_db(&self.root)).unwrap();
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS cap4_test_commands(id TEXT PRIMARY KEY,body TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'queued'); CREATE TABLE IF NOT EXISTS cap4_test_files(ref TEXT PRIMARY KEY,owner TEXT NOT NULL,size INTEGER NOT NULL)").unwrap();
+            conn
+        }
+    }
+    impl Resources for Runtime {
+        fn artifact(&self, app: &str, _: Option<&str>) -> Result<AppArtifact, CtoxError> {
+            self.artifacts
+                .borrow()
+                .get(app)
+                .cloned()
+                .ok_or_else(invalid)
+        }
+        fn publish_file(
+            &self,
+            ctx: &CapCallContext,
+            bytes: &[u8],
+            mime: &str,
+        ) -> Result<FileRef, CtoxError> {
+            let reference = format!("{:x}", Sha256::digest(bytes));
+            let dir = self.root.join("test-cas");
+            std::fs::create_dir_all(&dir).map_err(native)?;
+            std::fs::write(dir.join(&reference), bytes).map_err(native)?;
+            self.conn()
+                .execute(
+                    "INSERT OR IGNORE INTO cap4_test_files(ref,owner,size) VALUES(?1,?2,?3)",
+                    params![reference, ctx.app_id, bytes.len() as i64],
+                )
+                .map_err(native)?;
+            Ok(FileRef {
+                reference,
+                size: bytes.len() as u64,
+                mime: mime.into(),
+            })
+        }
+        fn authorize_command(&self, _: &CapCallContext, _: &str, _: &str) -> Result<(), CtoxError> {
+            Ok(())
+        }
+        fn emit_command_once(
+            &self,
+            _: &CapCallContext,
+            c: &AppCommand,
+        ) -> Result<Value, CtoxError> {
+            let conn = self.conn();
+            let body = serde_json::to_string(c).map_err(native)?;
+            conn.execute(
+                "INSERT OR IGNORE INTO cap4_test_commands(id,body) VALUES(?1,?2)",
+                params![c.id, body],
+            )
+            .map_err(native)?;
+            let saved: String = conn
+                .query_row(
+                    "SELECT body FROM cap4_test_commands WHERE id=?1",
+                    [&c.id],
+                    |r| r.get(0),
+                )
+                .map_err(native)?;
+            if saved != body {
+                return Err(CtoxError::new(
+                    ErrorCode::Conflict,
+                    "changed command intent",
+                ));
+            }
+            Ok(json!({"id":c.id,"status":"accepted"}))
+        }
+        fn authorize_queue_task(
+            &self,
+            ctx: &CapCallContext,
+            task: &QueueTaskView,
+        ) -> Result<(), CtoxError> {
+            if owns(ctx, task) {
+                Ok(())
+            } else {
+                Err(CtoxError::new(
+                    ErrorCode::Forbidden,
+                    "fixture queue row policy",
+                ))
+            }
+        }
+        fn terminal_command(&self, id: &str) -> Result<Option<TerminalResult>, CtoxError> {
+            let status: Option<String> = self
+                .conn()
+                .query_row(
+                    "SELECT status FROM cap4_test_commands WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(native)?;
+            Ok(status
+                .filter(|s| s != "queued")
+                .map(|status| TerminalResult {
+                    status,
+                    result: json!({"answer":42}),
+                    workspace_refs: vec!["answer.txt".into()],
+                }))
+        }
+    }
+    struct Fallback;
+    impl CapabilityBackend for Fallback {
+        fn execute(&self, _: &CapCallContext, _: &NativeCall) -> Result<Value, CtoxError> {
+            Err(CtoxError::new(ErrorCode::NotFound, "no fallback"))
+        }
+    }
+    struct Host(CapCallContext);
+    impl CapabilityHost for Host {
+        fn authorize(
+            &self,
+            ctx: &CapCallContext,
+            cap: &str,
+            _: &str,
+            _: &Value,
+        ) -> Result<CapabilityGrant, CtoxError> {
+            if ctx != &self.0 {
+                return Err(CtoxError::new(
+                    ErrorCode::Revoked,
+                    "fixture binding changed",
+                ));
+            }
+            Ok(CapabilityGrant {
+                app_id: ctx.app_id.clone(),
+                app_ver: ctx.app_ver.clone(),
+                actor: ctx.actor.clone(),
+                command_id: ctx.command_id.clone(),
+                capabilities_required: BTreeSet::from([cap.into()]),
+                allowed_roles: BTreeSet::from([ctx.actor.role.clone()]),
+            })
+        }
+        fn now_ms(&self) -> u64 {
+            1
+        }
+        fn with_fence(
+            &self,
+            ctx: &CapCallContext,
+            _: &str,
+            _: &str,
+            _: &Value,
+            effect: &mut dyn FnMut() -> Result<Value, CtoxError>,
+        ) -> Result<Value, CtoxError> {
+            if ctx != &self.0 || ctx.fence.expires_at_core_ms <= 1 {
+                return Err(CtoxError::new(ErrorCode::Revoked, "fixture fence changed"));
+            }
+            effect()
+        }
+        fn audit(&self, _: &AuditEntry) -> Result<(), CtoxError> {
+            Ok(())
+        }
+    }
+    fn ctx(app: &str, call: &str) -> CapCallContext {
+        CapCallContext {
+            app_id: app.into(),
+            app_ver: "1".into(),
+            actor: Actor {
+                id: "actor".into(),
+                role: "owner".into(),
+            },
+            command_id: "parent".into(),
+            call_id: call.into(),
+            fence: ExecutorFence {
+                run_id: "run".into(),
+                participant: "core".into(),
+                fence: 1,
+                expires_at_core_ms: 999999,
+            },
+        }
+    }
+    fn call(
+        b: &Backend<'_>,
+        ctx: &CapCallContext,
+        cap: &str,
+        f: &str,
+        args: Value,
+    ) -> Result<Value, CtoxError> {
+        invoke(&Host(ctx.clone()), b, ctx, cap, f, args)
+    }
+    fn enqueue(b: &Backend<'_>, ctx: &CapCallContext) -> String {
+        call(b,ctx,"agent.task","enqueue",json!({"title":"bounded work","instruction":"Return an answer","skill":"a/sample","template":"prompts/run.md","payload":{"value":1},"idempotency_key":"test-task","on_complete":"done","on_failed":"failed"})).unwrap()["task_id"].as_str().unwrap().into()
+    }
+
+    #[test]
+    fn cap4_task_artifact_workspace_and_cancel_callback_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(tmp.path());
+        let b = Backend::new(tmp.path(), &rt, &Fallback);
+        let c = ctx("a", "enqueue");
+        assert!(call(
+            &b,
+            &c,
+            "agent.task",
+            "enqueue",
+            json!({"title":"missing artifact", "template":"prompts/missing.md"})
+        )
+        .is_err());
+        let id = enqueue(&b, &c);
+        assert_eq!(enqueue(&b, &c), id);
+        let native_task = channels::load_queue_task(tmp.path(), &id).unwrap().unwrap();
+        assert!(native_task
+            .prompt
+            .contains("Use the app-owned sample skill"));
+        assert!(native_task.prompt.contains("Pinned app prompt template"));
+        let root = Path::new(native_task.workspace_root.as_deref().unwrap());
+        assert_eq!(
+            std::fs::read(root.join("app-artifact/skills/sample/references/data.bin")).unwrap(),
+            vec![0, 255, 7]
+        );
+        std::fs::write(root.join("answer.txt"), "a real answer").unwrap();
+        std::fs::write(root.join("binary"), [0, 255]).unwrap();
+        assert_eq!(
+            call(
+                &b,
+                &c,
+                "agent.task",
+                "workspace.read",
+                json!({"task_id":id,"path":"answer.txt"})
+            )
+            .unwrap(),
+            json!({"text":"a real answer"})
+        );
+        let file = call(
+            &b,
+            &c,
+            "agent.task",
+            "workspace.read",
+            json!({"task_id":id,"path":"binary"}),
+        )
+        .unwrap();
+        assert_eq!(file["size"], 2);
+        assert!(file.get("ref").is_some());
+        assert!(file.get("transfer_id").is_none());
+        assert!(file.get("data_base64").is_none());
+        assert!(call(
+            &b,
+            &ctx("b", "foreign"),
+            "agent.task",
+            "get",
+            json!({"task_id":id})
+        )
+        .is_err());
+        std::fs::write(root.parent().unwrap().join("outside.txt"), "outside").unwrap();
+        assert!(call(
+            &b,
+            &c,
+            "agent.task",
+            "workspace.read",
+            json!({"task_id":id,"path":"../outside.txt"})
+        )
+        .is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                root.parent().unwrap().join("outside.txt"),
+                root.join("link"),
+            )
+            .unwrap();
+            assert!(call(
+                &b,
+                &c,
+                "agent.task",
+                "workspace.read",
+                json!({"task_id":id,"path":"link"})
+            )
+            .is_err());
+        }
+        rt.conn()
+            .execute(
+                "UPDATE business_command_aggregates SET result_json=?1",
+                [r#"{"answer":42}"#],
+            )
+            .unwrap();
+        channels::set_queue_task_metadata_value(
+            tmp.path(),
+            &id,
+            "workspace_refs",
+            json!(["answer.txt"]),
+        )
+        .unwrap();
+        call(
+            &b,
+            &ctx("a", "cancel"),
+            "agent.task",
+            "cancel",
+            json!({"task_id":id}),
+        )
+        .unwrap();
+        let reopened = Runtime::new(tmp.path());
+        let b = Backend::new(tmp.path(), &reopened, &Fallback);
+        call(
+            &b,
+            &ctx("a", "reconcile"),
+            "agent.task",
+            "get",
+            json!({"task_id":id}),
+        )
+        .unwrap();
+        let conn = reopened.conn();
+        let commands = conn
+            .prepare("SELECT body FROM cap4_test_commands")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(commands.len(), 1);
+        let command: AppCommand = serde_json::from_str(&commands[0]).unwrap();
+        assert_eq!(command.app_id, "a");
+        assert_eq!(command.command_type, "failed");
+        assert_eq!(command.payload["status"], "cancelled");
+        assert_eq!(command.payload["task_id"], id);
+        assert_eq!(command.payload["workspace_refs"], json!(["answer.txt"]));
+        assert_eq!(command.payload["result"], json!({"answer":42}));
+        let mut wrong = reopened.artifacts.borrow()["a"].clone();
+        wrong.version = "other".into();
+        reopened.artifacts.borrow_mut().insert("a".into(), wrong);
+        assert!(call(
+            &b,
+            &ctx("a", "changed"),
+            "agent.task",
+            "enqueue",
+            json!({"title":"new","instruction":"x"})
+        )
+        .is_err());
+    }
+    #[test]
+    fn cap4_queue_claim_filter_and_linked_command_rollback_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(tmp.path());
+        let b = Backend::new(tmp.path(), &rt, &Fallback);
+        let c = ctx("a", "enqueue");
+        let id = enqueue(&b, &c);
+        assert!(call(
+            &b,
+            &c,
+            "agent.queue",
+            "task.claim",
+            json!({"task_id":id,"holder":"worker","route_status_in":["blocked"]})
+        )
+        .is_err());
+        assert_eq!(
+            channels::load_queue_task(tmp.path(), &id)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        let conn = rt.conn();
+        conn.execute_batch("CREATE TRIGGER cap4_abort_cancel BEFORE UPDATE ON business_command_aggregates WHEN NEW.terminal_status='cancelled' BEGIN SELECT RAISE(ABORT,'injected rollback'); END").unwrap();
+        assert!(call(
+            &b,
+            &c,
+            "agent.queue",
+            "task.set_status",
+            json!({"task_id":id,"status":"cancelled"})
+        )
+        .is_err());
+        assert_eq!(
+            channels::load_queue_task(tmp.path(), &id)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        conn.execute_batch("DROP TRIGGER cap4_abort_cancel")
+            .unwrap();
+        call(
+            &b,
+            &c,
+            "agent.queue",
+            "task.set_status",
+            json!({"task_id":id,"status":"cancelled"}),
+        )
+        .unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT terminal_status FROM business_command_aggregates",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
+    }
+    #[test]
+    fn cap4_schedule_native_cron_scope_and_command_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(tmp.path());
+        let b = Backend::new(tmp.path(), &rt, &Fallback);
+        let a = ctx("a", "schedule");
+        let other = ctx("b", "schedule");
+        let args =
+            json!({"name":"daily","cron_expr":"0 * * * *","command":{"type":"tick","payload":{}}});
+        let task = call(&b, &a, "schedule", "ensure", args.clone()).unwrap();
+        call(&b, &other, "schedule", "ensure", args).unwrap();
+        let own = call(&b, &a, "schedule", "list", json!({})).unwrap();
+        assert_eq!(own["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(own["tasks"][0]["task_id"], task["task_id"]);
+        assert!(call(
+            &b,
+            &other,
+            "schedule",
+            "remove",
+            json!({"task_id":task["task_id"]})
+        )
+        .is_err());
+        let id = task["task_id"].as_str().unwrap();
+        let run = crate::mission::schedule::emit_task_now(tmp.path(), id).unwrap();
+        let first = super::super::schedule::dispatch_emitted(&b, &a, &run.message_key)
+            .unwrap()
+            .unwrap();
+        let second = super::super::schedule::dispatch_emitted(&b, &a, &run.message_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, second);
+        let body: String = rt
+            .conn()
+            .query_row("SELECT body FROM cap4_test_commands", [], |r| r.get(0))
+            .unwrap();
+        let cmd: AppCommand = serde_json::from_str(&body).unwrap();
+        assert_eq!(cmd.payload["trigger"], "schedule");
+        assert_eq!(cmd.app_id, "a");
+        assert_eq!(cmd.actor_id, a.actor.id);
+        call(
+            &b,
+            &a,
+            "schedule",
+            "set_enabled",
+            json!({"task_id":id,"enabled":false}),
+        )
+        .unwrap();
+        call(&b, &a, "schedule", "remove", json!({"task_id":id})).unwrap();
+        assert!(
+            call(&b, &a, "schedule", "list", json!({})).unwrap()["tasks"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn cap4_ipc_dual_opt_in_and_origin_callback_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(tmp.path());
+        let b = Backend::new(tmp.path(), &rt, &Fallback);
+        let c = ctx("a", "ipc");
+        let request = json!({"app":"b","type":"ask","id":"ipc-explicit","record_id":"record","client_context":{"tab":"report"},"payload":{"origin_app":"forged"},"on_complete":"done","on_failed":"failed"});
+        rt.artifacts.borrow_mut().get_mut("b").unwrap().manifest["commands_in"] = json!([]);
+        assert!(super::super::turn::command(&Host(c.clone()), &b, &c, request.clone()).is_err());
+        rt.artifacts.borrow_mut().get_mut("b").unwrap().manifest["commands_in"] =
+            json!([{"type":"ask","from":["a"]}]);
+        rt.artifacts.borrow_mut().get_mut("a").unwrap().manifest["commands_out"] = json!([]);
+        assert!(super::super::turn::command(&Host(c.clone()), &b, &c, request.clone()).is_err());
+        rt.artifacts.borrow_mut().get_mut("a").unwrap().manifest["commands_out"] =
+            json!([{"app":"b","type":"ask"}]);
+        let sent = super::super::turn::command(&Host(c.clone()), &b, &c, request).unwrap();
+        let id = sent["id"].as_str().unwrap();
+        let conn = rt.conn();
+        conn.execute(
+            "UPDATE cap4_test_commands SET status='completed' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        b.settle_command(&c, id).unwrap();
+        b.settle_command(&ctx("a", "again"), id).unwrap();
+        assert!(b.settle_command(&ctx("b", "foreign"), id).is_err());
+        let bodies = conn
+            .prepare("SELECT body FROM cap4_test_commands ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let docs = bodies
+            .iter()
+            .map(|s| serde_json::from_str::<AppCommand>(s).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(docs.len(), 2);
+        let callback = docs.iter().find(|c| c.command_type == "done").unwrap();
+        assert_eq!(callback.app_id, "a");
+        assert_eq!(callback.origin_app, "a");
+        assert_eq!(callback.payload["command_id"], id);
+        let request = docs.iter().find(|c| c.command_type == "ask").unwrap();
+        assert_eq!(request.origin_app, "a");
+        assert_eq!(request.app_id, "b");
+        assert_eq!(request.id, "ipc-explicit");
+        assert_eq!(request.record_id.as_deref(), Some("record"));
+        assert_eq!(request.client_context, Some(json!({"tab":"report"})));
+    }
 }

@@ -158,6 +158,9 @@ pub(super) fn execute(
                     "schedule actor is Core-bound",
                 ));
             }
+            if !r.command.payload.is_object() {
+                return Err(invalid());
+            }
             let artifact = backend.artifact(ctx)?;
             if !artifact.handler(&r.command.kind) {
                 return Err(invalid());
@@ -267,6 +270,8 @@ pub fn dispatch_emitted(
         actor_id: ctx.actor.id.clone(),
         command_type: e.command.kind,
         payload: Value::Object(payload),
+        record_id: None,
+        client_context: None,
     };
     Ok(Some(backend.resources.emit_command_once(ctx, &command)?))
 }

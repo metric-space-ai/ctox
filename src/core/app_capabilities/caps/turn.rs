@@ -127,6 +127,9 @@ struct CommandRequest {
     kind: String,
     #[serde(default)]
     payload: Value,
+    id: Option<String>,
+    record_id: Option<String>,
+    client_context: Option<Value>,
     on_complete: Option<String>,
     on_failed: Option<String>,
 }
@@ -183,7 +186,7 @@ pub fn command(
             return Err(invalid());
         }
         backend.resources.authorize_command(ctx, target, &r.kind)?;
-        let id = format!(
+        let generated_id = format!(
             "cap-command:{}",
             task::digest(&json!([
                 ctx.app_id,
@@ -192,6 +195,11 @@ pub fn command(
                 ctx.call_id
             ]))
         );
+        let id = r.id.unwrap_or(generated_id);
+        task::identifier(&id)?;
+        if let Some(record_id) = &r.record_id {
+            task::identifier(record_id)?;
+        }
         let command = AppCommand {
             id: id.clone(),
             app_id: target.into(),
@@ -199,6 +207,8 @@ pub fn command(
             actor_id: ctx.actor.id.clone(),
             command_type: r.kind,
             payload: r.payload,
+            record_id: r.record_id,
+            client_context: r.client_context,
         };
         let intent = json!({"command":command,"on_complete":r.on_complete,"on_failed":r.on_failed});
         let conn = crate::mission::channels::open_channel_db(&crate::paths::core_db(backend.root))

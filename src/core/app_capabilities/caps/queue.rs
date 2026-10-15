@@ -95,7 +95,8 @@ pub(super) const ROUTES: &[NativeRoute] = &[
 ];
 #[derive(Clone)]
 struct Predicate {
-    ctx: CapCallContext,
+    message_key: String,
+    metadata: Value,
     statuses: Vec<String>,
 }
 thread_local! {static CLAIM:RefCell<Option<Predicate>>=const {RefCell::new(None)};}
@@ -109,9 +110,11 @@ impl Drop for Reset {
 }
 fn eligible(task: &QueueTaskView) -> bool {
     CLAIM.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .is_some_and(|p| task::owns(&p.ctx, task) && p.statuses.contains(&task.route_status))
+        slot.borrow().as_ref().is_some_and(|p| {
+            p.message_key == task.message_key
+                && p.metadata == task.metadata
+                && p.statuses.contains(&task.route_status)
+        })
     })
 }
 #[derive(Deserialize)]
@@ -158,21 +161,30 @@ pub(super) fn execute(
     match function {
         "task.get" => {
             let r: task::TaskId = decode(args)?;
-            Ok(backend.view(&backend.owned(ctx, &r.task_id)?))
+            Ok(backend.view(&backend.queue_task(ctx, &r.task_id)?))
         }
         "task.for_command" => {
             let r: Command = decode(args)?;
             task::identifier(&r.command_id)?;
-            Ok(backend
-                .find(ctx, None, Some(&r.command_id))?
+            if let Some(task) = backend.find(ctx, None, Some(&r.command_id))? {
+                backend.resources.authorize_queue_task(ctx, &task)?;
+                return Ok(backend.view(&task));
+            }
+            let context =
+                channels::inspect_business_command(backend.root, &r.command_id).map_err(native)?;
+            match context
                 .as_ref()
-                .map(|t| backend.view(t))
-                .unwrap_or_else(|| json!({"__cap4_not_found":true})))
+                .and_then(|v| v.get("execution_task_id"))
+                .and_then(Value::as_str)
+            {
+                Some(id) if !id.is_empty() => Ok(backend.view(&backend.queue_task(ctx, id)?)),
+                _ => Ok(json!({"__cap4_not_found":true})),
+            }
         }
         "task.claim" => {
             let r: Claim = decode(args)?;
             task::identifier(&r.holder)?;
-            backend.owned(ctx, &r.task_id)?;
+            let authorized = backend.queue_task(ctx, &r.task_id)?;
             if r.route_status_in.is_empty() || r.route_status_in.len() > 16 {
                 return Err(invalid());
             }
@@ -185,7 +197,8 @@ pub(super) fn execute(
                     true
                 } else {
                     *slot = Some(Predicate {
-                        ctx: ctx.clone(),
+                        message_key: authorized.message_key,
+                        metadata: authorized.metadata,
                         statuses: r.route_status_in,
                     });
                     false
@@ -205,7 +218,7 @@ pub(super) fn execute(
         }
         "task.update" => {
             let r: Change = decode(args)?;
-            backend.owned(ctx, &r.task_id)?;
+            backend.queue_task(ctx, &r.task_id)?;
             let task = channels::update_queue_task(
                 backend.root,
                 QueueTaskUpdateRequest {
@@ -222,7 +235,7 @@ pub(super) fn execute(
         }
         "task.set_status" => {
             let r: Status = decode(args)?;
-            backend.owned(ctx, &r.task_id)?;
+            backend.queue_task(ctx, &r.task_id)?;
             let task = channels::update_queue_task(
                 backend.root,
                 QueueTaskUpdateRequest {
@@ -233,26 +246,21 @@ pub(super) fn execute(
                 },
             )
             .map_err(native)?;
-            backend.settle_task(ctx, &task)?;
+            backend.queue_callback(ctx, &task)?;
             Ok(backend.view(&task))
         }
         "task.delete" => {
             let r: Delete = decode(args)?;
-            backend.owned(ctx, &r.task_id)?;
-            let task = channels::update_queue_task(
-                backend.root,
-                QueueTaskUpdateRequest {
-                    message_key: r.task_id.clone(),
-                    route_status: Some("cancelled".into()),
-                    status_note: r.status_note,
-                    ..Default::default()
-                },
-            )
-            .map_err(native)?;
-            backend.settle_task(ctx, &task)?;
-            Ok(
-                json!({"task_id":r.task_id,"status":"cancelled","deleted":true,"history_retained":true}),
-            )
+            backend.queue_task(ctx, &r.task_id)?;
+            let _ = r.status_note;
+            // Native update_queue_task cancels atomically, but does NOT delete
+            // the queue/command projections. The legacy delete_ctox_task uses
+            // separate connections/commits. Never acknowledge a deletion until
+            // the Core exposes the required single-transaction primitive.
+            Err(CtoxError::new(
+                ErrorCode::Unavailable,
+                "atomic native queue deletion is not available",
+            ))
         }
         _ => Err(CtoxError::new(
             ErrorCode::NotFound,
