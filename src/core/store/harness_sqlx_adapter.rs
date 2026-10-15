@@ -22,7 +22,7 @@ pub(crate) async fn open_pool(
         .min_connections(1)
         .max_lifetime(None)
         .idle_timeout(None)
-        .acquire_timeout(Duration::from_millis(50))
+        .acquire_timeout(Duration::from_millis(250))
         .connect_with(options)
         .await?;
     if let Err(error) = migrator.run(&pool).await {
