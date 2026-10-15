@@ -51,8 +51,8 @@ test('commands return acceptance plus task_id and preserve options; cursors pers
   let options;
   const f={trigger_id:'tick',command:(_type,_payload,opts)=>{options=opts;return{id:opts.id,status:'accepted',task_id:'task-real-ref'};}};
   const ctx=createContext(app(),f);
-  assert.deepEqual(await ctx.command('run',{x:1},{id:'next',record_id:'row',module:'mod',client_context:{a:1}}),{id:'next',status:'accepted',task_id:'task-real-ref'});
-  assert.equal(options.record_id,'row');assert.equal(options.module,'mod');
+  assert.deepEqual(await ctx.command('run',{x:1},{id:'next',record_id:'row',module:'contract',client_context:{a:1}}),{id:'next',status:'accepted',task_id:'task-real-ref'});
+  assert.equal(options.record_id,'row');assert.equal(options.module,'contract');
   assert.equal(await ctx.cursor.get(),null);await ctx.cursor.set(17);assert.equal(await createContext(app(),f).cursor.get(),17);
 });
 test('command_rights rejects before loading/executing handler and foreign watch is explicit', async () => {

@@ -1,6 +1,8 @@
 //! Supervised, app-neutral Node execution. Core owns policy, persistence and grants.
 //! App code has no host credentials and receives only an inherited LocalTransport.
 use anyhow::{bail, ensure, Context, Result};
+#[cfg(feature = "core-store")]
+pub use ctox_app_capabilities_contract as cap_contract;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,12 +24,16 @@ mod core_tests;
 #[cfg(feature = "core-store")]
 pub mod daemon;
 pub mod delivery;
+pub mod ipc;
 #[cfg(feature = "legacy-store")]
 pub mod legacy_store;
 #[path = "../execution/models/local_transport.rs"]
 pub mod local_transport;
 #[cfg(feature = "core-store")]
+pub mod registration;
+#[cfg(feature = "core-store")]
 pub mod service;
+pub mod shared;
 #[cfg(feature = "core-store")]
 mod state;
 use local_transport::{LocalStream, LocalTransport};
@@ -89,6 +95,11 @@ fn reference_file(reference: &str) -> Result<&str> {
 /// All methods run outside the store writer. The write adapter must enqueue
 /// into the existing authoritative writer, not mutate a JS mirror.
 pub trait RuntimeHost: Send + Sync + 'static {
+    /// Core resolves the active shell once before the handler starts. Empty
+    /// means shared imports are unavailable, never a host-filesystem fallback.
+    fn shared_modules(&self, _binding: &Value) -> Result<shared::SharedModules> {
+        Ok(shared::SharedModules::default())
+    }
     fn authorize(&self, app: &str, actor: &Value, operation: &Value) -> Result<()>;
     fn exported(&self, owner: &str, collection: &str, operation: &str) -> Result<bool>;
     fn capability_available(&self, name: &str) -> bool;
@@ -152,6 +163,7 @@ impl AppBundle {
         grants: BTreeSet<String>,
     ) -> Result<Self> {
         string(&manifest, "app_id")?;
+        ipc::validate(&manifest)?;
         ensure!(
             manifest["collections"].is_object() && manifest["handlers"].is_object(),
             "invalid: manifest sections"
@@ -701,6 +713,10 @@ impl RuntimePool {
         let _finish = binding
             .as_ref()
             .map(|value| FinishBinding(self.inner.host.clone(), value.clone()));
+        let shared = self
+            .inner
+            .host
+            .shared_modules(binding.as_ref().unwrap_or(&Value::Null))?;
         self.inner.host.authorize(
             app,
             &actor,
@@ -758,7 +774,7 @@ impl RuntimePool {
             send(
                 process.stream.get_mut(),
                 &json!({"type":"call", "id":call_id, "kind":operation,
-                "path":path, "sources":bundle.sources, "input":input,"core_now_ms":self.inner.host.now_ms()}),
+                "path":path, "sources":bundle.sources, "shared":shared, "input":input,"core_now_ms":self.inner.host.now_ms()}),
             )?;
             let deadline = Instant::now() + Duration::from_secs(600);
             loop {
@@ -953,9 +969,11 @@ fn callback(
                 .first()
                 .and_then(Value::as_str)
                 .context("invalid: command")?;
+            let options = args.get(2).cloned().unwrap_or(json!({}));
+            let target = crate::ipc::target(&bundle.manifest, command, &options)?;
             ensure!(
-                bundle.manifest["handlers"].get(command).is_some(),
-                "forbidden: undeclared app command"
+                target == bundle.app_id() || binding.is_some(),
+                "forbidden: foreign command requires Core binding"
             );
         }
         "capability" => {

@@ -50,19 +50,33 @@ function context(frame) {
   return{logs,ctx:handlerContext(bindings,{migration:frame.kind==='migration'})};
 }
 const modules=new Map();
+let shellVersion;
 const sandbox=createContext({URL,URLSearchParams,TextEncoder,TextDecoder,CtoxError,crypto:Object.freeze({subtle:Object.freeze({digest:webcrypto.subtle.digest.bind(webcrypto.subtle)}),randomUUID})},{codeGeneration:{strings:false,wasm:false}});
-async function load(sources,reference) {
+async function load(sources,reference,shared={version:'',sources:{}}) {
+  // App modules are linked to their shell imports. Retire the entire module
+  // generation when that pin changes, including unchanged app entry sources.
+  if(shellVersion!==shared.version){modules.clear();shellVersion=shared.version;}
   const [entry,exportName='default']=reference.split('#');
   if(entry.split('/').at(-1).startsWith('_'))throw new CtoxError('invalid','Library cannot be a handler');
   function moduleFor(name) {
-    if(!Object.hasOwn(sources,name))throw new CtoxError('invalid','Undeclared module: '+name);
-    if(!modules.has(name))modules.set(name,new SourceTextModule(sources[name],{context:sandbox,identifier:'ctox-app:/'+name,importModuleDynamically(){throw new CtoxError('forbidden','Dynamic import unavailable');}}));
+    const shell=name.startsWith('ctox:shared/'),path=shell?name.slice(5):name,table=shell?shared.sources:sources;
+    if(!Object.hasOwn(table,path))throw new CtoxError('forbidden','Undeclared module: '+name);
+    if(!modules.has(name))modules.set(name,new SourceTextModule(table[path],{context:sandbox,identifier:(shell?'ctox-shared:/':'ctox-app:/')+path,importModuleDynamically(){throw new CtoxError('forbidden','Dynamic import unavailable');}}));
     return modules.get(name);
   }
   const module=moduleFor(entry);
   if(module.status==='unlinked')await module.link((specifier,parent)=>{
+    if(specifier.startsWith('ctox:shared/')) {
+      const name=specifier.slice(5);
+      if(name.split('/').some(p=>!p||p==='.'||p==='..')||name.includes('\\')||name.includes('%'))throw new CtoxError('forbidden','Invalid shared import');
+      return moduleFor(specifier);
+    }
     if(!specifier.startsWith('./')&&!specifier.startsWith('../'))throw new CtoxError('forbidden','Only relative handler imports allowed');
     const url=new URL(specifier,parent.identifier),name=decodeURIComponent(url.pathname.slice(1));
+    if(url.protocol==='ctox-shared:') {
+      if(!name.startsWith('shared/')||name.split('/').some(p=>!p||p==='.'||p==='..'))throw new CtoxError('forbidden','Import escapes shared exports');
+      return moduleFor('ctox:'+name);
+    }
     const root=parent.identifier.startsWith('ctox-app:/handlers/')?'handlers/':'';
     if(url.protocol!=='ctox-app:'||!name.startsWith(root)||name.split('/').some(p=>p==='..'||p===''))throw new CtoxError('forbidden','Import escapes handlers');
     return moduleFor(name);
@@ -77,7 +91,7 @@ async function call(frame) {
   if(active!==null)throw new Error('Concurrent app call');
   active=frame.id;
   try {
-    const fn=await load(frame.sources,frame.path),{ctx,logs}=context(frame);
+    const fn=await load(frame.sources,frame.path,frame.shared),{ctx,logs}=context(frame);
     let value;
     if(frame.kind==='migration') {
       value=[];

@@ -5,6 +5,7 @@ import { createHash, randomUUID, webcrypto } from 'node:crypto';
 import { CtoxError, invalid, mango } from './mango.mjs';
 import { handlerContext } from './context.mjs';
 import { assetText } from './asset.mjs';
+import { commandTarget, commandDeclarations } from './ipc.mjs';
 export { CtoxError, mango };
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const own = (obj, key) => Object.hasOwn(obj ?? {}, key);
@@ -41,6 +42,14 @@ export function validateManifest(manifest) {
   if (!Array.isArray(manifest.capabilities_required ?? []) || (manifest.capabilities_required ?? []).some(name => typeof name !== 'string' || !/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$/.test(name))) invalid('Invalid capability declaration');
   for (const [name, spec] of Object.entries(manifest.collections ?? {})) if (!name || !object(spec)) invalid('Invalid collection schema', name);
   for (const ref of Object.values(manifest.handlers ?? {})) handlerReference(ref);
+  for (const key of ['commands_out','commands_in']) {
+    if (!Array.isArray(manifest[key] ?? [])) invalid('Invalid '+key);
+    for(const rule of manifest[key] ?? []) {
+      if (!object(rule) || typeof rule.type!=='string' || !rule.type) invalid('Invalid '+key+' rule');
+      if (key==='commands_out' && (typeof rule.app!=='string' || !rule.app)) invalid('Invalid commands_out target');
+      if (key==='commands_in' && (rule.from!=='*' && (!Array.isArray(rule.from) || rule.from.length===0 || rule.from.some(a=>typeof a!=='string'||!a)))) invalid('Invalid commands_in source');
+    }
+  }
   for (const [name, rule] of Object.entries(manifest.foreign_collections ?? {})) {
     if (own(manifest.collections,name) || !object(rule) || typeof rule.owner_app !== 'string' || !rule.owner_app || rule.owner_app === manifest.app_id || !Array.isArray(rule.ops) || rule.ops.some(op => !['read','write','watch'].includes(op))) invalid('Invalid foreign collection declaration', name);
   }
@@ -117,8 +126,11 @@ export function createContext(manifest, fixtures = {}, { migration = false } = {
     model: req => cap('model.run',[req],fixtures.model),
     http: req => cap('net.http.fetch',[req],fixtures.http),
     async command(type,payload,opts) {
-      if (!own(manifest.handlers,type)) fail('forbidden','Command is not declared by this app');
-      await policy({ operation:'command',type, options:opts });
+      const target=commandTarget(manifest,type,opts), receiver=target===manifest.app_id?manifest:fixtures.apps?.[target];
+      commandDeclarations(manifest,receiver,type,opts);
+      const actor=fixtures.actor ?? {};
+      commandRights(receiver,{type,actor},fixtures);
+      await policy({ operation:'command',type, target_app:target, options:opts });
       if (typeof fixtures.command !== 'function') fail('unavailable','Command fixture unavailable');
       return clone(await fixtures.command(type,clone(payload),clone(opts)));
     },
@@ -186,14 +198,33 @@ export async function loadFunction(manifest, reference, fixtures = {}) {
     await walk(rootPrefix);
   }
   if (!files.has(file)) fail('not_found','Handler file unavailable');
+  // Snapshot fixture activation before linking, just as Core pins a CAS shell
+  // manifest for one invocation. No shell filesystem or package fallback.
+  const shell=fixtures.shell ? clone(fixtures.shell) : null, sharedPrefix='__ctox_shell__/';
+  if (shell) {
+    if (!Array.isArray(shell.manifest?.shared_exports) || !shell.artifacts) invalid('Verified shell fixture required');
+    for (const key of shell.manifest.shared_exports) {
+      if (typeof key!=='string' || !key.startsWith('shared/')) invalid('Invalid shell shared export');
+      files.set(sharedPrefix+key,await assetText(shell.manifest,key,{artifacts:shell.artifacts}));
+    }
+  }
   const base = 'ctox-handler-kit://'+randomUUID()+'/';
   const hook = registerHooks({
     resolve(specifier,context,next) {
       if (specifier.startsWith(base)) return {url:specifier,shortCircuit:true};
       if (!context.parentURL?.startsWith(base)) return next(specifier,context);
+      if (specifier.startsWith('ctox:shared/')) {
+        const key=specifier.slice(5);
+        if (key.split('/').some(p=>!p||p==='.'||p==='..') || key.includes('%') || key.includes('\\') || !files.has(sharedPrefix+key)) fail('forbidden','Undeclared shell shared export');
+        return {url:base+sharedPrefix+key,shortCircuit:true};
+      }
       if (!specifier.startsWith('./') && !specifier.startsWith('../')) fail('forbidden','Only relative handler imports allowed');
       const url = new URL(specifier,context.parentURL);
       const key = decodeURIComponent(url.pathname.slice(1));
+      if (context.parentURL.startsWith(base+sharedPrefix)) {
+        if (url.host!==new URL(base).host || !key.startsWith(sharedPrefix+'shared/') || !files.has(key)) fail('forbidden','Import escapes shell exports');
+        return {url:url.href,shortCircuit:true};
+      }
       if (url.host !== new URL(base).host || !key.startsWith(rootPrefix) || !files.has(key)) fail('forbidden','Import escapes handler bundle');
       return {url:url.href,shortCircuit:true};
     },

@@ -134,11 +134,20 @@ impl CoreAuthority for Authority {
         }
         Ok(())
     }
-    fn authorize(&self, _app: &str, actor: &Value, _operation: &Value) -> Result<()> {
+    fn authorize(&self, _app: &str, actor: &Value, operation: &Value) -> Result<()> {
         ensure!(
             self.allowed.load(Ordering::SeqCst) && actor["id"] == "owner",
             "revoked: actor"
         );
+        if operation["operation"] == "command.submit" {
+            let kind = crate::string(operation, "type")?;
+            if let Some(roles) = operation["command_rights"][kind]["roles"].as_array() {
+                ensure!(
+                    roles.iter().any(|r| r == "writer"),
+                    "forbidden: target Core command_rights"
+                );
+            }
+        }
         Ok(())
     }
     fn exported(&self, _owner: &str, _collection: &str, _op: &str) -> Result<bool> {
@@ -288,6 +297,24 @@ fn check_fence(db: &Connection, binding: &Value) -> std::result::Result<(), Stor
     Ok(())
 }
 impl StoreCodec for Codec {
+    fn active_shell(&self, db: &Connection) -> std::result::Result<Option<Value>, StoreError> {
+        let value = meta(db, "active_shell")?;
+        Ok((!value.is_null()).then_some(value))
+    }
+    fn active_manifest(
+        &self,
+        db: &Connection,
+        app: &str,
+    ) -> std::result::Result<Value, StoreError> {
+        let version = meta(db, &format!("active:{app}"))?;
+        self.version(
+            db,
+            app,
+            version
+                .as_str()
+                .ok_or_else(|| StoreError::Invalid("not_found: active app".into()))?,
+        )
+    }
     fn check_fence(
         &self,
         tx: &Transaction<'_>,
@@ -879,7 +906,7 @@ fn core_dispatch_preserves_envelope_and_writes_via_the_single_writer() {
     service.published("app", "v1").unwrap();
     let mut cmd = command("app", "v1", "cmd", json!({"n":3}));
     cmd["record_id"] = json!("record");
-    cmd["module"] = json!("mod");
+    cmd["module"] = json!("app");
     cmd["client_context"] = json!({"view":"v"});
     let result = service.command(cmd, fence()).unwrap();
     assert_eq!(result["row"]["n"], 3);
@@ -891,12 +918,213 @@ fn core_dispatch_preserves_envelope_and_writes_via_the_single_writer() {
     assert!(result["accepted"]["task_id"].is_string());
     let stored = f.raw("business_commands");
     assert_eq!(stored[0]["record_id"], "record");
-    assert_eq!(stored[0]["module"], "mod");
+    assert_eq!(stored[0]["module"], "app");
     assert_eq!(stored[0]["client_context"]["view"], "v");
     assert_eq!(
         f.raw("ctox_queue_tasks")[0]["id"],
         result["accepted"]["task_id"]
     );
+}
+
+#[test]
+fn command_callback_is_owned_by_source_and_cancelled_delivers_once_with_workspace_refs() {
+    let f = Fixture::new();
+    f.publish("v1", "export default async(_command,ctx)=>ctx.command('run',{}, {id:'child',on_complete:'done',on_failed:'failed'});",
+        json!({"handlers":{"run":"handlers/run.js","done":"handlers/finish.js","failed":"handlers/finish.js"},
+        "sources":{"handlers/finish.js":"export default async(command,ctx)=>{await ctx.put('rows',{id:'callback',...command.payload});return command.payload;};"}}));
+    let service = f.service();
+    service.published("app", "v1").unwrap();
+    let accepted = service
+        .command(command("app", "v1", "source", Value::Null), fence())
+        .unwrap();
+    assert_eq!(accepted["id"], "child");
+    let result=service.command_completed(f.binding(),"child",json!({"status":"cancelled","workspace_refs":["result/report.md"],"error":{"code":"cancelled"}})).unwrap();
+    assert_eq!(result["status"], "cancelled");
+    assert_eq!(result["workspace_refs"], json!(["result/report.md"]));
+    assert_eq!(f.raw("rows")[0]["command_id"], "child");
+    let duplicate = service
+        .command_completed(
+            f.binding(),
+            "child",
+            json!({"status":"completed","result":"late"}),
+        )
+        .unwrap();
+    assert_eq!(duplicate["status"], "skipped");
+    assert_eq!(f.raw("rows")[0]["status"], "cancelled");
+}
+
+#[test]
+fn core_foreign_command_requires_current_bilateral_exports_and_user_policy_before_writer_effect() {
+    let f = Fixture::new();
+    f.publish(
+        "v1",
+        "export default()=>null;",
+        json!({"commands_out":[{"app":"receiver","type":"admin.run"}]}),
+    );
+    let put_receiver = |incoming: bool, denied: bool| {
+        let mut manifest = json!({"app_id":"receiver","app_ver":"v1","handlers":{"admin.run":"handlers/run.js"},"commands_in":if incoming{json!([{"type":"admin.run","from":["app"]}])}else{json!([])}});
+        if denied {
+            manifest["command_rights"] = json!({"admin.run":{"roles":["admin"]}});
+        }
+        f.host
+            .writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                tx.execute(
+                    "INSERT OR REPLACE INTO versions VALUES(?,?,?)",
+                    params!["receiver", "v1", manifest.to_string()],
+                )?;
+                set_meta(tx, "active:receiver", &json!("v1"))
+            }))
+            .unwrap()
+            .blocking_wait()
+            .unwrap();
+    };
+    let mut binding = f.binding();
+    binding["manifest"] = f.host.release("app", "v1").unwrap();
+    put_receiver(true, false);
+    let args = json!(["admin.run",{}, {"module":"receiver","id":"cross"}]);
+    assert_eq!(
+        f.host.invoke_bound(&binding, "command", &args).unwrap()["status"],
+        "accepted"
+    );
+    let mut without_out = binding.clone();
+    without_out["manifest"]["commands_out"] = json!([]);
+    assert!(f
+        .host
+        .invoke_bound(&without_out, "command", &args)
+        .unwrap_err()
+        .to_string()
+        .starts_with("forbidden:"));
+    put_receiver(false, false);
+    assert!(f
+        .host
+        .invoke_bound(&binding, "command", &args)
+        .unwrap_err()
+        .to_string()
+        .starts_with("forbidden:"));
+    put_receiver(true, true);
+    assert!(f
+        .host
+        .invoke_bound(&binding, "command", &args)
+        .unwrap_err()
+        .to_string()
+        .starts_with("forbidden:"));
+    assert_eq!(f.raw("business_commands").len(), 1);
+}
+
+#[test]
+fn active_shell_shared_cas_is_pinned_and_module_generation_relinks() {
+    let f = Fixture::new();
+    f.publish(
+        "v1",
+        "import {value} from 'ctox:shared/pure.js';let n=0;export default()=>({value,n:++n});",
+        json!({}),
+    );
+    let activate = |word: &str, exports: bool| {
+        let source = format!("export const value='{word}';");
+        let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let manifest = json!({"app_ver":word,"files":{"shared/pure.js":hash},"shared_exports":if exports{json!(["shared/pure.js"])}else{json!([])}});
+        f.host
+            .writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                tx.execute(
+                    "INSERT OR IGNORE INTO artifacts VALUES(?,?)",
+                    params![hash, source.as_bytes()],
+                )?;
+                set_meta(tx, "active_shell", &manifest)
+            }))
+            .unwrap()
+            .blocking_wait()
+            .unwrap();
+    };
+    let service = f.service();
+    service.published("app", "v1").unwrap();
+    activate("first", true);
+    let first = service
+        .command(command("app", "v1", "first", Value::Null), fence())
+        .unwrap();
+    assert_eq!(first["value"], "first");
+    assert_eq!(first["n"], 1);
+    assert_eq!(
+        service
+            .command(command("app", "v1", "repeat", Value::Null), fence())
+            .unwrap()["n"],
+        2
+    );
+    activate("second", true);
+    let second = service
+        .command(command("app", "v1", "second", Value::Null), fence())
+        .unwrap();
+    assert_eq!(second["value"], "second");
+    assert_eq!(second["n"], 1);
+    activate("revoked", false);
+    assert!(service
+        .command(command("app", "v1", "revoked", Value::Null), fence())
+        .unwrap_err()
+        .to_string()
+        .starts_with("forbidden:"));
+}
+
+#[cfg(feature = "bundled-node")]
+#[test]
+fn registered_core_ingress_hotplugs_late_cas_app_and_drains_before_writer_shutdown() {
+    use crate::registration::{AppRuntimeInputs, AppRuntimeRegistration};
+    let f = Fixture::new();
+    let registration = AppRuntimeRegistration::start(
+        f.root.path().to_path_buf(),
+        AppRuntimeInputs {
+            host: f.host.clone(),
+            runtime: f.runtime.handle().clone(),
+            active: vec![],
+        },
+    )
+    .unwrap();
+    for (version, word) in [("v1", "first"), ("v2", "second")] {
+        f.publish(version,&format!("let n=0;export default async(command,ctx)=>{{await ctx.put('rows',{{id:command.id,release:'{word}'}});return {{release:'{word}',n:++n}};}};"),
+            json!({"skills":[{"name":"review","path":"skills/review/SKILL.md"}],"sources":{"skills/review/SKILL.md":word}}));
+        f.runtime.block_on(async {
+            registration
+                .ingress
+                .published("app".into(), version.into())
+                .await
+                .unwrap();
+            let first = registration
+                .ingress
+                .command(
+                    command("app", version, &format!("{version}-one"), Value::Null),
+                    fence(),
+                )
+                .await
+                .unwrap();
+            let second = registration
+                .ingress
+                .command(
+                    command("app", version, &format!("{version}-two"), Value::Null),
+                    fence(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(first["release"], word);
+            assert_eq!(first["n"], 1);
+            assert_eq!(second["n"], 2);
+            let skill = registration
+                .ingress
+                .skill("app/review".into(), json!({"id":"owner","role":"writer"}))
+                .await
+                .unwrap();
+            assert_eq!(skill["instruction"], word);
+        });
+    }
+    f.runtime.block_on(async {
+        registration.ingress.removed("app".into()).await.unwrap();
+        assert!(registration
+            .ingress
+            .skill("app/review".into(), json!({"id":"owner","role":"writer"}))
+            .await
+            .is_err());
+        registration.shutdown().await.unwrap();
+    });
+    assert_eq!(f.raw("rows").len(), 4);
 }
 #[test]
 fn transaction_is_one_atomic_store_job_and_failed_second_write_rolls_back_first() {

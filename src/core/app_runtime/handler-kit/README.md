@@ -70,9 +70,16 @@ werden geprüft. Absolute Pfade, ausbrechende Pfade und Symlinks sind verboten.
   tx hat ausschließlich read/get/write/put/patch/remove. Fehler rollen zurück;
   zwischenzeitliche Änderungen führen zu conflict. Äußeres ctx und externe
   Wirkungen sind während des Callbacks gesperrt.
-- `command(type,payload,{id?,record_id?,module?,client_context?})` ruft
+- `command(type,payload,{id?,record_id?,module?,client_context?,on_complete?,on_failed?})` ruft
   `fixtures.command` auf und liefert dessen Annahme:
   `{id,status:"accepted"|"rejected",task_id?,reason?}`, keinen Abschluss.
+  `module` benennt die Ziel-App; ohne Angabe wird der eigene Handler bzw.
+  der eindeutige `commands_out`-Eintrag gewählt. Fremde Befehle brauchen
+  `commands_out:[{app,type}]` beim Sender und `commands_in:[{type,from:[app]}]`
+  (oder explizit `from:'*'`) beim Empfänger, zusätzlich dessen Nutzerrecht.
+  Abschluss-Befehlstypen gehören zur auslösenden App. Der Core bindet sie
+  atomar bei Annahme und liefert höchstens einmal je command_id aus;
+  Abbruch geht an on_failed mit status cancelled, einschließlich workspace_refs.
 - `model(req)`, `http(req)`, `cap.<name>.<fn>(req)` benutzen ausschließlich
   Fixtures. Fähigkeit muss deklariert, administrativ gewährt und implementiert
   sein. Keine Netz- oder Ersatzroute. `fixtures.capabilities` unterstützt
@@ -89,6 +96,13 @@ werden geprüft. Absolute Pfade, ausbrechende Pfade und Symlinks sind verboten.
 `command_rights` wird vor dem Laden des Einstiegs ausgewertet. Der produktive
 Core muss seine authentifizierte Policy und aktuelle Grants selbst durchsetzen;
 Fixture-Rollen sind kein Berechtigungsnachweis.
+
+`ctox:shared/<pfad>` wird nur aus `fixtures.shell = {manifest,artifacts}`
+geladen. `manifest.shared_exports` ist eine Liste von `shared/...`-Dateien;
+jede muss unter `files` einen CAS-Hash tragen. Dieser Shell-Snapshot bleibt
+während des Aufrufs stabil. Relative Importe zwischen Exporten sind erlaubt,
+andere Shell-Dateien und Node-/Paketimporte werden abgewiesen. Produktion
+liest die aktive Shell über den bestehenden Core-Reader, keine Host-Dateien.
 
 ## Fremde Daten, Trigger und Abschlüsse
 

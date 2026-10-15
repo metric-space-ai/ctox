@@ -185,7 +185,17 @@ impl AppRuntimeService {
     pub fn command(&self, command: Value, fence: Value) -> Result<Value> {
         let app = crate::string(&command, "app_id")?.to_owned();
         let version = crate::string(&command, "app_ver")?.to_owned();
-        self.at_version(&app, &version, || self.pool.dispatch(command, fence))
+        self.at_version(&app, &version, || {
+            ensure!(
+                self.active
+                    .lock()
+                    .unwrap()
+                    .get(&app)
+                    .is_some_and(|release| release.version == version),
+                "conflict: command release is not active"
+            );
+            self.pool.dispatch(command, fence)
+        })
     }
     /// Read-only migration proposals from the admitted CAS release. Core
     /// commits them separately in its schema/generation writer transaction.
@@ -359,6 +369,64 @@ impl AppRuntimeService {
     }
     pub fn process_id(&self, app: &str) -> Option<u32> {
         self.pool.process_id(app)
+    }
+    /// Core supplies the original source binding retained at acceptance. This
+    /// cannot be invoked by a handler. Claim precedes execution, and an uncertain
+    /// or crashed callback is never replayed as a second effect.
+    pub fn command_completed(
+        &self,
+        mut binding: Value,
+        command_id: &str,
+        outcome: Value,
+    ) -> Result<Value> {
+        let app = crate::string(&binding["command"], "app_id")?.to_owned();
+        let version = crate::string(&binding["command"], "app_ver")?.to_owned();
+        binding["manifest"] = self.bundle(&app, &version)?.manifest;
+        self.host.authority.admit(&binding["manifest"], &binding)?;
+        let status = crate::string(&outcome, "status")?;
+        ensure!(
+            matches!(status, "completed" | "failed" | "cancelled"),
+            "invalid: terminal command outcome"
+        );
+        let ledger_id = format!("command:{command_id}");
+        let receipt = self.host.platform(
+            &binding,
+            "completion.claim",
+            &json!({"task_id":ledger_id,"succeeded":status=="completed"}),
+        )?;
+        if receipt["claimed"] != true {
+            return Ok(json!({"status":"skipped","command_id":command_id}));
+        }
+        let kind = crate::string(&receipt, "entry")?;
+        ensure!(
+            binding["manifest"]["handlers"].get(kind).is_some(),
+            "forbidden: callback no longer in originating release"
+        );
+        let mut callback = binding["command"].clone();
+        callback["id"] = json!(format!("command-callback:{command_id}"));
+        callback["type"] = json!(kind);
+        let mut payload = json!({"command_id":command_id,"status":status});
+        for key in ["result", "error", "workspace_refs"] {
+            if let Some(value) = outcome.get(key) {
+                payload[key] = value.clone();
+            }
+        }
+        callback["payload"] = payload;
+        // This is the Core-retained completion of an already accepted command;
+        // it stays bound to its originating immutable version after an update.
+        let result = self.at_version(&app, &version, || {
+            self.pool.dispatch(callback, binding["fence"].clone())
+        });
+        let settled = match &result {
+            Ok(_) => json!({"status":"completed"}),
+            Err(error) => json!({"status":"failed","code":crate::error_code(&error.to_string())}),
+        };
+        self.host.platform(
+            &binding,
+            "completion.finish",
+            &json!({"task_id":ledger_id,"outcome":settled}),
+        )?;
+        result
     }
 }
 pub fn interval_ms(value: &str) -> Result<u64> {

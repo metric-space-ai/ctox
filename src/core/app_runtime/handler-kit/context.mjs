@@ -45,7 +45,7 @@ export function handlerContext(bindings, { migration = false, transaction = fals
     },
     async command(type, payload, opts = {}) {
       effect(); options(opts);
-      if (Object.keys(opts).some(key => !['id','record_id','module','client_context'].includes(key))) error('invalid', 'Unknown command option');
+      if (Object.keys(opts).some(key => !['id','record_id','module','client_context','on_complete','on_failed'].includes(key))) error('invalid', 'Unknown command option');
       const result = await bindings.command(type, payload, opts);
       if (!result || typeof result.id !== 'string' || !['accepted','rejected'].includes(result.status)) error('invalid', 'Core command must return an acceptance result');
       return result;

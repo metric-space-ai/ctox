@@ -41,6 +41,21 @@ pub struct StoreSnapshot {
 /// revoke/claim uses this same writer, so it cannot interleave before commit.
 /// A batch is applied wholly or returns Err; the writer rolls the whole job back.
 pub trait StoreCodec: Send + Sync + 'static {
+    /// Resolve from committed activation metadata, never a sender-selected version.
+    fn active_manifest(
+        &self,
+        _db: &Connection,
+        _app: &str,
+    ) -> std::result::Result<Value, StoreError> {
+        Err(StoreError::Invalid(
+            "unavailable: active app resolver not attached".into(),
+        ))
+    }
+    /// None only when no shell is active. The manifest must be a committed,
+    /// verified active shell release; bytes are resolved by immutable CAS hash.
+    fn active_shell(&self, _db: &Connection) -> std::result::Result<Option<Value>, StoreError> {
+        Ok(None)
+    }
     fn check_fence(
         &self,
         tx: &Transaction<'_>,
@@ -88,6 +103,9 @@ pub trait StoreCodec: Send + Sync + 'static {
 //  active grants, actual executor lease and retained authority at effect point.
 pub trait CoreAuthority: Send + Sync + 'static {
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()>;
+    /// command.submit checks the target app's current command_rights and actor
+    /// assignment. It authorizes a new intent; it MUST NOT reinterpret the
+    /// originating command/fence as an executor lease for the receiving app.
     fn authorize(&self, app: &str, actor: &Value, operation: &Value) -> Result<()>;
     fn exported(&self, owner: &str, collection: &str, operation: &str) -> Result<bool>;
     fn capability_available(&self, name: &str) -> bool;
@@ -135,7 +153,15 @@ pub(crate) fn prepare_registry(
     full_name: &str,
     request: &Value,
 ) -> Result<(String, String, Value)> {
-    let descriptors = registry.descriptors();
+    prepare_descriptors(&registry.descriptors(), full_name, request)
+}
+/// The daemon may use the wider native registry, with the same closed CAP-1
+/// envelope. This function resolves descriptors only; it grants no authority.
+pub fn prepare_descriptors(
+    descriptors: &Value,
+    full_name: &str,
+    request: &Value,
+) -> Result<(String, String, Value)> {
     let matches: Vec<_> = descriptors
         .as_array()
         .unwrap()
@@ -147,6 +173,7 @@ pub(crate) fn prepare_registry(
                 d["fn"].as_str().unwrap()
             ) == full_name
                 || d["name"] == full_name && d["fn"] == "invoke"
+                || d["name"] == full_name && full_name.rsplit('.').next() == d["fn"].as_str()
         })
         .collect();
     ensure!(
@@ -183,7 +210,7 @@ pub(crate) fn prepare_registry(
         args,
     ))
 }
-pub(crate) fn capability_call_id(binding: &Value) -> Result<String> {
+pub fn capability_call_id(binding: &Value) -> Result<String> {
     crate::string(&binding["command"], "id")?;
     crate::string(binding, "invocation_id")?;
     ensure!(binding["callback_id"].is_u64(), "invalid: callback counter");
@@ -371,9 +398,52 @@ impl CoreRuntimeHost {
                         if method.starts_with("trigger.") || method.starts_with("completion.") {
                             crate::state::apply(tx, &binding, &method, &args).map_err(store_failure)
                         } else {
-                            codec
+                            if method == "command.accept" {
+                                let target = crate::string(&args, "target_app")?;
+                                let kind = crate::string(&args, "type")?;
+                                let receiver = if binding["command"]["app_id"] == target {
+                                    codec
+                                        .version(
+                                            tx,
+                                            target,
+                                            crate::string(&binding["command"], "app_ver")?,
+                                        )
+                                        .map_err(store_failure)?
+                                } else {
+                                    codec.active_manifest(tx, target).map_err(store_failure)?
+                                };
+                                let receiver = receiver.get("manifest").unwrap_or(&receiver);
+                                ensure!(
+                                    receiver["app_ver"] == args["target_app_ver"],
+                                    "conflict: target activation changed"
+                                );
+                                crate::ipc::check(
+                                    &binding["manifest"],
+                                    receiver,
+                                    kind,
+                                    &args["options"],
+                                )?;
+                                authority.authorize(target,&binding["command"]["actor"],&json!({
+                                    "operation":"command.submit","type":kind,"payload":args["payload"],
+                                    "command_rights":receiver["command_rights"],"manifest":receiver,
+                                    "source_command_id":binding["command"]["id"]
+                                }))?;
+                            }
+                            let value = codec
                                 .platform(tx, &binding, &method, &args)
-                                .map_err(store_failure)
+                                .map_err(store_failure)?;
+                            if method == "command.accept"
+                                && value["status"] == "accepted"
+                                && ["on_complete", "on_failed"]
+                                    .iter()
+                                    .any(|key| args["options"].get(key).is_some())
+                            {
+                                let id = crate::string(&value, "id")?;
+                                crate::state::apply(tx,&binding,"completion.register",&json!({
+                                    "task_id":format!("command:{id}"),"callbacks":args["options"]
+                                })).map_err(store_failure)?;
+                            }
+                            Ok(value)
                         }
                     })
                     .map_err(denied)
@@ -581,6 +651,18 @@ impl CoreRuntimeHost {
     }
 }
 impl RuntimeHost for CoreRuntimeHost {
+    fn shared_modules(&self, _binding: &Value) -> Result<crate::shared::SharedModules> {
+        let codec = self.codec.clone();
+        let manifest = self.read_job(ReadJob::new(Self::options(), move |db| {
+            codec.active_shell(db)
+        }))?;
+        match manifest {
+            Some(manifest) => {
+                crate::shared::SharedModules::load(&manifest, |hash| self.artifact(hash))
+            }
+            None => Ok(crate::shared::SharedModules::default()),
+        }
+    }
     fn authorize(&self, app: &str, actor: &Value, operation: &Value) -> Result<()> {
         self.authority.authorize(app, actor, operation)
     }
@@ -685,7 +767,32 @@ impl RuntimeHost for CoreRuntimeHost {
                 self.write_batch(binding, Some(snapshot.snapshot.stamp), operations)
             }
             "command" => {
-                let value=self.platform(binding,"command.accept",&json!({"type":args[0],"payload":args[1],"options":args.get(2).cloned().unwrap_or(json!({}))}))?;
+                let kind = args[0].as_str().context("invalid: command type")?;
+                let options = args.get(2).cloned().unwrap_or(json!({}));
+                let target = crate::ipc::target(&binding["manifest"], kind, &options)?.to_owned();
+                let receiver = if target == binding["command"]["app_id"] {
+                    binding["manifest"].clone()
+                } else {
+                    let codec = self.codec.clone();
+                    let app = target.clone();
+                    self.read_job(ReadJob::new(Self::options(), move |db| {
+                        codec.active_manifest(db, &app)
+                    }))?
+                };
+                crate::ipc::check(&binding["manifest"], &receiver, kind, &options)?;
+                self.authority.authorize(
+                    &target,
+                    &binding["command"]["actor"],
+                    &json!({
+                        "operation":"command.submit","type":kind,"payload":args[1],
+                        "command_rights":receiver["command_rights"],"manifest":receiver,
+                        "source_command_id":binding["command"]["id"]
+                    }),
+                )?;
+                // Codec MUST repeat active-version/declaration/user-right checks in
+                // its acceptance transaction; the read snapshot grants no authority.
+                let value=self.platform(binding,"command.accept",&json!({"type":args[0],"payload":args[1],"options":options,
+                    "target_app":target,"target_app_ver":receiver["app_ver"],"callback_app":binding["command"]["app_id"]}))?;
                 ensure!(
                     value["id"].is_string()
                         && matches!(value["status"].as_str(), Some("accepted" | "rejected")),

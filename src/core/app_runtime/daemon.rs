@@ -19,6 +19,9 @@ pub struct AppRuntimeDaemon {
     blocking_calls: Arc<Semaphore>,
 }
 impl AppRuntimeDaemon {
+    pub(crate) fn bootstrap_published(&self, app: &str, version: &str) -> Result<()> {
+        self.service.published(app, version)
+    }
     pub fn production(root: PathBuf, host: Arc<CoreRuntimeHost>) -> Result<Self> {
         Ok(Self::from_service(AppRuntimeService::production(
             root, host,
@@ -91,6 +94,15 @@ impl AppRuntimeDaemon {
     }
     pub async fn prompt(&self, app: String, path: String, actor: Value) -> Result<Value> {
         self.call(move |service| service.prompt(&app, &path, &actor))
+            .await
+    }
+    pub async fn command_completed(
+        &self,
+        binding: Value,
+        command_id: String,
+        outcome: Value,
+    ) -> Result<Value> {
+        self.call(move |service| service.command_completed(binding, &command_id, outcome))
             .await
     }
 }

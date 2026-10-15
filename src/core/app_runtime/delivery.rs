@@ -116,7 +116,7 @@ pub fn load_release(
 }
 
 #[cfg(feature = "bundled-node")]
-const NODE: &[u8] = include_bytes!(env!("CTOX_APP_RUNTIME_NODE_BUNDLE"));
+const NODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app-node"));
 /// Build-time packaging input, never a runtime environment override or download.
 /// The package owner supplies the platform's official Node binary at compilation.
 pub fn bundled_node(root: &Path) -> Result<PathBuf> {
