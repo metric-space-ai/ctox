@@ -222,6 +222,14 @@ impl Reassembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn v4_framing_contract_codec_bounds_order_and_decimal_wire_identity() {
+        v4_frames_negotiate_codecs_bound_frames_and_roundtrip_decimal_seq();
+        v4_frames_allow_control_between_bulk_fragments_and_reject_bad_order();
+        v4_frames_reject_expansion_size_and_unnegotiated_codec();
+        super::fixture_tests::v4_frames_shared_fixture_uses_canonical_decimal_strings_and_exact_wire_bytes();
+    }
+
     fn framer(codec: Codec) -> Framer {
         Framer::new(TransportSelection {
             codec,
@@ -231,7 +239,6 @@ mod tests {
         })
         .unwrap()
     }
-    #[test]
     fn v4_frames_negotiate_codecs_bound_frames_and_roundtrip_decimal_seq() {
         for codec in [Codec::Zstd, Codec::Gzip] {
             let f = framer(codec);
@@ -253,7 +260,6 @@ mod tests {
             assert_eq!(r.bytes, 0);
         }
     }
-    #[test]
     fn v4_frames_allow_control_between_bulk_fragments_and_reject_bad_order() {
         let f = framer(Codec::Zstd);
         let mut r = Reassembler::new(f.clone());
@@ -267,7 +273,6 @@ mod tests {
         assert!(r.accept(&bulk[2]).is_err());
         assert!(r.accept(&bulk[0]).is_err());
     }
-    #[test]
     fn v4_frames_reject_expansion_size_and_unnegotiated_codec() {
         let f = framer(Codec::Zstd);
         let frames = f.encode(Lane::Live, WireSeq(0), &vec![1; 2000]).unwrap();
@@ -279,5 +284,45 @@ mod tests {
         let mut tiny = f.transport.clone();
         tiny.frame_bytes = 100;
         assert!(Framer::new(tiny).is_err());
+    }
+}
+
+#[cfg(test)]
+mod fixture_tests {
+    use super::*;
+    use base64::Engine;
+    pub(super) fn v4_frames_shared_fixture_uses_canonical_decimal_strings_and_exact_wire_bytes() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("framing_fixture.json")).unwrap();
+        let f = Framer::new(TransportSelection {
+            codec: Codec::Zstd,
+            frame_bytes: fixture["frame_bytes"].as_u64().unwrap() as u32,
+            fragmentation: true,
+            reassembly: true,
+        })
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let lane = Lane::from_index(case["lane"].as_u64().unwrap() as usize).unwrap();
+            let seq: WireSeq = serde_json::from_value(case["seq"].clone()).unwrap();
+            let text = case["text"].as_str().unwrap().as_bytes();
+            let expected = base64::engine::general_purpose::STANDARD
+                .decode(case["frame_base64"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(f.encode(lane, seq, text).unwrap(), vec![expected.clone()]);
+            assert_eq!(
+                Reassembler::new(f.clone())
+                    .accept(&expected)
+                    .unwrap()
+                    .unwrap(),
+                (lane, seq, text.to_vec())
+            );
+        }
+        let mut noncanonical = f
+            .encode(Lane::Control, WireSeq(0), b"ack")
+            .unwrap()
+            .remove(0);
+        noncanonical[6] = 2;
+        noncanonical[8] = b'0';
+        assert!(f.decode(&noncanonical).is_err());
     }
 }

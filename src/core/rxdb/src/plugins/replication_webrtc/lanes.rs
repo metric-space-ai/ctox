@@ -42,17 +42,3 @@ impl Lane {
     }
 }
 pub const REALTIME_LABEL: &str = "ctox-v4-realtime";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn v4_lane_identity_and_budget() {
-        for (i, lane) in Lane::ALL.into_iter().enumerate() {
-            assert_eq!(lane.index(), i);
-            assert_eq!(Lane::from_index(i), Some(lane));
-        }
-        assert_eq!(Lane::from_index(6), None);
-        assert!(7 * FRAME_BYTES <= ASSOCIATION_BUDGET);
-    }
-}

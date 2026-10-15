@@ -2546,9 +2546,14 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         if !self.is_current_connection(peer) {
             return 0;
         }
+        if self.v4_senders.lock().contains_key(peer) {
+            // V4 admission is per lane and owned by the association scheduler;
+            // the legacy synthetic 1-MiB lead sentinel is not a second gate.
+            return 0;
+        }
         let peer = &peer.peer_id;
         match self.backpressure.lock().get(peer) {
-            Some(bp) if bp.is_high() => DATA_CHANNEL_BUFFERED_HIGH_WATER as usize + 1,
+            Some(bp) if bp.is_high() => super::webrtc_types::WEBRTC_BUFFERED_HIGH_WATER + 1,
             _ => 0,
         }
     }
