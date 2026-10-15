@@ -436,7 +436,8 @@ fn removing_large_collection_archives_its_generation_without_bulk_copy_or_delete
     for i in 0..600 {
         put(&tx, "c_items", &i.to_string(), "1");
     }
-    archive_collection(&tx, "items", 100).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    archive_collection(&tx, &lock(), "items", 100).unwrap();
     assert!(active_collection(&tx, "items").unwrap().is_none());
     assert_eq!(count(&tx, "c_items"), 600);
     assert_eq!(count(&tx, "_archive"), 1);
@@ -509,7 +510,8 @@ fn retired_generation_is_deleted_in_bounded_pages_only_after_reserve() {
     for i in 0..12 {
         put(&tx, "c_items", &i.to_string(), "1");
     }
-    archive_collection(&tx, "items", 100).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    archive_collection(&tx, &lock(), "items", 100).unwrap();
     assert!(
         purge_generation_page(&tx, "items", 1, 100 + change_log::RETENTION_SECONDS, 5).is_err()
     );
@@ -532,7 +534,8 @@ fn archived_collection_name_cannot_be_taken_by_a_foreign_app() {
     let mut db = Connection::open_in_memory().unwrap();
     let tx = db.transaction().unwrap();
     create_collection(&tx, &definition("items")).unwrap();
-    archive_collection(&tx, "items", 100).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    archive_collection(&tx, &lock(), "items", 100).unwrap();
     let other = PublishLock {
         app_id: "other".into(),
         base_app_ver: String::new(),
@@ -548,4 +551,144 @@ fn archived_collection_name_cannot_be_taken_by_a_foreign_app() {
         collection(&tx, "items", 1).unwrap().definition.app_id,
         "app"
     );
+}
+
+#[test]
+fn compatible_preparation_survives_reopen_without_exposing_new_schema_and_abort_discards_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("compatible.sqlite");
+    let old = definition("items");
+    let mut new = old.clone();
+    new.schema_ver = 2;
+    new.app_ver = "2".into();
+    new.schema_json["properties"]["optional"] = json!({"type":"string","default":""});
+    let mut db = Connection::open(&path).unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &old).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    update_compatible(&tx, &lock(), &new).unwrap();
+    assert_eq!(
+        active_collection(&tx, "items").unwrap().unwrap().definition,
+        old
+    );
+    assert!(prepare_migration(&tx, &lock(), &next(&old)).is_err());
+    tx.commit().unwrap();
+    drop(db);
+    let mut db = Connection::open(&path).unwrap();
+    let tx = db.transaction().unwrap();
+    verify_publish(&tx, &lock()).unwrap();
+    assert_eq!(count(&tx, "_schema_updates"), 1);
+    abort_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(
+        active_collection(&tx, "items").unwrap().unwrap().definition,
+        old
+    );
+    assert_eq!(count(&tx, "_schema_updates"), 0);
+}
+
+#[test]
+fn all_compatible_collections_switch_together_and_failed_cutover_restores_preparation() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let a = definition("a");
+    let b = definition("b");
+    create_collection(&tx, &a).unwrap();
+    create_collection(&tx, &b).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    for old in [&a, &b] {
+        let mut new = old.clone();
+        new.app_ver = "2".into();
+        new.client_limit = 2000;
+        update_compatible(&tx, &lock(), &new).unwrap();
+    }
+    assert!(create_collection(&tx, &definition("third")).is_err());
+    assert!(archive_collection(&tx, &lock(), "a", 100).is_err());
+    tx.execute("UPDATE _collections SET schema_ver=9 WHERE name='b'", [])
+        .unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert_eq!(active_collection(&tx, "a").unwrap().unwrap().definition, a);
+    assert_eq!(count(&tx, "_schema_updates"), 2);
+    tx.execute("UPDATE _collections SET schema_ver=1 WHERE name='b'", [])
+        .unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
+    for name in ["a", "b"] {
+        let active = active_collection(&tx, name).unwrap().unwrap();
+        assert_eq!(active.definition.app_ver, "2");
+        assert_eq!(active.definition.client_limit, 2000);
+    }
+}
+
+#[test]
+fn index_publish_race_does_not_build_an_unbounded_index_or_expose_a_partial_schema() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let old = definition("items");
+    create_collection(&tx, &old).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    let mut new = old.clone();
+    new.schema_ver = 2;
+    new.app_ver = "2".into();
+    new.schema_json["indexes"] = json!(["value", ["value", "other"]]);
+    update_compatible(&tx, &lock(), &new).unwrap();
+    put(&tx, "c_items", "race", "1");
+    let error = activate_publication(&tx, &lock(), 100)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("online_index_build_required"), "{error}");
+    assert_eq!(
+        active_collection(&tx, "items").unwrap().unwrap().definition,
+        old
+    );
+    assert_eq!(count(&tx, "_schema_updates"), 1);
+    verify_publish(&tx, &lock()).unwrap();
+}
+
+#[test]
+fn stale_publication_base_can_be_aborted_by_its_exact_reservation_owner() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    tx.execute(
+        "UPDATE _schema_apps SET app_ver='new-owner-version' WHERE app_id='app'",
+        [],
+    )
+    .unwrap();
+    let mut wrong = lock();
+    wrong.operation_id = "wrong-owner".into();
+    assert!(abort_publication(&tx, &wrong, 100).is_err());
+    assert_eq!(count(&tx, "publish_lock"), 1);
+    abort_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(count(&tx, "publish_lock"), 0);
+    assert_eq!(active_collection(&tx, "items").unwrap().unwrap().gen, 1);
+}
+
+#[test]
+fn populated_aborted_generation_is_revoked_then_retired_in_bounded_pages() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let old = definition("items");
+    create_collection(&tx, &old).unwrap();
+    put(&tx, "c_items", "one", "1");
+    put(&tx, "c_items", "two", "1");
+    reserve_publish(&tx, &lock()).unwrap();
+    prepare_migration(&tx, &lock(), &next(&old)).unwrap();
+    let page = change_log::read_page(&tx, "items", 1, 0, 500).unwrap();
+    apply_migration_page(&tx, &lock(), "items", 0, &page, &outputs(&page), 100).unwrap();
+    abort_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(active_collection(&tx, "items").unwrap().unwrap().gen, 1);
+    assert_eq!(count(&tx, "c_items__g2"), 2);
+    assert!(change_log::read_page(&tx, "items", 2, 0, 500).is_err());
+    assert!(!purge_generation_page(&tx, "items", 2, 101, 1).unwrap());
+    assert!(purge_generation_page(&tx, "items", 2, 101, 1).unwrap());
+}
+
+#[test]
+fn zero_based_schema_versions_are_supported_independently_of_generation() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let mut def = definition("items");
+    def.schema_ver = 0;
+    let created = create_collection(&tx, &def).unwrap();
+    assert_eq!((created.gen, created.definition.schema_ver), (1, 0));
 }
