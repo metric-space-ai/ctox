@@ -169,6 +169,66 @@ async fn command_schema_publication_refuses_unmapped_legacy_rows_and_resumes_exp
     writer.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn command_fresh_import_cannot_label_legacy_payload_as_schema_v4() {
+    let (_dir, writer, readers) = runtime().await;
+    let plan = command_release_fixture();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        let old=crate::import::Document {collection:"business_commands".into(),id:"old-1".into(),
+            body:json!({"id":"old-1","module":"fixture","command_type":"task","status":"completed"}),
+            revision:None};
+        let error=crate::import::insert_document(tx,&old).expect_err("unmapped initial import must fail closed");
+        assert!(error.to_string().contains("command_schema_migration_required"),"{error}");
+        Ok(())
+    })).unwrap().await.unwrap();
+    let after = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    assert_eq!(
+        before.head_seq, after.head_seq,
+        "invalid import must not mint a change"
+    );
+    writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let mapped = crate::import::Document {
+                collection: "business_commands".into(),
+                id: "old-1".into(),
+                body: json!({"id":"old-1","app_id":"fixture","type":"task","status":"done",
+                "actor_id":"retained-user","created_at":"2026-10-15T20:00:00Z","payload":{}}),
+                revision: None,
+            };
+            assert!(crate::import::insert_document(tx, &mapped)?);
+            let head = change_log::head(tx)?;
+            assert!(!crate::import::insert_document(tx, &mapped)?);
+            assert_eq!(change_log::head(tx)?.head_seq, head.head_seq);
+            // Removal stays payload-free even when an old source supplies no V4 intent.
+            let tombstone = crate::import::Document {
+                collection: "business_commands".into(),
+                id: "removed-1".into(),
+                body: json!({"id":"removed-1","_deleted":true}),
+                revision: None,
+            };
+            assert!(crate::import::insert_document(tx, &tombstone)?);
+            let active = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert!(tx.query_row(
+                &format!(
+                    "SELECT data IS NULL AND deleted=1 FROM {} WHERE id='removed-1'",
+                    change_log::identifier(&active.table)?
+                ),
+                [],
+                |r| r.get::<_, bool>(0)
+            )?);
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
 // Frozen release source copied into actual loader inputs; no registry seeding.
 fn command_release_fixture() -> crate::import::base_release::ReleasePlan {
     let defaults = crate::schema::BaseReleaseDefaults {
