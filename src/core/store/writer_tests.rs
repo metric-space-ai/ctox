@@ -96,6 +96,10 @@ async fn sqlite_and_jobs_run_on_one_os_thread_with_safe_pragmas() {
                         tx.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))?,
                         1
                     );
+                    assert_eq!(
+                        tx.query_row("PRAGMA wal_autocheckpoint", [], |r| r.get::<_, u32>(0))?,
+                        crate::config::ConnectionConfig::default().wal_autocheckpoint
+                    );
                     Ok(std::thread::current().id())
                 }))
                 .unwrap()

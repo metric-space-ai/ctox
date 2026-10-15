@@ -5,9 +5,13 @@
 
 pub mod change_log;
 pub mod config;
+pub mod ipc;
+pub mod publication;
 pub mod read_pool;
 pub mod registry;
+pub mod rxdb_schema_adapter;
 pub mod schema;
+pub mod testkit;
 pub mod types;
 pub mod writer;
 

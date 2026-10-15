@@ -3781,6 +3781,17 @@ pub(super) fn queue_task_count_cache_miss_count_for_tests(
     counts.get(&key).copied().unwrap_or(0)
 }
 
+/// Owner-backed read entry point. The supplied pool executes exactly one
+/// query-only snapshot and never creates a database.
+pub(super) async fn read_channel_store<T: Send + 'static>(
+    store: &crate::lcm::owner_adapter::OwnerAdapter,
+    options: ctox_store::JobOptions,
+    read: impl FnOnce(&Connection) -> std::result::Result<T, ctox_store::StoreError> + Send + 'static,
+) -> std::result::Result<T, ctox_store::StoreError> {
+    store.read(options, read).await
+}
+
+// Compatibility opener while retained-Connection callers are migrated.
 pub(super) fn open_channel_db_read_only(path: &Path) -> Result<Option<Connection>> {
     if !path.exists() {
         return Ok(None);

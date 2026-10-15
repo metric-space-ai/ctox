@@ -580,6 +580,51 @@ fn load_runtime_state_uncached(root: &Path) -> Result<Option<InferenceRuntimeSta
     Ok(None)
 }
 
+impl crate::inference::runtime_env::RuntimeStore {
+    /// Load persisted state in one reader snapshot. Migration/resolution is
+    /// deliberately separate and must not open Core from this Runtime job.
+    pub(crate) async fn load_state(
+        &self,
+    ) -> std::result::Result<Option<InferenceRuntimeState>, ctox_store::StoreError> {
+        let raw: Option<String> = self
+            .owner
+            .read(ctox_store::JobOptions::default(), |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT state_json FROM runtime_state_store WHERE state_id = 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            })
+            .await?;
+        raw.map(|raw| {
+            serde_json::from_str(&raw).map_err(|_| {
+                ctox_store::StoreError::Invalid("runtime state decoding failed".into())
+            })
+        })
+        .transpose()
+    }
+
+    /// Uses the same owner as env writes; no independent runtime-state opener.
+    /// Resolution/migration stays outside the writer job.
+    pub(crate) async fn persist_state(
+        &self,
+        state: InferenceRuntimeState,
+    ) -> std::result::Result<(), ctox_store::StoreError> {
+        let raw = serde_json::to_string_pretty(&state)
+            .map_err(|_| ctox_store::StoreError::Invalid("runtime state encoding failed".into()))?;
+        self.owner.write(ctox_store::JobOptions::default(), move |tx| {
+            tx.execute("INSERT INTO runtime_state_store (state_id, state_json) VALUES (1, ?1) ON CONFLICT(state_id) DO UPDATE SET state_json = excluded.state_json", params![raw])?;
+            Ok(())
+        }).await?;
+        invalidate_runtime_state_cache(&self.root);
+        // Async completions may resume out of commit order. Reload the committed
+        // row on the next read instead of caching this caller's older snapshot.
+        Ok(())
+    }
+}
+
 pub fn persist_runtime_state(root: &Path, state: &InferenceRuntimeState) -> Result<()> {
     let conn = open_runtime_state_db(root)?;
     let raw =

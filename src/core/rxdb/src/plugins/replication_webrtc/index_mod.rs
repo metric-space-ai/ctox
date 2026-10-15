@@ -23,6 +23,12 @@
 pub mod connection_lifecycle;
 #[path = "hello.rs"]
 pub mod hello;
+#[path = "lanes.rs"]
+pub mod lanes;
+#[path = "framing.rs"]
+pub mod framing;
+#[path = "scheduler.rs"]
+pub mod scheduler;
 
 use super::collection_authority::authorize_collection_for_peer;
 use super::{protocol_contract_generated, NativePeerRole};
@@ -83,7 +89,6 @@ use protocol_contract_generated::{
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 const PROTOCOL_ROOM_PAYLOAD_CACHE_TTL: Duration = Duration::from_secs(5);
-const MAX_CONCURRENT_MASTER_PULLS: usize = 4;
 const MAX_CONCURRENT_REQUEST_TASKS: usize = 32;
 const MAX_CONCURRENT_HANDSHAKE_REQUESTS: usize = 4;
 const MAX_CONCURRENT_AUXILIARY_REQUESTS: usize = 8;
@@ -422,9 +427,6 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// checkpoint awaits. Waiters re-check the cache after acquiring this gate
     /// and consume the winner's payload instead of starting another build.
     protocol_room_payload_build: AsyncMutex<()>,
-    /// Historical pulls perform synchronous SQLite work below an async
-    /// boundary. Bound them so command writes retain a runnable Tokio worker.
-    master_pull_semaphore: Semaphore,
     /// Bounds replication, query, and file-fetch request futures.
     request_semaphore: Arc<Semaphore>,
     /// Protocol admission must remain runnable when data transfers back up.
@@ -517,7 +519,6 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             collections: collection_map,
             protocol_room_payload_cache: Mutex::new(ProtocolRoomPayloadCache::default()),
             protocol_room_payload_build: AsyncMutex::new(()),
-            master_pull_semaphore: Semaphore::new(MAX_CONCURRENT_MASTER_PULLS),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUEST_TASKS)),
             handshake_request_semaphore: Arc::new(Semaphore::new(
                 MAX_CONCURRENT_HANDSHAKE_REQUESTS,
@@ -1909,11 +1910,8 @@ where
                             } else {
                                 match pool_task.master_handler_for(&target_name) {
                                     Some(master) => {
-                                        let _pull_permit = if method == "masterChangesSince" {
-                                            pool_task.master_pull_semaphore.acquire().await.ok()
-                                        } else {
-                                            None
-                                        };
+                                        // Association scheduling owns transport fairness.
+                                        // General request admission remains bounded.
                                         if pool_task
                                             .canceled
                                             .load(std::sync::atomic::Ordering::SeqCst)

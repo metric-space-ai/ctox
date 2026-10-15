@@ -7,4 +7,5 @@ const hash=createHash('sha256');
 for(const file of (await files(root)).sort()){
  hash.update(relative(root,file));hash.update('\0');hash.update(await readFile(file));hash.update('\0');
 }
+hash.update('../rxdb/src/hello.mjs');hash.update('\0');hash.update(await readFile(resolve(root,'../rxdb/src/hello.mjs')));hash.update('\0');
 console.log('KERNEL_SOURCE_SHA256 '+hash.digest('hex'));
