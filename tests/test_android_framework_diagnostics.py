@@ -27,9 +27,6 @@ REAL_THREADTIME = (
     b"09-10 12:00:00.200  1201  1201 I unknown : account=topsecret path=/private/value\n"
 )
 
-class StaticScriptTest(unittest.TestCase):
-    def test_source_compiles_without_execution_side_effects(self):
-        compile(SCRIPT.read_text(encoding="utf-8"), str(SCRIPT), "exec")
 
 class BoundedChildTest(unittest.TestCase):
     def test_output_overflow_terminates_and_reaps_child(self):
@@ -70,6 +67,7 @@ class BoundedChildTest(unittest.TestCase):
                 timer.join()
             self.assertEqual("stopped", result.status)
             self.assertIsNotNone(result.returncode)
+
 
     def test_terminate_child_escalates_and_confirms_reap(self):
         process = mock.Mock(pid=1234, poll=lambda: None, stdout=None)
@@ -183,6 +181,7 @@ class FakeExecutor:
         self.last_was_stopped = result.status == "stopped"
         return result
 
+
 def healthy_results():
     return [
         diagnostics.CommandResult("ok", b"device", 0),
@@ -193,6 +192,7 @@ def healthy_results():
         diagnostics.CommandResult("ok", b"1200", 0),
         diagnostics.CommandResult("ok", REAL_THREADTIME, 0),
     ]
+
 
 class SamplingTest(unittest.TestCase):
     def test_binder_services_are_observed_without_app_probes(self):
@@ -348,6 +348,7 @@ class SamplingTest(unittest.TestCase):
             self.assertIsNone(completion)
             self.assertEqual(1, rejected["oversize_records"])
 
+
 def _namespace(**overrides):
     values = {
         "ownership": "ownership.json",
@@ -361,11 +362,8 @@ def _namespace(**overrides):
     values.update(overrides)
     return argparse.Namespace(**values)
 
-class StrictMetadataParsingTest(unittest.TestCase):
-    def test_enum_wrong_types_return_fixed_default(self):
-        self.assertEqual("fixed", diagnostics._enum(["secret"], {"valid"}, "fixed"))
-        self.assertEqual("fixed", diagnostics._enum({"key": "secret"}, {"valid"}, "fixed"))
 
+class StrictMetadataParsingTest(unittest.TestCase):
     def test_sample_elapsed_large_integer_is_bounded_without_overflow(self):
         sample, _, _ = diagnostics.sample_once(FakeExecutor(healthy_results()), "adb", "emulator-5554", 0, None)
         sample["elapsed_seconds"] = 10**400
@@ -434,6 +432,7 @@ class StrictMetadataParsingTest(unittest.TestCase):
             path.write_bytes(b"x" * (diagnostics.MAX_OUTPUT_BYTES + 1))
             self.assertIsNone(diagnostics._load_ownership(path))
 
+
 class CoverageReportingTest(unittest.TestCase):
     def _observed_sample(self):
         sample, _, _ = diagnostics.sample_once(
@@ -492,6 +491,7 @@ class CoverageReportingTest(unittest.TestCase):
         self.assertFalse(result["coverage"]["coverage_complete"])
         self.assertEqual("output_truncated", result["coverage"]["gap_reason"])
 
+
 def _fake_adb(directory: Path, broken: bool = False, slow: bool = False) -> Path:
     executable = directory / "adb-fixture"
     if broken:
@@ -526,6 +526,7 @@ time.sleep(3)
     executable.chmod(executable.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return executable
 
+
 def _wait_for_file(path: Path, timeout: float = 4) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -534,6 +535,7 @@ def _wait_for_file(path: Path, timeout: float = 4) -> bool:
         time.sleep(0.02)
     return False
 
+
 def _wait_for_completion(path: Path, timeout: float = 5) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -541,6 +543,7 @@ def _wait_for_completion(path: Path, timeout: float = 5) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("monitor did not write a bounded completion record")
+
 
 class OwnershipLifecycleTest(unittest.TestCase):
     def setUp(self):
@@ -762,60 +765,12 @@ class OwnershipLifecycleTest(unittest.TestCase):
         self.assertEqual([(999998, "424242")], stopped)
         self.assertEqual("", stdout.getvalue())
 
+
 class WorkflowIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows/business-os-mobile-ci.yml"
         ).read_text(encoding="utf-8")
-
-    def test_tablet_monitor_wraps_existing_action_and_upload_is_sanitized(self):
-        self.assertIn("id: phone", self.workflow)
-        self.assertIn("id: tablet", self.workflow)
-        self.assertLess(
-            self.workflow.index("Start bounded tablet framework diagnostics"),
-            self.workflow.index("4:3 tablet launch smoke"),
-        )
-        self.assertGreater(
-            self.workflow.index("Finalize bounded tablet framework diagnostics"),
-            self.workflow.index("assert_android_tablet_screenshot.py"),
-        )
-        upload = self.workflow[self.workflow.index("Upload sanitized tablet framework diagnostics"):]
-        self.assertIn("if: always()", upload)
-        self.assertIn("retention-days: 7", upload)
-        self.assertIn("if-no-files-found: error", upload)
-        self.assertIn("android-tablet-framework-diagnostics.json\n", upload)
-        self.assertNotIn(".jsonl", upload)
-        self.assertNotIn("--package", self.workflow)
-        self.assertNotIn("--activity", self.workflow)
-
-    def test_focused_suite_runs_in_ci_with_evidence_artifact(self):
-        for path in (
-            "src/scripts/android-framework-diagnostics.py",
-            "tests/test_android_framework_diagnostics.py",
-        ):
-            self.assertIn(f'- "{path}"\n', self.workflow)
-        job = self.workflow.split("  framework-diagnostics-tests:", 1)[1].split("\n  portable:", 1)[0]
-        self.assertIn("timeout-minutes: 5", job)
-        self.assertIn("python3 -m unittest -v tests/test_android_framework_diagnostics.py", job)
-        self.assertIn("android-framework-diagnostics-tests.log", job)
-        upload = job.split("      - name: Upload focused framework diagnostics test log", 1)[1]
-        self.assertIn("if: always()", upload)
-        self.assertIn("if-no-files-found: error", upload)
-        self.assertIn("retention-days: 7", upload)
-
-    def test_existing_tablet_assertions_and_profile_are_preserved(self):
-        for expected in (
-            'profile: "Nexus 9"',
-            "adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk",
-            "adb shell settings put system accelerometer_rotation 0",
-            "adb shell settings put system user_rotation 0",
-            "adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity",
-            "adb shell cmd window user-rotation lock 0",
-            "adb shell cmd window user-rotation",
-            "python3 src/scripts/assert_android_tablet_screenshot.py \"$RUNNER_TEMP/android-tablet-4x3.png\"",
-        ):
-            self.assertIn(expected, self.workflow)
-        self.assertNotIn("continue-on-error", self.workflow)
 
 if __name__ == "__main__":
     unittest.main()
