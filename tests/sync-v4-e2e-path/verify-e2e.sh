@@ -23,7 +23,7 @@ step() {
  local status=$?
  printf '%s\t%s\n' "$name" "$status" >>"$evidence/exits.tsv"
  printf 'E2E_CHECK %s exit=%s\n' "$name" "$status"
- if [[ "$status" != 0 ]]; then tail -n 65 "$evidence/$name.log"; failed=1; fi
+ if [[ "$status" != 0 ]]; then cat "$evidence/$name.log"; failed=1; fi
  return 0
 }
 : >"$evidence/exits.tsv"
