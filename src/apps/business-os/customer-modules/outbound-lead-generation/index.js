@@ -33,6 +33,7 @@ import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
+import { mergeStoredContacts } from './contact-merge.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -12724,6 +12725,7 @@ async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } 
   const current = doc.toJSON?.() || doc;
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
+  if (Array.isArray(patch?.contacts)) patch = { ...patch, contacts: mergeStoredContacts(current.contacts, patch.contacts) };
   const normalized = normalizeLeadRecipientShape({ ...current, ...patch, id });
   const updatedAt = Date.now();
   const applied = {
