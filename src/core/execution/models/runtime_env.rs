@@ -15,7 +15,6 @@ use crate::inference::runtime_state;
 use crate::secrets;
 
 const RUNTIME_ENV_TABLE: &str = "runtime_env_kv";
-const RUNTIME_ENV_STORE_FILE: &str = "ctox-runtime.sqlite3";
 
 fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
     static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -43,7 +42,7 @@ fn cached_runtime_env_maps() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeEn
 }
 
 pub fn runtime_config_path(root: &Path) -> PathBuf {
-    root.join("runtime").join(RUNTIME_ENV_STORE_FILE)
+    crate::paths::runtime_config_db(root)
 }
 
 fn runtime_env_file_stamp(path: &Path) -> RuntimeEnvFileStamp {
@@ -354,6 +353,61 @@ pub fn get_runtime_env_value(root: &Path, key: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Runtime env and runtime state share this file owner, distinct from Secrets.
+/// Schema registration and legacy import must finish before attachment.
+#[derive(Clone)]
+pub(crate) struct RuntimeStore {
+    pub(super) owner: crate::lcm::owner_adapter::OwnerAdapter,
+    pub(super) root: PathBuf,
+}
+
+impl RuntimeStore {
+    pub(crate) async fn attach(
+        root: &Path,
+        writer: ctox_store::writer::WriterHandle,
+        readers: ctox_store::read_pool::ReadPool,
+    ) -> std::result::Result<Self, ctox_store::StoreError> {
+        let owner = crate::lcm::owner_adapter::OwnerAdapter::attach(
+            &runtime_config_path(root),
+            writer,
+            readers,
+        )
+        .await?;
+        Ok(Self {
+            owner,
+            root: root.to_path_buf(),
+        })
+    }
+
+    pub(crate) async fn load_env(
+        &self,
+    ) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
+        self.owner
+            .read(
+                ctox_store::JobOptions::default(),
+                load_runtime_env_map_from_db,
+            )
+            .await
+    }
+
+    pub(crate) async fn set_value(
+        &self,
+        key: String,
+        value: String,
+    ) -> std::result::Result<(), ctox_store::StoreError> {
+        if key.trim().is_empty() || secrets::is_secret_key(&key) {
+            return Ok(());
+        }
+        self.owner.write(ctox_store::JobOptions::default(), move |tx| {
+            tx.execute("INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2) ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value", params![key, value])?;
+            Ok(())
+        }).await?;
+        invalidate_runtime_env_cache(&self.root);
+        Ok(())
+    }
+}
+
+// Compatibility seam until synchronous callers migrate to RuntimeStore.
 fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
     let path = runtime_config_path(root);
     if let Some(parent) = path.parent() {
@@ -454,20 +508,18 @@ fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn load_runtime_env_map_from_db(conn: &Connection) -> Result<BTreeMap<String, String>> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
-        ))
-        .context("failed to prepare runtime env query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("failed to read runtime env rows")?;
+fn load_runtime_env_map_from_db(
+    conn: &Connection,
+) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut env_map = BTreeMap::new();
     for row in rows {
-        let (key, value) = row.context("failed to decode runtime env row")?;
+        let (key, value) = row?;
         env_map.insert(key, value);
     }
     Ok(env_map)
