@@ -7,6 +7,11 @@ mod init;
 mod request;
 #[path = "claude_openai-responses_response.rs"]
 mod response;
+#[path = "claude_openai-responses_tool_search.rs"]
+mod tool_search;
+#[cfg(test)]
+#[path = "claude_openai-responses_tool_search_test.rs"]
+mod tool_search_test;
 
 #[cfg(test)]
 mod claude_openai_responses_compat_test;

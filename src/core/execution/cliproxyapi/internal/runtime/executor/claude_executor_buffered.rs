@@ -2,15 +2,11 @@
 // Port-Status: candidate
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use std::collections::HashMap;
-
 use super::claude_executor::{ClaudeMessagesRequest, ClaudeMessagesResponse, ClaudeUsage};
 use super::claude_executor_diagnostics::{
     claude_message_id_from_response, claude_message_id_from_sse,
 };
-use super::claude_executor_request::{
-    restore_claude_oauth_tool_names_from_response, restore_claude_oauth_tool_names_from_stream_line,
-};
+use super::claude_executor_request::{ClaudeMcpAliasError, ClaudeMcpAliasResolver};
 use super::helps::{observe_plugin_executor_stream, StreamUsageBuffer};
 
 /// A unary caller can still request an upstream stream and receive its complete
@@ -18,16 +14,11 @@ use super::helps::{observe_plugin_executor_stream, StreamUsageBuffer};
 pub(super) fn prepare_claude_buffered_response(
     response: ClaudeMessagesResponse,
     request: &ClaudeMessagesRequest,
-) -> ClaudeMessagesResponse {
+) -> Result<ClaudeMessagesResponse, ClaudeMcpAliasError> {
+    let resolver = ClaudeMcpAliasResolver::new(request.body(), request.tool_name_reverse_map());
     if !request.stream() || !(200..300).contains(&response.status()) {
-        return response.map_body(|body| {
-            restore_claude_oauth_tool_names_from_response(
-                body,
-                "",
-                false,
-                request.tool_name_reverse_map(),
-            )
-        });
+        let body = resolver.restore_response(response.body())?;
+        return Ok(response.map_body(|_| body));
     }
     if let Err(message) = validate_claude_buffered_stream(response.body()) {
         let mut headers = response.headers().clone();
@@ -45,28 +36,26 @@ pub(super) fn prepare_claude_buffered_response(
             "error": {"type": "api_error", "message": message},
         }))
         .expect("fixed Claude error envelope is serializable");
-        return ClaudeMessagesResponse::new(502, body)
+        return Ok(ClaudeMessagesResponse::new(502, body)
             .with_headers(headers)
-            .with_retry_after(response.retry_after());
+            .with_retry_after(response.retry_after()));
     }
-    response
-        .map_body(|body| restore_claude_stream_tool_names(body, request.tool_name_reverse_map()))
+    let body = restore_claude_stream_tool_names(response.body(), &resolver)?;
+    Ok(response.map_body(|_| body))
 }
 
 pub(super) fn restore_claude_stream_tool_names(
     data: &[u8],
-    reverse: &HashMap<String, String>,
-) -> Vec<u8> {
+    resolver: &ClaudeMcpAliasResolver,
+) -> Result<Vec<u8>, ClaudeMcpAliasError> {
     let mut restored = Vec::with_capacity(data.len());
     for (index, line) in data.split(|byte| *byte == b'\n').enumerate() {
         if index > 0 {
             restored.push(b'\n');
         }
-        restored.extend_from_slice(&restore_claude_oauth_tool_names_from_stream_line(
-            line, "", false, reverse,
-        ));
+        restored.extend_from_slice(&resolver.restore_line(line)?);
     }
-    restored
+    Ok(restored)
 }
 
 pub(super) fn claude_buffered_response_message_id(data: &[u8], stream: bool) -> String {

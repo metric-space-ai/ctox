@@ -124,25 +124,54 @@ test('open menu and transient visibility cannot satisfy the two-frame paint conf
   driver.frame(170);
   driver.frame(186);
   const timing = await result;
-  assert.equal(timing.domVisibleMs, 20);
+  assert.equal(timing.domVisibleMs, 160);
   assert.equal(timing.firstRenderFrameMs, 170);
   assert.equal(timing.firstPaintMs, 186, 'real slow rendering must remain above the unchanged 150-ms gate');
   driver.assertClean();
 });
 
-test('actual submit guard accepts 149 ms and still rejects exactly 150 ms', async () => {
+test('shared-runner frame delay keeps paint proof without charging idle time to prompt work', async () => {
+  const driver = paintDriver();
+  const accepted = driver.guard(() => driver.show(36.5));
+  driver.frame(142);
+  driver.frame(278.1);
+  await accepted;
+  driver.assertClean();
+});
+
+test('actual submit guard retains the strict 150-ms readiness and main-thread budgets', async () => {
   const fast = paintDriver();
-  const accepted = fast.guard(() => fast.show(0));
-  fast.frame(133);
-  fast.frame(149);
+  const accepted = fast.guard(() => fast.show(149));
+  fast.frame(160);
+  fast.frame(176);
   await accepted;
   fast.assertClean();
   const slow = paintDriver();
-  const rejected = slow.guard(() => slow.show(0));
-  slow.frame(134);
-  slow.frame(150);
-  await assert.rejects(rejected, /Context prompt first paint exceeded 150ms: 150.0ms/);
+  const rejected = slow.guard(() => slow.show(150));
+  slow.frame(160);
+  slow.frame(176);
+  await assert.rejects(rejected, /critical path exceeded 150ms/);
   slow.assertClean();
+  const blocked = paintDriver();
+  const blockedResult = blocked.guard(() => blocked.show(0));
+  blocked.task(0, 150);
+  blocked.frame(150);
+  blocked.frame(166);
+  await assert.rejects(blockedResult, /critical path exceeded 150ms/);
+  blocked.assertClean();
+});
+
+test('transient visibility cannot hide late stable readiness from the submit guard', async () => {
+  const driver = paintDriver();
+  const rejected = driver.guard(() => driver.show(0));
+  driver.frame(16);
+  driver.hide(20);
+  driver.frame(32);
+  driver.show(160);
+  driver.frame(176);
+  driver.frame(192);
+  await assert.rejects(rejected, /critical path exceeded 150ms/);
+  driver.assertClean();
 });
 
 test('missing prompt and submit exceptions release frame, timer and performance observers', async () => {
