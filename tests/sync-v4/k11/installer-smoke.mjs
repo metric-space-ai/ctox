@@ -7,7 +7,7 @@ import {spawnSync} from 'node:child_process';
 import {Native,verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
 import {schema} from '../../sync-v4-e2e/browser.mjs';
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
-const [oldReceipt,newReceipt,outArg]=process.argv.slice(2),before=verifiedBuild(oldReceipt),after=verifiedBuild(newReceipt);
+const [oldReceipt,newReceipt,outArg,roundtrip]=process.argv.slice(2),before=verifiedBuild(oldReceipt),after=verifiedBuild(newReceipt);
 const output=resolve(outArg),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
 if(!output.startsWith(allowed))throw Error('New private artifact prefix required');
 fs.mkdirSync(output,{recursive:false,mode:0o700});
@@ -31,7 +31,7 @@ try{
  record.fixture={rows:truth.rows.length,documentsCovered:bodies.rows.length,fullDocumentSha256:digest(bodies.rows),metadataSha256:digest(truth.rows)};save();
  record.root=root;record.beforeSnapshot=snapshot('before');save();
  const controller=join(dirname(new URL(import.meta.url).pathname),'upgrade-controller.mjs'),log=fs.openSync(join(output,'controller.log'),'w',0o600);
- const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade')],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
+ const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade'),roundtrip==='yes'?'yes':'no'],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
  record.controllerExit=run.status;record.controllerError=run.error?.message;
  for(const [name,file]of [['installer','installer.json'],['failure','failure.json'],['controller','controller.json']]){
   const p=join(output,'upgrade',file);if(fs.existsSync(p))record[name]=JSON.parse(fs.readFileSync(p));

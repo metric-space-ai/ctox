@@ -31,7 +31,7 @@ try{
   if(!prefix.startsWith(allowed)||p.id!=='K11'||!p.terminal||!p.installerExecuted||!p.dataPreserved||!p.controller?.groupAbsent||!p.beforeSnapshot?.quiesced||!p.afterSnapshot?.quiesced||p.beforeRevision!==old.revision||p.afterRevision!==next.revision||p.installer?.activeBinarySha256!==next.binarySha256)throw Error('Reused installer evidence does not match this transition');
   report.steps.push({id:'sqlite-backup-install-restore',status:'green',reused:true,evidence:join(prefix,'result.json'),evidenceSha256:createHash('sha256').update(bytes).digest('hex'),startedAt:p.startedAt,finishedAt:p.finishedAt});save();
  }else{
-  const install=run('sqlite-backup-install-restore',process.execPath,['tests/sync-v4/k11/installer-smoke.mjs',o.before,o.after,prefix],14*60*1000);
+  const install=run('sqlite-backup-install-restore',process.execPath,['tests/sync-v4/k11/installer-smoke.mjs',o.before,o.after,prefix,o['rollback-roundtrip']==='yes'?'yes':'no'],14*60*1000);
   if(install.exit!==0)throw Error('Isolated supported installer/snapshot rehearsal failed');
  }
  const proof=JSON.parse(fs.readFileSync(join(prefix,'result.json')));

@@ -13,6 +13,11 @@ own process groups. No record HTTP bridge, no mocked query/replication/readiness
 synthetic profile, SQLite API snapshots/restores before and after, then binds the
 regression preflight to that **same upgraded state**. Pass all runtime paths from
 the accepted bench: coturn and Playwright need not live in system/default paths.
+`--rollback-roundtrip yes` additionally attempts the official rollback followed
+by exact forward installation; a refusal stops the run and remains a negative
+result. The current masked-bus namespace cannot satisfy the installer's User
+Service Manager requirement, so full rollback/forward is not qualified there.
+Never expose the host bus or stub systemctl to make that result green.
 Run through the canonical lane. `--installed-evidence /private/install/result.json`
 reuses a verified completed transition after a fixture setup correction instead
 of repeating the installer; both revisions, binary hash, owner, cleanup and
