@@ -573,7 +573,7 @@ async fn release_enters_catalog_and_stale_release_has_no_effect() {
             "app_catalog",
             &format!("unknown-at-boot:{installed}:stable")
         )
-        .is_some());
+        .await.is_some());
     assert_eq!(
         f.run(
             "stale-release",
@@ -586,7 +586,7 @@ async fn release_enters_catalog_and_stale_release_has_no_effect() {
     );
     assert!(f
         .read("app_catalog", &format!("unknown-at-boot:{installed}:bad"))
-        .is_none());
+        .await.is_none());
 }
 
 #[tokio::test]
