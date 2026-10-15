@@ -16,7 +16,7 @@ pub fn command_document_schema() -> Value {
 /// Migration may never relabel a legacy command body as a V4 command. The
 /// artifact evaluator owns semantic/actor mapping; this boundary only rejects
 /// missing V4 intent/identity fields and invalid lifecycle values. P4 still
-/// performs complete JSON-schema/rights validation on normal write admission.
+/// remains responsible for complete JSON-schema/rights validation on writes.
 pub fn validate_migrated_command(body: &Value, id: &str) -> rusqlite::Result<()> {
     let has_identity = ["type", "app_id", "actor_id", "created_at"]
         .iter()

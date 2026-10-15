@@ -59,6 +59,8 @@ async fn command_schema_publication_changes_generation_and_replay_is_seq_neutral
 async fn command_schema_publication_refuses_unmapped_legacy_rows_and_resumes_explicit_migration() {
     let (_dir, writer, readers) = runtime().await;
     let mut plan = command_release_fixture();
+    // Deliberately exercise the importer identity fallback, not an artifact mapper.
+    plan.migrations.remove("business_commands");
     let mut legacy = plan.collections["ctox-platform"]
         .iter()
         .find(|d| d.name == "business_commands")
@@ -357,7 +359,9 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
             .env("KERNEL_URL", format!("file://{}", kernel.display()))
             .env(
                 "COMMAND_CONFIG",
-                json!({"schema":schema,"epoch":epoch}).to_string(),
+                json!({"schema":schema,"epoch":epoch,"manifest":plan.manifests.iter()
+                    .find(|m|m["app_id"]=="ctox-platform").unwrap()})
+                .to_string(),
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -503,9 +507,10 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     );
     let mut measured = measured.expect("missing actual runtime measurement");
     projection_us.sort_by(|a, b| a.total_cmp(b));
-    measured["projection_read_p50_us"] = json!(projection_us[projection_us.len() / 2]);
+    measured["projection_read_p50_us"] = json!(projection_us[projection_us.len().div_ceil(2) - 1]);
     measured["projection_read_p99_us"] =
         json!(projection_us[(projection_us.len() * 99).div_ceil(100) - 1]);
+    measured["projection_samples_us"] = json!(projection_us);
     println!("P9_M8_COMPONENT {}", measured);
     assert!(measured["verified_pages"].as_u64().unwrap() > 0);
     assert!(measured["canonical_replays"].as_u64().unwrap() > 0);
