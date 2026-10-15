@@ -46,7 +46,7 @@ test('Mango multi-field ordering, id ties, pagination, no default row cap or res
   assert.equal(mango(many, { selector: {} }).length, 1200);
   const read = mango(docs, { selector: {} }); read[0].n = 999;
   assert.equal(docs[1].n, 1);
-  for (const query of [{ selector: {}, limit: -1 }, { selector: {}, skip: 0.5 }, { selector: {}, sort: [{ n: 'up' }] }, { selector: { '__proto__.x': 1 } }]) assert.throws(() => mango([], query), denied('invalid'));
+  for (const query of [{ selector: null }, { selector: {}, sort: null }, { selector: { n: { $not: 1 } } }, { selector: {}, limit: -1 }, { selector: {}, skip: 0.5 }, { selector: {}, sort: [{ n: 'up' }] }, { selector: { '__proto__.x': 1 } }]) assert.throws(() => mango([], query), denied('invalid'));
 });
 test('ctx read/write runs on the in-memory store and enforces compare-and-set', async () => {
   const fixtures = { collections: { records: [{ id: 'one', rev: 'old', n: 1 }] } };
@@ -181,4 +181,14 @@ test('migration rejects missing source revisions and duplicate ids', async t => 
   const app = manifest({ migrations: { records: { migrate_fn: 'handler.mjs' } } });
   await assert.rejects(runMigration(app, 'records', [{ id: 'x' }], { fixtures }), denied('invalid'));
   await assert.rejects(runMigration(app, 'records', [{ id: 'x', rev: 'r' }, { id: 'x', rev: 'r' }], { fixtures }), denied('invalid'));
+});
+
+test('JS regex query forms normalize to the wire subset and preserve only flag i', () => {
+  assert.deepEqual(ids({ title: /^ALP/i }), ['a', 'c']);
+  assert.deepEqual(ids({ title: { $regex: /^ALP/i } }), ['a', 'c']);
+  assert.deepEqual(ids({ title: { $not: /^ALP/i } }), ['b']);
+  assert.deepEqual(ids({ title: { $regex: '^b', $options: '' } }), []);
+  for (const selector of [{ title: /alpha/g }, { title: { $regex: /alpha/m } }])
+    assert.throws(() => mango([], { selector }), denied('invalid'));
+  assert.equal(new CtoxError('invalid', 'field', { path: 'records.title' }).path, 'records.title');
 });

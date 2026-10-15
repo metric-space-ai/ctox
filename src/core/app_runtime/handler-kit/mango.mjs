@@ -5,10 +5,30 @@ export class CtoxError extends Error {
     super(message);
     this.name = 'CtoxError';
     this.code = code;
-    if (path !== undefined) this.path = path;
+    if (path !== undefined) this.path = typeof path === 'string' ? path : path.path;
   }
 }
 export const invalid = (message, path) => { throw new CtoxError('invalid', message, path); };
+/** Convert JS query regexes to the JSON wire subset, preserving only flag i. */
+export function normalizeMango(value) {
+  const regex = item => Object.prototype.toString.call(item) === '[object RegExp]';
+  const flags = item => {
+    if (!['', 'i'].includes(item.flags)) invalid('Only regex flag i is supported');
+    return item.flags;
+  };
+  if (regex(value)) return { $regex: value.source, $options: flags(value) };
+  if (Array.isArray(value)) return value.map(normalizeMango);
+  if (value !== null && typeof value === 'object') {
+    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, normalizeMango(item)]));
+    if (regex(value.$regex)) {
+      result.$regex = value.$regex.source;
+      result.$options = Object.hasOwn(value, '$options') ? value.$options : flags(value.$regex);
+      flags(value.$regex);
+    }
+    return result;
+  }
+  return value;
+}
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const has = (value, key) => value != null && Object.hasOwn(value, key);
 const MISSING = Symbol('missing');
@@ -21,7 +41,7 @@ function validateCondition(condition, depth = 0) {
     if (!operators.has(op)) invalid('Unsupported Mango operator', op);
     if (['$in', '$nin'].includes(op) && !Array.isArray(value)) invalid(op + ' requires an array');
     if (op === '$exists' && typeof value !== 'boolean') invalid('$exists requires a boolean');
-    if (op === '$options' && (value !== 'i' || !has(condition, '$regex'))) invalid('Only regex flag i is supported');
+    if (op === '$options' && (!['', 'i'].includes(value) || !has(condition, '$regex'))) invalid('Only regex flag i is supported');
     if (op === '$regex') {
       if (typeof value !== 'string') invalid('$regex requires a string');
       try { new RegExp(value, condition.$options ?? ''); } catch { invalid('Invalid regular expression'); }
@@ -31,7 +51,10 @@ function validateCondition(condition, depth = 0) {
       if (Object.keys(value).some(key => key.startsWith('$') && !['$and', '$or', '$not'].includes(key))) validateCondition(value, depth + 1);
       else validateSelector(value, depth + 1);
     }
-    if (op === '$not') validateCondition(value, depth);
+    if (op === '$not') {
+      if (!plain(value)) invalid('$not requires a condition object');
+      validateCondition(value, depth);
+    }
   }
 }
 function validateSelector(selector, depth = 0) {
@@ -90,7 +113,10 @@ const compare = (a, b) => {
 
 /** Normative v4 subset: missing differs from null; ties sort by id; no implicit limit. */
 export function mango(docs, query = { selector: {} }) {
+  query = normalizeMango(query);
   if (!plain(query) || Object.keys(query).some(key => !['selector', 'sort', 'limit', 'skip'].includes(key))) invalid('Invalid Mango query');
+  if (has(query, 'selector') && !plain(query.selector)) invalid('Mango selector must be an object');
+  if (has(query, 'sort') && !Array.isArray(query.sort)) invalid('Mango sort must be an array');
   validateSelector(query.selector ?? {});
   for (const name of ['limit', 'skip']) if (has(query, name) && (!Number.isSafeInteger(query[name]) || query[name] < 0)) invalid('Invalid Mango ' + name);
   const sort = query.sort ?? [];
