@@ -75,8 +75,11 @@ fn definition(name: &str) -> crate::schema::CollectionDefinition {
     }
 }
 fn op(n: u16) -> String {
+    op_at(NOW, n)
+}
+fn op_at(issued: u64, n: u16) -> String {
     let mut bytes = [0u8; 16];
-    bytes[..6].copy_from_slice(&NOW.to_be_bytes()[2..]);
+    bytes[..6].copy_from_slice(&issued.to_be_bytes()[2..]);
     bytes[6] = 0x70;
     bytes[8] = 0x80;
     bytes[14..].copy_from_slice(&n.to_be_bytes());
@@ -345,6 +348,16 @@ fn prev_chain_is_resolved_after_ordered_arrival_and_rollback_has_no_receipt() {
         NOW,
     );
     assert_eq!(good.results[0].result.status, WriteStatus::Accepted);
+    let previous = op_at(NOW - OP_HORIZON_MS - 1, 998);
+    let mut expired = put(5, 5, "d", Some(format!("op:{previous}")), json!({"v":5}));
+    expired.write.prev_op_id = Some(previous);
+    assert_eq!(
+        submit(&mut db, "alice", &expired, NOW).results[0]
+            .result
+            .reason
+            .as_deref(),
+        Some("expired")
+    );
 }
 #[test]
 fn gap_expiry_overflow_restart_and_gc_do_not_execute_a_late_write() {
@@ -403,6 +416,25 @@ fn gap_expiry_overflow_restart_and_gc_do_not_execute_a_late_write() {
             .as_deref(),
         Some("expired")
     );
+    // A first delivery near the op_id horizon cannot extend that horizon by
+    // another month merely by replaying through the client_seq receipt ledger.
+    {
+        let mut delayed = database();
+        let request = put(1, 777, "delayed", None, json!({"v":1}));
+        assert_eq!(
+            submit(&mut delayed, "delayed", &request, NOW + OP_HORIZON_MS - 1).results[0]
+                .result
+                .status,
+            WriteStatus::Accepted
+        );
+        assert_eq!(
+            submit(&mut delayed, "delayed", &request, NOW + OP_HORIZON_MS + 1).results[0]
+                .result
+                .reason
+                .as_deref(),
+            Some("expired")
+        );
+    }
     for seq in 2..=(MAX_WAITING as u64 + 1) {
         submit(
             &mut db,
