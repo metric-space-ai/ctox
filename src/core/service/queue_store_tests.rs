@@ -18,9 +18,11 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
         assert_eq!(tx.pragma_query_value(None,"busy_timeout",|r|r.get::<_,i64>(0))?,0,"domain DDL replaced owner pragmas");
         for n in 0..130 {
             let id=format!("queue-owner-fixture-{n:03}");
+            let large = if n == 129 { "λ".repeat(600_000) } else { String::new() };
+            let prompt = if n == 129 {large.as_str()} else {"synthetic load"};
             crate::communication_store::upsert_communication_message_tx(tx,crate::communication_store::UpsertMessage {
                 message_key:&id,channel:"queue",account_key:"synthetic",thread_key:"synthetic",remote_id:&id,direction:"inbound",folder_hint:"queue",
-                sender_display:"fixture",sender_address:"fixture",recipient_addresses_json:"[]",cc_addresses_json:"[]",bcc_addresses_json:"[]",subject:"synthetic owner job",preview:"fixture",body_text:"synthetic load",body_html:"",raw_payload_ref:"",trust_level:"high",status:"received",seen:false,has_attachments:false,
+                sender_display:"fixture",sender_address:"fixture",recipient_addresses_json:"[]",cc_addresses_json:"[]",bcc_addresses_json:"[]",subject:"synthetic owner job",preview:"fixture",body_text:prompt,body_html:"",raw_payload_ref:"",trust_level:"high",status:"received",seen:false,has_attachments:false,
                 external_created_at:"2026-10-15T00:00:00Z",observed_at:"2026-10-15T00:00:00Z",metadata_json:r#"{"source":"ctox-queue","priority":"normal"}"#
             }).map_err(|_|StoreError::Invalid("fixture message seed".into()))?;
             tx.execute("INSERT INTO communication_routing_state(message_key,route_status,lease_owner,updated_at) VALUES(?1,'leased','fixture','2026-10-15T00:00:00Z')",[id])?;
@@ -112,6 +114,86 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
     let mut conflict = replay;
     conflict.failure = Some("different operation".into());
     assert!(ack_async(root.clone(), conflict, None).await.is_err());
+    // R8: a pre-existing >1 MiB prompt must not roll back a small ACK.
+    let large_ack = AckRequest {
+        operation_id: "queue-large-content".into(),
+        keys: vec!["queue-owner-fixture-129".into()],
+        status: "failed".into(),
+        failure: Some("synthetic failure".into()),
+        reason: None,
+        attempt: None,
+    };
+    assert_eq!(ack_async(root.clone(), large_ack.clone(), None).await?, 1);
+    let large_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while changes.latest().is_none_or(|head| head.head_seq < 129) {
+        tokio::time::timeout_at(large_deadline, changes.changed()).await??;
+    }
+    let projected: String = sync
+        .readers
+        .read(|tx| {
+            tx.query_row(
+                "SELECT data FROM c_ctox_queue_tasks WHERE id='queue-owner-fixture-129'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .await?;
+    assert!(
+        projected.len() < super::super::queue_projection::INLINE_BYTES,
+        "projection was not bounded"
+    );
+    let projected: Value = serde_json::from_str(&projected)?;
+    assert!(
+        projected["prompt"].is_string(),
+        "projection changed the prompt type"
+    );
+    let reference = projected["projection_ref"].clone();
+    let (source_len, envelope_len):(i64,i64)=core.readers.read(|tx|{
+        Ok((tx.query_row("SELECT length(CAST(body_text AS BLOB)) FROM communication_messages WHERE message_key='queue-owner-fixture-129'",[],|r|r.get(0))?,
+            tx.query_row("SELECT length(payload) FROM _publication_outbox WHERE op_id='queue-large-content:queue-owner-fixture-129'",[],|r|r.get(0))?))
+    }).await?;
+    assert_eq!(source_len, 1_200_000, "source prompt lost bytes");
+    assert!(envelope_len < 128 * 1024, "outbox payload is not bounded");
+    assert_eq!(
+        ack_async(root.clone(), large_ack, None).await?,
+        1,
+        "ACK replay changed result"
+    );
+    let mut full = Vec::new();
+    let mut chunk_us = Vec::new();
+    while full.len() < (reference["size"].as_u64().unwrap() as usize) {
+        let request = super::super::queue_projection::ChunkRequest {
+            record_id: "queue-owner-fixture-129".into(),
+            sha256: reference["sha256"].as_str().unwrap().into(),
+            offset: full.len() as u64,
+        };
+        let started = Instant::now();
+        let chunk = ipc::request(
+            endpoint(&root),
+            Request {
+                request_id: full.len() as u64,
+                kind: JobKind::Read,
+                method: "queue.projection.read".into(),
+                payload: serde_json::to_vec(&request)?,
+            },
+            options(),
+        )?
+        .await?;
+        chunk_us.push(started.elapsed().as_micros() as u64);
+        assert!(!chunk.is_empty() && chunk.len() <= super::super::queue_projection::CHUNK_BYTES);
+        full.extend(chunk);
+    }
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&full)),
+        reference["sha256"].as_str().unwrap(),
+        "lossless projection hash mismatch"
+    );
+    let full: Value = serde_json::from_slice(&full)?;
+    assert_eq!(full["prompt"].as_str().unwrap(), "λ".repeat(600_000));
+    eprintln!(
+        "QUEUE_PROJECTION_CHUNKS {}",
+        json!({"max_roundtrip_us":chunk_us.iter().max(),"full_bytes":source_len,"envelope_bytes":envelope_len,"reader_execution_budget_ms":20})
+    );
     // The destination owner changes after source admission was configured.
     // Resolving it again in B's transaction must reject the pending effect.
     sync.writer

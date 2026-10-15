@@ -12,6 +12,7 @@ mod lifecycle_timeouts;
 pub use lifecycle_timeouts::SERVICE_LIFECYCLE_TIMEOUTS;
 pub mod mission_governor;
 pub mod process_mining;
+pub(crate) mod queue_projection;
 pub(crate) mod queue_store;
 pub mod reset;
 pub mod state_invariants;

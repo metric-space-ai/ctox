@@ -53,6 +53,29 @@ impl Dispatcher for Inspect {
                 .ok_or(StoreError::Closed)?;
             return queue.dispatch(request, options);
         }
+        if request.kind == JobKind::Read && request.method == "queue.projection.read" {
+            let chunk: super::queue_projection::ChunkRequest =
+                serde_json::from_slice(&request.payload)
+                    .map_err(|_| StoreError::Invalid("invalid projection request".into()))?;
+            let core = self
+                .databases
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get("core")
+                .cloned()
+                .ok_or(StoreError::Closed)?;
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            self.runtime.spawn(async move {
+                let result = core
+                    .readers
+                    .read_job(ReadJob::new(options, move |db| {
+                        super::queue_projection::read_chunk(db, &chunk)
+                    }))
+                    .await;
+                let _ = reply.send(result);
+            });
+            return Ok(JobHandle::from_receiver(receive));
+        }
         if request.kind != JobKind::Read || request.method != "store.inspect" {
             return Err(StoreError::Invalid("unknown store operation".into()));
         }
