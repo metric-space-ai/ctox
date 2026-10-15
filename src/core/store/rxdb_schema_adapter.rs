@@ -26,16 +26,23 @@ pub trait ChangeLogSink {
     fn install_rxdb(&self, tx: &Transaction<'_>, binding: &RxdbTable) -> Result<(), StoreError>;
 }
 
-
 /// Compatibility name for the canonical sink exported by P3-15 wiring.
 /// There is only one implementation and one sequence source.
 pub use CanonicalChangeLog as StoreChangeLog;
 impl CanonicalChangeLog {
     /// Retain the bounded page receipt needed by the takeover caller.
     pub fn backfill(
-        tx: &Transaction<'_>, binding: &RxdbTable, after: Option<&str>,
+        tx: &Transaction<'_>,
+        binding: &RxdbTable,
+        after: Option<&str>,
     ) -> Result<crate::change_log::BackfillPage, StoreError> {
-        Ok(crate::change_log::backfill_page(tx, &binding.collection, binding.generation, after, 500)?)
+        Ok(crate::change_log::backfill_page(
+            tx,
+            &binding.collection,
+            binding.generation,
+            after,
+            500,
+        )?)
     }
 }
 /// The actual P3-05 sink, retaining the registered application's version and
@@ -219,10 +226,16 @@ mod change_log_sink_tests {
             "CREATE TABLE rx_docs(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,data TEXT)",
         )?;
         let binding = RxdbTable {
-            collection: "docs".into(), table: "rx_docs".into(), generation: 1,
-            schema_version: 0, app_version: "base".into(),
+            collection: "docs".into(),
+            table: "rx_docs".into(),
+            generation: 1,
+            schema_version: 0,
+            app_version: "base".into(),
         };
-        tx.execute("INSERT INTO rx_docs VALUES('doc','1-r',0,'{\"id\":\"doc\"}')", [])?;
+        tx.execute(
+            "INSERT INTO rx_docs VALUES('doc','1-r',0,'{\"id\":\"doc\"}')",
+            [],
+        )?;
         install(&tx, &binding, &StoreChangeLog)?;
         assert!(StoreChangeLog::backfill(&tx, &binding, None)?.complete);
         let inserted = crate::change_log::read_page(&tx, "docs", 1, 0, 10)?;
