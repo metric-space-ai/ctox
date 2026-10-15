@@ -222,9 +222,9 @@ impl V4StreamSource for Source {
         &self,
         peer: &str,
         _: &Value,
-    ) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>> {
+    ) -> RxResult<Arc<dyn WebRTCPublicationGuard>> {
         self.check(peer)?;
-        Ok(Some(Arc::new(Guard)))
+        Ok(Arc::new(Guard))
     }
     fn subscribe(
         &self,

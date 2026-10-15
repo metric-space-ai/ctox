@@ -15,11 +15,13 @@ use std::sync::{
 /// It signs pages, reads the commit-driven change log and uses the ONE writer
 /// transaction for document + op_id result. Replayed requests recheck authority.
 pub trait V4StreamSource: Send + Sync {
+    /// Missing or stale authority is an error, including every retained replay.
+    /// An optional guard would silently turn denied publication into unrestricted IO.
     fn publication(
         &self,
         peer: &str,
         packet: &Value,
-    ) -> RxResult<Option<Arc<dyn super::super::webrtc_types::WebRTCPublicationGuard>>>;
+    ) -> RxResult<Arc<dyn super::super::webrtc_types::WebRTCPublicationGuard>>;
     fn subscribe(
         &self,
         peer: &str,
@@ -93,7 +95,7 @@ impl V4Session {
                             Lane::Commands,
                             WireSeq(result_seq.fetch_add(1, Ordering::Relaxed)),
                             &bytes,
-                            guard,
+                            Some(guard),
                         )
                         .await
                 }
@@ -156,7 +158,7 @@ impl V4Session {
                                                 lane,
                                                 WireSeq(seq.fetch_add(1, Ordering::Relaxed)),
                                                 &bytes,
-                                                guard,
+                                                Some(guard),
                                             )
                                             .await
                                             .is_err()
