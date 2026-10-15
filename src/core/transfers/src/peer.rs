@@ -270,5 +270,4 @@ impl Worker {
         }
         Ok(Some(partial))
     }
-
 }

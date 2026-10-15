@@ -126,7 +126,11 @@ impl Store {
 // worker/OS lease can disappear. Normal completion reports close failures.
 struct ClosingStorage(Option<Box<dyn StorageConnection>>);
 impl Drop for ClosingStorage {
-    fn drop(&mut self) { if let Some(mut remote)=self.0.take() { let _=remote.close(); } }
+    fn drop(&mut self) {
+        if let Some(mut remote) = self.0.take() {
+            let _ = remote.close();
+        }
+    }
 }
 
 impl Worker {
@@ -149,13 +153,20 @@ impl Worker {
         if !self.storage_continue(request, stop).await? {
             return self.settle_interruption(&request.id).await;
         }
-        let mut remote = ClosingStorage(Some(self
-            .storage
-            .as_ref()
-            .context("storage resolver unavailable")?
-            .connect(request)?));
+        let mut remote = ClosingStorage(Some(
+            self.storage
+                .as_ref()
+                .context("storage resolver unavailable")?
+                .connect(request)?,
+        ));
         // Always close the actual attempt before the worker releases its lease.
-        let outcome = self.storage_attempt(request, remote.0.as_mut().expect("active transport").as_mut(), stop).await;
+        let outcome = self
+            .storage_attempt(
+                request,
+                remote.0.as_mut().expect("active transport").as_mut(),
+                stop,
+            )
+            .await;
         let closed = remote.0.take().expect("active transport").close();
         outcome.and(closed)
     }
@@ -235,7 +246,10 @@ impl Worker {
         verify_file(&object, request)?;
         // Recover publication-before-receipt crashes without ever overwriting a target.
         if remote.length(&storage.relative_path)?.is_some() {
-            if !self.verify_storage_remote(request, remote, &storage.relative_path, stop).await? {
+            if !self
+                .verify_storage_remote(request, remote, &storage.relative_path, stop)
+                .await?
+            {
                 return self.settle_interruption(&request.id).await;
             }
             return self.storage_receipt(request, stop).await;
@@ -285,14 +299,20 @@ impl Worker {
             offset += n as u64;
             self.checkpoint(&request.id, offset).await?;
         }
-        if !self.verify_storage_remote(request, remote, &temporary, stop).await? {
+        if !self
+            .verify_storage_remote(request, remote, &temporary, stop)
+            .await?
+        {
             return self.settle_interruption(&request.id).await;
         }
         if !self.storage_continue(request, stop).await? {
             return self.settle_interruption(&request.id).await;
         }
         remote.publish(&temporary, &storage.relative_path)?;
-        if !self.verify_storage_remote(request, remote, &storage.relative_path, stop).await? {
+        if !self
+            .verify_storage_remote(request, remote, &storage.relative_path, stop)
+            .await?
+        {
             return self.settle_interruption(&request.id).await;
         }
         self.storage_receipt(request, stop).await
@@ -347,7 +367,7 @@ impl Worker {
                 transport: "ctox-storage-v1".into(),
             },
             stop,
-        ).await
+        )
+        .await
     }
-
 }

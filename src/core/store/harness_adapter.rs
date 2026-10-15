@@ -56,7 +56,11 @@ impl FileOwner {
             .open(lock)?;
         file.try_lock()
             .map_err(|error| io::Error::other(format!("database already owned: {error}")))?;
-        Ok(Self { file, path, exclusive: true })
+        Ok(Self {
+            file,
+            path,
+            exclusive: true,
+        })
     }
 
     /// Temporary compatibility access: multiple legacy connections may coexist,
@@ -73,11 +77,19 @@ impl FileOwner {
             .open(lock)?;
         file.try_lock_shared()
             .map_err(|error| io::Error::other(format!("database already owned: {error}")))?;
-        Ok(Self { file, path, exclusive: false })
+        Ok(Self {
+            file,
+            path,
+            exclusive: false,
+        })
     }
 
     pub fn require_exclusive(&self) -> io::Result<()> {
-        if self.exclusive { Ok(()) } else { Err(io::Error::other("exclusive file owner required")) }
+        if self.exclusive {
+            Ok(())
+        } else {
+            Err(io::Error::other("exclusive file owner required"))
+        }
     }
 
     pub fn path(&self) -> &Path {

@@ -1,7 +1,7 @@
-#[path = "../../../store/harness_adapter.rs"]
-mod owner_adapter;
 #[path = "../../../store/harness_sqlx_adapter.rs"]
 mod owned_sqlx;
+#[path = "../../../store/harness_adapter.rs"]
+mod owner_adapter;
 
 use crate::AgentJob;
 use crate::AgentJobCreateParams;
@@ -55,7 +55,6 @@ mod memories;
 #[cfg(test)]
 mod test_support;
 mod threads;
-
 
 // "Partition" is the retention bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
@@ -167,8 +166,6 @@ async fn open_sqlite(
     pools.insert(key, pool.downgrade());
     Ok(pool)
 }
-
-
 
 fn db_filename(base_name: &str, version: u32) -> String {
     format!("{base_name}_{version}.sqlite")

@@ -322,7 +322,12 @@ async fn handle(
                 .retained
                 .lock()
                 .map_err(|_| anyhow::anyhow!("unavailable"))? = None;
-            crate::persistence::store_json_payload_owned(&authority.root, CHECK_KEY, None::<&Value>).await?;
+            crate::persistence::store_json_payload_owned(
+                &authority.root,
+                CHECK_KEY,
+                None::<&Value>,
+            )
+            .await?;
             returned_check = Value::Null;
         }
         "instance.grok.check" => {
@@ -354,7 +359,8 @@ async fn handle(
                 &authority.root,
                 CHECK_KEY,
                 Some(&json!({"binding":after,"check":check})),
-            ).await?;
+            )
+            .await?;
             returned_check = check;
         }
         _ => {}
@@ -415,14 +421,28 @@ pub(super) fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
-    async fn install_fixture_core(root: &Path) -> anyhow::Result<Arc<crate::persistence::CorePersistence>> {
-        let path=crate::persistence::sqlite_path(root);
-        anyhow::ensure!(path.starts_with(root), "fixture requires an isolated state root");
+    async fn install_fixture_core(
+        root: &Path,
+    ) -> anyhow::Result<Arc<crate::persistence::CorePersistence>> {
+        let path = crate::persistence::sqlite_path(root);
+        anyhow::ensure!(
+            path.starts_with(root),
+            "fixture requires an isolated state root"
+        );
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let writer=ctox_store::registry::Registry.open(ctox_store::DbId::new(path)?,ctox_store::writer::WriterOptions::default())?;
+        let writer = ctox_store::registry::Registry.open(
+            ctox_store::DbId::new(path)?,
+            ctox_store::writer::WriterOptions::default(),
+        )?;
         writer.ready().await?;
-        let readers=ctox_store::read_pool::ReadPool::for_database(writer.db_id(),writer.generation(),Default::default(),Default::default()).await?;
-        crate::persistence::install_core_owner(root,writer,readers).await
+        let readers = ctox_store::read_pool::ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            Default::default(),
+            Default::default(),
+        )
+        .await?;
+        crate::persistence::install_core_owner(root, writer, readers).await
     }
     #[tokio::test]
     async fn shared_route_requires_real_text_and_reset_invalidates_check() -> anyhow::Result<()> {
@@ -507,7 +527,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let root = tempfile::tempdir()?;
-            let _core = install_fixture_core(root.path()).await?;
+        let _core = install_fixture_core(root.path()).await?;
         let authority = auth(root.path(), "chef", Arc::new(|| true))?;
         let record = json!({"access":"private-before","refresh":null,"identity":null,"expires_at":chrono::Utc::now().timestamp()+3600,"token_endpoint":"https://auth.x.ai/token"});
         crate::secrets::write_secret_record(
@@ -522,7 +542,8 @@ mod tests {
             root.path(),
             CHECK_KEY,
             Some(&json!({"binding":xai::credential_binding(root.path())?,"check":{"status":"ok"}})),
-        ).await?;
+        )
+        .await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         xai::test_endpoint(
             root.path(),
@@ -616,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn read_rejects_member_and_retired_owner() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
-            let _core = install_fixture_core(root.path()).await?;
+        let _core = install_fixture_core(root.path()).await?;
         let controller = Arc::new(Controller::new(root.path())?);
         for (role, current) in [("user", true), ("chef", false)] {
             assert!(handle(
@@ -642,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_and_retirement_drop_work() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
-            let _core = install_fixture_core(root.path()).await?;
+        let _core = install_fixture_core(root.path()).await?;
         let current = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let c = current.clone();
         let auth = auth(
