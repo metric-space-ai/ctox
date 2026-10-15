@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 149] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -307,6 +307,10 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.app.action.run",
     "ctox.app_store.install",
     "ctox.app_store.uninstall",
+    "ctox.machine.enroll.begin",
+    "ctox.machine.enroll.cancel",
+    "ctox.machine.enroll.step",
+    "ctox.machine.heartbeat",
     "ctox.business_os.audit.list",
     "ctox.business_os.audit.retention",
     "ctox.business_os.audit.retention_policy.set",
@@ -1740,6 +1744,12 @@ fn dispatch_business_command(
         | "ctox.app.access.revoke"
         | "ctox.app_store.install"
         | "ctox.app_store.uninstall" => handle_app_lifecycle_command(root, command_id, command)
+            .map(BusinessCommandDispatchOutcome::Returned),
+        // §16.41 one-click machine join: core-owned enrollment state.
+        "ctox.machine.enroll.begin"
+        | "ctox.machine.enroll.cancel"
+        | "ctox.machine.enroll.step"
+        | "ctox.machine.heartbeat" => super::machine_enrollment::handle_command(root, command)
             .map(BusinessCommandDispatchOutcome::Returned),
         "web_stack.person_research" => super::person_research_command::start(root, command.clone())
             .map(BusinessCommandDispatchOutcome::Returned),

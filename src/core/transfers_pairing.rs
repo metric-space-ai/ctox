@@ -48,6 +48,11 @@ impl PairingInvite {
         Self::decode(&bytes)
     }
 
+    /// In-memory invite (machine join token): the secret never touches disk.
+    fn from_value(value: serde_json::Value) -> Result<Self> {
+        Self::decode(&serde_json::to_vec(&value)?)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self> {
         let mut value: serde_json::Value = serde_json::from_slice(bytes)
             .map_err(|_| anyhow::anyhow!("invalid native pairing file"))?;
@@ -103,12 +108,23 @@ impl PairingInvite {
     }
 }
 
+/// Runs once the paired source is ready for control, before the account is
+/// provisioned (machine join reports its steps over this admitted channel).
+pub(crate) type AfterReady = Box<
+    dyn FnOnce(
+            ctox_sync::native::NativePool,
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        ) -> futures_util::future::BoxFuture<'static, Result<()>>
+        + Send,
+>;
+
 async fn enroll(
     host: Arc<NativeTransferAccountHost>,
     database: Arc<QueryDatabase>,
     scope: NativeDeviceKeyScope,
     invite: PairingInvite,
     session_slot: &mut AdmissionSession,
+    after_ready: Option<AfterReady>,
 ) -> Result<NativeTransferAccount> {
     let routing = invite.routing(chrono::Utc::now().timestamp_millis())?;
     let provider = host
@@ -188,6 +204,9 @@ async fn enroll(
             last_error,
         )
     })??;
+    if let Some(after_ready) = after_ready {
+        after_ready(session.pool_clone(), connection.clone()).await?;
+    }
     host.provision_from_session(scope, session, &connection)
         .await
 }
@@ -219,7 +238,34 @@ pub(crate) fn pair(
     source_pin: &str,
     path: &Path,
 ) -> Result<serde_json::Value> {
-    let invite = PairingInvite::read(path)?;
+    pair_invite_with(
+        root,
+        target_id,
+        source_pin,
+        PairingInvite::read(path)?,
+        None,
+    )
+}
+
+/// Same one-time pairing from an in-memory invite (machine join token).
+pub(crate) fn pair_invite(
+    root: &Path,
+    target_id: &str,
+    source_pin: &str,
+    invite: serde_json::Value,
+    after_ready: Option<AfterReady>,
+) -> Result<serde_json::Value> {
+    let invite = PairingInvite::from_value(invite)?;
+    pair_invite_with(root, target_id, source_pin, invite, after_ready)
+}
+
+fn pair_invite_with(
+    root: &Path,
+    target_id: &str,
+    source_pin: &str,
+    invite: PairingInvite,
+    after_ready: Option<AfterReady>,
+) -> Result<serde_json::Value> {
     invite.routing(chrono::Utc::now().timestamp_millis())?;
     let scope = NativeDeviceKeyScope {
         target_id: target_id.into(),
@@ -242,7 +288,14 @@ pub(crate) fn pair(
         let mut session = AdmissionSession::default();
         let result = tokio::time::timeout(
             Duration::from_secs(60),
-            enroll(host.clone(), database.clone(), scope, invite, &mut session),
+            enroll(
+                host.clone(),
+                database.clone(),
+                scope,
+                invite,
+                &mut session,
+                after_ready,
+            ),
         )
         .await
         .context("native pairing deadline")

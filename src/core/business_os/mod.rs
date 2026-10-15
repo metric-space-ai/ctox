@@ -45,6 +45,7 @@ mod importer;
 mod inventory_drift_tests;
 mod invoices;
 mod iot_supervision;
+pub(crate) mod machine_enrollment;
 pub mod mcp_channel;
 pub(crate) mod meeting_report;
 pub mod mobile_invites;
