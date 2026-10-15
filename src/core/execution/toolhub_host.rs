@@ -100,13 +100,13 @@ pub fn hub(root: &Path) -> Result<ToolHub<CtoxSecretBackend>> {
     Ok(ToolHub::new(
         CtoxSecretBackend::new(root),
         Arc::new(UreqTransport::default()),
-        match public_origin(root) {
-            Some(origin) => RedirectTarget::Public {
-                uri: format!("{origin}{MCP_CALLBACK_PATH}"),
-            },
-            None => RedirectTarget::Loopback {
-                port: loopback_port()?,
-            },
+        // Loopback redirect (RFC 8252), exactly like "LLM einbinden": the
+        // client that opens the authorize URL (Workjet in-app browser on the
+        // user's PC) owns the listener and hands state + code to THIS instance
+        // as the sync command `ctox.toolhub.oauth.complete`. The instance
+        // never serves an HTTP callback.
+        RedirectTarget::Loopback {
+            port: loopback_port()?,
         },
     ))
 }
@@ -489,119 +489,14 @@ impl McpRef {
     }
 }
 
-/// Optional explicit override of the public HTTPS origin of this instance.
-/// Normally not needed: the origin is derived per instance (see [`public_origin`]).
-pub const PUBLIC_BASE_URL_ENV: &str = "CTOX_PUBLIC_BASE_URL";
-/// Instance-hosted OAuth callback route (MCP connectors and toolkit OAuth).
-pub const MCP_CALLBACK_PATH: &str = "/toolhub/oauth/callback";
-/// Per-instance record of the managed hostname, written by the managed MCP
-/// connector of THIS instance (`ctox business-os mcp connect`) on every start.
-pub const PUBLIC_ORIGIN_FILE: &str = "runtime/toolhub-public-origin";
-
-/// `https://<host>` for a managed instance alias as used by the ctox.dev
-/// control plane (`welsch.ctox.dev`, or a bare slug `welsch`).
-pub fn origin_from_instance_alias(alias: &str) -> Option<String> {
-    let host = alias.trim().trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty() || host.len() > 253 || host == "localhost" || host.ends_with(".localhost") {
-        return None;
+/// Redirect URI handed to providers: loopback on the client's machine.
+/// State, PKCE verifier, DCR registration and tokens stay on this instance;
+/// the code reaches it only through ctox sync (`ctox.toolhub.oauth.complete`).
+pub fn mcp_redirect_uri(_root: &Path) -> Result<String> {
+    Ok(RedirectTarget::Loopback {
+        port: loopback_port()?,
     }
-    if !host
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
-        || host.starts_with(['-', '.'])
-        || host.parse::<std::net::IpAddr>().is_ok()
-    {
-        return None;
-    }
-    let host = if host.contains('.') { host } else { format!("{host}.ctox.dev") };
-    Some(format!("https://{host}"))
-}
-
-/// Remember this instance's managed hostname from its managed MCP connect URL
-/// (`wss://mcp.ctox.dev/connect/<alias>`). Provisioned per instance by the
-/// control plane; restarted with every release switch, so an update via
-/// "Core anwenden" refreshes it without manual configuration.
-pub fn record_public_origin_from_connect_url(root: &Path, connect_url: &str) -> Result<Option<String>> {
-    let parsed = url::Url::parse(connect_url).context("invalid managed MCP connect URL")?;
-    let alias = parsed
-        .path_segments()
-        .and_then(|mut s| {
-            let first = s.next()?;
-            (first == "connect").then(|| s.next()).flatten()
-        })
-        .map(|a| percent_decode(a));
-    let Some(origin) = alias.as_deref().and_then(origin_from_instance_alias) else {
-        return Ok(None);
-    };
-    let path = root.join(PUBLIC_ORIGIN_FILE);
-    if std::fs::read_to_string(&path).ok().as_deref().map(str::trim) != Some(origin.as_str()) {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, format!("{origin}\n"))?;
-        std::fs::rename(&tmp, &path)?;
-    }
-    Ok(Some(origin))
-}
-
-fn percent_decode(s: &str) -> String {
-    url::form_urlencoded::parse(format!("x={s}").as_bytes())
-        .next()
-        .map(|(_, v)| v.into_owned())
-        .unwrap_or_default()
-}
-
-/// Origin from this instance's own managed-connector unit (fallback when the
-/// connector has not started since the update yet).
-fn origin_from_connector_unit() -> Option<String> {
-    let home = std::env::var_os("HOME")?;
-    let unit = std::path::Path::new(&home).join(".config/systemd/user/ctox-business-os-mcp.service");
-    let text = std::fs::read_to_string(unit).ok()?;
-    let start = text.find("/connect/")? + "/connect/".len();
-    let alias: String = text[start..]
-        .chars()
-        .take_while(|c| !matches!(c, '"' | '\'' | ' ' | '\n' | '/' | '?'))
-        .collect();
-    origin_from_instance_alias(&percent_decode(&alias))
-}
-
-/// Public HTTPS origin of THIS instance, never derived from request headers
-/// (Host is caller-controlled). Order: explicit override, the instance's own
-/// recorded managed hostname, its managed-connector unit.
-pub fn public_origin(root: &Path) -> Option<String> {
-    if let Ok(base) = std::env::var(PUBLIC_BASE_URL_ENV) {
-        let base = base.trim().trim_end_matches('/');
-        if let Ok(parsed) = url::Url::parse(base) {
-            if parsed.scheme() == "https" && parsed.host_str().is_some() {
-                return Some(base.to_string());
-            }
-        }
-    }
-    if let Ok(text) = std::fs::read_to_string(root.join(PUBLIC_ORIGIN_FILE)) {
-        let v = text.trim();
-        if v.starts_with("https://") && url::Url::parse(v).is_ok() {
-            return Some(v.to_string());
-        }
-    }
-    origin_from_connector_unit()
-}
-
-/// Redirect URI owned by the instance: DCR registration (one per instance and
-/// provider, reused), state, PKCE verifier and tokens all belong to the
-/// instance; any client only opens the authorize URL the instance hands out.
-/// Loopback is a local-dev fallback only (`CTOX_TOOLHUB_DEV_LOOPBACK=1`).
-pub fn mcp_redirect_uri(root: &Path) -> Result<String> {
-    if let Some(origin) = public_origin(root) {
-        return Ok(format!("{origin}{MCP_CALLBACK_PATH}"));
-    }
-    if std::env::var("CTOX_TOOLHUB_DEV_LOOPBACK").is_ok_and(|v| v == "1") {
-        return Ok(RedirectTarget::Loopback {
-            port: loopback_port()?,
-        }
-        .redirect_uri());
-    }
-    bail!("Öffentliche Instanz-URL unbekannt: der verwaltete MCP-Connector dieser Instanz ist nicht eingerichtet / instance public origin unknown: managed MCP connector not provisioned")
+    .redirect_uri())
 }
 
 fn mcp(root: &Path) -> Result<McpRef> {
@@ -610,35 +505,6 @@ fn mcp(root: &Path) -> Result<McpRef> {
         transport: UreqTransport::default(),
         redirect: mcp_redirect_uri(root).unwrap_or_default(),
     }))
-}
-
-/// Instance-hosted OAuth callback: validates state, exchanges code + verifier
-/// on the instance and returns a small result page for the in-app window.
-pub fn handle_mcp_oauth_callback(root: &Path, url: &str) -> (u16, String) {
-    let page = |ok: bool, de: &str, en: &str| {
-        format!(
-            "<!doctype html><meta charset=utf-8><title>{}</title><body data-toolhub-result=\"{}\" style=\"font:15px system-ui;padding:2em\"><h1>{de}</h1><p>{en}</p><p><a href=\"/\">Zurück zu Business OS / Back to Business OS</a></p></body>",
-            if ok { "CTOX Toolhub: verbunden" } else { "CTOX Toolhub: Fehler" },
-            if ok { "connected" } else { "failed" }
-        )
-    };
-    match complete_oauth_callback(root, url) {
-        Ok(_) => (
-            200,
-            page(
-                true,
-                "Verbunden. Du kannst dieses Fenster schließen.",
-                "Connected. You can close this window.",
-            ),
-        ),
-        Err(e) => {
-            eprintln!("[toolhub] oauth callback failed: {e:#}");
-            (
-                400,
-                page(false, "Verbindung fehlgeschlagen.", "Connection failed."),
-            )
-        }
-    }
 }
 
 /// Finish an OAuth flow of THIS instance from the provider's callback URL:
@@ -652,57 +518,6 @@ pub fn complete_oauth_callback(root: &Path, url: &str) -> Result<Value> {
             Err(e) => Err(anyhow::anyhow!("{mcp_err:#}; {e:#}")),
         },
     }
-}
-
-/// True if the query of `url` looks like a provider callback (state + code/error).
-pub fn looks_like_oauth_callback(url: &str) -> bool {
-    let q = url.split_once('?').map(|(_, q)| q).unwrap_or("");
-    let keys: Vec<String> = url::form_urlencoded::parse(q.as_bytes()).map(|(k, _)| k.into_owned()).collect();
-    keys.iter().any(|k| k == "state") && keys.iter().any(|k| k == "code" || k == "error")
-}
-
-fn exec_via_proxy(
-    base: &str,
-    server: &str,
-    tool: &str,
-    args: &Value,
-    confirm: bool,
-) -> (i32, Value) {
-    let token = std::env::var("CTOX_TOOLHUB_PROXY_TOKEN").unwrap_or_default();
-    let url = format!(
-        "{}/api/business-os/toolhub/mcp/call",
-        base.trim_end_matches('/')
-    );
-    let resp = ureq::post(&url)
-        .set("authorization", &format!("Bearer {token}"))
-        .set("content-type", "application/json")
-        .send_string(
-            &json!({"server": server, "tool": tool, "arguments": args, "confirm": confirm})
-                .to_string(),
-        );
-    let v: Value = match resp {
-        Ok(r) => serde_json::from_reader(r.into_reader()).unwrap_or(Value::Null),
-        Err(ureq::Error::Status(code, _)) => {
-            return (
-                exit::UPSTREAM,
-                json!({"outcome": "provider_error", "message": format!("proxy HTTP {code}")}),
-            )
-        }
-        Err(e) => {
-            return (
-                exit::INTERNAL,
-                json!({"outcome": "error", "message": e.to_string()}),
-            )
-        }
-    };
-    let outcome = v.get("outcome").cloned().unwrap_or(Value::Null);
-    let code = match outcome.get("outcome").and_then(Value::as_str) {
-        Some("success") => exit::OK,
-        Some("credential_required") => exit::CREDENTIAL_REQUIRED,
-        Some("approval_required") => exit::APPROVAL_REQUIRED,
-        _ => exit::UPSTREAM,
-    };
-    (code, outcome)
 }
 
 fn hub_for_proxy(root: &Path) -> Result<ToolHub<CtoxSecretBackend>> {
@@ -724,11 +539,11 @@ fn mcp_project(args: &[String], resolver: ProjectResolver<'_>) -> Result<String>
     }
 }
 
-/// Central toolhub proxy on the instance (`/api/business-os/toolhub/<route>`).
-/// Auth is done by the Business OS server (session cookie or capability bearer),
-/// so Workjet apps, harnesses and PCs in the instance network share connections
-/// without ever receiving provider tokens. Returns (HTTP status, JSON).
-pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) -> (u16, Value) {
+/// Transport-neutral toolhub request handler of the instance. Reached only
+/// locally (CLI, Business OS MCP) and through ctox sync commands
+/// (`ctox.toolhub.*`, see [`handle_toolhub_sync_command`]); there is no HTTP
+/// route. Returns (status code in HTTP semantics, JSON).
+pub fn handle_toolhub_request(root: &Path, route: &str, admin: bool, body: &Value) -> (u16, Value) {
     use ctox_toolhub::remote_mcp::McpOutcome;
     let err = |status: u16, m: String| (status, json!({"ok": false, "message": m}));
     let hub = match mcp(root) {
@@ -951,13 +766,23 @@ pub fn handle_toolhub_http(root: &Path, route: &str, admin: bool, body: &Value) 
                 Err(e) => err(500, e.to_string()),
             }
         }
+        "oauth/complete" if !admin => err(403, "chef or admin role required".into()),
+        "oauth/complete" => {
+            let Some(callback) = s("callback_url") else {
+                return err(400, "callback_url required".into());
+            };
+            match complete_oauth_callback(root, &callback) {
+                Ok(v) => (200, json!({"ok": true, "result": v})),
+                Err(e) => err(400, e.to_string()),
+            }
+        }
         other => err(404, format!("unknown toolhub route `{other}`")),
     }
 }
 
 /// Business OS MCP tools `business_os.toolhub_{list,catalog,exec,needs_user}`:
-/// the same instance handler as `/api/business-os/toolhub/*`, so harnesses
-/// reach the Toolhub through their MCP connection without a local `ctox`.
+/// the same instance handler as the sync commands `ctox.toolhub.*`, so
+/// harnesses reach the Toolhub through their MCP connection.
 /// Role-aware: only supervisor/operator calls raise a user card; workers get
 /// a structured `needs_user` for their supervisor.
 pub fn handle_toolhub_mcp_tool(root: &Path, tool: &str, args: &Value) -> Result<Value> {
@@ -968,7 +793,7 @@ pub fn handle_toolhub_mcp_tool(root: &Path, tool: &str, args: &Value) -> Result<
         toolhub_role::resolve_claimed(conn.as_ref(), thread, claim)
     };
     let routed = |route: &str, body: &Value| -> Result<Value> {
-        let (status, value) = handle_toolhub_http(root, route, false, body);
+        let (status, value) = handle_toolhub_request(root, route, false, body);
         if status != 200 {
             bail!(
                 "{}",
@@ -1079,11 +904,6 @@ fn exec_mcp(root: &Path, args: &[String], projects: ProjectResolver<'_>) -> (i32
         Ok(p) => p,
         Err(e) => return validation(e),
     };
-    // Network client mode: harnesses/PCs outside the instance call the central
-    // proxy instead of holding a local store (CTOX_TOOLHUB_PROXY_URL + capability token).
-    if let Ok(base) = std::env::var("CTOX_TOOLHUB_PROXY_URL") {
-        return exec_via_proxy(&base, server, tool, &tool_args, has(args, "--confirm"));
-    }
     let hub = match mcp(root) {
         Ok(h) => h,
         Err(e) => {
@@ -1232,6 +1052,72 @@ pub fn exec<B: SecretBackend>(
     }
 }
 
+/// Sync command types of the toolhub. Clients (Workjet, Business OS shell)
+/// write them into the replicated `business_commands` collection; the instance
+/// executes them and writes the outcome back into the same document.
+pub const SYNC_COMMAND_TYPES: [&str; 3] = [
+    "ctox.toolhub.request",
+    "ctox.toolhub.credential.submit",
+    "ctox.toolhub.oauth.complete",
+];
+
+/// Routes allowed through `ctox.toolhub.request`. Secret-carrying routes have
+/// their own command type whose secret field is detached before persistence.
+const SYNC_REQUEST_ROUTES: [&str; 8] = [
+    "connections", "catalog", "connect", "disconnect", "mcp/tools", "mcp/call", "call", "ui/requests",
+];
+
+/// Execute one toolhub sync command on this instance. `secret` is the value the
+/// command bus detached from the replicated document (never persisted):
+/// `credential.submit` -> the credential (or a JSON object of card values),
+/// `oauth.complete` -> the full loopback callback URL (state + code).
+pub fn handle_toolhub_sync_command(
+    root: &Path,
+    command_type: &str,
+    payload: &Value,
+    secret: Option<String>,
+    admin: bool,
+) -> (u16, Value) {
+    let err = |status: u16, m: &str| (status, json!({"ok": false, "message": m}));
+    let body = payload.get("body").cloned().unwrap_or_else(|| json!({}));
+    match command_type {
+        "ctox.toolhub.request" => {
+            let route = payload.get("route").and_then(Value::as_str).unwrap_or_default();
+            if !SYNC_REQUEST_ROUTES.contains(&route) {
+                return err(400, "route not allowed over ctox.toolhub.request");
+            }
+            handle_toolhub_request(root, route, admin, &body)
+        }
+        "ctox.toolhub.credential.submit" => {
+            let Some(secret) = secret.filter(|v| !v.trim().is_empty()) else {
+                return err(400, "Zugangsdaten fehlen, bitte erneut speichern / credential missing, please save again");
+            };
+            let mut body = body;
+            if let Some(id) = body.get("ui_request_id").and_then(Value::as_str).map(str::to_string) {
+                let values = serde_json::from_str::<Value>(&secret)
+                    .ok()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| json!({"credential": secret}));
+                return handle_toolhub_request(
+                    root,
+                    "ui/resolve",
+                    admin,
+                    &json!({"id": id, "action": "submit", "values": values}),
+                );
+            }
+            body["credential"] = json!(secret);
+            handle_toolhub_request(root, "credential", admin, &body)
+        }
+        "ctox.toolhub.oauth.complete" => {
+            let Some(callback) = secret.filter(|v| !v.trim().is_empty()) else {
+                return err(400, "Anmeldung unvollständig, bitte erneut verbinden / sign-in incomplete, please connect again");
+            };
+            handle_toolhub_request(root, "oauth/complete", admin, &json!({"callback_url": callback}))
+        }
+        _ => err(404, "unknown toolhub sync command"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1244,30 +1130,14 @@ mod tests {
         r
     }
 
-    #[test]
-    fn instance_alias_maps_to_its_own_https_origin() {
-        assert_eq!(origin_from_instance_alias("welsch.ctox.dev").as_deref(), Some("https://welsch.ctox.dev"));
-        assert_eq!(origin_from_instance_alias("Ninja").as_deref(), Some("https://ninja.ctox.dev"));
-        for bad in ["", "localhost", "a.localhost", "127.0.0.1", "evil.com/x", "-x.ctox.dev", "a b"] {
-            assert_eq!(origin_from_instance_alias(bad), None, "{bad}");
-        }
-    }
-
     /// Two instances on one machine: public origin, callback URI, credentials
     /// and OAuth states are per instance; nothing leaks across.
     #[test]
     fn two_instances_share_no_toolhub_state() {
-        assert!(std::env::var(PUBLIC_BASE_URL_ENV).is_err(), "test needs no global override");
         let a = temp_root("iso-a");
         let b = temp_root("iso-b");
-        // Origin comes from each instance's own managed connect URL.
-        assert_eq!(
-            record_public_origin_from_connect_url(&a, "wss://mcp.ctox.dev/connect/welsch.ctox.dev").unwrap().as_deref(),
-            Some("https://welsch.ctox.dev")
-        );
-        record_public_origin_from_connect_url(&b, "wss://mcp.ctox.dev/connect/ninja.ctox.dev").unwrap();
-        assert_eq!(mcp_redirect_uri(&a).unwrap(), "https://welsch.ctox.dev/toolhub/oauth/callback");
-        assert_eq!(mcp_redirect_uri(&b).unwrap(), "https://ninja.ctox.dev/toolhub/oauth/callback");
+        let redirect = mcp_redirect_uri(&a).unwrap();
+        assert!(redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/toolhub/oauth/callback"), "{redirect}");
 
         // Credentials: stored in A only.
         store_token(&a, "linear", "lin_api_isolation_test", &Default::default()).unwrap();
@@ -1290,26 +1160,49 @@ mod tests {
         )
         .unwrap();
         let req = ha.connect_oauth("gh", INSTANCE_SCOPE, "test").unwrap();
-        assert!(req.redirect_url.contains("redirect_uri=https%3A%2F%2Fwelsch.ctox.dev%2Ftoolhub%2Foauth%2Fcallback"), "{}", req.redirect_url);
-        let callback = format!("https://welsch.ctox.dev/toolhub/oauth/callback?code=c&state={}", req.state);
-        let err = complete_oauth_callback(&b, &callback).unwrap_err().to_string();
-        assert!(err.contains("unknown or already used OAuth state"), "{err}");
+        assert!(req.redirect_url.contains("redirect_uri=http%3A%2F%2F127.0.0.1"), "{}", req.redirect_url);
+        // The loopback capture reaches B as a sync command: B must reject it.
+        let callback = format!("{redirect}?code=c&state={}", req.state);
+        let (status, v) = handle_toolhub_sync_command(&b, "ctox.toolhub.oauth.complete", &json!({}), Some(callback), true);
+        assert_eq!(status, 400, "{v}");
+        assert!(v["message"].as_str().unwrap().contains("unknown or already used OAuth state"), "{v}");
         // B's attempt consumed nothing in A: A still holds its pending state.
         let still = hub(&a).unwrap();
         let acct = still.store().list().unwrap().into_iter().find(|x| x.id == req.account_id).unwrap();
         let pending = still.store().take_pending(&acct).unwrap().expect("A's pending state intact");
         assert_eq!(pending.state, req.state);
-        assert_eq!(pending.redirect_uri, "https://welsch.ctox.dev/toolhub/oauth/callback");
+        assert_eq!(pending.redirect_uri, redirect);
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]
-    fn callback_detection_needs_state_and_code_or_error() {
-        assert!(looks_like_oauth_callback("/index.html?code=x&state=y"));
-        assert!(looks_like_oauth_callback("/?state=y&error=access_denied"));
-        assert!(!looks_like_oauth_callback("/index.html?code=x"));
-        assert!(!looks_like_oauth_callback("/index.html"));
+    fn sync_commands_gate_secrets_and_roles() {
+        let root = temp_root("sync-gate");
+        // Secret routes are not reachable through the generic request command.
+        for route in ["credential", "ui/resolve", "oauth/complete"] {
+            let (code, _) = handle_toolhub_sync_command(&root, "ctox.toolhub.request",
+                &json!({"route": route, "body": {}}), None, true);
+            assert_eq!(code, 400, "{route}");
+        }
+        // Credential submit without the detached secret fails closed.
+        let (code, _) = handle_toolhub_sync_command(&root, "ctox.toolhub.credential.submit",
+            &json!({"body": {"toolkit": "linear"}}), None, true);
+        assert_eq!(code, 400);
+        // Non-admin sessions cannot store credentials.
+        let (code, _) = handle_toolhub_sync_command(&root, "ctox.toolhub.credential.submit",
+            &json!({"body": {"toolkit": "linear"}}), Some("lin_api_sync_test".into()), false);
+        assert_eq!(code, 403);
+        // Admin: stored on the instance; the reply carries no secret.
+        let (code, v) = handle_toolhub_sync_command(&root, "ctox.toolhub.credential.submit",
+            &json!({"body": {"toolkit": "linear"}}), Some("lin_api_sync_test".into()), true);
+        assert_eq!(code, 200, "{v}");
+        assert!(!v.to_string().contains("lin_api_sync_test"), "secret echoed: {v}");
+        let (code, cat) = handle_toolhub_sync_command(&root, "ctox.toolhub.request",
+            &json!({"route": "catalog"}), None, false);
+        assert_eq!(code, 200);
+        assert_eq!(cat["accounts"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1457,10 +1350,10 @@ mod tests {
         )
         .unwrap();
         let (_, listed) =
-            handle_toolhub_http(&root, "ui/requests", false, &json!({"session": "t1"}));
+            handle_toolhub_request(&root, "ui/requests", false, &json!({"session": "t1"}));
         assert_eq!(listed["requests"][0]["id"], r.id);
         let (_, other) =
-            handle_toolhub_http(&root, "ui/requests", false, &json!({"session": "t2"}));
+            handle_toolhub_request(&root, "ui/requests", false, &json!({"session": "t2"}));
         assert!(other["requests"].as_array().unwrap().is_empty());
         let waiter = {
             let root = root.clone();
@@ -1469,16 +1362,16 @@ mod tests {
         };
         let body = json!({"id": r.id, "action": "submit", "values": {"token": "xoxb-card-999"}});
         assert_eq!(
-            handle_toolhub_http(&root, "ui/resolve", false, &body).0,
+            handle_toolhub_request(&root, "ui/resolve", false, &body).0,
             403
         );
-        let (code, v) = handle_toolhub_http(&root, "ui/resolve", true, &body);
+        let (code, v) = handle_toolhub_request(&root, "ui/resolve", true, &body);
         assert_eq!(code, 200, "{v}");
         assert!(!v.to_string().contains("xoxb-card-999"));
         let done = waiter.join().unwrap();
         assert_eq!(toolhub_ui::exit_code(done.status), toolhub_ui::exit::DONE);
         assert!(toolkit_connected(&root, "slack"));
-        let (_, cat) = handle_toolhub_http(&root, "catalog", false, &Value::Null);
+        let (_, cat) = handle_toolhub_request(&root, "catalog", false, &Value::Null);
         assert!(!cat.to_string().contains("xoxb-card-999"));
         // Connect cards only finish once the connection is really live.
         let c = toolhub_ui::create(
@@ -1491,14 +1384,14 @@ mod tests {
             600,
         )
         .unwrap();
-        let (_, v) = handle_toolhub_http(
+        let (_, v) = handle_toolhub_request(
             &root,
             "ui/resolve",
             true,
             &json!({"id": c.id, "action": "connected"}),
         );
         assert_eq!(v["request"]["status"], "open");
-        let (_, v) = handle_toolhub_http(
+        let (_, v) = handle_toolhub_request(
             &root,
             "ui/resolve",
             true,
@@ -1512,21 +1405,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         // Non-admins cannot store credentials.
-        let (code, _) = handle_toolhub_http(
+        let (code, _) = handle_toolhub_request(
             root,
             "credential",
             false,
             &json!({"toolkit": "slack", "credential": "xoxb-test-123"}),
         );
         assert_eq!(code, 403);
-        let (code, v) = handle_toolhub_http(
+        let (code, v) = handle_toolhub_request(
             root,
             "credential",
             true,
             &json!({"toolkit": "slack", "credential": "xoxb-test-123"}),
         );
         assert_eq!(code, 200, "{v}");
-        let (_, cat) = handle_toolhub_http(root, "catalog", false, &Value::Null);
+        let (_, cat) = handle_toolhub_request(root, "catalog", false, &Value::Null);
         assert!(cat["accounts"]
             .as_array()
             .unwrap()
@@ -1542,7 +1435,7 @@ mod tests {
             .iter()
             .any(|t| t["slug"] == "gmail"));
         // Mutating tool through the proxy without confirm -> approval_required, no provider call.
-        let (_, call) = handle_toolhub_http(
+        let (_, call) = handle_toolhub_request(
             root,
             "call",
             false,
@@ -1550,16 +1443,16 @@ mod tests {
         );
         assert_eq!(call["exit_code"], exit::APPROVAL_REQUIRED);
         // Validation errors come back as exit 2.
-        let (_, bad) = handle_toolhub_http(
+        let (_, bad) = handle_toolhub_request(
             root,
             "call",
             false,
             &json!({"tool": "slack.get_history", "arguments": {"channel": "C1&x"}}),
         );
         assert_eq!(bad["exit_code"], exit::VALIDATION);
-        let (_, gone) = handle_toolhub_http(root, "disconnect", true, &json!({"toolkit": "slack"}));
+        let (_, gone) = handle_toolhub_request(root, "disconnect", true, &json!({"toolkit": "slack"}));
         assert_eq!(gone["removed"], 1);
-        assert_eq!(handle_toolhub_http(root, "nope", true, &Value::Null).0, 404);
+        assert_eq!(handle_toolhub_request(root, "nope", true, &Value::Null).0, 404);
     }
 
     #[test]

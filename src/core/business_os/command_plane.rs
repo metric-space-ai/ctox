@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 142] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -357,6 +357,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 142] = [
     "ctox.subscription_auth.start",
     "ctox.task.delete",
     "ctox.task.update",
+    "ctox.toolhub.credential.submit",
+    "ctox.toolhub.oauth.complete",
+    "ctox.toolhub.request",
     "ctox.workjet.providers.list",
     "ctox.workjet.providers.adopt_native",
     "ctox.workjet.providers.observe_native",
@@ -2088,6 +2091,9 @@ fn dispatch_business_command(
         | "ctox.provider_subscription.disconnect"
         | "ctox.provider_subscription.rotate"
         | "ctox.provider_subscription.status"
+        | "ctox.toolhub.request"
+        | "ctox.toolhub.credential.submit"
+        | "ctox.toolhub.oauth.complete"
         | "ctox.subscription_auth.start" => {
             handle_secret_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }

@@ -15234,6 +15234,11 @@ fn secret_payload_field(command_type: &str) -> Option<&'static str> {
     match command_type {
         "ctox.secret.put" => Some("value"),
         "ctox.mailserver.save_user" => Some("password"),
+        // Toolhub over ctox sync: the credential (or JSON card values) and the
+        // loopback OAuth callback URL (state + code) leave the replicated
+        // document before anything is persisted or replicated onward.
+        "ctox.toolhub.credential.submit" => Some("secret"),
+        "ctox.toolhub.oauth.complete" => Some("callback_url"),
         _ => None,
     }
 }
@@ -17431,6 +17436,33 @@ pub(super) fn handle_secret_command(
                     serde_json::json!({ "outcome": { "ok": false, "error": error.to_string() } }),
                 ),
             };
+        }
+        "ctox.toolhub.request" | "ctox.toolhub.credential.submit" | "ctox.toolhub.oauth.complete" => {
+            let session = rxdb_authenticated_session(root, &command)?;
+            let secret = take_secret_intake_value(command);
+            let mut safe_payload = command.payload.clone();
+            if let Some(object) = safe_payload.as_object_mut() {
+                object.remove("secret");
+                object.remove("callback_url");
+            }
+            let safe_command = secret_command_safe_command(&command, &session, safe_payload);
+            let admin = session_can_manage_all(&session);
+            let (status, value) = crate::execution::toolhub_host::handle_toolhub_sync_command(
+                root,
+                &command.command_type,
+                &command.payload,
+                secret,
+                admin,
+            );
+            let ok = status == 200;
+            return write_rxdb_control_command_outcome(
+                root,
+                &safe_command,
+                if ok { "completed" } else { "failed" },
+                None,
+                Some(if ok { "completed" } else { "failed" }),
+                serde_json::json!({ "outcome": value, "status_code": status }),
+            );
         }
         "ctox.secret.delete" => {
             return enforce_command_policy(
