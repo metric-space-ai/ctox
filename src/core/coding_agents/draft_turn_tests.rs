@@ -470,9 +470,7 @@ fn second_turn_is_refused_and_cancel_kills_the_sidecar() {
 
 /// Terminal exactly once + callback at most once (§16.39 Nr. 3). Mutation:
 /// drop the `queued|running` guard in `finish_turn` → the late cancel
-/// regresses `done` to `cancelled` → red. Mutation: `insert_new` → `put` and
-/// no `callback_command_id` guard → the callback document is rewritten as
-/// `reports.coding.failed` → red.
+/// regresses `done` to `cancelled` (and would emit `on_failed`) → red.
 #[test]
 fn terminal_state_and_callback_happen_exactly_once() {
     let env = env();
