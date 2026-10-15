@@ -60,21 +60,25 @@ async function runCommand(core, doc, depth, via) {
 }
 export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
-  constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs } = {}) {
+  constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;
     this.core = coreFor(namespace); this.reject = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
     if (everyMs !== undefined) this.core.everyMs = everyMs;
     if (agentDelayMs !== undefined) this.core.agentDelayMs = agentDelayMs;
+    if (codingDelayMs !== undefined) this.core.codingDelayMs = codingDelayMs;
     this.user = user ? cloneValue(user) : null;
+    this.deviceLabel = deviceLabel ?? 'browser';
     this.pending = this.core.pending; this.online = true; this.closed = false; this.subscriptions = new Map();
   }
   /** Katalog-Primitive, die dieser Core anbietet (§16.29); die Aktivierung prüft capabilities_required dagegen. */
   get capabilities() { return this.core.runtime.capabilities; }
   get runtime() { return this.core.runtime; }
   setUser(user) { this.core.users.set(user.id, cloneValue(user)); }
+  /** §16.43: device_pairing_id dieses Geräts, deterministisch je (Instanz, Nutzer, Gerät). */
+  deviceId(instanceId, userId) { return `dev-${fnv1a(`${instanceId}|${userId}|${this.deviceLabel}`)}`; }
   async connect(identity, events) {
     if (this.identity && JSON.stringify(identity) !== JSON.stringify(this.identity)) throw new CtoxError('forbidden', 'Transport identity mismatch');
-    this.identity = cloneValue(identity); this.events = events; this.closed = false;
+    this.identity = cloneValue(identity); this.events = events; this.closed = false; this.connects = (this.connects ?? 0) + 1;
     if (this.user && this.user.id === identity.userId && !this.core.users.has(this.user.id)) this.core.users.set(this.user.id, this.user);
     this.core.listeners.add(this); events.link?.({ state: this.online ? 'online' : 'offline', rtt_ms: this.latencyMs, relay: false });
     const known = this.core.users.get(identity.userId);
@@ -106,7 +110,10 @@ export class MemoryCoreTransport extends KernelTransport {
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
-    if (!result) { const code = this.core.runtime.checkWrite(this.currentUser, entry, old); if (code) result = { status: 'rejected', reason: code }; }
+    if (!result) {
+      const code = this.core.runtime.checkWrite(this.currentUser, entry, old);
+      if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
+    }
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};
     // Doppelter Befehl (gleiche id, neue op): geänderte Absicht → idempotency_conflict; gleiche Absicht → angenommen ohne Rückschritt
     let duplicateCommand = false;
@@ -132,6 +139,10 @@ export class MemoryCoreTransport extends KernelTransport {
     this.core.ops.set(entry.op_id,cloneValue(result));
     // Pages follow the write result through the SAME stream. No separate live path.
     setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection);},0);
+    // §16.44: Turn-Annahme (Prüfung + Reservierung des Entwurfs) im selben Schritt wie der Write
+    if (result.status !== 'rejected' && !duplicateCommand && entry.collection === 'business_commands' && entry.body?.type === 'ctox.coding.turn' && entry.body?.status === 'queued') {
+      this.core.runtime.acceptCodingTurn(this.currentUser ?? { id: entry.body.actor_id ?? this.identity?.userId }, entry.body);
+    }
     if(result.status!=='rejected' && !duplicateCommand && entry.collection==='business_commands' && entry.body?.status==='queued') this.core.spawnCommand({ ...entry.body, actor_id: entry.body.actor_id ?? this.identity?.userId }, 0, this);
     return cloneValue(result);
   }

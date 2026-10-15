@@ -59,6 +59,10 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   the platform collection `app_drafts` (`<user>/<app>`, files as sha256 in the local CAS). `kernel.shell.publishApp|
   updateApp|rollbackApp|releaseApp|removeApp` issue `ctox.app.*` with CAS on `base_app_ver`. Publishing the same app twice
   queues (no `busy`). An activated version clears kernel status entries of other versions in every tab.
+- K-1e: `kernel.metrics.collections[name] = {state: live|catching_up|offline|error, backlog, gen, since_ms, error?}` (§16.45;
+  live = link online and backlog 0 after a complete page for the subscribed scope; follower tabs get it via the leader),
+  `kernel.reconnect()` re-brings-up the transport (never a page reload), `kernel.identity.device_id` (§16.43, from
+  `opts.deviceId`; fake core deterministic per instance+user+device).
 - `fake-core.mjs` + `fake-core-runtime.mjs` (tests/Shell development only): one core per `coreNamespace` for several users
   (own DB each, core-authoritative role), row/collection/command rights, in-process handler runtime routed by
   (app_id, type) with relative imports and `ctx.read/get/put/patch/remove/command/asset/cap`, `on`/`every` triggers
