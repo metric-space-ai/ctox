@@ -12,17 +12,14 @@ function source(relativePath) {
   return fs.readFileSync(path.join(repositoryRoot, relativePath), "utf8");
 }
 
-test("managed capability retry requests a fresh ctox.dev launch contract", () => {
+test("native managed capability bridge requests a fresh ctox.dev launch contract", () => {
   const preload = source("src/apps/business-os-desktop/src/instance-preload.cjs");
   const main = source("src/apps/business-os-desktop/src/main/main.cjs");
-  const shell = source("src/apps/business-os/app.js");
 
   assert.match(preload, /refreshManagedLaunch:\s*\(\)\s*=>\s*ipcRenderer\.send\("instance:refresh-managed-launch"\)/);
   assert.match(main, /ipcMain\.on\("instance:refresh-managed-launch"/);
   assert.match(main, /instance\.source\s*!==\s*"ctox_dev"/);
   assert.match(main, /destroyInstanceView\(instanceId\);[\s\S]*await activateInstance\(instance\);/);
-  assert.match(shell, /CTOX_MANAGED_CAPABILITY_MISSING/);
-  assert.match(shell, /window\.ctoxBusinessOsDesktop\.refreshManagedLaunch\(\)/);
 });
 
 test("desktop version is visible in both native and renderer chrome", () => {

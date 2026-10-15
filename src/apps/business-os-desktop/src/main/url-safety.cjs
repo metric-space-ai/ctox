@@ -22,10 +22,6 @@ const BUSINESS_OS_DATA_RESOURCE_TYPES = new Set(["xhr", "fetch", "websocket", "w
 // Static shell manifests and module assets are intentionally loaded with
 // fetch/XHR. Keep this allowlist path- and method-scoped so the Electron guard
 // can distinguish executable/presentation assets from Business OS data APIs.
-const BUSINESS_OS_STATIC_ASSET_PATHS = new Set([
-  "/system-apps.json",
-  "/modules/registry.json",
-]);
 const BUSINESS_OS_STATIC_ASSET_PREFIXES = [
   "/assets/",
   "/desktop-apps/",
@@ -160,7 +156,6 @@ function isAllowedBusinessOsStaticAssetPath(path, method = "GET") {
   const assetPath = path.startsWith("/business-os/")
     ? path.slice("/business-os".length)
     : path;
-  if (BUSINESS_OS_STATIC_ASSET_PATHS.has(assetPath)) return true;
   if (!BUSINESS_OS_STATIC_ASSET_PREFIXES.some((prefix) => assetPath.startsWith(prefix))) return false;
   const filename = assetPath.slice(assetPath.lastIndexOf("/") + 1);
   const dot = filename.lastIndexOf(".");
