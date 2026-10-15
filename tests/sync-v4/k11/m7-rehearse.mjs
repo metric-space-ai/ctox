@@ -41,7 +41,7 @@ try{
  report.steps.push({id:'base-release-import-828',status:'not_run',sourcePresent:fs.existsSync(importer),reason:fs.existsSync(importer)?'Library present; no verified productive CLI/IPC import operation supplied. Do not replace it with test-only direct SQL.':'#828 importer is absent from the exact built integration revision; no import can be executed.'});
  report.steps.push({id:'signed-shell-activation',status:'not_run',reason:'No verified signed V4 slot artifact supplied. Existing Shell bind snapshot is not a signed native slot.'});save();
  const args=['tests/sync-v4/k-support/gate.mjs','--target','v4='+next.revision,'--kernel-revision',o['kernel-revision']??next.revision,'--build',o.after,'--gate-output',join(output,'catalog'),'--installed-profile',join(prefix,'result.json'),'--profile','small','--clients','1','--rtt','150','--loss','0','--k11-evidence',join(prefix,'result.json')];
- for(const key of ['modules-root','turn-bin','turn-lib','chrome'])if(o[key])args.push('--'+key,o[key]);
+ for(const key of ['modules-root','turn-bin','turn-lib','chrome','kernel-archive','kernel-archive-sha256'])if(o[key])args.push('--'+key,o[key]);
  const gate=run('upgraded-profile-regression',process.execPath,args,6*60*1000);
  const evidence=join(output,'catalog/gate.json');
  if(fs.existsSync(evidence))report.catalog=JSON.parse(fs.readFileSync(evidence));

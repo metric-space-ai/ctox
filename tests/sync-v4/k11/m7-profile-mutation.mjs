@@ -14,7 +14,7 @@ const positive=JSON.parse(fs.readFileSync(evidence)),bad=join(out,'unpreserved.j
 fs.writeFileSync(bad,JSON.stringify({...positive,dataPreserved:false}));
 const module=join(out,'installed-profile.mjs');
 const check=join(out,'check.mjs');
-fs.writeFileSync(check,`import assert from 'node:assert/strict';\nimport {installedProfile} from ${JSON.stringify(pathToFileURL(module).href)};\nconst b=${JSON.stringify(build)};\ninstalledProfile(${JSON.stringify(resolve(evidence))},b,${JSON.stringify(lane)},${JSON.stringify(owner)});\nassert.throws(()=>installedProfile(${JSON.stringify(bad)},b,${JSON.stringify(lane)},${JSON.stringify(owner)}),/Incomplete or mismatched installed profile/,'Unpreserved profile must not start a native daemon');\n`);
+fs.writeFileSync(check,`import assert from 'node:assert/strict';\nimport {installedProfile} from ${JSON.stringify(pathToFileURL(module).href)};\nconst b=${JSON.stringify(build)};\nconst bound=installedProfile(${JSON.stringify(resolve(evidence))},b,${JSON.stringify(lane)},${JSON.stringify(owner)});\nassert.equal(bound.binary,${JSON.stringify(join(positive.currentRelease,'bin/ctox'))},'M7 must run the installed image');\nassert.throws(()=>installedProfile(${JSON.stringify(bad)},b,${JSON.stringify(lane)},${JSON.stringify(owner)}),/Incomplete or mismatched installed profile/,'Unpreserved profile must not start a native daemon');\n`);
 const run=phase=>{const r=spawnSync(process.execPath,[check],{encoding:'utf8',timeout:30000});fs.writeFileSync(join(out,phase+'.log'),(r.stdout??'')+(r.stderr??''));return r;};
 const row={sourceSha256:createHash('sha256').update(source).digest('hex'),line:source.slice(0,source.indexOf(needle)).split('\n').length,change:'remove dataPreserved guard',realEvidence:resolve(evidence),pass:false};
 try{
@@ -22,6 +22,10 @@ try{
  fs.writeFileSync(module,source.replace(needle,''));const mutated=run('mutated');
  if(mutated.status===0||!mutated.stderr.includes('Unpreserved profile must not start a native daemon'))throw Error('Custody guard mutation was not detected: '+mutated.stderr);
  row.baselineExit=baseline.status;row.mutatedExit=mutated.status;
+ const image="binary:join(current,'bin/ctox')";if(source.split(image).length!==2)throw Error('Installed image anchor missing');
+ fs.writeFileSync(module,source.replace(image,'binary:build.binary'));const uninstalled=run('uninstalled-image');
+ if(uninstalled.status===0||!uninstalled.stderr.includes('M7 must run the installed image'))throw Error('Uninstalled image mutation was not detected: '+uninstalled.stderr);
+ row.imageMutation={change:'installed executable -> bit-identical producer copy',exit:uninstalled.status,assertion:'M7 must run the installed image'};
 }finally{fs.writeFileSync(module,source);}
 const restored=run('restored');if(restored.status!==0)throw Error('Restored custody guard failed: '+restored.stderr);
 row.restoredExit=restored.status;row.restoredSourceSha256=createHash('sha256').update(fs.readFileSync(module)).digest('hex');row.pass=row.restoredSourceSha256===row.sourceSha256;

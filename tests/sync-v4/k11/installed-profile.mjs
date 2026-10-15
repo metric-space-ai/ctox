@@ -14,5 +14,5 @@ export function installedProfile(file,build,lane,owner){
  if(fs.lstatSync(state).isSymbolicLink()||!fs.lstatSync(state).isDirectory()||fs.realpathSync(join(current,'runtime'))!==state)throw Error('Installed runtime must remain inside the owned profile');
  const marker=JSON.parse(fs.readFileSync(join(root,'.sync-v4-e2e.json')));
  if(marker.owner!==owner||marker.synthetic!==true||createHash('sha256').update(fs.readFileSync(join(current,'bin/ctox'))).digest('hex')!==build.binarySha256)throw Error('Installed profile owner/binary mismatch');
- return {root:current,preparedProfile:{evidence:file,root,fixture:proof.afterFixture}};
+ return {root:current,binary:join(current,'bin/ctox'),preparedProfile:{evidence:file,root,fixture:proof.afterFixture}};
 }
