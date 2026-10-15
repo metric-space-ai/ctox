@@ -6,7 +6,7 @@ import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 const root=process.cwd(),out=path.resolve(process.env.CARGO_TARGET_DIR,'evidence/m3-lane4');
 fs.mkdirSync(out,{recursive:true});
-const report={started:new Date().toISOString(),status:'not_run',baseline:'883ec4c403b181c9c0605bfc77fd5413d3535a94',branch:'v4/lane4-cas',commands:1000,drops:5,forced_turn:true};
+const report={started:new Date().toISOString(),status:'not_run',baseline:'f30f234da284d38f644434d7e6c5959e1226bc5e',branch:'v4/lane4-cas',commands:1000,drops:5,forced_turn:true};
 let scratch,index,worktree;
 function run(command,args,options={}){
  const r=spawnSync(command,args,{cwd:root,encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024,...options});
