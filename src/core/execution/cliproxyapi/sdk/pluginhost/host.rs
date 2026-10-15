@@ -116,8 +116,19 @@ impl std::fmt::Debug for Host {
 impl Host {
     /// Constructs a host from an explicitly injected process loader.
     pub fn new(loader: Arc<dyn PluginLoader>) -> Self {
+        Self::with_callback_contexts(
+            loader,
+            crate::internal::pluginhost::callback_contexts::CallbackContextRegistry::new(),
+        )
+    }
+
+    /// Share callback leases with an explicitly constructed process transport.
+    pub fn with_callback_contexts(
+        loader: Arc<dyn PluginLoader>,
+        contexts: crate::internal::pluginhost::callback_contexts::CallbackContextRegistry,
+    ) -> Self {
         Self {
-            inner: Arc::new(PluginHost::new(loader)),
+            inner: Arc::new(PluginHost::with_callback_contexts(loader, contexts)),
             summary: Arc::new(SummarySource::default()),
             loading: Arc::new(RwLock::new(BTreeMap::new())),
         }

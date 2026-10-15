@@ -77,3 +77,41 @@ async fn invalid_capacity_is_rejected_before_transport() {
         Err(PluginClientError::InvalidRequest)
     ));
 }
+
+#[tokio::test]
+async fn dropping_typed_stream_cancels_a_stalled_producer_before_any_chunk() {
+    type ChunkReceiver =
+        mpsc::Receiver<Result<Box<serde_json::value::RawValue>, PluginClientError>>;
+    struct PendingClient(std::sync::Mutex<Option<ChunkReceiver>>);
+    impl PluginClient for PendingClient {
+        fn call<'a>(&'a self, _: PluginCall) -> PluginFuture<'a, Envelope> {
+            Box::pin(async { Err(PluginClientError::UnsupportedCapability) })
+        }
+        fn call_stream<'a>(&'a self, _: PluginCall) -> PluginFuture<'a, PluginStream> {
+            Box::pin(async move {
+                let chunks = self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .ok_or(PluginClientError::Closed)?;
+                Ok(PluginStream { chunks })
+            })
+        }
+        fn shutdown<'a>(&'a self) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let (producer, receiver) = mpsc::channel(1);
+    let client = RpcPluginClient::new(Arc::new(PendingClient(std::sync::Mutex::new(Some(
+        receiver,
+    )))));
+    let stream = client
+        .call_stream::<_, Value>("executor.execute_stream", &json!({}), None, 1)
+        .await
+        .unwrap();
+    drop(stream);
+    tokio::time::timeout(std::time::Duration::from_secs(1), producer.closed())
+        .await
+        .expect("stalled producer was not canceled when its typed consumer closed");
+}

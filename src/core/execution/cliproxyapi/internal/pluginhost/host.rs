@@ -45,11 +45,19 @@ impl std::fmt::Debug for PluginHost {
 
 impl PluginHost {
     pub fn new(loader: Arc<dyn PluginLoader>) -> Self {
+        Self::with_callback_contexts(loader, CallbackContextRegistry::new())
+    }
+
+    /// The process loader and host must share the same callback leases.
+    pub fn with_callback_contexts(
+        loader: Arc<dyn PluginLoader>,
+        callback_contexts: CallbackContextRegistry,
+    ) -> Self {
         Self {
             loader,
             apply: Mutex::new(()),
             snapshot: RwLock::new(Arc::new(Snapshot::default())),
-            callback_contexts: CallbackContextRegistry::new(),
+            callback_contexts,
             streams: StreamBridge::new(),
         }
     }

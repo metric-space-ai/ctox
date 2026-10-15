@@ -27,6 +27,10 @@ pub mod management;
 pub mod model_router;
 pub mod model_stream_bridge;
 pub mod platform;
+#[cfg(any(unix, windows))]
+pub mod process_client;
+#[cfg(any(unix, windows))]
+mod process_client_stream;
 pub mod process_transport;
 pub mod quota_provider;
 pub mod rpc_client;
@@ -80,6 +84,8 @@ mod management_test;
 mod model_router_test;
 #[cfg(test)]
 mod platform_test;
+#[cfg(all(test, any(unix, windows)))]
+mod process_client_test;
 #[cfg(test)]
 mod process_transport_test;
 #[cfg(test)]
