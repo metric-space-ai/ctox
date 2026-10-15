@@ -482,6 +482,7 @@ pub struct PeerPacket {
     pub collection: String,
     pub gen: u64,
     pub package_id: String,
+    #[serde(rename = "type")]
     pub kind: String,
     #[serde(with = "decimal")]
     pub seq_from: u64,
@@ -539,3 +540,40 @@ impl PeerPacket {
 #[cfg(test)]
 #[path = "scope_tests.rs"]
 mod tests;
+
+/// Persisted checkpoint domain. A projection-equivalence declaration never
+/// carries a cursor across an instance, epoch, collection or generation change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopedCheckpoint {
+    pub instance_id: String,
+    pub epoch: String,
+    pub collection: String,
+    pub generation: u64,
+    pub scope_hash: String,
+    #[serde(with = "decimal")]
+    pub seq: u64,
+}
+impl ScopedCheckpoint {
+    #[allow(clippy::too_many_arguments)]
+    pub fn reuse_for(
+        &self,
+        old: &ResolvedScope,
+        next: &ResolvedScope,
+        instance: &str,
+        epoch: &str,
+        collection: &str,
+        generation: u64,
+    ) -> Result<u64> {
+        if self.instance_id != instance
+            || self.epoch != epoch
+            || self.collection != collection
+            || self.generation != generation
+            || generation == 0
+            || self.scope_hash != old.hash()?
+        {
+            return Ok(0);
+        }
+        Ok(old.carry_checkpoint(next, collection, self.seq))
+    }
+}

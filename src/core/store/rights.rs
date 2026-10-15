@@ -296,3 +296,296 @@ impl RightsSnapshot {
 #[cfg(test)]
 #[path = "rights_tests.rs"]
 mod tests;
+
+/// One Core-side authority for all active subscriptions. A queued change is
+/// projected again at the synchronous frame handoff; callers must not enqueue
+/// already-authorized plaintext and send it later outside this boundary.
+pub struct RightsRouter(std::sync::Mutex<RouterState>);
+struct RouterState {
+    instance_id: String,
+    epoch: String,
+    rights: Option<RightsSnapshot>,
+    pending: Option<std::sync::Arc<()>>,
+    subscriptions: std::collections::BTreeMap<String, Subscription>,
+}
+#[derive(Debug, Clone)]
+pub struct Subscription {
+    pub device_id: String,
+    pub actor_id: String,
+    pub role: String,
+    pub collection: String,
+    pub generation: u64,
+}
+#[derive(Debug, Clone)]
+pub struct SubscriptionUpdate {
+    pub subscription_id: String,
+    pub previous_scope_hash: String,
+    pub scope: ResolvedScope,
+}
+
+impl RightsRouter {
+    pub fn new(instance_id: String, epoch: String, rights: RightsSnapshot) -> scope::Result<Self> {
+        if instance_id.is_empty() || epoch.is_empty() || rights.rights_ver == 0 {
+            return Err("invalid rights authority identity".into());
+        }
+        Ok(Self(std::sync::Mutex::new(RouterState {
+            instance_id,
+            epoch,
+            rights: Some(rights),
+            pending: None,
+            subscriptions: std::collections::BTreeMap::new(),
+        })))
+    }
+
+    /// Identity and role come from the authenticated Core session, never from
+    /// the subscribe packet. The signed token proves only that resolved scope.
+    pub fn subscribe(
+        &self,
+        id: &str,
+        subscription: Subscription,
+        token: &scope::SignedScope,
+        public_key: &[u8],
+        now: u64,
+    ) -> scope::Result<ResolvedScope> {
+        let mut state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        if id.is_empty()
+            || id.len() > 256
+            || subscription.generation == 0
+            || subscription.device_id.is_empty()
+            || subscription.actor_id.is_empty()
+            || state.subscriptions.contains_key(id)
+            || state.subscriptions.len() >= 4096
+        {
+            return Err("invalid or duplicate subscription".into());
+        }
+        let rights = state
+            .rights
+            .as_ref()
+            .ok_or("rights authority unavailable")?;
+        let scope = rights.resolve(&subscription.role, &subscription.actor_id)?;
+        token.verify(
+            public_key,
+            &state.instance_id,
+            &subscription.device_id,
+            &scope,
+            now,
+        )?;
+        if scope.projection(&subscription.collection).is_none() {
+            return Err("revoked".into());
+        }
+        state.subscriptions.insert(id.into(), subscription);
+        Ok(scope)
+    }
+
+    pub fn unsubscribe(&self, id: &str) -> scope::Result<()> {
+        self.0
+            .lock()
+            .map_err(|_| "rights authority poisoned")?
+            .subscriptions
+            .remove(id);
+        Ok(())
+    }
+
+    pub fn active_subscriptions(&self, collection: &str) -> scope::Result<Vec<String>> {
+        let state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        if state.rights.is_none() {
+            return Err("rights authority unavailable".into());
+        }
+        Ok(state
+            .subscriptions
+            .iter()
+            .filter(|(_, s)| s.collection == collection)
+            .map(|(id, _)| id.clone())
+            .collect())
+    }
+
+    /// Enter before the Store writer commits. The callback returns only after
+    /// commit; all later frame handoffs see its new snapshot or fail closed.
+    /// Revoke/token renewal notifications are built from the returned resolved
+    /// scopes. Do not wait for network cleanup ACKs before replacing authority.
+    pub fn begin_rights_update(&self) -> scope::Result<PendingRightsUpdate> {
+        let mut state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        let previous = state
+            .rights
+            .take()
+            .ok_or("rights update pending or authority unavailable")?;
+        let marker = std::sync::Arc::new(());
+        state.pending = Some(marker.clone());
+        Ok(PendingRightsUpdate { marker, previous })
+    }
+
+    /// Call only with the result of the Store job handle, which resolves AFTER
+    /// commit. No mutex/guard crosses the writer queue or an async boundary.
+    pub fn finish_rights_update(
+        &self,
+        update: PendingRightsUpdate,
+        committed: scope::Result<RightsSnapshot>,
+    ) -> scope::Result<Vec<SubscriptionUpdate>> {
+        let mut state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        if !state
+            .pending
+            .as_ref()
+            .is_some_and(|p| std::sync::Arc::ptr_eq(p, &update.marker))
+        {
+            return Err("foreign or retired rights publication".into());
+        }
+        state.pending = None;
+        let new = committed?;
+        if new.rights_ver <= update.previous.rights_ver {
+            return Err("rights version must increase".into());
+        }
+        let updates = state
+            .subscriptions
+            .iter()
+            .map(|(id, s)| {
+                Ok(SubscriptionUpdate {
+                    subscription_id: id.clone(),
+                    previous_scope_hash: update.previous.resolve(&s.role, &s.actor_id)?.hash()?,
+                    scope: new.resolve(&s.role, &s.actor_id)?,
+                })
+            })
+            .collect::<scope::Result<Vec<_>>>()?;
+        state.rights = Some(new);
+        Ok(updates)
+    }
+
+    pub fn update_committed(
+        &self,
+        commit: impl FnOnce(&RightsSnapshot) -> scope::Result<RightsSnapshot>,
+    ) -> scope::Result<Vec<SubscriptionUpdate>> {
+        let update = self.begin_rights_update()?;
+        let result = commit(&update.previous);
+        self.finish_rights_update(update, result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_change_frame<T>(
+        &self,
+        subscription_id: &str,
+        token: &scope::SignedScope,
+        public_key: &[u8],
+        now: u64,
+        collection: &str,
+        generation: u64,
+        id: &str,
+        seq: u64,
+        document: Option<&serde_json::Value>,
+        send_one_frame: impl FnOnce(scope::scope_filter::ProjectedChange) -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        let s = state
+            .subscriptions
+            .get(subscription_id)
+            .ok_or("subscription retired")?;
+        if s.collection != collection || s.generation != generation {
+            return Err("subscription mismatch".into());
+        }
+        let scope = state
+            .rights
+            .as_ref()
+            .ok_or("rights authority unavailable")?
+            .resolve(&s.role, &s.actor_id)?;
+        token.verify(public_key, &state.instance_id, &s.device_id, &scope, now)?;
+        // No read grant now means unproject, never a stale cached projection.
+        send_one_frame(scope::scope_filter::project(
+            scope.projection(collection),
+            collection,
+            id,
+            seq,
+            document,
+        )?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_peer_frame<T>(
+        &self,
+        subscription_id: &str,
+        public_key: &[u8],
+        now: u64,
+        sender: (&str, &scope::PeerLease),
+        receiver_lease: &scope::PeerLease,
+        packet: &scope::PeerPacket,
+        signature: &str,
+        payload: &[u8],
+        send_one_frame: impl FnOnce() -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        let s = state
+            .subscriptions
+            .get(subscription_id)
+            .ok_or("subscription retired")?;
+        if packet.collection != s.collection {
+            return Err("subscription mismatch".into());
+        }
+        let scope = state
+            .rights
+            .as_ref()
+            .ok_or("rights authority unavailable")?
+            .resolve(&s.role, &s.actor_id)?;
+        packet.authorize(
+            signature,
+            payload,
+            public_key,
+            sender,
+            (&s.device_id, receiver_lease),
+            &state.instance_id,
+            &state.epoch,
+            s.generation,
+            &scope,
+            now,
+        )?;
+        send_one_frame()
+    }
+
+    /// Execute inside a Store writer job with before/after from its transaction.
+    /// Never enqueue or wait for another Store job in this callback. The owning
+    /// writer commits after it returns; pending rights changes serialize after
+    /// that write and suspend frame delivery in the meantime.
+    pub fn with_outbox_commit<T>(
+        &self,
+        subscription_id: &str,
+        op_id: &str,
+        before: Option<&serde_json::Value>,
+        after: Option<&serde_json::Value>,
+        commit: impl FnOnce() -> scope::Result<T>,
+    ) -> std::result::Result<T, OutboxError> {
+        let denied = || OutboxError::Revoked(scope::scope_filter::RevokedWrite::new(op_id));
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| OutboxError::AuthorityUnavailable)?;
+        let s = state
+            .subscriptions
+            .get(subscription_id)
+            .ok_or_else(denied)?;
+        let rights = state
+            .rights
+            .as_ref()
+            .ok_or(OutboxError::AuthorityUnavailable)?;
+        rights
+            .authorize_write(&s.role, &s.actor_id, &s.collection, before, after)
+            .map_err(|_| denied())?;
+        commit().map_err(OutboxError::CommitFailed)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutboxError {
+    Revoked(scope::scope_filter::RevokedWrite),
+    /// Retain the pending operation; unknown authority is not a revocation receipt.
+    AuthorityUnavailable,
+    /// The writer's transaction failed; do not report it as a committed rejection.
+    CommitFailed(String),
+}
+
+/// Linear publication ticket. While it exists the router is suspended, not
+/// locked: pending Store jobs can drain without a writer/router lock inversion.
+pub struct PendingRightsUpdate {
+    marker: std::sync::Arc<()>,
+    previous: RightsSnapshot,
+}
+impl PendingRightsUpdate {
+    pub fn expected_version(&self) -> u64 {
+        self.previous.rights_ver
+    }
+}
