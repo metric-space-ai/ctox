@@ -56,7 +56,7 @@
          sets, so it is inert in a browser: no host detection, no conditional
          loading. It carries no design of its own — see the file header. -->
     <link rel="stylesheet" href="themes/ctox-desktop-shell.css?v=20261014-shell-v2-query-checkpoint-readonly" />
-    <link rel="stylesheet" href="shared/shell-topbar.css?v=20261014-shell-v2-query-checkpoint-readonly" />
+    <link rel="stylesheet" href="shared/shell-topbar.css?v=20261015-shell-v2-settings-button" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
     <script>
@@ -136,6 +136,12 @@
             <span class="shell-sync-dot" aria-hidden="true"></span>
             <span data-sync-state-label aria-live="polite"></span>
           </button>
+          <button class="icon-button app-menu-button" type="button" data-open-settings aria-label="Einstellungen öffnen" data-shell-t-aria="settings" title="Einstellungen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"></path>
+              <path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.55-2-3.46-2.4.95a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.44a7.5 7.5 0 0 0-2.6 1.5l-2.4-.95-2 3.46 2 1.55a7.6 7.6 0 0 0 0 3l-2 1.55 2 3.46 2.4-.95a7.5 7.5 0 0 0 2.6 1.5l.4 2.44h4l.4-2.44a7.5 7.5 0 0 0 2.6-1.5l2.4.95 2-3.46-2-1.55Z"></path>
+            </svg>
+          </button>
           <button class="account-button" type="button" data-open-account aria-label="Login öffnen" data-shell-t-aria="loginOpen">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
@@ -143,7 +149,6 @@
             </svg>
             <span data-account-label>Login</span>
           </button>
-
         </div>
       </header>
 
@@ -248,6 +253,6 @@
 
   <script type="module" src="shared/shell-release-status.js?v=20261014-shell-v2-query-checkpoint-readonly"></script>
   <script type="module" src="mobile-host.js?v=20261014-shell-v2-query-checkpoint-readonly"></script>
-  <script type="module" src="app.js?v=20261014-shell-v2-query-checkpoint-readonly"></script>
+  <script type="module" src="app.js?v=20261015-shell-v2-settings-button"></script>
   </body>
 </html>

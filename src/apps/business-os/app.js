@@ -1109,6 +1109,7 @@ const shellMessages = {
     languageAria: 'Sprache',
     themeAria: 'Design Theme',
     appearanceSettings: 'Darstellung und Sprache',
+    settings: 'Einstellungen',
     shellStyleLabel: 'Fenster',
     languageLabel: 'Sprache',
     themeLabel: 'Schema',
@@ -1228,6 +1229,7 @@ const shellMessages = {
     languageAria: 'Language',
     themeAria: 'Theme',
     appearanceSettings: 'Appearance and language',
+    settings: 'Settings',
     shellStyleLabel: 'Window',
     languageLabel: 'Language',
     themeLabel: 'Scheme',
@@ -2431,9 +2433,9 @@ function wireShellActions() {
     const id = currentHashModuleId();
     if (id) openModule(id);
   });
-  document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
+  document.querySelectorAll('[data-open-settings]').forEach((button) => button.addEventListener('click', () => {
     openSettingsDrawer();
-  });
+  }));
   document.querySelectorAll('[data-open-sync-diagnostics]').forEach((button) => button.addEventListener('click', () => {
     if (!state.session?.authenticated
       || document.documentElement.dataset.authState === 'locked'
