@@ -13,7 +13,7 @@ pub struct LegacyCollection { pub collection: String, pub table: String, pub own
 pub struct SnapshotFile { pub relative_path: PathBuf, pub owner_app: String, pub owner_user: Option<String>, pub created_at_ms: i64 }
 pub struct ProfilePaths { pub original_root: PathBuf, pub copied_root: PathBuf }
 pub struct Budget { pub rows: usize, pub bytes: usize }
-enum Content { Bytes(Vec<u8>), File(PathBuf) }
+enum Content { Bytes(Vec<u8>), File(PathBuf), Directory }
 struct OwnedStaging(PathBuf);
 impl Drop for OwnedStaging { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
 struct Pending { id: String, name: String, mime: String, owner_app: String, owner_user: Option<String>, created_at_ms: i64, expected: Option<String>, content: Content }
@@ -72,7 +72,7 @@ fn decode(encoded:&str)->Result<Vec<u8>> {
     Ok(out)
 }
 /// Reads only explicitly selected frozen collections; budgets cover raw JSON and
-/// decoded content. Desktop folders are excluded, never published as fake files.
+/// decoded content. Desktop folders retain their ID as metadata without a blob.
 pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[SnapshotFile], paths:&ProfilePaths, budget:&Budget)->Result<FilePlan> {
     let mut plan=FilePlan{pending:vec![],source_rows:BTreeMap::new()};
     let mut seen_rows=0usize; let mut seen_bytes=0usize;
@@ -88,7 +88,10 @@ pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[Sna
             let value:Value=serde_json::from_str(&raw).map_err(|_|invalid("file_source_json"))?;
             *plan.source_rows.entry(source.collection.clone()).or_default()+=1;
             if source.collection=="desktop_files" {
-                if value["kind"].as_str()==Some("folder") {continue;}
+                if value["kind"].as_str()==Some("folder") {
+                    plan.pending.push(Pending{id:required(&value,"id")?.into(),name:required(&value,"name")?.into(),mime:"inode/directory".into(),owner_app:source.owner_app.clone(),owner_user:source_owner(&value,source),created_at_ms:value["created_at_ms"].as_i64().unwrap_or(0),expected:None,content:Content::Directory});
+                    continue;
+                }
                 let path=value["local_path"].as_str().or_else(||value["path"].as_str()).ok_or_else(||invalid("desktop_file_path_missing"))?;
                 plan.pending.push(Pending{id:required(&value,"id")?.into(),name:required(&value,"name")?.into(),mime:value["mime_type"].as_str().unwrap_or("application/octet-stream").into(),owner_app:source.owner_app.clone(),owner_user:source_owner(&value,source),created_at_ms:value["created_at_ms"].as_i64().unwrap_or(0),expected:value["content_hash"].as_str().filter(|s|!s.is_empty()).map(str::to_owned),content:Content::File(copied_path(paths,Path::new(path))?)});
             } else { groups.entry(required(&value,"blob_id")?.into()).or_default().push(value); }
@@ -118,7 +121,7 @@ pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[Sna
     let mut identities=std::collections::BTreeSet::new(); let mut bytes=0u64;
     for p in &plan.pending {
         if p.id.len()>180 || p.owner_app.is_empty() || !identities.insert(&p.id) {return Err(invalid("file_import_identity"));}
-        bytes=bytes.checked_add(match &p.content {Content::Bytes(b)=>b.len() as u64,Content::File(f)=>fs::metadata(f)?.len()}).ok_or_else(||invalid("file_import_budget"))?;
+        bytes=bytes.checked_add(match &p.content {Content::Bytes(b)=>b.len() as u64,Content::File(f)=>fs::metadata(f)?.len(),Content::Directory=>0}).ok_or_else(||invalid("file_import_budget"))?;
         if bytes>budget.bytes as u64 {return Err(invalid("file_import_budget"));}
     }
     Ok(plan)
@@ -128,6 +131,12 @@ pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[Sna
 pub async fn prepare(plan:FilePlan, cas:&Cas, scratch:&Path)->Result<PreparedFiles> {
     let mut output=PreparedFiles{documents:vec![],source_rows:plan.source_rows,references:BTreeMap::new()};
     for p in plan.pending {
+        if matches!(&p.content,Content::Directory) {
+            let mut body=json!({"id":p.id,"name":p.name,"mime":p.mime,"size":0,"owner_app":p.owner_app,"created_at_ms":p.created_at_ms});
+            if let Some(owner)=p.owner_user {body["owner_user"]=owner.into();}
+            output.documents.push(Document{collection:"files".into(),id:p.id,body,revision:None});
+            continue;
+        }
         let temporary=match &p.content {
             Content::Bytes(bytes)=>{
                 let path=scratch.join(format!("import-{}",uuid::Uuid::new_v4()));
@@ -135,9 +144,9 @@ pub async fn prepare(plan:FilePlan, cas:&Cas, scratch:&Path)->Result<PreparedFil
                 #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
                 let mut file=options.open(&path)?;
                 let owned=OwnedStaging(path);file.write_all(bytes)?;Some(owned)
-            },Content::File(_)=>None,
+            },Content::File(_)=>None,Content::Directory=>unreachable!("handled metadata-only folder"),
         };
-        let path=match &p.content {Content::File(path)=>path.clone(),Content::Bytes(_)=>temporary.as_ref().unwrap().0.clone()};
+        let path=match &p.content {Content::File(path)=>path.clone(),Content::Bytes(_)=>temporary.as_ref().unwrap().0.clone(),Content::Directory=>unreachable!("handled metadata-only folder")};
         let before=fs::metadata(&path)?;
         let imported=cas.import(path.clone(),uuid::Uuid::new_v4().simple().to_string().repeat(2)).await;
         let unchanged=fs::metadata(&path).map(|m| m.len()==before.len() && m.modified().ok()==before.modified().ok()).unwrap_or(false);

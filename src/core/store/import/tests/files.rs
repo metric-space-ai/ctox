@@ -15,6 +15,7 @@ async fn copied_profile_files_tracking_and_counting_are_complete_and_replay_is_s
     let mut source_db=rusqlite::Connection::open(&profile)?;
     source_db.execute_batch("CREATE TABLE legacy_desktop_files(id TEXT,data TEXT,deleted INTEGER);
       INSERT INTO legacy_desktop_files VALUES('same-id','{\"id\":\"same-id\",\"name\":\"desktop.txt\",\"kind\":\"file\",\"local_path\":\"/original/desktop.txt\",\"owner_id\":\"owner\"}',0);
+      INSERT INTO legacy_desktop_files VALUES('folder-id','{\"id\":\"folder-id\",\"name\":\"folder\",\"kind\":\"folder\"}',0);
       CREATE TABLE legacy_document_blob_chunks(id TEXT,data TEXT,deleted INTEGER);
       INSERT INTO legacy_document_blob_chunks VALUES('b1','{\"id\":\"b1\",\"blob_id\":\"blob\",\"idx\":1,\"total\":2,\"data\":\"bG8=\",\"encoding\":\"base64\"}',0),('b0','{\"id\":\"b0\",\"blob_id\":\"blob\",\"idx\":0,\"total\":2,\"data\":\"aGVs\",\"encoding\":\"base64\"}',0);
       CREATE TABLE stalwart_mail_tracking_tokens(token TEXT,message_id TEXT,campaign_id TEXT,event_type TEXT,target_url TEXT,created_at INTEGER);
@@ -36,14 +37,18 @@ async fn copied_profile_files_tracking_and_counting_are_complete_and_replay_is_s
     let cas=crate::cas::Cas::open(dir.path().join("cas"))?;
     let prepared=file_import::prepare(plan,&cas,dir.path()).await?;
     assert_eq!(prepared.source_rows["document_blob_chunks"],2);
-    assert_eq!(prepared.documents.len(),3);
+    assert_eq!(prepared.documents.len(),4);
+    assert_eq!(prepared.source_rows["desktop_files"],2);
     let desktop=prepared.documents.iter().find(|d|d.id=="same-id").unwrap();
     let blob=prepared.documents.iter().find(|d|d.body["name"]=="blob").unwrap();
     assert_eq!(desktop.body["ref"],"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     assert_eq!(blob.body["ref"],desktop.body["ref"]);
     assert_eq!(desktop.body["owner_user"],"owner");
     assert_eq!(blob.body["owner_user"],"owner");
-    for doc in &prepared.documents {cas.verified(doc.body["ref"].as_str().unwrap(),doc.body["size"].as_u64().unwrap())?;}
+    for doc in &prepared.documents {
+        if doc.id=="folder-id" {assert_eq!(doc.body["mime"],"inode/directory");assert!(doc.body.get("ref").is_none());}
+        else {cas.verified(doc.body["ref"].as_str().unwrap(),doc.body["size"].as_u64().unwrap())?;}
+    }
     let defaults=schema::BaseReleaseDefaults{app_ver:"main@4794af03d+v4".into(),client_limit:100000,byte_budget:33554432,rights_ver:1};
     let mut release=base_release::load(&Path::new(&input).join("v4"),&Path::new(&input).join("ctox-platform.manifest.json"),&defaults)?;
     // Existing frozen input predates OUT3: register the canonical target shapes
