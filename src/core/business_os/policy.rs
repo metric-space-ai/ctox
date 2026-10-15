@@ -64,7 +64,7 @@ pub enum BusinessOsPermission {
     SessionHandoffExecute,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 36] = [
+pub const BUSINESS_OS_PERMISSIONS: &[BusinessOsPermission] = &[
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
@@ -105,7 +105,7 @@ pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 36] = [
 
 impl BusinessOsPermission {
     pub fn all() -> &'static [BusinessOsPermission] {
-        &BUSINESS_OS_PERMISSIONS
+        BUSINESS_OS_PERMISSIONS
     }
 
     pub fn as_str(self) -> &'static str {
@@ -510,6 +510,14 @@ pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
                 BusinessOsPermission::SessionHandoffDisclose
                 | BusinessOsPermission::SessionHandoffReceive
                 | BusinessOsPermission::SessionHandoffExecute => RowFilter::None,
+                // Integration may add a permission before its typed seed arm.
+                // New permissions deny by default; source drafts are the one
+                // specified additive permission (§9.2/§16.22), admin-only.
+                #[allow(unreachable_patterns)]
+                _ => match permission.as_str() {
+                    "apps.source.edit" => yes,
+                    _ => RowFilter::None,
+                },
             };
             rows.push(Right {
                 role: role.as_str().into(),
