@@ -151,11 +151,12 @@ pub(crate) use command_saga::{
     pending_business_command_outbox, persist_business_command_worker_result,
     progress_business_control_command, reconcile_business_command_invariants,
     record_business_command_applied_effect_delivery_failure,
-    record_business_command_intake_failure, record_business_command_review,
-    record_business_command_saga_step_evidence, reject_legacy_unowned_external_sql_command,
-    resolve_business_command_intake_failures, retry_failed_app_create_business_command,
-    runtime_business_command_action_snapshot, start_business_command_saga,
-    start_runtime_business_command_saga, transition_business_command_for_task,
+    record_business_command_intake_failure, record_business_command_intake_rejection,
+    record_business_command_review, record_business_command_saga_step_evidence,
+    reject_legacy_unowned_external_sql_command, resolve_business_command_intake_failures,
+    retry_failed_app_create_business_command, runtime_business_command_action_snapshot,
+    start_business_command_saga, start_runtime_business_command_saga,
+    transition_business_command_for_task, BusinessCommandIntakeFailureKind,
     BusinessOsQueueMirrorSnapshot,
 };
 pub(crate) use route_status::QueueRouteStatus;
@@ -172,6 +173,7 @@ pub use business_os_projection::{
     pull_communication_threads_for_business_os, pull_communication_threads_for_business_os_after,
     read_pairing_state_for_business_os, save_channel_settings_for_business_os,
     start_pairing_for_business_os, sync_channel_for_business_os, test_channel_for_business_os,
+    test_email_draft_for_business_os,
 };
 
 use anyhow::Context;

@@ -4,13 +4,14 @@
 // News app (modules/news): native side of its four commands.
 //
 // - `news.topic.schedule` (control): owns the topic's `ctox schedule` entry.
-// - `news.source.auth_assist` (control): hands the X sign-in to the owner's
-//   CTOX browser profile, the same path Outbound uses for LinkedIn/XING.
+// - `news.source.auth_assist` (control): hands the X/Reddit sign-in to the
+//   owner's CTOX browser profile, the same path Outbound uses for LinkedIn/XING.
 // - `news.issue.generate` (queue): the harness researches the sources with the
 //   `news-aggregation` skill and replies with a `ctox.news.issue.v1` object;
 //   this file validates it and writes news_issues/news_posts.
-// - `news.source.adapter` (queue): a `universal-scraping` run; its terminal
-//   state is projected onto the source row.
+// - `news.source.adapter` (queue): a `universal-scraping` run, or for X and
+//   Reddit the account connection (sign in, or register with the CTOX
+//   mailbox) answered as `ctox.news.source.v1`; projected onto the source row.
 //
 // Scheduled runs re-enter through `emit_scheduled_issue`, called from the
 // schedule emitter before the generic cron path, so every issue — manual or
@@ -38,7 +39,7 @@ pub(super) const NEWS_ISSUE_CONTRACT: &str = "ctox.news.issue.v1";
 const NEWS_SKILL: &str = "news-aggregation";
 const SCHEDULE_PREFIX: &str = "news:";
 const ROUTE_MARKER: &str = "ctox-news-schedule:";
-const X_LOGIN_URL: &str = "https://x.com/i/flow/login";
+pub(super) const NEWS_SOURCE_CONTRACT: &str = "ctox.news.source.v1";
 const MAX_POSTS: usize = 40;
 const MAX_TEXT: usize = 8_000;
 const CATEGORIES: [&str; 4] = ["model", "tool", "research", "debate"];
@@ -99,6 +100,16 @@ fn patch_record(
     }
     write_record(root, conn, collection, id, now, record.clone())?;
     Ok(Some(record))
+}
+
+/// Account sources have no API path: X and Reddit are read through a real
+/// account in the owner's CTOX browser profile.
+fn account_auth_source(kind: &str) -> Option<&'static str> {
+    match kind {
+        "x" => Some("x.com"),
+        "reddit" => Some("reddit.com"),
+        _ => None,
+    }
 }
 
 fn session_user_id(session: &BusinessOsSession) -> anyhow::Result<String> {
@@ -252,10 +263,11 @@ fn handle_source_auth_assist(
     );
     let source = load_rxdb_collection_record(root, "news_sources", &source_id)?
         .context("news source not found")?;
-    ensure!(
-        source.get("kind").and_then(Value::as_str) == Some("x"),
-        "only X sources sign in through the browser"
-    );
+    let auth_source = source
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(account_auth_source)
+        .context("only X and Reddit sources sign in through the browser")?;
     let owner_user_id = session_user_id(session)?;
     let requesting_task_id = command
         .id
@@ -265,8 +277,8 @@ fn handle_source_auth_assist(
         .to_string();
     let effect = crate::service::business_os::enqueue_web_stack_auth_assist_request(
         root,
-        "x.com",
-        Some(X_LOGIN_URL),
+        auth_source,
+        None,
         None,
         None,
         None,
@@ -396,7 +408,7 @@ pub(crate) fn emit_scheduled_issue(
             "record_id": route.topic_id,
             "inbound_channel": "business_os.news",
             "sync_collections": ["news_issues", "news_posts"],
-            "payload": generate_payload(&topic, &sources, &issue_id, &issue_date),
+            "payload": generate_payload(&topic, &sources, &issue_id, &issue_date, &command_id),
             "client_context": {
                 "actor": super::threads::actor_payload(&session),
                 "source": "native-news-schedule",
@@ -431,7 +443,13 @@ pub(crate) fn emit_scheduled_issue(
     Ok(Some((key, "emitted".to_string())))
 }
 
-fn generate_payload(topic: &Value, sources: &[Value], issue_id: &str, issue_date: &str) -> Value {
+fn generate_payload(
+    topic: &Value,
+    sources: &[Value],
+    issue_id: &str,
+    issue_date: &str,
+    command_id: &str,
+) -> Value {
     let field = |key: &str| {
         topic
             .get(key)
@@ -451,7 +469,14 @@ fn generate_payload(topic: &Value, sources: &[Value], issue_id: &str, issue_date
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let instruction = [
+    let signed_in = sources.iter().any(|source| {
+        source
+            .get("kind")
+            .and_then(Value::as_str)
+            .and_then(account_auth_source)
+            .is_some()
+    });
+    let mut instruction = vec![
         format!("Erstelle die News-Ausgabe für das Thema \"{}\" mit dem Skill {NEWS_SKILL}.", field("title")),
         format!("Fokus: {}", field("prompt")),
         format!(
@@ -461,8 +486,15 @@ fn generate_payload(topic: &Value, sources: &[Value], issue_id: &str, issue_date
             if source_line.is_empty() { "keine konfiguriert, nutze die Websuche".to_string() } else { source_line }
         ),
         format!("Liefere das Ergebnis im Vertrag {NEWS_ISSUE_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link."),
-    ]
-    .join("\n");
+    ];
+    if signed_in {
+        // The owner of an authenticated read is resolved from this command.
+        instruction.insert(
+            3,
+            format!("Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id {command_id}."),
+        );
+    }
+    let instruction = instruction.join("\n");
     let snapshot_sources: Vec<Value> = sources
         .iter()
         .map(|source| {
@@ -474,6 +506,11 @@ fn generate_payload(topic: &Value, sources: &[Value], issue_id: &str, issue_date
                 "adapter_kind": source.get("adapter_kind"),
                 "target_key": source.get("target_key"),
                 "auth_mode": source.get("auth_mode"),
+                "auth_source": source
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .and_then(account_auth_source)
+                    .unwrap_or_default(),
                 "items": source.get("items"),
                 "status": source.get("status"),
             })
@@ -535,15 +572,17 @@ pub(super) fn apply_news_queue_reply(
                 "news.source.adapter is missing source_id"
             );
             let now = now_ms() as i64;
-            patch_record(
-                root,
-                conn,
-                "news_sources",
-                &source_id,
-                now,
-                json!({ "status": "ok", "last_error": "", "last_run_at_ms": now }),
-            )?;
-            Ok(json!({ "ok": true, "source_id": source_id, "status": "ok" }))
+            let report = parse_source_reply(reply_text);
+            let mut patch = json!({
+                "status": report.status,
+                "last_error": report.note,
+                "last_run_at_ms": now,
+            });
+            if !report.account.is_empty() {
+                patch["account_handle"] = json!(report.account);
+            }
+            patch_record(root, conn, "news_sources", &source_id, now, patch)?;
+            Ok(json!({ "ok": true, "source_id": source_id, "status": report.status }))
         }
         other => anyhow::bail!("not a news queue command: {other}"),
     }
@@ -716,6 +755,47 @@ pub(super) fn mark_news_command_failed(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct SourceReport {
+    status: &'static str,
+    account: String,
+    note: String,
+}
+
+/// `ctox.news.source.v1` from an account connection. A scraper setup replies
+/// in prose; that stays the plain success it always was.
+fn parse_source_reply(reply_text: &str) -> SourceReport {
+    let Some(value) = extract_json_object(reply_text)
+        .filter(|value| value.get("schema").and_then(Value::as_str) == Some(NEWS_SOURCE_CONTRACT))
+    else {
+        return SourceReport {
+            status: "ok",
+            account: String::new(),
+            note: String::new(),
+        };
+    };
+    let status = match value.get("status").and_then(Value::as_str) {
+        Some("ok") | Some("connected") => "ok",
+        Some("needs_auth") | Some("needs_owner") => "needs_auth",
+        _ => "failed",
+    };
+    // Account names only; a reply never carries the password.
+    let account = clip(value.get("account"), 120);
+    SourceReport {
+        status,
+        account: if account.contains(char::is_whitespace) {
+            String::new()
+        } else {
+            account
+        },
+        note: if status == "ok" {
+            String::new()
+        } else {
+            clip(value.get("note"), 500)
+        },
+    }
 }
 
 #[derive(Debug)]
@@ -996,5 +1076,54 @@ mod tests {
             serde_json::from_str(prompt.strip_prefix(ROUTE_MARKER).unwrap()).unwrap();
         assert_eq!(back, route);
         assert_eq!(schedule_name("topic_1"), "news:topic_1");
+    }
+
+    #[test]
+    fn account_connection_reply_maps_onto_the_source_row() {
+        let ok = parse_source_reply(
+            r#"Verbunden. {"schema":"ctox.news.source.v1","source_id":"source_1","status":"connected","account":"ctox_news","note":"x"}"#,
+        );
+        assert_eq!(
+            ok,
+            SourceReport {
+                status: "ok",
+                account: "ctox_news".into(),
+                note: String::new()
+            }
+        );
+        let owner = parse_source_reply(
+            r#"{"schema":"ctox.news.source.v1","status":"needs_owner","account":"a b","note":"CAPTCHA im Browser lösen"}"#,
+        );
+        assert_eq!(owner.status, "needs_auth");
+        assert!(owner.account.is_empty());
+        assert_eq!(owner.note, "CAPTCHA im Browser lösen");
+        let unknown = parse_source_reply(r#"{"schema":"ctox.news.source.v1","status":"weird"}"#);
+        assert_eq!(unknown.status, "failed");
+        // A scraper setup answers in prose and stays a plain success.
+        assert_eq!(parse_source_reply("Scraper läuft.").status, "ok");
+        assert_eq!(account_auth_source("reddit"), Some("reddit.com"));
+        assert_eq!(account_auth_source("lab"), None);
+    }
+
+    #[test]
+    fn scheduled_issue_names_its_command_for_signed_in_sources() {
+        let topic = json!({"id": "topic_1", "title": "KI", "prompt": "", "max_posts": 5});
+        let reddit = json!({"id": "source_1", "kind": "reddit", "label": "Reddit", "items": ["r/LocalLLaMA"]});
+        let lab = json!({"id": "source_2", "kind": "lab", "label": "OpenAI"});
+        let with_account = generate_payload(
+            &topic,
+            &[reddit, lab.clone()],
+            "issue_1",
+            "2026-10-14",
+            "cmd_1",
+        );
+        let instruction = with_account["instruction"].as_str().unwrap();
+        assert!(instruction.contains("--task-id cmd_1"));
+        assert_eq!(
+            with_account["record_snapshot"]["sources"][0]["auth_source"],
+            "reddit.com"
+        );
+        let plain = generate_payload(&topic, &[lab], "issue_1", "2026-10-14", "cmd_1");
+        assert!(!plain["instruction"].as_str().unwrap().contains("--task-id"));
     }
 }

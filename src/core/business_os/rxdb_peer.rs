@@ -11476,6 +11476,100 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
+    fn replicated_command_without_capability_terminalizes_without_retry_loop() {
+        // Customer tenant 14.10.2026: an outbound auth_assist command arrived without a
+        // valid capability token and intake rejected it ~2x per second
+        // forever. It must reach one browser-visible terminal failure.
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let command_id = "cmd_leadgen_source_without_capability";
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            let now = now_ms() as u64;
+            commands
+                .insert(json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "contract_version": 2,
+                    "idempotency_key": command_id,
+                    "module": "outbound",
+                    "type": "outbound.research_source.auth_assist",
+                    "command_type": "outbound.research_source.auth_assist",
+                    "record_id": "adapter-1",
+                    "status": "pending_sync",
+                    "task_status": "pending_sync",
+                    "payload": {"adapter_id": "adapter-1", "source_id": "source-1"},
+                    "client_context": {"source_module": "outbound"},
+                    "created_at_ms": now,
+                    "updated_at_ms": now,
+                }))
+                .await
+                .expect("insert pending command without capability");
+
+            assert_eq!(
+                consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                    .await
+                    .expect("first intake sweep"),
+                1
+            );
+            assert_eq!(
+                consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
+                    .await
+                    .expect("second intake sweep"),
+                0,
+                "a capability rejection must not be replayed"
+            );
+
+            let conn = Connection::open(store::rxdb_store_path(root.path()))
+                .expect("open persisted RxDB command store");
+            let table = latest_rxdb_collection_table(&conn, "business_commands")
+                .expect("resolve persisted command table")
+                .expect("persisted command table exists");
+            let table = sqlite_quote_identifier(&table);
+            let raw: String = conn
+                .query_row(
+                    &format!("SELECT data FROM {table} WHERE id = ?1"),
+                    params![command_id],
+                    |row| row.get(0),
+                )
+                .expect("load persisted command projection");
+            let persisted: Value = serde_json::from_str(&raw).expect("parse projection");
+            assert_eq!(persisted["status"], "failed");
+            assert_eq!(persisted["execution_phase"], "terminal");
+            assert_eq!(persisted["terminal_status"], "failed");
+            assert_eq!(persisted["error_code"], "auth_required");
+            assert_eq!(persisted["retryable"], false);
+            assert_eq!(persisted["result"]["reason"], "capability_missing");
+
+            let conn = Connection::open(crate::paths::core_db(root.path()))
+                .expect("open channel database");
+            let (total, open): (u64, u64) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(resolved_at_ms IS NULL), 0)
+                     FROM business_command_intake_failures WHERE command_id = ?1",
+                    params![command_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("count intake failures");
+            assert_eq!(total, 1, "the rejection is recorded exactly once");
+            assert_eq!(open, 0, "history resolves after the terminal projection");
+        });
+    }
+
+    #[test]
     fn business_command_poll_sleep_backs_off_after_idle_round() {
         assert_eq!(
             business_command_poll_sleep_secs(0),

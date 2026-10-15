@@ -25,6 +25,7 @@ pub(in crate::business_os) mod persistent_worker_binding;
 pub(in crate::business_os) mod presentation;
 pub(in crate::business_os) mod presentation_validator;
 mod privacy;
+pub(in crate::business_os) mod project_init;
 pub(in crate::business_os) mod supervisor_binding;
 mod supervisor_history;
 mod supervisor_observation;

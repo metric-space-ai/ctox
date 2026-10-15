@@ -1961,7 +1961,9 @@ fn print_json(value: &Value) -> Result<()> {
 #[cfg(test)]
 use classify::classify_outcome;
 #[cfg(test)]
-use execute::{acquire_target_run_lock, is_preserved_runner_env_key};
+use execute::{
+    acquire_target_run_lock, acquire_target_run_lock_waiting, is_preserved_runner_env_key,
+};
 #[cfg(test)]
 use reauth::{
     derived_secret_name, protected_config_from_script, url_is_login_landing,

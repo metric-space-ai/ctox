@@ -7,6 +7,10 @@ pub(crate) struct WebStackAuthSourceDefaults {
     pub(crate) login_url: &'static str,
     pub(crate) allowed_domains: &'static [&'static str],
     pub(crate) secret_name: &'static str,
+    /// Registration page for sources where CTOX provisions its own account
+    /// (with the instance mailbox). `None` means only an existing account
+    /// can sign in.
+    pub(crate) signup_url: Option<&'static str>,
 }
 
 pub(crate) fn web_stack_auth_source_defaults(
@@ -18,12 +22,28 @@ pub(crate) fn web_stack_auth_source_defaults(
                 login_url: "https://accounts.google.com/ServiceLogin",
                 allowed_domains: &["google.de", "google.com"],
                 secret_name: "GOOGLE_BROWSER_LOGIN",
+                signup_url: None,
             })
         }
         "rocketreach.com" => Some(WebStackAuthSourceDefaults {
             login_url: "https://rocketreach.co/login",
             allowed_domains: &["rocketreach.com", "rocketreach.co"],
             secret_name: "ROCKETREACH_BROWSER_LOGIN",
+            signup_url: None,
+        }),
+        // News sources without an API path: a real account in the owner's
+        // browser profile is the only way in (no X or Reddit API keys).
+        "x.com" | "twitter.com" => Some(WebStackAuthSourceDefaults {
+            login_url: "https://x.com/i/flow/login",
+            allowed_domains: &["x.com", "twitter.com"],
+            secret_name: "X_BROWSER_LOGIN",
+            signup_url: Some("https://x.com/i/flow/signup"),
+        }),
+        "reddit.com" | "www.reddit.com" => Some(WebStackAuthSourceDefaults {
+            login_url: "https://www.reddit.com/login/",
+            allowed_domains: &["reddit.com"],
+            secret_name: "REDDIT_BROWSER_LOGIN",
+            signup_url: Some("https://www.reddit.com/register/"),
         }),
         _ => None,
     }
@@ -48,6 +68,8 @@ pub(super) fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmai
             "xing.com" => &["xing.com"],
             "linkedin.com" => &["linkedin.com"],
             "rocketreach.com" | "rocketreach.co" => &["rocketreach.co", "rocketreach.com"],
+            "x.com" | "twitter.com" => &["x.com", "twitter.com"],
+            "reddit.com" | "www.reddit.com" => &["reddit.com", "redditmail.com"],
             _ => return None,
         };
     Some(WebStackEmailOtpRecipe { sender_domains })
@@ -149,5 +171,39 @@ mod tests {
             "no-reply@accounts.google.com"
         ));
         assert!(web_stack_email_otp_recipe("brightdata.com").is_none());
+    }
+
+    #[test]
+    fn news_sources_sign_in_with_their_own_account_boundary() {
+        let x = web_stack_auth_source_defaults(" X.com ").expect("X profile");
+        assert_eq!(x.secret_name, "X_BROWSER_LOGIN");
+        assert_eq!(x.allowed_domains, &["x.com", "twitter.com"]);
+        assert_eq!(x.signup_url, Some("https://x.com/i/flow/signup"));
+        let reddit = web_stack_auth_source_defaults("reddit.com").expect("Reddit profile");
+        assert_eq!(reddit.secret_name, "REDDIT_BROWSER_LOGIN");
+        assert_eq!(reddit.allowed_domains, &["reddit.com"]);
+        assert!(web_stack_auth_source_defaults("google.de")
+            .unwrap()
+            .signup_url
+            .is_none());
+        for source in ["x.com.evil.example", "old.reddit.com.evil.example"] {
+            assert!(web_stack_auth_source_defaults(source).is_none());
+        }
+        let x_codes = web_stack_email_otp_recipe("x.com").unwrap();
+        assert!(email_otp_sender_matches(&x_codes, "verify@x.com"));
+        assert!(email_otp_sender_matches(&x_codes, "info@twitter.com"));
+        assert!(!email_otp_sender_matches(
+            &x_codes,
+            "verify@x.com.evil.example"
+        ));
+        let reddit_codes = web_stack_email_otp_recipe("reddit.com").unwrap();
+        assert!(email_otp_sender_matches(
+            &reddit_codes,
+            "noreply@redditmail.com"
+        ));
+        assert!(!email_otp_sender_matches(
+            &reddit_codes,
+            "noreply@notreddit.com"
+        ));
     }
 }

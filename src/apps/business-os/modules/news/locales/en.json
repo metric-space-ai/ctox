@@ -42,7 +42,7 @@
   "addLabPreset": "Add all AI labs",
   "addCommunityPreset": "Add communities",
   "sourceAdapter": "Set up scraper",
-  "sourceLogin": "Sign in to X",
+  "sourceLogin": "Sign in in the browser",
   "sourceRemove": "Remove source",
   "sourceActive": "Source active",
   "statusNeedsAuth": "Sign-in needed",
@@ -54,7 +54,7 @@
   "placeholderX": "List, search, or @account",
   "placeholderYoutube": "https://www.youtube.com/@channel",
   "placeholderNewsletter": "sender@newsletter.com",
-  "placeholderCommunity": "https://www.reddit.com/r/…",
+  "placeholderCommunity": "https://news.ycombinator.com/",
   "showAsList": "Show as list",
   "showAsCards": "Show as cards",
   "importDone": "{0} topics imported",
@@ -63,5 +63,9 @@
   "weekly": "{1} {0}",
   "deadline": "Deadline {0}",
   "manual": "Manual",
-  "statusAuthRequested": "sign-in open"
+  "statusAuthRequested": "sign-in open",
+  "groupReddit": "Reddit",
+  "addRedditPreset": "Add AI subreddits",
+  "placeholderReddit": "r/subreddit",
+  "sourceConnect": "Connect account"
 }

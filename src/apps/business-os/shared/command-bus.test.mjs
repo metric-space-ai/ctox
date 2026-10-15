@@ -1375,6 +1375,85 @@ test('command mutation fails before local insertion when authorization is unavai
   assert.equal(inserts, 0);
 });
 
+test('dispatch during a capability outage never inserts or pushes a token-less command', async (context) => {
+  // Customer tenant 14.10.2026: a replicated outbound auth_assist command without a
+  // valid capability token was rejected by native intake in a loop while the
+  // Outbound app kept an empty browser window open. Every outage shape of the
+  // capability endpoint must fail the dispatch itself, before local insertion.
+  delete globalThis.CTOX_BUSINESS_OS_SESSION;
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  const outages = [
+    ['maintenance 503', async () => ({ ok: false, status: 503, async json() { return {}; } })],
+    ['upgrade 200 without token', async () => ({ ok: true, status: 200, async json() { return { ok: true }; } })],
+    ['session rejected 401', async () => ({ ok: false, status: 401, async json() { return {}; } })],
+    ['network down', async () => { throw new Error('offline'); }],
+  ];
+  for (const [label, outage] of outages) {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    globalThis.fetch = outage;
+    const inserted = [];
+    const pushed = [];
+    const collection = {
+      async insert(document) { inserted.push(document); },
+      findOne() { return { async exec() { return null; } }; },
+    };
+    const bus = createCommandBus({
+      db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+      sync: { async startCollection() {
+        return { state: { async pushDocumentsToRemotePeers(documents) {
+          pushed.push(...documents);
+          return true;
+        } } };
+      } },
+    });
+    await assert.rejects(
+      bus.dispatch({
+        id: `cmd-outage-${inserted.length}-${label.replaceAll(' ', '-')}`,
+        module: 'outbound',
+        command_type: 'outbound.research_source.auth_assist',
+        record_id: 'adapter-1',
+        sync_queue_tasks: false,
+      }),
+      (error) => error.code === 'auth_required',
+      `${label}: dispatch must reject with auth_required`,
+    );
+    assert.equal(inserted.length, 0, `${label}: no local insert without a token`);
+    assert.equal(pushed.length, 0, `${label}: nothing replicated without a token`);
+  }
+
+  // Once the endpoint recovers, the inserted command carries the token.
+  resetBusinessOsCapabilityTokenCacheForTests();
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return { capability_token: 'recovered-capability', expires_at_ms: Date.now() + 60 * 60 * 1000 };
+    },
+  });
+  let stored = null;
+  const collection = {
+    async insert(document) { stored = { ...document }; },
+    findOne() { return { async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; } }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: collection, ctox_queue_tasks: collection } },
+  });
+  const receipt = await bus.submit({
+    id: 'cmd-recovered-capability',
+    module: 'outbound',
+    command_type: 'outbound.research_source.auth_assist',
+    sync_queue_tasks: false,
+    allow_local_intent_without_peer: true,
+  });
+  assert.equal(receipt.status, 'local');
+  assert.equal(stored.client_context.capability_token, 'recovered-capability');
+});
+
+test('the local-insert boundary refuses a command document without a capability token', () => {
+  assert.match(source, /assertCommandDocumentAuthorized\(doc, commandId\);\s*const localWriteStartedAt/);
+});
+
 test('command subscriptions are bounded and release capacity on unsubscribe', async () => {
   const collection = {
     findOne() {

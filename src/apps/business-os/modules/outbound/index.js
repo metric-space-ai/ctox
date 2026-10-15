@@ -5447,17 +5447,56 @@ async function requestResearchSourceAdapterCommand(row, commandType, statusPatch
   // Inhalt aufgehen. Es kann aber SOFORT aufgehen: bis zur Antwort sah der
   // Nutzer sonst 60 Sekunden lang gar nichts und hielt den Knopf fuer tot.
   // Das leere Fenster mit Wartezustand ist die ehrlichere Rueckmeldung.
-  if (commandType === 'outbound.research_source.auth_assist') {
-    try {
-      await state.ctx?.openDesktopApp?.('browser', { title: t('browser', 'Browser'), mode: 'maximized' });
-    } catch (error) {
-      console.warn('[outbound] Browserfenster konnte nicht vorab geoeffnet werden', error);
+  // Liefert der Befehl keine Startargumente (Dispatch ohne Capability
+  // abgelehnt, Befehl serverseitig gescheitert), darf das vorab geoeffnete
+  // Fenster nicht leer stehen bleiben: es wird wieder geschlossen.
+  const preopenedBrowserWindowId = commandType === 'outbound.research_source.auth_assist'
+    ? await preopenAuthAssistBrowserWindow(state.ctx)
+    : null;
+  let browserLaunched = false;
+  try {
+    browserLaunched = await runResearchSourceAdapterCommand(
+      campaign,
+      source,
+      commandType,
+      statusPatch,
+    );
+  } finally {
+    if (!browserLaunched) {
+      await closePreopenedAuthAssistBrowserWindow(state.ctx, preopenedBrowserWindowId);
     }
   }
+}
+
+async function preopenAuthAssistBrowserWindow(ctx) {
+  try {
+    const existing = new Set((ctx?.windowManager?.listWindows?.() || []).map((win) => win?.id));
+    const windowId = await ctx?.openDesktopApp?.('browser', { title: t('browser', 'Browser'), mode: 'maximized' });
+    // Nur ein selbst erzeugtes Fenster darf spaeter wieder geschlossen werden;
+    // ein bereits offenes Browserfenster des Nutzers bleibt unberuehrt.
+    return windowId && !existing.has(windowId) ? windowId : null;
+  } catch (error) {
+    console.warn('[outbound] Browserfenster konnte nicht vorab geoeffnet werden', error);
+    return null;
+  }
+}
+
+async function closePreopenedAuthAssistBrowserWindow(ctx, windowId) {
+  if (!windowId) return false;
+  try {
+    await ctx?.windowManager?.destroy?.(windowId);
+    return true;
+  } catch (error) {
+    console.warn('[outbound] Vorab geoeffnetes Browserfenster konnte nicht geschlossen werden', error);
+    return false;
+  }
+}
+
+async function runResearchSourceAdapterCommand(campaign, source, commandType, statusPatch) {
   const adapter = await upsertResearchAdapterDocumentForCampaign(campaign, source, statusPatch);
   if (!adapter) {
     showBusinessAlert(t('adapterCollectionMissing', 'Research-Adapter konnten nicht gespeichert werden.'));
-    return;
+    return false;
   }
   const command = buildResearchAdapterCommand(commandType, campaign, adapter);
   const result = await state.ctx?.commandBus?.dispatch?.(command).catch((error) => ({
@@ -5500,13 +5539,13 @@ async function requestResearchSourceAdapterCommand(row, commandType, statusPatch
   const next = state.ctx?.host?.querySelector('.outbound-research-drawer');
   if (next) next.innerHTML = renderResearchSettingsDrawer(campaign);
   const browserArgs = browserAuthAssistLaunchArgs(authAssist);
-  if (browserArgs) {
-    await state.ctx?.openDesktopApp?.('browser', {
-      title: t('browser', 'Browser'),
-      mode: 'maximized',
-      args: browserArgs,
-    });
-  }
+  if (!browserArgs) return false;
+  await state.ctx?.openDesktopApp?.('browser', {
+    title: t('browser', 'Browser'),
+    mode: 'maximized',
+    args: browserArgs,
+  });
+  return true;
 }
 
 function buildResearchAdapterCommand(commandType, campaign, adapter) {
@@ -9224,6 +9263,8 @@ export const __outboundTestHooks = {
   normalizeResearchSources,
   authAssistFromCommandResult,
   browserAuthAssistLaunchArgs,
+  closePreopenedAuthAssistBrowserWindow,
+  preopenAuthAssistBrowserWindow,
   researchAdapterFromCommandResult,
   researchAdapterPatchFromServer,
   researchSourcePolicyForPrompt,

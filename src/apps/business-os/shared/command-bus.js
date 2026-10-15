@@ -454,6 +454,28 @@ function requireCommandCapability(commandId, capability) {
   return capability.token;
 }
 
+// Native intake rejects every replicated mutation without a verifiable
+// capability token (customer tenant 14.10.2026: such a command was rejected about twice
+// per second until native terminalized it). The token is part of the immutable
+// intent, so a document inserted without one can never become authorized.
+// Check the exact document at the local-insert boundary, independent of how
+// the token was acquired, and fail the dispatch visibly to the caller.
+function assertCommandDocumentAuthorized(doc, commandId) {
+  if (
+    CTOX_COMMAND_AUTHORIZATION.defaultRequirement !== 'capability'
+    || CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
+  ) return;
+  const token = typeof doc?.client_context?.capability_token === 'string'
+    ? doc.client_context.capability_token.trim()
+    : '';
+  if (token) return;
+  throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
+    code: 'auth_required',
+    transient: true,
+    retryable: true,
+  });
+}
+
 async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt = 0 }) {
   const submitStartedAt = Date.now();
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
@@ -517,6 +539,7 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
       doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
     }
     assertCommandDocumentTransportBudget(doc, commandId);
+    assertCommandDocumentAuthorized(doc, commandId);
     const localWriteStartedAt = Date.now();
     recordCommandPreinsertMark(commandId, 'local_write_started', localWriteStartedAt);
     const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
