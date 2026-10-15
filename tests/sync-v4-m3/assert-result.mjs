@@ -4,6 +4,8 @@ const failures=[];
 if (!evidence.terminal || !evidence.measured) failures.push('measurement incomplete: '+(evidence.error||''));
 if (!evidence.relayProof?.length || !evidence.measurements?.relayAlwaysObserved) failures.push('relay not verified');
 if (evidence.config.peers !== 3) failures.push('requires 3 peers');
+if (evidence.nativeMetadataOverflow || evidence.browsers?.some(b => b.counters?.metadataOverflow))
+  failures.push('measurement metadata overflow');
 if (evidence.config.durationSeconds === 600 && evidence.injectedDisconnectsPerBrowser < 19)
   failures.push('missing 30s disconnect injections');
 const totals=evidence.nativeEvents?.filter(e=>e.kind==='status').at(-1)?.sendCounters;

@@ -3,6 +3,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import readline from 'node:readline';
+import dgram from 'node:dgram';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { CLASSES, reconcile, quantiles } from './counters.mjs';
@@ -63,11 +64,26 @@ try {
   evidence.revisions = { nativeBinarySha256: hashFile(config.nativeBin), nativeRevisionDeclared: config.nativeRevision,
     browserRevisionDeclared: config.browserRevision, browserTransportSha256: hashFile(path.join(config.browserRoot, 'webrtc-native.mjs')),
     adapterSha256: hashFile(config.browserAdapter) };
-  const turn = spawn(config.turnserver, ['-n', '--no-auth', '--no-cli', '--no-tls', '--no-dtls', '--no-tcp-relay',
+  const turn = spawn(config.turnserver, ['-n', '--lt-cred-mech', '--realm=bench.test', '--user=bench:bench', '--no-cli', '--no-tls', '--no-dtls', '--no-tcp-relay',
     '--allow-loopback-peers', '--relay-threads=2', '--userdb=' + out + '/turn.sqlite', '--listening-ip=127.0.0.1', '--relay-ip=127.0.0.1', `--listening-port=${config.turnPort}`,
     '--min-port=49152', '--max-port=49251', `--pidfile=${out}/turn.pid`, `--log-file=${out}/turn.log`, '--no-stdout-log'],
   { env: { ...process.env, LD_LIBRARY_PATH: config.turnLibs || '' }, stdio: ['ignore', 'ignore', fs.openSync(path.join(out, 'turn-stderr.log'), 'w')] });
   children.push(turn); evidence.pids.turn = turn.pid;
+  turn.on('error', error => { evidence.turnStartError = error.message; });
+  await sleep(300);
+  // Reuse DevOps calibration (5d64aff5e), scoped to this owned loopback relay.
+  evidence.turnBindingProbe = await new Promise(resolve => {
+    const socket = dgram.createSocket('udp4'), started = performance.now();
+    const request = Buffer.alloc(20); request.writeUInt16BE(1, 0); request.writeUInt32BE(0x2112a442, 4);
+    crypto.randomBytes(12).copy(request, 8);
+    const timer = setTimeout(() => { socket.close(); resolve({ ok: false, timeoutMs: 2500 }); }, 2500);
+    socket.on('message', reply => { clearTimeout(timer); socket.close();
+      resolve({ ok: reply.length >= 20 && reply.readUInt16BE(0) === 0x0101,
+        roundTripMs: performance.now() - started }); });
+    socket.on('error', error => { clearTimeout(timer); socket.close(); resolve({ ok: false, code: error.code }); });
+    socket.send(request, config.turnPort, '127.0.0.1');
+  });
+  if (!evidence.turnBindingProbe.ok) throw new Error('turn_binding_probe_failed');
   server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://bench.invalid');
     let file;
@@ -113,6 +129,7 @@ try {
   native = spawn(config.nativeBin, [], { stdio: ['pipe', 'pipe', fs.openSync(path.join(out, 'native-stderr.log'), 'w')] });
   children.push(native); evidence.pids.native = native.pid;
   native.on('exit', (code, signal) => { Object.assign(nativeExit, { code, signal }); });
+  native.on('error', error => { nativeExit.error = error.message; });
   readline.createInterface({ input: native.stdout }).on('line', line => {
     let event; try { event = JSON.parse(line); } catch { return; }
     if (evidence.nativeEvents.length < 250000) evidence.nativeEvents.push({ at: performance.now(), ...event });
@@ -148,6 +165,9 @@ try {
   const browserTmp = fs.mkdtempSync(path.join(browserTmpRoot, 'bt-'));
 
   evidence.browserTmp = browserTmp;
+  // Playwright creates its own profile before spawning Chrome. Keep Unix socket
+  // paths short too; setting only the child environment is insufficient.
+  process.env.TMPDIR = browserTmp;
   browser = await chromium.launch({ headless: true, executablePath: config.chrome, env: { ...process.env, TMPDIR: browserTmp } });
   evidence.browserVersion = browser.version();
   const pages = [];
