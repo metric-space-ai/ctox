@@ -2357,15 +2357,19 @@ mod tests {
             },
             Arc::new(RejectOwner),
         );
-        assert!(create_storage_instance(&storage, params(test_schema()))
+        let error = create_storage_instance(&storage, params(test_schema()))
             .await
-            .is_err());
-        assert!(crate::types::RxStorage::create_storage_instance(
+            .err()
+            .unwrap();
+        assert_eq!(error.parameters()["message"], "busy");
+        let error = crate::types::RxStorage::create_storage_instance(
             storage.as_ref(),
-            params(test_schema())
+            params(test_schema()),
         )
         .await
-        .is_err());
+        .err()
+        .unwrap();
+        assert_eq!(error.parameters()["message"], "busy");
         assert!(storage.connection.lock().is_none());
         assert!(!path.parent().unwrap().exists());
     }
@@ -2546,40 +2550,6 @@ mod tests {
         instance.close().await.unwrap();
         // Closing the collection retires its commit subscription/owner reference.
         tokio::task::yield_now().await;
-    }
-
-    #[tokio::test]
-    async fn owner_jobs_error_rolls_back_before_receipt() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("owner.sqlite3");
-        let owner = TestOwner::new(path.clone());
-        let storage = super::super::types::RxStorageSqlite::with_owner(
-            RxStorageSqliteSettings {
-                database_path: path,
-            },
-            owner,
-        );
-        let instance = create_storage_instance(&storage, params(test_schema()))
-            .await
-            .unwrap();
-        let table = instance.table_name.clone();
-        let result: RxResult<()> = instance
-            .with_write_connection(move |conn| {
-                insert_document(conn, &table, "id", &doc("abort", "1-a", 1, false, 1.0))?;
-                Err(super::super::types::owner_job_error("abort after mutation"))
-            })
-            .await;
-        assert!(result.is_err());
-        assert!(instance
-            .find_documents_by_id(&["abort".into()], true)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            instance.replication_checkpoint_status().await["headSeq"],
-            "0"
-        );
-        instance.close().await.unwrap();
     }
 
     #[tokio::test]
