@@ -295,11 +295,11 @@ fn cancel_stops_further_steps() {
     let conn = conn();
     let (id, token) = start(&conn);
     assert_eq!(
-        code(cancel(&conn, "other-admin", &id)),
+        code(cancel(&conn, "other-admin", false, &id)),
         "step_forbidden",
         "only the creator cancels"
     );
-    let cancelled = cancel(&conn, ADMIN, &id).unwrap();
+    let cancelled = cancel(&conn, ADMIN, false, &id).unwrap();
     assert_eq!(cancelled["status"], "cancelled");
     assert_eq!(
         code(client_step(
@@ -382,4 +382,21 @@ fn begin_command_is_denied_without_machines_manage() -> anyhow::Result<()> {
     )?;
     assert_eq!(issued, 0, "no enrollment state before the policy gate");
     Ok(())
+}
+
+/// Part C: cancel = creator OR machines.manage.
+/// Mutations: drop `manages ||`, or drop the creator clause in `cancel`.
+#[test]
+fn cancel_allows_creator_and_machines_manage_holders_only() {
+    let conn = conn();
+    let (first, _) = start(&conn);
+    assert_eq!(
+        code(cancel(&conn, "stranger", false, &first)),
+        "step_forbidden"
+    );
+    let by_manager = cancel(&conn, "other-admin", true, &first).unwrap();
+    assert_eq!(by_manager["status"], "cancelled");
+    let (second, _) = start(&conn);
+    let by_creator = cancel(&conn, ADMIN, false, &second).unwrap();
+    assert_eq!(by_creator["status"], "cancelled");
 }

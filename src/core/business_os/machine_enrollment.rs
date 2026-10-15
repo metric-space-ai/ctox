@@ -424,10 +424,19 @@ fn open_row(conn: &Connection, id: &str) -> anyhow::Result<Row> {
     Ok(row)
 }
 
-/// `ctox.machine.enroll.cancel`: creator only; closes every further write.
-pub(crate) fn cancel(conn: &Connection, actor_id: &str, id: &str) -> anyhow::Result<Value> {
+/// `ctox.machine.enroll.cancel`: the creator, or any holder of
+/// `machines.manage` (`manages`), may cancel; closes every further write.
+pub(crate) fn cancel(
+    conn: &Connection,
+    actor_id: &str,
+    manages: bool,
+    id: &str,
+) -> anyhow::Result<Value> {
     let mut row = open_row(conn, id)?;
-    anyhow::ensure!(row.created_by == actor_id, JoinError::StepForbidden);
+    anyhow::ensure!(
+        manages || (!actor_id.is_empty() && row.created_by == actor_id),
+        JoinError::StepForbidden
+    );
     row.status = "cancelled".into();
     store(conn, &row)?;
     Ok(row.document())
@@ -617,20 +626,24 @@ pub(super) fn handle_command(
             )
         })?
         .into_outcome(),
-        CANCEL => enforce_command_policy(root, command, manage, |session| {
-            settle(
-                root,
-                command,
-                (|| -> anyhow::Result<Value> {
-                    let actor = super::session::session_user_id(session).unwrap_or_default();
-                    let conn = super::store::open_store(root)?;
-                    let doc = cancel(&conn, actor, &enrollment_id(payload)?)?;
-                    project(root, &doc, now)?;
-                    Ok(json!({"enrollment": doc}))
-                })(),
-            )
-        })?
-        .into_outcome(),
+        CANCEL => {
+            // Creator or machines.manage (§16.41 as specified, Part C).
+            let session = super::store::rxdb_authenticated_session(root, command)?;
+            let result = (|| -> anyhow::Result<Value> {
+                let actor = super::session::session_user_id(&session).unwrap_or_default();
+                let manages = super::store_policy::workspace_policy_decision(
+                    root,
+                    &session,
+                    BusinessOsPermission::MachinesManage,
+                )?
+                .allowed;
+                let conn = super::store::open_store(root)?;
+                let doc = cancel(&conn, actor, manages, &enrollment_id(payload)?)?;
+                project(root, &doc, now)?;
+                Ok(json!({"enrollment": doc}))
+            })();
+            settle(root, command, result)
+        }
         STEP if !machine_key => enforce_command_policy(root, command, manage, |session| {
             settle(
                 root,
