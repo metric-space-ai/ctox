@@ -4377,6 +4377,13 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
 
     async fn on_data_channel(&self, data_channel: Arc<dyn DataChannel>) {
         let label = data_channel.label().await.unwrap_or_default();
+        // The V4 scheduler owns the original handles and their event receivers.
+        // This SDK also announces locally created channels with a second handle
+        // whose receiver is closed. Installing that handle as bootstrap would
+        // replace the bootstrap and retire the live peer on receiver EOF.
+        if label.starts_with("ctox-v4-") {
+            return;
+        }
         let staged = {
             let mut pending = self.handler.pending_offers.lock();
             if let Some(entry) = pending.get_mut(&(self.remote_peer_id.clone(), self.generation)) {
@@ -6180,6 +6187,41 @@ mod tests {
         handler
             .connection_for_peer(route)
             .expect("fixture connection is current")
+    }
+
+
+    #[tokio::test]
+    async fn v4_channel_callback_preserves_bootstrap_and_its_event_consumer() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "v4-callback", 1).await;
+        let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
+        let bootstrap = pc.create_data_channel("ctox-rxdb", None).await.unwrap();
+        handler.peers.lock().get_mut(peer.peer_id()).unwrap().data_channel = Some(bootstrap.clone());
+        let listener = super::super::signaling_client::bind_test_signaling_listener().await;
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while ws.next().await.is_some() {}
+        });
+        let signaling = SignalingClient::connect(format!("ws://{address}")).await.unwrap();
+        let events = RsPeerConnectionEvents {
+            handler: handler.clone(),
+            signaling: signaling.clone(),
+            remote_peer_id: peer.peer_id().to_owned(),
+            generation: peer.generation(),
+        };
+        for label in super::super::index_mod::lanes::Lane::ALL.iter().map(|l| l.label()).chain([super::super::index_mod::lanes::REALTIME_LABEL]) {
+            let lane = pc.create_data_channel(label, None).await.unwrap();
+            events.on_data_channel(lane).await;
+            let peers = handler.peers.lock();
+            let entry = peers.get(peer.peer_id()).expect("V4 callback must not retire its peer");
+            assert_eq!(entry.data_channel.as_ref().unwrap().id(), bootstrap.id(), "V4 callback must not replace bootstrap");
+            assert!(entry.tasks.is_empty(), "scheduler must remain the only V4 event consumer");
+        }
+        handler.close().await.unwrap();
+        signaling.close().await;
+        server.abort();
     }
 
     fn invoke_policy_probe(
