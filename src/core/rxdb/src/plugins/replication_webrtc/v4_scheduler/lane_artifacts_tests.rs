@@ -501,3 +501,50 @@ async fn lane4_real_webrtc_drop_after_persistence_replays_then_resumes_prefix() 
         assert!(tokio::time::timeout(Duration::from_secs(1), send_blob(&closed, source, blob, 0, Arc::new(Authorized))).await.unwrap().is_err(), "closed association left producer waiting");
     }).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lane4_library_file_is_pinned_lazy_and_resumable() {
+    use super::manifest::{FileManifest, LibraryFileRequest};
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for route in ["/~a/lib:monaco@0/editor.js", "/~a/lib:monaco@00.1/editor.js", "/~a/lib:monaco@0.01/editor.js", "/~a/lib:monaco@0.9/%2e%2e/editor.js"] {
+            assert!(LibraryFileRequest::parse(route).is_err());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = Cas::open(dir.path().join("source")).unwrap();
+        let target = Cas::open(dir.path().join("target")).unwrap();
+        let data: Vec<_> = (0..65_536).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.path().join("wanted"), &data).unwrap();
+        std::fs::write(dir.path().join("wrong"), b"not in this manifest").unwrap();
+        let blob = source.import(dir.path().join("wanted"), "b".repeat(64)).await.unwrap();
+        let wrong = source.import(dir.path().join("wrong"), "c".repeat(64)).await.unwrap();
+        let manifest: FileManifest = serde_json::from_value(serde_json::json!({"app_id":"lib:monaco","app_ver":"0.9","entry":"esm/editor.js","files":{"esm/editor.js":blob.reference(),"unused/huge.wasm":"f".repeat(64)}})).unwrap();
+        let request = LibraryFileRequest::parse("/~a/lib:monaco@0.9/esm/editor.js").unwrap();
+        assert_eq!(request.reference(&manifest).unwrap(), blob.reference());
+        assert!(LibraryFileRequest::parse("/~a/lib:monaco@0.10/esm/editor.js").unwrap().reference(&manifest).is_err(), "unpinned minor accepted");
+        assert!(LibraryFileRequest::parse("/~a/lib:other@0.9/esm/editor.js").unwrap().reference(&manifest).is_err());
+        assert!(LibraryFileRequest::parse("/~a/lib:monaco@0.9/missing.js").unwrap().reference(&manifest).is_err());
+        let sa = ReliableSession::new("library-file".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("library-file".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let pair = PairFixture::connect(sa, sb).await;
+        assert!(request.send(&manifest, &pair.source, source.clone(), wrong, 0, Arc::new(Authorized)).await.is_err(), "unpinned blob admitted");
+        let mut incoming = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
+        let mut sink = ArtifactReceiver::open(&target, &"d".repeat(64), blob.reference(), blob.size()).unwrap();
+        const PREFIX: usize = 8192;
+        sink.apply(&packet(blob.reference(), blob.size(), 0, &data[..PREFIX]).unwrap()).unwrap();
+        let receive = async {
+            let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = incoming.recv().await else { panic!("requested library file missing"); };
+            let (header, _) = decode(&bytes).unwrap();
+            assert_eq!(header.offset, WireSeq(PREFIX as u64), "library resume offset changed");
+            let (sink, verified) = sink.deliver(bytes, token).await.unwrap();
+            assert_eq!(verified.unwrap().reference(), blob.reference());
+            assert_eq!(sink.offset().unwrap(), blob.size());
+        };
+        let (sent, ()) = tokio::join!(request.send(&manifest, &pair.source, source.clone(), blob.clone(), PREFIX as u64, Arc::new(Authorized)), receive);
+        sent.unwrap();
+        target.verified(blob.reference(), blob.size()).unwrap();
+        assert!(source.verified(&"f".repeat(64), 1).is_err());
+        assert!(target.verified(&"f".repeat(64), 1).is_err(), "unrequested library file fetched eagerly");
+        pair.close().await;
+    }).await.unwrap();
+}
