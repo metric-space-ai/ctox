@@ -4,9 +4,9 @@ export RUST_TEST_THREADS=2 CMAKE_BUILD_PARALLEL_LEVEL=2 MAKEFLAGS=-j2
 SOURCE=$(pwd)
 PROOF=${IMPORT_PROOF_DIR:?set IMPORT_PROOF_DIR outside disposable TMPDIR}
 mkdir -p "$PROOF"
-# Integration's registry is still a placeholder. Compose only in isolated scratch,
-# pinning the actual P3-06 source; never alter another strand's checkout files.
-REGISTRY_SOURCE=535d6deb3da5ee87623cf143e142e5e30d666271
+# Compose the integrated registry and existing CAS only in isolated scratch.
+# Pin exact sources; never alter another strand's checkout files.
+REGISTRY_SOURCE=c132b903d8f08b0caf7034db984f76d834e392ff
 mkdir -p "$TMPDIR/import-registry"
 git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$REGISTRY_SOURCE" src/core/store src/core/paths.rs tests/sync-v4-m2 | tar -x -C "$TMPDIR/import-registry"
 STORE="$TMPDIR/import-registry/src/core/store"
@@ -19,6 +19,7 @@ rustfmt --edition 2021 src/core/store/import/{mod,base_release,core_import,file_
 rustfmt --edition 2021 --check src/core/store/import/{mod,base_release,core_import,file_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy,files}.rs
 export IMPORT_INPUT_ROOT=${IMPORT_INPUT_ROOT:-/mnt/sata8t/lane/artifacts/v4-import-input}
 export PATH=/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin:$PATH
+sha256sum "$IMPORT_INPUT_ROOT/outbound-tracking.schema.json" "$IMPORT_INPUT_ROOT/core-allowlisted-v2.sqlite3" > "$PROOF/supplement.sha256"
 node --check scripts/sync-v4/import-report.mjs
 bash -n src/core/store/import/tests/qualify.sh
 node --test src/core/store/import/tests/import-report.test.mjs 2>&1 | tee "$PROOF/input-contract.log"

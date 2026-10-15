@@ -7,7 +7,9 @@ use serde_json::json;
 use std::{collections::BTreeMap, fs, io::Write, path::{Component, Path, PathBuf}};
 
 #[derive(Clone)]
-pub struct LegacyCollection { pub collection: String, pub table: String, pub owner_app: String }
+/// Owner scope is supplied from the frozen profile authority, never guessed.
+/// None is explicit app-shared source state, not an inferred default grant.
+pub struct LegacyCollection { pub collection: String, pub table: String, pub owner_app: String, pub owner_user: Option<String> }
 pub struct SnapshotFile { pub relative_path: PathBuf, pub owner_app: String, pub owner_user: Option<String>, pub created_at_ms: i64 }
 pub struct ProfilePaths { pub original_root: PathBuf, pub copied_root: PathBuf }
 pub struct Budget { pub rows: usize, pub bytes: usize }
@@ -35,7 +37,13 @@ pub fn blob_file_id(collection: &str, blob: &str) -> String {
 }
 fn required<'a>
 (v:&'a Value,k:&str)->Result<&'a str> { v[k].as_str().filter(|s|!s.is_empty()).ok_or_else(||invalid(format!("file_import_required:{k}"))) }
-fn copied_path(paths:&ProfilePaths, path:&Path)->Result<PathBuf> {
+fn source_owner(row: &Value, source: &LegacyCollection) -> Option<String> {
+    row["owner_user"].as_str().filter(|s|!s.trim().is_empty())
+        .or_else(||row["owner_id"].as_str().filter(|s|!s.trim().is_empty()))
+        .map(str::to_owned).or_else(||source.owner_user.clone())
+}
+fn copied_path(
+paths:&ProfilePaths, path:&Path)->Result<PathBuf> {
     let rel = if path.is_absolute() {path.strip_prefix(&paths.original_root).map_err(|_|invalid("file_outside_profile"))?} else {path};
     if rel.components().any(|c|!matches!(c,Component::Normal(_))) { return Err(invalid("file_unsafe_path")); }
     let root = paths.copied_root.canonicalize()?;
@@ -82,7 +90,7 @@ pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[Sna
             if source.collection=="desktop_files" {
                 if value["kind"].as_str()==Some("folder") {continue;}
                 let path=value["local_path"].as_str().or_else(||value["path"].as_str()).ok_or_else(||invalid("desktop_file_path_missing"))?;
-                plan.pending.push(Pending{id:required(&value,"id")?.into(),name:required(&value,"name")?.into(),mime:value["mime_type"].as_str().unwrap_or("application/octet-stream").into(),owner_app:source.owner_app.clone(),owner_user:value["owner_id"].as_str().filter(|s|!s.is_empty()).map(str::to_owned),created_at_ms:value["created_at_ms"].as_i64().unwrap_or(0),expected:value["content_hash"].as_str().filter(|s|!s.is_empty()).map(str::to_owned),content:Content::File(copied_path(paths,Path::new(path))?)});
+                plan.pending.push(Pending{id:required(&value,"id")?.into(),name:required(&value,"name")?.into(),mime:value["mime_type"].as_str().unwrap_or("application/octet-stream").into(),owner_app:source.owner_app.clone(),owner_user:source_owner(&value,source),created_at_ms:value["created_at_ms"].as_i64().unwrap_or(0),expected:value["content_hash"].as_str().filter(|s|!s.is_empty()).map(str::to_owned),content:Content::File(copied_path(paths,Path::new(path))?)});
             } else { groups.entry(required(&value,"blob_id")?.into()).or_default().push(value); }
         }
         for (blob,mut chunks) in groups {
@@ -96,7 +104,7 @@ pub fn collect(tx:&Transaction<'_>, sources:&[LegacyCollection], snapshots:&[Sna
                 if bytes.len().saturating_add(data.len())>budget.bytes {return Err(invalid("file_import_budget"));}
                 bytes.extend(data);
             }
-            plan.pending.push(Pending{id:blob_file_id(&source.collection,&blob),name:blob,mime:first["mime_type"].as_str().unwrap_or("application/octet-stream").into(),owner_app:source.owner_app.clone(),owner_user:first["owner_id"].as_str().map(str::to_owned),created_at_ms:first["created_at_ms"].as_i64().unwrap_or(0),expected:None,content:Content::Bytes(bytes)});
+            plan.pending.push(Pending{id:blob_file_id(&source.collection,&blob),name:blob,mime:first["mime_type"].as_str().unwrap_or("application/octet-stream").into(),owner_app:source.owner_app.clone(),owner_user:source_owner(first,source),created_at_ms:first["created_at_ms"].as_i64().unwrap_or(0),expected:None,content:Content::Bytes(bytes)});
         }
     }
     for snapshot in snapshots {

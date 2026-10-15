@@ -22,6 +22,9 @@ def mutate(path,old,new,test):
 try:
     mutate(source/'src/core/store/import/mod.rs','counts.source_rows != counts.target_documents','false','import::tests::files::copied_profile_files_tracking_and_counting_are_complete_and_replay_is_seq_neutral')
     mutate(source/'src/core/store/import/file_import.rs','total != chunks.len() as u64','false','import::tests::files::incomplete_chunks_and_escaping_paths_never_reach_cas')
+    mutate(source/'src/core/store/import/core_import.rs','t.checked_mul(1000)','t.checked_mul(1)','import::tests::files::copied_profile_files_tracking_and_counting_are_complete_and_replay_is_seq_neutral')
+    mutate(source/'src/core/store/import/core_import.rs','campaigns.get(token).cloned().unwrap_or_default()','String::new()','import::tests::files::copied_profile_files_tracking_and_counting_are_complete_and_replay_is_seq_neutral')
+    mutate(source/'src/core/store/import/file_import.rs','source.owner_user.clone()','None','import::tests::files::copied_profile_files_tracking_and_counting_are_complete_and_replay_is_seq_neutral')
     mutate(source/'src/core/store/import/mod.rs','return Ok(false);','sql(tx.execute(&format!("UPDATE {table} SET data=json_set(data,\'$.title\',\'mutant\'),rev=rev || \'-mutant\' WHERE id=?1"), [&doc.id]))?; return Ok(false);','import::tests::publication_replay_and_core_import_are_seq_neutral_and_never_overwrite_app_edits')
     mutate(source/'src/core/store/import/mod.rs','return Ok(false);','return Ok(true);','import::tests::publication_replay_and_core_import_are_seq_neutral_and_never_overwrite_app_edits')
     mutate(source/'src/core/store/import/core_import.rs','"username,created_at"','"username,password_hash,created_at"','import::tests::source_snapshot_maps_bindings_tickets_witnesses_and_mail_never_reads_secrets')

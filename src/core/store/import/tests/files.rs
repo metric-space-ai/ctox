@@ -1,7 +1,7 @@
 use super::*;
 use super::super::file_import::{self, Budget, LegacyCollection, ProfilePaths, SnapshotFile};
 use std::{fs, path::Path};
-fn source(name:&str,app:&str)->LegacyCollection {LegacyCollection{collection:name.into(),table:format!("legacy_{name}"),owner_app:app.into()}}
+fn source(name:&str,app:&str)->LegacyCollection {LegacyCollection{collection:name.into(),table:format!("legacy_{name}"),owner_app:app.into(),owner_user:Some("owner".into())}}
 fn paths(root:&Path)->ProfilePaths {ProfilePaths{original_root:"/original".into(),copied_root:root.into()}}
 fn budget()->Budget {Budget{rows:100,bytes:1024*1024}}
 #[tokio::test]
@@ -42,6 +42,7 @@ async fn copied_profile_files_tracking_and_counting_are_complete_and_replay_is_s
     assert_eq!(desktop.body["ref"],"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     assert_eq!(blob.body["ref"],desktop.body["ref"]);
     assert_eq!(desktop.body["owner_user"],"owner");
+    assert_eq!(blob.body["owner_user"],"owner");
     for doc in &prepared.documents {cas.verified(doc.body["ref"].as_str().unwrap(),doc.body["size"].as_u64().unwrap())?;}
     let defaults=schema::BaseReleaseDefaults{app_ver:"main@4794af03d+v4".into(),client_limit:100000,byte_budget:33554432,rights_ver:1};
     let mut release=base_release::load(&Path::new(&input).join("v4"),&Path::new(&input).join("ctox-platform.manifest.json"),&defaults)?;
@@ -52,7 +53,7 @@ async fn copied_profile_files_tracking_and_counting_are_complete_and_replay_is_s
         let entry=outbound["collections"][name].clone();
         let schema=entry.get("schema").unwrap_or(&entry).clone();
         assert!(schema["properties"].is_object());
-        let mut def=definition(name,"main@4794af03d+v4");def.app_id="outbound".into();def.schema_json=schema;
+        let mut def=definition(name,"main@4794af03d+v4");def.app_id="outbound".into();def.schema_ver=schema["version"].as_u64().and_then(|v|u32::try_from(v).ok()).expect("canonical schema version");def.schema_json=schema;
         release.collections.entry("outbound".into()).or_default().retain(|d|d.name!=name);
         release.collections.get_mut("outbound").unwrap().push(def);
     }
