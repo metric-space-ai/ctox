@@ -1,0 +1,55 @@
+# CTOX client kernel (App API 4.0)
+
+No UI, build step, runtime package install, HTTP business-data bridge, or imports from the V3 runtime.
+
+```js
+import { createKernel, createShellKernel } from './kernel.mjs';
+import { createLoader } from './loader.mjs';
+const loader = await createLoader({ instanceId, userId, actor, transport });
+// Shell module exports startShell(kernel, {restored}) and stopShell().
+const kernel = loader.kernel;
+const shell = createShellKernel(kernel);
+const api = kernel.appApi('notes', '1');
+const query = api.query('notes', {selector: {done: false}});
+const off = query.subscribe(render);
+const h = api.put('notes', {id: 'n1', done: false});
+await h.local; // atomic docs+outbox durability
+await h.result; // core accepted/rejected/migrated, pending while offline
+```
+
+`createKernel` requires authenticated instanceId/userId. A dbName override cannot bypass its durable identity binding.
+The default transport is offline; it NEVER manufactures acceptance. `createStubKernel` explicitly selects
+`MemoryCoreTransport` for conformance tests and Shell development only. It is not a WebRTC adapter or tenant path.
+
+## Modules
+
+- `store-idb-v5.mjs`: seven generic client stores, atomic IndexedDB and rollback-capable memory backend.
+- `migrate-v3.mjs`: version4 `documents` takeover in the upgrade transaction; identity-owned database only.
+  Confirmed rows retain their base; V3 unconfirmed input is also archived, never blindly dispatched under V4 authority.
+- `leader.mjs`: Web Lock generations; effect and generation check share an IDB transaction.
+- `outbox.mjs`: optimistic base plus ordered operations, immutable op IDs and chained base revisions.
+- `app-api.mjs`/`values.mjs`: Mango, JSON validation, JSON Schema subset, errors, hashing.
+- `kernel.mjs`: local live views, shared outbox, leader dispatch, transactional page cursor, reader reconciliation,
+  activation, hot remount with persisted snapshot and rollback, files, Shell/actor/status facade.
+- `transport.mjs`: KernelTransport seam. `connect(identity,{page,write_result,link})`, `subscribe(scope)`,
+  `write(entry)`, `appActivation(report)`, `priority(hint)`, `artifact(hash)`, `blob(ref)`, `upload(ref,blob)`.
+  A write may return its result or deliver `write_result`; duplicate results are harmless. The adapter receives
+  op_id/prev_op_id/base_rev/base_seq/gen/app_ver. Pages carry decimal-string seq/cursor_to, epoch, scope_hash,
+  gen, docs, complete and per-subscription backlog. Signature verification is the adapter's responsibility.
+- `fake-core.mjs`: explicit in-memory core from the executable stub contract; isolated from client IDB.
+- `shell-api.mjs`/`loader.mjs`: Shell-only API and live Shell bootstrap/replacement. `/sw.js` belongs to Shell v4;
+  artifact route `/~a/<app>@<version>/<path>`, Blob/data module fallback when no controlling SW exists.
+
+`index.d.ts` retains the normative App API from the binding stub, with the real kernel/transport additions.
+Readers never wait for initial sync or call a remote query. New collections require no IDB version increase.
+Both initial catch-up and changes use `page`; data and the scoped checkpoint commit together, stale doc seq cannot win.
+
+## Checks
+
+On the admitted GPU lane: `node --test --test-concurrency=2 src/apps/business-os/kernel/tests/*.test.mjs`.
+Browser: `PLAYWRIGHT_MODULE=<existing package> CHROME_BIN=<existing chromium> node src/apps/business-os/kernel/tests/browser.mjs`.
+The latter starts only its own bounded loopback static fixture and isolated headless context; no tenant or credentials.
+The explicit Node lock adapter is test-only; browsers use actual navigator.locks and IndexedDB.
+
+No old runtime is switched off by this slice. Integration and real WebRTC are phases5/8; no production hot-plug
+claim until the installed all-app acceptance. Old runtime retirement requires zero usage for24h on WELSCH.
