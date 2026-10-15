@@ -1,4 +1,5 @@
 use super::base_release::{self, MigrationEvaluator, ReleasePlan};
+#[path="tests/files.rs"] mod files;
 use super::*;
 use crate::{registry::Registry, schema, types::DbId, writer::WriterOptions};
 use serde_json::json;

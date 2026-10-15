@@ -1,6 +1,38 @@
 //! Allowlisted reads of the frozen core snapshot. Never modifies the source.
 //! The caller stages files through the existing files primitive, not a parallel
-//! blob store. No secret table, password hash or DKIM private key is selected.
+
+/// May also be called against a separate frozen mail-server database.
+/// The caller must select each source database once, never import both mirrors.
+pub fn collect_mail_tracking(tx: &Transaction<'_>) -> Result<CoreImport> {
+    let mut out = CoreImport { documents: vec![], dataframe_rows: vec![], report: ImportReport::default() };
+    mail_tracking(tx, &mut out)?;
+    Ok(out)
+}
+
+/// Legacy timestamps differ intentionally: token creation is seconds, events ms.
+fn mail_tracking(tx: &Transaction<'_>, out: &mut CoreImport) -> Result<()> {
+    for name in ["outbound_tracking_tokens", "outbound_tracking_events"] {
+        out.report.collections.entry(name.into()).or_default();
+    }
+    let tokens = rows(tx,"stalwart_mail_tracking_tokens","token,message_id,campaign_id,event_type,target_url,created_at")?;
+    let mut campaigns = BTreeMap::new();
+    for token in tokens {
+        let id = text(&token,"token")?.to_owned();
+        let created = token["created_at"].as_i64().and_then(|t| t.checked_mul(1000)).ok_or_else(||invalid("tracking_token_timestamp"))?;
+        let campaign = token["campaign_id"].as_str().unwrap_or("").to_owned();
+        campaigns.insert(id.clone(), campaign.clone());
+        push(out,"outbound_tracking_tokens",id.clone(),json!({"id":id,"token":id,"message_id":text(&token,"message_id")?,"campaign_id":campaign,"event_type":text(&token,"event_type")?,"target_url":token["target_url"].as_str().unwrap_or(""),"created_at_ms":created}))?;
+    }
+    for event in rows(tx,"stalwart_mail_tracking_events","id,token,message_id,event_type,occurred_at,user_agent")? {
+        let id = event["id"].as_str().map(str::to_owned).or_else(||event["id"].as_i64().map(|n|n.to_string())).ok_or_else(||invalid("tracking_event_identity"))?;
+        let token = text(&event,"token")?;
+        let campaign = campaigns.get(token).cloned().unwrap_or_default();
+        let occurred = event["occurred_at"].as_i64().ok_or_else(||invalid("tracking_event_timestamp"))?;
+        push(out,"outbound_tracking_events",id.clone(),json!({"id":id,"token":token,"message_id":text(&event,"message_id")?,"campaign_id":campaign,"event_type":text(&event,"event_type")?,"occurred_at_ms":occurred,"user_agent":event["user_agent"].as_str().unwrap_or("")}))?;
+    }
+    Ok(())
+}
+// No secret table, password hash or DKIM private key is selected.
 use super::*;
 use rusqlite::{types::ValueRef, Connection};
 use serde_json::{json, Map};
@@ -76,6 +108,7 @@ pub async fn apply(
             .or_default()
             .target_documents = imported;
     }
+    report.validate_complete()?;
     Ok(report)
 }
 
@@ -275,6 +308,7 @@ pub fn collect(
             .collections
             .insert(name.into(), Counts::default());
     }
+    mail_tracking(tx, &mut out)?;
     tickets(tx, &mut out)?;
     iot(tx, &mut out)?;
     crew(tx, services, &mut out)?;
@@ -705,7 +739,7 @@ pub fn mail_server(tx: &Transaction<'_>) -> Result<Vec<Document>> {
             boolean(&mut data, "enabled");
             if kind == "runtime" {
                 // JSON paths are allowlisted too: never SELECT config_json.
-                let runtime: Option<String> = sql(tx.query_row("SELECT json_object('hostname',json_extract(config_json,'$.hostname'),'bind_host',json_extract(config_json,'$.bind_host'),'smtp_port',json_extract(config_json,'$.smtp_port'),'imap_port',json_extract(config_json,'$.imap_port'),'outbound_throttle_per_min',json_extract(config_json,'$.outbound_throttle_per_min'),'max_connections',json_extract(config_json,'$.max_connections'),'tracking_base_url',json_extract(config_json,'$.tracking_base_url')) FROM stalwart_runtime_config WHERE id=1",[],|r|r.get(0)).optional())?;
+                let runtime: Option<String> = sql(tx.query_row("SELECT json_object('hostname',json_extract(config_json,'$.hostname'),'bind_host',json_extract(config_json,'$.bind_host'),'smtp_port',json_extract(config_json,'$.smtp_port'),'imap_port',json_extract(config_json,'$.imap_port'),'outbound_throttle_per_min',json_extract(config_json,'$.outbound_throttle_per_min'),'max_connections',json_extract(config_json,'$.max_connections')) FROM stalwart_runtime_config WHERE id=1",[],|r|r.get(0)).optional())?;
                 if let Some(runtime) = runtime {
                     let values: Value = serde_json::from_str(&runtime)
                         .map_err(|_| invalid("mail_runtime_config_invalid"))?;

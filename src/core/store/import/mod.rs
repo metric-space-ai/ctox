@@ -2,6 +2,7 @@
 //! registered destination writer; this module never opens a database or runs DDL.
 pub mod base_release;
 pub mod core_import;
+pub mod file_import;
 
 use crate::{
     types::{JobOptions, StoreError, WriteJob},
@@ -41,6 +42,21 @@ pub struct ImportReport {
     pub collections: BTreeMap<String, Counts>,
     /// Codes and source IDs only; never raw rows, configuration or credentials.
     pub diagnostics: Vec<String>,
+    /// Raw source rows before chunk assembly/grouping; logical entities above.
+    #[serde(default)]
+    pub physical_source_rows: BTreeMap<String, usize>,
+}
+
+impl ImportReport {
+    /// Never certify a partial or rejected takeover as a completed import.
+    pub fn validate_complete(&self) -> Result<()> {
+        for (name, counts) in &self.collections {
+            if counts.source_rows != counts.target_documents || counts.rejected != 0 {
+                return Err(invalid(format!("import_count_mismatch:{name}")));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Insert only: reruns cannot roll back app edits or resurrect app tombstones.

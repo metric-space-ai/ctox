@@ -10,9 +10,13 @@ REGISTRY_SOURCE=535d6deb3da5ee87623cf143e142e5e30d666271
 mkdir -p "$TMPDIR/import-registry"
 git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$REGISTRY_SOURCE" src/core/store src/core/paths.rs tests/sync-v4-m2 | tar -x -C "$TMPDIR/import-registry"
 STORE="$TMPDIR/import-registry/src/core/store"
+CAS_SOURCE=7d1cb291550b859a8c05997603f285cb7d3ca8ac
+git --git-dir=/mnt/nvme1/build-lane/mirror/metric-space-ai__ctox.git archive "$CAS_SOURCE" src/core/store/cas | tar -x -C "$TMPDIR/import-registry"
+sed -i '/^\[dependencies\]/a sha2 = "0.10"' "$STORE/Cargo.toml"
+printf '\npub mod cas;\n' >> "$STORE/lib.rs"
 printf '\n#[path="%s/src/core/store/import/mod.rs"] pub mod import;\n' "$SOURCE" >> "$STORE/lib.rs"
-rustfmt --edition 2021 src/core/store/import/{mod,base_release,core_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy}.rs
-rustfmt --edition 2021 --check src/core/store/import/{mod,base_release,core_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy}.rs
+rustfmt --edition 2021 src/core/store/import/{mod,base_release,core_import,file_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy,files}.rs
+rustfmt --edition 2021 --check src/core/store/import/{mod,base_release,core_import,file_import,tests}.rs src/core/store/import/tests/{release_input,profile,legacy,files}.rs
 export IMPORT_INPUT_ROOT=${IMPORT_INPUT_ROOT:-/mnt/sata8t/lane/artifacts/v4-import-input}
 export PATH=/mnt/nvme1/build-lane/cache/node-v24.13.1-linux-x64/bin:$PATH
 node --check scripts/sync-v4/import-report.mjs
@@ -22,6 +26,8 @@ node scripts/sync-v4/import-report.mjs --v4-root "$IMPORT_INPUT_ROOT/v4" --platf
 cargo test --manifest-path "$STORE/Cargo.toml" --lib import::tests -- --nocapture 2>&1 | tee "$PROOF/component.log"
 cargo check --manifest-path "$STORE/Cargo.toml" 2>&1 | tee "$PROOF/check.log"
 python3 src/core/store/import/tests/mutations.py "$STORE"
+node scripts/sync-v4/import-report.mjs --v4-root "$IMPORT_INPUT_ROOT/v4" --platform "$IMPORT_INPUT_ROOT/ctox-platform.manifest.json" --output "$PROOF/import2-inventory-accounting.json" --counts "$PROOF/import2-files-tracking.json"
 cargo test --manifest-path "$STORE/Cargo.toml" --lib import::tests -- --nocapture 2>&1 | tee "$PROOF/restored.log"
-sha256sum src/core/store/import/*.rs scripts/sync-v4/import-report.mjs > "$PROOF/source.sha256"
+sha256sum src/core/store/import/*.rs src/core/store/import/tests/*.rs src/core/store/import/tests/*.py src/core/store/import/tests/*.sh src/core/store/import/tests/*.mjs scripts/sync-v4/import-report.mjs > "$PROOF/source.sha256"
 printf '%s\n' "$REGISTRY_SOURCE" > "$PROOF/registry-source.txt"
+printf '%s\n' "$CAS_SOURCE" > "$PROOF/cas-source.txt"

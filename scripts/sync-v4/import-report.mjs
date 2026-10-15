@@ -73,7 +73,9 @@ async function main() {
   delete result.manifests; delete result.schemas;
   if (options['--counts']) {
     const counts = JSON.parse(await readFile(options['--counts'],'utf8'));
-    result.accounting = accounting(counts.report ?? counts);
+    const report = counts.report ?? counts;
+    result.accounting = accounting(report);
+    result.physical_source_rows = report.physical_source_rows ?? {};
   }
   await mkdir(dirname(resolve(options['--output'])),{recursive:true});
   await writeFile(options['--output'],JSON.stringify(result,null,2)+'\n');

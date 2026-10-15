@@ -1,5 +1,5 @@
 use super::*;
-struct NoTimeseries;
+pub(super) struct NoTimeseries;
 impl core_import::DataframeImporter for NoTimeseries {
     fn import_timeseries(&mut self, _: &str, _: &[Value]) -> Result<usize> {
         Err(invalid("unexpected timeseries"))
