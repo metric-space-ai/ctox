@@ -553,17 +553,23 @@ where
         label: &str,
         options: Option<RTCDataChannelInit>,
     ) -> Result<Arc<dyn DataChannel>> {
-        // Create the data channel via the core
-        let channel_id = {
-            let mut core = self.inner.core.lock().await;
-            let rtc_dc = core.create_data_channel(label, options)?;
-            rtc_dc.id()
-        };
-
+        // Register the receiver before the driver can flush an immediately
+        // opened channel. Keep the established core -> registry lock order.
+        let mut core = self.inner.core.lock().await;
+        let channel_id = core.create_data_channel(label, options)?.id();
         let (evt_tx, evt_rx) = channel(DATA_CHANNEL_EVENT_CHANNEL_CAPACITY);
         {
             let mut data_channels = self.inner.data_channel_events_tx.lock().await;
             data_channels.insert(channel_id, evt_tx);
+        }
+        drop(core);
+        match self
+            .inner
+            .driver_event_tx
+            .try_send(PeerConnectionDriverEvent::WriteNotify)
+        {
+            Ok(()) | Err(crate::runtime::TrySendError::Full(_)) => {}
+            Err(error) => return Err(Error::Other(format!("{error:?}"))),
         }
 
         Ok(Arc::new(DataChannelImpl::new(

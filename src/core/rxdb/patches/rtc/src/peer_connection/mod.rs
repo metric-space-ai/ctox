@@ -1820,6 +1820,27 @@ where
 
         self.data_channels.insert(id, data_channel);
 
+        // The SCTP handshake only fires once. Channels created after hello
+        // must join the existing association instead of remaining Connecting
+        // until a handshake that will never happen again. Reuse the same
+        // pending-channel dial path (including DCEP, events and statistics).
+        let established = self
+            .pipeline_context
+            .sctp_handler_context
+            .sctp_transport
+            .sctp_associations
+            .iter()
+            .find(|(_, association)| !association.is_handshaking() && !association.is_closed())
+            .map(|(handle, _)| handle.0);
+        if let Some(handle) = established {
+            if let Err(error) = sansio::Protocol::handle_event(
+                &mut self.get_datachannel_handler(),
+                crate::peer_connection::event::RTCEventInternal::SCTPHandshakeComplete(handle),
+            ) {
+                self.data_channels.remove(&id);
+                return Err(error);
+            }
+        }
         self.trigger_negotiation_needed();
 
         Ok(RTCDataChannel {
