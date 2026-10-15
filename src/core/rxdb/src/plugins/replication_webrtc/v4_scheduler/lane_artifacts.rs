@@ -3,7 +3,7 @@
 //! adapter never resolves an app URL into a caller-selected filesystem path.
 use super::super::super::webrtc_types::WebRTCPublicationGuard;
 use super::super::hello::WireSeq;
-use super::super::lanes::{Lane, ASSOCIATION_BUDGET};
+use super::super::lanes::Lane;
 use super::{failure, DeliveryToken, NativeSendScheduler};
 use crate::rx_error::RxResult;
 use ctox_store::cas::{Cas, Receiver, VerifiedBlob, CHUNK_BYTES};
@@ -25,7 +25,7 @@ pub struct ArtifactAddress<'a> {
     pub app: &'a str,
     pub app_version: &'a str,
     pub shell_version: &'a str,
-    pub path: &'a str,
+    pub path: std::borrow::Cow<'a, str>,
 }
 impl<'a> ArtifactAddress<'a> {
     pub fn parse(route: &'a str) -> RxResult<Self> {
@@ -49,13 +49,40 @@ impl<'a> ArtifactAddress<'a> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
         };
-        if !identifier(app)
-            || !identifier(app_version)
-            || !identifier(shell_version)
-            || path.is_empty()
-            || path.split('/').any(|part| !identifier(part))
-        {
+        if !identifier(app) || !identifier(app_version) || !identifier(shell_version) {
             return Err(failure("invalid immutable artifact address"));
+        }
+        let path = if path.contains('%') {
+            let mut decoded = Vec::with_capacity(path.len());
+            let mut raw = path.as_bytes().iter().copied();
+            while let Some(byte) = raw.next() {
+                if byte == b'%' {
+                    let hi = raw
+                        .next()
+                        .and_then(|b| (b as char).to_digit(16))
+                        .ok_or_else(|| failure("artifact percent escape"))?;
+                    let lo = raw
+                        .next()
+                        .and_then(|b| (b as char).to_digit(16))
+                        .ok_or_else(|| failure("artifact percent escape"))?;
+                    decoded.push((hi * 16 + lo) as u8);
+                } else {
+                    decoded.push(byte);
+                }
+            }
+            std::borrow::Cow::Owned(
+                String::from_utf8(decoded).map_err(|_| failure("artifact UTF-8 path"))?,
+            )
+        } else {
+            std::borrow::Cow::Borrowed(path)
+        };
+        if path.len() > 4096
+            || path.chars().any(|c| c.is_control() || c == '\\')
+            || path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err(failure("invalid artifact path"));
         }
         Ok(Self {
             app,
@@ -93,8 +120,8 @@ fn packet(reference: &str, size: u64, offset: u64, data: &[u8]) -> RxResult<Vec<
     bytes.extend_from_slice(&(header.len() as u32).to_be_bytes());
     bytes.extend(header);
     bytes.extend(data);
-    if bytes.len() > ASSOCIATION_BUDGET {
-        return Err(failure("artifact packet exceeds connection budget"));
+    if bytes.len() > PACKET_LIMIT {
+        return Err(failure("artifact logical packet limit"));
     }
     Ok(bytes)
 }
@@ -126,6 +153,9 @@ fn decode(bytes: &[u8]) -> RxResult<(Header, &[u8])> {
 /// Resume offset is the receiver's durable prefix, obtained on the authorized
 /// same-epoch route. Across session reset query the prefix again; never guess it
 /// from SCTP handoffs. E14 replay handles unacknowledged chunks within a session.
+/// Success is bounded retained admission; final delivery is the receiver's
+/// verified CAS completion. Association close interrupts admission, retaining
+/// already accepted messages for rebind rather than leaving this producer stuck.
 pub async fn send_blob(
     scheduler: &NativeSendScheduler,
     cas: Cas,
@@ -133,18 +163,21 @@ pub async fn send_blob(
     offset: u64,
     publication: Arc<dyn WebRTCPublicationGuard>,
 ) -> RxResult<()> {
-    if scheduler.session.is_none() {
-        return Err(failure("artifact delivery requires E14 session"));
+    let mut draining = scheduler.drain.subscribe();
+    let mut status = scheduler.status.clone();
+    if *draining.borrow() || status.borrow().is_some() {
+        return Err(failure("artifact association closed"));
     }
-    if offset > blob.size() {
-        return Err(failure("artifact resume beyond size"));
-    }
-    let reference = blob.reference().to_owned();
-    let size = blob.size();
-    let mut file = tokio::task::spawn_blocking(move || cas.reader(&blob))
-        .await
-        .map_err(|e| failure(&e.to_string()))?
-        .map_err(|e| failure(&e.to_string()))?;
+    tokio::select! {
+        biased;
+        _ = draining.changed() => Err(failure("artifact association draining; resume required")),
+        _ = status.changed() => Err(failure("artifact association ended; resume required")),
+        result = async {
+    if scheduler.session.is_none() { return Err(failure("artifact delivery requires E14 session")); }
+    if offset > blob.size() { return Err(failure("artifact resume beyond size")); }
+    let reference = blob.reference().to_owned(); let size = blob.size();
+    let mut file = tokio::task::spawn_blocking(move || cas.reader(&blob)).await
+        .map_err(|e| failure(&e.to_string()))?.map_err(|e| failure(&e.to_string()))?;
     // Each file operation is off the async executor and writer thread. Admission
     // awaits only Transfer's retained window, never a control/command permit.
     let mut cursor = offset;
@@ -152,26 +185,15 @@ pub async fn send_blob(
         let (returned, data) = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
             file.seek(SeekFrom::Start(cursor))?;
             let mut bytes = vec![0; CHUNK_BYTES.min((size - cursor) as usize)];
-            file.read_exact(&mut bytes)?;
-            Ok((file, bytes))
-        })
-        .await
-        .map_err(|e| failure(&e.to_string()))?
-        .map_err(|e| failure(&e.to_string()))?;
+            file.read_exact(&mut bytes)?; Ok((file, bytes))
+        }).await.map_err(|e| failure(&e.to_string()))?.map_err(|e| failure(&e.to_string()))?;
         file = returned;
         let payload = packet(&reference, size, cursor, &data)?;
-        scheduler
-            .send(
-                Lane::Transfer,
-                WireSeq(cursor),
-                &payload,
-                Some(publication.clone()),
-            )
-            .await?;
+        scheduler.send(Lane::Transfer, WireSeq(cursor), &payload, Some(publication.clone())).await?;
         cursor += data.len() as u64;
-        if cursor == size {
-            return Ok(());
-        }
+        if cursor == size { return Ok(()); }
+    }
+        } => result,
     }
 }
 
@@ -255,6 +277,5 @@ impl ArtifactReceiver {
 }
 
 #[cfg(test)]
-mod tests {
-    include!("lane_artifacts_tests.rs");
-}
+#[path = "lane_artifacts_tests.rs"]
+mod tests;

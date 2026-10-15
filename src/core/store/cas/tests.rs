@@ -74,19 +74,25 @@ async fn lane4_cas_resume_integrity_and_atomic_file_publication() {
         )
         .await;
     assert!(failed.is_err());
-    blob.commit_with_file(
-        &writer,
-        "x".into(),
-        "text/plain".into(),
-        "app".into(),
-        insert,
-        |tx, blob| {
-            tx.execute("INSERT INTO effects VALUES (?1)", [&blob.r#ref])?;
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
+    let (published, ()) = cas
+        .produce_file(
+            dir.path().join("primitive-output"),
+            "e".repeat(64),
+            &writer,
+            FileMetadata {
+                name: "x".into(),
+                mime: "text/plain".into(),
+                owner_app: "app".into(),
+            },
+            insert,
+            |tx, blob| {
+                tx.execute("INSERT INTO effects VALUES (?1)", [&blob.r#ref])?;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(published.r#ref, imported.reference());
     writer
         .submit(WriteJob::new(JobOptions::default(), |tx| {
             let matched: u64 = tx.query_row(

@@ -9,7 +9,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const CHUNK_BYTES: usize = 64 * 1024;
+// Logical chunks amortize durable IO; physical frames/credit remain owned by
+// the scheduler (16 KiB / 128 KiB). Never allocate a chunk on the async stack.
+pub const CHUNK_BYTES: usize = 512 * 1024;
+const IO_BUFFER_BYTES: usize = 64 * 1024;
 fn invalid(message: &str) -> StoreError {
     StoreError::Invalid(message.into())
 }
@@ -49,7 +52,7 @@ fn verify(path: &Path, reference: &str, size: u64) -> Result<(), StoreError> {
         return Err(invalid("CAS size mismatch"));
     }
     let mut hash = Sha256::new();
-    let mut buf = [0; CHUNK_BYTES];
+    let mut buf = [0; IO_BUFFER_BYTES];
     loop {
         let n = f.read(&mut buf)?;
         if n == 0 {
@@ -74,6 +77,11 @@ pub struct FileRecord {
     pub name: String,
     pub mime: String,
     pub size: u64,
+    pub owner_app: String,
+}
+pub struct FileMetadata {
+    pub name: String,
+    pub mime: String,
     pub owner_app: String,
 }
 /// Constructible only after hashing complete bytes, before publishing metadata.
@@ -128,6 +136,37 @@ pub struct Cas {
     root: PathBuf,
 }
 impl Cas {
+    /// Primitive entry point: return the app's `{ref}` only after the files row
+    /// and primitive's database effect have committed together. Callers supply
+    /// their platform schema inserter; it and the effect must enforce the current
+    /// actor/epoch policy inside the committing transaction.
+    pub async fn produce_file<T: Send + 'static>(
+        &self,
+        source: PathBuf,
+        scope: String,
+        writer: &WriterHandle,
+        metadata: FileMetadata,
+        insert_file: impl FnOnce(&Transaction<'_>, &FileRecord) -> Result<(), StoreError>
+            + Send
+            + 'static,
+        effect: impl FnOnce(&Transaction<'_>, &BlobRef) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<(BlobRef, T), StoreError> {
+        let blob = self.import(source, scope).await?;
+        let reference = BlobRef {
+            r#ref: blob.reference.clone(),
+        };
+        let result = blob
+            .commit_with_file(
+                writer,
+                metadata.name,
+                metadata.mime,
+                metadata.owner_app,
+                insert_file,
+                effect,
+            )
+            .await?;
+        Ok((reference, result))
+    }
     /// Import a primitive's output before its single publication transaction.
     /// Full hashing and bounded copies run off the canonical writer. On a
     /// publication failure bytes may remain unreferenced for normal CAS GC.
@@ -138,7 +177,7 @@ impl Cas {
             let mut file = File::open(&source)?;
             let size = file.metadata()?.len();
             let mut hash = Sha256::new();
-            let mut buffer = [0; CHUNK_BYTES];
+            let mut buffer = [0; IO_BUFFER_BYTES];
             loop {
                 let n = file.read(&mut buffer)?;
                 if n == 0 {
@@ -153,6 +192,7 @@ impl Cas {
             let mut receiver = cas.receive(&scope, &reference, size)?;
             let mut offset = receiver.offset()?;
             file.seek(SeekFrom::Start(offset))?;
+            let mut buffer = vec![0; CHUNK_BYTES];
             loop {
                 let n = file.read(&mut buffer)?;
                 if n == 0 {
