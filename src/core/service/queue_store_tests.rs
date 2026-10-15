@@ -171,7 +171,7 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
         let chunk = ipc::request(
             endpoint(&root),
             Request {
-                request_id: full.len() as u64,
+                request_id: full.len() as u64 + 1,
                 kind: JobKind::Read,
                 method: "queue.projection.read".into(),
                 payload: serde_json::to_vec(&request)?,
@@ -301,5 +301,118 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
         "hash alone became a reference grant"
     );
     restarted.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_drain_keeps_projection_pending_for_the_next_owner() -> anyhow::Result<()> {
+    anyhow::ensure!(
+        std::env::var_os("CTOX_STATE_ROOT").is_none(),
+        "fixture refuses configured state root"
+    );
+    let root = tempfile::tempdir()?;
+    let mut stores = DaemonStores::start(endpoint(root.path()), Handle::current())?;
+    let core = stores
+        .register(
+            "core",
+            DbId::new(crate::paths::core_db(root.path()))?,
+            false,
+            Arc::new(|tx| {
+                tx.execute_batch("CREATE TABLE source_effect(id INTEGER PRIMARY KEY)")?;
+                Ok(())
+            }),
+        )
+        .await?;
+    let sync=stores.register("sync",DbId::new(crate::paths::sync_db(root.path()))?,true,Arc::new(|tx|{
+        ctox_store::schema::create_collection(tx,&ctox_store::schema::CollectionDefinition{name:"ctox_queue_tasks".into(),app_id:"ctox-platform".into(),schema_ver:0,schema_json:json!({"primaryKey":"id","type":"object","properties":{"id":{"type":"string"}}}),class:"projection".into(),client_limit:1000,byte_budget:1048576,rights_ver:1,app_ver:"fixture".into()})?;Ok(())
+    })).await?;
+    publication::stage(&core.writer,options(),Publication{op_id:"drain-race".into(),target:"sync.queue".into(),kind:"queue.projection.v4".into(),subject:"ctox.daemon.queue".into(),payload:serde_json::to_vec(&json!({"queue":{"id":"retained","queue_projection_version":1,"title":"retained","status":"failed"}}))?},1000,|tx|{tx.execute("INSERT INTO source_effect VALUES(1)",[])?;Ok(())}).await?;
+    let authority = Arc::new(QueueAuthority {
+        core: core.clone(),
+        sync: sync.clone(),
+        closing: Arc::new(AtomicBool::new(true)),
+        gate: Arc::new(RwLock::new(())),
+    });
+    let result = publication::deliver_one(
+        &core.writer,
+        &sync.writer,
+        "sync.queue".into(),
+        options(),
+        Receiver {
+            authority,
+            apply: Arc::new(apply),
+        },
+        1000,
+        RetryPolicy::default(),
+    )
+    .await?;
+    assert_eq!(
+        result,
+        Delivery::Retrying,
+        "local drain destroyed a committed publication"
+    );
+    let status = publication::status(&core.writer, options(), "drain-race".into())
+        .await?
+        .unwrap();
+    assert_eq!(status.state, "pending");
+    stores.shutdown().await?;
+    let mut stores = DaemonStores::start(endpoint(root.path()), Handle::current())?;
+    let core = stores
+        .register(
+            "core",
+            DbId::new(crate::paths::core_db(root.path()))?,
+            false,
+            Arc::new(|_| Ok(())),
+        )
+        .await?;
+    let sync = stores
+        .register(
+            "sync",
+            DbId::new(crate::paths::sync_db(root.path()))?,
+            true,
+            Arc::new(|_| Ok(())),
+        )
+        .await?;
+    let authority = Arc::new(QueueAuthority {
+        core: core.clone(),
+        sync: sync.clone(),
+        closing: Arc::new(AtomicBool::new(false)),
+        gate: Arc::new(RwLock::new(())),
+    });
+    assert_eq!(
+        publication::deliver_one(
+            &core.writer,
+            &sync.writer,
+            "sync.queue".into(),
+            options(),
+            Receiver {
+                authority,
+                apply: Arc::new(apply)
+            },
+            status.next_attempt_ms,
+            RetryPolicy::default()
+        )
+        .await?,
+        Delivery::Applied
+    );
+    assert!(
+        sync.readers
+            .read(|tx| tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM c_ctox_queue_tasks WHERE id='retained')",
+                [],
+                |r| r.get::<_, bool>(0)
+            ))
+            .await?
+    );
+    assert_eq!(
+        core.readers
+            .read(
+                |tx| tx.query_row("SELECT COUNT(*) FROM source_effect", [], |r| r
+                    .get::<_, u64>(0))
+            )
+            .await?,
+        1
+    );
+    stores.shutdown().await?;
     Ok(())
 }

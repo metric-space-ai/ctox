@@ -28,6 +28,49 @@ pub(crate) struct Database {
     pub readers: ReadPool,
 }
 
+/// Time the existing reader boundary without changing admission/execution
+/// budgets. The two outer intervals include scheduling/WAL setup and validation;
+/// they are deliberately NOT described as SQL CPU or pure queue wait.
+/// Labels are native constants; never emit SQL, identifiers or record contents.
+pub(super) async fn read_snapshot<T: Send + 'static>(
+    database: &Database,
+    stage: &'static str,
+    options: JobOptions,
+    operation: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
+) -> Result<T, StoreError> {
+    let submitted = std::time::Instant::now();
+    let timing = Arc::new(Mutex::new(None));
+    let observed = timing.clone();
+    let result = database
+        .readers
+        .read_job(ReadJob::new(options, move |tx| {
+            let before = submitted.elapsed();
+            let entered = std::time::Instant::now();
+            let result = operation(tx);
+            *observed.lock().unwrap_or_else(|p| p.into_inner()) = Some((before, entered.elapsed()));
+            result
+        }))
+        .await;
+    let elapsed = submitted.elapsed();
+    if result.is_err() || elapsed >= std::time::Duration::from_millis(20) {
+        let measured = *timing.lock().unwrap_or_else(|p| p.into_inner());
+        let outcome = match &result {
+            Ok(_) => "ok",
+            Err(StoreError::Busy) => "busy",
+            Err(StoreError::DeadlineExceeded) => "deadline",
+            Err(StoreError::Cancelled) => "cancelled",
+            Err(StoreError::Closed) => "closed",
+            Err(_) => "failed",
+        };
+        let (before, callback) = measured.unwrap_or_default();
+        eprintln!(
+            "ctox_owner_read_timing={}",
+            serde_json::json!({"stage":stage,"outcome":outcome,"callback_entered":measured.is_some(),"pre_callback_us":before.as_micros(),"callback_us":callback.as_micros(),"post_callback_us":elapsed.saturating_sub(before+callback).as_micros(),"total_us":elapsed.as_micros()})
+        );
+    }
+    result
+}
+
 /// Names and paths are resolved by native code, never accepted over IPC.
 struct Inspect {
     databases: Arc<Mutex<HashMap<String, Database>>>,
@@ -66,12 +109,10 @@ impl Dispatcher for Inspect {
                 .ok_or(StoreError::Closed)?;
             let (reply, receive) = tokio::sync::oneshot::channel();
             self.runtime.spawn(async move {
-                let result = core
-                    .readers
-                    .read_job(ReadJob::new(options, move |db| {
-                        super::queue_projection::read_chunk(db, &chunk)
-                    }))
-                    .await;
+                let result = read_snapshot(&core, "queue.projection.read", options, move |db| {
+                    super::queue_projection::read_chunk(db, &chunk)
+                })
+                .await;
                 let _ = reply.send(result);
             });
             return Ok(JobHandle::from_receiver(receive));
