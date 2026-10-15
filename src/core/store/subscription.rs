@@ -85,6 +85,8 @@ impl Subscription {
     pub fn key(&self) -> &SubscriptionKey {
         &self.key
     }
+    /// Sender read position only, never proof of recipient persistence.
+    /// Reconnect MUST use the recipient's durable checkpoint, not this position.
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         self.epoch.as_ref().map(|epoch| Checkpoint {
             instance_id: self
@@ -134,9 +136,20 @@ impl Subscription {
         let key = self.key.clone();
         let cursor = self.cursor;
         let epoch = self.epoch.clone();
+        let expected_database = self.writer.db_id().path().to_path_buf();
         let (page, docs) = self
             .reader
             .read(move |tx| {
+                let file: String = tx.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let actual_database = std::fs::canonicalize(&file)
+                    .map_err(|_| invalid("reader database identity unavailable"))?;
+                if actual_database != expected_database {
+                    return Err(invalid("reader database differs from writer owner"));
+                }
                 authority.authorize(tx, &key)?;
                 let page = change_log::read_page(tx, &key.collection, key.gen, cursor, limit)?;
                 if epoch.as_ref().is_some_and(|e| e != &page.epoch) {
@@ -207,29 +220,39 @@ impl Subscription {
     }
 }
 
+#[path = "write_contract.rs"]
+pub mod write_contract;
+
 /// Native authority is mandatory, including replay and removes. It may enforce
 /// write_guard/schema validation and resolve old-schema input through the owned migration runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WritePermission {
+    Permit,
+    Reject(String),
+}
 pub trait WriteAuthority: Send + Sync {
     fn authorize(
         &self,
         tx: &Transaction<'_>,
         participant: &str,
         request: &Write,
-    ) -> rusqlite::Result<()>;
-    /// Trusted semantic migration seam. None rejects stale schema/generation input.
-    /// Implementations must use already prepared, revision-bound output; no I/O or JS in the writer.
+    ) -> rusqlite::Result<WritePermission>;
+    /// Validate the final current-schema document and write guards. Reject reasons are public machine codes.
     fn validate_document(
         &self,
         tx: &Transaction<'_>,
         participant: &str,
         collection: &crate::schema::Collection,
         document: &Value,
-    ) -> rusqlite::Result<()>;
+    ) -> rusqlite::Result<WritePermission>;
+    /// Trusted semantic migration seam. None is a terminal migration_required rejection.
+    /// Use prepared, revision-bound output; no I/O or JS in the writer. A transient unavailable runner returns Err.
     fn migrate(
         &self,
         _tx: &Transaction<'_>,
         _participant: &str,
         _request: &Write,
+        _resolved_base_rev: Option<&str>,
         _current: &crate::schema::Collection,
     ) -> rusqlite::Result<Option<Migration>> {
         Ok(None)
@@ -293,7 +316,7 @@ fn remember(
 }
 /// Call inside the ONE writer transaction; document, revision history and dedup result commit together.
 /// Missing predecessors return a retryable error without storing a terminal rejection.
-pub fn apply_write(
+pub(crate) fn apply_write(
     tx: &Transaction<'_>,
     participant: &str,
     request: &Write,
@@ -305,7 +328,7 @@ pub fn apply_write(
         if participant.is_empty() || request.id.is_empty() || request.gen == 0 {
             return Err(invalid("invalid write binding"));
         }
-        authority.authorize(tx, participant, request)?;
+        let permission = authority.authorize(tx, participant, request)?;
         let issued = operation_time(&request.op_id)?;
         if issued > now_ms.saturating_add(300_000) {
             return Ok(rejected(request, "invalid_time"));
@@ -325,9 +348,25 @@ pub fn apply_write(
             }
             return serde_json::from_str(&result).map_err(|e| invalid(e.to_string()));
         }
+        if let WritePermission::Reject(reason) = permission {
+            let result = rejected(request, &reason);
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
         let mut base = request.base_rev.clone();
         if let Some(previous) = &request.prev_op_id {
             if previous == &request.op_id || base.as_deref() != Some(&format!("op:{previous}")) {
+                let result = rejected(request, "invalid_predecessor");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
+            let predecessor_time = operation_time(previous)?;
+            if now_ms.saturating_sub(predecessor_time) > OP_HORIZON_MS {
+                let result = rejected(request, "expired");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
+            if predecessor_time > now_ms.saturating_add(300_000) {
                 let result = rejected(request, "invalid_predecessor");
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
@@ -340,9 +379,6 @@ pub fn apply_write(
                 )
                 .optional()?;
             let Some((owner, collection, id, gen, json)) = previous_row else {
-                if now_ms.saturating_sub(operation_time(previous)?) > OP_HORIZON_MS {
-                    return Ok(rejected(request, "expired"));
-                }
                 return Err(invalid("pending_predecessor"));
             };
             let previous_result: WriteResult =
@@ -378,7 +414,7 @@ pub fn apply_write(
                 archived_ref: None,
             })
         } else if stale {
-            authority.migrate(tx, participant, request, &current)?
+            authority.migrate(tx, participant, request, base.as_deref(), &current)?
         } else {
             None
         };
@@ -404,7 +440,7 @@ pub fn apply_write(
                 if *deleted {
                     request.op != WriteOp::Put || base.is_some()
                 } else {
-                    base.as_ref() != Some(rev)
+                    base.as_ref() != Some(rev) && (request.op == WriteOp::Delete || base.is_none())
                 }
             }
             None => base.is_some() || request.op != WriteOp::Put,
@@ -414,8 +450,25 @@ pub fn apply_write(
             remember(tx, participant, request, &result, now_ms)?;
             return Ok(result);
         }
+        let merging = row
+            .as_ref()
+            .is_some_and(|(rev, _, deleted)| !deleted && base.as_ref() != Some(rev));
+        let merge_base: Option<Value> = if merging {
+            let history: Option<Option<String>> = tx.query_row(
+                "SELECT body FROM _revs WHERE collection=?1 AND gen=?2 AND id=?3 AND rev=?4 AND created_at>=?5",
+                params![request.collection, integer(current.gen)?, request.id, base, integer(now_ms.saturating_sub(OP_HORIZON_MS)/1000)?],
+                |r| r.get(0)).optional()?;
+            let Some(Some(json)) = history else {
+                let result = rejected(request, "conflict");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            };
+            Some(serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?)
+        } else {
+            None
+        };
         if let Some(seq) = request.base_seq {
-            if request.prev_op_id.is_none() && !stale {
+            if request.prev_op_id.is_none() && !stale && !merging {
                 let actual: Option<u64> = tx
                     .query_row(
                         "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
@@ -429,6 +482,12 @@ pub fn apply_write(
                     return Ok(result);
                 }
             }
+        }
+        // Preserve a pre-existing revision too (e.g. imported/backfilled rows).
+        if let Some((prior_rev, Some(prior_body), false)) = &row {
+            tx.execute("INSERT OR IGNORE INTO _revs(collection,id,rev,seq,gen,body,created_at)
+                SELECT ?1,?2,?3,seq,?4,?5,?6 FROM _changes WHERE collection=?1 AND gen=?4 AND id=?2",
+                params![request.collection,request.id,prior_rev,integer(current.gen)?,prior_body,integer(now_ms/1000)?])?;
         }
         let rev = format!("v4:{}", request.op_id);
         let body = if let Some(m) = &migration {
@@ -458,23 +517,41 @@ pub fn apply_write(
                 return Ok(result);
             };
             let mut document = if request.op == WriteOp::Patch && !stale {
-                let prior = row
-                    .as_ref()
-                    .and_then(|r| r.1.as_ref())
-                    .ok_or_else(|| invalid("patch base unavailable"))?;
-                let mut doc: Value =
-                    serde_json::from_str(prior).map_err(|e| invalid(e.to_string()))?;
+                let mut doc: Value = if let Some(base) = &merge_base {
+                    base.clone()
+                } else {
+                    let prior = row
+                        .as_ref()
+                        .and_then(|r| r.1.as_ref())
+                        .ok_or_else(|| invalid("patch base unavailable"))?;
+                    serde_json::from_str(prior).map_err(|e| invalid(e.to_string()))?
+                };
                 merge_patch(&mut doc, &input);
                 doc
             } else {
                 input
             };
+            if let Some(base) = &merge_base {
+                let server: Value = serde_json::from_str(
+                    row.as_ref()
+                        .and_then(|r| r.1.as_deref())
+                        .ok_or_else(|| invalid("merge current unavailable"))?,
+                )
+                .map_err(|e| invalid(e.to_string()))?;
+                document = write_contract::merge_fields(base, &server, &document);
+            }
             if !document.is_object() {
                 let result = rejected(request, "object_required");
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
             }
-            authority.validate_document(tx, participant, &current, &document)?;
+            if let WritePermission::Reject(reason) =
+                authority.validate_document(tx, participant, &current, &document)?
+            {
+                let result = rejected(request, &reason);
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
             // Schemas operate on business JSON; id/rev/deleted are authoritative table columns.
             let json = serde_json::to_string(&mut document).map_err(|e| invalid(e.to_string()))?;
             tx.execute(&format!("INSERT INTO {table}(id,rev,schema_ver,data,deleted) VALUES(?1,?2,?3,?4,0)
@@ -490,6 +567,8 @@ pub fn apply_write(
             op_id: request.op_id.clone(),
             status: if stale {
                 WriteStatus::Migrated
+            } else if merging {
+                WriteStatus::Merged
             } else {
                 WriteStatus::Accepted
             },

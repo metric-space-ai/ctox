@@ -96,6 +96,7 @@ pub struct StreamPacket {
     pub sig: Vec<u8>,
 }
 /// Production implementations fetch/use the instance key through the native secret provider.
+/// The provider pins one immutable instance/key identity for the packet's signing lifetime.
 /// There is deliberately no default signer, environment key, or caller-supplied key material.
 pub trait InstanceSigner: Send + Sync {
     fn instance_id(&self) -> &str;
@@ -233,6 +234,7 @@ pub struct Write {
 #[serde(rename_all = "snake_case")]
 pub enum WriteStatus {
     Accepted,
+    Merged,
     Rejected,
     Migrated,
 }
@@ -247,18 +249,46 @@ pub struct WriteResult {
     pub reason: Option<String>,
     pub archived_ref: Option<String>,
 }
+/// Participant identity is supplied by the admitted native connection, never this payload.
+/// client_seq starts at 1 for an admitted participant/session identity and is a decimal string.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderedWrite {
+    pub client_seq: Seq,
+    #[serde(flatten)]
+    pub write: Write,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderedWriteResult {
+    pub client_seq: Seq,
+    /// Merged/migrated results carry no unmasked business payload. The consumer MUST
+    /// wait for the authoritative normal page (seq >= result.seq), rather than stamp
+    /// its own optimistic body with this revision/seq. Keep the outbox until then.
+    pub requires_page: bool,
+    #[serde(flatten)]
+    pub result: WriteResult,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Subscribe(Subscribe),
-    Write(Write),
+    Write(OrderedWrite),
     ClockSync(ClockProbe),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
-    WriteResult(WriteResult),
-    HelloOk(ClockReply),
+    WriteResult(OrderedWriteResult),
+    HelloOk(HelloOk),
+}
+/// Scope token values are issued/validated by P6, never minted by this codec.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloOk {
+    pub epoch: String,
+    pub head_seq: Seq,
+    pub scope_tokens: Vec<Value>,
+    pub rights_ver: u64,
+    pub clock: ClockReply,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -309,7 +339,7 @@ impl ClockReply {
     }
 }
 /// Exact signed bytes for the P5 reliable message payload. Receivers verify these
-/// bytes BEFORE parsing business values; JS number/stringify rules cannot change the signature.
+/// bytes BEFORE dispatching business values; JS number/stringify rules cannot change the signature.
 /// The domain prefix is part of payload. P5 owns framing and negotiated byte budgets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
