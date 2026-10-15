@@ -1366,7 +1366,6 @@ fn run_plugin_child(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
                     error: (mode == "application_error").then(|| ctox_cliproxyapi::sdk::pluginabi::Error {
                         code: "fixture_rate_limit".into(), message: "fixture limit".into(),
                         http_status: 429, retryable: true,
-                        ..Default::default()
                     }),
                 }).await?;
                 continue;
