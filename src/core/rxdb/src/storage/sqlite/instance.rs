@@ -994,6 +994,11 @@ fn owned_changes_since(
             checkpoint
                 .get("seq")
                 .and_then(Value::as_str)
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.bytes().all(|b| b.is_ascii_digit())
+                        && (s.len() == 1 || !s.starts_with('0'))
+                })
                 .and_then(|s| s.parse::<u64>().ok())
                 .ok_or_else(|| {
                     super::types::owner_job_error("decimal sequence checkpoint required")
@@ -1678,7 +1683,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let (batch_sender, mut batch_receiver) = mpsc::channel::<Vec<Value>>(1);
         let (decision_sender, decision_receiver) = std::sync::mpsc::channel::<bool>();
         let stream_task = if let Some(owner) = &self.owner {
-            let ticket = owner.read(Box::new(move |conn| {
+            let ticket = owner.read_stream(Box::new(move |conn| {
                 query_stream_on_connection(
                     conn,
                     &table_name,
@@ -2076,7 +2081,7 @@ fn query_stream_on_dedicated_connection<F>(
     primary_path: &str,
     prepared_query: &Value,
     chunk_size: usize,
-    mut visit: F,
+    visit: F,
 ) -> RxResult<()>
 where
     F: FnMut(Vec<Value>) -> RxResult<bool>,
@@ -2208,7 +2213,7 @@ impl RxStorageInstanceSqlite {
         let query = prepared_query.clone();
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         let (decide, decisions) = std::sync::mpsc::channel();
-        let ticket = owner.read(Box::new(move |conn| {
+        let ticket = owner.read_stream(Box::new(move |conn| {
             let emit = |event| -> RxResult<bool> {
                 if send.send(event).is_err() {
                     return Ok(false);
@@ -2307,6 +2312,64 @@ mod tests {
             tokio::sync::oneshot::Sender<RxResult<super::super::types::SqliteJobValue>>,
         ),
     }
+    struct RejectOwner;
+    impl super::super::types::SqliteOwnerJobs for RejectOwner {
+        fn read(
+            &self,
+            _: super::super::types::SqliteOwnerJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            Err(super::super::types::owner_job_error("busy"))
+        }
+        fn write(
+            &self,
+            _: super::super::types::SqliteOwnerWriteJob,
+        ) -> RxResult<super::super::types::SqliteJobTicket> {
+            Err(super::super::types::owner_job_error("busy"))
+        }
+        fn install_change_log(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &str,
+            _: i32,
+        ) -> RxResult<()> {
+            unreachable!()
+        }
+        fn backfill_change_log(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: Option<&str>,
+        ) -> RxResult<Option<String>> {
+            unreachable!()
+        }
+        fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64> {
+            tokio::sync::watch::channel(0).1
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn owner_jobs_admission_error_never_opens_a_legacy_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("must-not-exist/db.sqlite3");
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path.clone(),
+            },
+            Arc::new(RejectOwner),
+        );
+        assert!(create_storage_instance(&storage, params(test_schema()))
+            .await
+            .is_err());
+        assert!(crate::types::RxStorage::create_storage_instance(
+            storage.as_ref(),
+            params(test_schema())
+        )
+        .await
+        .is_err());
+        assert!(storage.connection.lock().is_none());
+        assert!(!path.parent().unwrap().exists());
+    }
+
     struct TestOwner {
         send: Option<std::sync::mpsc::SyncSender<OwnerTestJob>>,
         head: tokio::sync::watch::Sender<u64>,
@@ -2516,6 +2579,198 @@ mod tests {
             instance.replication_checkpoint_status().await["headSeq"],
             "0"
         );
+        instance.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_jobs_global_cursor_covers_old_lwt_empty_ranges_and_hard_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.sqlite3");
+        let owner = TestOwner::new(path.clone());
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path,
+            },
+            owner,
+        );
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        let first = doc("a", "1-a", 1, false, 100.0);
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: first.clone()
+                }],
+                "test"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let page = instance
+            .get_changed_documents_since(10, None)
+            .await
+            .unwrap();
+        assert_eq!(page.checkpoint["seq"], "1");
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: Some(first),
+                    document: doc("a", "2-a", 2, false, 1.0)
+                }],
+                "test"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let changed = instance
+            .get_changed_documents_since(10, Some(&page.checkpoint))
+            .await
+            .unwrap();
+        assert_eq!(changed.documents[0]["_rev"], "2-a");
+        let mut other_params = params(test_schema());
+        other_params.collection_name = "other".into();
+        let other = create_storage_instance(&storage, other_params)
+            .await
+            .unwrap();
+        other
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("b", "1-b", 3, false, 2.0),
+                }],
+                "test",
+            )
+            .await
+            .unwrap();
+        let empty = instance
+            .get_changed_documents_since(10, Some(&changed.checkpoint))
+            .await
+            .unwrap();
+        assert!(empty.documents.is_empty());
+        assert_eq!(empty.checkpoint["seq"], "3");
+        let mut invalid = empty.checkpoint.clone();
+        invalid["epoch"] = json!("foreign");
+        assert!(instance
+            .get_changed_documents_since(10, Some(&invalid))
+            .await
+            .is_err());
+        invalid = empty.checkpoint.clone();
+        invalid["seq"] = json!("03");
+        assert!(instance
+            .get_changed_documents_since(10, Some(&invalid))
+            .await
+            .is_err());
+        instance.remove().await.unwrap();
+        let reopened = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        let deleted = reopened
+            .get_changed_documents_since(10, Some(&empty.checkpoint))
+            .await
+            .unwrap();
+        assert_eq!(deleted.documents[0]["id"], "a");
+        assert_eq!(deleted.documents[0]["_deleted"], true);
+        assert!(reopened
+            .find_documents_by_id(&["a".into()], true)
+            .await
+            .unwrap()
+            .is_empty());
+        reopened.close().await.unwrap();
+        other.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_jobs_stream_snapshot_releases_before_end_and_cancellation_has_no_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.sqlite3");
+        let owner = TestOwner::new(path.clone());
+        let storage = super::super::types::RxStorageSqlite::with_owner(
+            RxStorageSqliteSettings {
+                database_path: path,
+            },
+            owner.clone(),
+        );
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                (0..3)
+                    .map(|i| BulkWriteRow {
+                        previous: None,
+                        document: doc(&format!("doc{i}"), "1-a", i, false, 1.0),
+                    })
+                    .collect(),
+                "test",
+            )
+            .await
+            .unwrap();
+        let query = snapshot_query(&schema);
+        let mut seen = Vec::new();
+        instance
+            .query_stream_into(&query, 1, &mut |batch| {
+                seen.extend(batch);
+                Ok(true)
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen.len(), 3);
+        let run = instance.clone();
+        let query2 = query.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut phases = Vec::new();
+            run.query_snapshot_stream_into_blocking(&query2, 1, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Start { change_counter } => {
+                        assert_eq!(change_counter, 3);
+                        phases.push("start");
+                    }
+                    RxStorageSnapshotEvent::Documents(batch) => {
+                        assert_eq!(batch.len(), 1);
+                        phases.push("doc");
+                    }
+                    RxStorageSnapshotEvent::End => {
+                        // The same test owner cannot execute another job until
+                        // the snapshot cursor has returned and released its tx.
+                        let ticket = super::super::types::SqliteOwnerJobs::read(
+                            owner.as_ref(),
+                            Box::new(|conn| {
+                                let n: u64 = conn
+                                    .query_row("SELECT v FROM _seq", [], |r| r.get(0))
+                                    .map_err(sqlite_error)?;
+                                Ok(Box::new(n) as super::super::types::SqliteJobValue)
+                            }),
+                        )?;
+                        let value = ticket.blocking_recv().unwrap()?;
+                        assert_eq!(*value.downcast::<u64>().unwrap(), 3);
+                        phases.push("end");
+                    }
+                }
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(phases, vec!["start", "doc", "doc", "doc", "end"]);
+            let mut ended = false;
+            run.query_snapshot_stream_into_blocking(&query2, 1, &mut |event| match event {
+                RxStorageSnapshotEvent::Documents(_) => Ok(false),
+                RxStorageSnapshotEvent::End => {
+                    ended = true;
+                    Ok(true)
+                }
+                _ => Ok(true),
+            })
+            .unwrap()
+            .unwrap();
+            assert!(!ended);
+        })
+        .await
+        .unwrap();
         instance.close().await.unwrap();
     }
 

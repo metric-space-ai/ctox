@@ -73,6 +73,12 @@ pub type SqliteJobTicket = tokio::sync::oneshot::Receiver<RxResult<SqliteJobValu
 /// Callbacks must not re-enter the owner or allow SQLite handles to escape.
 pub trait SqliteOwnerJobs: Send + Sync {
     fn read(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket>;
+    /// A stream keeps one snapshot across bounded consumer callbacks. The
+    /// daemon may assign a longer typed execution budget than for point reads;
+    /// it still uses the same four-reader pool and bounded admission.
+    fn read_stream(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket> {
+        self.read(job)
+    }
     fn write(&self, job: SqliteOwnerWriteJob) -> RxResult<SqliteJobTicket>;
     /// Install the P3-05 log binding in the same owner transaction as DDL.
     fn install_change_log(
