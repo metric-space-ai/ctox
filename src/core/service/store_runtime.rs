@@ -96,6 +96,7 @@ pub(crate) struct DaemonStores {
     native_stores: Vec<super::store_rxdb::NativeStoreRegistration>,
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
     runtime: Handle,
+    inputs: Option<super::store_inputs::InputRegistration>,
 }
 impl DaemonStores {
     /// Acquire process/lifecycle ownership BEFORE opening a database file.
@@ -120,6 +121,7 @@ impl DaemonStores {
             native_stores: Vec::new(),
             queue,
             runtime,
+            inputs: None,
         })
     }
 
@@ -131,6 +133,42 @@ impl DaemonStores {
         id: DbId,
         sync: bool,
         initialize: Initializer,
+    ) -> Result<Database, StoreError> {
+        self.register_with_budget(name, id, sync, initialize, AdmissionBudget::default())
+            .await
+    }
+
+    /// Deliberately-held WAL snapshots test ordering, not production latency.
+    /// The production register() entry always retains its 20ms execution budget.
+    #[cfg(test)]
+    pub(super) async fn register_snapshot_fixture(
+        &mut self,
+        name: &str,
+        id: DbId,
+        sync: bool,
+        initialize: Initializer,
+    ) -> Result<Database, StoreError> {
+        self.register_with_budget(
+            name,
+            id,
+            sync,
+            initialize,
+            AdmissionBudget {
+                wait: std::time::Duration::from_secs(3),
+                execution: std::time::Duration::from_secs(3),
+                ..AdmissionBudget::default()
+            },
+        )
+        .await
+    }
+
+    async fn register_with_budget(
+        &mut self,
+        name: &str,
+        id: DbId,
+        sync: bool,
+        initialize: Initializer,
+        read_budget: AdmissionBudget,
     ) -> Result<Database, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
@@ -175,26 +213,55 @@ impl DaemonStores {
             let _ = writer.shutdown().await;
             return Err(error);
         }
-        let readers = match ReadPool::for_database(
-            writer.db_id(),
-            writer.generation(),
-            config,
-            AdmissionBudget::default(),
-        )
-        .await
-        {
-            Ok(readers) => readers,
-            Err(error) => {
-                let _ = writer.shutdown().await;
-                return Err(error);
-            }
-        };
+        let readers =
+            match ReadPool::for_database(writer.db_id(), writer.generation(), config, read_budget)
+                .await
+            {
+                Ok(readers) => readers,
+                Err(error) => {
+                    let _ = writer.shutdown().await;
+                    return Err(error);
+                }
+            };
         let database = Database { writer, readers };
         self.databases
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(name.to_owned(), database.clone());
         Ok(database)
+    }
+
+    /// Publish the existing canonical handles once, only after both owners are ready.
+    /// The daemon retains the registration until before admission closes on drain.
+    pub fn publish_inputs(&mut self, root: &std::path::Path) -> Result<(), StoreError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
+        if self.inputs.is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
+        let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
+        let core = databases.get("core").cloned().ok_or(StoreError::Closed)?;
+        let sync = databases.get("sync").cloned().ok_or(StoreError::Closed)?;
+        if core.writer.db_id().path() != crate::paths::core_db(root)
+            || sync.writer.db_id().path() != crate::paths::sync_db(root)
+        {
+            return Err(StoreError::Invalid(
+                "composition root/file identity mismatch".into(),
+            ));
+        }
+        self.inputs = Some(super::store_inputs::InputRegistration::new(
+            root,
+            core,
+            sync,
+            self.runtime.clone(),
+            self.closing.clone(),
+        )?);
+        Ok(())
+    }
+
+    pub fn retire_inputs(&mut self) {
+        self.inputs.take();
     }
 
     pub async fn install_native_rxdb(&mut self, database: Database) -> Result<(), StoreError> {
@@ -237,6 +304,7 @@ impl DaemonStores {
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
+        self.inputs.take();
         self.native_stores.clear();
         let databases = self
             .databases
