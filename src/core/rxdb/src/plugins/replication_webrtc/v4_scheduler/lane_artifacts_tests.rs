@@ -403,14 +403,19 @@ impl PairFixture {
         };
         // Surface constructor failure immediately. join! used to hide it
         // behind the unrelated accept future until the fixture watchdog fired.
-        let (source, target) = tokio::time::timeout(Duration::from_secs(5), async {
+        let dynamic_started = Instant::now();
+        let (source, target) = tokio::time::timeout(Duration::from_secs(1), async {
             tokio::try_join!(create, async {
                 Ok::<_, crate::rx_error::RxError>(accept.await)
             })
         })
         .await
-        .expect("native post-bootstrap channels did not open")
+        .expect("native post-bootstrap channels did not open within 1 s")
         .unwrap_or_else(|e| panic!("native resumed constructor: {e:?}"));
+        eprintln!(
+            "DCEP_DYNAMIC_OPEN {}",
+            serde_json::json!({"peer":"native", "channels":7, "elapsed_ms":dynamic_started.elapsed().as_secs_f64()*1000.0, "renegotiated":false})
+        );
         for scheduler in [source.clone(), target.clone()] {
             let mut failures = scheduler.failures();
             forwarding.spawn(async move {
@@ -439,6 +444,71 @@ impl PairFixture {
         self.b.close().await.unwrap();
         eprintln!("LANE4_RESUME stage=closed");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lane4_dynamic_channels_open_after_handshake_within_one_second() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let sa = ReliableSession::new(
+            "dcep-after-hello".into(),
+            ADMISSION[..6].try_into().unwrap(),
+        )
+        .unwrap();
+        let sb = ReliableSession::new(
+            "dcep-after-hello".into(),
+            ADMISSION[..6].try_into().unwrap(),
+        )
+        .unwrap();
+        let pair = PairFixture::connect(sa, sb).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut received = pair.target.take_incoming(Some(Lane::Control)).unwrap();
+            let mut replies = pair.source.take_incoming(Some(Lane::Control)).unwrap();
+            pair.source
+                .send(
+                    Lane::Control,
+                    WireSeq(0),
+                    b"after-handshake",
+                    Some(Arc::new(Authorized)),
+                )
+                .await
+                .unwrap();
+            let Some(Incoming::Reliable {
+                bytes,
+                delivery: Some(token),
+                ..
+            }) = received.recv().await
+            else {
+                panic!("dynamic channel missing request");
+            };
+            assert_eq!(bytes, b"after-handshake");
+            token.acknowledge().unwrap();
+            pair.target
+                .send(
+                    Lane::Control,
+                    WireSeq(0),
+                    b"dcep-open",
+                    Some(Arc::new(Authorized)),
+                )
+                .await
+                .unwrap();
+            let Some(Incoming::Reliable {
+                bytes,
+                delivery: Some(token),
+                ..
+            }) = replies.recv().await
+            else {
+                panic!("dynamic channel missing reply");
+            };
+            assert_eq!(bytes, b"dcep-open");
+            token.acknowledge().unwrap();
+        })
+        .await;
+        pair.close().await;
+        result.expect("dynamic channels opened without bidirectional delivery");
+    })
+    .await
+    .expect("bootstrap fixture did not terminate");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -547,4 +617,134 @@ async fn lane4_library_file_is_pinned_lazy_and_resumable() {
         assert!(target.verified(&"f".repeat(64), 1).is_err(), "unrequested library file fetched eagerly");
         pair.close().await;
     }).await.unwrap();
+}
+
+// Explicit opt-in: requires an existing Playwright/Chromium installation on the
+// acceptance lane. Never downloads dependencies or connects a product tenant.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires CTOX_DCEP_BROWSER_MODULES and a lane Chromium installation"]
+async fn lane4_dynamic_browser_channel_opens_after_handshake_within_one_second() {
+    use std::io::{BufRead, BufReader};
+    use webrtc::data_channel::DataChannelEvent;
+    use webrtc::peer_connection::RTCSessionDescription;
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    struct Browser(std::process::Child);
+    impl Drop for Browser {
+        fn drop(&mut self) {
+            // stdin closes first on unwind: let Node close its owned browser.
+            for _ in 0..40 {
+                if self.0.try_wait().ok().flatten().is_some() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut browser = Browser(
+        std::process::Command::new(
+            std::env::var("CTOX_DCEP_NODE").unwrap_or_else(|_| "node".into()),
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/plugins/replication_webrtc/v4_scheduler/dcep_browser_fixture.mjs"
+        ))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap(),
+    );
+    let mut signal = browser.0.stdin.take().unwrap();
+    let stdout = browser.0.stdout.take().unwrap();
+    let (rows, mut input) = mpsc::unbounded_channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) => {
+                    if rows
+                        .send(serde_json::from_str::<serde_json::Value>(&line).unwrap())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    fn emit(out: &mut std::process::ChildStdin, row: serde_json::Value) {
+        writeln!(out, "{row}").unwrap();
+        out.flush().unwrap();
+    }
+    let (atx, mut candidates) = mpsc::unbounded_channel();
+    let (unused, _discard) = mpsc::unbounded_channel();
+    let a: Arc<dyn PeerConnection> = Arc::new(
+        PeerConnectionBuilder::new()
+            .with_handler(Arc::new(Events {
+                candidates: atx,
+                channels: unused,
+            }))
+            .with_udp_addrs(vec!["127.0.0.1:0"])
+            .build()
+            .await
+            .unwrap(),
+    );
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        let bootstrap = a.create_data_channel("lane4-bootstrap", None).await.unwrap();
+        let offer = a.create_offer(None).await.unwrap();
+        a.set_local_description(offer.clone()).await.unwrap();
+        emit(&mut signal, serde_json::json!({"type":"offer", "description":offer}));
+        let mut remote = false;
+        let mut pending = Vec::new();
+        loop {
+            tokio::select! {
+                Some(candidate) = candidates.recv() => emit(&mut signal, serde_json::json!({"type":"candidate", "candidate":candidate})),
+                row = input.recv() => {
+                    let row = row.expect("browser fixture exited before bootstrap");
+                    match row["type"].as_str().unwrap() {
+                        "answer" => {
+                            let answer: RTCSessionDescription = serde_json::from_value(row["description"].clone()).unwrap();
+                            a.set_remote_description(answer).await.unwrap(); remote = true;
+                            for candidate in pending.drain(..) { a.add_ice_candidate(candidate).await.unwrap(); }
+                        },
+                        "candidate" => {
+                            let candidate: RTCIceCandidateInit = serde_json::from_value(row["candidate"].clone()).unwrap();
+                            if remote { a.add_ice_candidate(candidate).await.unwrap(); } else { pending.push(candidate); }
+                        },
+                        "open" if row["label"] == "lane4-bootstrap" => break,
+                        _ => panic!("unexpected browser bootstrap event: {row}"),
+                    }
+                }
+            }
+        }
+        while !matches!(bootstrap.poll().await, Some(DataChannelEvent::OnOpen)) {}
+        let start = Instant::now();
+        let opened = tokio::time::timeout(Duration::from_secs(1), async {
+            let channel = a.create_data_channel(Lane::Control.label(), None).await.unwrap();
+            while !matches!(channel.poll().await, Some(DataChannelEvent::OnOpen)) {}
+            loop {
+                let row = input.recv().await.expect("browser fixture exited before DCEP OPEN");
+                if row["type"] == "open" && row["label"] == Lane::Control.label() { break; }
+                assert_ne!(row["type"], "error", "browser data channel error: {row}");
+            }
+            channel
+        }).await.expect("browser post-bootstrap channel did not open within 1 s");
+        eprintln!("DCEP_DYNAMIC_OPEN {}", serde_json::json!({"peer":"chromium", "elapsed_ms":start.elapsed().as_secs_f64()*1000.0, "renegotiated":false}));
+        opened.send_text("after-handshake").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(DataChannelEvent::OnMessage(message)) = opened.poll().await {
+                    assert_eq!(message.data.as_ref(), b"after-handshake"); break;
+                }
+            }
+        }).await.expect("browser dynamic channel did not echo");
+    }).await;
+    a.close().await.unwrap();
+    emit(&mut signal, serde_json::json!({"type":"close"}));
+    drop(signal);
+    drop(browser);
+    reader.join().unwrap();
+    result.expect("browser fixture timed out");
 }
