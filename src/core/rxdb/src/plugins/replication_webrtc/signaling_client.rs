@@ -389,6 +389,7 @@ impl SignalingClient {
         // Keep role metadata in sync before publishing the empty peer list, just
         // as `Joined` installs roles before publishing its populated list.
         self.peer_roles.lock().clear();
+        *self.ice_configuration.lock() = None;
         self.peer_list.next(Vec::new());
     }
 
@@ -416,12 +417,21 @@ impl SignalingClient {
         let revision = snapshot
             .as_ref()
             .map_or(1, |s| s.revision.saturating_add(1));
-        *snapshot = Some(SignalingIceSnapshot::new(servers, now_ms(), revision));
+        let refresh_attempt_at_ms = snapshot.as_ref().map_or(0, |s| s.refresh_attempt_at_ms);
+        let mut fresh = SignalingIceSnapshot::new(servers, now_ms(), revision);
+        fresh.refresh_attempt_at_ms = refresh_attempt_at_ms;
+        *snapshot = Some(fresh);
     }
 
     /// Rejoining on the existing authenticated socket requests fresh control-plane
     /// configuration. It does not replace the signaling identity or close peers.
     async fn refresh_ice_if_expiring(self: &Arc<Self>) {
+        if !self.join_accepted.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(room) = self.joined_room.lock().clone() else {
+            return;
+        };
         let now = now_ms();
         let due = {
             let mut snapshot = self.ice_configuration.lock();
@@ -437,17 +447,13 @@ impl SignalingClient {
                 true
             })
         };
-        if due {
-            let room = self.joined_room.lock().clone();
-            if let Some(room) = room {
-                if self
-                    .send_frame(&ClientToServer::Join { room })
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(target: "ctox_rxdb::signaling_client", "ICE credential refresh request failed");
-                }
-            }
+        if due
+            && self
+                .send_frame(&ClientToServer::Join { room })
+                .await
+                .is_err()
+        {
+            tracing::warn!(target: "ctox_rxdb::signaling_client", "ICE credential refresh request failed");
         }
     }
 
@@ -838,6 +844,92 @@ mod tests {
 
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn signaling_turn_updates_before_join_and_renews_without_reconnect() {
+        use crate::plugins::replication_webrtc::connection_handler_rs::{
+            WebRTCRsConfig, WebRTCRsConnectionHandler,
+        };
+        let listener = bind_test_signaling_listener().await;
+        let addr = listener.local_addr().unwrap();
+        let (updated, update) = tokio::sync::oneshot::channel();
+        let (done, finish) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                r#"{"type":"init","yourPeerId":"stable-peer"}"#.into(),
+            ))
+            .await
+            .unwrap();
+            let mut joins = 0;
+            let mut updated = Some(updated);
+            while let Some(Ok(message)) = ws.next().await {
+                if let Message::Text(text) = message {
+                    if matches!(
+                        serde_json::from_str::<ClientToServer>(&text),
+                        Ok(ClientToServer::Join { .. })
+                    ) {
+                        joins += 1;
+                        let expiry = now_ms() / 1000 + if joins == 1 { 120 } else { 3600 };
+                        let ice = serde_json::json!({"type":"ctoxIceServers","iceServers":[{"urls":["turn:localhost:3478?transport=tcp","turns:localhost:443"],"username":format!("{expiry}:fixture"),"credential":format!("fixture-secret-{joins}")}]});
+                        ws.send(Message::Text(ice.to_string().into()))
+                            .await
+                            .unwrap();
+                        ws.send(Message::Text(
+                            r#"{"type":"joined","otherPeerIds":[],"peers":[]}"#.into(),
+                        ))
+                        .await
+                        .unwrap();
+                        if joins == 2 {
+                            let _ = updated.take().unwrap().send(());
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = finish.await;
+            ws.close(None).await.ok();
+        });
+        let client = SignalingClient::connect(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        client.join("turn-room".to_owned()).await.unwrap();
+        assert_eq!(client.ice_servers(&[])[0].credential, "fixture-secret-1");
+        let handler = WebRTCRsConnectionHandler::prepare_with_signaling(WebRTCRsConfig::new(
+            client.clone(),
+            "turn-room",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            handler.frame_transport_status_json()["credentialedTurnReady"],
+            true
+        );
+        client.refresh_ice_if_expiring().await;
+        tokio::time::timeout(Duration::from_secs(2), update)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.ice_configuration_status()["revision"] != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(client.ice_servers(&[])[0].credential, "fixture-secret-2");
+        assert_eq!(client.own_peer_id().as_deref(), Some("stable-peer"));
+        assert!(client.socket_connected());
+        let status = handler.frame_transport_status_json().to_string();
+        assert!(!status.contains("fixture-secret"));
+        assert!(!status.contains("localhost:443"));
+        done.send(()).unwrap();
+        use crate::plugins::replication_webrtc::webrtc_types::WebRTCConnectionHandler;
+        handler.close().await.unwrap();
+        client.close().await;
+        server.await.unwrap();
+    }
 
     /// Chaos test for the reconnect supervisor (P7 / hardening C): when the
     /// signaling socket drops mid-session, the client must reconnect AND re-join

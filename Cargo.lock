@@ -15128,7 +15128,9 @@ dependencies = [
  "futures",
  "log",
  "rtc",
+ "rustls-native-certs",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

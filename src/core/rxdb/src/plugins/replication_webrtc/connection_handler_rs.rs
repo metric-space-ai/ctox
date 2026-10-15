@@ -1848,7 +1848,11 @@ impl WebRTCRsConnectionHandler {
             .signaling
             .as_ref()
             .is_some_and(|signaling| signaling.join_accepted());
-        let ice_servers = self.signaling.as_ref().map(|s| s.ice_servers(&self.ice_servers)).unwrap_or_else(|| self.ice_servers.clone());
+        let ice_servers = self
+            .signaling
+            .as_ref()
+            .map(|s| s.ice_servers(&self.ice_servers))
+            .unwrap_or_else(|| self.ice_servers.clone());
         status.turn_configured = ice_servers.iter().any(|server| {
             server
                 .urls
@@ -1932,6 +1936,7 @@ impl WebRTCRsConnectionHandler {
             "handshake": self.handshake_status.lock().json(
                 self.signaling.as_ref().and_then(|client| client.own_peer_id()).as_deref()),
             "iceConfiguration": self.signaling.as_ref().map(|s| s.ice_configuration_status()),
+            "turnCredentialExpiresAtMs": self.signaling.as_ref().map(|s| s.ice_configuration_status()["turnCredentialExpiresAtMs"].clone()).unwrap_or(Value::Null),
             "turnConfigured": status.turn_configured,
             "credentialedTurnReady": status.credentialed_turn_ready,
             "lastSendPriority": status.last_send_priority,
@@ -4418,7 +4423,13 @@ async fn build_peer_connection(
         )
     })?;
     let config = RTCConfigurationBuilder::new()
-        .with_ice_servers(handler.signaling.as_ref().map(|s| s.ice_servers(&handler.ice_servers)).unwrap_or_else(|| handler.ice_servers.clone()))
+        .with_ice_servers(
+            handler
+                .signaling
+                .as_ref()
+                .map(|s| s.ice_servers(&handler.ice_servers))
+                .unwrap_or_else(|| handler.ice_servers.clone()),
+        )
         .build();
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_multicast_dns_mode(MulticastDnsMode::QueryOnly);
