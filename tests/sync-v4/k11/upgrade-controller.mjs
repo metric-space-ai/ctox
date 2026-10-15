@@ -10,7 +10,7 @@ const output=resolve(directory),allowed=resolve(process.env.BUILD_LANE_BIN,'../a
 if(!output.startsWith(allowed+'/'))throw Error('Private artifact output required');
 fs.mkdirSync(output,{recursive:false,mode:0o700});
 const here=fileURLToPath(new URL('.',import.meta.url));
-const config={oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',tmpdir:process.env.TMPDIR,uid:process.getuid(),gid:process.getgid(),runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['net','mnt','pid'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
+const config={owner:'01a087a0-169a',oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',tmpdir:process.env.TMPDIR,path:process.env.PATH,laneBin:process.env.BUILD_LANE_BIN,node:process.execPath,uid:process.getuid(),gid:process.getgid(),runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['net','mnt','pid','cgroup'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
 const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
 const child=spawn('sudo',['-n','unshare','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file],{stdio:'inherit',detached:true});
 const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or 10 min',startedAt:new Date().toISOString()};
