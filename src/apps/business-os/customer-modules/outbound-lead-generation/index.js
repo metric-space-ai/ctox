@@ -1,3 +1,4 @@
+import { readTerminalCommandResult } from './terminal-command-result.mjs';
 import {
   extractCompanyRowsFromWorkbookFile,
   extractCompanyRowsFromText,
@@ -7340,8 +7341,12 @@ async function ladeSecretKatalog() {
         business_chat_auto_focus: false,
       },
     }, { until: 'terminal', timeoutMs: 30_000, sync_queue_tasks: false });
-    const outcome = receipt?.result?.result || receipt?.result || receipt || {};
-    const eintraege = [...(outcome.catalog || []), ...(outcome.extra || [])];
+    const outcome = await readTerminalCommandResult(receipt, {
+      commandId, commandBus: state.ctx?.commandBus,
+      accepts: (value) => Array.isArray(value?.catalog)
+        && (value.extra === undefined || Array.isArray(value.extra)),
+    });
+    const eintraege = [...outcome.catalog, ...(outcome.extra || [])];
     state.secretKatalog = new Map(eintraege
       .filter((eintrag) => eintrag?.is_set)
       .map((eintrag) => [String(eintrag.name || ''), String(eintrag.updated_at || '')]));
@@ -9366,8 +9371,11 @@ async function ladeQuellenRegistry() {
         business_chat_auto_focus: false,
       },
     }, { until: 'terminal', timeoutMs: 45_000, sync_queue_tasks: false });
-    const result = receipt?.result?.result || receipt?.result || receipt;
-    const ziele = Array.isArray(result?.targets) ? result.targets : [];
+    const result = await readTerminalCommandResult(receipt, {
+      commandId, commandBus: state.ctx?.commandBus,
+      accepts: (value) => Array.isArray(value?.targets),
+    });
+    const ziele = result.targets;
     state.registry = new Map(ziele.map((z) => [String(z.target_key || ''), z]));
     state.registryStand = Date.now();
     try { globalThis.localStorage?.setItem('ctox.olg.registry.v1', JSON.stringify({ at: state.registryStand, ziele })); } catch { /* nur Komfort */ }
