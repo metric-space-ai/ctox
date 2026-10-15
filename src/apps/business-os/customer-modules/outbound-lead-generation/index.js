@@ -91,11 +91,12 @@ const SOURCE_DEFS = Object.freeze([
 // jedem Feld, das aus dem eigenen CRM uebernommen wurde.
 const SELLIFY_SOURCE_ID = 'sellify';
 const SELLIFY_SOURCE_LABEL = 'Sellify (eigenes CRM)';
-// Owner-Vorgabe 31.08.: mindestens eine Person je Kategorie, in dieser
-// Reihenfolge (Prompt-Punkt 4).
+// Die sieben Ansprechpartner-Bereiche des Rechercheablaufs (Schritt 4), in
+// dieser Reihenfolge. Prokura ist kein Bereich: sie bleibt Registerfakt aus
+// Schritt 1 (Owner 15.10.2026: "keine Prokura mehr"). Die alte Liste mit
+// Prokura ging mit jedem Auftrag an den Agenten und uebersteuerte den Prompt.
 const PERSON_RESEARCH_PRIORITIES = Object.freeze([
-  'Geschäftsführung',
-  'Prokura',
+  'Gesamtverantwortung',
   'Finanzen',
   'Einkauf',
   'Supply Chain',
@@ -717,6 +718,7 @@ export async function mount(ctx) {
   globalThis.addEventListener('offline', handleOffline);
   globalThis.addEventListener('online', handleOnline);
   bindCollections();
+  holdLeadChannel(ctx);
   bindUi();
   // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Kundeninstanz gemessen: vom
   // Seitenaufruf bis zur nutzbaren Oberflaeche vergingen 167 Sekunden, davon
@@ -754,6 +756,7 @@ export async function mount(ctx) {
   }, COMMAND_REFRESH_MS);
   return () => {
     state.uiMounted = false;
+    releaseLeadChannel();
     state.collectionReloader?.dispose();
     state.collectionReloader = null;
     state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
@@ -779,6 +782,45 @@ export async function mount(ctx) {
     ctx.host.classList.remove('outbound-lead-generation');
     ctx.host.replaceChildren();
   };
+}
+
+// Die Lead-Collection ist demand-only: jede Lese-Lease startete die Lead-
+// Replikation, und ihr Freigeben beendete sie wieder. Jeder Klick auf einen
+// Lead baute so den WebRTC-Kanal neu auf und wartete auf "query ready" - bis
+// zu 20 s fuer einen einzigen Datensatz (Kundeninstanz 15.10.2026), und ein Klick,
+// der den Kanal freigab, waehrend ein anderer Ladevorgang ihn noch brauchte,
+// endete in "WebRTC replication cancelled". Solange die App offen ist, haelt
+// sie deshalb selbst eine Lease; jedes Lesen nutzt den stehenden Kanal.
+const LEAD_CHANNEL_RETRY_MS = 10_000;
+function holdLeadChannel(ctx) {
+  releaseLeadChannel();
+  const holding = { lease: null, timer: null, released: false };
+  state.leadChannel = holding;
+  const acquire = () => {
+    if (holding.released || state.uiMounted === false) return;
+    Promise.resolve()
+      .then(() => ctx.sync?.leaseCollection?.('outbound_lead_generation_leads', 'outbound-module-open', { forceDirect: true }))
+      .then((lease) => {
+        if (!lease) return;
+        if (holding.released || state.uiMounted === false) { void lease.release?.().catch?.(() => {}); return; }
+        holding.lease = lease;
+      })
+      .catch(() => {
+        if (!holding.released) holding.timer = globalThis.setTimeout(acquire, LEAD_CHANNEL_RETRY_MS);
+      });
+  };
+  acquire();
+}
+
+function releaseLeadChannel() {
+  const holding = state.leadChannel;
+  if (!holding) return;
+  holding.released = true;
+  if (holding.timer) globalThis.clearTimeout(holding.timer);
+  const lease = holding.lease;
+  holding.lease = null;
+  state.leadChannel = null;
+  if (lease) void Promise.resolve(lease.release?.()).catch(() => {});
 }
 
 // P0-Selbstheilung (31.08.): Nach einem CTOX-Service-Neustart ist der
@@ -3304,7 +3346,28 @@ function adapterScriptText(adapter) {
   return definition ? JSON.stringify(sanitizeCommandResult(definition), null, 2) : '';
 }
 
+// Client first: die Leads der geoeffneten Kampagne liegen vollstaendig im
+// Browser, bevor jemand klickt. Vorher wurde jeder Lead erst beim Klick vom
+// Server geholt ("Details und Belege werden geladen ..." bis zu 20 s, Kundeninstanz
+// 15.10.2026). selectedLead() zeigt einen vorhandenen vollstaendigen Stand
+// sofort; ein neuerer Stand wird danach im Hintergrund nachgeladen.
+const CAMPAIGN_PREFETCH_LIMIT = 100;
+function prefetchCampaignLeads() {
+  const kampagne = state.selectedCampaign;
+  if (!kampagne || state.uiMounted === false || state.campaignPrefetchRunning) return;
+  const vorhanden = new Set(state.leads.map((row) => row.id));
+  const fehlend = campaignListLeads(kampagne).map((row) => row.id)
+    .filter((id) => id && !vorhanden.has(id)).slice(0, CAMPAIGN_PREFETCH_LIMIT);
+  if (!fehlend.length) return;
+  state.campaignPrefetchRunning = true;
+  ensureFullLeads(fehlend)
+    .then(() => { if (state.uiMounted !== false) renderDetail(); })
+    .catch(() => {})
+    .finally(() => { state.campaignPrefetchRunning = false; });
+}
+
 function renderCenter() {
+  queueMicrotask(prefetchCampaignLeads);
   const pane = state.ctx.host.querySelector('[data-leads-pane]');
   if (!pane) return;
   const statusFilter = state.leadStatusFilter;
@@ -13900,13 +13963,12 @@ function contactTabLead(lead) {
         const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
         if (exact >= 0) return exact;
         if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-        if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-        if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-        if (/einkauf|procurement|purchas/.test(role)) return 3;
-        if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-        if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-        if (/entwicklung|f&e|r&d/.test(role)) return 7;
+        if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+        if (/einkauf|procurement|purchas/.test(role)) return 2;
+        if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+        if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+        if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+        if (/entwicklung|f&e|r&d/.test(role)) return 6;
         return PERSON_RESEARCH_PRIORITIES.length;
       };
       return priority(left.contact) - priority(right.contact) || left.index - right.index;
@@ -14065,13 +14127,12 @@ function renderContactTabs(lead) {
     const exact = PERSON_RESEARCH_PRIORITIES.findIndex((value) => role.includes(value.toLowerCase()));
     if (exact >= 0) return exact;
     if (/gesch[aä]ftsführ|managing director|\bceo\b|gesamtverantwort|vorstand/.test(role)) return 0;
-    if (/prokur|vertretungsberechtigt/.test(role)) return 1;
-    if (/finanz|\bcfo\b|controlling/.test(role)) return 2;
-    if (/einkauf|procurement|purchas/.test(role)) return 3;
-    if (/supply chain|\bscm\b|logistik/.test(role)) return 4;
-    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 5;
-    if (/technik|technisch|\bcto\b|technical/.test(role)) return 6;
-    if (/entwicklung|f&e|r&d/.test(role)) return 7;
+    if (/finanz|\bcfo\b|controlling/.test(role)) return 1;
+    if (/einkauf|procurement|purchas/.test(role)) return 2;
+    if (/supply chain|\bscm\b|logistik/.test(role)) return 3;
+    if (/operations|betriebsleit|\bcoo\b/.test(role)) return 4;
+    if (/technik|technisch|\bcto\b|technical/.test(role)) return 5;
+    if (/entwicklung|f&e|r&d/.test(role)) return 6;
     return PERSON_RESEARCH_PRIORITIES.length;
   };
   const groups = PERSON_RESEARCH_PRIORITIES.map((label) => ({ label, contacts: [] }));
