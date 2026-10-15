@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# --target v3 | --target v4=<branch/commit>; missing V4 prerequisites exit 2 (not_run).
 # Entrypoint on the controller. Linux acceptance always goes through the shared lane.
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
