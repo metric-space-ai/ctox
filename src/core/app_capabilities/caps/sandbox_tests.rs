@@ -156,10 +156,16 @@ fn app_capabilities_e20_fork_bomb_contract() {
     let f = Fixture::new();
     allow(&f, sh_entry(json!({"processes":24})));
     // Bounded binary fork bomb (254 subshells unconfined): every subshell
-    // leaves a marker, spawns two more and holds its slot for 2 s, so the
-    // markers count processes alive at the same time; failed forks are not retried.
-    let bomb = "b(){ if [ \"$1\" -gt 0 ]; then (: > \"m.$2a\"; b $(($1-1)) \"$2a\") & (: > \"m.$2b\"; b $(($1-1)) \"$2b\") & fi; sleep 2; wait; }; b 7 x 2>/dev/null; true";
-    let out = run(&f, "sh", bomb, 8_000);
+    // leaves a marker, spawns two more and then blocks on a FIFO that nobody
+    // writes (a builtin redirection, no fork), so no process ever frees its
+    // slot and the markers count processes alive at once. Ends by timeout.
+    std::fs::create_dir_all(workspace(&f)).unwrap();
+    let fifo =
+        std::ffi::CString::new(workspace(&f).join("hold").to_string_lossy().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let bomb = "b(){ if [ \"$1\" -gt 0 ]; then (: > \"m.$2a\"; b $(($1-1)) \"$2a\") & (: > \"m.$2b\"; b $(($1-1)) \"$2b\") & fi; read x < hold; }; b 7 x 2>/dev/null";
+    let out = run(&f, "sh", bomb, 4_000);
+    assert_eq!(out["timed_out"], true, "{out}");
     let started = std::fs::read_dir(workspace(&f))
         .unwrap()
         .filter_map(Result::ok)
