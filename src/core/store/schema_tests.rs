@@ -1,3 +1,119 @@
+fn release_fixture() -> BaseReleaseInput {
+    serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json")).unwrap()
+}
+fn release_defaults() -> BaseReleaseDefaults {
+    BaseReleaseDefaults {
+        app_ver: "base-test".into(),
+        client_limit: 1000,
+        byte_budget: 16 * 1024 * 1024,
+        rights_ver: 1,
+    }
+}
+#[test]
+fn imports_real_199_collection_ownership_copy_and_platform_extensions_atomically_and_idempotently()
+{
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let mut input = release_fixture();
+    let mut corrected = input
+        .manifests
+        .iter()
+        .find(|m| m["app_id"] == "browser")
+        .unwrap()["collections"]["outbound_lead_generation_adapters"]["schema"]
+        .clone();
+    corrected["properties"]["nullable_correction"] =
+        json!({"type":["string","null"],"default":null});
+    input.schemas.insert(
+        "outbound-lead-generation".into(),
+        json!({"collections":{"outbound_lead_generation_adapters":corrected.clone()}}),
+    );
+    let report = import_base_release(&tx, &input, &release_defaults()).unwrap();
+    assert_eq!(report.source_ownership_count, 199);
+    assert_eq!(report.created, 208);
+    assert!(report.legacy_catalog_replaced);
+    assert_eq!(report.missing_addenda_definitions.len(), 4); // input producer has not supplied these definitions yet
+    let adapter = active_collection(&tx, "outbound_lead_generation_adapters")
+        .unwrap()
+        .unwrap();
+    assert_eq!(adapter.definition.app_id, "outbound-lead-generation");
+    assert_eq!(adapter.definition.schema_json, corrected);
+    for name in [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runtime_settings",
+        "business_apps",
+        "business_app_versions",
+        "_bench",
+    ] {
+        assert_eq!(
+            active_collection(&tx, name)
+                .unwrap()
+                .unwrap()
+                .definition
+                .app_id,
+            "ctox-platform"
+        );
+    }
+    assert!(active_collection(&tx, "business_module_catalog")
+        .unwrap()
+        .is_none());
+    let again = import_base_release(&tx, &input, &release_defaults()).unwrap();
+    assert_eq!((again.created, again.existing), (0, 208));
+    assert_eq!(change_log::head(&tx).unwrap().head_seq, 0);
+}
+#[test]
+fn invalid_late_base_schema_rolls_back_all_tables_triggers_and_registry_rows() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    initialize(&tx).unwrap();
+    let mut input = release_fixture();
+    let app = input
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "browser")
+        .unwrap();
+    app["collections"]["zz_invalid"] =
+        json!({"class":"full","schema":{"type":"object","indexes":["invalid;sql"]}});
+    assert!(import_base_release(&tx, &input, &release_defaults()).is_err());
+    assert_eq!(count(&tx, "_collections"), 0);
+    assert_eq!(
+        tx.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'c_%'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+#[test]
+fn base_loader_prefers_optional_corrected_schemas_without_loading_inside_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("tools/manifest/out")).unwrap();
+    std::fs::create_dir(root.join("manifests")).unwrap();
+    std::fs::create_dir(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("tools/manifest/out/ownership.json"),
+        r#"{"ownership":{"items":{"owner":"app"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("manifests/app.manifest.json"),
+        r#"{"app_id":"app","collections":{}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("schemas/app.collections.schema.json"),
+        r#"{"collections":{"items":{"type":"object","version":2}}}"#,
+    )
+    .unwrap();
+    let platform = root.join("platform.json");
+    std::fs::write(&platform, r#"{"app_id":"ctox-platform","collections":{}}"#).unwrap();
+    let loaded = load_base_release(root, &platform).unwrap();
+    assert_eq!(loaded.schemas["app"]["collections"]["items"]["version"], 2);
+    assert_eq!(loaded.manifests.len(), 2);
+}
 #[test]
 fn remove_is_cas_guarded_payload_free_and_scrubs_revisions_and_archives_atomically() {
     let mut db = Connection::open_in_memory().unwrap();

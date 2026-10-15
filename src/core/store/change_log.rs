@@ -557,5 +557,9 @@ pub fn purge_tombstones(tx: &Transaction<'_>, now: i64) -> Result<usize> {
 }
 
 #[cfg(test)]
+#[path = "bench_m2.rs"]
+mod bench_m2;
+
+#[cfg(test)]
 #[path = "change_log_tests.rs"]
 mod tests;

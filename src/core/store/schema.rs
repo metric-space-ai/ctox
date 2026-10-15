@@ -99,7 +99,14 @@ fn validate(def: &CollectionDefinition) -> Result<()> {
         || !def.schema_json.is_object()
         || !matches!(
             def.class.as_str(),
-            "replicated" | "demand" | "control" | "stream" | "window"
+            "replicated"
+                | "demand"
+                | "control"
+                | "stream"
+                | "window"
+                | "full"
+                | "blob"
+                | "projection"
         )
     {
         return Err(invalid("invalid collection definition"));
@@ -796,7 +803,6 @@ fn write_output(
                 if reason.is_empty() {
                     return Err(invalid("archive reason required"));
                 }
-                archive(tx, target, source, reason, now)?;
             }
             tx.execute(
                 &format!(
@@ -806,6 +812,11 @@ fn write_output(
                 ),
                 params![source.id, source.rev, target.definition.schema_ver],
             )?;
+            // This is schema-value archival, not an explicit document remove.
+            // Preserve E4's old value after creating the target tombstone.
+            if let MigrationOutput::Archive { reason } = output {
+                archive(tx, target, source, reason, now)?;
+            }
         }
     }
     Ok(())
@@ -1365,6 +1376,224 @@ pub fn remove_document(
             params![name, id],
         )?;
         Ok(change_log::head(tx)?.head_seq)
+    })
+}
+
+/// Filesystem loading happens before submitting the atomic import to the writer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BaseReleaseInput {
+    pub ownership: Value,
+    pub manifests: Vec<Value>,
+    pub schemas: std::collections::BTreeMap<String, Value>,
+}
+#[derive(Debug, Clone)]
+pub struct BaseReleaseDefaults {
+    pub app_ver: String,
+    pub client_limit: u64,
+    pub byte_budget: u64,
+    pub rights_ver: u64,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct BaseReleaseReport {
+    pub created: usize,
+    pub existing: usize,
+    pub source_ownership_count: usize,
+    pub legacy_catalog_replaced: bool,
+    pub missing_addenda_definitions: Vec<String>,
+}
+/// Read immutable release inputs outside the Store writer. No ambient paths/config.
+pub fn load_base_release(
+    v4_root: &std::path::Path,
+    platform_manifest: &std::path::Path,
+) -> Result<BaseReleaseInput> {
+    fn json(path: &std::path::Path) -> Result<Value> {
+        let data = std::fs::read(path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+        serde_json::from_slice(&data).map_err(|e| invalid(format!("{}: {e}", path.display())))
+    }
+    let ownership = json(&v4_root.join("tools/manifest/out/ownership.json"))?;
+    let mut files = std::fs::read_dir(v4_root.join("manifests"))
+        .map_err(|e| invalid(e.to_string()))?
+        .map(|e| e.map(|x| x.path()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|e| invalid(e.to_string()))?;
+    files.sort();
+    let mut manifests = Vec::new();
+    for path in files {
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".manifest.json"))
+        {
+            manifests.push(json(&path)?);
+        }
+    }
+    manifests.retain(|m| m.get("app_id").and_then(Value::as_str) != Some("ctox-platform"));
+    manifests.push(json(platform_manifest)?);
+    let mut schemas = std::collections::BTreeMap::new();
+    for manifest in &manifests {
+        let app = manifest
+            .get("app_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("manifest app_id missing"))?;
+        if app.contains('/') || app.contains('\\') || app == "." || app == ".." {
+            return Err(invalid("invalid manifest app_id path"));
+        }
+        let path = v4_root
+            .join("schemas")
+            .join(format!("{app}.collections.schema.json"));
+        if path.exists() {
+            schemas.insert(app.to_owned(), json(&path)?);
+        }
+    }
+    Ok(BaseReleaseInput {
+        ownership,
+        manifests,
+        schemas,
+    })
+}
+const OLG_COLLECTIONS: [&str; 5] = [
+    "outbound_lead_generation_adapters",
+    "sellify_companies",
+    "sellify_people",
+    "sellify_campaigns",
+    "outbound_research_policies",
+];
+
+/// Atomic registry/table import only. Does not activate/install any app or read a deployed store.
+/// Missing numeric manifest budgets require explicit caller policy, never guessed defaults.
+pub fn import_base_release(
+    tx: &Transaction<'_>,
+    input: &BaseReleaseInput,
+    defaults: &BaseReleaseDefaults,
+) -> Result<BaseReleaseReport> {
+    atomic(tx, || {
+        initialize(tx)?;
+        if defaults.app_ver.is_empty() {
+            return Err(invalid("base release version required"));
+        }
+        let ownership = input
+            .ownership
+            .get("ownership")
+            .unwrap_or(&input.ownership)
+            .as_object()
+            .ok_or_else(|| invalid("ownership map missing"))?;
+        let mut apps = std::collections::BTreeMap::new();
+        let mut definitions: std::collections::BTreeMap<String, Vec<(String, Value)>> =
+            std::collections::BTreeMap::new();
+        for manifest in &input.manifests {
+            let app = manifest
+                .get("app_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("manifest app_id missing"))?;
+            if apps.insert(app, manifest).is_some() {
+                return Err(invalid("duplicate app manifest"));
+            }
+            let collections = manifest
+                .get("collections")
+                .and_then(Value::as_object)
+                .ok_or_else(|| invalid("manifest collections missing"))?;
+            for (name, definition) in collections {
+                definitions
+                    .entry(name.clone())
+                    .or_default()
+                    .push((app.into(), definition.clone()));
+            }
+        }
+        for name in ownership.keys() {
+            if name != "business_module_catalog" && !definitions.contains_key(name) {
+                return Err(invalid(format!("collection definition missing: {name}")));
+            }
+        }
+        let missing_addenda_definitions = OLG_COLLECTIONS
+            .iter()
+            .filter(|n| !definitions.contains_key(**n))
+            .map(|n| n.to_string())
+            .collect();
+        let mut report = BaseReleaseReport {
+            created: 0,
+            existing: 0,
+            source_ownership_count: ownership.len(),
+            legacy_catalog_replaced: ownership.contains_key("business_module_catalog"),
+            missing_addenda_definitions,
+        };
+        if report.legacy_catalog_replaced
+            && (!definitions.contains_key("business_apps")
+                || !definitions.contains_key("business_app_versions"))
+        {
+            return Err(invalid("legacy catalog replacement schemas missing"));
+        }
+        for (name, candidates) in definitions {
+            if name == "business_module_catalog" {
+                continue;
+            }
+            let platform = candidates.iter().any(|(app, _)| app == "ctox-platform");
+            let owner = if OLG_COLLECTIONS.contains(&name.as_str()) {
+                "outbound-lead-generation".to_owned()
+            } else if platform {
+                "ctox-platform".to_owned()
+            } else if let Some(owner) = ownership
+                .get(&name)
+                .and_then(|v| v.get("owner"))
+                .and_then(Value::as_str)
+            {
+                owner.to_owned()
+            } else if candidates.len() == 1 {
+                candidates[0].0.clone()
+            } else {
+                return Err(invalid(format!("ambiguous collection owner: {name}")));
+            };
+            if !apps.contains_key(owner.as_str()) {
+                return Err(invalid(format!("owner manifest missing: {owner}")));
+            }
+            let metadata = candidates
+                .iter()
+                .find(|(app, _)| app == &owner)
+                .unwrap_or(&candidates[0])
+                .1
+                .clone();
+            let corrected = input
+                .schemas
+                .get(&owner)
+                .and_then(|v| v.get("collections"))
+                .and_then(|v| v.get(&name));
+            let schema = corrected
+                .or_else(|| metadata.get("schema"))
+                .ok_or_else(|| invalid(format!("schema missing: {name}")))?
+                .clone();
+            let version = schema.get("version").and_then(Value::as_u64).unwrap_or(0);
+            let def = CollectionDefinition {
+                name: name.clone(),
+                app_id: owner,
+                schema_ver: u32::try_from(version)
+                    .map_err(|_| invalid("schema version overflow"))?,
+                schema_json: schema,
+                class: metadata
+                    .get("class")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid("collection class missing"))?
+                    .into(),
+                client_limit: metadata
+                    .get("client_limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(defaults.client_limit),
+                byte_budget: metadata
+                    .get("byte_budget")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(defaults.byte_budget),
+                rights_ver: defaults.rights_ver,
+                app_ver: defaults.app_ver.clone(),
+            };
+            if let Some(existing) = active_collection(tx, &name)? {
+                if existing.definition != def {
+                    return Err(invalid(format!("base registry differs: {name}")));
+                }
+                report.existing += 1;
+            } else {
+                create_collection(tx, &def)?;
+                report.created += 1;
+            }
+        }
+        Ok(report)
     })
 }
 
