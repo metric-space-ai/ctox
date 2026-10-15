@@ -1893,12 +1893,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let owned = self.owner.is_some();
         self.with_write_connection(move |conn| -> RxResult<bool> {
             if owned {
-                return super::cleanup::cleanup_deleted_documents_batch(
-                    conn,
-                    &table_name,
-                    min_deleted_time,
-                    500,
-                );
+                // P3-05 owns tombstone retention and advances the horizon when
+                // purging. V3's caller-time cleanup must never erase v4 deletes.
+                return Ok(true);
             }
             cleanup_deleted_documents(conn, &table_name, min_deleted_time)
         })
@@ -2440,6 +2437,23 @@ mod tests {
         }
     }
     impl super::super::types::SqliteOwnerJobs for TestOwner {
+        fn collection_table(
+            &self,
+            tx: &rusqlite::Transaction<'_>,
+            collection: &str,
+            version: i32,
+        ) -> RxResult<String> {
+            let table = format!("c_{collection}");
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS _collections(name TEXT PRIMARY KEY,table_name TEXT,schema_ver INTEGER,state TEXT,schema_json TEXT)").map_err(sqlite_error)?;
+            tx.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {}(id TEXT PRIMARY KEY,rev TEXT NOT NULL,schema_ver INTEGER NOT NULL,deleted INTEGER NOT NULL,data TEXT)",quote_identifier(&table))).map_err(sqlite_error)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO _collections VALUES(?1,?2,?3,'active','{}')",
+                params![collection, table, version],
+            )
+            .map_err(sqlite_error)?;
+            Ok(table)
+        }
+
         fn read(
             &self,
             job: super::super::types::SqliteOwnerJob,
@@ -2490,7 +2504,7 @@ mod tests {
             ] {
                 tx.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS {} AFTER {event} ON {} BEGIN
                     UPDATE _seq SET v=v+1;
-                    INSERT INTO _changes VALUES('{}',1,{row}.id,(SELECT v FROM _seq),{op},{row}.revision)
+                    INSERT INTO _changes VALUES('{}',1,{row}.id,(SELECT v FROM _seq),{op},{row}.rev)
                     ON CONFLICT(collection,gen,id) DO UPDATE SET seq=excluded.seq,op=excluded.op,rev=excluded.rev; END;",
                     quote_identifier(&format!("{table}_{suffix}")),quote_identifier(table),collection.replace('\'',"''")))
                     .map_err(sqlite_error)?;

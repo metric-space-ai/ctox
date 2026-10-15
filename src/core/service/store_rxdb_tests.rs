@@ -85,7 +85,14 @@ async fn real_rxdb_factory_uses_owner_and_rejected_write_rolls_back_without_losi
             "sync",
             DbId::new(dir.path().join("sync.sqlite3")).unwrap(),
             true,
-            Arc::new(|_| Ok(())),
+            Arc::new(|tx| {
+                ctox_store::schema::create_collection(tx, &ctox_store::schema::CollectionDefinition {
+                    name:"notes".into(), app_id:"fixture.notes".into(),schema_ver:0,
+                    schema_json:json!({"primaryKey":"id","type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"}}}),
+                    class:"replicated".into(),client_limit:100,byte_budget:1048576,rights_ver:1,app_ver:"notes.1".into()
+                })?;
+                Ok(())
+            }),
         )
         .await
         .unwrap();
@@ -156,10 +163,21 @@ async fn real_rxdb_factory_uses_owner_and_rejected_write_rolls_back_without_losi
         .unwrap();
     assert_eq!(page.docs[0].body.as_ref().unwrap()["title"], "owned");
     let before = page.head_seq;
-    let rejected = jobs.write(Box::new(|tx| {
-        tx.execute("UPDATE owner_fixture__notes__v0 SET data=json_set(data,'$.title','must-rollback') WHERE id='one'", []).map_err(|_| new_rx_error("FIXTURE_SQL",None))?;
-        Err(new_rx_error("FIXTURE_REJECTED", Some(json!({"status":422,"field":"evidence"}))))
-    })).unwrap().await.unwrap();
+    let rejected = jobs
+        .write(Box::new(|tx| {
+            tx.execute(
+                "UPDATE c_notes SET data=json_set(data,'$.title','must-rollback') WHERE id='one'",
+                [],
+            )
+            .map_err(|_| new_rx_error("FIXTURE_SQL", None))?;
+            Err(new_rx_error(
+                "FIXTURE_REJECTED",
+                Some(json!({"status":422,"field":"evidence"})),
+            ))
+        }))
+        .unwrap()
+        .await
+        .unwrap();
     assert_eq!(rejected.err().unwrap().code(), "FIXTURE_REJECTED");
     let after = database
         .readers
@@ -195,6 +213,86 @@ async fn real_rxdb_factory_uses_owner_and_rejected_write_rolls_back_without_losi
     assert_eq!(*wake.borrow(), before);
     instance.close().await.unwrap();
     drop(instance);
+    drop(storage);
+    drop(jobs);
+    stores.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn canonical_cutover_counts_restartable_import_and_refuses_double_activation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut stores = DaemonStores::start(
+        StoreEndpoint::UnixSocket {
+            path: dir.path().join("ipc/store.sock"),
+        },
+        Handle::current(),
+    )
+    .unwrap();
+    let database=stores.register("sync",DbId::new(dir.path().join("sync.sqlite3")).unwrap(),true,Arc::new(|tx| {
+        ctox_store::schema::create_collection(tx,&ctox_store::schema::CollectionDefinition {
+            name:"notes".into(),app_id:"notes".into(),schema_ver:0,
+            schema_json:json!({"primaryKey":"id","type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"}}}),
+            class:"replicated".into(),client_limit:1000,byte_budget:1048576,rights_ver:1,app_ver:"1".into()
+        })?;
+        tx.execute_batch("CREATE TABLE ctox_business_os__notes__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,lastWriteTime REAL,data TEXT)")?;
+        for n in 0..503 {
+            let id=format!("legacy-{n:04}");
+            tx.execute("INSERT INTO ctox_business_os__notes__v0 VALUES(?1,'1-import',?2,999999999,?3)",rusqlite::params![id,i64::from(n==502),json!({"id":id,"title":"preserved","_rev":"stale-body","_meta":{"lwt":1}}).to_string()])?;
+        }
+        Ok(())
+    })).await.unwrap();
+    let jobs = RxdbJobs::attach_canonical(database.clone(), Handle::current())
+        .await
+        .unwrap();
+    let storage = jobs.storage();
+    assert!(storage.connection().is_err(), "raw-opener bypass");
+    let parameters = || {
+        RxStorageInstanceCreationParams {
+        database_instance_token:"cutover".into(),database_name:"ctox-business-os".into(),collection_name:"notes".into(),
+        schema:serde_json::from_value(json!({"version":0,"type":"object","primaryKey":"id","properties":{"id":{"type":"string","maxLength":120},"title":{"type":"string"}},"required":["id","title"]})).unwrap(),
+        options:HashMap::new(),multi_instance:false,dev_mode:false,password:None
+    }
+    };
+    let first = create_storage_instance(&storage, parameters())
+        .await
+        .unwrap();
+    let docs = first
+        .find_documents_by_id(&["legacy-0000".into(), "legacy-0502".into()], true)
+        .await
+        .unwrap();
+    assert_eq!(docs[0]["title"], "preserved");
+    assert_eq!(docs[0]["_rev"], "1-import");
+    assert_eq!(docs[1]["_deleted"], true);
+    database.readers.read(|tx| {
+        let receipt:(i64,i64,String)=tx.query_row("SELECT expected,copied,state FROM _rxdb_imports",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        assert_eq!(receipt,(503,503,"complete".into()));
+        assert_eq!(tx.query_row("SELECT COUNT(*) FROM c_notes",[],|r|r.get::<_,i64>(0))?,503);
+        assert!(tx.query_row("SELECT data IS NULL FROM c_notes WHERE id='legacy-0502'",[],|r|r.get::<_,bool>(0))?);
+        assert!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='ctox_business_os__notes__v0')",[],|r|r.get::<_,bool>(0))?);
+        Ok(())
+    }).await.unwrap();
+    first.close().await.unwrap();
+    let second = create_storage_instance(&storage, parameters())
+        .await
+        .unwrap();
+    second.close().await.unwrap();
+    // Recreating a source after successful cutover must not silently activate
+    // another current table or overwrite already accepted canonical rows.
+    database
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            tx.execute_batch("CREATE TABLE ctox_business_os__notes__v0(id TEXT)")?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert!(
+        create_storage_instance(&storage, parameters())
+            .await
+            .is_err(),
+        "double activation accepted"
+    );
     drop(storage);
     drop(jobs);
     stores.shutdown().await.unwrap();

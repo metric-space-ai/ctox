@@ -80,6 +80,35 @@ pub(crate) struct RxdbJobs {
     admission: Arc<Semaphore>,
 }
 impl RxdbJobs {
+    pub async fn attach_canonical(
+        database: Database,
+        runtime: Handle,
+    ) -> Result<Arc<Self>, StoreError> {
+        Self::attach(
+            database,
+            runtime,
+            Arc::new(|tx, table, name, version| {
+                let active = ctox_store::schema::active_collection(tx, name)?
+                    .ok_or_else(|| StoreError::Invalid("collection not registered".into()))?;
+                if active.table != table
+                    || i32::try_from(active.definition.schema_ver).ok() != Some(version)
+                {
+                    return Err(StoreError::Invalid(
+                        "active collection binding changed".into(),
+                    ));
+                }
+                Ok(RxdbTable {
+                    collection: name.into(),
+                    table: active.table,
+                    generation: active.gen,
+                    schema_version: active.definition.schema_ver,
+                    app_version: active.definition.app_ver,
+                })
+            }),
+        )
+        .await
+    }
+
     pub async fn attach(
         database: Database,
         runtime: Handle,
@@ -135,6 +164,24 @@ impl RxdbJobs {
     }
 }
 impl SqliteOwnerJobs for RxdbJobs {
+    fn collection_table(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        collection: &str,
+        version: i32,
+    ) -> RxResult<String> {
+        let registered = ctox_store::schema::active_collection(tx, collection)
+            .map_err(StoreError::from)
+            .map_err(error)?
+            .ok_or_else(|| error(StoreError::Invalid("collection not registered".into())))?;
+        if i32::try_from(registered.definition.schema_ver).ok() != Some(version) {
+            return Err(error(StoreError::Invalid(
+                "collection schema version mismatch".into(),
+            )));
+        }
+        Ok(registered.table)
+    }
+
     fn read(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket> {
         // Bound bridge futures as well as SQLite jobs. There is no unbounded
         // Tokio task backlog ahead of the four-reader admission boundary.
