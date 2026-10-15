@@ -328,7 +328,13 @@ where
                 }
             };
             let _context = handle.enter();
-            match finish_on_owner_thread(initialize(lease.clone())) {
+            // SQLx initialization must be polled as a real task on the existing
+            // runtime (timers/cooperative scheduling included). The dedicated
+            // owner keeps the file lease and waits only for that task's result.
+            let initialized = finish_on_owner_thread(handle.spawn(initialize(lease.clone())))
+                .map_err(io::Error::other)
+                .and_then(|result| result);
+            match initialized {
                 Ok(resource) => {
                     // If startup's caller was cancelled, send drops this wrapper,
                     // disconnects receiver and still closes before releasing lease.
