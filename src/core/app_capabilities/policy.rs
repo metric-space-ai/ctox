@@ -73,6 +73,8 @@ impl CapabilityGrant {
 pub trait CapabilityHost {
     /// Resolve current app version, parent command rights (§16.20), authenticated
     /// actor and the per-function native permission. Not just a role-string lookup.
+    /// Inspect args for record/owner scope and native subcommands (in particular,
+    /// knowledge.command can write; the compatibility name query is not a read grant).
     fn authorize(
         &self,
         ctx: &CapCallContext,

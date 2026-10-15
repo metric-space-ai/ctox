@@ -156,8 +156,9 @@ pub(crate) fn validate_context(ctx: &CapCallContext) -> Result<(), CtoxError> {
     Ok(())
 }
 
-/// JSON schema for exactly the Rust wire types. LocalTransport supplies framing;
-/// the receiver also calls decode (byte bound and request/call binding).
+/// Structural JSON schema for the Rust wire types. LocalTransport supplies framing;
+/// decode additionally enforces UTF-8 byte bounds, control-free trimmed IDs,
+/// u64 ranges and the request/call binding.
 pub fn json_schema() -> Value {
     let id =
         json!({"type":"string","minLength":1,"maxLength":256,"pattern":"^\\S(?:[^\\r\\n]*\\S)?$"});
