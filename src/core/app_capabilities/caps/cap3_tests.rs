@@ -1156,7 +1156,7 @@ fn app_capabilities_cap3_files_owner_contract() {
             &docs,
             "files",
             "put",
-            json!({"name":"b.bin","base64":"AAEC"}),
+            json!({"name":"b.bin","base64":"//4="}),
         )
         .unwrap();
     let got = f

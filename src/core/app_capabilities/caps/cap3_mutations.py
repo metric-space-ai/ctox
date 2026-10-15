@@ -7,7 +7,8 @@ SOURCE=ROOT/"src/core/app_capabilities/caps"
 OUT=pathlib.Path(os.environ["CARGO_TARGET_DIR"])/("cap3-proofs-"+datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 OUT.mkdir(parents=True,exist_ok=False)
 DEADLINE=datetime.datetime.fromisoformat(sys.argv[1]).timestamp() if len(sys.argv)>1 and sys.argv[1] else time.time()+5400
-FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","cap3_tests.rs"]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
+STORE="../../business_os/store.rs"
+FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","directory.rs","files.rs","process.rs","cap3_tests.rs",STORE]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
 ORIGINAL={path:path.read_bytes() for path in FILES}
 def digest():
     return {str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in FILES}
@@ -52,6 +53,17 @@ PROOFS=[
  ("ingest-unknown-command","ingest.rs",E("if !runtime.has_handler(&ctx.app_id, &request.command)? {"),"if false {","ingest_register_contract"),
  ("coding-flat","coding.rs",E("if object.keys().any(|key| !allowed.contains(&key.as_str())) {"),"if false {","coding_flat_contract"),
  ("mail-intake-binding","mail.rs",E("if request.command_id != ctx.command_id {"),"if false {","mail_server_intake_contract"),
+ # ---- CAP-3b
+ ("intake-field-binding",STORE,E('["value", "password"].into_iter().find(|f| *f == field)?'),'["value", "password"].into_iter().find(|_| true)?',"secret_intake_live_contract"),
+ ("platform-origin","config.rs",E("if !is_platform(ctx) {"),"if false {","platform_origin_contract"),
+ ("ingest-serves-alias","ingest.rs",E(".is_ok_and(|route| route.is_some())"),".is_ok()","platform_origin_contract"),
+ ("files-owner","files.rs",E("if meta.owner_app != ctx.app_id || sha256_hex(&bytes) != meta.reference {"),"if sha256_hex(&bytes) != meta.reference {","files_owner_contract"),
+ ("files-list-owner","files.rs",E(".filter(|meta| meta.owner_app == ctx.app_id)"),".filter(|_| true)","files_owner_contract"),
+ ("process-env-clear","process.rs",E(".env_clear()"),"","process_env_contract"),
+ ("process-cwd","process.rs",E("Some(path) if relative(path) => {"),"Some(path) => {","process_env_contract"),
+ ("policy-actor","directory.rs",E("BusinessOsActor::new(Some(ctx.actor.id.clone()), &ctx.actor.role)"),'BusinessOsActor::new(Some(ctx.actor.id.clone()), "admin")',"directory_policy_contract"),
+ ("command-scope","directory.rs",E("WHERE command_id=?1 AND module=?2"),"WHERE command_id=?1 AND ?2=?2","directory_policy_contract"),
+ ("auth-assist-module","browser.rs",E(".is_some_and(|module| module != ctx.app_id)"),".is_some_and(|_| false)","auth_assist_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None
