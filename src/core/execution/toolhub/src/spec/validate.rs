@@ -65,6 +65,8 @@ pub struct EachField {
     pub key: String,
     pub pointer: String,
     pub each: Option<Vec<EachField>>,
+    /// `{"pointer", "default"}`: used when the value is missing or of another JSON type.
+    pub default: Option<Value>,
 }
 
 pub fn parse_each(e: &Value, ctx: &str) -> Result<Vec<EachField>> {
@@ -72,18 +74,25 @@ pub fn parse_each(e: &Value, ctx: &str) -> Result<Vec<EachField>> {
         .ok_or_else(|| anyhow!("{ctx}: `each` maps output keys to item pointers"))?
         .iter()
         .map(|(k, p)| {
-            let (pointer, each) = match p {
-                Value::String(s) => (s.clone(), None),
-                Value::Object(o) => (
-                    o.get("pointer").and_then(Value::as_str).unwrap_or("").to_string(),
-                    Some(parse_each(o.get("each").ok_or_else(|| anyhow!("{ctx}: `each.{k}` object needs `each`"))?, ctx)?),
-                ),
-                _ => bail!("{ctx}: `each.{k}` must be a pointer or {{pointer, each}}"),
+            let (pointer, each, default) = match p {
+                Value::String(s) => (s.clone(), None, None),
+                Value::Object(o) => {
+                    known_keys(p, &["pointer", "each", "default"], ctx)?;
+                    let each = match o.get("each") {
+                        Some(e) => Some(parse_each(e, ctx)?),
+                        None => None,
+                    };
+                    if each.is_none() == o.get("default").is_none() {
+                        bail!("{ctx}: `each.{k}` object needs exactly one of `each` or `default`");
+                    }
+                    (o.get("pointer").and_then(Value::as_str).unwrap_or("").to_string(), each, o.get("default").cloned())
+                }
+                _ => bail!("{ctx}: `each.{k}` must be a pointer or {{pointer, each|default}}"),
             };
             if !pointer.starts_with('/') {
                 bail!("{ctx}: `each.{k}` pointer must start with `/`");
             }
-            Ok(EachField { key: k.clone(), pointer, each })
+            Ok(EachField { key: k.clone(), pointer, each, default })
         })
         .collect()
 }
@@ -99,6 +108,8 @@ pub enum Escape {
     None,
     /// `\` -> `\\`, `"` -> `\"` (formula / string-literal contexts).
     BackslashQuote,
+    /// JSON string-literal escaping (without the surrounding quotes).
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +146,8 @@ pub struct ArgRef {
     pub stringify_values: Option<String>,
     /// Fixed items placed before the given list items (duplicates removed).
     pub prepend: Vec<String>,
+    /// Send the (object/array) value as its JSON text (GraphQL `JSON` scalars).
+    pub json_string: bool,
     /// List args: keep only object items that have a string value at this key.
     pub require_key: Option<String>,
 }
@@ -210,7 +223,8 @@ pub enum Response {
     Body,
     Pick { pointer: String, required: bool, empty_error: String },
     List { pointer: String, key: String },
-    Object(Vec<(String, String, Option<Value>, FieldShape)>),
+    /// Fields, plus an optional `require`: (pointer that must be an object, error text).
+    Object(Vec<(String, String, Option<Value>, FieldShape)>, Option<(String, String)>),
     MergeSuccess { pointer: String },
     Const(Value),
 }
@@ -244,6 +258,10 @@ pub enum ErrorCheck {
     Present { pointer: String, message_key: String, prefix: String },
     /// `pointer` must equal `expect`, error text at `error_pointer`.
     Flag { pointer: String, expect: Value, error_pointer: String },
+    /// GraphQL envelope: a non-empty `errors` array fails with its `message`s joined
+    /// by `; ` ("unknown" when none); then, if `require_data`, a missing/null `data`
+    /// fails with `no_data`.
+    GraphQl { prefix: String, require_data: bool, no_data: String },
 }
 
 #[derive(Debug, Clone)]
@@ -366,6 +384,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
                     let escape = match v.get("escape").and_then(|e| e.get(&name)).and_then(Value::as_str) {
                         None | Some("none") => Escape::None,
                         Some("backslash_quote") => Escape::BackslashQuote,
+                        Some("json") => Escape::Json,
                         Some(o) => bail!("{ctx}: unknown escape `{o}`"),
                     };
                     let forbid = v.get("forbid").and_then(|e| e.get(&name)).and_then(Value::as_str).unwrap_or("").to_string();
@@ -404,7 +423,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         }
         return Ok(Val::Switch { arg, cases, default, otherwise });
     }
-    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key", "items_integer", "strip_prefix", "segment", "stringify_values", "prepend"], ctx)?;
+    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key", "items_integer", "strip_prefix", "segment", "stringify_values", "prepend", "json_string"], ctx)?;
     let name = s(v, "arg", ctx)?.to_string();
     let prop = props.get(&name).ok_or_else(|| anyhow!("{ctx}: arg `{name}` is not declared in input_schema.properties"))?;
     used.insert(name.clone());
@@ -462,6 +481,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         items_segment: v.get("items_segment").and_then(Value::as_bool).unwrap_or(false),
         wrap_object: v.get("wrap_object").and_then(Value::as_bool).unwrap_or(false),
         stringify_values: v.get("stringify_values").and_then(Value::as_str).map(String::from),
+        json_string: v.get("json_string").and_then(Value::as_bool).unwrap_or(false),
         prepend: v.get("prepend").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
         segment: v.get("segment").and_then(Value::as_bool).unwrap_or(false),
         strip_prefix: v.get("strip_prefix").and_then(Value::as_str).map(String::from),
@@ -570,7 +590,7 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
 
 fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
     let Some(v) = v else { return Ok(Response::Body) };
-    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value"], ctx)?;
+    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value", "require"], ctx)?;
     let ptr = |v: &Value| -> Result<String> {
         let p = v.get("pointer").and_then(Value::as_str).unwrap_or("").to_string();
         if !(p.is_empty() || p.starts_with('/')) {
@@ -603,7 +623,14 @@ fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
                 let shape = FieldShape { each, count: x.get("count").and_then(Value::as_bool).unwrap_or(false) };
                 out.push((k.clone(), p, x.get("default").cloned(), shape));
             }
-            Response::Object(out)
+            let require = match v.get("require") {
+                None => None,
+                Some(r) => {
+                    known_keys(r, &["pointer", "message"], ctx)?;
+                    Some((s(r, "pointer", ctx)?.to_string(), s(r, "message", ctx)?.to_string()))
+                }
+            };
+            Response::Object(out, require)
         }
         "merge_success" => Response::MergeSuccess { pointer: ptr(v)? },
         "const" => Response::Const(v.get("value").cloned().ok_or_else(|| anyhow!("{ctx}: const mode needs `value`"))?),
@@ -888,6 +915,11 @@ pub fn compile(doc: &Value) -> Result<Compiled> {
                 pointer: s(e, "pointer", "error_check")?.into(),
                 expect: e.get("expect").cloned().unwrap_or(Value::Bool(true)),
                 error_pointer: e.get("error_pointer").and_then(Value::as_str).unwrap_or("/error").into(),
+            },
+            "graphql" => ErrorCheck::GraphQl {
+                prefix: e.get("prefix").and_then(Value::as_str).unwrap_or("GraphQL error").into(),
+                require_data: e.get("require_data").and_then(Value::as_bool).unwrap_or(true),
+                no_data: e.get("no_data").and_then(Value::as_str).unwrap_or("the GraphQL API returned no data").into(),
             },
             o => bail!("error_check: unknown kind `{o}`"),
         });

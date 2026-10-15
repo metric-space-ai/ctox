@@ -158,6 +158,10 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
                         match escape {
                             Escape::None => out.push_str(&raw),
                             Escape::BackslashQuote => out.push_str(&raw.replace('\\', "\\\\").replace('"', "\\\"")),
+                            Escape::Json => {
+                                let q = serde_json::to_string(&raw).unwrap_or_default();
+                                out.push_str(&q[1..q.len() - 1]);
+                            }
                         }
                     }
                 }
@@ -278,6 +282,11 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
     }
     if let (true, Some(v @ Value::String(_))) = (a.segment, &out) {
         check_segment(v, &a.name)?;
+    }
+    if let (true, Some(v)) = (a.json_string, &out) {
+        if !v.is_string() {
+            out = Some(Value::String(v.to_string()));
+        }
     }
     if out.is_none() {
         if let Some(d) = &a.default {
@@ -443,7 +452,12 @@ fn project_list(list: &[Value], each: &[EachField]) -> Value {
                     each.iter()
                         .map(|f| {
                             let v = match &f.each {
-                                None => it.pointer(&f.pointer).cloned().unwrap_or(Value::Null),
+                                None => match (it.pointer(&f.pointer), &f.default) {
+                                    (Some(v), Some(d)) if std::mem::discriminant(v) != std::mem::discriminant(d) => d.clone(),
+                                    (Some(v), _) => v.clone(),
+                                    (None, Some(d)) => d.clone(),
+                                    (None, None) => Value::Null,
+                                },
                                 Some(sub) => it.pointer(&f.pointer).and_then(Value::as_array).map_or(json!([]), |l| project_list(l, sub)),
                             };
                             (f.key.clone(), v)
@@ -644,6 +658,15 @@ impl ToolkitAdapter for SpecAdapter {
                         }
                     }
                 }
+                ErrorCheck::GraphQl { prefix, require_data, no_data } => {
+                    if let Some(errors) = body.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) {
+                        let msg = errors.iter().filter_map(|e| e["message"].as_str()).collect::<Vec<_>>().join("; ");
+                        bail!("{prefix}: {}", if msg.is_empty() { "unknown" } else { &msg });
+                    }
+                    if *require_data && body.get("data").is_none_or(Value::is_null) {
+                        bail!("{no_data}");
+                    }
+                }
                 ErrorCheck::Flag { pointer, expect, error_pointer } => {
                     if body.pointer(pointer).is_some_and(|v| v != expect) {
                         bail!("provider error: {}", body.pointer(error_pointer).map(|v| error_text(v, "message")).unwrap_or_default());
@@ -662,7 +685,12 @@ impl ToolkitAdapter for SpecAdapter {
                 let items = body.pointer(pointer).and_then(Value::as_array).cloned().unwrap_or_default();
                 json!({ key.as_str(): items.clone(), "count": items.len() })
             }
-            Response::Object(fields) => {
+            Response::Object(fields, require) => {
+                if let Some((p, msg)) = require {
+                    if !body.pointer(p).is_some_and(Value::is_object) {
+                        bail!("{msg}");
+                    }
+                }
                 let mut m = Map::new();
                 for (k, p, d, shape) in fields {
                     if shape.count {

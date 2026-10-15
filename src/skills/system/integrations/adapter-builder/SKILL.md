@@ -108,6 +108,13 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   actions PASS via spec and via Rust; FIND_TICKET scope-missing, GET_DEAL /
   GET_TICKET skipped (no record / scope). Writes not live-tested (key is read-only).
   11/32 straight from the generator.
+- **Monday (2026-10-15): converted Rust -> hybrid spec** (`specs/monday.json`,
+  16 spec + 14 Rust actions). Parity: all recorded port cases identical, 0 of 523
+  differential cases differ. Live (`tests/live_monday.rs`, only board 5106123210
+  "Toolhub Test", guarded by an assert): 28/28 distinct actions PASS via spec and
+  via Rust; a throwaway group, text column and item are created and deleted.
+  Not run live: CREATE_SUBITEM (leaves a permanent hidden subitems board),
+  SEND_NOTIFICATION (notifies a person). 16/30 requests straight from the generator.
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -301,7 +308,25 @@ and property maps (arrays joined with `;`, numbers stringified, explicit field
 vs. map precedence differs between upsert and deal). Port cases + adversarial
 values were again what proved parity.
 
-Ideas not yet automated: `tristate` inference (enum `["true","false"]` sent as
+Monday (GraphQL) lessons: the request side was easy (documents + variables map
+1:1 onto `graphql` bodies); everything hard was response *reshaping*. Split by
+response, not by endpoint: plain projections (item summaries, users-like lists,
+mutations returning ids) went to the spec; computed strings (comma-joined
+member/owner lists, `kind:tier`, re-serialised settings JSON), per-type value
+parsing, "first of several documents", dynamic result keys and injected parent
+ids stayed Rust. Added only shapes that recur in GraphQL APIs:
+- `error_check` kind `graphql` (`errors[].message` joined by `; `, "unknown" when
+  none; optional `require_data` / `no_data`). Several checks run in order, so a
+  provider-specific `error_message` field slots in between.
+- object response `require: {pointer, message}` (GraphQL "no `me`" / "no board")
+- `each` fields `{"pointer", "default"}` (bool-or-false flags)
+- arg option `json_string` (GraphQL `JSON` scalars take JSON *text*) and template
+  escape `json` (a JSON value built from a string arg, e.g. `{"name": …}`)
+The generator still misses id checks on GraphQL variables (`segment: true`) and
+required flags on them; adversarial differential cases found every one.
+
+Ideas not yet automated: `segment`/required inference for GraphQL variables
+(probe `grp/sub` and absence per variable), `tristate` inference (enum `["true","false"]` sent as
 bool), `clear_*`->switch-`else` inference, `segment` on body ids, label-style
 `namespaced` extra chars, nested `each` inference (markers inside nested lists),
 template inference for computed strings, switch inference from enum args.

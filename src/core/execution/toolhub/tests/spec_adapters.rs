@@ -753,3 +753,38 @@ fn hybrid_spec_is_validated() {
     doc["hybrid"] = json!({"rust_actions": ["HUBSPOT_CREATE_NOTE"]});
     assert!(SpecAdapter::from_json(&doc.to_string()).is_err(), "reason is required");
 }
+
+const MONDAY: &str = include_str!("../specs/monday.json");
+
+#[test]
+fn monday_spec_matches_compiled_adapter() {
+    let (n, d) = differential("monday", MONDAY);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+}
+
+/// GraphQL error check, object `require`, `json_string`, template `json` escape, `each` defaults.
+#[test]
+fn monday_format_features() {
+    let a = SpecAdapter::from_json(MONDAY).unwrap();
+    let resp = |v: Value| HttpResponse { status: 200, session_id: None, body: v.to_string().into_bytes() };
+    let gv = |r: HttpRequest| serde_json::from_slice::<Value>(r.body.as_ref().unwrap()).unwrap()["variables"].clone();
+    // graphql: errors joined, then error_message, then missing data
+    let e = a.parse_response("MONDAY_GET_ME", &resp(json!({"errors": [{"message": "A"}, {"message": "B"}]}))).unwrap_err().to_string();
+    assert_eq!(e, "monday.com API error: A; B");
+    let e = a.parse_response("MONDAY_GET_ME", &resp(json!({"errors": [{"code": 1}]}))).unwrap_err().to_string();
+    assert_eq!(e, "monday.com API error: unknown");
+    assert!(a.parse_response("MONDAY_GET_ME", &resp(json!({"error_message": "quota"}))).unwrap_err().to_string().contains("quota"));
+    assert_eq!(a.parse_response("MONDAY_GET_ME", &resp(json!({"data": null}))).unwrap_err().to_string(), "monday.com API returned no data.");
+    // object `require`
+    assert_eq!(a.parse_response("MONDAY_GET_ME", &resp(json!({"data": {}}))).unwrap_err().to_string(), "monday.com returned no `me`.");
+    assert!(a.parse_response("MONDAY_LIST_GROUPS", &resp(json!({"data": {"boards": []}}))).is_err());
+    // each default: non-bool / missing -> false
+    let out = a.parse_response("MONDAY_LIST_GROUPS", &resp(json!({"data": {"boards": [{"id": "1", "groups": [{"id": "g", "archived": true}, {"id": "h", "archived": "x"}]}]}}))).unwrap();
+    assert_eq!((out["groups"][0]["archived"].clone(), out["groups"][1]["archived"].clone(), out["groups"][1]["deleted"].clone()), (json!(true), json!(false), json!(false)));
+    // json_string + json escape
+    let v = gv(a.build_request("MONDAY_SET_ITEM_COLUMN_VALUES", &json!({"board_id": "1", "item_id": "2", "column_values": {"text": "a\"b"}})).unwrap());
+    assert_eq!(v["columnValues"], json!(r#"{"text":"a\"b"}"#));
+    let v = gv(a.build_request("MONDAY_RENAME_ITEM", &json!({"board_id": "1", "item_id": "2", "name": "x \"y\"\nz"})).unwrap());
+    assert_eq!(serde_json::from_str::<Value>(v["columnValues"].as_str().unwrap()).unwrap(), json!({"name": "x \"y\"\nz"}));
+    assert_eq!(a.rust_actions().len(), 14);
+}

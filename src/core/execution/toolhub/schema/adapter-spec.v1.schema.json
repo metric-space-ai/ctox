@@ -39,7 +39,7 @@
     "error_check": {
       "type": "object", "required": ["kind", "pointer"],
       "properties": {
-        "kind": {"enum": ["present", "flag"]}, "pointer": {"type": "string"},
+        "kind": {"enum": ["present", "flag", "graphql"]}, "require_data": {"type": "boolean"}, "no_data": {"type": "string"}, "pointer": {"type": "string"},
         "message_key": {"type": "string"}, "prefix": {"type": "string"},
         "expect": {}, "error_pointer": {"type": "string"}
       }
@@ -58,7 +58,7 @@
             "one_of": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"},
             "join": {"type": "string"}, "wrap_array": {"type": "boolean"},
             "uri_prefix": {"type": "string", "pattern": "^https://.*/$"},
-            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"}, "items_integer": {"type": "boolean"}, "segment": {"type": "boolean"}, "strip_prefix": {"type": "string"}, "stringify_values": {"type": "string"}, "prepend": {"type": "array", "items": {"type": "string"}},
+            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"}, "items_integer": {"type": "boolean"}, "segment": {"type": "boolean"}, "strip_prefix": {"type": "string"}, "stringify_values": {"type": "string"}, "json_string": {"type": "boolean"}, "prepend": {"type": "array", "items": {"type": "string"}},
             "wrap_object": {"type": "boolean"}, "blank_to_null": {"type": "boolean"}, "require_key": {"type": "string"}
           }
         },
@@ -67,7 +67,7 @@
           "type": "object", "additionalProperties": false, "required": ["template"],
           "properties": {
             "template": {"type": "string"},
-            "escape": {"type": "object", "additionalProperties": {"enum": ["none", "backslash_quote"]}},
+            "escape": {"type": "object", "additionalProperties": {"enum": ["none", "backslash_quote", "json"]}},
             "forbid": {"type": "object", "additionalProperties": {"type": "string"}}
           }
         },
@@ -86,7 +86,7 @@
       "type": "object", "required": ["mode"],
       "properties": {
         "mode": {"enum": ["body", "pick", "list", "object", "merge_success", "const"]},
-        "pointer": {"type": "string"}, "required": {"type": "boolean"}, "empty_error": {"type": "string"},
+        "pointer": {"type": "string"}, "required": {"type": "boolean"}, "empty_error": {"type": "string"}, "require": {"type": "object", "required": ["pointer", "message"], "description": "object mode: fail with `message` unless `pointer` is an object", "properties": {"pointer": {"type": "string"}, "message": {"type": "string"}}},
         "as": {"type": "string"}, "value": {},
         "fields": {"type": "object", "description": "object mode: key -> {pointer, default?, each? (item projection, nested allowed), count? (array length)}. A pointer segment `-` selects the last array element."}
       }

@@ -1,0 +1,1571 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Liest das Konto hinter dem API-Token.",
+        "en": "Reads the account behind the API token."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query { me { id name email title status url time_zone_identifier country_code created_at user_config { kind } photo_url { small } account { id name slug } } }",
+            "variables": {
+              "const": {}
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_GET_ME",
+      "title": {
+        "de": "Aktuellen Nutzer lesen",
+        "en": "Get current user"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/me/id"
+          },
+          "name": {
+            "pointer": "/data/me/name"
+          },
+          "email": {
+            "pointer": "/data/me/email"
+          },
+          "title": {
+            "pointer": "/data/me/title"
+          },
+          "kind": {
+            "pointer": "/data/me/user_config/kind"
+          },
+          "status": {
+            "pointer": "/data/me/status"
+          },
+          "url": {
+            "pointer": "/data/me/url"
+          },
+          "time_zone": {
+            "pointer": "/data/me/time_zone_identifier"
+          },
+          "country_code": {
+            "pointer": "/data/me/country_code"
+          },
+          "photo_url": {
+            "pointer": "/data/me/photo_url/small"
+          },
+          "created_at": {
+            "pointer": "/data/me/created_at"
+          },
+          "account_id": {
+            "pointer": "/data/me/account/id"
+          },
+          "account_name": {
+            "pointer": "/data/me/account/name"
+          },
+          "account_slug": {
+            "pointer": "/data/me/account/slug"
+          }
+        },
+        "require": {
+          "pointer": "/data/me",
+          "message": "monday.com returned no `me`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Workspaces, optional nach Art, Status oder Mitgliedschaft.",
+        "en": "Lists workspaces, optionally by kind, state or membership."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "Nur offene oder geschlossene Workspaces",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Workspaces pro Seite",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "membership_kind": {
+            "description": "Nur eigene Workspaces oder alle sichtbaren",
+            "enum": [
+              "all",
+              "member"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, 1-basiert",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "description": "Status der Workspaces",
+            "enum": [
+              "active",
+              "archived",
+              "deleted",
+              "all"
+            ],
+            "type": "string"
+          },
+          "workspace_ids": {
+            "description": "Nur diese Workspace-IDs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query ($ids: [ID!], $kind: WorkspaceKind, $state: State, $membership_kind: WorkspaceMembershipKind, $limit: Int, $page: Int) { workspaces(ids: $ids, kind: $kind, state: $state, membership_kind: $membership_kind, limit: $limit, page: $page) { id name kind description state created_at is_default_workspace } }",
+            "variables": {
+              "ids": {
+                "arg": "workspace_ids",
+                "type": "string_list",
+                "items_segment": true
+              },
+              "kind": {
+                "arg": "kind"
+              },
+              "limit": {
+                "arg": "limit",
+                "default": 50,
+                "clamp": [
+                  1,
+                  100
+                ]
+              },
+              "membership_kind": {
+                "arg": "membership_kind",
+                "default": "all"
+              },
+              "page": {
+                "arg": "page",
+                "default": 1,
+                "clamp": [
+                  1,
+                  100
+                ]
+              },
+              "state": {
+                "arg": "state",
+                "default": "active"
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "workspaces": {
+            "pointer": "/data/workspaces",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "kind": "/kind",
+              "description": "/description",
+              "state": "/state",
+              "created_at": "/created_at",
+              "is_default_workspace": {
+                "pointer": "/is_default_workspace",
+                "default": false
+              }
+            }
+          },
+          "count": {
+            "pointer": "/data/workspaces",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_LIST_WORKSPACES",
+      "title": {
+        "de": "Workspaces auflisten",
+        "en": "List workspaces"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die gespeicherten Ansichten eines Boards.",
+        "en": "Lists the saved views of a board."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID, z. B. 1234567890",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query ($ids: [ID!]) { boards(ids: $ids) { views { id name type access_level source_view_id } } }",
+            "variables": {
+              "ids": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true,
+                "wrap_array": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_LIST_BOARD_VIEWS",
+      "title": {
+        "de": "Board-Ansichten auflisten",
+        "en": "List board views"
+      },
+      "response": {
+        "mode": "object",
+        "require": {
+          "pointer": "/data/boards/0",
+          "message": "monday.com returned no board (not found or not accessible)."
+        },
+        "fields": {
+          "views": {
+            "pointer": "/data/boards/0/views",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "type": "/type",
+              "access_level": "/access_level",
+              "source_view_id": "/source_view_id"
+            }
+          },
+          "count": {
+            "pointer": "/data/boards/0/views",
+            "count": true
+          }
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Gruppen (Abschnitte) eines Boards.",
+        "en": "Lists the groups (sections) of a board."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query ($boardIds: [ID!]) { boards(ids: $boardIds) { id groups { id title color archived deleted } } }",
+            "variables": {
+              "boardIds": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true,
+                "wrap_array": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_LIST_GROUPS",
+      "title": {
+        "de": "Gruppen auflisten",
+        "en": "List groups"
+      },
+      "response": {
+        "mode": "object",
+        "require": {
+          "pointer": "/data/boards/0",
+          "message": "monday.com returned no board (not found or not accessible)."
+        },
+        "fields": {
+          "board_id": {
+            "pointer": "/data/boards/0/id"
+          },
+          "groups": {
+            "pointer": "/data/boards/0/groups",
+            "each": {
+              "id": "/id",
+              "title": "/title",
+              "color": "/color",
+              "archived": {
+                "pointer": "/archived",
+                "default": false
+              },
+              "deleted": {
+                "pointer": "/deleted",
+                "default": false
+              }
+            }
+          },
+          "count": {
+            "pointer": "/data/boards/0/groups",
+            "count": true
+          }
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Liest bis zu 100 Items direkt über ihre IDs.",
+        "en": "Reads up to 100 items directly by their ids."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "item_ids": {
+            "description": "Item-IDs (höchstens 100)",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "item_ids"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query ($ids: [ID!]) { items(ids: $ids) { id name state created_at updated_at url board { id name } group { id title } parent_item { id } column_values { id type text value } } }",
+            "variables": {
+              "ids": {
+                "arg": "item_ids",
+                "type": "string_list",
+                "items_segment": true,
+                "required": true,
+                "max_items": 100
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "/data/items",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "state": "/state",
+              "url": "/url",
+              "board_id": "/board/id",
+              "board_name": "/board/name",
+              "group_id": "/group/id",
+              "group_title": "/group/title",
+              "parent_item_id": "/parent_item/id",
+              "created_at": "/created_at",
+              "updated_at": "/updated_at",
+              "column_values": {
+                "pointer": "/column_values",
+                "each": {
+                  "column_id": "/id",
+                  "type": "/type",
+                  "text": "/text",
+                  "value": "/value"
+                }
+              }
+            }
+          },
+          "count": {
+            "pointer": "/data/items",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_GET_ITEMS",
+      "title": {
+        "de": "Items lesen",
+        "en": "Get items"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Updates aller Items eines Boards.",
+        "en": "Lists the updates of every item on a board."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "from_date": {
+            "description": "Nur Updates ab diesem ISO-Zeitpunkt",
+            "type": "string"
+          },
+          "limit": {
+            "default": 25,
+            "description": "Updates pro Seite",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, 1-basiert",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "to_date": {
+            "description": "Nur Updates bis zu diesem ISO-Zeitpunkt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "query ($ids: [ID!], $limit: Int, $page: Int, $fromDate: ISO8601DateTime, $toDate: ISO8601DateTime) { boards(ids: $ids) { id updates(limit: $limit, page: $page, from_date: $fromDate, to_date: $toDate) { id body text_body item_id creator_id creator { name } created_at updated_at } } }",
+            "variables": {
+              "ids": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true,
+                "wrap_array": true
+              },
+              "limit": {
+                "arg": "limit",
+                "default": 25,
+                "clamp": [
+                  1,
+                  100
+                ]
+              },
+              "page": {
+                "arg": "page",
+                "default": 1,
+                "clamp": [
+                  1,
+                  100
+                ]
+              },
+              "fromDate": {
+                "arg": "from_date"
+              },
+              "toDate": {
+                "arg": "to_date"
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2",
+        "read_only_post": true
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "MONDAY_LIST_BOARD_UPDATES",
+      "title": {
+        "de": "Board-Updates auflisten",
+        "en": "List board updates"
+      },
+      "response": {
+        "mode": "object",
+        "require": {
+          "pointer": "/data/boards/0",
+          "message": "monday.com returned no board (not found or not accessible)."
+        },
+        "fields": {
+          "updates": {
+            "pointer": "/data/boards/0/updates",
+            "each": {
+              "id": "/id",
+              "item_id": "/item_id",
+              "body": "/body",
+              "text_body": "/text_body",
+              "creator_id": "/creator_id",
+              "creator_name": "/creator/name",
+              "created_at": "/created_at",
+              "updated_at": "/updated_at"
+            }
+          },
+          "count": {
+            "pointer": "/data/boards/0/updates",
+            "count": true
+          }
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Legt ein Item auf einem Board an; braucht --confirm.",
+        "en": "Creates an item on a board; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "column_values": {
+            "description": "column_values als JSON-Objekt, z. B. {\"status\": {\"label\": \"Working on it\"}}",
+            "type": "object"
+          },
+          "create_labels_if_missing": {
+            "default": false,
+            "description": "Fehlende Status-/Dropdown-Labels anlegen (braucht Rechte auf die Boardstruktur)",
+            "type": "boolean"
+          },
+          "group_id": {
+            "description": "Gruppe, z. B. topics",
+            "type": "string"
+          },
+          "item_name": {
+            "description": "Name des Items",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id",
+          "item_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($boardId: ID!, $itemName: String!, $groupId: String, $columnValues: JSON, $createLabels: Boolean) { create_item(board_id: $boardId, item_name: $itemName, group_id: $groupId, column_values: $columnValues, create_labels_if_missing: $createLabels) { id name state url board { id } group { id } } }",
+            "variables": {
+              "boardId": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true
+              },
+              "itemName": {
+                "arg": "item_name",
+                "required": true
+              },
+              "groupId": {
+                "arg": "group_id",
+                "trim": true,
+                "segment": true
+              },
+              "columnValues": {
+                "arg": "column_values",
+                "type": "object",
+                "json_string": true
+              },
+              "createLabels": {
+                "arg": "create_labels_if_missing",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_CREATE_BOARD_ITEM",
+      "title": {
+        "de": "Item anlegen",
+        "en": "Create board item"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_item/id"
+          },
+          "name": {
+            "pointer": "/data/create_item/name"
+          },
+          "state": {
+            "pointer": "/data/create_item/state"
+          },
+          "url": {
+            "pointer": "/data/create_item/url"
+          },
+          "board_id": {
+            "pointer": "/data/create_item/board/id"
+          },
+          "group_id": {
+            "pointer": "/data/create_item/group/id"
+          }
+        },
+        "require": {
+          "pointer": "/data/create_item",
+          "message": "monday.com returned no `create_item`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Ändert nur den Namen eines Items; braucht --confirm.",
+        "en": "Changes only the name of an item; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "item_id": {
+            "description": "Item-ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "Neuer Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id",
+          "item_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) { change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id name state url board { id } group { id } } }",
+            "variables": {
+              "boardId": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true
+              },
+              "itemId": {
+                "arg": "item_id",
+                "required": true,
+                "segment": true
+              },
+              "columnValues": {
+                "template": "{{\"name\":\"{name}\"}}",
+                "escape": {
+                  "name": "json"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_RENAME_ITEM",
+      "title": {
+        "de": "Item umbenennen",
+        "en": "Rename item"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/change_multiple_column_values/id"
+          },
+          "name": {
+            "pointer": "/data/change_multiple_column_values/name"
+          },
+          "state": {
+            "pointer": "/data/change_multiple_column_values/state"
+          },
+          "url": {
+            "pointer": "/data/change_multiple_column_values/url"
+          },
+          "board_id": {
+            "pointer": "/data/change_multiple_column_values/board/id"
+          },
+          "group_id": {
+            "pointer": "/data/change_multiple_column_values/group/id"
+          }
+        },
+        "require": {
+          "pointer": "/data/change_multiple_column_values",
+          "message": "monday.com returned no `change_multiple_column_values`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Setzt mehrere Spaltenwerte eines Items; braucht --confirm.",
+        "en": "Sets several column values on an item; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "column_values": {
+            "description": "column_values als JSON-Objekt, z. B. {\"status\": {\"label\": \"Done\"}}",
+            "type": "object"
+          },
+          "create_labels_if_missing": {
+            "default": false,
+            "description": "Fehlende Labels anlegen",
+            "type": "boolean"
+          },
+          "item_id": {
+            "description": "Item-ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id",
+          "item_id",
+          "column_values"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!, $createLabels: Boolean) { change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues, create_labels_if_missing: $createLabels) { id name state url board { id } group { id } } }",
+            "variables": {
+              "boardId": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true
+              },
+              "itemId": {
+                "arg": "item_id",
+                "required": true,
+                "segment": true
+              },
+              "columnValues": {
+                "arg": "column_values",
+                "type": "object",
+                "json_string": true,
+                "required": true
+              },
+              "createLabels": {
+                "arg": "create_labels_if_missing",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_SET_ITEM_COLUMN_VALUES",
+      "title": {
+        "de": "Item-Spaltenwerte setzen",
+        "en": "Set item column values"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/change_multiple_column_values/id"
+          },
+          "name": {
+            "pointer": "/data/change_multiple_column_values/name"
+          },
+          "state": {
+            "pointer": "/data/change_multiple_column_values/state"
+          },
+          "url": {
+            "pointer": "/data/change_multiple_column_values/url"
+          },
+          "board_id": {
+            "pointer": "/data/change_multiple_column_values/board/id"
+          },
+          "group_id": {
+            "pointer": "/data/change_multiple_column_values/group/id"
+          }
+        },
+        "require": {
+          "pointer": "/data/change_multiple_column_values",
+          "message": "monday.com returned no `change_multiple_column_values`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Archiviert ein Item; braucht --confirm.",
+        "en": "Archives an item; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "item_id": {
+            "description": "Item-ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($itemId: ID!) { archive_item(item_id: $itemId) { id name state url board { id } group { id } } }",
+            "variables": {
+              "itemId": {
+                "arg": "item_id",
+                "required": true,
+                "segment": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_ARCHIVE_ITEM",
+      "title": {
+        "de": "Item archivieren",
+        "en": "Archive item"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/archive_item/id"
+          },
+          "name": {
+            "pointer": "/data/archive_item/name"
+          },
+          "state": {
+            "pointer": "/data/archive_item/state"
+          },
+          "url": {
+            "pointer": "/data/archive_item/url"
+          },
+          "board_id": {
+            "pointer": "/data/archive_item/board/id"
+          },
+          "group_id": {
+            "pointer": "/data/archive_item/group/id"
+          }
+        },
+        "require": {
+          "pointer": "/data/archive_item",
+          "message": "monday.com returned no `archive_item`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Legt ein Subitem unter einem Item an; braucht --confirm.",
+        "en": "Creates a subitem under an item; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "column_values": {
+            "description": "column_values als JSON-Objekt",
+            "type": "object"
+          },
+          "create_labels_if_missing": {
+            "default": false,
+            "description": "Fehlende Labels anlegen",
+            "type": "boolean"
+          },
+          "item_name": {
+            "description": "Name des Subitems",
+            "type": "string"
+          },
+          "parent_item_id": {
+            "description": "ID des Eltern-Items",
+            "type": "string"
+          }
+        },
+        "required": [
+          "parent_item_id",
+          "item_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($parentItemId: ID!, $itemName: String!, $columnValues: JSON, $createLabels: Boolean) { create_subitem(parent_item_id: $parentItemId, item_name: $itemName, column_values: $columnValues, create_labels_if_missing: $createLabels) { id name state url board { id } group { id } } }",
+            "variables": {
+              "parentItemId": {
+                "arg": "parent_item_id",
+                "required": true,
+                "segment": true
+              },
+              "itemName": {
+                "arg": "item_name",
+                "required": true
+              },
+              "columnValues": {
+                "arg": "column_values",
+                "type": "object",
+                "json_string": true
+              },
+              "createLabels": {
+                "arg": "create_labels_if_missing",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_CREATE_SUBITEM",
+      "title": {
+        "de": "Subitem anlegen",
+        "en": "Create subitem"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_subitem/id"
+          },
+          "name": {
+            "pointer": "/data/create_subitem/name"
+          },
+          "state": {
+            "pointer": "/data/create_subitem/state"
+          },
+          "url": {
+            "pointer": "/data/create_subitem/url"
+          },
+          "board_id": {
+            "pointer": "/data/create_subitem/board/id"
+          },
+          "group_id": {
+            "pointer": "/data/create_subitem/group/id"
+          }
+        },
+        "require": {
+          "pointer": "/data/create_subitem",
+          "message": "monday.com returned no `create_subitem`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Postet ein Update auf ein Item oder eine Antwort auf ein Update.",
+        "en": "Posts an update on an item or a reply to an update."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Text des Updates",
+            "type": "string"
+          },
+          "item_id": {
+            "description": "Item-ID; alternativ parent_id verwenden",
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "Update-ID, auf das geantwortet wird",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($itemId: ID, $parentId: ID, $body: String!) { create_update(item_id: $itemId, parent_id: $parentId, body: $body) { id body text_body item_id creator_id created_at } }",
+            "variables": {
+              "body": {
+                "arg": "body",
+                "required": true
+              },
+              "itemId": {
+                "arg": "item_id",
+                "trim": true,
+                "segment": true
+              },
+              "parentId": {
+                "arg": "parent_id",
+                "trim": true,
+                "segment": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "nonempty_body": "provide an `item_id` to post an update, or a `parent_id` to reply",
+        "path": "/v2",
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "args": [
+              "item_id",
+              "parent_id"
+            ],
+            "message": "provide an `item_id` to post an update, or a `parent_id` to reply"
+          }
+        ]
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_POST_ITEM_UPDATE",
+      "title": {
+        "de": "Update schreiben",
+        "en": "Post item update"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_update/id"
+          },
+          "item_id": {
+            "pointer": "/data/create_update/item_id"
+          },
+          "body": {
+            "pointer": "/data/create_update/body"
+          },
+          "text_body": {
+            "pointer": "/data/create_update/text_body"
+          },
+          "creator_id": {
+            "pointer": "/data/create_update/creator_id"
+          },
+          "created_at": {
+            "pointer": "/data/create_update/created_at"
+          }
+        },
+        "require": {
+          "pointer": "/data/create_update",
+          "message": "monday.com returned no `create_update`."
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Schickt eine In-App-Benachrichtigung an einen Nutzer.",
+        "en": "Sends an in-app notification to a user."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "target_id": {
+            "description": "ID des Ziels (Item, Board, Update …)",
+            "type": "string"
+          },
+          "target_type": {
+            "description": "Art des Ziels",
+            "enum": [
+              "item",
+              "board",
+              "update",
+              "group"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "Text der Benachrichtigung",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "Nutzer-ID, der benachrichtigt wird",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "target_id",
+          "target_type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation ($userId: ID!, $targetId: ID!, $targetType: NotificationTargetType!, $text: String!) { create_notification(user_id: $userId, target_id: $targetId, target_type: $targetType, text: $text) { text } }",
+            "variables": {
+              "targetId": {
+                "arg": "target_id",
+                "required": true,
+                "segment": true
+              },
+              "targetType": {
+                "arg": "target_type",
+                "required": true,
+                "one_of": [
+                  "item",
+                  "board",
+                  "update",
+                  "group"
+                ],
+                "strict": true
+              },
+              "text": {
+                "arg": "text",
+                "required": true
+              },
+              "userId": {
+                "arg": "user_id",
+                "required": true,
+                "segment": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2026-07"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "sent": {
+            "pointer": "/__ctox_const__",
+            "default": true
+          },
+          "text": {
+            "pointer": "/data/create_notification/text"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_SEND_NOTIFICATION",
+      "title": {
+        "de": "Benachrichtigung senden",
+        "en": "Send notification"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt eine Spalte in einem Board an; braucht --confirm.",
+        "en": "Creates a column on a board; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "column_title": {
+            "description": "Titel der Spalte",
+            "type": "string"
+          },
+          "column_type": {
+            "description": "Typ der Spalte",
+            "enum": [
+              "auto_number",
+              "color_picker",
+              "checkbox",
+              "country",
+              "creation_log",
+              "date",
+              "dropdown",
+              "email",
+              "hour",
+              "item_id",
+              "last_updated",
+              "link",
+              "location",
+              "long_text",
+              "numbers",
+              "people",
+              "phone",
+              "progress",
+              "rating",
+              "status",
+              "tags",
+              "text",
+              "timeline",
+              "time_tracking",
+              "vote",
+              "week",
+              "world_clock"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id",
+          "column_title",
+          "column_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation createColumn($boardId: ID!, $columnTitle: String!, $columnType: ColumnType!) { create_column(board_id: $boardId, title: $columnTitle, column_type: $columnType) { id } }",
+            "variables": {
+              "boardId": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true
+              },
+              "columnTitle": {
+                "arg": "column_title",
+                "required": true
+              },
+              "columnType": {
+                "arg": "column_type",
+                "trim": true,
+                "required": true,
+                "one_of": [
+                  "auto_number",
+                  "color_picker",
+                  "checkbox",
+                  "country",
+                  "creation_log",
+                  "date",
+                  "dropdown",
+                  "email",
+                  "hour",
+                  "item_id",
+                  "last_updated",
+                  "link",
+                  "location",
+                  "long_text",
+                  "numbers",
+                  "people",
+                  "phone",
+                  "progress",
+                  "rating",
+                  "status",
+                  "tags",
+                  "text",
+                  "timeline",
+                  "time_tracking",
+                  "vote",
+                  "week",
+                  "world_clock"
+                ],
+                "strict": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2023-10"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_column/id"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_CREATE_COLUMN",
+      "title": {
+        "de": "Spalte anlegen",
+        "en": "Create column"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt eine Gruppe in einem Board an; braucht --confirm.",
+        "en": "Creates a group on a board; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "Board-ID",
+            "type": "string"
+          },
+          "group_name": {
+            "description": "Name der Gruppe",
+            "type": "string"
+          }
+        },
+        "required": [
+          "board_id",
+          "group_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation createGroup($boardId: ID!, $groupName: String!) { create_group(board_id: $boardId, group_name: $groupName) { id } }",
+            "variables": {
+              "boardId": {
+                "arg": "board_id",
+                "required": true,
+                "segment": true
+              },
+              "groupName": {
+                "arg": "group_name",
+                "required": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2023-10"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_group/id"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_CREATE_GROUP",
+      "title": {
+        "de": "Gruppe anlegen",
+        "en": "Create group"
+      }
+    },
+    {
+      "description": {
+        "de": "Postet ein Update auf ein Item; braucht --confirm.",
+        "en": "Posts an update on an item; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Text des Updates",
+            "type": "string"
+          },
+          "item_id": {
+            "description": "Item-ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_id",
+          "body"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "graphql": {
+            "query": "mutation createUpdate($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }",
+            "variables": {
+              "body": {
+                "arg": "body",
+                "required": true
+              },
+              "itemId": {
+                "arg": "item_id",
+                "required": true,
+                "segment": true
+              }
+            }
+          }
+        },
+        "headers": {
+          "api-version": "2023-10"
+        },
+        "method": "POST",
+        "path": "/v2"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/data/create_update/id"
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [],
+      "slug": "MONDAY_CREATE_UPDATE",
+      "title": {
+        "de": "Update anlegen",
+        "en": "Create update"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "api.monday.com"
+  ],
+  "api_base": "https://api.monday.com",
+  "auth_schemes": [
+    {
+      "header_name": "authorization",
+      "prefix": "",
+      "type": "api_key"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "Boards, Items, Spalten, Gruppen, Updates, Nutzer und Workspaces in monday.com lesen und bearbeiten.",
+    "en": "Read and change boards, items, columns, groups, updates, users and workspaces in monday.com."
+  },
+  "name": "monday.com",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/monday.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "monday",
+  "version": "1.0.0",
+  "error_check": [
+    {
+      "kind": "graphql",
+      "prefix": "monday.com API error",
+      "require_data": false
+    },
+    {
+      "kind": "present",
+      "pointer": "/error_message",
+      "prefix": "monday.com API error"
+    },
+    {
+      "kind": "graphql",
+      "prefix": "monday.com API error",
+      "require_data": true,
+      "no_data": "monday.com API returned no data."
+    }
+  ],
+  "hybrid": {
+    "rust_actions": [
+      "MONDAY_GET_ACCOUNT",
+      "MONDAY_LIST_USERS",
+      "MONDAY_LIST_TEAMS",
+      "MONDAY_LIST_BOARDS",
+      "MONDAY_LIST_COLUMNS",
+      "MONDAY_GET_COLUMN_TYPE_SCHEMA",
+      "MONDAY_LIST_BOARD_ITEMS",
+      "MONDAY_SEARCH_ITEMS_BY_COLUMN_VALUES",
+      "MONDAY_LIST_SUBITEMS",
+      "MONDAY_SEARCH",
+      "MONDAY_LIST_ITEM_UPDATES",
+      "MONDAY_LIST_FOLDERS",
+      "MONDAY_GET_BOARD_VALUES",
+      "MONDAY_GET_ITEM_COLUMN_VALUES"
+    ],
+    "reason": "These actions reshape responses in ways that are code, not projection: comma-joined member/owner lists (teams, folders, boards), `kind:tier` product strings (account), settings/schema JSON re-serialised as strings (columns, column type schema), per-column-type value parsing (board/item values), the first of several possible item-page documents and request documents chosen by args (board items, column search), the search entity taken from a dynamic key, parent ids injected into children (subitems, item updates), and silent input filtering (users: non-email entries dropped)."
+  },
+  "docs": [
+    "https://developer.monday.com/api-reference/docs"
+  ]
+}
