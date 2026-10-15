@@ -677,6 +677,7 @@ function installAdvancedStatusInterface() {
   globalThis.workjetComputerControl = workjetComputerControl;
   globalThis.workjetProjectControl = workjetProjectControl;
   globalThis.workjetSessionControl = workjetSessionControl;
+  globalThis.workjetToolhubControl = workjetToolhubControl;
   globalThis.workjetSessionEvents = createWorkjetSessionEvents();
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
   // Navigation only; settings retain their own role and command-policy checks.
@@ -15478,6 +15479,71 @@ async function workjetPresentationControl(action, request, scope) {
 
 const WORKJET_SESSION_CONTROL_MAX_RESULTS = 100;
 const WORKJET_SESSION_CONTROL_TIMEOUT_MS = 30_000;
+
+// Toolhub over ctox sync (no HTTP route): Workjet calls this inside the guest
+// shell; requests travel as business_commands and the instance writes the
+// outcome back. Secrets ride only in the detached field (`secret` /
+// `callback_url`), which the instance strips before persisting anything; the
+// local copy is redacted right after the command completes.
+const WORKJET_TOOLHUB_TIMEOUT_MS = 90_000;
+const WORKJET_TOOLHUB_ROUTES = new Set([
+  'connections', 'catalog', 'connect', 'disconnect', 'mcp/tools', 'mcp/call', 'call', 'ui/requests',
+]);
+
+async function workjetToolhubControl(request = {}) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    throw new TypeError('Workjet toolhub request must be an object.');
+  }
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('Workjet toolhub control is not ready.');
+  }
+  const commandBridge = await state.sync?.startCollection?.('business_commands');
+  await waitForSyncBridgeReady(commandBridge, 15_000);
+  const action = String(request.action || '');
+  const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {};
+  let commandType;
+  const payload = { body };
+  if (action === 'request') {
+    const route = String(request.route || '');
+    if (!WORKJET_TOOLHUB_ROUTES.has(route)) throw new Error(`toolhub route not allowed: ${route}`);
+    commandType = 'ctox.toolhub.request';
+    payload.route = route;
+  } else if (action === 'credential.submit') {
+    if (typeof request.secret !== 'string' || !request.secret) throw new Error('toolhub secret missing');
+    commandType = 'ctox.toolhub.credential.submit';
+    payload.secret = request.secret;
+  } else if (action === 'oauth.complete') {
+    if (typeof request.callbackUrl !== 'string' || !request.callbackUrl) throw new Error('toolhub callback missing');
+    commandType = 'ctox.toolhub.oauth.complete';
+    payload.callback_url = request.callbackUrl;
+  } else {
+    throw new Error(`unknown toolhub action: ${action}`);
+  }
+  const commandId = `cmd_toolhub_${newId()}`;
+  try {
+    await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: commandType,
+      record_id: 'toolhub',
+      payload,
+      client_context: { source: 'workjet-toolhub', actor: actorContext(state.session) },
+    }, { until: 'terminal', timeoutMs: WORKJET_TOOLHUB_TIMEOUT_MS });
+    const doc = await state.db.collection('business_commands').findOne(commandId).exec();
+    const command = doc?.toJSON?.() || doc || {};
+    // Instance writes result = { outcome: <toolhub reply>, status_code }.
+    const result = command.result || {};
+    return { status: Number(result.status_code || 0), body: result.outcome || {} };
+  } finally {
+    if (commandType !== 'ctox.toolhub.request') {
+      try {
+        const doc = await state.db.collection('business_commands').findOne(commandId).exec();
+        if (doc) await doc.patch({ payload: { body } });
+      } catch { /* instance already stripped the secret */ }
+    }
+  }
+}
 
 async function workjetSessionControl(request = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
