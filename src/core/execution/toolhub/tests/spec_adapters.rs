@@ -522,3 +522,39 @@ fn response_pointer_dash_selects_last_array_element_for_cursor_pagination() {
     let r = a.build_request("STRIPE_CREATE_REFUND", &json!({"payment_intent":"pi_1","reason":"requested_by_customer"})).unwrap();
     assert!(String::from_utf8(r.body.unwrap()).unwrap().contains("payment_intent=pi_1"));
 }
+
+// ------------------------------------------------------------------ oauth_header (Trello)
+
+const TRELLO: &str = include_str!("../specs/trello.json");
+
+#[test]
+fn oauth_header_puts_key_and_token_in_authorization_not_in_url() {
+    let a = SpecAdapter::from_json(TRELLO).expect("trello spec");
+    assert_eq!(a.spec().auth_schemes, vec![AuthScheme::OAuthHeader]);
+    let root = tmpdir("oauthh");
+    let store = SpecStore::for_instance_root(&root);
+    store.install(TRELLO).unwrap();
+    store.activate("trello", "1.0.0", "t").unwrap();
+    struct Cap(Mutex<Vec<(String, String)>>);
+    impl HttpTransport for Cap {
+        fn send(&self, _: HttpRequest) -> anyhow::Result<HttpResponse> { unreachable!() }
+        fn send_restricted(&self, r: HttpRequest) -> anyhow::Result<HttpResponse> {
+            self.0.lock().unwrap().push((r.url.clone(), r.headers.get("authorization").cloned().unwrap_or_default()));
+            Ok(HttpResponse { status: 200, body: br#"{"id":"m1","username":"u"}"#.to_vec(), session_id: None })
+        }
+    }
+    let cap = Arc::new(Cap(Mutex::new(vec![])));
+    let mut hub = ToolHub::new(MemorySecretBackend::default(), cap.clone());
+    hub.reload_specs(&store).unwrap();
+    let cfg = AuthConfig { id: "c".into(), toolkit: "trello".into(), scheme: AuthSchemeKind::OAuthHeader, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
+    hub.upsert_auth_config(&cfg, None).unwrap();
+    hub.connect_with_credential("c", "p", "a", "KEY123:TOKEN456").unwrap();
+    assert!(matches!(hub.execute("p", "TRELLO_GET_CURRENT_MEMBER", &json!({}), None).unwrap(), ToolOutcome::Success { .. }));
+    let calls = cap.0.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert!(!calls[0].0.contains("KEY123") && !calls[0].0.contains("TOKEN456"), "secrets must not be in the URL: {}", calls[0].0);
+    assert_eq!(calls[0].1, r#"OAuth oauth_consumer_key="KEY123", oauth_token="TOKEN456""#);
+    assert!(hub.connect_with_credential("c", "p", "a", "KEY123").is_err(), "needs key:token");
+    assert!(hub.connect_with_credential("c", "p", "a", "KEY\"bad:TOK").is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}

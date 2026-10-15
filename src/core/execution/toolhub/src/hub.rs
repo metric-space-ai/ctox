@@ -162,7 +162,7 @@ impl<B: SecretBackend> ToolHub<B> {
     /// Static-credential scheme for `toolkit` (API key, bearer token or Basic).
     pub fn credential_scheme(&self, toolkit: &str) -> Result<AuthSchemeKind> {
         let kinds: Vec<AuthSchemeKind> = self.toolkit(toolkit)?.spec().auth_schemes.iter().map(|s| s.kind()).collect();
-        [AuthSchemeKind::ApiKey, AuthSchemeKind::Bearer, AuthSchemeKind::Basic]
+        [AuthSchemeKind::ApiKey, AuthSchemeKind::Bearer, AuthSchemeKind::Basic, AuthSchemeKind::OAuthHeader]
             .into_iter()
             .find(|k| kinds.contains(k))
             .ok_or_else(|| anyhow!("toolkit `{toolkit}` only supports OAuth2"))
@@ -396,6 +396,13 @@ impl<B: SecretBackend> ToolHub<B> {
                 request.header("authorization", format!("Bearer {}", secret.access_token))
             }
             AuthSchemeKind::None => request,
+            AuthSchemeKind::OAuthHeader => {
+                let (key, token) = secret.access_token.split_once(':').ok_or_else(|| anyhow!("oauth_header credential must be `key:token`"))?;
+                if key.is_empty() || token.is_empty() || key.contains('"') || token.contains('"') {
+                    bail!("invalid oauth_header credential");
+                }
+                request.header("authorization", format!(r#"OAuth oauth_consumer_key="{key}", oauth_token="{token}""#))
+            }
             AuthSchemeKind::Basic => request.header(
                 "authorization",
                 format!(

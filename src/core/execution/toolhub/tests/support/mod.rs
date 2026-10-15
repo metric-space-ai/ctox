@@ -104,8 +104,13 @@ pub fn live(adapter: &dyn ToolkitAdapter, tool: &str, args: Value) -> Option<Res
 /// Credential from env `CTOX_TOOLHUB_LIVE_<SLUG>_TOKEN`; never printed.
 pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str, args: Value) -> Option<Result<Value, String>> {
     use ctox_toolhub::*;
-    let var = format!("CTOX_TOOLHUB_LIVE_{}_TOKEN", toolkit.to_ascii_uppercase().replace('-', "_"));
-    let token = std::env::var(&var).ok()?;
+    let base = format!("CTOX_TOOLHUB_LIVE_{}", toolkit.to_ascii_uppercase().replace('-', "_"));
+    let token = std::env::var(format!("{base}_TOKEN")).ok()?;
+    // Optional companion KEY (Trello): credential becomes `key:token` for oauth_header / Basic.
+    let credential = match std::env::var(format!("{base}_KEY")) {
+        Ok(k) => format!("{}:{}", k.trim(), token.trim()),
+        Err(_) => token.trim().to_string(),
+    };
     #[allow(unused_mut)]
     let mut hub = ToolHub::new(
         MemorySecretBackend::default(),
@@ -130,7 +135,7 @@ pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str
     }
     let cfg = AuthConfig { id: "live".into(), toolkit: toolkit.into(), scheme, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
     hub.upsert_auth_config(&cfg, None).expect("auth config");
-    hub.connect_with_credential("live", "_instance", "live-test", token.trim()).expect("connect");
+    hub.connect_with_credential("live", "_instance", "live-test", &credential).expect("connect");
     Some(match hub.execute("_instance", tool, &args, None) {
         Ok(ToolOutcome::Success { data }) => Ok(data),
         Ok(ToolOutcome::ProviderError { status, data }) => Err(format!("provider {status}: {data}")),

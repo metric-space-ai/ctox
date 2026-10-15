@@ -30,6 +30,8 @@ Calendly (`calendly.json`) is the first spec-only build (no compiled code change
 
 `stripe.json` is a hot-plug only port of the Activepieces Stripe piece (form bodies with bracketed nested keys, `starting_after`/`has_more` cursor pagination via a `-` pointer segment). Live test `live_stripe` refuses any key that is not `sk_test_`.
 
+`trello.json` is a hot-plug only port of the Activepieces Trello piece. Auth scheme `oauth_header` (credential `key:token`) puts the secrets in the Authorization header, never in the URL. Live test `live_trello` creates a throwaway board and deletes it at the end.
+
 Known limits of v1 (use a compiled adapter for these): multipart uploads, request signing
 (HMAC/AWS SigV4), binary downloads, multi-step calls (e.g. upload session then commit),
 per-tool response logic beyond pick/list/object/merge/const.

@@ -92,6 +92,10 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 - **Stripe (2026-10-15):** hot-plug only (`specs/stripe.json`, 21 actions). All
   live-passed on a `sk_test_` key; leftovers cleaned up. Needed two format
   extensions: nested form flattening and a `-` pointer segment for cursor pages.
+- **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
+  live-passed; a throwaway board is created and deleted. Needed auth scheme
+  `oauth_header` (key+token in the Authorization header). Webhooks need a
+  URL that answers HEAD 200 (https://example.com/ works; a path that 404s does not).
 - **Not wired yet:** the toolhub is not part of the `ctox` binary on main, so there
   is no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,
@@ -171,3 +175,25 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   including the two format extensions and the leftover cleanup of a failed first
   attempt. The nested-form generator (one recursive flatten) was the bulk of the
   new code; the spec itself was generated with Python helpers again.
+- **Auth `oauth_header` (Trello):** `"auth_schemes": [{"type": "oauth_header"}]`.
+  Credential is stored as `key:token`. The hub sends
+  `Authorization: OAuth oauth_consumer_key="{key}", oauth_token="{token}"`, so
+  neither secret appears in the URL (Trello also accepts `?key=&token=` query
+  params; we refuse that path). Quotes inside key/token are rejected. Live
+  harness: set both `CTOX_TOOLHUB_LIVE_<SLUG>_KEY` and `_TOKEN`; `live_exec`
+  joins them as `key:token` when the KEY env is present.
+- **Trello webhooks require a live HEAD 200** on the callback URL before create
+  succeeds (`VALIDATOR_URL_RETURNED_ERROR` otherwise). `https://example.com/`
+  answers 200; a path under it that 404s does not. Prefer a real reachable
+  HTTPS endpoint; if none is available, skip create/delete and say so.
+- **Board lifecycle for live tests:** create a dedicated board (no default lists),
+  do all writes on it, close it, then delete it. Closing alone is not enough —
+  closed boards still count against the free quota. Prefer `defaultLists: false`
+  so you control the lists you create.
+- **List response for top-level arrays:** Trello returns a bare JSON array; use
+  `response.mode = list` with `"pointer": ""` (the validator already allows an
+  empty pointer) and `as: boards|lists|cards`.
+- **Build time (Trello):** about 30 minutes from credentials to a green live run,
+  including the auth-scheme extension and one webhook retry (wrong callback
+  path). Auth was the only format change; the rest fitted existing JSON bodies
+  and path params.
