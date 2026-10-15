@@ -1,4 +1,61 @@
 #[test]
+fn removal_preparation_survives_reopen_and_abort_preserves_the_active_generation() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut db = Connection::open(file.path()).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        create_collection(&tx, &definition("items")).unwrap();
+        put(&tx, "c_items", "one", "1");
+        reserve_publish(&tx, &lock()).unwrap();
+        archive_collection(&tx, &lock(), "items", 1).unwrap();
+        archive_collection(&tx, &lock(), "items", 2).unwrap();
+        let mut compatible = definition("items");
+        compatible.app_ver = "2".into();
+        assert!(update_compatible(&tx, &lock(), &compatible).is_err());
+        assert!(prepare_migration(&tx, &lock(), &next(&definition("items"))).is_err());
+        tx.commit().unwrap();
+    }
+    drop(db);
+    let mut db = Connection::open(file.path()).unwrap();
+    let tx = db.transaction().unwrap();
+    assert_eq!(active_collection(&tx, "items").unwrap().unwrap().gen, 1);
+    assert_eq!(count(&tx, "_archive"), 0);
+    tx.execute(
+        "UPDATE _schema_apps SET app_ver='changed' WHERE app_id='app'",
+        [],
+    )
+    .unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert!(active_collection(&tx, "items").unwrap().is_some());
+    abort_publication(&tx, &lock(), 101).unwrap();
+    assert_eq!(count(&tx, "_schema_removals"), 0);
+    assert_eq!(count(&tx, "c_items"), 1);
+    assert_eq!(count(&tx, "_archive"), 0);
+}
+
+#[test]
+fn failed_mixed_cutover_rolls_back_an_earlier_collection_removal() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("a")).unwrap();
+    create_collection(&tx, &definition("z")).unwrap();
+    reserve_publish(&tx, &lock()).unwrap();
+    archive_collection(&tx, &lock(), "a", 1).unwrap();
+    archive_collection(&tx, &lock(), "z", 1).unwrap();
+    // Corrupt only a prepared binding to simulate a changed source generation.
+    tx.execute(
+        "UPDATE _schema_removals SET gen=42 WHERE collection='z'",
+        [],
+    )
+    .unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert!(active_collection(&tx, "a").unwrap().is_some());
+    assert!(active_collection(&tx, "z").unwrap().is_some());
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert_eq!(count(&tx, "_schema_removals"), 2);
+    assert_eq!(count(&tx, "publish_lock"), 1);
+}
+#[test]
 fn migration_sequences_are_lossless_canonical_decimal_strings() {
     let seq = 9_007_199_254_740_993_u64;
     let migration = Migration {
@@ -484,7 +541,10 @@ fn removing_large_collection_archives_its_generation_without_bulk_copy_or_delete
         put(&tx, "c_items", &i.to_string(), "1");
     }
     reserve_publish(&tx, &lock()).unwrap();
-    archive_collection(&tx, &lock(), "items", 100).unwrap();
+    archive_collection(&tx, &lock(), "items", 1).unwrap();
+    assert!(active_collection(&tx, "items").unwrap().is_some());
+    assert_eq!(count(&tx, "_archive"), 0);
+    activate_publication(&tx, &lock(), 100).unwrap();
     assert!(active_collection(&tx, "items").unwrap().is_none());
     assert_eq!(count(&tx, "c_items"), 600);
     assert_eq!(count(&tx, "_archive"), 1);
@@ -559,6 +619,7 @@ fn retired_generation_is_deleted_in_bounded_pages_only_after_reserve() {
     }
     reserve_publish(&tx, &lock()).unwrap();
     archive_collection(&tx, &lock(), "items", 100).unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
     assert!(
         purge_generation_page(&tx, "items", 1, 100 + change_log::RETENTION_SECONDS, 5).is_err()
     );
@@ -583,6 +644,7 @@ fn archived_collection_name_cannot_be_taken_by_a_foreign_app() {
     create_collection(&tx, &definition("items")).unwrap();
     reserve_publish(&tx, &lock()).unwrap();
     archive_collection(&tx, &lock(), "items", 100).unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
     let other = PublishLock {
         app_id: "other".into(),
         base_app_ver: String::new(),
