@@ -26,6 +26,18 @@ pub trait ChangeLogSink {
     fn install_rxdb(&self, tx: &Transaction<'_>, binding: &RxdbTable) -> Result<(), StoreError>;
 }
 
+
+/// Compatibility name for the canonical sink exported by P3-15 wiring.
+/// There is only one implementation and one sequence source.
+pub use CanonicalChangeLog as StoreChangeLog;
+impl CanonicalChangeLog {
+    /// Retain the bounded page receipt needed by the takeover caller.
+    pub fn backfill(
+        tx: &Transaction<'_>, binding: &RxdbTable, after: Option<&str>,
+    ) -> Result<crate::change_log::BackfillPage, StoreError> {
+        Ok(crate::change_log::backfill_page(tx, &binding.collection, binding.generation, after, 500)?)
+    }
+}
 /// The actual P3-05 sink, retaining the registered application's version and
 /// generation. Neither a per-table counter nor a fabricated schema version is
 /// introduced when a legacy physical table joins the global change log.
@@ -197,7 +209,38 @@ pub fn table_change_position(conn: &Connection, table: &str) -> Result<u64, Stor
 }
 
 #[cfg(test)]
+mod change_log_sink_tests {
+    use super::*;
+    #[test]
+    fn real_sink_preserves_schema_zero_and_emits_hard_delete() -> Result<(), StoreError> {
+        let mut conn = Connection::open_in_memory()?;
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE rx_docs(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,data TEXT)",
+        )?;
+        let binding = RxdbTable {
+            collection: "docs".into(), table: "rx_docs".into(), generation: 1,
+            schema_version: 0, app_version: "base".into(),
+        };
+        tx.execute("INSERT INTO rx_docs VALUES('doc','1-r',0,'{\"id\":\"doc\"}')", [])?;
+        install(&tx, &binding, &StoreChangeLog)?;
+        assert!(StoreChangeLog::backfill(&tx, &binding, None)?.complete);
+        let inserted = crate::change_log::read_page(&tx, "docs", 1, 0, 10)?;
+        assert_eq!(inserted.docs[0].schema_ver, 0);
+        assert_eq!(inserted.docs[0].rev, "1-r");
+        tx.execute("DELETE FROM rx_docs WHERE id='doc'", [])?;
+        let removed = crate::change_log::read_page(&tx, "docs", 1, inserted.cursor_to, 10)?;
+        assert_eq!(removed.docs[0].op, crate::change_log::Operation::Delete);
+        assert!(removed.docs[0].seq > inserted.cursor_to);
+        assert!(removed.docs[0].body.is_none());
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::writer::WriterOptions;
     use crate::{

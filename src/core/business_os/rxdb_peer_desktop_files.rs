@@ -17,13 +17,15 @@ use super::rxdb_peer::{
     demand_file_chunk_rows_for_key_from_sqlite, demand_file_source_error,
     desktop_file_index_projection_stamp, ensure_ctox_desktop_folder_path, hex_sha256,
     is_ctox_internal_desktop_scan_root, is_ctox_internal_path_layout, maintenance_revision,
-    metadata_modified_at_ms, now_ms, should_eager_sync_file, sqlite_pragma_u64,
-    sqlite_table_exists, sqlite_table_has_column, DemandFileFetchRequestStats,
-    DesktopFileChunkCacheCandidate, DesktopFileChunkCacheConfig, DesktopFileChunkCacheEviction,
-    DesktopFileChunkCacheState, DesktopFileDemandMetadata, DesktopFileIndexMaintenanceStats,
-    NATIVE_RXDB_WRITE_LOCK,
+    metadata_modified_at_ms, now_ms, should_eager_sync_file, sqlite_table_exists,
+    sqlite_table_has_column, DemandFileFetchRequestStats, DesktopFileChunkCacheCandidate,
+    DesktopFileChunkCacheConfig, DesktopFileChunkCacheEviction, DesktopFileChunkCacheState,
+    DesktopFileDemandMetadata, DesktopFileIndexMaintenanceStats, NATIVE_RXDB_WRITE_LOCK,
 };
 use super::store;
+use super::store_catalog_projections::owner_adapter;
+#[path = "desktop_maintenance_owner_adapter.rs"]
+mod owner_maintenance;
 use crate::mission::channels;
 use anyhow::Context;
 use rusqlite::types::Value as SqlValue;
@@ -861,17 +863,71 @@ pub(super) fn compact_desktop_file_index_store_sync_with_config(
     home: Option<&Path>,
     cache_config: DesktopFileChunkCacheConfig,
 ) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
-    const FILES_TABLE: &str = "\"ctox_business_os__desktop_files__v0\"";
-    const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
-
     let database_path = store::rxdb_store_path(root);
     if !database_path.exists() {
         return Ok(DesktopFileIndexMaintenanceStats::default());
     }
-    let mut conn = Connection::open(&database_path)
-        .with_context(|| format!("open RxDB store {}", database_path.display()))?;
-    conn.busy_timeout(Duration::from_secs(10))
-        .context("set RxDB maintenance busy timeout")?;
+    // Candidate filesystem checks happen before entering the writer. The job
+    // re-reads metadata and compares its exact revision before eviction.
+    let cache_metadata = desktop_cache_eviction_metadata_snapshot(root, cache_config)?;
+    let root = root.to_path_buf();
+    let home = home.map(Path::to_path_buf);
+    owner_maintenance::submit(&database_path, move |tx| {
+        compact_desktop_file_index_in_owner(
+            &root,
+            home.as_deref(),
+            cache_config,
+            &cache_metadata,
+            tx,
+        )
+    })?
+    .blocking_wait()
+    .map_err(Into::into)
+}
+
+type DesktopCacheMetadata = HashMap<(String, Option<String>, String), fs::Metadata>;
+
+fn desktop_cache_eviction_metadata_snapshot(
+    root: &Path,
+    config: DesktopFileChunkCacheConfig,
+) -> anyhow::Result<DesktopCacheMetadata> {
+    let path = store::rxdb_store_path(root);
+    let candidates = owner_maintenance::submit(&path, move |tx| {
+        if !sqlite_table_exists(tx, "ctox_business_os__desktop_file_chunks__v0")?
+            || !sqlite_table_exists(tx, "ctox_business_os__desktop_files__v0")?
+        {
+            return Ok(Vec::new());
+        }
+        desktop_file_chunk_cache_candidates(tx, config.normalized().max_files_per_pass)
+    })?
+    .blocking_wait()?;
+    let roots = desktop_file_scan_roots(root);
+    Ok(candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let metadata =
+                desktop_file_chunk_cache_eviction_metadata(root, &roots, &candidate.document)?;
+            Some((
+                (
+                    candidate.file_id,
+                    candidate.revision,
+                    candidate.generation_id,
+                ),
+                metadata,
+            ))
+        })
+        .collect())
+}
+
+fn compact_desktop_file_index_in_owner(
+    _root: &Path,
+    home: Option<&Path>,
+    cache_config: DesktopFileChunkCacheConfig,
+    cache_metadata: &DesktopCacheMetadata,
+    conn: &rusqlite::Transaction<'_>,
+) -> anyhow::Result<DesktopFileIndexMaintenanceStats> {
+    const FILES_TABLE: &str = "\"ctox_business_os__desktop_files__v0\"";
+    const CHUNKS_TABLE: &str = "\"ctox_business_os__desktop_file_chunks__v0\"";
     let has_tables = sqlite_table_exists(&conn, "ctox_business_os__desktop_files__v0")?
         && sqlite_table_exists(&conn, "ctox_business_os__desktop_file_chunks__v0")?;
     if !has_tables {
@@ -908,7 +964,7 @@ pub(super) fn compact_desktop_file_index_store_sync_with_config(
         unsafe_files
     };
 
-    let tx = conn.transaction()?;
+    let tx = conn;
     let now = now_ms() as f64;
     let mut stats = DesktopFileIndexMaintenanceStats::default();
     for (file_id, revision, document) in &unsafe_files {
@@ -1018,16 +1074,20 @@ pub(super) fn compact_desktop_file_index_store_sync_with_config(
             [],
         )?;
     }
-    tx.commit()?;
-    apply_desktop_file_chunk_cache_policy(root, &mut conn, &mut stats, cache_config.normalized())?;
+    apply_desktop_file_chunk_cache_policy(
+        conn,
+        &mut stats,
+        cache_config.normalized(),
+        cache_metadata,
+    )?;
     Ok(stats)
 }
 
 fn apply_desktop_file_chunk_cache_policy(
-    root: &Path,
-    conn: &mut Connection,
+    conn: &rusqlite::Transaction<'_>,
     stats: &mut DesktopFileIndexMaintenanceStats,
     config: DesktopFileChunkCacheConfig,
+    cache_metadata: &DesktopCacheMetadata,
 ) -> anyhow::Result<()> {
     let live_bytes_before = desktop_file_chunk_cache_live_bytes(conn)?;
     stats.cache_live_bytes_before = live_bytes_before;
@@ -1040,7 +1100,6 @@ fn apply_desktop_file_chunk_cache_policy(
     let mut state = desktop_file_chunk_cache_state(conn)?;
     let now = now_ms() as u64;
     let cutoff_ms = now.saturating_sub(config.active_min_age_secs.saturating_mul(1_000));
-    let scan_roots = desktop_file_scan_roots(root);
     let candidates = desktop_file_chunk_cache_candidates(conn, config.max_files_per_pass)?;
     let mut projected_live_bytes = live_bytes_before;
     let mut selected_chunk_count = 0usize;
@@ -1063,8 +1122,13 @@ fn apply_desktop_file_chunk_cache_policy(
             pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
             continue;
         }
-        let Some(metadata) =
-            desktop_file_chunk_cache_eviction_metadata(root, &scan_roots, &candidate.document)
+        let Some(metadata) = cache_metadata
+            .get(&(
+                candidate.file_id.clone(),
+                candidate.revision.clone(),
+                candidate.generation_id.clone(),
+            ))
+            .cloned()
         else {
             pinned_bytes = pinned_bytes.saturating_add(candidate.bytes);
             continue;
@@ -1085,7 +1149,7 @@ fn apply_desktop_file_chunk_cache_policy(
     }
 
     {
-        let tx = conn.transaction()?;
+        let tx = conn;
         let now_f64 = now as f64;
         for eviction in &selected {
             let next_revision = maintenance_revision(
@@ -1146,7 +1210,6 @@ fn apply_desktop_file_chunk_cache_policy(
                 .removed_cache_bytes
                 .saturating_add(eviction.candidate.bytes);
         }
-        tx.commit()?;
     }
 
     let live_bytes_after = desktop_file_chunk_cache_live_bytes(conn)?;
@@ -1163,32 +1226,8 @@ fn apply_desktop_file_chunk_cache_policy(
     state.last_deleted_bytes = stats.removed_cache_bytes;
     state.last_deleted_chunks = stats.removed_cache_chunks as u64;
 
-    if stats.removed_cache_bytes >= config.wal_checkpoint_min_bytes
-        && now.saturating_sub(state.last_checkpoint_at_ms)
-            >= config.checkpoint_min_interval_secs.saturating_mul(1_000)
-    {
-        if conn
-            .execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;")
-            .is_ok()
-        {
-            stats.wal_checkpoint_ran = true;
-            state.last_checkpoint_at_ms = now;
-        }
-    }
-
-    let page_size = sqlite_pragma_u64(conn, "page_size").unwrap_or(0);
-    let freelist_count = sqlite_pragma_u64(conn, "freelist_count").unwrap_or(0);
-    let reclaimable_bytes = page_size.saturating_mul(freelist_count);
-    if reclaimable_bytes >= config.vacuum_min_reclaim_bytes
-        && now.saturating_sub(state.last_vacuum_at_ms)
-            >= config.vacuum_min_interval_secs.saturating_mul(1_000)
-    {
-        if conn.execute_batch("VACUUM; PRAGMA optimize;").is_ok() {
-            stats.vacuum_ran = true;
-            state.last_vacuum_at_ms = now;
-        }
-    }
-
+    // Checkpoint/VACUUM cannot execute inside an owner transaction. The
+    // centralized store maintenance scheduler handles physical reclamation.
     save_desktop_file_chunk_cache_state(conn, &state)?;
     Ok(())
 }
@@ -1912,14 +1951,14 @@ pub(super) fn ensure_desktop_file_index_query_indexes_for_root_sync(
     if !database_path.exists() {
         return Ok(());
     }
-    let conn = Connection::open(&database_path)
-        .with_context(|| format!("open RxDB store {}", database_path.display()))?;
-    conn.busy_timeout(Duration::from_secs(10))
-        .context("set RxDB index busy timeout")?;
-    if !sqlite_table_exists(&conn, FILES_TABLE_NAME)? {
-        return Ok(());
-    }
-    ensure_desktop_file_index_query_indexes(&conn)
+    owner_maintenance::submit(&database_path, |tx| {
+        if sqlite_table_exists(tx, FILES_TABLE_NAME)? {
+            ensure_desktop_file_index_query_indexes(tx)?;
+        }
+        Ok(())
+    })?
+    .blocking_wait()?;
+    Ok(())
 }
 
 pub(super) fn load_live_ctox_desktop_file_documents_sync(
