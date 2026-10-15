@@ -164,7 +164,7 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             updates.changed().await?;
             let snapshot = updates.borrow_and_update().clone().unwrap();
-            apply(&db, &[registry.clone()], (*snapshot).clone()).await?;
+            apply(&db, std::slice::from_ref(&registry), (*snapshot).clone()).await?;
             let collection = registry
                 .get("hotplug_notes")
                 .ok_or_else(|| anyhow::anyhow!("new collection is not served"))?;
