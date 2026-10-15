@@ -18,6 +18,13 @@ It runs Pi's real `runAgentLoop` with the upstream coding-agent tool factories
 (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`). It is a turn/session
 primitive, **not** a terminal UI. `pi-tui` is not used.
 
+Each bounded turn supplies one opaque random session ID to Pi's stream options.
+The Responses adapter sends it as `prompt_cache_key` for every model/tool round,
+allowing the gateway to retain the selected account and its prompt cache. Fresh
+turns get independent IDs even when the request/module label is reused; that
+label is correlation metadata, not evidence of a resumed conversation. This
+does not make the sidecar a persistent cross-turn harness.
+
 ## CTOX deltas from the Vercel reference
 
 1. **ExecutionEnv = Business OS app source (not virtualfs).** The `env` is a
