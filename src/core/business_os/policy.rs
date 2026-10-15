@@ -67,7 +67,7 @@ pub enum BusinessOsPermission {
     SessionHandoffExecute,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 36] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 37] = [
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
