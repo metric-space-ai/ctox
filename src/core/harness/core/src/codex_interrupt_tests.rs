@@ -228,3 +228,105 @@ async fn exact_turn_interrupt_removes_cancelled_and_failed_receipts() {
     assert!(client.interrupt_turn("unknown".into()).await.is_err());
     assert!(sess.interrupt_receipts.lock().unwrap().is_empty());
 }
+
+struct CompletionClaimTask {
+    reached_claim: Arc<tokio::sync::Notify>,
+    release_completion: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl SessionTask for CompletionClaimTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.completion_claim"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _: Arc<SessionTaskContext>,
+        _: Arc<TurnContext>,
+        _: Vec<UserInput>,
+        _: CancellationToken,
+    ) -> Option<String> {
+        // Unlike NeverEndingTask, model execution has finished normally.
+        Some("finished normally".into())
+    }
+
+    async fn before_completion_claim(&self, token: &CancellationToken) {
+        self.reached_claim.notify_one();
+        // Freeze exactly after the runner's cancellation check. Cancellation
+        // releases this hook so abort cleanup can observe the runner's real stop.
+        tokio::select! {
+            _ = token.cancelled() => {},
+            _ = self.release_completion.notified() => {},
+        }
+    }
+}
+
+#[tokio::test]
+async fn exact_turn_interrupt_and_completion_have_one_atomic_terminal_winner() {
+    for interrupt_wins in [true, false] {
+        let (sess, tc, events) = make_session_and_context_with_rx().await;
+        let reached_claim = Arc::new(tokio::sync::Notify::new());
+        let release_completion = Arc::new(tokio::sync::Notify::new());
+        sess.spawn_task(
+            Arc::clone(&tc),
+            vec![],
+            CompletionClaimTask {
+                reached_claim: Arc::clone(&reached_claim),
+                release_completion: Arc::clone(&release_completion),
+            },
+        )
+        .await;
+        // Timeouts only bound failures; Notify / CancellationToken order the race.
+        tokio::time::timeout(StdDuration::from_secs(5), reached_claim.notified())
+            .await
+            .expect("normally finished task reaches completion claim");
+        let (client, submissions) = interrupt_client(Arc::clone(&sess), events.clone());
+
+        if !interrupt_wins {
+            release_completion.notify_one();
+            let completed = tokio::time::timeout(StdDuration::from_secs(5), events.recv())
+                .await
+                .expect("completion must be published")
+                .unwrap();
+            assert!(matches!(completed.msg, EventMsg::TurnComplete(ref e)
+                if e.turn_id == tc.sub_id && e.last_agent_message.as_deref() == Some("finished normally")));
+        }
+
+        let caller = Arc::clone(&client);
+        let turn_id = tc.sub_id.clone();
+        let request = tokio::spawn(async move { caller.interrupt_turn(turn_id).await });
+        let submission = submissions.recv().await.expect("exact-turn request queued");
+        let accepted = tokio::time::timeout(
+            StdDuration::from_secs(5),
+            dispatch_interrupt(&sess, submission),
+        )
+        .await
+        .expect("exact-turn stop must resolve");
+        std::assert_eq!(accepted, interrupt_wins);
+        std::assert_eq!(request.await.unwrap().unwrap(), interrupt_wins);
+
+        if interrupt_wins {
+            let aborted = tokio::time::timeout(StdDuration::from_secs(5), events.recv())
+                .await
+                .expect("accepted interrupt must publish its terminal event")
+                .unwrap();
+            assert!(
+                matches!(aborted.msg, EventMsg::TurnAborted(ref e)
+                if e.turn_id.as_deref() == Some(tc.sub_id.as_str()) && e.reason == TurnAbortReason::Interrupted),
+                "accepted interrupt must never also publish TurnComplete: {:?}",
+                aborted.msg
+            );
+        }
+        assert!(
+            events.try_recv().is_err(),
+            "the winner publishes the only terminal event"
+        );
+        assert!(sess.active_turn.lock().await.is_none());
+        assert!(sess.interrupt_receipts.lock().unwrap().is_empty());
+    }
+}
