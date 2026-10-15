@@ -270,15 +270,24 @@ fn rights_change_under_load_rejects_old_authority_before_next_frame() {
     let hash = old.hash().unwrap();
     let authority = Arc::new(FrameAuthority::new(old));
     let start = Arc::new(Barrier::new(5));
+    let warmed = Arc::new(Barrier::new(5));
     let delivered = Arc::new(AtomicUsize::new(0));
     let mut workers = Vec::new();
     for _ in 0..4 {
         let authority = authority.clone();
         let start = start.clone();
+        let warmed = warmed.clone();
         let delivered = delivered.clone();
         let hash = hash.clone();
         workers.push(std::thread::spawn(move || {
             start.wait();
+            authority
+                .with_frame(1, &hash, |_| {
+                    delivered.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .unwrap();
+            warmed.wait();
             for _ in 0..1000 {
                 let _ = authority.with_frame(1, &hash, |_| {
                     delivered.fetch_add(1, Ordering::SeqCst);
@@ -288,8 +297,10 @@ fn rights_change_under_load_rejects_old_authority_before_next_frame() {
         }));
     }
     start.wait();
+    warmed.wait();
     authority.update_committed(|_| Ok(scope(2))).unwrap();
     let at_commit = delivered.load(Ordering::SeqCst);
+    assert!(at_commit >= 4);
     for worker in workers {
         worker.join().unwrap();
     }
@@ -312,4 +323,42 @@ fn failed_rights_publication_cannot_leave_stale_frame_authority_live() {
     let authority = FrameAuthority::new(scope(1));
     assert!(authority.update_committed(|_| Ok(scope(1))).is_err());
     assert!(authority.with_frame(1, &hash, |_| Ok(())).is_err());
+}
+
+#[test]
+fn equivalent_projection_checkpoint_is_still_bound_to_epoch_instance_and_generation() {
+    let old = scope(1);
+    let next = scope(2);
+    let cp = ScopedCheckpoint {
+        instance_id: "i".into(),
+        epoch: "e".into(),
+        collection: "leads".into(),
+        generation: 1,
+        scope_hash: old.hash().unwrap(),
+        seq: 9007199254740993,
+    };
+    assert_eq!(
+        cp.reuse_for(&old, &next, "i", "e", "leads", 1).unwrap(),
+        cp.seq
+    );
+    for (instance, epoch, collection, generation) in [
+        ("foreign", "e", "leads", 1),
+        ("i", "restored", "leads", 1),
+        ("i", "e", "foreign", 1),
+        ("i", "e", "leads", 2),
+    ] {
+        assert_eq!(
+            cp.reuse_for(&old, &next, instance, epoch, collection, generation)
+                .unwrap(),
+            0
+        );
+    }
+    let wire = serde_json::to_value(&cp).unwrap();
+    assert_eq!(wire["seq"], "9007199254740993");
+    let mut forged = cp.clone();
+    forged.scope_hash = "other".into();
+    assert_eq!(
+        forged.reuse_for(&old, &next, "i", "e", "leads", 1).unwrap(),
+        0
+    );
 }
