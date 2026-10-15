@@ -7,8 +7,11 @@ import { createHash } from 'node:crypto';
 import { createStubKernel, createShellKernel } from '../kernel.mjs';
 
 let n = 0;
-async function mk(o = {}) {
+// Jeder Kernel wird auch bei einem roten assert geschlossen: ein offener Kernel hält seinen BroadcastChannel
+// (MessagePort) und damit den Testprozess am Leben – der Test war dann rot, der Lauf endete aber nie (K-1c Punkt 0).
+async function mk(t, o = {}) {
   const k = createStubKernel({ locks: testLocks, instanceId: `k1b${process.pid}-${++n}`, userId: 'u1', latencyMs: 5, ...o });
+  t.after(() => k.close());
   await k.ready;
   return k;
 }
@@ -20,8 +23,8 @@ async function until(pred, ms = 3000) {
 const MOUNT = 'export function mount(){ return { unmount(){} }; }';
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-test('1 §16.19 Nr. 2: activation.reportFailed → failed für diesen Client, Zeiger auf letzte funktionierende Version, app_activation failed', async () => {
-  const k = await mk();
+test('1 §16.19 Nr. 2: activation.reportFailed → failed für diesen Client, Zeiger auf letzte funktionierende Version, app_activation failed', async (t) => {
+  const k = await mk(t);
   const sk = createShellKernel(k);
   await k.sim.publishAppVersion('notes', '1', { files: { 'index.js': MOUNT } });
   await k.sim.publishAppVersion('notes', '2', { files: { 'index.js': `${MOUNT}\n// v2` } });
@@ -38,9 +41,9 @@ test('1 §16.19 Nr. 2: activation.reportFailed → failed für diesen Client, Ze
   await k.close();
 });
 
-test('2 §16.19 Nr. 3: windowState.get/put/del je Tab und Nutzer (IDB window_state), überlebt Neuladen desselben Tabs', async () => {
+test('2 §16.19 Nr. 3: windowState.get/put/del je Tab und Nutzer (IDB window_state), überlebt Neuladen desselben Tabs', async (t) => {
   const instanceId = `k1b-ws-${process.pid}`;
-  const a = await mk({ instanceId, tabKey: 'tab-A' });
+  const a = await mk(t, { instanceId, tabKey: 'tab-A' });
   assert.equal(await a.windowState.get('layout'), null);
   await a.windowState.put('layout', { open: ['notes'], focus: 'notes' });
   assert.deepEqual(await a.windowState.get('layout'), { open: ['notes'], focus: 'notes' });
@@ -48,18 +51,18 @@ test('2 §16.19 Nr. 3: windowState.get/put/del je Tab und Nutzer (IDB window_sta
   assert.deepEqual([row.tab_key, row.user_id], ['tab-A', 'u1']);
   await assert.rejects(a.windowState.put('', 1), (e) => e.code === 'invalid');
   await a.close();
-  const other = await mk({ instanceId, tabKey: 'tab-B' }); // anderer Tab, gleicher Nutzer
+  const other = await mk(t, { instanceId, tabKey: 'tab-B' }); // anderer Tab, gleicher Nutzer
   assert.equal(await other.windowState.get('layout'), null, 'Fensterzustand ist je Tab');
   await other.close();
-  const reload = await mk({ instanceId, tabKey: 'tab-A' }); // derselbe Tab nach Neuladen
+  const reload = await mk(t, { instanceId, tabKey: 'tab-A' }); // derselbe Tab nach Neuladen
   assert.deepEqual(await reload.windowState.get('layout'), { open: ['notes'], focus: 'notes' });
   await reload.windowState.del('layout');
   assert.equal(await reload.windowState.get('layout'), null);
   await reload.close();
 });
 
-test('3 §16.19 Nr. 6: Manifest mit layout (9 Felder) und styles; kernel.apps-Einträge liefern beides', async () => {
-  const k = await mk();
+test('3 §16.19 Nr. 6: Manifest mit layout (9 Felder) und styles; kernel.apps-Einträge liefern beides', async (t) => {
+  const k = await mk(t);
   await k.sim.publishAppVersion('crm', '1', {
     files: { 'index.js': MOUNT, 'styles/app.css': 'p{}' }, title: 'CRM',
     layout: { icon_asset: 'icon.png', category: 'sales', default_width: 960, presentation: 'window' }, styles: ['styles/app.css'],
@@ -76,8 +79,8 @@ test('3 §16.19 Nr. 6: Manifest mit layout (9 Felder) und styles; kernel.apps-Ei
   await k.close();
 });
 
-test('4a §16.22 A6/A9: draft.setCollections(vollständiges Schema) → Diff kompatibel/neu/Generation; Generation ohne Migration → invalid', async () => {
-  const k = await mk();
+test('4a §16.22 A6/A9: draft.setCollections(vollständiges Schema) → Diff kompatibel/neu/Generation; Generation ohne Migration → invalid', async (t) => {
+  const k = await mk(t);
   const leads = { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' } }, required: ['id'] } };
   await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT }, collections: { leads } });
   const src = k.source('crm');
@@ -105,8 +108,8 @@ test('4a §16.22 A6/A9: draft.setCollections(vollständiges Schema) → Diff kom
   await k.close();
 });
 
-test('4b §16.26 + Befund B4: kein manifest.json im Entwurf, fehlende Verweise → invalid, publish erbt alle Basis-Manifest-Felder', async () => {
-  const k = await mk();
+test('4b §16.26 + Befund B4: kein manifest.json im Entwurf, fehlende Verweise → invalid, publish erbt alle Basis-Manifest-Felder', async (t) => {
+  const k = await mk(t);
   const extra = {
     triggers: [{ handler: 'handlers/touch.js', on: { collection: 'leads', op: 'insert' } }], command_rights: { 'crm.*': { roles: ['user'] } },
     foreign_collections: { contacts: 'ctox-platform' }, exports: { leads: ['id'] }, row_filters: { leads: { owner: '$actor' } }, write_guard: { leads: 'own' },
@@ -132,8 +135,8 @@ test('4b §16.26 + Befund B4: kein manifest.json im Entwurf, fehlende Verweise �
   await k.close();
 });
 
-test('5 §16.19 Nr. 3: shell_preferences ist Plattform-Collection (Schema ctox-platform), nur die eigene Zeile', async () => {
-  const k = await mk();
+test('5 §16.19 Nr. 3: shell_preferences ist Plattform-Collection (Schema ctox-platform), nur die eigene Zeile', async (t) => {
+  const k = await mk(t);
   await k.sim.publishAppVersion('shell', '1', { files: { 'index.js': MOUNT } });
   const api = k.appApi('shell', '1');
   const own = await api.put('shell_preferences', { id: 'u1', user_id: 'u1', pins: ['crm'], launcher_order: ['crm', 'notes'] }).result;
@@ -151,14 +154,15 @@ test('5 §16.19 Nr. 3: shell_preferences ist Plattform-Collection (Schema ctox-p
   await k.close();
 });
 
-test('6 Binärartefakte: Uint8Array/Blob/ArrayBuffer, Hash über die Bytes, PNG als image/png lesbar', async () => {
-  const k = await mk();
+test('6 Binärartefakte: Uint8Array/Blob/ArrayBuffer, Hash über die Bytes, PNG als image/png lesbar', async (t) => {
+  const k = await mk(t);
   // 1×1-PNG mit Bytes > 0x7f (würde über String()/UTF-8 verfälscht)
   const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
   await k.sim.publishAppVersion('crm', '1', {
     files: { 'index.js': MOUNT, 'icon.png': png, 'icon2.png': new Blob([png]), 'icon3.png': png.buffer.slice(0) },
     layout: { icon_asset: 'icon.png' },
   });
+  assert.equal(k.apps.get()[0].state, 'activated', 'alle Dateien gegen ihren sha256 geprüft');
   const m = await k.artifacts.manifest('crm', '1');
   for (const p of ['icon.png', 'icon2.png', 'icon3.png']) assert.equal(m.files[p], sha(png), `${p}: sha256 über die Bytes`);
   const blob = await k.artifacts.read(m.files['icon.png']);
@@ -172,4 +176,19 @@ test('6 Binärartefakte: Uint8Array/Blob/ArrayBuffer, Hash über die Bytes, PNG 
   await until(() => k.apps.get()[0].activated_ver === r.rev);
   assert.equal((await k.artifacts.manifest('crm', r.rev)).files['icon-new.png'], sha(png));
   await k.close();
+});
+
+test('0 §16.15a Nr. 3: Hash-Fehlschlag beim Artefaktabruf → einmal neu holen, wiederholt → failed (deterministisch, kein Hängen)', async (t) => {
+  const k = await mk(t);
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 200, 255]);
+  k.sim.corruptNextFetch(1);
+  const ok = await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT, 'icon.png': png } });
+  assert.deepEqual([ok.state, k.sim.refetches], ['activated', 1], 'ein verfälschter Abruf wird neu geholt');
+  k.sim.corruptNextFetch(2);
+  const t0 = Date.now();
+  const bad = await k.sim.publishAppVersion('crm', '2', { files: { 'index.js': `${MOUNT}\n// v2`, 'icon.png': Uint8Array.from([...png, 1]) } });
+  assert.deepEqual([bad.state, bad.target_ver, bad.activated_ver], ['failed', '2', '1']);
+  assert.match(bad.error, /^hash_mismatch:/);
+  assert.ok(Date.now() - t0 < 5000, 'failed ohne Warten auf ein Ereignis, das nie kommt');
+  assert.equal(k.apps.get()[0].activated_ver, '1', 'letzte funktionierende Version läuft weiter');
 });

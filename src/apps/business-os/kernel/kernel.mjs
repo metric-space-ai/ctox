@@ -136,7 +136,8 @@ export function createKernel(opts = {}) {
   const publishing = new Set();
   const doubleWrite = new Map(); // ns_old -> {ns_new, migrate}
   const sim0 = { reject: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map() };
-  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0 };
+  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches: 0 };
+  let corruptNextFetch = 0;
   let readyResolve;
   const ready = new Promise((r) => { readyResolve = r; });
   const preReady = [];
@@ -826,11 +827,18 @@ export function createKernel(opts = {}) {
       const cached=await db.get('artifacts',hash);
       if(cached && await sha256Hex(cached.content)===hash)continue;
       await waitUntil(() => link.state === 'online' || closed);
-      const content = await transport.artifact(hash).then(artifactContent).catch(()=>null);
-      const src = content == null ? null : {content};
-      if (!src) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
-      if ((await sha256Hex(src.content)) !== hash) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `hash_mismatch:${path}` }); return; }
-      await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content: src.content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
+      // §16.15a Nr. 3 (wie Stub): sha256-Fehlschlag → einmal neu über Spur 4 holen, erst wiederholter Fehlschlag → failed.
+      // Jeder Zweig endet in setActivation; kein Warten ohne Ende (K-1c Punkt 0).
+      let content = null;
+      for (let attempt = 0; attempt < 2 && content === null; attempt++) {
+        let got = await transport.artifact(hash).then(artifactContent).catch(() => null);
+        if (got == null) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
+        if (corruptNextFetch > 0) { corruptNextFetch--; got = typeof got === 'string' ? `${got}\n/* beschädigt */` : Uint8Array.from([...got, 0]); }
+        if ((await sha256Hex(got)) === hash) content = got;
+        else simRecord.refetches++;
+      }
+      if (content === null) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `hash_mismatch:${path}` }); return; }
+      await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
     }
     await setActivation(appId, { target_ver: ver, state: 'fetched' });
     const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c));
@@ -1683,6 +1691,9 @@ export function createKernel(opts = {}) {
     get dialogs() { return simRecord.dialogs; },
     get openedFiles() { return simRecord.openedFiles; },
     get staleDiscards() { return simRecord.staleDiscards; },
+    get refetches() { return simRecord.refetches; },
+    /** Die nächsten n Artefakt-Abrufe liefern verfälschte Bytes (§16.15a Nr. 3). */
+    corruptNextFetch(n = 1) { corruptNextFetch += n; },
     async settle(timeoutMs = 10000) {
       const t0 = Date.now();
       for (;;) {
