@@ -166,6 +166,10 @@ impl IncrementalWriteQueue {
                         }
                     }
                 }
+                // Rejected modifiers must not produce hooks, revisions or storage writes.
+                if items.iter().all(|item| item.sender.is_none()) {
+                    continue;
+                }
                 // ref: rxdb/src/incremental-write.ts:121-131
                 let pre_write_result = (self.pre_write)(new_data.clone(), old_data.clone()).await;
                 let new_data = match pre_write_result {
@@ -368,3 +372,42 @@ pub fn find_newest_of_document_states(docs: Vec<Value>) -> Value {
 }
 
 // `RxError` already derives `Clone`; no extra trait needed.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rx_collection::test_support::test_collection_named;
+    use crate::rx_error::new_rx_error;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn rejected_modifier_never_calls_write_hooks() {
+        let collection = test_collection_named("rejected-modifier").await;
+        let writes = Arc::new(AtomicUsize::new(0));
+        let queue = IncrementalWriteQueue::new(
+            collection.storage_instance.clone(),
+            "id".into(),
+            {
+                let writes = writes.clone();
+                Arc::new(move |next, _| {
+                    writes.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move { Ok(next) })
+                })
+            },
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        );
+        let (sender, result) = oneshot::channel();
+        queue.state.lock().await.queue_by_doc_id.insert(
+            "one".into(),
+            vec![QueueItem {
+                last_known_document_state: serde_json::json!({"id":"one","age":1,"_rev":"1-test"}),
+                modifier: Arc::new(|_| Box::pin(async { Err(new_rx_error("DENIED", None)) })),
+                sender: Some(sender),
+            }],
+        );
+        queue.trigger_run().await;
+        assert_eq!(result.await.unwrap().unwrap_err().code(), "DENIED");
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        // The in-memory fixture is dropped with this test runtime.
+    }
+}
