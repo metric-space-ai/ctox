@@ -607,7 +607,9 @@ mod sqlite_build_flags_tests {
 #[cfg(test)]
 mod owner_adapter_tests {
     use super::*;
-    use ctox_store::{registry::Registry, testkit::StoreFixture, writer::WriterOptions, DbId, JobOptions, StoreError};
+    use ctox_store::{
+        registry::Registry, testkit::StoreFixture, writer::WriterOptions, DbId, JobOptions, StoreError,
+    };
 
     async fn adapter(path: &Path) -> Result<CorePersistence> {
         let (writer, readers) = StoreFixture::open(DbId::new(path)?).await?.into_parts();
