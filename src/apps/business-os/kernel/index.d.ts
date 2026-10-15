@@ -417,7 +417,10 @@ export interface ShellKernelApi {
   };
   /** §16.39 Nr. 2: SW-Nachrichten; im Browser automatisch an navigator.serviceWorker gebunden. */
   libs: {
-    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
+    /** §16.50: bedient lib-miss unabhängig vom auslösenden Client (Fenster/Worker). Antwort über den Port:
+     *  {type:'ctox:lib-ready', lib, ver, path, sha, mime, size, body: ArrayBuffer} (sha256-geprüft) oder {type:'ctox:lib-abort', reason}
+     *  (hash_mismatch | not_found | manifest | invalid | artifact_missing | timeout – vor den 15 s des SW). */
+    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string; client_id?: string; client_type?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
     resolve(name: string, major: string | number): string | null;
     enforceBudget(): Promise<string[]>;
     readonly byteBudget: number;
@@ -730,4 +733,6 @@ export interface ArtifactBinding {
   readonly libs: Readonly<Record<string, string>>;
   readonly root: string;
   url(path: string): string;
+  /** §16.50: gleich-ursprüngliche Worker-URL unter der gebundenen Lib-Wurzel `/~a/lib:<name>@<M.m>[~lib:…]/<path>` (nie data:/blob:); nicht gebunden → not_found. */
+  workerUrl(lib: string, path: string): string;
 }
