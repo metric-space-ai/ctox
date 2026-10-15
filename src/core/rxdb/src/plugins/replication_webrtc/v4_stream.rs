@@ -96,6 +96,7 @@ pub struct StreamPacket {
     pub sig: Vec<u8>,
 }
 /// Production implementations fetch/use the instance key through the native secret provider.
+/// The provider pins one immutable instance/key identity for the packet's signing lifetime.
 /// There is deliberately no default signer, environment key, or caller-supplied key material.
 pub trait InstanceSigner: Send + Sync {
     fn instance_id(&self) -> &str;
@@ -258,7 +259,17 @@ pub enum ClientMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
     WriteResult(WriteResult),
-    HelloOk(ClockReply),
+    HelloOk(HelloOk),
+}
+/// Scope token values are issued/validated by P6, never minted by this codec.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloOk {
+    pub epoch: String,
+    pub head_seq: Seq,
+    pub scope_tokens: Vec<Value>,
+    pub rights_ver: u64,
+    pub clock: ClockReply,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

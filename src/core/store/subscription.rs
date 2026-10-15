@@ -85,6 +85,8 @@ impl Subscription {
     pub fn key(&self) -> &SubscriptionKey {
         &self.key
     }
+    /// Sender read position only, never proof of recipient persistence.
+    /// Reconnect MUST use the recipient's durable checkpoint, not this position.
     pub fn checkpoint(&self) -> Option<Checkpoint> {
         self.epoch.as_ref().map(|epoch| Checkpoint {
             instance_id: self
@@ -232,8 +234,7 @@ pub trait WriteAuthority: Send + Sync {
         participant: &str,
         request: &Write,
     ) -> rusqlite::Result<WritePermission>;
-    /// Trusted semantic migration seam. None rejects stale schema/generation input.
-    /// Implementations must use already prepared, revision-bound output; no I/O or JS in the writer.
+    /// Validate the final current-schema document and write guards. Reject reasons are public machine codes.
     fn validate_document(
         &self,
         tx: &Transaction<'_>,
@@ -241,6 +242,8 @@ pub trait WriteAuthority: Send + Sync {
         collection: &crate::schema::Collection,
         document: &Value,
     ) -> rusqlite::Result<WritePermission>;
+    /// Trusted semantic migration seam. None is a terminal migration_required rejection.
+    /// Use prepared, revision-bound output; no I/O or JS in the writer. A transient unavailable runner returns Err.
     fn migrate(
         &self,
         _tx: &Transaction<'_>,
@@ -354,6 +357,17 @@ pub fn apply_write(
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
             }
+            let predecessor_time = operation_time(previous)?;
+            if now_ms.saturating_sub(predecessor_time) > OP_HORIZON_MS {
+                let result = rejected(request, "expired");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
+            if predecessor_time > now_ms.saturating_add(300_000) {
+                let result = rejected(request, "invalid_predecessor");
+                remember(tx, participant, request, &result, now_ms)?;
+                return Ok(result);
+            }
             let previous_row: Option<(String, String, String, u64, String)> = tx
                 .query_row(
                     "SELECT participant,collection,id,gen,result_json FROM _ops WHERE op_id=?1",
@@ -362,9 +376,6 @@ pub fn apply_write(
                 )
                 .optional()?;
             let Some((owner, collection, id, gen, json)) = previous_row else {
-                if now_ms.saturating_sub(operation_time(previous)?) > OP_HORIZON_MS {
-                    return Ok(rejected(request, "expired"));
-                }
                 return Err(invalid("pending_predecessor"));
             };
             let previous_result: WriteResult =
