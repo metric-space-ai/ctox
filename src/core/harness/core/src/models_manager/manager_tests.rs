@@ -1,30 +1,10 @@
 use super::*;
 use crate::CodexAuth;
-use crate::auth::AuthCredentialsStoreMode;
 use crate::config::ConfigBuilder;
-use crate::model_provider_info::WireApi;
-use base64::Engine as _;
-use chrono::Utc;
-use core_test_support::responses::mount_models_once;
-use ctox_api::TransportError;
 use ctox_protocol::openai_models::ModelsResponse;
-use http::HeaderMap;
-use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use tempfile::tempdir;
-use tracing::Event;
-use tracing::Subscriber;
-use tracing::field::Visit;
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
-use wiremock::MockServer;
 
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
@@ -62,79 +42,13 @@ fn remote_model_with_visibility(
         .expect("valid model")
 }
 
-fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
-    for model in expected {
-        assert!(
-            actual.iter().any(|candidate| candidate.slug == model.slug),
-            "expected model {} in cached list",
-            model.slug
-        );
-    }
-}
 
-fn provider_for(base_url: String) -> ModelProviderInfo {
-    ModelProviderInfo {
-        name: "mock".into(),
-        base_url: Some(base_url),
-        transport_endpoint: None,
-        socket_transport_required: false,
-        env_key: None,
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        wire_api: WireApi::Responses,
-        requires_full_responses_history: false,
-        query_params: None,
-        http_headers: None,
-        env_http_headers: None,
-        request_max_retries: Some(0),
-        stream_max_retries: Some(0),
-        stream_idle_timeout_ms: Some(5_000),
-        websocket_connect_timeout_ms: None,
-        requires_openai_auth: false,
-        supports_websockets: false,
-    }
-}
 
-#[derive(Default)]
-struct TagCollectorVisitor {
-    tags: BTreeMap<String, String>,
-}
 
-impl Visit for TagCollectorVisitor {
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.tags
-            .insert(field.name().to_string(), value.to_string());
-    }
 
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.tags
-            .insert(field.name().to_string(), value.to_string());
-    }
 
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.tags
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
 
-#[derive(Clone)]
-struct TagCollectorLayer {
-    tags: Arc<Mutex<BTreeMap<String, String>>>,
-}
 
-impl<S> Layer<S> for TagCollectorLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != "feedback_tags" {
-            return;
-        }
-        let mut visitor = TagCollectorVisitor::default();
-        event.record(&mut visitor);
-        self.tags.lock().unwrap().extend(visitor.tags);
-    }
-}
 
 #[tokio::test]
 async fn get_model_info_tracks_fallback_usage() {

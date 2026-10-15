@@ -1,41 +1,13 @@
 use super::*;
-use crate::compact::InitialContextInjection;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::exec::ExecParams;
-use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
-use crate::guardian::GUARDIAN_REVIEWER_NAME;
-use crate::protocol::AskForApproval;
-use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use core_test_support::ctox_linux_sandbox_exe_or_skip;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use ctox_app_server_protocol::ConfigLayerSource;
-use ctox_execpolicy::Decision;
-use ctox_execpolicy::Evaluation;
-use ctox_execpolicy::RuleMatch;
-use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::NetworkPermissions;
 use ctox_protocol::models::PermissionProfile;
-use ctox_protocol::models::ResponseItem;
 use ctox_protocol::models::function_call_output_content_items_to_text;
-use ctox_protocol::permissions::FileSystemSandboxPolicy;
-use ctox_protocol::permissions::NetworkSandboxPolicy;
-use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::fs;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 fn expect_text_output(output: &FunctionToolOutput) -> String {
     function_call_output_content_items_to_text(&output.body).unwrap_or_default()

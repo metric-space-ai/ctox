@@ -17,17 +17,6 @@ fn resource(uri: &str, name: &str) -> Resource {
     .no_annotation()
 }
 
-fn template(uri_template: &str, name: &str) -> ResourceTemplate {
-    rmcp::model::RawResourceTemplate {
-        uri_template: uri_template.to_string(),
-        name: name.to_string(),
-        title: None,
-        description: None,
-        mime_type: None,
-        icons: None,
-    }
-    .no_annotation()
-}
 
 
 

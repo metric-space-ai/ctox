@@ -1,12 +1,10 @@
 use super::parse_turn_item;
 use ctox_protocol::items::AgentMessageContent;
 use ctox_protocol::items::TurnItem;
-use ctox_protocol::items::WebSearchItem;
 use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::ReasoningItemContent;
 use ctox_protocol::models::ReasoningItemReasoningSummary;
 use ctox_protocol::models::ResponseItem;
-use ctox_protocol::models::WebSearchAction;
 use ctox_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
 

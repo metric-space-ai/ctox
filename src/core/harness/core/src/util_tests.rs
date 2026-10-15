@@ -1,16 +1,4 @@
 use super::*;
-use crate::auth_env_telemetry::AuthEnvTelemetry;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-use tracing::Event;
-use tracing::Subscriber;
-use tracing::field::Visit;
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
 
 #[test]
 fn test_try_parse_error_message() {
@@ -37,48 +25,11 @@ fn test_try_parse_error_message_no_error() {
 }
 
 
-#[derive(Default)]
-struct TagCollectorVisitor {
-    tags: BTreeMap<String, String>,
-}
 
-impl Visit for TagCollectorVisitor {
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.tags
-            .insert(field.name().to_string(), value.to_string());
-    }
 
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.tags
-            .insert(field.name().to_string(), value.to_string());
-    }
 
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.tags
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
 
-#[derive(Clone)]
-struct TagCollectorLayer {
-    tags: Arc<Mutex<BTreeMap<String, String>>>,
-    event_count: Arc<Mutex<usize>>,
-}
 
-impl<S> Layer<S> for TagCollectorLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != "feedback_tags" {
-            return;
-        }
-        let mut visitor = TagCollectorVisitor::default();
-        event.record(&mut visitor);
-        self.tags.lock().unwrap().extend(visitor.tags);
-        *self.event_count.lock().unwrap() += 1;
-    }
-}
 
 
 

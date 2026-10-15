@@ -2,20 +2,15 @@ use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
-use crate::shell::Shell;
-use crate::shell::ShellType;
 use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
 use ctox_app_server_protocol::AppInfo;
-use ctox_protocol::openai_models::InputModality;
 use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ModelsResponse;
 use ctox_protocol::protocol::ReadOnlyAccess;
 use ctox_protocol::protocol::SubAgentSource;
-use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::path::PathBuf;
 
 use super::*;
 
@@ -27,32 +22,7 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
     )
 }
 
-fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
-    let slug = name.replace(' ', "-").to_lowercase();
-    DiscoverableTool::Connector(Box::new(AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: Some(format!("https://chatgpt.com/apps/{slug}/{id}")),
-        is_accessible: false,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }))
-}
 
-fn search_capable_model_info() -> ModelInfo {
-    let config = test_config();
-    let mut model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    model_info.supports_search_tool = true;
-    model_info
-}
 
 #[test]
 fn channel_tools_are_registered_in_default_tool_router() {
@@ -373,44 +343,7 @@ fn find_tool<'a>(tools: &'a [ConfiguredToolSpec], expected_name: &str) -> &'a Co
         .unwrap_or_else(|| panic!("expected tool {expected_name}"))
 }
 
-fn strip_descriptions_schema(schema: &mut JsonSchema) {
-    match schema {
-        JsonSchema::Boolean { description }
-        | JsonSchema::String { description }
-        | JsonSchema::Number { description, .. } => {
-            *description = None;
-        }
-        JsonSchema::Array { items, description } => {
-            strip_descriptions_schema(items);
-            *description = None;
-        }
-        JsonSchema::Object {
-            properties,
-            required: _,
-            additional_properties,
-        } => {
-            for v in properties.values_mut() {
-                strip_descriptions_schema(v);
-            }
-            if let Some(AdditionalProperties::Schema(s)) = additional_properties {
-                strip_descriptions_schema(s);
-            }
-        }
-    }
-}
 
-fn strip_descriptions_tool(spec: &mut ToolSpec) {
-    match spec {
-        ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
-        ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
-            strip_descriptions_schema(parameters);
-        }
-        ToolSpec::Freeform(_)
-        | ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
-        | ToolSpec::WebSearch { .. } => {}
-    }
-}
 
 fn model_info_from_models_json(slug: &str) -> ModelInfo {
     let config = test_config();
@@ -614,56 +547,7 @@ fn read_only_sessions_omit_mutating_builtin_tools() {
 
 
 
-fn assert_model_tools(
-    model_slug: &str,
-    features: &Features,
-    web_search_mode: Option<WebSearchMode>,
-    expected_tools: &[&str],
-) {
-    let _config = test_config();
-    let model_info = model_info_from_models_json(model_slug);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features,
-        web_search_mode,
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let router = ToolRouter::from_config(
-        &tools_config,
-        ToolRouterParams {
-            mcp_tools: None,
-            app_tools: None,
-            discoverable_tools: None,
-            dynamic_tools: &[],
-        },
-    );
-    let model_visible_specs = router.model_visible_specs();
-    let tool_names = model_visible_specs
-        .iter()
-        .map(ToolSpec::name)
-        .collect::<Vec<_>>();
-    assert_eq!(&tool_names, &expected_tools,);
-}
 
-fn assert_default_model_tools(
-    model_slug: &str,
-    features: &Features,
-    web_search_mode: Option<WebSearchMode>,
-    shell_tool: &'static str,
-    expected_tail: &[&str],
-) {
-    let mut expected = if features.enabled(Feature::UnifiedExec) {
-        vec!["exec_command", "write_stdin"]
-    } else {
-        vec![shell_tool]
-    };
-    expected.extend(expected_tail);
-    assert_model_tools(model_slug, features, web_search_mode, &expected);
-}
 
 #[test]
 fn ctox_web_tools_are_hidden_by_default() {

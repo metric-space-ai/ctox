@@ -264,8 +264,6 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 mod tests {
     use super::*;
     use ctox_core::AnalyticsEventsClient;
-    use ctox_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
-    use ctox_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;

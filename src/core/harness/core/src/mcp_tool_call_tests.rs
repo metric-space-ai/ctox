@@ -1,23 +1,8 @@
 use super::*;
 use crate::codex::make_session_and_context;
-use crate::config::ApprovalsReviewer;
-use crate::config::ConfigToml;
-use crate::config::types::AppConfig;
-use crate::config::types::AppToolConfig;
-use crate::config::types::AppToolsConfig;
-use crate::config::types::AppsConfigToml;
-use core_test_support::responses::ev_assistant_message;
-use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_sse_once;
-use core_test_support::responses::sse;
-use core_test_support::responses::start_mock_server;
-use ctox_config::CONFIG_TOML_FILE;
 use pretty_assertions::assert_eq;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 fn annotations(
     read_only: Option<bool>,
@@ -27,33 +12,7 @@ fn annotations(
     ToolAnnotations::from_raw(None, read_only, destructive, None, open_world)
 }
 
-fn approval_metadata(
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
-    connector_description: Option<&str>,
-    tool_title: Option<&str>,
-    tool_description: Option<&str>,
-) -> McpToolApprovalMetadata {
-    McpToolApprovalMetadata {
-        annotations: None,
-        connector_id: connector_id.map(str::to_string),
-        connector_name: connector_name.map(str::to_string),
-        connector_description: connector_description.map(str::to_string),
-        tool_title: tool_title.map(str::to_string),
-        tool_description: tool_description.map(str::to_string),
-        codex_apps_meta: None,
-    }
-}
 
-fn prompt_options(
-    allow_session_remember: bool,
-    allow_persistent_approval: bool,
-) -> McpToolApprovalPromptOptions {
-    McpToolApprovalPromptOptions {
-        allow_session_remember,
-        allow_persistent_approval,
-    }
-}
 
 struct NativeEmissionProbe {
     thread: String,

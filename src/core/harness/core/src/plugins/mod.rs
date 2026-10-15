@@ -7,8 +7,6 @@ mod marketplace;
 mod remote;
 mod render;
 mod store;
-#[cfg(test)]
-pub(crate) mod test_support;
 mod toggles;
 
 pub(crate) use curated_repo::curated_plugins_repo_path;

@@ -7,8 +7,6 @@ use pretty_assertions::assert_eq;
 use crate::codex::make_session_and_context;
 use crate::exec_env::create_env;
 use crate::is_safe_command::is_known_safe_command;
-use crate::powershell::try_find_powershell_executable_blocking;
-use crate::powershell::try_find_pwsh_executable_blocking;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -17,14 +15,6 @@ use crate::tools::handlers::ShellCommandHandler;
 use tokio::sync::watch;
 
 
-fn assert_safe(shell: &Shell, command: &str) {
-    assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ true)
-    ));
-    assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ false)
-    ));
-}
 
 #[tokio::test]
 async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {

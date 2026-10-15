@@ -1,6 +1,4 @@
 use super::*;
-use ctox_protocol::models::ContentItem;
-use pretty_assertions::assert_eq;
 
 
 #[test]

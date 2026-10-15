@@ -9,7 +9,6 @@ use ctox_protocol::permissions::FileSystemPath;
 use ctox_protocol::permissions::FileSystemSandboxEntry;
 use ctox_protocol::permissions::FileSystemSpecialPath;
 use ctox_protocol::protocol::AskForApproval;
-use ctox_protocol::protocol::GranularApprovalConfig;
 use ctox_protocol::protocol::SandboxPolicy;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -581,45 +580,4 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
     );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-fn derive_requested_execpolicy_amendment_for_test(
-    prefix_rule: Option<&Vec<String>>,
-    matched_rules: &[RuleMatch],
-) -> Option<ExecPolicyAmendment> {
-    let commands = prefix_rule
-        .cloned()
-        .map(|prefix_rule| vec![prefix_rule])
-        .unwrap_or_else(|| vec![vec!["echo".to_string()]]);
-    derive_requested_execpolicy_amendment_from_prefix_rule(
-        prefix_rule,
-        matched_rules,
-        &Policy::empty(),
-        &commands,
-        &|_: &[String]| Decision::Allow,
-        &MatchOptions::default(),
-    )
-}
-
-
-
-
-
-
-
-
-
-fn vec_str(items: &[&str]) -> Vec<String> {
-    items.iter().map(std::string::ToString::to_string).collect()
 }

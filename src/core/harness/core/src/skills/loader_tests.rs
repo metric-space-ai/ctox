@@ -10,10 +10,6 @@ use crate::config_loader::ConfigRequirementsToml;
 use ctox_config::CONFIG_TOML_FILE;
 use ctox_protocol::config_types::TrustLevel;
 use ctox_protocol::models::FileSystemPermissions;
-use ctox_protocol::models::MacOsAutomationPermission;
-use ctox_protocol::models::MacOsContactsPermission;
-use ctox_protocol::models::MacOsPreferencesPermission;
-use ctox_protocol::models::MacOsSeatbeltProfileExtensions;
 use ctox_protocol::models::PermissionProfile;
 use ctox_protocol::protocol::SkillScope;
 use ctox_utils_absolute_path::AbsolutePathBuf;
@@ -292,9 +288,6 @@ fn write_skill_metadata_at(skill_dir: &Path, contents: &str) -> PathBuf {
     path
 }
 
-fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
-    write_skill_metadata_at(skill_dir, contents)
-}
 
 
 

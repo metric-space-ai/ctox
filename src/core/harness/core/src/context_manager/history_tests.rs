@@ -3,7 +3,6 @@ use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use ctox_git::GhostCommit;
 use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::FunctionCallOutputBody;

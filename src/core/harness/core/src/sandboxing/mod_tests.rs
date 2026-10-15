@@ -5,13 +5,8 @@ use super::effective_file_system_sandbox_policy;
 #[cfg(target_os = "macos")]
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
-use super::normalize_additional_permissions;
-use super::sandbox_policy_with_additional_permissions;
 use super::should_require_platform_sandbox;
 use crate::exec::SandboxType;
-use crate::protocol::NetworkAccess;
-use crate::protocol::ReadOnlyAccess;
-use crate::protocol::SandboxPolicy;
 use crate::tools::sandboxing::SandboxablePreference;
 use ctox_protocol::config_types::WindowsSandboxLevel;
 use ctox_protocol::models::FileSystemPermissions;
@@ -23,7 +18,6 @@ use ctox_protocol::models::MacOsContactsPermission;
 use ctox_protocol::models::MacOsPreferencesPermission;
 #[cfg(target_os = "macos")]
 use ctox_protocol::models::MacOsSeatbeltProfileExtensions;
-use ctox_protocol::models::NetworkPermissions;
 use ctox_protocol::models::PermissionProfile;
 use ctox_protocol::permissions::FileSystemAccessMode;
 use ctox_protocol::permissions::FileSystemPath;
@@ -34,15 +28,10 @@ use ctox_protocol::permissions::NetworkSandboxPolicy;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 #[cfg(unix)]
 use std::path::Path;
 use tempfile::TempDir;
 
-#[cfg(unix)]
-fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(original, link)
-}
 
 #[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {

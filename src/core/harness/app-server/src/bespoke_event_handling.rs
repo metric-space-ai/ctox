@@ -2726,28 +2726,15 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use ctox_app_server_protocol::GuardianApprovalReviewStatus;
-    use ctox_app_server_protocol::JSONRPCErrorError;
     use ctox_app_server_protocol::TurnPlanStepStatus;
-    use ctox_protocol::mcp::CallToolResult;
-    use ctox_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
-    use ctox_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use ctox_protocol::plan_tool::PlanItemArg;
     use ctox_protocol::plan_tool::StepStatus;
-    use ctox_protocol::protocol::CollabResumeBeginEvent;
-    use ctox_protocol::protocol::CollabResumeEndEvent;
     use ctox_protocol::protocol::CreditsSnapshot;
-    use ctox_protocol::protocol::McpInvocation;
     use ctox_protocol::protocol::RateLimitSnapshot;
     use ctox_protocol::protocol::RateLimitWindow;
     use ctox_protocol::protocol::TokenUsage;
     use ctox_protocol::protocol::TokenUsageInfo;
-    use ctox_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use rmcp::model::Content;
-    use serde_json::Value as JsonValue;
-    use serde_json::json;
-    use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
 

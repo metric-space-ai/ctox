@@ -1,8 +1,6 @@
 use crate::shell::ShellType;
 
 use super::*;
-use core_test_support::test_path_buf;
-use pretty_assertions::assert_eq;
 
 fn fake_shell() -> Shell {
     Shell {

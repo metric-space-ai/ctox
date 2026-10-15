@@ -1,8 +1,3 @@
-use ctox_api::ResponsesApiRequest;
-use ctox_api::common::OpenAiVerbosity;
-use ctox_api::common::TextControls;
-use ctox_api::create_text_param_for_request;
-use ctox_protocol::config_types::ServiceTier;
 use ctox_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
 

@@ -16,8 +16,6 @@ use bm25::SearchEngineBuilder;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-#[cfg(test)]
-use crate::client_common::tools::ResponsesApiTool;
 
 pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,

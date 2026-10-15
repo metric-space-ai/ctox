@@ -2,18 +2,11 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config::types::ApprovalsReviewer;
-use crate::config::types::BundledSkillsConfig;
-use crate::config::types::FeedbackConfigToml;
-use crate::config::types::HistoryPersistence;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::MemoriesConfig;
-use crate::config::types::MemoriesToml;
 use crate::config::types::ModelAvailabilityNuxConfig;
-use crate::config::types::NotificationMethod;
-use crate::config::types::Notifications;
 use crate::config_loader::RequirementSource;
 use crate::features::Feature;
-use assert_matches::assert_matches;
 use ctox_config::CONFIG_TOML_FILE;
 use ctox_protocol::permissions::FileSystemAccessMode;
 use ctox_protocol::permissions::FileSystemPath;
@@ -21,7 +14,6 @@ use ctox_protocol::permissions::FileSystemSandboxEntry;
 use ctox_protocol::permissions::FileSystemSandboxPolicy;
 use ctox_protocol::permissions::FileSystemSpecialPath;
 use ctox_protocol::permissions::NetworkSandboxPolicy;
-use serde::Deserialize;
 use tempfile::tempdir;
 
 use super::*;
@@ -3159,42 +3151,4 @@ fn test_untrusted_project_gets_unless_trusted_approval_policy() -> anyhow::Resul
     }
 
     Ok(())
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct TuiTomlTest {
-    #[serde(default)]
-    notifications: Notifications,
-    #[serde(default)]
-    notification_method: NotificationMethod,
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-struct RootTomlTest {
-    tui: TuiTomlTest,
 }

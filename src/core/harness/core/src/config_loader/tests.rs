@@ -3,27 +3,17 @@ use super::load_config_layers_state;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConfigToml;
-use crate::config::ConstraintError;
 use crate::config::ProjectConfig;
-use crate::config_loader::CloudRequirementsLoadError;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLoadError;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::ConfigRequirementsWithSources;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
 use ctox_config::CONFIG_TOML_FILE;
 use ctox_protocol::config_types::TrustLevel;
-use ctox_protocol::config_types::WebSearchMode;
-use ctox_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
 use ctox_protocol::protocol::SandboxPolicy;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use tempfile::tempdir;
@@ -868,51 +858,16 @@ mod requirements_exec_policy_tests {
     use crate::config_loader::ConfigRequirementsToml;
     use crate::config_loader::ConfigRequirementsWithSources;
     use crate::config_loader::RequirementSource;
-    use crate::exec_policy::load_exec_policy;
     use ctox_app_server_protocol::ConfigLayerSource;
-    use ctox_config::RequirementsExecPolicyDecisionToml;
-    use ctox_config::RequirementsExecPolicyParseError;
-    use ctox_config::RequirementsExecPolicyPatternTokenToml;
-    use ctox_config::RequirementsExecPolicyPrefixRuleToml;
-    use ctox_config::RequirementsExecPolicyToml;
     use ctox_execpolicy::Decision;
-    use ctox_execpolicy::Evaluation;
-    use ctox_execpolicy::RuleMatch;
     use ctox_utils_absolute_path::AbsolutePathBuf;
-    use pretty_assertions::assert_eq;
     use std::path::Path;
-    use tempfile::tempdir;
     use toml::Value as TomlValue;
     use toml::from_str;
 
-    fn tokens(cmd: &[&str]) -> Vec<String> {
-        cmd.iter().map(std::string::ToString::to_string).collect()
-    }
 
-    fn panic_if_called(_: &[String]) -> Decision {
-        panic!("rule should match so heuristic should not be called");
-    }
 
-    fn config_stack_for_dot_codex_folder_with_requirements(
-        dot_codex_folder: &Path,
-        requirements: ConfigRequirements,
-    ) -> ConfigLayerStack {
-        let dot_codex_folder = AbsolutePathBuf::from_absolute_path(dot_codex_folder)
-            .expect("absolute dot_codex_folder");
-        let layer = ConfigLayerEntry::new(
-            ConfigLayerSource::Project { dot_codex_folder },
-            TomlValue::Table(Default::default()),
-        );
-        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())
-            .expect("ConfigLayerStack")
-    }
 
-    fn requirements_from_toml(toml_str: &str) -> ConfigRequirements {
-        let config: ConfigRequirementsToml = from_str(toml_str).expect("parse requirements toml");
-        let mut with_sources = ConfigRequirementsWithSources::default();
-        with_sources.merge_unset_fields(RequirementSource::Unknown, config);
-        ConfigRequirements::try_from(with_sources).expect("requirements")
-    }
 
 
 

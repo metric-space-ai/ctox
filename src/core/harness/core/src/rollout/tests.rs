@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::FileTimes;
 use std::fs::{self};
@@ -23,8 +22,6 @@ use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
-use crate::rollout::list::read_head_for_summary;
-use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use ctox_protocol::ThreadId;
 use ctox_protocol::models::ContentItem;
@@ -423,47 +420,6 @@ fn write_session_file_with_delayed_user_event(
     Ok(())
 }
 
-fn write_session_file_with_meta_payload(
-    root: &Path,
-    ts_str: &str,
-    uuid: Uuid,
-    payload: serde_json::Value,
-) -> std::io::Result<()> {
-    let format: &[FormatItem] =
-        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-    let dt = PrimitiveDateTime::parse(ts_str, format)
-        .unwrap()
-        .assume_utc();
-    let dir = root
-        .join("sessions")
-        .join(format!("{:04}", dt.year()))
-        .join(format!("{:02}", u8::from(dt.month())))
-        .join(format!("{:02}", dt.day()));
-    fs::create_dir_all(&dir)?;
-
-    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
-    let file_path = dir.join(filename);
-    let mut file = File::create(file_path)?;
-
-    let meta = serde_json::json!({
-        "timestamp": ts_str,
-        "type": "session_meta",
-        "payload": payload,
-    });
-    writeln!(file, "{meta}")?;
-
-    let user_event = serde_json::json!({
-        "timestamp": ts_str,
-        "type": "event_msg",
-        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
-    });
-    writeln!(file, "{user_event}")?;
-
-    let times = FileTimes::new().set_modified(dt.into());
-    file.set_times(times)?;
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn test_list_conversations_latest_first() {

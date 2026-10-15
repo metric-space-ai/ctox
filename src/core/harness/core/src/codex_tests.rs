@@ -2,15 +2,9 @@ use super::*;
 use crate::CodexAuth;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::NetworkConstraints;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::Sourced;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
@@ -24,16 +18,9 @@ use ctox_protocol::permissions::FileSystemSandboxPolicy;
 use ctox_protocol::permissions::FileSystemSpecialPath;
 use ctox_protocol::protocol::ReadOnlyAccess;
 use ctox_protocol::protocol::SandboxPolicy;
-use ctox_protocol::request_permissions::PermissionGrantScope;
-use ctox_protocol::request_permissions::RequestPermissionProfile;
-use tracing::Span;
 
 use crate::protocol::CompactedItem;
-use crate::protocol::CreditsSnapshot;
 use crate::protocol::InitialHistory;
-use crate::protocol::NetworkApprovalProtocol;
-use crate::protocol::RateLimitSnapshot;
-use crate::protocol::RateLimitWindow;
 use crate::protocol::ResumedHistory;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
@@ -57,29 +44,18 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use ctox_app_server_protocol::AppInfo;
-use ctox_execpolicy::Decision;
-use ctox_execpolicy::NetworkRuleProtocol;
-use ctox_execpolicy::Policy;
-use ctox_network_proxy::NetworkProxyConfig;
 use ctox_otel::TelemetryAuthMode;
 use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::DeveloperInstructions;
 use ctox_protocol::models::ResponseInputItem;
 use ctox_protocol::models::ResponseItem;
-use ctox_protocol::openai_models::ModelsResponse;
-use ctox_protocol::protocol::ConversationAudioParams;
-use ctox_protocol::protocol::RealtimeAudioFrame;
 use ctox_protocol::protocol::Submission;
-use ctox_protocol::protocol::W3cTraceContext;
-use opentelemetry::trace::TraceContextExt;
-use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::prelude::*;
 
 use ctox_protocol::mcp::CallToolResult as McpCallToolResult;
@@ -105,10 +81,6 @@ fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
     function_call_output_content_items_to_text(&output.body).unwrap_or_default()
 }
 
-struct InstructionsTestCase {
-    slug: &'static str,
-    expects_apply_patch_instructions: bool,
-}
 
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -134,17 +106,6 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
-fn skill_message(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    }
-}
 
 #[tokio::test]
 async fn regular_turn_emits_turn_started_without_waiting_for_startup_prewarm() {
@@ -248,54 +209,8 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
     .new_session()
 }
 
-fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
-    items
-        .iter()
-        .filter_map(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "developer" => {
-                Some(content.as_slice())
-            }
-            _ => None,
-        })
-        .flat_map(|content| content.iter())
-        .filter_map(|item| match item {
-            ContentItem::InputText { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect()
-}
 
-fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
-    let router = Arc::new(ToolRouter::from_config(
-        &turn_context.tools_config,
-        crate::tools::router::ToolRouterParams {
-            mcp_tools: None,
-            app_tools: None,
-            discoverable_tools: None,
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    ));
-    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    ToolCallRuntime::new(router, session, turn_context, tracker)
-}
 
-fn make_connector(id: &str, name: &str) -> AppInfo {
-    AppInfo {
-        id: id.to_string(),
-        name: name.to_string(),
-        description: None,
-        logo_url: None,
-        logo_url_dark: None,
-        distribution_channel: None,
-        branding: None,
-        app_metadata: None,
-        labels: None,
-        install_url: None,
-        is_accessible: true,
-        is_enabled: true,
-        plugin_display_names: Vec::new(),
-    }
-}
 
 #[test]
 fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() {
@@ -1454,17 +1369,6 @@ fn text_block(s: &str) -> serde_json::Value {
     })
 }
 
-fn init_test_tracing() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let provider = SdkTracerProvider::builder().build();
-        let tracer = provider.tracer("ctox-core-tests");
-        let subscriber =
-            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("global tracing subscriber should only be installed once");
-    });
-}
 
 async fn build_test_config(codex_home: &Path) -> Config {
     ConfigBuilder::default()

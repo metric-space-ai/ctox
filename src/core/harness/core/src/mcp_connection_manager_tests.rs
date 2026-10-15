@@ -1,10 +1,8 @@
 use super::*;
 use ctox_protocol::protocol::GranularApprovalConfig;
-use ctox_protocol::protocol::McpAuthStatus;
 use rmcp::model::JsonObject;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     ToolInfo {
@@ -27,32 +25,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
     }
 }
 
-fn create_test_tool_with_connector(
-    server_name: &str,
-    tool_name: &str,
-    connector_id: &str,
-    connector_name: Option<&str>,
-) -> ToolInfo {
-    let mut tool = create_test_tool(server_name, tool_name);
-    tool.connector_id = Some(connector_id.to_string());
-    tool.connector_name = connector_name.map(ToOwned::to_owned);
-    tool
-}
 
-fn create_codex_apps_tools_cache_context(
-    codex_home: PathBuf,
-    account_id: Option<&str>,
-    chatgpt_user_id: Option<&str>,
-) -> CodexAppsToolsCacheContext {
-    CodexAppsToolsCacheContext {
-        codex_home,
-        user_key: CodexAppsToolsCacheKey {
-            account_id: account_id.map(ToOwned::to_owned),
-            chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
-            is_workspace_account: false,
-        },
-    }
-}
 
 #[test]
 fn elicitation_granular_policy_defaults_to_prompting() {

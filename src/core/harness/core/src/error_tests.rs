@@ -1,7 +1,6 @@
 use super::*;
 use crate::exec::StreamOutput;
 use chrono::DateTime;
-use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
 use ctox_protocol::protocol::RateLimitWindow;
@@ -11,41 +10,7 @@ use reqwest::ResponseBuilderExt;
 use reqwest::StatusCode;
 use reqwest::Url;
 
-fn rate_limit_snapshot() -> RateLimitSnapshot {
-    let primary_reset_at = Utc
-        .with_ymd_and_hms(2024, 1, 1, 1, 0, 0)
-        .unwrap()
-        .timestamp();
-    let secondary_reset_at = Utc
-        .with_ymd_and_hms(2024, 1, 1, 2, 0, 0)
-        .unwrap()
-        .timestamp();
-    RateLimitSnapshot {
-        limit_id: None,
-        limit_name: None,
-        primary: Some(RateLimitWindow {
-            used_percent: 50.0,
-            window_minutes: Some(60),
-            resets_at: Some(primary_reset_at),
-        }),
-        secondary: Some(RateLimitWindow {
-            used_percent: 30.0,
-            window_minutes: Some(120),
-            resets_at: Some(secondary_reset_at),
-        }),
-        credits: None,
-        plan_type: None,
-    }
-}
 
-fn with_now_override<T>(now: DateTime<Utc>, f: impl FnOnce() -> T) -> T {
-    NOW_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = Some(now);
-        let result = f();
-        *cell.borrow_mut() = None;
-        result
-    })
-}
 
 
 #[test]

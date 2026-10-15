@@ -90,14 +90,10 @@ pub(crate) fn telemetry_api_error_message(error: &ApiError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ResponseDebugContext;
-    use super::extract_response_debug_context;
     use super::telemetry_api_error_message;
     use super::telemetry_transport_error_message;
     use ctox_api::TransportError;
     use ctox_api::error::ApiError;
-    use http::HeaderMap;
-    use http::HeaderValue;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
 

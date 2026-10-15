@@ -333,37 +333,7 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) async fn cache_for_test(&self, codex: Codex) {
-        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
-            codex.session.get_config().await.as_ref(),
-        );
-        self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
-            reuse_key,
-            codex,
-            cancel_token: CancellationToken::new(),
-            review_lock: Mutex::new(()),
-            last_committed_rollout_items: Mutex::new(None),
-        }));
-    }
 
-    #[cfg(test)]
-    pub(crate) async fn register_ephemeral_for_test(&self, codex: Codex) {
-        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
-            codex.session.get_config().await.as_ref(),
-        );
-        self.state
-            .lock()
-            .await
-            .ephemeral_reviews
-            .push(Arc::new(GuardianReviewSession {
-                reuse_key,
-                codex,
-                cancel_token: CancellationToken::new(),
-                review_lock: Mutex::new(()),
-                last_committed_rollout_items: Mutex::new(None),
-            }));
-    }
 
     async fn remove_trunk_if_current(
         &self,

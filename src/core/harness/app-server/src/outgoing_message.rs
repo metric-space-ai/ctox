@@ -24,8 +24,6 @@ use tracing::warn;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 
-#[cfg(test)]
-use ctox_protocol::account::PlanType;
 
 pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
 
@@ -632,25 +630,15 @@ pub(crate) struct OutgoingError {
 mod tests {
     use std::time::Duration;
 
-    use ctox_app_server_protocol::AccountLoginCompletedNotification;
-    use ctox_app_server_protocol::AccountRateLimitsUpdatedNotification;
-    use ctox_app_server_protocol::AccountUpdatedNotification;
     use ctox_app_server_protocol::ApplyPatchApprovalParams;
-    use ctox_app_server_protocol::AuthMode;
-    use ctox_app_server_protocol::ConfigWarningNotification;
     use ctox_app_server_protocol::DynamicToolCallParams;
     use ctox_app_server_protocol::FileChangeRequestApprovalParams;
-    use ctox_app_server_protocol::ModelRerouteReason;
-    use ctox_app_server_protocol::ModelReroutedNotification;
-    use ctox_app_server_protocol::RateLimitSnapshot;
-    use ctox_app_server_protocol::RateLimitWindow;
     use ctox_app_server_protocol::ToolRequestUserInputParams;
     use ctox_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::time::timeout;
-    use uuid::Uuid;
 
     use super::*;
 

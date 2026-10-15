@@ -72,5 +72,6 @@ keyring = { workspace = true, features = ["windows-native"] }
 keyring = { workspace = true, features = ["sync-secret-service"] }
 
 [dev-dependencies]
+serial_test = "3.5.0"
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

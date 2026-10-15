@@ -1030,7 +1030,6 @@ pub(crate) fn request_method_name(request: &ClientRequest) -> String {
 mod tests {
     use super::*;
     use ctox_app_server_protocol::ConfigRequirementsReadResponse;
-    use ctox_app_server_protocol::ServerNotification;
     use ctox_app_server_protocol::SessionSource as ApiSessionSource;
     use ctox_app_server_protocol::ThreadStartParams;
     use ctox_app_server_protocol::ThreadStartResponse;

@@ -198,7 +198,6 @@ mod errors {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::Ordering;
 
     use super::Readiness;
     use super::ReadinessFlag;

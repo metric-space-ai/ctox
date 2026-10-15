@@ -1,18 +1,13 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::config::test_config;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::RefreshStrategy;
 use assert_matches::assert_matches;
-use core_test_support::responses::mount_models_once;
 use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::ReasoningItemReasoningSummary;
 use ctox_protocol::models::ResponseItem;
-use ctox_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tempfile::tempdir;
-use wiremock::MockServer;
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {

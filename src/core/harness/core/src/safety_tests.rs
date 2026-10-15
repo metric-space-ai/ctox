@@ -1,11 +1,5 @@
 use super::*;
-use ctox_protocol::protocol::FileSystemAccessMode;
-use ctox_protocol::protocol::FileSystemPath;
-use ctox_protocol::protocol::FileSystemSandboxEntry;
-use ctox_protocol::protocol::FileSystemSpecialPath;
-use ctox_protocol::protocol::GranularApprovalConfig;
 use ctox_utils_absolute_path::AbsolutePathBuf;
-use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[test]

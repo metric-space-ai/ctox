@@ -1,15 +1,7 @@
 use super::*;
 use crate::shell::default_user_shell;
-use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::resolve_workdir_base_path;
-use crate::tools::spec::ZshForkConfig;
-use ctox_protocol::models::FileSystemPermissions;
-use ctox_protocol::models::PermissionProfile;
-use ctox_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::fs;
 use std::sync::Arc;
-use tempfile::tempdir;
 
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {

@@ -3,20 +3,7 @@ use crate::tools::context::ToolInvocation;
 use async_trait::async_trait;
 use pretty_assertions::assert_eq;
 
-struct TestHandler;
 
-#[async_trait]
-impl ToolHandler for TestHandler {
-    type Output = crate::tools::context::FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn handle(&self, _invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        unreachable!("test handler should not be invoked")
-    }
-}
 
 
 #[tokio::test]
