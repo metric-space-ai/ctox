@@ -44,6 +44,11 @@ export async function participant(h, fixture, identity) {
   assert.equal(actual.userId,identity.id,'Server-authenticated identity mismatch');
   assert.equal(actual.role,identity.role,'Role must come from the Core, never a browser override');
   assert.equal(actual.instanceId,fixture.instanceId);
+  const binding=await page.evaluate(()=>({userId:globalThis.__e2eOS.kernel.userId,
+    shellUserId:globalThis.__e2eOS.shell.identity.user_id,
+    transportUserId:globalThis.__e2eOS.transport?.identity?.userId}));
+  assert.equal(binding.userId,identity.id);assert.equal(binding.shellUserId,identity.id);
+  assert.equal(binding.transportUserId,identity.id,'Real WebRTC session must use the requested Core identity');
   await page.evaluate(() => {
     const os=globalThis.__e2eOS, t=os.transport;
     if (!t || !t.channels || !t.session || typeof t.receive !== 'function' || !t.events)

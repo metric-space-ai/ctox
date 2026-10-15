@@ -19,6 +19,7 @@ test('incident acceptance rejects leaked persisted state, incomplete inventory a
   assertInventory(inventory,inventory);
   assert.throws(()=>assertInventory(inventory,inventory.slice(1)),/missing app/);
   assert.throws(()=>p95([]),/Empty/);
+  assert.throws(()=>p95([-1]),/Empty/);
   const rejected={receiverApplied:false,receiverRejected:true,reason:'old_rights_ver',packetSha256:'a'.repeat(64),transportKind:'native-webrtc'};
   assertPeerRejected(rejected);
   assert.throws(()=>assertPeerRejected({...rejected,receiverApplied:true}),/unauthorized peer/);

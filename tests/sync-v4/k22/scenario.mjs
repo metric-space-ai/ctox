@@ -24,20 +24,26 @@ export default {
     if(!f.externalParticipants || !['workjet','mobile','native'].every(kind=>f.externalParticipants.some(p=>p.kind===kind)))
       return notRun('Real Workjet, mobile and native participant routes are required; browser-only is not K22');
     const peers=await Promise.all(f.identities.map(i=>participant(h,f,i)));
-    const first=peers[0],second=peers[1];
+    const first=peers[0];
+    assert.equal(f.peerIdentity?.id,first.identity.id,'Forward between two devices of the same resolved user scope');
+    const second=await participant(h,f,f.peerIdentity);
     assert.equal(first.identity.role,second.identity.role);
     const equal=await control(owner,'participantScopes',{devices:[first.identity.deviceId,second.identity.deviceId]});
     assert.equal(equal[0].scope_hash,equal[1].scope_hash,'Valid forwarding positive control needs equivalent projections');
     assert.notEqual(equal[0].device_id,equal[1].device_id);
+    const writers=f.conflict.writerIds.map(id=>peers.find(p=>p.identity.id===id));
+    assert.equal(writers.length,2);assert.ok(writers.every(Boolean));
+    assert.notEqual(writers[0].identity.id,writers[1].identity.id,'Conflict requires two different users');
     const conflict=await control(owner,'sameBaseWrites',{collection:f.collection,id:f.conflict.id,
-      participants:[first.identity.deviceId,second.identity.deviceId],
+      participants:writers.map(p=>p.identity.deviceId),
       writes:[f.conflict.first,f.conflict.second]});
     assert.equal(conflict.transportKind,'native-webrtc');
     assert.ok(conflict.baseRev && conflict.opIds?.length===2);
     const merged=(await control(owner,'readNative',{collection:f.collection,id:f.conflict.id})).rows;
     assert.equal(merged.length,1);
     for(const [field,value] of Object.entries(f.conflict.expectedMerged))assert.deepEqual(merged[0][field],value,'Disjoint field lost or server collision rule changed');
-    const loser=await rawStore(second.page,'archive_local');
+    const losing=peers.find(p=>p.identity.id===conflict.loserUserId);assert.ok(losing);
+    const loser=await rawStore(losing.page,'archive_local');
     assert.ok(loser.some(r=>r.op_id===conflict.loserOpId),'Collision is not visible in the losing client archive');
     const external=await control(owner,'startParticipants',{participants:f.externalParticipants,stopAfterMs:610000,intervalMs:50});
     assert.ok(external.owner && external.stopAt);
@@ -58,7 +64,7 @@ export default {
         await h.pause(50);
       }
     })());
-    let forwarding,invalid;
+    let forwarding,invalid,externalTerminal;
     try {
       const remaining=async target=>{const wait=start+target-Date.now();if(wait>0)await h.pause(wait);};
       await remaining(300000);
@@ -88,7 +94,9 @@ export default {
       await remaining(600000);
     } finally {
       stopped=true;await Promise.all(producers);
-      const terminal=await control(owner,'stopParticipants',{owner:external.owner});
+      const terminal=await control(owner,'stopParticipants',{owner:external.owner});externalTerminal=terminal;
+      assert.deepEqual(terminal.participants.map(p=>p.kind).sort(),f.externalParticipants.map(p=>p.kind).sort(),
+        'Every configured Workjet/mobile/native route must actually complete');
       assert.ok(terminal.participants.every(p=>p.accepted>0 && p.nativeConfirmed===true),'External participant did not perform real native-confirmed writes');
       assert.deepEqual(terminal.unexpectedRightsFailures,[]);
     }
@@ -100,7 +108,14 @@ export default {
       assertExactScope(await rawStore(p.page,'docs'),f.collection,
         p.identity.id===f.revokedUser?[]:f.expectedIds[p.identity.id],f.maskedFields[p.identity.id]??[]);
     }
+    assertExactScope(await rawStore(second.page,'docs'),f.collection,
+      second.identity.id===f.revokedUser?[]:f.expectedIds[second.identity.id],f.maskedFields[second.identity.id]??[]);
+    for(const participant of externalTerminal.participants) {
+      assert.equal(participant.storage.kind,participant.kind==='native'?'native-scope':'indexeddb');
+      assertExactScope(participant.storage.records,f.collection,
+        participant.userId===f.revokedUser?[]:f.expectedIds[participant.userId],f.maskedFields[participant.userId]??[]);
+    }
     return {status:'measured',pass:true,acceptanceComplete:true,
-      measured:{durationMs,stats,forwarding,invalid,revocation,wire}};
+      measured:{durationMs,stats,forwarding,invalid,revocation,wire,external:externalTerminal}};
   }
 };

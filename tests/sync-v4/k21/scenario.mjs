@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {connect,participant,control,publish,activation,write,rawStore,notRun} from '../k13/native.mjs';
 
 export const p95 = values => {
-  assert.ok(values.length>0 && values.every(Number.isFinite),'Empty/non-finite activation sample');
+  assert.ok(values.length>0 && values.every(v=>Number.isFinite(v) && v>=0),'Empty/non-finite activation sample');
   return [...values].sort((a,b)=>a-b)[Math.ceil(values.length*0.95)-1];
 };
 export function assertInventory(expected,completed) {
@@ -61,8 +61,11 @@ export default {
         assert.ok(['accepted','migrated'].includes(written.result.status));
         const before=await control(owner,'readNative',{collection:app.collection});
         assert.ok(before.rows.some(r=>r.id===app.doc.id),'Positive native write control failed');
-        assert.ok(app.next.collections && app.next.manifest.row_filters && app.next.indexChanged,
-          'Update must change schema field, index and rights, not just a title');
+        const previous=app.previous.collections.collections[app.collection];
+        const next=app.next.collections.collections[app.collection];
+        assert.notDeepEqual(next.indexes,previous.indexes,'The actual published index must change');
+        assert.notDeepEqual(next.properties,previous.properties,'The actual schema fields must change');
+        assert.notDeepEqual(app.next.manifest.row_filters,app.previous.manifest.row_filters,'The actual declarative rights must change');
         const updated=await publish(owner,app.id,app.next,ver);
         assert.ok(['accepted','migrated'].includes(updated.status));
         times.push(...await Promise.all(peers.map(p=>activation(p.page,app.id,updated.rev,updated.committedAtMs))));
@@ -87,8 +90,10 @@ export default {
         assert.deepEqual(exported.rowIds.sort(),balance.rows.map(r=>r.id).sort(),'Archive export lost rows');
         for(let i=0;i<peers.length;i++) {
           assert.equal(await peers[i].page.evaluate(()=>performance.timeOrigin),navigations[i],'Page reloaded');
-          const statuses=await control(peers[i].page,'statusPlacement',{appId:app.id});
-          assert.deepEqual(statuses.outsideStateZone,[],'State text escaped the shell state zone');
+          assert.ok(app.statusSelector && app.stateZoneSelector,'Actual app status/state-zone selectors are required');
+          const outside=await peers[i].page.locator(app.statusSelector).evaluateAll((nodes,zone)=>
+            nodes.filter(node=>node.textContent.trim() && !node.closest(zone)).map(node=>node.textContent),app.stateZoneSelector);
+          assert.deepEqual(outside,[],'State text escaped the shell state zone');
           // Read raw stores as well as live app queries; no mock/local mirror acceptance.
           assert.ok(Array.isArray(await rawStore(peers[i].page,'docs')));
         }
