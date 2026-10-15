@@ -404,6 +404,8 @@ pub(crate) fn emit_scheduled_issue(
     drop(conn);
 
     let session = active_domain_recovery_session(root, &route.owner_user_id)?;
+    let mut payload = generate_payload(&topic, &sources, &issue_id, &issue_date, &command_id);
+    attach_checkpoint(&mut payload, root, &issue_id);
     let accepted = accept_rxdb_business_command_with_origin(
         root,
         json!({
@@ -414,11 +416,7 @@ pub(crate) fn emit_scheduled_issue(
             "record_id": route.topic_id,
             "inbound_channel": "business_os.news",
             "sync_collections": ["news_issues", "news_posts"],
-            "payload": {
-                let mut payload = generate_payload(&topic, &sources, &issue_id, &issue_date, &command_id);
-                attach_checkpoint(&mut payload, root, &issue_id);
-                payload
-            },
+            "payload": payload,
             "client_context": {
                 "actor": super::threads::actor_payload(&session),
                 "source": "native-news-schedule",
