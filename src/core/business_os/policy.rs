@@ -301,8 +301,15 @@ impl PolicyDecision {
     }
 }
 
+/// Actor-less V3 grants cannot bypass the Store decision. Import explicit grants
+/// into _rights with the base release and use evaluate with the actual actor.
 pub fn allow_decision(permission: BusinessOsPermission, scope: &BusinessOsScope) -> PolicyDecision {
-    PolicyDecision::allow(permission, scope)
+    PolicyDecision::deny(
+        permission,
+        scope,
+        "legacy_grant_requires_store_import",
+        "Legacy grant must be imported into current Store rights.",
+    )
 }
 
 pub fn normalize_role(role: &str) -> String {
@@ -320,17 +327,26 @@ pub fn parse_role(role: &str) -> BusinessOsRole {
 }
 
 pub fn role_can_manage(role: &str) -> bool {
-    matches!(
-        parse_role(role),
-        BusinessOsRole::Chef | BusinessOsRole::Admin
+    evaluate(
+        &BusinessOsActor::new(None, role),
+        BusinessOsPermission::WorkspaceBrandingManage,
+        &BusinessOsScope::workspace(),
     )
+    .allowed
 }
 
 pub(crate) fn role_sees_private_crew_fields(role: &str) -> bool {
-    matches!(
-        parse_role(role),
-        BusinessOsRole::Chef | BusinessOsRole::Admin | BusinessOsRole::Founder
-    )
+    with_policy_rights(|rights| {
+        Ok(rights
+            .resolve_collection(
+                parse_role(role).as_str(),
+                "__role_summary__",
+                "ctox_crew_members",
+            )?
+            .projection("ctox_crew_members")
+            .is_some_and(|p| p.field_mask == sync_rights::scope::FieldMask::All))
+    })
+    .unwrap_or(false)
 }
 
 pub(crate) fn crew_fields_for_role(role: &str) -> Option<Vec<String>> {
@@ -346,11 +362,8 @@ pub(crate) fn crew_fields_for_role(role: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Collections that hold administrative / sensitive control data and must not
-/// replicate to non-admin peers. This is a CONSERVATIVE deny-set: every
-/// collection NOT listed here is workspace app data and stays readable by all
-/// roles, so enabling enforcement does not change access to ordinary data.
-/// Refine this matrix as the per-collection sensitivity model is finalized.
+/// Legacy sensitivity classifications used only by the base-release import.
+/// Runtime access is decided from its committed _rights rows, never this list.
 pub const ADMIN_ONLY_COLLECTIONS: &[&str] = &[
     "business_users",
     "business_module_acl",
@@ -380,123 +393,286 @@ pub fn user_readable_cockpit_projection(collection: &str) -> bool {
     matches!(collection, "ctox_crew_members" | "ctox_harness_status")
 }
 
-/// Role-only summary for CLI policy audits. Runtime authorization additionally
-/// checks the actor, permission and scope through `evaluate`.
-pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
-    match role {
-        BusinessOsRole::Chef | BusinessOsRole::Admin => true,
-        BusinessOsRole::Founder => !ADMIN_ONLY_COLLECTIONS.contains(&collection),
-        BusinessOsRole::User => {
-            !ADMIN_ONLY_COLLECTIONS.contains(&collection)
-                && (!is_cockpit_projection(collection)
-                    || user_readable_cockpit_projection(collection))
+/// Base-release import is the only producer of the former default matrix.
+/// Persist its result through StoreRightsAuthority::replace; never call it as
+/// a runtime fallback. Registry supplies every real collection explicitly.
+pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
+    use sync_rights::{
+        scope::{FieldMask, FilterValue, RowFilter},
+        Operation, Right,
+    };
+    fn eq(path: &str, value: Value) -> RowFilter {
+        RowFilter::Eq {
+            path: path.into(),
+            value: FilterValue::Literal { value },
+        }
+    }
+    fn or(filters: Vec<RowFilter>) -> RowFilter {
+        RowFilter::Or { filters }
+    }
+    fn and(filters: Vec<RowFilter>) -> RowFilter {
+        RowFilter::And { filters }
+    }
+    let mut rows = Vec::new();
+    for role in [
+        BusinessOsRole::Chef,
+        BusinessOsRole::Admin,
+        BusinessOsRole::Founder,
+        BusinessOsRole::User,
+    ] {
+        let admin = matches!(role, BusinessOsRole::Chef | BusinessOsRole::Admin);
+        for permission in BusinessOsPermission::all() {
+            let assigned = eq("/assigned", Value::Bool(true));
+            let owned = eq("/owned", Value::Bool(true));
+            let record = eq("/scope_type", Value::String("record".into()));
+            let yes = if admin {
+                RowFilter::All
+            } else {
+                RowFilter::None
+            };
+            let filter = match permission {
+                BusinessOsPermission::WorkspaceManage => {
+                    if role == BusinessOsRole::Chef {
+                        RowFilter::All
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::WorkspaceBrandingManage
+                | BusinessOsPermission::UsersManage
+                | BusinessOsPermission::RolesManage
+                | BusinessOsPermission::RuntimeManage
+                | BusinessOsPermission::IntegrationsManage
+                | BusinessOsPermission::SecretsManage
+                | BusinessOsPermission::McpManage
+                | BusinessOsPermission::AppsInstall
+                | BusinessOsPermission::AppsUninstall
+                | BusinessOsPermission::AppsAssignOwner
+                | BusinessOsPermission::SupportManageInboxes
+                | BusinessOsPermission::SupportManageMacros
+                | BusinessOsPermission::SupportManageSla => yes,
+                BusinessOsPermission::AppsView
+                | BusinessOsPermission::AppsModify
+                | BusinessOsPermission::AppsRelease
+                | BusinessOsPermission::AppsRollback
+                | BusinessOsPermission::AppsSourceView => {
+                    if admin {
+                        RowFilter::All
+                    } else if role == BusinessOsRole::Founder {
+                        and(vec![
+                            eq("/scope_type", Value::String("module".into())),
+                            assigned,
+                        ])
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::DataRead => or(vec![yes, assigned]),
+                BusinessOsPermission::DataWrite => {
+                    or(vec![yes, assigned, and(vec![record, owned])])
+                }
+                BusinessOsPermission::CtoxTaskCreate => RowFilter::All,
+                BusinessOsPermission::CtoxTaskManage => or(vec![yes, owned, assigned]),
+                BusinessOsPermission::CrewManage => {
+                    if admin {
+                        RowFilter::All
+                    } else if role == BusinessOsRole::Founder {
+                        and(vec![
+                            record,
+                            or(vec![
+                                eq(
+                                    "/scope_id",
+                                    Value::String("ctox.crew.learning.confirm".into()),
+                                ),
+                                eq(
+                                    "/scope_id",
+                                    Value::String("ctox.crew.learning.update".into()),
+                                ),
+                            ]),
+                        ])
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::ExternalApprove
+                | BusinessOsPermission::SupportRead
+                | BusinessOsPermission::SupportTriage
+                | BusinessOsPermission::SupportAssign
+                | BusinessOsPermission::SupportReply
+                | BusinessOsPermission::SupportResolve
+                | BusinessOsPermission::SupportAgentRequest
+                | BusinessOsPermission::SupportAgentApply => or(vec![yes, assigned]),
+                BusinessOsPermission::SessionHandoffDisclose
+                | BusinessOsPermission::SessionHandoffReceive
+                | BusinessOsPermission::SessionHandoffExecute => RowFilter::None,
+            };
+            rows.push(Right {
+                role: role.as_str().into(),
+                collection: format!("policy:{}", permission.as_str()),
+                row_filter: filter,
+                field_mask: FieldMask::All,
+                ops: [Operation::Command].into(),
+            });
+        }
+        for collection in collections {
+            let visible = admin
+                || (!ADMIN_ONLY_COLLECTIONS.contains(&collection.as_str())
+                    && (role != BusinessOsRole::User
+                        || !is_cockpit_projection(collection)
+                        || user_readable_cockpit_projection(collection)));
+            if !visible {
+                continue;
+            }
+            let field_mask = if collection == "ctox_crew_members" && role == BusinessOsRole::User {
+                FieldMask::Fields {
+                    paths: crate::crew::PUBLIC_MEMBER_FIELDS
+                        .iter()
+                        .map(|f| format!("/{}", f.replace('~', "~0").replace('/', "~1")))
+                        .collect(),
+                }
+            } else {
+                FieldMask::All
+            };
+            let mut ops = [Operation::Read]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            if admin && !is_cockpit_projection(collection) {
+                ops.extend([Operation::Write, Operation::Delete]);
+            }
+            rows.push(Right {
+                role: role.as_str().into(),
+                collection: collection.clone(),
+                row_filter: RowFilter::All,
+                field_mask,
+                ops,
+            });
+        }
+    }
+    rows
+}
+
+static POLICY_AUTHORITY: std::sync::RwLock<
+    Option<std::sync::Weak<sync_rights::StoreRightsAuthority>>,
+> = std::sync::RwLock::new(None);
+/// Retain for the daemon lifetime. Drop removes only this exact registration.
+/// No credential, Store connection or duplicate rights snapshot is retained.
+pub struct PolicyAuthorityRegistration(std::sync::Arc<sync_rights::StoreRightsAuthority>);
+pub fn bind_policy_authority(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+) -> sync_rights::scope::Result<PolicyAuthorityRegistration> {
+    let mut current = POLICY_AUTHORITY
+        .write()
+        .map_err(|_| "policy authority poisoned")?;
+    if current
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .is_some()
+    {
+        return Err("policy authority already bound".into());
+    }
+    *current = Some(std::sync::Arc::downgrade(&authority));
+    Ok(PolicyAuthorityRegistration(authority))
+}
+impl Drop for PolicyAuthorityRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut current) = POLICY_AUTHORITY.write() {
+            if current
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|a| std::sync::Arc::ptr_eq(&a, &self.0))
+            {
+                *current = None;
+            }
         }
     }
 }
+fn with_policy_rights<T>(
+    f: impl FnOnce(&sync_rights::RightsSnapshot) -> sync_rights::scope::Result<T>,
+) -> sync_rights::scope::Result<T> {
+    let authority = POLICY_AUTHORITY
+        .read()
+        .map_err(|_| "policy authority poisoned")?
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .ok_or("policy authority unavailable")?;
+    authority.router.with_current_rights(f)
+}
+pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
+    with_policy_rights(|rights| {
+        Ok(rights
+            .resolve_collection(role.as_str(), "__role_summary__", collection)?
+            .projection(collection)
+            .is_some_and(|p| p.row_filter != sync_rights::scope::RowFilter::None))
+    })
+    .unwrap_or(false)
+}
 
+/// All former role defaults are now seq-bearing Store rows. Unknown authority,
+/// missing grants and stopped/pending writers deny without seeding on demand.
 pub fn evaluate(
     actor: &BusinessOsActor,
     permission: BusinessOsPermission,
     scope: &BusinessOsScope,
 ) -> PolicyDecision {
-    if scope.scope_id.as_deref().is_some_and(is_cockpit_projection)
+    with_policy_rights(|rights| Ok(evaluate_with_rights(rights, actor, permission, scope)))
+        .unwrap_or_else(|_| {
+            PolicyDecision::deny(
+                permission,
+                scope,
+                "rights_unavailable",
+                "Current Store rights are unavailable.",
+            )
+        })
+}
+pub fn evaluate_with_rights(
+    rights: &sync_rights::RightsSnapshot,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> PolicyDecision {
+    use sync_rights::Operation;
+    let context = serde_json::json!({"scope_type":scope.scope_type.as_str(), "scope_id":scope.scope_id,
+        "assigned":scope.assigned_to_actor, "owned":scope.owned_by_actor, "actor_id":actor.id});
+    if scope.scope_type == BusinessOsScopeType::Collection
         && matches!(
             permission,
             BusinessOsPermission::DataRead | BusinessOsPermission::DataWrite
         )
     {
-        return if permission == BusinessOsPermission::DataRead
-            && (actor.role != BusinessOsRole::User
-                || scope
-                    .scope_id
-                    .as_deref()
-                    .is_some_and(user_readable_cockpit_projection))
-        {
+        let op = if permission == BusinessOsPermission::DataRead {
+            Operation::Read
+        } else {
+            Operation::Write
+        };
+        let allowed = scope.scope_id.as_ref().is_some_and(|name| {
+            rights.allows_unrestricted_collection(
+                actor.role.as_str(),
+                actor.id.as_deref().unwrap_or(""),
+                name,
+                op,
+            )
+        });
+        return if allowed {
             PolicyDecision::allow(permission, scope)
         } else {
             PolicyDecision::deny(
                 permission,
                 scope,
-                "cockpit_projection_policy",
-                "cockpit projections are server-authored and readable by Admin/Founder only",
+                "role_or_scope_denied",
+                "Current Store rights deny this collection.",
             )
         };
     }
-    let allowed = match permission {
-        BusinessOsPermission::WorkspaceManage => actor.role == BusinessOsRole::Chef,
-        BusinessOsPermission::WorkspaceBrandingManage
-        | BusinessOsPermission::UsersManage
-        | BusinessOsPermission::RolesManage
-        | BusinessOsPermission::RuntimeManage
-        | BusinessOsPermission::IntegrationsManage
-        | BusinessOsPermission::SecretsManage
-        | BusinessOsPermission::McpManage
-        | BusinessOsPermission::AppsInstall
-        | BusinessOsPermission::AppsUninstall
-        | BusinessOsPermission::AppsAssignOwner => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-        }
-        BusinessOsPermission::AppsView
-        | BusinessOsPermission::AppsModify
-        | BusinessOsPermission::AppsRelease
-        | BusinessOsPermission::AppsRollback
-        | BusinessOsPermission::AppsSourceView => match actor.role {
-            BusinessOsRole::Chef | BusinessOsRole::Admin => true,
-            BusinessOsRole::Founder => {
-                scope.scope_type == BusinessOsScopeType::Module && scope.assigned_to_actor
-            }
-            BusinessOsRole::User => false,
-        },
-        BusinessOsPermission::DataRead => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::DataWrite => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-                || (scope.scope_type == BusinessOsScopeType::Record && scope.owned_by_actor)
-        }
-        BusinessOsPermission::CtoxTaskCreate => true,
-        BusinessOsPermission::CrewManage => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || (actor.role == BusinessOsRole::Founder
-                    && scope.scope_type == BusinessOsScopeType::Record
-                    && matches!(
-                        scope.scope_id.as_deref(),
-                        Some("ctox.crew.learning.confirm" | "ctox.crew.learning.update")
-                    ))
-        }
-        BusinessOsPermission::CtoxTaskManage => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.owned_by_actor
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::ExternalApprove => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::SupportManageInboxes
-        | BusinessOsPermission::SupportManageMacros
-        | BusinessOsPermission::SupportManageSla => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-        }
-        BusinessOsPermission::SupportRead
-        | BusinessOsPermission::SupportTriage
-        | BusinessOsPermission::SupportAssign
-        | BusinessOsPermission::SupportReply
-        | BusinessOsPermission::SupportResolve
-        | BusinessOsPermission::SupportAgentRequest
-        | BusinessOsPermission::SupportAgentApply => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        // Session handoff is never role-authorized: only an exact, active
-        // binding-scoped grant allows it (enforced by the explicit-grant layer).
-        BusinessOsPermission::SessionHandoffDisclose
-        | BusinessOsPermission::SessionHandoffReceive
-        | BusinessOsPermission::SessionHandoffExecute => false,
-    };
-
+    let allowed = rights
+        .rules
+        .iter()
+        .find(|r| {
+            r.role == actor.role.as_str()
+                && r.collection == format!("policy:{}", permission.as_str())
+                && r.ops.contains(&Operation::Command)
+        })
+        .and_then(|r| r.row_filter.resolve(actor.id.as_deref().unwrap_or("")).ok())
+        .is_some_and(|filter| filter.matches(&context));
     if allowed {
         PolicyDecision::allow(permission, scope)
     } else {
@@ -504,324 +680,19 @@ pub fn evaluate(
             permission,
             scope,
             "role_or_scope_denied",
-            "This role is not allowed to perform this action for the selected scope.",
+            "Current Store rights deny this action.",
         )
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn record_owned_data_write_allows_owner_only_on_record_scope() {
-        let actor = BusinessOsActor::new(Some("owner-1".to_owned()), "user");
-        let owned_record = BusinessOsScope {
-            scope_type: BusinessOsScopeType::Record,
-            scope_id: Some("workjet_sessions/session-1".to_owned()),
-            assigned_to_actor: false,
-            owned_by_actor: true,
-        };
-        assert!(evaluate(&actor, BusinessOsPermission::DataWrite, &owned_record).allowed);
-
-        for scope_type in [
-            BusinessOsScopeType::Workspace,
-            BusinessOsScopeType::Module,
-            BusinessOsScopeType::Collection,
-        ] {
-            let non_record = BusinessOsScope {
-                scope_type,
-                scope_id: Some("scope-1".to_owned()),
-                assigned_to_actor: false,
-                owned_by_actor: true,
-            };
-            assert!(
-                !evaluate(&actor, BusinessOsPermission::DataWrite, &non_record).allowed,
-                "owned_by_actor must not expand DataWrite on {} scope",
-                scope_type.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn record_owned_data_write_denies_foreign_user_and_allows_chef_admin() {
-        let foreign_record = BusinessOsScope {
-            scope_type: BusinessOsScopeType::Record,
-            scope_id: Some("workjet_sessions/session-foreign".to_owned()),
-            assigned_to_actor: false,
-            owned_by_actor: false,
-        };
-        assert!(
-            !evaluate(
-                &BusinessOsActor::new(Some("user-2".to_owned()), "user"),
-                BusinessOsPermission::DataWrite,
-                &foreign_record,
-            )
-            .allowed
-        );
-        for role in ["chef", "admin"] {
-            assert!(
-                evaluate(
-                    &BusinessOsActor::new(Some(role.to_owned()), role),
-                    BusinessOsPermission::DataWrite,
-                    &foreign_record,
-                )
-                .allowed
-            );
-        }
-    }
-
-    #[test]
-    fn per_collection_read_authz_denies_admin_only_to_non_admins() {
-        // Admins/chefs read everything, including the admin-only set.
-        for collection in ADMIN_ONLY_COLLECTIONS {
-            assert!(role_may_read_collection(BusinessOsRole::Chef, collection));
-            assert!(role_may_read_collection(BusinessOsRole::Admin, collection));
-            assert!(!role_may_read_collection(
-                BusinessOsRole::Founder,
-                collection
-            ));
-            assert!(!role_may_read_collection(BusinessOsRole::User, collection));
-        }
-        // Ordinary business data is readable by every role (deny-by-exception).
-        for collection in ["customer_accounts", "calendar_events", "business_chats"] {
-            for role in [
-                BusinessOsRole::Chef,
-                BusinessOsRole::Admin,
-                BusinessOsRole::Founder,
-                BusinessOsRole::User,
-            ] {
-                assert!(role_may_read_collection(role, collection));
-            }
-        }
-    }
-
-    #[test]
-    fn business_os_policy_normalizes_current_role_aliases() {
-        assert_eq!(normalize_role("chef"), "chef");
-        assert_eq!(normalize_role("owner"), "chef");
-        assert_eq!(normalize_role("business_os_admin"), "admin");
-        assert_eq!(normalize_role("founder"), "founder");
-        assert_eq!(normalize_role("user"), "user");
-        assert_eq!(normalize_role("business_os_user"), "user");
-        assert_eq!(normalize_role("team"), "user");
-        assert_eq!(normalize_role("business_os_team"), "user");
-        assert_eq!(normalize_role("unknown"), "user");
-    }
-
-    #[test]
-    fn business_os_policy_default_role_matrix_covers_major_permissions() {
-        let owner = BusinessOsActor::new(Some("owner".to_owned()), "chef");
-        let admin = BusinessOsActor::new(Some("admin".to_owned()), "admin");
-        let founder = BusinessOsActor::new(Some("founder".to_owned()), "founder");
-        let team = BusinessOsActor::new(Some("team".to_owned()), "team");
-        let workspace = BusinessOsScope::workspace();
-        let assigned_module = BusinessOsScope::module("crm", true);
-        let unassigned_module = BusinessOsScope::module("crm", false);
-
-        let cases = [
-            (
-                &owner,
-                BusinessOsPermission::WorkspaceManage,
-                &workspace,
-                true,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::WorkspaceManage,
-                &workspace,
-                false,
-            ),
-            (&owner, BusinessOsPermission::UsersManage, &workspace, true),
-            (&admin, BusinessOsPermission::UsersManage, &workspace, true),
-            (
-                &founder,
-                BusinessOsPermission::UsersManage,
-                &workspace,
-                false,
-            ),
-            (&team, BusinessOsPermission::UsersManage, &workspace, false),
-            (&owner, BusinessOsPermission::AppsInstall, &workspace, true),
-            (&admin, BusinessOsPermission::AppsInstall, &workspace, true),
-            (
-                &founder,
-                BusinessOsPermission::AppsInstall,
-                &workspace,
-                false,
-            ),
-            (&team, BusinessOsPermission::AppsInstall, &workspace, false),
-            (
-                &founder,
-                BusinessOsPermission::AppsView,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsView,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::AppsView,
-                &assigned_module,
-                false,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsModify,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsModify,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::AppsModify,
-                &assigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::CtoxTaskCreate,
-                &workspace,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::ExternalApprove,
-                &workspace,
-                false,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SupportReply,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SupportManageSla,
-                &assigned_module,
-                false,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::SupportManageInboxes,
-                &workspace,
-                true,
-            ),
-            (
-                &team,
-                BusinessOsPermission::SupportAgentRequest,
-                &assigned_module,
-                true,
-            ),
-            (
-                &team,
-                BusinessOsPermission::ExternalApprove,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::ExternalApprove,
-                &assigned_module,
-                true,
-            ),
-            // data.write gate: the exact boundary the browser canSelfExecuteBusinessData
-            // mirrors -- only chef/admin or an actor assigned to the module may write;
-            // an unassigned team member is denied and must delegate the change via approval.
-            (&owner, BusinessOsPermission::DataWrite, &workspace, true),
-            (&admin, BusinessOsPermission::DataWrite, &workspace, true),
-            (
-                &team,
-                BusinessOsPermission::DataWrite,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::DataWrite,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::DataWrite,
-                &assigned_module,
-                true,
-            ),
-            (
-                &owner,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                true,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                false,
-            ),
-        ];
-
-        for (actor, permission, scope, expected) in cases {
-            assert_eq!(
-                evaluate(actor, permission, scope).allowed,
-                expected,
-                "role={} permission={} scope={} assigned={} owned={}",
-                actor.role.as_str(),
-                permission.as_str(),
-                scope.scope_type.as_str(),
-                scope.assigned_to_actor,
-                scope.owned_by_actor
-            );
-        }
-    }
-
-    #[test]
-    fn business_os_policy_denials_include_stable_decision_shape() {
-        let actor = BusinessOsActor::new(Some("team".to_owned()), "user");
-        let scope = BusinessOsScope::module("crm", false);
-        let decision = evaluate(&actor, BusinessOsPermission::AppsModify, &scope);
-
-        assert!(!decision.allowed);
-        assert_eq!(decision.permission, "apps.modify");
-        assert_eq!(decision.scope_type, "module");
-        assert_eq!(decision.scope_id.as_deref(), Some("crm"));
-        assert_eq!(decision.reason_code, "role_or_scope_denied");
-        assert!(!decision.display_reason.is_empty());
-        assert!(decision.requires_approval);
-        assert_eq!(decision.audit_level, "decision");
-
-        let read_denial = evaluate(&actor, BusinessOsPermission::DataRead, &scope);
-        assert!(!read_denial.requires_approval);
-    }
-}
+#[path = "../store/rights_matrix_tests.rs"]
+mod rights_matrix_tests;
 
 // ---------------------------------------------------------------------------
-// Policy overlays lifted out of store.rs (S-CUT5). Pure evaluation: they
-// decide from a session and its role and never reach for the store. This move
-// only became possible once BusinessOsSession moved below both modules —
-// before that it would have created policy -> store.
+// Session mapping stays below Store orchestration. Permission decisions use
+// the registered StoreRightsAuthority; these helpers never open SQLite or
+// manufacture a default grant when the authority is absent.
 //
 // The overlays that stayed in store.rs are thin wrappers over store-bound
 // lookups (scoped_policy_decision and friends); moving those would relocate
@@ -876,6 +747,46 @@ pub fn resolve_sync_scope(
     rights.resolve(actor.role.as_str(), actor_id)
 }
 
+/// Actual Store document read: the app boundary, row predicate and field mask
+/// are enforced together; an unrestricted legacy boolean is never reused.
+pub fn read_sync_document(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    app: &str,
+    collection: &str,
+    doc: &Value,
+) -> sync_rights::scope::Result<Value> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    rights.authorize_app_read(app, actor.role.as_str(), id, collection, doc)
+}
+pub fn write_sync_document(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    app: &str,
+    collection: &str,
+    before: Option<&Value>,
+    after: Option<&Value>,
+    permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+) -> sync_rights::scope::Result<()> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    rights.authorize_app_write(
+        app,
+        actor.role.as_str(),
+        id,
+        collection,
+        before,
+        after,
+        permit,
+    )
+}
 pub fn authorize_sync_write(
     actor: &BusinessOsActor,
     rights: &sync_rights::RightsSnapshot,

@@ -23,7 +23,29 @@ pub struct RoleVisibility {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteGuard {
+    #[serde(default)]
     pub command_only_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub command_only_transitions: BTreeMap<String, CommandOnlyTransition>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandOnlyTransition {
+    pub from: Vec<Value>,
+    pub to: Vec<Value>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppOperation {
+    Read,
+    Write,
+    Watch,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForeignCollection {
+    pub owner_app: String,
+    pub ops: BTreeSet<AppOperation>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +66,10 @@ pub struct ManifestRules {
     write_guard: BTreeMap<String, WriteGuard>,
     #[serde(default)]
     command_rights: BTreeMap<String, CommandRight>,
+    #[serde(default)]
+    foreign_collections: BTreeMap<String, ForeignCollection>,
+    #[serde(default)]
+    exports: BTreeMap<String, BTreeSet<AppOperation>>,
 }
 /// Constructed only by current Core command authorization, never deserialized.
 #[derive(Debug, Clone)]
@@ -80,9 +106,25 @@ impl ManifestRules {
             row_filters: part(manifest, "row_filters")?,
             write_guard: part(manifest, "write_guard")?,
             command_rights: part(manifest, "command_rights")?,
+            foreign_collections: part(manifest, "foreign_collections")?,
+            exports: part(manifest, "exports")?,
         };
         // Plain field names mean a top-level field; nested paths are JSON pointers.
+        fn pointer(p: &str) -> String {
+            if p.starts_with('/') {
+                p.into()
+            } else {
+                format!("/{}", p.replace('~', "~0").replace('/', "~1"))
+            }
+        }
         for guard in rules.write_guard.values_mut() {
+            let mut transitions = BTreeMap::new();
+            for (p, t) in std::mem::take(&mut guard.command_only_transitions) {
+                if transitions.insert(pointer(&p), t).is_some() {
+                    return Err("duplicate normalized transition field".into());
+                }
+            }
+            guard.command_only_transitions = transitions;
             guard.command_only_fields = guard
                 .command_only_fields
                 .iter()
@@ -97,6 +139,50 @@ impl ManifestRules {
         }
         rules.validate()?;
         Ok(rules)
+    }
+    /// Validate against the complete committed registry, not caller-provided ownership.
+    pub fn validate_registry(&self, registry: &[Self]) -> scope::Result<()> {
+        for (collection, access) in &self.foreign_collections {
+            let owner = registry
+                .iter()
+                .find(|m| m.app_id == access.owner_app && m.owns(collection))
+                .ok_or("foreign collection owner missing")?;
+            let exported = owner
+                .exports
+                .get(collection)
+                .ok_or("foreign collection not exported")?;
+            if !access.ops.is_subset(exported) {
+                return Err("foreign operation not exported".into());
+            }
+        }
+        Ok(())
+    }
+    pub fn authorize_collection(
+        &self,
+        registry: &[Self],
+        collection: &str,
+        op: AppOperation,
+    ) -> scope::Result<()> {
+        if self.owns(collection) {
+            return Ok(());
+        }
+        let access = self
+            .foreign_collections
+            .get(collection)
+            .ok_or("foreign collection not declared")?;
+        let owner = registry
+            .iter()
+            .find(|m| m.app_id == access.owner_app && m.owns(collection))
+            .ok_or("foreign collection owner missing")?;
+        if !access.ops.contains(&op)
+            || !owner
+                .exports
+                .get(collection)
+                .is_some_and(|ops| ops.contains(&op))
+        {
+            return Err("foreign collection operation denied".into());
+        }
+        Ok(())
     }
     pub fn app_id(&self) -> &str {
         &self.app_id
@@ -151,6 +237,31 @@ impl ManifestRules {
                 paths: guard.command_only_fields.clone(),
             }
             .normalize()?;
+            FieldMask::Fields {
+                paths: guard.command_only_transitions.keys().cloned().collect(),
+            }
+            .normalize()?;
+            for t in guard.command_only_transitions.values() {
+                if t.from.is_empty() || t.to.is_empty() || t.from.len() > 128 || t.to.len() > 128 {
+                    return Err("invalid command-only transition".into());
+                }
+            }
+        }
+        for (name, ops) in &self.exports {
+            if !self.owns(name) || ops.is_empty() {
+                return Err("invalid collection export".into());
+            }
+        }
+        for (name, foreign) in &self.foreign_collections {
+            if name.is_empty()
+                || name.len() > 256
+                || self.owns(name)
+                || foreign.owner_app.is_empty()
+                || foreign.owner_app == self.app_id
+                || foreign.ops.is_empty()
+            {
+                return Err("invalid foreign collection".into());
+            }
         }
         if self.command_rights.len() > 1024 {
             return Err("too many command rules".into());
@@ -180,6 +291,11 @@ impl ManifestRules {
         };
         rule.resolve(actor)
     }
+    pub fn has_write_guard(&self, collection: &str) -> bool {
+        self.write_guard.get(collection).is_some_and(|g| {
+            !g.command_only_fields.is_empty() || !g.command_only_transitions.is_empty()
+        })
+    }
     pub fn guard_direct_write(
         &self,
         collection: &str,
@@ -193,6 +309,16 @@ impl ManifestRules {
                 .any(|p| before.and_then(|v| v.pointer(p)) != after.and_then(|v| v.pointer(p)))
             {
                 return Err("command_only_field".into());
+            }
+            for (path, transition) in &guard.command_only_transitions {
+                if let (Some(from), Some(to)) = (
+                    before.and_then(|v| v.pointer(path)),
+                    after.and_then(|v| v.pointer(path)),
+                ) {
+                    if from != to && transition.from.contains(from) && transition.to.contains(to) {
+                        return Err("command_only_transition".into());
+                    }
+                }
             }
         }
         Ok(())
