@@ -18,7 +18,7 @@ try{
  report.lane4_sha=run('git',['rev-parse',`refs/remotes/origin/${report.branch}`]);
  run('git',['merge-base','--is-ancestor',report.baseline,report.lane4_sha]);
  report.kernel_head=run('git',['rev-parse','HEAD']);
- report.fix_paths=run('git',['diff','--name-only',report.kernel_head,report.lane4_sha,'--','src/core/rxdb/patches/rtc/src/peer_connection/mod.rs','src/core/rxdb/patches/rtc/src/peer_connection/handler/datachannel.rs','src/core/rxdb/patches/webrtc/src/peer_connection/mod.rs']).split('\n').filter(Boolean);
+ report.fix_paths=run('git',['diff','--name-only',report.baseline,report.lane4_sha,'--','src/core/rxdb/patches/rtc/src/peer_connection/mod.rs','src/core/rxdb/patches/rtc/src/peer_connection/handler/datachannel.rs','src/core/rxdb/patches/webrtc/src/peer_connection/mod.rs','src/core/rxdb/patches/webrtc/src/peer_connection/driver.rs']).split('\n').filter(Boolean);
  if(!report.fix_paths.length){
   report.reason='Instances channel fix not pushed on v4/lane4-cas since the measured bootstrap failure; M3 was not started.';
  }else{
@@ -33,12 +33,14 @@ try{
   worktree=path.join(scratch,'source');
   run('git',['worktree','add','--detach',worktree,snapshot]);
   run('git',['merge','--no-commit','--no-ff',report.lane4_sha],{cwd:worktree});
-  // Instances changes the native dependency graph; resolve this TEST fixture's
-  // lock in the composed worktree, then keep --locked for build and mutations.
+  // Reconcile this fixture's existing lock without upgrading unrelated RTC crates.
+  // generate-lockfile discards their compatible pins and can break the patched SDK.
   const fixtureLock='tests/sync-v4-e2e-path/native/Cargo.lock';
-  run('cargo',['generate-lockfile','--offline','--manifest-path','tests/sync-v4-e2e-path/native/Cargo.toml'],{cwd:worktree});
+  run('cargo',['metadata','--offline','--format-version','1','--manifest-path','tests/sync-v4-e2e-path/native/Cargo.toml'],{cwd:worktree});
   run('git',['add','--',fixtureLock],{cwd:worktree});
   report.fixture_lock_sha256=createHash('sha256').update(fs.readFileSync(path.join(worktree,fixtureLock))).digest('hex');
+  report.fixture_lock_file=path.join(out,'fixture.Cargo.lock');
+  fs.copyFileSync(path.join(worktree,fixtureLock),report.fixture_lock_file);
   report.composed_tree=run('git',['write-tree'],{cwd:worktree});
   if(run('git',['status','--porcelain'],{cwd:worktree}))run('git',['-c','user.name=CTOX M3 bench','-c','user.email=m3-bench@localhost','commit','-m','Disposable composed M3 source'],{cwd:worktree});
   report.composed_head=run('git',['rev-parse','HEAD'],{cwd:worktree});
