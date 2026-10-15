@@ -74,3 +74,73 @@ fn native_account_projection_source_error_does_not_discard_last_snapshot() {
     assert!(sync_channel_state(root.path()).is_err());
     assert_eq!(projected_mailbox(root.path()), before);
 }
+
+#[test]
+fn native_account_snapshot_missing_database_is_unavailable_without_creating_source() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let path = crate::paths::core_db(root.path());
+    assert!(!path.exists());
+    let error = channels::snapshot_communication_accounts_for_business_os(root.path())
+        .expect_err("missing database is not an authoritative empty snapshot");
+    assert!(error.to_string().contains("channel database missing"));
+    assert!(
+        !path.exists(),
+        "read-only snapshot must not initialize the source"
+    );
+}
+
+#[test]
+fn native_account_projection_missing_database_preserves_existing_mailbox() {
+    let root = tempfile::tempdir().expect("isolated root");
+    seed_accounts(root.path(), 0);
+    sync_channel_state(root.path()).expect("initial projection");
+    let before = projected_mailbox(root.path());
+    let path = crate::paths::core_db(root.path());
+    let saved = root.path().join("saved-channel-source.sqlite3");
+    fs::rename(&path, &saved).expect("temporarily remove isolated source");
+    let error =
+        sync_channel_state(root.path()).expect_err("missing source must stop reconciliation");
+    assert!(format!("{error:#}").contains("channel database missing"));
+    assert_eq!(projected_mailbox(root.path()), before);
+    assert!(
+        !path.exists(),
+        "failed projection must not replace the source"
+    );
+    fs::rename(saved, path).expect("restore isolated source");
+    sync_channel_state(root.path()).expect("reconcile after source returns");
+    assert_eq!(projected_mailbox(root.path())["is_deleted"], false);
+}
+
+#[test]
+fn native_account_projection_missing_table_preserves_existing_mailbox() {
+    let root = tempfile::tempdir().expect("isolated root");
+    seed_accounts(root.path(), 0);
+    sync_channel_state(root.path()).expect("initial projection");
+    let before = projected_mailbox(root.path());
+    let conn = Connection::open(crate::paths::core_db(root.path())).expect("isolated source");
+    conn.execute("DROP TABLE communication_accounts", [])
+        .expect("remove source table");
+    drop(conn);
+    let error =
+        sync_channel_state(root.path()).expect_err("missing table must stop reconciliation");
+    assert!(format!("{error:#}").contains("communication_accounts table missing"));
+    assert_eq!(projected_mailbox(root.path()), before);
+}
+
+#[test]
+fn native_account_projection_authoritative_empty_table_tombstones_removed_mailbox() {
+    let root = tempfile::tempdir().expect("isolated root");
+    seed_accounts(root.path(), 0);
+    sync_channel_state(root.path()).expect("initial projection");
+    let conn = Connection::open(crate::paths::core_db(root.path())).expect("isolated source");
+    conn.execute("DELETE FROM communication_accounts", [])
+        .expect("empty existing source");
+    drop(conn);
+    assert!(
+        channels::snapshot_communication_accounts_for_business_os(root.path())
+            .expect("existing empty source is authoritative")
+            .is_empty()
+    );
+    sync_channel_state(root.path()).expect("reconcile authoritative removal");
+    assert_eq!(projected_mailbox(root.path())["is_deleted"], true);
+}
