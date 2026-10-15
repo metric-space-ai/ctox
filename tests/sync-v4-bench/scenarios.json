@@ -1,0 +1,17 @@
+{
+  "schema": "ctox.transport.scenarios.v1",
+  "baseline": {
+    "durationSeconds": 600,
+    "browserPeers": 3,
+    "requestedRttMs": [20, 150, 600],
+    "oneWayPacketLossPercent": 1,
+    "disconnectEverySeconds": 30,
+    "disconnectDurationSeconds": 1,
+    "bulkBodyBytes": 5000000,
+    "controlIntervalMs": 100,
+    "otherClassIntervalMs": 1000,
+    "classes": ["control", "command", "interactive", "live", "initial", "bulk"],
+    "applicationReplay": false,
+    "forcedTurn": true
+  }
+}

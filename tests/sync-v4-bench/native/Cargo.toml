@@ -1,0 +1,17 @@
+[package]
+name = "ctox-transport-bench-peer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+rxdb = { package = "ctox-rxdb", path = "../../../src/core/rxdb" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std"] }
+futures = "0.3"
+serde_json = "1"
+webrtc = "=0.20.0-alpha.1"
+
+[patch.crates-io]
+rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
