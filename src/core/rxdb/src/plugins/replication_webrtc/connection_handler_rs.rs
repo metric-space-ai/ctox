@@ -3093,6 +3093,28 @@ impl WebRTCRsConnectionHandler {
         peer: &WebRTCRsConnection,
         transport: super::index_mod::hello::TransportSelection,
     ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
+        self.activate_v4_sender(peer, transport, None).await
+    }
+
+    /// E14 seam: the caller owns state keyed by authenticated device, instance,
+    /// epoch and rights, and supplies fresh native authorization for each replay.
+    /// No signaling ID or untrusted hello field is sufficient to retrieve it.
+    pub async fn activate_v4_session_send_path(
+        &self,
+        peer: &WebRTCRsConnection,
+        transport: super::index_mod::hello::TransportSelection,
+        binding: super::index_mod::scheduler::SessionBinding,
+        authorize: Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>> + Send + Sync>,
+    ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
+        self.activate_v4_sender(peer, transport, Some((binding, authorize))).await
+    }
+
+    async fn activate_v4_sender(
+        &self,
+        peer: &WebRTCRsConnection,
+        transport: super::index_mod::hello::TransportSelection,
+        session: Option<(super::index_mod::scheduler::SessionBinding, Arc<dyn Fn(super::index_mod::lanes::Lane, super::index_mod::hello::WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>> + Send + Sync>)>,
+    ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
         let pc = {
             let _lifecycle = self.peer_lifecycle.lock();
             let peers = self.peers.lock();
@@ -3121,7 +3143,14 @@ impl WebRTCRsConnectionHandler {
             }
         }
         let _starting = Starting { handler: self, peer: peer.clone() };
-        let scheduler = super::index_mod::scheduler::NativeSendScheduler::create(&pc, transport).await?;
+        let scheduler = if let Some((binding, authorize)) = session {
+            super::index_mod::scheduler::NativeSendScheduler::create_resumed(&pc, transport, binding, |lane, id, bytes| {
+                let native = authorize(lane, id, bytes)?;
+                let _lifecycle = self.peer_lifecycle.lock();
+                if !self.is_current_connection(peer) { return Err(stale_connection_error(peer)); }
+                Ok(self.v4_publication(peer, native))
+            }).await?
+        } else { super::index_mod::scheduler::NativeSendScheduler::create(&pc, transport).await? };
         {
             let _lifecycle = self.peer_lifecycle.lock();
             if !self.is_current_connection(peer) { return Err(stale_connection_error(peer)); }

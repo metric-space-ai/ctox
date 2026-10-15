@@ -1,5 +1,6 @@
 //! One V4 sender per association, with strict 0–2 priority and byte DRR 8:3:1.
-//! No producer writes a V4 DataChannel directly. Receipts mean SCTP handoff.
+//! No producer writes a V4 DataChannel directly. Session admission means bounded
+//! retention until delivery ACK; handoff counters report SCTP separately.
 use super::super::connection_handler_rs::send_result::{transport_diagnostics, MessageClass};
 use super::super::connection_handler_rs::send_under_publication;
 use super::super::webrtc_types::WebRTCPublicationGuard;
@@ -16,6 +17,90 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::PeerConnection;
+#[path = "session_resume.rs"]
+pub mod session_resume;
+use session_resume::{ReliableSession, SessionControl, SessionHello};
+
+pub struct SessionPayload {
+    pub application_id: WireSeq,
+    pub bytes: Arc<[u8]>,
+}
+#[derive(Clone)]
+pub struct SessionBinding {
+    pub state: Arc<ReliableSession<SessionPayload>>,
+    pub generation: u64,
+}
+impl SessionBinding {
+    /// Called ONLY after same-device/instance/epoch/rights authentication.
+    pub fn attach(
+        state: Arc<ReliableSession<SessionPayload>>,
+        remote: &SessionHello,
+    ) -> RxResult<Self> {
+        let generation = state.attach(remote).map_err(|e| failure(&e.to_string()))?;
+        Ok(Self { state, generation })
+    }
+}
+/// Consumer acknowledgement follows application effect, never queue admission.
+#[derive(Clone)]
+pub struct DeliveryToken {
+    signal: Arc<Mutex<Option<oneshot::Sender<SessionControl>>>>,
+    binding: SessionBinding,
+    lane: Lane,
+    seq: WireSeq,
+}
+impl std::fmt::Debug for DeliveryToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeliveryToken")
+            .field("lane", &self.lane)
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
+}
+impl DeliveryToken {
+    pub fn acknowledge(&self) -> RxResult<()> {
+        let signal = self
+            .signal
+            .lock()
+            .take()
+            .ok_or_else(|| failure("V4 delivery already acknowledged"))?;
+        let ack = self
+            .binding
+            .state
+            .delivered(self.binding.generation, self.lane, self.seq)
+            .map_err(|e| failure(&e.to_string()))?;
+        signal
+            .send(ack)
+            .map_err(|_| failure("V4 delivery generation retired"))
+    }
+}
+struct SessionPublicationGuard {
+    binding: SessionBinding,
+    native: Option<Arc<dyn WebRTCPublicationGuard>>,
+}
+impl WebRTCPublicationGuard for SessionPublicationGuard {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        let mut guarded = || {
+            self.binding
+                .state
+                .with_generation(self.binding.generation, &mut *publish)
+                .map_err(|e| failure(&e.to_string()))?
+        };
+        if let Some(native) = &self.native {
+            native.with_current(&mut guarded)
+        } else {
+            guarded()
+        }
+    }
+    fn after_send(&self) -> RxResult<()> {
+        if let Some(native) = &self.native {
+            native.after_send()?;
+        }
+        self.binding
+            .state
+            .check_generation(self.binding.generation)
+            .map_err(|e| failure(&e.to_string()))
+    }
+}
 
 const QUEUE_BUDGET: usize = 192 * 1024 * 1024;
 const ADMISSION: [usize; 7] = [
@@ -144,6 +229,7 @@ pub enum Incoming {
         lane: Lane,
         id: WireSeq,
         bytes: Vec<u8>,
+        delivery: Option<DeliveryToken>,
     },
     Realtime(Vec<u8>),
     Failed {
@@ -156,16 +242,21 @@ pub enum Incoming {
 }
 struct Completion {
     remaining: usize,
+    failed: bool,
     result: Option<oneshot::Sender<RxResult<()>>>,
     liveness: tokio::sync::watch::Receiver<()>,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    _internal_owner: Option<tokio::sync::watch::Sender<()>>,
 }
 impl Completion {
     fn cancelled(&self) -> bool {
-        self.result.as_ref().is_none_or(|r| r.is_closed())
+        self.failed
+            || (self._internal_owner.is_none()
+                && self.result.as_ref().is_none_or(|r| r.is_closed()))
     }
     fn finish(&mut self, result: RxResult<()>) {
         if result.is_err() {
+            self.failed = true;
             if let Some(sender) = self.result.take() {
                 let _ = sender.send(result);
             }
@@ -187,6 +278,7 @@ struct Outbound {
 }
 struct Physical {
     bytes: Vec<u8>,
+    ack_lane: Option<Lane>,
     completion: Arc<Mutex<Completion>>,
     publication: Option<Arc<dyn WebRTCPublicationGuard>>,
 }
@@ -232,6 +324,8 @@ pub struct NativeSendScheduler {
     queue_budget: [Arc<Semaphore>; 7],
     receivers: Arc<Mutex<[Option<mpsc::Receiver<Incoming>>; 7]>>,
     failures: RxSubject<Incoming>,
+    session: Option<SessionBinding>,
+    reliable_order: [Arc<tokio::sync::Mutex<()>>; 6],
     _task: Arc<Task>,
 }
 fn failure(message: &str) -> RxError {
@@ -241,19 +335,74 @@ fn failure(message: &str) -> RxError {
     )
 }
 impl NativeSendScheduler {
+    /// The host must authenticate the same session and retire the old sender
+    /// before calling this. Every replay is freshly authorized; stale generation
+    /// guards are deliberately not retained or silently made unrestricted.
+    pub async fn create_resumed(
+        pc: &Arc<dyn PeerConnection>,
+        transport: TransportSelection,
+        session: SessionBinding,
+        authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>>
+            + Send
+            + Sync,
+    ) -> RxResult<Self> {
+        tokio::time::timeout(SEND_TIMEOUT, async {
+            let scheduler = Self::create_inner(pc, transport, Some(session)).await?;
+            if let Err(error) = scheduler.replay_pending(&authorize).await {
+                scheduler.close_now();
+                return Err(error);
+            }
+            Ok(scheduler)
+        })
+        .await
+        .map_err(|_| failure("V4 resumed setup/replay timed out"))?
+    }
+    async fn replay_pending(
+        &self,
+        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Option<Arc<dyn WebRTCPublicationGuard>>>
+              + Send
+              + Sync),
+    ) -> RxResult<()> {
+        let binding = self
+            .session
+            .as_ref()
+            .ok_or_else(|| failure("V4 replay requires a session"))?;
+        let mut replays = FuturesUnordered::new();
+        for lane in Lane::ALL {
+            let messages = binding
+                .state
+                .replay(binding.generation, lane)
+                .map_err(|e| failure(&e.to_string()))?;
+            replays.push(async move {
+                let _order = self.reliable_order[lane.index()].lock().await;
+                for message in messages {
+                    let publication =
+                        authorize(lane, message.value.application_id, &message.value.bytes)?;
+                    self.submit(Some(lane), message.seq, &message.value.bytes, publication)
+                        .await?;
+                }
+                Ok::<_, RxError>(())
+            });
+        }
+        while let Some(result) = replays.next().await {
+            result?;
+        }
+        Ok(())
+    }
     /// Called only after authenticated hello negotiation. Native creates every
     /// channel, including real-time; browser does not choose reliability.
     pub async fn create(
         pc: &Arc<dyn PeerConnection>,
         transport: TransportSelection,
     ) -> RxResult<Self> {
-        tokio::time::timeout(SEND_TIMEOUT, Self::create_inner(pc, transport))
+        tokio::time::timeout(SEND_TIMEOUT, Self::create_inner(pc, transport, None))
             .await
             .map_err(|_| failure("V4 channel setup timed out"))?
     }
     async fn create_inner(
         pc: &Arc<dyn PeerConnection>,
         transport: TransportSelection,
+        session: Option<SessionBinding>,
     ) -> RxResult<Self> {
         let framer = Framer::new(transport).map_err(|e| failure(&e.to_string()))?;
         let mut channels: Vec<Arc<dyn DataChannel>> = Vec::new();
@@ -296,11 +445,18 @@ impl NativeSendScheduler {
 
             channels.push(channel);
         }
-        let scheduler = Self::from_channels(channels, framer).await?;
+        let scheduler = Self::from_channels_session(channels, framer, session).await?;
         rollback.0.clear();
         Ok(scheduler)
     }
     async fn from_channels(channels: Vec<Arc<dyn DataChannel>>, framer: Framer) -> RxResult<Self> {
+        Self::from_channels_session(channels, framer, None).await
+    }
+    async fn from_channels_session(
+        channels: Vec<Arc<dyn DataChannel>>,
+        framer: Framer,
+        session: Option<SessionBinding>,
+    ) -> RxResult<Self> {
         if channels.len() != 7 {
             return Err(failure(
                 "V4 requires six reliable channels and one real-time channel",
@@ -336,6 +492,7 @@ impl NativeSendScheduler {
         let actor_framer = framer.clone();
         let actor_failures = failures.clone();
         let actor_counters = counters.clone();
+        let actor_session = session.clone();
         let task = tokio::spawn(async move {
             let result = run(
                 channels,
@@ -345,6 +502,7 @@ impl NativeSendScheduler {
                 actor_failures,
                 actor_counters,
                 drain_rx,
+                actor_session,
             )
             .await;
             let _ = finished.send(Some(result.is_ok()));
@@ -358,6 +516,8 @@ impl NativeSendScheduler {
             queue_budget: std::array::from_fn(|i| Arc::new(Semaphore::new(ADMISSION[i]))),
             receivers: Arc::new(Mutex::new(receivers.try_into().ok().unwrap())),
             failures,
+            session,
+            reliable_order: std::array::from_fn(|_| Arc::new(tokio::sync::Mutex::new(()))),
             _task: Arc::new(Task(task.abort_handle())),
         })
     }
@@ -378,7 +538,32 @@ impl NativeSendScheduler {
         bytes: &[u8],
         publication: Option<Arc<dyn WebRTCPublicationGuard>>,
     ) -> RxResult<()> {
-        self.submit(Some(lane), id, bytes, publication).await
+        if *self.drain.borrow() {
+            return Err(failure("V4 scheduler is draining"));
+        }
+        let _order = self.reliable_order[lane.index()].lock().await;
+        if *self.drain.borrow() {
+            return Err(failure("V4 scheduler is draining"));
+        }
+        let sequence = if let Some(binding) = &self.session {
+            let retained = binding
+                .state
+                .retain(
+                    binding.generation,
+                    lane,
+                    bytes.len(),
+                    SessionPayload {
+                        application_id: id,
+                        bytes: Arc::from(bytes),
+                    },
+                )
+                .await
+                .map_err(|e| failure(&e.to_string()))?;
+            retained.seq
+        } else {
+            id
+        };
+        self.submit(Some(lane), sequence, bytes, publication).await
     }
     /// Stop new admission and wait for all accepted frames to leave SCTP.
     /// Emergency Drop cancels; successful drain confirms SCTP retirement,
@@ -455,15 +640,25 @@ impl NativeSendScheduler {
                 .map_err(|e| failure(&e.to_string()))?,
             None => vec![bytes.to_vec()],
         };
+        let publication = match &self.session {
+            Some(binding) => Some(Arc::new(SessionPublicationGuard {
+                binding: binding.clone(),
+                native: publication,
+            }) as Arc<dyn WebRTCPublicationGuard>),
+            None => publication,
+        };
         let (sender, receipt) = oneshot::channel();
         // Sender lifetime belongs to exactly this submit future. Dropping it
         // cancels its own pending physical IO, never another producer's IO.
-        let (_owner, liveness) = tokio::sync::watch::channel(());
+        let (owner, liveness) = tokio::sync::watch::channel(());
+        let retained = self.session.is_some() && lane.is_some();
         let completion = Arc::new(Mutex::new(Completion {
             remaining: frames.len(),
+            failed: false,
             result: Some(sender),
             liveness,
-            _permit: permit,
+            _permit: Some(permit),
+            _internal_owner: retained.then_some(owner.clone()),
         }));
         if *self.drain.borrow() {
             return Err(failure("V4 scheduler is draining"));
@@ -477,6 +672,9 @@ impl NativeSendScheduler {
             })
             .await
             .map_err(|_| failure("V4 scheduler closed"))?;
+        if retained {
+            return Ok(());
+        }
         receipt
             .await
             .map_err(|_| failure("V4 association closed before SCTP handoff"))?
@@ -486,6 +684,7 @@ impl NativeSendScheduler {
 enum Wake {
     Channel(usize, Option<DataChannelEvent>),
     Delivered(usize, bool),
+    Committed(usize, usize, Option<SessionControl>),
 }
 fn next_event(
     index: usize,
@@ -520,6 +719,7 @@ fn enqueue(queue: &mut SendQueue<Physical>, realtime: &mut VecDeque<Physical>, m
     for bytes in message.frames {
         let item = Physical {
             bytes,
+            ack_lane: None,
             completion: message.completion.clone(),
             publication: message.publication.clone(),
         };
@@ -539,6 +739,55 @@ fn enqueue(queue: &mut SendQueue<Physical>, realtime: &mut VecDeque<Physical>, m
         }
     }
 }
+fn enqueue_ack(
+    queue: &mut SendQueue<Physical>,
+    framer: &Framer,
+    ack: SessionControl,
+    binding: &SessionBinding,
+) -> RxResult<()> {
+    let SessionControl::Ack { lane, .. } = &ack;
+    let mut removed = 0;
+    queue.queues[0].retain(|entry| {
+        if entry.value.ack_lane == Some(*lane) {
+            removed += entry.bytes;
+            false
+        } else {
+            true
+        }
+    });
+    queue.bytes -= removed;
+    let frames = framer
+        .encode(Lane::Control, WireSeq(0), &ack.encode())
+        .map_err(|e| failure(&e.to_string()))?;
+    let (owner, liveness) = tokio::sync::watch::channel(());
+    let completion = Arc::new(Mutex::new(Completion {
+        remaining: frames.len(),
+        failed: false,
+        result: None,
+        liveness,
+        _permit: None,
+        _internal_owner: Some(owner),
+    }));
+    for bytes in frames.into_iter().rev() {
+        if queue.bytes + bytes.len() > QUEUE_BUDGET {
+            return Err(failure("V4 ACK queue full"));
+        }
+        queue.bytes += bytes.len();
+        queue.queues[0].push_front(Entry {
+            bytes: bytes.len(),
+            value: Physical {
+                bytes,
+                ack_lane: Some(*lane),
+                completion: completion.clone(),
+                publication: Some(Arc::new(SessionPublicationGuard {
+                    binding: binding.clone(),
+                    native: None,
+                })),
+            },
+        });
+    }
+    Ok(())
+}
 async fn run(
     channels: Vec<Arc<dyn DataChannel>>,
     framer: Framer,
@@ -547,6 +796,7 @@ async fn run(
     failures: RxSubject<Incoming>,
     counters: Arc<Counters>,
     mut drain: tokio::sync::watch::Receiver<bool>,
+    session: Option<SessionBinding>,
 ) -> RxResult<()> {
     let _close_channels = CloseChannels(channels.clone());
     let mut events = FuturesUnordered::new();
@@ -563,17 +813,49 @@ async fn run(
     let startup_deadline = tokio::time::Instant::now() + SEND_TIMEOUT;
     let frame_limit = framer.frame_bytes();
     let mut drain_deadlines: [Option<tokio::time::Instant>; 7] = [None; 7];
-    let mut reassembly = Reassembler::new(framer);
+    let mut reassembly = Reassembler::new(framer.clone());
     let mut closing = false;
+    let mut deliveries: [VecDeque<(WireSeq, Vec<u8>)>; 6] =
+        std::array::from_fn(|_| VecDeque::new());
+    let mut delivery_active = [false; 6];
+    let mut delivery_bytes = [0usize; 6];
+    let mut received = session
+        .as_ref()
+        .map_or([0; 6], |s| s.state.hello().resume_from.map(|s| s.0));
     let result: RxResult<()> = async {
         loop {
+            if let Some(binding) = &session {
+                binding.state.check_generation(binding.generation).map_err(|e| failure(&e.to_string()))?;
+            }
             if *drain.borrow() { closing = true; rx.close(); }
-            if closing && rx.is_empty() && queue.queued_bytes() == 0 && realtime.is_empty() && budget.buffered() == 0 { return Ok(()); }
+            if closing && rx.is_empty() && queue.queued_bytes() == 0 && realtime.is_empty() && budget.buffered() == 0 && delivery_bytes.iter().all(|n| *n == 0) { return Ok(()); }
             if drain_deadlines.iter().flatten().any(|t| *t <= tokio::time::Instant::now()) {
                 return Err(failure("V4 SCTP buffer did not drain before its deadline"));
             }
             if initial_drain.iter().any(|ready| !*ready) && tokio::time::Instant::now() >= startup_deadline {
                 return Err(failure("V4 DCEP buffer did not drain before startup deadline"));
+            }
+            if let Some(binding) = &session {
+                for lane in Lane::ALL {
+                    let index = lane.index();
+                    if !delivery_active[index] {
+                        if let Some((id, bytes)) = deliveries[index].pop_front() {
+                            if !binding.state.should_deliver(binding.generation, lane, id).map_err(|e| failure(&e.to_string()))? {
+                                return Err(failure("V4 pending application delivery duplicated"));
+                            }
+                            delivery_active[index] = true;
+                            let size = bytes.len().max(1).saturating_add(256);
+                            let (tx, receipt) = oneshot::channel();
+                            let token = DeliveryToken { signal: Arc::new(Mutex::new(Some(tx))), binding: binding.clone(), lane, seq: id };
+                            let incoming = incoming[index].clone();
+                            events.push(async move {
+                                let message = Incoming::Reliable { lane, id, bytes, delivery: Some(token) };
+                                let ack = if incoming.send(message).await.is_ok() { receipt.await.ok() } else { None };
+                                Wake::Committed(index, size, ack)
+                            }.boxed());
+                        }
+                    }
+                }
             }
             // Admit pending producers before choosing another bulk frame.
             for _ in 0..32 {
@@ -634,6 +916,13 @@ async fn run(
                         Wake::Channel(index, event) => (index, event),
                         Wake::Delivered(index, true) => { events.push(next_event(index, channels[index].clone())); continue; }
                         Wake::Delivered(_, false) => return Err(failure("V4 receive consumer closed")),
+                        Wake::Committed(index, size, Some(ack)) => {
+                            enqueue_ack(&mut queue, &framer, ack, session.as_ref().unwrap())?;
+                            delivery_active[index] = false;
+                            delivery_bytes[index] -= size;
+                            continue;
+                        }
+                        Wake::Committed(_, _, None) => return Err(failure("V4 application delivery abandoned")),
                     };
                     let mut pending_delivery = None;
                     match event {
@@ -647,7 +936,26 @@ async fn run(
                             else {
                                 if message.data.get(4).copied() != Some(index as u8) { return Err(failure("V4 frame arrived on wrong lane")); }
                                 if let Some((lane, id, bytes)) = reassembly.accept(&message.data).map_err(|e| failure(&e.to_string()))? {
-                                    pending_delivery = Some(Incoming::Reliable { lane, id, bytes });
+                                    if let Some(binding) = &session {
+                                        if id.0 == 0 {
+                                            if lane != Lane::Control { return Err(failure("V4 ACK on non-control lane")); }
+                                            let ack = SessionControl::decode(&bytes).map_err(|e| failure(&e.to_string()))?;
+                                            binding.state.acknowledge(binding.generation, &ack).map_err(|e| failure(&e.to_string()))?;
+                                        } else if id.0 <= binding.state.hello().resume_from[index].0 {
+                                            let ack = binding.state.delivered(binding.generation, lane, id).map_err(|e| failure(&e.to_string()))?;
+                                            enqueue_ack(&mut queue, &framer, ack, binding)?;
+                                        } else if id.0 > received[index] {
+                                            if received[index].checked_add(1) != Some(id.0) { return Err(failure("V4 session sequence gap")); }
+                                            let size = bytes.len().max(1).saturating_add(256);
+                                            if delivery_bytes[index].saturating_add(size) > ADMISSION[index] { return Err(failure("V4 application receive lane full")); }
+                                            received[index] = id.0;
+                                            delivery_bytes[index] += size;
+                                            deliveries[index].push_back((id, bytes));
+                                        }
+                                        // A duplicate still pending application delivery is not ACKed.
+                                        // Keep polling this channel: ACKs cannot wait behind an app callback.
+
+                                    } else { pending_delivery = Some(Incoming::Reliable { lane, id, bytes, delivery: None }); }
                                 }
                             }
                         }
@@ -785,6 +1093,126 @@ mod native_tests {
 
     use async_trait::async_trait;
     use webrtc::data_channel::{RTCDataChannelId, RTCDataChannelState};
+    #[tokio::test]
+    async fn v4_session_native_replays_after_channel_loss_and_acks_while_application_is_busy() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let state =
+                ReliableSession::new("native-session".into(), ADMISSION[..6].try_into().unwrap())
+                    .unwrap();
+            let remote = state.hello();
+            let first = SessionBinding::attach(state.clone(), &remote).unwrap();
+            let old: Vec<_> = (0..7).map(Channel::new).collect();
+            let sender = NativeSendScheduler::from_channels_session(
+                old.iter()
+                    .map(|c| c.clone() as Arc<dyn DataChannel>)
+                    .collect(),
+                framer(),
+                Some(first.clone()),
+            )
+            .await
+            .unwrap();
+            sender
+                .send(Lane::Commands, WireSeq(99), b"survive loss", None)
+                .await
+                .unwrap();
+            old[1].wait_sent(1).await;
+            let sent = old[1].sent.lock()[0].clone();
+            sender.close_now();
+            let next = SessionBinding::attach(state.clone(), &remote).unwrap();
+            let channels: Vec<_> = (0..7).map(Channel::new).collect();
+            let resumed = NativeSendScheduler::from_channels_session(
+                channels
+                    .iter()
+                    .map(|c| c.clone() as Arc<dyn DataChannel>)
+                    .collect(),
+                framer(),
+                Some(next.clone()),
+            )
+            .await
+            .unwrap();
+            resumed
+                .replay_pending(&|lane, id, body| {
+                    assert_eq!(lane, Lane::Commands);
+                    assert_eq!(id, WireSeq(99));
+                    assert_eq!(body, b"survive loss");
+                    Ok(None)
+                })
+                .await
+                .unwrap();
+            channels[1].wait_sent(1).await;
+            assert_eq!(
+                channels[1].sent.lock()[0],
+                sent,
+                "lost message must be replayed with the same sequence"
+            );
+            let mut controls = resumed.take_incoming(Some(Lane::Control)).unwrap();
+            fn inject(channel: &Channel, bytes: Vec<u8>) {
+                channel
+                    .emit
+                    .send(DataChannelEvent::OnMessage(
+                        webrtc::data_channel::RTCDataChannelMessage {
+                            is_string: false,
+                            data: bytes::BytesMut::from(bytes.as_slice()),
+                        },
+                    ))
+                    .unwrap();
+            }
+            // Leave control application delivery pending. A subsequent ACK on
+            // the SAME physical control channel must nevertheless be processed.
+            let frame = framer()
+                .encode(Lane::Control, WireSeq(1), b"slow app")
+                .unwrap()
+                .remove(0);
+            inject(&channels[0], frame.clone());
+            let Some(Incoming::Reliable {
+                delivery: Some(token),
+                ..
+            }) = controls.recv().await
+            else {
+                panic!("missing application delivery")
+            };
+            let ack = SessionControl::Ack {
+                session_id: "native-session".into(),
+                lane: Lane::Commands,
+                upto: WireSeq(1),
+            };
+            inject(
+                &channels[0],
+                framer()
+                    .encode(Lane::Control, WireSeq(0), &ack.encode())
+                    .unwrap()
+                    .remove(0),
+            );
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !state
+                    .replay(next.generation, Lane::Commands)
+                    .unwrap()
+                    .is_empty()
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("ACK cannot wait for application delivery");
+            assert_eq!(
+                state.hello().resume_from[0],
+                WireSeq(0),
+                "queue admission is not delivery"
+            );
+            token.acknowledge().unwrap();
+            channels[0].wait_sent(1).await;
+            inject(&channels[0], frame);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), controls.recv())
+                    .await
+                    .is_err(),
+                "delivered duplicate must not reach the application"
+            );
+            resumed.close_now();
+        })
+        .await
+        .expect("session replay and independent ACK ingress must terminate");
+    }
     struct Channel {
         id: u16,
         events: tokio::sync::Mutex<mpsc::UnboundedReceiver<DataChannelEvent>>,
@@ -1279,8 +1707,28 @@ mod loopback_tests {
         );
         let mut forwarding = tokio::task::JoinSet::new();
         let result = tokio::time::timeout(Duration::from_secs(12), async {
-            let transport = TransportSelection { codec: super::super::hello::Codec::Zstd, frame_bytes: FRAME_BYTES as u32, fragmentation: true, reassembly: true };
-            let sender = NativeSendScheduler::create(&a, transport.clone()).await.unwrap();
+            let transport = TransportSelection {
+                codec: super::super::hello::Codec::Zstd,
+                frame_bytes: FRAME_BYTES as u32,
+                fragmentation: true,
+                reassembly: true,
+            };
+            let state_a = ReliableSession::new(
+                "loopback-session".into(),
+                ADMISSION[..6].try_into().unwrap(),
+            )
+            .unwrap();
+            let state_b = ReliableSession::new(
+                "loopback-session".into(),
+                ADMISSION[..6].try_into().unwrap(),
+            )
+            .unwrap();
+            let binding_a = SessionBinding::attach(state_a.clone(), &state_b.hello()).unwrap();
+            let binding_b = SessionBinding::attach(state_b.clone(), &state_a.hello()).unwrap();
+            let sender =
+                NativeSendScheduler::create_inner(&a, transport.clone(), Some(binding_a.clone()))
+                    .await
+                    .unwrap();
             let offer = a.create_offer(None).await.unwrap();
             a.set_local_description(offer.clone()).await.unwrap();
             b.set_remote_description(offer).await.unwrap();
@@ -1288,14 +1736,28 @@ mod loopback_tests {
             b.set_local_description(answer.clone()).await.unwrap();
             a.set_remote_description(answer).await.unwrap();
             let target = b.clone();
-            forwarding.spawn(async move { while let Some(candidate) = ac.recv().await { target.add_ice_candidate(candidate).await.unwrap(); } });
+            forwarding.spawn(async move {
+                while let Some(candidate) = ac.recv().await {
+                    target.add_ice_candidate(candidate).await.unwrap();
+                }
+            });
             let target = a.clone();
-            forwarding.spawn(async move { while let Some(candidate) = bc.recv().await { target.add_ice_candidate(candidate).await.unwrap(); } });
-            let mut channels: Vec<Option<Arc<dyn DataChannel>>> = vec![None;7];
+            forwarding.spawn(async move {
+                while let Some(candidate) = bc.recv().await {
+                    target.add_ice_candidate(candidate).await.unwrap();
+                }
+            });
+            let mut channels: Vec<Option<Arc<dyn DataChannel>>> = vec![None; 7];
             for _ in 0..7 {
                 let channel = incoming.recv().await.unwrap();
                 let label = channel.label().await.unwrap();
-                let index = Lane::ALL.iter().position(|lane| lane.label() == label).unwrap_or_else(|| { assert_eq!(label, REALTIME_LABEL); 6 });
+                let index = Lane::ALL
+                    .iter()
+                    .position(|lane| lane.label() == label)
+                    .unwrap_or_else(|| {
+                        assert_eq!(label, REALTIME_LABEL);
+                        6
+                    });
                 assert_eq!(channel.ordered().await.unwrap(), index != 6);
                 // Incoming optional reliability metadata is always None in
                 // rtc's accept adapter. Constructor validation above checks the
@@ -1303,18 +1765,74 @@ mod loopback_tests {
 
                 channels[index] = Some(channel);
             }
-            let receiver = NativeSendScheduler::from_channels(channels.into_iter().map(Option::unwrap).collect(), Framer::new(transport).unwrap()).await.unwrap();
+            let receiver = NativeSendScheduler::from_channels_session(
+                channels.into_iter().map(Option::unwrap).collect(),
+                Framer::new(transport).unwrap(),
+                Some(binding_b),
+            )
+            .await
+            .unwrap();
             let mut controls = receiver.take_incoming(Some(Lane::Control)).unwrap();
             let mut bulk = receiver.take_incoming(Some(Lane::Transfer)).unwrap();
-            sender.send(Lane::Control, WireSeq(u64::MAX), b"loopback-control", None).await.unwrap();
-            assert!(matches!(controls.recv().await, Some(Incoming::Reliable { id: WireSeq(u64::MAX), bytes, .. }) if bytes == b"loopback-control"));
+            sender
+                .send(Lane::Control, WireSeq(u64::MAX), b"loopback-control", None)
+                .await
+                .unwrap();
+            let Some(Incoming::Reliable {
+                id: WireSeq(1),
+                bytes,
+                delivery: Some(delivery),
+                ..
+            }) = controls.recv().await
+            else {
+                panic!("session control delivery missing")
+            };
+            assert_eq!(bytes, b"loopback-control");
+            assert_eq!(
+                state_a
+                    .replay(binding_a.generation, Lane::Control)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            delivery.acknowledge().unwrap();
             let payload = vec![9; 50_000];
-            sender.send(Lane::Transfer, WireSeq(2), &payload, None).await.unwrap();
-            assert!(matches!(bulk.recv().await, Some(Incoming::Reliable { bytes, .. }) if bytes == payload));
+            sender
+                .send(Lane::Transfer, WireSeq(2), &payload, None)
+                .await
+                .unwrap();
+            let Some(Incoming::Reliable {
+                bytes,
+                delivery: Some(delivery),
+                ..
+            }) = bulk.recv().await
+            else {
+                panic!("session bulk delivery missing")
+            };
+            assert_eq!(bytes, payload);
+            delivery.acknowledge().unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !state_a
+                    .replay(binding_a.generation, Lane::Transfer)
+                    .unwrap()
+                    .is_empty()
+                    || !state_a
+                        .replay(binding_a.generation, Lane::Control)
+                        .unwrap()
+                        .is_empty()
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("real receiver ACK must retire retained data");
             sender.drain().await.unwrap();
-            assert_eq!(sender.handoff_counters().handed_to_sctp, [5,0]);
-            assert!(sender.handoff_counters().buffered_upper_bound_peak <= ASSOCIATION_BUDGET as u64);
-        }).await;
+            assert_eq!(sender.handoff_counters().handed_to_sctp, [5, 0]);
+            assert!(
+                sender.handoff_counters().buffered_upper_bound_peak <= ASSOCIATION_BUDGET as u64
+            );
+        })
+        .await;
         forwarding.abort_all();
         while forwarding.join_next().await.is_some() {}
         let _ = a.close().await;
