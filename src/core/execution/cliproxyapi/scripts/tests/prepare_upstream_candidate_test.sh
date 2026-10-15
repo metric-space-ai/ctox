@@ -3,12 +3,33 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 crate_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
-repo_dir=$(CDPATH= cd -- "$crate_dir/../../../.." && pwd)
 prepare="$script_dir/prepare_upstream_candidate.sh"
-upstream_dir=${UPSTREAM_CHECKOUT:-"$repo_dir/runtime/cliproxyapi-upstream"}
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/cliproxyapi-prepare-test.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
+
+# Exercise the complete preparer on an isolated two-commit fixture. Regression
+# checks must not depend on an operator's external checkout, shallow history or
+# network access. Real candidate preparation is validated separately.
+upstream_dir="$scratch/upstream"
+mkdir -p "$upstream_dir/internal/review"
+git -C "$upstream_dir" init -q
+git -C "$upstream_dir" config user.name "CLIProxyAPI prepare test"
+git -C "$upstream_dir" config user.email "prepare-test@invalid.example"
+git -C "$upstream_dir" config commit.gpgSign false
+git -C "$upstream_dir" config core.hooksPath /dev/null
+printf 'package review\n// base\n' > "$upstream_dir/internal/review/review.go"
+git -C "$upstream_dir" add .
+git -C "$upstream_dir" commit -qm base
+base=$(git -C "$upstream_dir" rev-parse HEAD)
+printf 'package review\n// candidate\n' > "$upstream_dir/internal/review/review.go"
+printf '# Candidate review fixture\n' > "$upstream_dir/README.md"
+git -C "$upstream_dir" add .
+git -C "$upstream_dir" commit -qm candidate
+export UPSTREAM_LOCK_FILE="$scratch/lock.json"
+export UPSTREAM_PORT_MAP="$scratch/port-map.json"
+jq -n --arg base "$base" '{repository: "invalid.example/upstream", base_commit: $base}' > "$UPSTREAM_LOCK_FILE"
+jq -n --arg base "$base" '{upstream_commit: $base, files: []}' > "$UPSTREAM_PORT_MAP"
 
 hash_file() {
     git hash-object "$1"

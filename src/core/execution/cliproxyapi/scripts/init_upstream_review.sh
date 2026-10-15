@@ -12,7 +12,7 @@ jq '{
   status: (if .clean then "ready_for_gate_evidence" else "in_progress" end),
   changes: [.changes[] | {
     upstream,
-    module,
+    module: .module,
     kind,
     source_kind,
     required_action,
