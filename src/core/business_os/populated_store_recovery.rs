@@ -24,7 +24,7 @@ use super::rxdb_peer::{
     rxdb_collection_version_table_name, sqlite_quote_identifier, sqlite_table_exists,
     NativePeerProcessLock,
 };
-use super::sqlite_file_digest::{sqlite_file_sha256, sqlite_path_sha256};
+use super::sqlite_file_digest::{sqlite_file_sha256, sqlite_path_sha256, MaintenanceOwner};
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
 use anyhow::{anyhow, Context};
 use base64::Engine;
@@ -60,6 +60,16 @@ const FIXTURE_JSON: &str = include_str!(
 const PACKAGED_COCKPIT_SCHEMA: &str =
     include_str!("../../apps/business-os/modules/ctox/collections.schema.json");
 
+// TODO(sync-v4 P3-06): read both contracts from the active schema registry.
+// Keep the packaged fallback until the registry owns historical migrations.
+fn recovery_schema_contracts() -> anyhow::Result<(Value, Value)> {
+    Ok((
+        serde_json::from_str(include_str!("business_os_schema_contract.json"))
+            .context("parse Business OS schema contract")?,
+        serde_json::from_str(PACKAGED_COCKPIT_SCHEMA).context("parse packaged cockpit schema")?,
+    ))
+}
+
 pub fn native_rxdb_cutover_receipt_path(root: &Path) -> PathBuf {
     root.join("runtime/business-os-rxdb.cutover.json")
 }
@@ -77,10 +87,7 @@ pub fn populated_store_fixture_spec() -> anyhow::Result<Value> {
 }
 
 pub fn supported_historical_rxdb_versions() -> anyhow::Result<Value> {
-    let contract: Value = serde_json::from_str(include_str!("business_os_schema_contract.json"))
-        .context("parse Business OS schema contract")?;
-    let packaged: Value =
-        serde_json::from_str(PACKAGED_COCKPIT_SCHEMA).context("parse packaged cockpit schema")?;
+    let (contract, packaged) = recovery_schema_contracts()?;
     let strategies = packaged
         .get("migration_strategies")
         .and_then(Value::as_object)
@@ -691,6 +698,7 @@ pub fn backup_native_rxdb_immutable_store(
         .map(PathBuf::from)
         .unwrap_or_else(|| default_native_rxdb_immutable_backup_path(root));
     let _peer_lock = acquire_native_rxdb_peer_lock(root)?;
+    let _store_owner = MaintenanceOwner::acquire(&database_path)?;
     anyhow::ensure!(
         !output.exists(),
         "refusing to overwrite existing immutable RxDB backup {}",
@@ -767,6 +775,7 @@ const CUTOVER_PHASE_ACCEPTED: &str = "accepted";
 
 struct NativeRxdbWriterGuard {
     _peer_lock: NativePeerProcessLock,
+    _store_owner: MaintenanceOwner,
     exclusive: Option<Connection>,
 }
 
@@ -793,9 +802,13 @@ fn acquire_exclusive_native_rxdb_writer(root: &Path) -> anyhow::Result<NativeRxd
         )
     })?;
     let live_path = rxdb_store_path(root);
+    if let Some(parent) = live_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let store_owner = MaintenanceOwner::acquire(&live_path)?;
     let exclusive = if live_path.is_file() {
         let conn = open_rxdb_sqlite(&live_path)?;
-        conn.busy_timeout(Duration::from_millis(250))?;
+        conn.busy_timeout(Duration::ZERO)?;
         conn.execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;")
             .with_context(|| {
                 format!(
@@ -809,6 +822,7 @@ fn acquire_exclusive_native_rxdb_writer(root: &Path) -> anyhow::Result<NativeRxd
     };
     Ok(NativeRxdbWriterGuard {
         _peer_lock: peer_lock,
+        _store_owner: store_owner,
         exclusive,
     })
 }
@@ -1078,10 +1092,19 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
     // writers of the live file; both take that lock.
     guard.release_sqlite();
     invoke_after_sqlite_release_hook();
-    replace_sqlite_store(&live_path, backup)?;
+    let image = prepare_epoch_restore_image(&live_path, backup, &backup_sha256)?;
+    stage_epoch_restore_image(&live_path, &image.path, &backup_sha256)?;
+    replace_sqlite_store_inner(&live_path, &image.path, Some(&backup_sha256))?;
     let receipt_path = native_rxdb_cutover_receipt_path(root);
     if receipt_path.exists() {
         fs::remove_file(&receipt_path)?;
+    }
+    // Remove the proof before the image. An orphan image is never trusted and
+    // requires explicit recovery; a successful restore never exposes old epoch.
+    fs::remove_file(&image.proof)?;
+    fs::remove_file(&image.path)?;
+    if let Some(parent) = live_path.parent() {
+        fsync_dir(parent)?;
     }
     drop(guard);
     Ok(json!({
@@ -1090,8 +1113,155 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
         "backup_path": backup.display().to_string(),
         "database_path": live_path.display().to_string(),
         "backup_bytes": backup_bytes,
-        "backup_sha256": backup_sha256
+        "backup_sha256": backup_sha256,
+        "restored_sha256": image.sha256,
+        "epoch": image.epoch
     }))
+}
+
+struct EpochRestoreImage {
+    path: PathBuf,
+    proof: PathBuf,
+    sha256: String,
+    epoch: String,
+}
+
+/// Publish a new epoch with the restored pages, not in a later live transaction.
+/// A crash leaves a pinned image; retry must reuse its epoch and physical hash.
+fn prepare_epoch_restore_image(
+    live: &Path,
+    backup: &Path,
+    source_hash: &str,
+) -> anyhow::Result<EpochRestoreImage> {
+    let path = live.with_extension("sqlite3.restore-image");
+    let proof = live.with_extension("sqlite3.restore-image.json");
+    let _image_owner = MaintenanceOwner::acquire(&path)?;
+    if path.exists() || proof.exists() {
+        let saved: Value = serde_json::from_slice(&fs::read(&proof).context(
+            "unresolved restore image: missing proof; retain evidence for explicit recovery",
+        )?)?;
+        anyhow::ensure!(
+            saved["source_sha256"].as_str() == Some(source_hash),
+            "restore image belongs to a different backup"
+        );
+        let sha256 = sqlite_file_digest_under_owner(&path)?.1;
+        anyhow::ensure!(
+            saved["sha256"].as_str() == Some(&sha256),
+            "restore image digest differs from pinned proof"
+        );
+        let epoch = saved["epoch"]
+            .as_str()
+            .context("restore image missing epoch")?
+            .to_owned();
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let stored_epoch: String =
+            conn.query_row("SELECT epoch FROM _meta WHERE singleton=1", [], |row| {
+                row.get(0)
+            })?;
+        anyhow::ensure!(
+            stored_epoch == epoch && uuid::Uuid::parse_str(&epoch).is_ok(),
+            "restore image epoch differs from pinned proof"
+        );
+        return Ok(EpochRestoreImage {
+            path,
+            proof,
+            sha256,
+            epoch,
+        });
+    }
+    let backup_owner = MaintenanceOwner::acquire(backup)?;
+    let mut source = File::open(backup)?;
+    let permissions = source.metadata()?.permissions();
+    let mut target = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        target.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    io::copy(&mut source, &mut target)?;
+    target.sync_all()?;
+    drop(target);
+    drop(source);
+    drop(backup_owner);
+    anyhow::ensure!(
+        sqlite_file_digest_under_owner(&path)?.1 == source_hash,
+        "backup changed while preparing restore image"
+    );
+    let epoch = uuid::Uuid::new_v4().to_string();
+    let mut conn = Connection::open(&path)?;
+    conn.busy_timeout(Duration::ZERO)?;
+    // The unpublished image must have no WAL sidecars when renamed.
+    conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;")?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // TODO(sync-v4 P3-05): delegate to change_log::initialize/rotate_epoch once
+    // merged. This is precisely its singleton metadata contract, not a new seq.
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS _meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), epoch TEXT NOT NULL, horizon_seq INTEGER NOT NULL DEFAULT 0 CHECK(horizon_seq>=0));")?;
+    tx.execute("INSERT INTO _meta(singleton,epoch) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET epoch=excluded.epoch", [&epoch])?;
+    tx.commit()?;
+    drop(conn);
+    fs::set_permissions(&path, permissions)?;
+    fsync_file(&path)?;
+    let sha256 = sqlite_file_digest_under_owner(&path)?.1;
+    publish_exclusive_file(
+        &proof,
+        &serde_json::to_vec(&json!({
+            "source_sha256": source_hash, "sha256": sha256, "epoch": epoch
+        }))?,
+    )?;
+    if let Some(parent) = path.parent() {
+        fsync_dir(parent)?;
+    }
+    Ok(EpochRestoreImage {
+        path,
+        proof,
+        sha256,
+        epoch,
+    })
+}
+
+fn sqlite_file_digest_under_owner(path: &Path) -> anyhow::Result<(u64, String)> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    sqlite_file_sha256(&conn)
+}
+
+/// Upgrade a verified pre-v4 staging image before it can become live. Never
+/// publish the original backup epoch even when resuming an older exchange.
+fn stage_epoch_restore_image(live: &Path, image: &Path, source_hash: &str) -> anyhow::Result<()> {
+    let staging = live.with_extension("sqlite3.restore-staging");
+    if staging.exists() {
+        let hash = sqlite_path_sha256(&staging)?.1;
+        if hash != source_hash {
+            anyhow::ensure!(
+                hash == sqlite_path_sha256(image)?.1,
+                "unresolved staging belongs to a different restore image"
+            );
+            return Ok(());
+        }
+    } else if !(live.is_file()
+        && live.with_extension("sqlite3.pre-restore").is_file()
+        && file_sha256(live)?.1 == source_hash)
+    {
+        return Ok(());
+    }
+    let upgraded = unique_owned_staging_path(&staging)?;
+    let mut input = File::open(image)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&upgraded)?;
+    output.set_permissions(input.metadata()?.permissions())?;
+    io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    drop(output);
+    drop(input);
+    fs::rename(&upgraded, &staging)?;
+    if let Some(parent) = staging.parent() {
+        fsync_dir(parent)?;
+    }
+    Ok(())
 }
 
 fn refuse_restore(
@@ -1123,7 +1293,13 @@ fn refuse_restore(
         .get("sha256")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let (_bytes, backup_sha256) = sqlite_path_sha256(backup)?;
+    // A rejected backup can be the live inode (including a hardlink). Reuse
+    // the retained VFS connection: never open another live file connection.
+    let (_bytes, backup_sha256) = if live_path.is_file() && paths_would_alias(&live_path, backup)? {
+        sqlite_file_sha256(live_conn.context("live backup alias without maintenance connection")?)?
+    } else {
+        sqlite_path_sha256(backup)?
+    };
     if recorded_backup != backup_sha256 {
         return Ok(Some(format!(
             "refusing native RxDB restore: backup identity does not match pinned provenance (pinned {recorded_backup}, backup {backup_sha256})"
@@ -1231,6 +1407,14 @@ fn sqlite_store_inventory_on(conn: &Connection, database_path: &Path) -> anyhow:
 }
 
 fn replace_sqlite_store(live_path: &Path, backup: &Path) -> anyhow::Result<()> {
+    replace_sqlite_store_inner(live_path, backup, None)
+}
+
+fn replace_sqlite_store_inner(
+    live_path: &Path,
+    backup: &Path,
+    previous_source_hash: Option<&str>,
+) -> anyhow::Result<()> {
     if let Some(parent) = live_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1242,6 +1426,31 @@ fn replace_sqlite_store(live_path: &Path, backup: &Path) -> anyhow::Result<()> {
 
     if live_path.is_file() && preserved.is_file() {
         let (_bytes, live_sha) = file_sha256(live_path)?;
+        if previous_source_hash == Some(live_sha.as_str()) {
+            // Older recovery already published the source bytes. Its retained
+            // original is evidence until the new epoch image is durable.
+            anyhow::ensure!(
+                file_sha256(&staging)?.1 == backup_sha256,
+                "epoch staging does not match pinned image"
+            );
+            remove_existing_files(&live_sidecars)?;
+            if let Some(parent) = live_path.parent() {
+                fsync_dir(parent)?;
+            }
+            fs::rename(&staging, live_path)?;
+            if let Some(parent) = live_path.parent() {
+                fsync_dir(parent)?;
+            }
+            anyhow::ensure!(
+                file_sha256(live_path)?.1 == backup_sha256,
+                "published epoch image differs from pinned image"
+            );
+            cleanup_completed_restore(&preserved, &preserved_sidecars, &staging)?;
+            if let Some(parent) = live_path.parent() {
+                fsync_dir(parent)?;
+            }
+            return Ok(());
+        }
         if live_sha == backup_sha256 {
             // The published file already matches the backup. Leftover live WAL/SHM
             // still attach by filename and must not survive this return.
@@ -1498,6 +1707,14 @@ fn sqlite_sidecar_paths(database_path: &Path) -> Vec<PathBuf> {
 fn paths_would_alias(source: &Path, dest: &Path) -> anyhow::Result<bool> {
     if source == dest {
         return Ok(true);
+    }
+    #[cfg(unix)]
+    if dest.exists() {
+        use std::os::unix::fs::MetadataExt;
+        let (source, dest) = (fs::metadata(source)?, fs::metadata(dest)?);
+        if source.dev() == dest.dev() && source.ino() == dest.ino() {
+            return Ok(true);
+        }
     }
     let source = fs::canonicalize(source)?;
     if dest.exists() {
@@ -1863,8 +2080,10 @@ mod tests {
         drop(writer);
 
         let alias = root.path().join("backup-alias.sqlite3");
-        fs::hard_link(&path, &alias)?;
         let guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        // Simulate an out-of-band alias created after maintenance acquisition;
+        // pre-existing hardlinks are rejected by canonical DbId takeover.
+        fs::hard_link(&path, &alias)?;
         assert!(!another_process_can_lock_sqlite_main(&path)?);
         // A caller can pass the live pathname or a different hardlink as backup.
         // Identity refusal must not drop the live guard's kernel locks before
@@ -1888,6 +2107,60 @@ mod tests {
         let memory = Connection::open_in_memory()?;
         let error = sqlite_file_sha256(&memory).expect_err("no file-backed VFS");
         assert!(error.to_string().contains("SQLite main"));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_image_pins_new_epoch_before_publish_and_reuses_it_after_crash() -> anyhow::Result<()>
+    {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let live = rxdb_store_path(root.path());
+        let backup = default_native_rxdb_immutable_backup_path(root.path());
+        backup_native_rxdb_immutable_store(root.path(), Some(&backup))?;
+        let backup_hash = sqlite_path_sha256(&backup)?.1;
+        let image = prepare_epoch_restore_image(&live, &backup, &backup_hash)?;
+        let conn = Connection::open(&image.path)?;
+        let epoch: String =
+            conn.query_row("SELECT epoch FROM _meta WHERE singleton=1", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(epoch, image.epoch);
+        assert!(uuid::Uuid::parse_str(&epoch).is_ok());
+        drop(conn);
+        // Simulate interruption after durable image/proof and before exchange.
+        let resumed = prepare_epoch_restore_image(&live, &backup, &backup_hash)?;
+        assert_eq!(resumed.sha256, image.sha256);
+        assert_eq!(resumed.epoch, epoch);
+        let receipt = restore_native_rxdb_immutable_backup(root.path(), &backup)?;
+        assert_eq!(receipt["epoch"], epoch);
+        assert_eq!(sqlite_path_sha256(&backup)?.1, backup_hash);
+        assert!(!image.path.exists() && !image.proof.exists());
+        let conn = Connection::open(&live)?;
+        let live_epoch: String =
+            conn.query_row("SELECT epoch FROM _meta WHERE singleton=1", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(live_epoch, epoch);
+        drop(conn);
+        let second = restore_native_rxdb_immutable_backup(root.path(), &backup)?;
+        assert_ne!(second["epoch"], receipt["epoch"]);
+        Ok(())
+    }
+
+    #[test]
+    fn corrupt_epoch_image_refuses_publish_and_preserves_live() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let live = rxdb_store_path(root.path());
+        let backup = default_native_rxdb_immutable_backup_path(root.path());
+        backup_native_rxdb_immutable_store(root.path(), Some(&backup))?;
+        let before = sqlite_path_sha256(&live)?;
+        let image = prepare_epoch_restore_image(&live, &backup, &sqlite_path_sha256(&backup)?.1)?;
+        fs::write(&image.path, b"corrupt unpublished image")?;
+        assert!(restore_native_rxdb_immutable_backup(root.path(), &backup).is_err());
+        assert_eq!(sqlite_path_sha256(&live)?, before);
+        assert!(image.path.exists() && image.proof.exists());
         Ok(())
     }
 
@@ -2327,11 +2600,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some(CUTOVER_PHASE_IN_PROGRESS)
         );
-        restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
+        let receipt = restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         let (bytes, sha256) = file_sha256(&rxdb_store_path(root.path()))?;
         assert!(bytes > 0);
         let restored = native_rxdb_store_inventory(root.path())?;
-        assert_eq!(restored["file_sha256"], original_sha);
+        assert_eq!(restored["file_sha256"], receipt["restored_sha256"]);
+        assert_eq!(sha256, receipt["restored_sha256"]);
+        assert_eq!(file_sha256(&backup_path)?.1, original_sha);
+        assert_eq!(restored["inventory_sha256"], backup["inventory_sha256"]);
         let conn = Connection::open(rxdb_store_path(root.path()))?;
         assert!(sqlite_table_exists(
             &conn,
@@ -2776,6 +3052,8 @@ mod tests {
                     peer.is_none(),
                     "legitimate native peer writer must honor the retained peer lock after sqlite release"
                 );
+                assert!(MaintenanceOwner::acquire(&rxdb_store_path(&root_for_hook)).is_err(),
+                    "v4 store owner lock must remain held after SQLite release");
                 let exclusive = acquire_exclusive_native_rxdb_writer(&root_for_hook);
                 assert!(
                     exclusive.is_err(),
@@ -2804,7 +3082,7 @@ mod tests {
             wal.is_file() && wal.metadata()?.len() > 0,
             "crash left live-named WAL in place"
         );
-        restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
+        let receipt = restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         assert!(live.is_file());
         assert!(
             !wal.exists(),
@@ -2812,7 +3090,8 @@ mod tests {
         );
         assert!(!preserved.exists());
         let restored = native_rxdb_store_inventory(root.path())?;
-        assert_eq!(restored["file_sha256"], backup["sha256"]);
+        assert_eq!(restored["file_sha256"], receipt["restored_sha256"]);
+        assert_eq!(restored["inventory_sha256"], backup["inventory_sha256"]);
         Ok(())
     }
 
@@ -2844,7 +3123,7 @@ mod tests {
             "matching-backup crash left live-named WAL"
         );
         let _ = take_skipped_wal_checkpoint();
-        restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
+        let receipt = restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         assert!(
             take_skipped_wal_checkpoint(),
             "matching-backup restore must take the skip-checkpoint branch"
@@ -2858,7 +3137,8 @@ mod tests {
             "matching-backup restore must not leave pre-restore evidence"
         );
         let restored = native_rxdb_store_inventory(root.path())?;
-        assert_eq!(restored["file_sha256"], backup["sha256"]);
+        assert_eq!(restored["file_sha256"], receipt["restored_sha256"]);
+        assert_eq!(restored["inventory_sha256"], backup["inventory_sha256"]);
         let table = rxdb_collection_version_table_name("desktop_files", 0);
         let conn = Connection::open(&live)?;
         let last_write: f64 = conn.query_row(
