@@ -1,0 +1,441 @@
+[
+  {
+    "name": "unknown-not-exhausted",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "window": "5h"
+            }
+          ]
+        }
+      ]
+    },
+    "reject": true
+  },
+  {
+    "name": "real-zero",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {},
+            {
+              "remainingFraction": 0
+            },
+            {
+              "remaining_fraction": 0.25
+            }
+          ]
+        }
+      ]
+    },
+    "expected": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": 0
+            },
+            {
+              "remainingFraction": 0.25
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty-buckets",
+    "input": {
+      "groups": [
+        {
+          "buckets": []
+        }
+      ]
+    },
+    "reject": true
+  },
+  {
+    "name": "bad-optional-summary",
+    "input": {
+      "subscription": {
+        "plan": "paid"
+      },
+      "SUMMARY": {
+        "invalid": true
+      }
+    },
+    "expected": {
+      "subscription": {
+        "plan": "paid"
+      }
+    }
+  },
+  {
+    "name": "summary-valid-zero-only",
+    "input": {
+      "summary": [
+        {
+          "key": " balance ",
+          "label": " Balance ",
+          "value": 0
+        },
+        {
+          "key": "missing",
+          "label": "Missing"
+        },
+        {
+          "key": 123,
+          "label": "Wrong",
+          "value": 1
+        },
+        {
+          "key": "string",
+          "label": "String",
+          "value": "0"
+        }
+      ]
+    },
+    "expected": {
+      "summary": [
+        {
+          "key": "balance",
+          "label": "Balance",
+          "value": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "summary-currencies",
+    "input": {
+      "summary": [
+        {
+          "key": "usd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "usd"
+        },
+        {
+          "key": "eur",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "eur"
+        },
+        {
+          "key": "US",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "US"
+        },
+        {
+          "key": "not-iso",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "not-iso"
+        },
+        {
+          "key": "ßd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "ßd"
+        },
+        {
+          "key": "ſrd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "ſrd"
+        }
+      ]
+    },
+    "expected": {
+      "summary": [
+        {
+          "key": "usd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "USD"
+        },
+        {
+          "key": "eur",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "EUR"
+        },
+        {
+          "key": "US",
+          "label": "Currency",
+          "value": 0
+        },
+        {
+          "key": "not-iso",
+          "label": "Currency",
+          "value": 0
+        },
+        {
+          "key": "ßd",
+          "label": "Currency",
+          "value": 0
+        },
+        {
+          "key": "ſrd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "SRD"
+        }
+      ]
+    }
+  },
+  {
+    "name": "canonical-fraction-wins",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": 0,
+              "remaining_fraction": 0.9
+            }
+          ]
+        }
+      ]
+    },
+    "expected": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "null-fraction-fallback",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": null,
+              "remaining_fraction": 0.9
+            }
+          ]
+        }
+      ]
+    },
+    "reject": true
+  },
+  {
+    "name": "string-core-fraction-rejected",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    "reject": true
+  },
+  {
+    "name": "malformed-core",
+    "input": {
+      "subscription": {
+        "plan": "paid"
+      },
+      "groups": {}
+    },
+    "reject": true
+  },
+  {
+    "name": "tier-only",
+    "input": {
+      "subscription": {
+        "tierName": "paid"
+      }
+    },
+    "reject": true
+  },
+  {
+    "name": "mapped-dynamic-and-static",
+    "input": {
+      "plan": {
+        "name": "Paid",
+        "tier": "Team"
+      },
+      "windows": [
+        {
+          "window": "5h",
+          "left": "0",
+          "total": 100,
+          "reset_time": "tomorrow"
+        },
+        {
+          "window": "week",
+          "left": 75,
+          "total": 100
+        },
+        {
+          "left": 1,
+          "total": 0
+        },
+        {
+          "left": false,
+          "total": 10
+        }
+      ],
+      "fraction": 0.5
+    },
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "description": "Static label",
+              "remaining_fraction": "fraction",
+              "window": "manual"
+            }
+          ],
+          "buckets_path": "windows",
+          "display_name": "Allowance",
+          "remaining_amount_key": "left",
+          "total_amount_key": "total"
+        }
+      ],
+      "plan": "plan.name",
+      "tier_name": "plan.tier"
+    },
+    "expected": {
+      "subscription": {
+        "plan": "Paid",
+        "tierName": "Team"
+      },
+      "groups": [
+        {
+          "displayName": "Allowance",
+          "buckets": [
+            {
+              "window": "5h",
+              "remainingFraction": 0,
+              "resetTime": "tomorrow"
+            },
+            {
+              "window": "week",
+              "remainingFraction": 0.75
+            },
+            {
+              "window": "manual",
+              "remainingFraction": 0.5,
+              "description": "Static label"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-summary-only",
+    "input": {
+      "summary": [
+        {
+          "key": "balance",
+          "label": "Balance",
+          "value": 0
+        }
+      ]
+    },
+    "mapping": {
+      "plan": "absent"
+    },
+    "expected": {
+      "summary": [
+        {
+          "key": "balance",
+          "label": "Balance",
+          "value": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-missing",
+    "input": {},
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_fraction": "absent"
+            }
+          ]
+        }
+      ]
+    },
+    "reject": true
+  },
+  {
+    "name": "mapped-numeric-string",
+    "input": {
+      "fraction": " 0.25 "
+    },
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_fraction": "fraction"
+            }
+          ]
+        }
+      ]
+    },
+    "expected": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": 0.25
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-overflow",
+    "input": {
+      "left": 1e+308,
+      "total": 1e-308
+    },
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_amount": "left",
+              "total_amount": "total"
+            }
+          ]
+        }
+      ]
+    },
+    "reject": true
+  }
+]

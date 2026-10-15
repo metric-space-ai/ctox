@@ -1,0 +1,307 @@
+[
+  {
+    "name": "unknown-not-exhausted",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "window": "5h"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "real-zero",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {},
+            {
+              "remainingFraction": 0
+            },
+            {
+              "remaining_fraction": 0.25
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty-buckets",
+    "input": {
+      "groups": [
+        {
+          "buckets": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "bad-optional-summary",
+    "input": {
+      "subscription": {
+        "plan": "paid"
+      },
+      "SUMMARY": {
+        "invalid": true
+      }
+    }
+  },
+  {
+    "name": "summary-valid-zero-only",
+    "input": {
+      "summary": [
+        {
+          "key": " balance ",
+          "label": " Balance ",
+          "value": 0
+        },
+        {
+          "key": "missing",
+          "label": "Missing"
+        },
+        {
+          "key": 123,
+          "label": "Wrong",
+          "value": 1
+        },
+        {
+          "key": "string",
+          "label": "String",
+          "value": "0"
+        }
+      ]
+    }
+  },
+  {
+    "name": "summary-currencies",
+    "input": {
+      "summary": [
+        {
+          "key": "usd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "usd"
+        },
+        {
+          "key": "eur",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "eur"
+        },
+        {
+          "key": "US",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "US"
+        },
+        {
+          "key": "not-iso",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "not-iso"
+        },
+        {
+          "key": "ßd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "ßd"
+        },
+        {
+          "key": "ſrd",
+          "label": "Currency",
+          "value": 0,
+          "format": "currency",
+          "currency": "ſrd"
+        }
+      ]
+    }
+  },
+  {
+    "name": "canonical-fraction-wins",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": 0,
+              "remaining_fraction": 0.9
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "null-fraction-fallback",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": null,
+              "remaining_fraction": 0.9
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "string-core-fraction-rejected",
+    "input": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remainingFraction": "0.5"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "malformed-core",
+    "input": {
+      "subscription": {
+        "plan": "paid"
+      },
+      "groups": {}
+    }
+  },
+  {
+    "name": "tier-only",
+    "input": {
+      "subscription": {
+        "tierName": "paid"
+      }
+    }
+  },
+  {
+    "name": "mapped-dynamic-and-static",
+    "input": {
+      "plan": {
+        "name": "Paid",
+        "tier": "Team"
+      },
+      "windows": [
+        {
+          "window": "5h",
+          "left": "0",
+          "total": 100,
+          "reset_time": "tomorrow"
+        },
+        {
+          "window": "week",
+          "left": 75,
+          "total": 100
+        },
+        {
+          "left": 1,
+          "total": 0
+        },
+        {
+          "left": false,
+          "total": 10
+        }
+      ],
+      "fraction": 0.5
+    },
+    "mapping": {
+      "plan": "plan.name",
+      "tier_name": "plan.tier",
+      "groups": [
+        {
+          "display_name": "Allowance",
+          "buckets_path": "windows",
+          "remaining_amount_key": "left",
+          "total_amount_key": "total",
+          "buckets": [
+            {
+              "window": "manual",
+              "remaining_fraction": "fraction",
+              "description": "Static label"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-summary-only",
+    "input": {
+      "summary": [
+        {
+          "key": "balance",
+          "label": "Balance",
+          "value": 0
+        }
+      ]
+    },
+    "mapping": {
+      "plan": "absent"
+    }
+  },
+  {
+    "name": "mapped-missing",
+    "input": {},
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_fraction": "absent"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-numeric-string",
+    "input": {
+      "fraction": " 0.25 "
+    },
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_fraction": "fraction"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mapped-overflow",
+    "input": {
+      "left": 1e+308,
+      "total": 1e-308
+    },
+    "mapping": {
+      "groups": [
+        {
+          "buckets": [
+            {
+              "remaining_amount": "left",
+              "total_amount": "total"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

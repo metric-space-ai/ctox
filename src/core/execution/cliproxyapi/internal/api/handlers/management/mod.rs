@@ -17,6 +17,10 @@ mod logs;
 mod model_definitions;
 mod oauth_callback;
 mod oauth_sessions;
+mod plugin_quota;
+mod plugin_quota_probe;
+#[cfg(test)]
+mod plugin_quota_test;
 mod plugin_store;
 mod plugins;
 mod quota;
@@ -148,6 +152,8 @@ pub use oauth_sessions::{
     ManagementOAuthClock, ManagementOAuthSession, ManagementOAuthSessionError,
     ManagementOAuthSessionSource, ManagementOAuthSessions,
 };
+pub use plugin_quota::{normalize_quota_probe, QuotaProbeError};
+pub use plugin_quota_probe::{ManagementQuotaProbe, ManagementQuotaProbeError};
 pub use plugin_store::{
     ManagementPluginInstallRequest, ManagementPluginInstallResult, ManagementPluginStagedInstall,
     ManagementPluginStoreAuthority, ManagementPluginStoreAuthorityError,

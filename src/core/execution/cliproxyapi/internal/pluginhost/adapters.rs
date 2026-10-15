@@ -358,6 +358,9 @@ pub fn plugin_from_record(
                 .stream_chunk_interceptor
                 .then(|| Arc::new(RpcStreamChunkInterceptor::new(client.clone())) as _),
             thinking_applier,
+            // The additive quota SDK slot is not advertised by process plugins
+            // until their guarded quota RPC adapter is installed.
+            quota_provider: None,
             usage_plugin: rpc
                 .usage_plugin
                 .then(|| Arc::new(RpcUsagePlugin::new(client.clone())) as _),
