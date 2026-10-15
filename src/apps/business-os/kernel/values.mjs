@@ -21,6 +21,7 @@ export function cloneValue(v) {
   return structuredClone(v);
 }
 export function deepFreeze(v) {
+  if(typeof HTMLElement==='function' && v instanceof HTMLElement)return v;
   if (v === null || typeof v !== 'object' || Object.isFrozen(v) || isBlob(v) || ArrayBuffer.isView(v)) return v;
   Object.freeze(v);
   for (const k of Object.keys(v)) deepFreeze(v[k]);

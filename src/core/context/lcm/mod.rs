@@ -1,3 +1,17 @@
+// This adapter lives in the assigned store file until the integrator exposes
+// it from ctox-store; no second registry or file owner is constructed here.
+#[path = "../../store/lcm_adapter.rs"]
+pub(crate) mod owner_adapter;
+
+/// Inject the existing Core owner; schema initialization is P3-06's responsibility.
+pub(crate) async fn attach_lcm_store(
+    root: &std::path::Path,
+    writer: ctox_store::writer::WriterHandle,
+    readers: ctox_store::read_pool::ReadPool,
+) -> std::result::Result<owner_adapter::OwnerAdapter, ctox_store::StoreError> {
+    owner_adapter::OwnerAdapter::attach(&crate::paths::lcm_db(root), writer, readers).await
+}
+
 mod mission_state;
 mod runtime_support;
 mod worker_runs;
@@ -911,35 +925,6 @@ pub struct LcmEngine {
     config: LcmConfig,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JournalMode {
-    Wal,
-    Delete,
-    Truncate,
-}
-
-impl JournalMode {
-    fn from_env() -> Self {
-        let value = std::env::var("CTOX_LCM_JOURNAL_MODE")
-            .ok()
-            .or_else(|| std::env::var("CTOX_SQLITE_JOURNAL_MODE").ok())
-            .unwrap_or_else(|| "wal".to_string());
-        match value.trim().to_ascii_lowercase().as_str() {
-            "delete" => Self::Delete,
-            "truncate" => Self::Truncate,
-            _ => Self::Wal,
-        }
-    }
-
-    fn as_sql(self) -> &'static str {
-        match self {
-            Self::Wal => "WAL",
-            Self::Delete => "DELETE",
-            Self::Truncate => "TRUNCATE",
-        }
-    }
-}
-
 impl LcmEngine {
     pub fn open(path: &Path, config: LcmConfig) -> Result<Self> {
         let conn = Connection::open(path)
@@ -952,7 +937,7 @@ impl LcmEngine {
         };
         // Skip the writer-locked schema-init batch on subsequent opens of the
         // same database file. The first open per process still runs the full
-        // init (with WAL fallback); later opens just reuse it.
+        // init; later opens just reuse it. Journal policy belongs to the owner.
         let canonical = path.to_path_buf();
         if initialized_lcm_paths()
             .lock()
@@ -961,30 +946,7 @@ impl LcmEngine {
         {
             return Ok(engine);
         }
-        let journal_mode = JournalMode::from_env();
-        if let Err(err) = engine.init_schema(journal_mode) {
-            if journal_mode == JournalMode::Wal && is_shared_memory_io_error(&err) {
-                let conn = Connection::open(path).with_context(|| {
-                    format!(
-                        "failed to reopen SQLite database {} after WAL error",
-                        path.display()
-                    )
-                })?;
-                conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-                    .context("failed to configure SQLite busy_timeout for LCM fallback")?;
-                let fallback = Self {
-                    conn,
-                    config: config.clone(),
-                };
-                fallback.init_schema(JournalMode::Delete)?;
-                initialized_lcm_paths()
-                    .lock()
-                    .unwrap_or_else(|err| err.into_inner())
-                    .insert(canonical);
-                return Ok(fallback);
-            }
-            return Err(err);
-        }
+        engine.init_schema()?;
         initialized_lcm_paths()
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -1002,11 +964,10 @@ impl LcmEngine {
             .context("failed to override SQLite busy_timeout for LCM")
     }
 
-    fn init_schema(&self, journal_mode: JournalMode) -> Result<()> {
-        self.conn.execute_batch(&format!(
+    fn init_schema(&self) -> Result<()> {
+        self.conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
-            PRAGMA journal_mode = {};
 
             CREATE TABLE IF NOT EXISTS messages (
                 message_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1204,8 +1165,7 @@ impl LcmEngine {
             CREATE INDEX IF NOT EXISTS idx_secret_rewrites_conversation_time
                 ON secret_rewrites(conversation_id, created_at DESC);
             "#,
-            journal_mode.as_sql()
-        ))?;
+        )?;
         self.ensure_schema_upgrades()?;
         self.ensure_worker_attempt_finalization_schema()?;
         self.ensure_worker_run_identity_schema()?;
