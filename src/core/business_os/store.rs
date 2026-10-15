@@ -1471,7 +1471,7 @@ pub(crate) fn owner_queue_projection_effect(
         stamp_canonical_queue_mirror_versions(body, None, clock);
         redact_document_client_context_secrets(body);
     }
-    Ok(json!({"queue":queue,"command":command}))
+    Ok(serde_json::json!({"queue":queue,"command":command}))
 }
 
 fn refresh_attached_queue_projections(
