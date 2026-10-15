@@ -7,7 +7,7 @@
       "expected_current_revision": 32,
       "expected_current_script_sha256": "d7a2e2ba0c6213e2fbe6a7e480a15963343788ac4a609e8256e5d35a3f5a17dd",
       "source_path": "src/core/capabilities/scrape/adapters/google-de-authenticated.js",
-      "script_sha256": "ee8fea1a238f132c66473f465e7b64c2bfafaeb244404bf2a4dfde2701e65cab",
+      "script_sha256": "1db7012cce1057d7b8f1d7c7859d3a6a13b5216597cc84e956c98cd87b312e63",
       "language": "javascript"
     },
     {

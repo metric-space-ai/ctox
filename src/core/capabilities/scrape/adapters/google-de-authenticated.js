@@ -492,10 +492,54 @@ function quoteTerm(term) {
   return /\s/.test(term) ? `"${term.replace(/"/g, "")}"` : term;
 }
 
+// A free query that lists the company with all its legal form plus every
+// title ("linkedin Hüttenes-Albertus Chemische Werke GmbH Supply Chain
+// Management Leiter Logistik") makes Google AND all words and returns no
+// profile. Measured 15.10.2026: the same company and titles as
+// site:linkedin.com/in "Hüttenes-Albertus" ("Supply" OR "Logistik" …)
+// returned 9 employee profiles. So every free query also runs in this form.
+const GENERIC_TITLE_WORDS = new Set([
+  "linkedin", "xing", "site", "com", "in", "leiter", "leiterin", "head", "of", "manager", "managerin",
+  "management", "director", "direktor", "senior", "vice", "president", "chief", "officer", "und", "and",
+  "oder", "or", "der", "die", "das", "bei", "the", "for", "fur", "von", "deutschland", "germany",
+]);
+
+// LinkedIn writes "Budenheim", not "Chemische Fabrik Budenheim KG": search
+// and filter on the most distinctive word of the name instead of the first.
+const GENERIC_COMPANY_WORDS = new Set([
+  "chemische", "chemie", "fabrik", "werke", "werk", "germany", "deutschland", "gruppe", "group",
+  "international", "industries", "industrie", "gesellschaft", "verwaltung", "service", "services",
+]);
+
+function distinctiveWord(company) {
+  const words = searchName(company).split(/\s+/)
+    .filter((word) => normalized(word).replace(/\s+/g, "").length >= 3 && !GENERIC_COMPANY_WORDS.has(normalized(word)));
+  return words.find((word) => word.length >= 5)
+    || words.slice(0, 3).reduce((best, word) => (word.length > best.length ? word : best), "")
+    || searchName(company);
+}
+
+function linkedinSiteQuery(query, company, shortName) {
+  if (/\bsite:/i.test(query)) return "";
+  const companyWords = new Set([...normalized(company).split(/\s+/), ...LEGAL_TOKENS]);
+  const terms = [];
+  for (const word of normalized(query).split(/\s+/)) {
+    if (word.length < 3 || companyWords.has(word) || GENERIC_TITLE_WORDS.has(word) || terms.includes(word)) continue;
+    terms.push(word);
+  }
+  const name = distinctiveWord(company) || shortName;
+  if (terms.length === 0) return `site:linkedin.com/in "${name}"`;
+  return `site:linkedin.com/in "${name}" (${terms.slice(0, 8).join(" OR ")})`;
+}
+
 function personQueries(input, company) {
   const queries = [];
   const shortName = searchName(company);
-  if (String(input.query || "").trim()) queries.push(String(input.query).trim());
+  if (String(input.query || "").trim()) {
+    queries.push(String(input.query).trim());
+    const site = linkedinSiteQuery(String(input.query), company, shortName);
+    if (site) queries.push(site);
+  }
   const titles = Array.isArray(input.titles) ? input.titles.map((t) => String(t || "").trim()).filter(Boolean) : [];
   for (const title of titles) queries.push(`linkedin "${shortName}" ${quoteTerm(title)}`);
   // title_groups: one search per group, titles OR-combined.
@@ -515,7 +559,7 @@ function wantsPersonMode(input) {
 
 async function personSearch(input, company, country, token, zone) {
   const queries = personQueries(input, company);
-  const firstToken = identityTokens(company)[0];
+  const firstToken = normalized(distinctiveWord(company)).split(/\s+/)[0] || identityTokens(company)[0];
   if (queries.length === 0 || !firstToken) {
     return { records: [], failure_mode: "invalid_input", detail: "person search needs a company name token and at least one title or query" };
   }

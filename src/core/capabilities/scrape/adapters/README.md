@@ -4,7 +4,8 @@ These are source artifacts for the registered `google-de` and `maps-google-com`
 adapters, not the excluded local web-stack crate. They are the successors of
 the deployed google-de revision 32 and maps-google-com revision 32 and were
 registered on the production instance on 14 October 2026 as google-de
-revision 38 and maps-google-com revision 34 (byte-identical to these files).
+revision 38 and maps-google-com revision 34; the google-de source here is
+registered there as revision 39 (15 October 2026, byte-identical).
 
 Why: Google answers the server IP's own searches and Maps requests only with
 its robot check ("ungewöhnlicher Datenverkehr"), whether or not the owner-bound
@@ -40,8 +41,17 @@ or `query`: all `linkedin "<company without legal form>" <titles>` searches run
 in parallel within 55 s and return LinkedIn profile candidates
 (`person_vorname`, `person_nachname`, `person_position`, `person_linkedin`,
 source = normalized profile URL, note = hit title and snippet) whose hit names
-the company's first distinctive token. Confirmation of the current employer is
-left to `linkedin-com`.
+the company's most distinctive name word (the first word of at least five
+letters that is not generic such as "Chemische" or "Werke": "Budenheim" for
+"Chemische Fabrik Budenheim KG"). Confirmation of the current employer is left
+to `linkedin-com`.
+
+A free `query` additionally runs as `site:linkedin.com/in "<distinctive word>"
+(<title words OR-combined>)`: Google ANDs every word of a long free query
+("linkedin Hüttenes-Albertus Chemische Werke GmbH Supply Chain Management
+Leiter Logistik") and returned no profile in ten research runs on
+15 October 2026, while the site form returned nine employee profiles for the
+same company and titles.
 
 `maps-google-com` reads the Google business profile from the same SERP API:
 the business panel of the web search for the company (plus `city` /

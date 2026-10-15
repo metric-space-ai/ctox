@@ -234,6 +234,27 @@ test('google.de: person search without any matching profile is portal_drift', as
   assert.equal(new URL(f.requests[0].body.url).searchParams.get('q'), 'linkedin "Example" CFO');
 });
 
+test('google.de: a free query also runs as a LinkedIn site search on the distinctive name word', async () => {
+  const answer = (body) => {
+    const q = new URL(body.url).searchParams.get('q');
+    return { status: 200, body: serp({ organic: q.startsWith('site:')
+      ? [{ link: 'https://de.linkedin.com/in/nina-beispiel', title: 'Nina Beispiel – Head of Supply Chain Germany – Budenheim | LinkedIn', description: '' }]
+      : [{ link: 'https://www.example.org/news', title: 'Chemische Fabrik news', description: '' }] }) };
+  };
+  const f = fixture('google-de-authenticated.js', {
+    company: 'Chemische Fabrik Budenheim KG', country: 'DE',
+    query: 'linkedin Chemische Fabrik Budenheim KG Supply Chain Leiter Logistik',
+  }, { responses: [answer, answer] });
+  const result = await f.run();
+  const queries = f.requests.map((r) => new URL(r.body.url).searchParams.get('q')).sort();
+  assert.deepEqual(queries, [
+    'linkedin Chemische Fabrik Budenheim KG Supply Chain Leiter Logistik',
+    'site:linkedin.com/in "Budenheim" (supply OR chain OR logistik)',
+  ]);
+  assert.deepEqual(result.records.filter((r) => r.field === 'person_linkedin').map((r) => r.value),
+    ['https://www.linkedin.com/in/nina-beispiel']);
+});
+
 // --- maps.google.com ---------------------------------------------------------
 
 test('maps.google.com: business panel yields address, phone and domain on the Maps search URL', async () => {
