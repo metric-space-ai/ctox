@@ -129,6 +129,11 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<()> {
           app_ver TEXT NOT NULL,table_name TEXT NOT NULL UNIQUE,migrated_at_seq INTEGER,
           archived_at INTEGER,retire_after INTEGER,PRIMARY KEY(name,gen));
          CREATE UNIQUE INDEX IF NOT EXISTS _collections_active ON _collections(name) WHERE state='active';
+         CREATE TABLE IF NOT EXISTS _client_app_activations(
+          participant TEXT NOT NULL,app_id TEXT NOT NULL,app_ver TEXT NOT NULL,
+          receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+          checkpoints_json TEXT NOT NULL CHECK(json_valid(checkpoints_json)),
+          PRIMARY KEY(participant,app_id,app_ver)) WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS _schema_publications(
           operation_id TEXT PRIMARY KEY,app_id TEXT NOT NULL,base_app_ver TEXT NOT NULL,
           target_app_ver TEXT NOT NULL,migrated_at_seq INTEGER NOT NULL);
@@ -2021,14 +2026,14 @@ pub(crate) fn mirror_generation_write(
 /// Validate an authenticated participant's durable checkpoint acknowledgements.
 /// This is the data-ready barrier only: artifact verification and the client's
 /// atomic activation pointer belong to the Kernel. Sending pages is not an ack.
-pub fn validate_activation_checkpoints(
+pub fn validate_activation_checkpoints<A: change_log::subscription::ReadAuthority + ?Sized>(
     tx: &Transaction<'_>,
     instance_id: &str,
     participant: &str,
     app_id: &str,
     app_ver: &str,
     checkpoints: &[change_log::subscription::protocol::Checkpoint],
-    authority: &dyn change_log::subscription::ReadAuthority,
+    authority: &A,
 ) -> Result<u64> {
     let current: Option<String> = tx
         .query_row(
@@ -2089,6 +2094,139 @@ pub fn validate_activation_checkpoints(
         barrier = barrier.max(watermark);
     }
     Ok(barrier)
+}
+
+/// App admission comes from the native authenticated session, never from this payload.
+pub trait ActivationAuthority: change_log::subscription::ReadAuthority {
+    fn authorize_app(
+        &self,
+        tx: &Transaction<'_>,
+        participant: &str,
+        app_id: &str,
+        app_ver: &str,
+    ) -> Result<()>;
+}
+/// Historical client acknowledgement, not proof that an offline client still has
+/// current rights, artifacts, or an active pointer. Consumers must not infer it
+/// from publication or from a sender's read cursor.
+pub fn client_activation(
+    tx: &Transaction<'_>,
+    participant: &str,
+    app_id: &str,
+    app_ver: &str,
+) -> Result<Option<change_log::subscription::protocol::AppActivationReceipt>> {
+    let json: Option<String> = tx.query_row(
+        "SELECT receipt_json FROM _client_app_activations WHERE participant=?1 AND app_id=?2 AND app_ver=?3",
+        params![participant,app_id,app_ver],|r|r.get(0)).optional()?;
+    json.map(|s| serde_json::from_str(&s).map_err(|e| invalid(e.to_string())))
+        .transpose()
+}
+pub fn record_client_activation(
+    tx: &Transaction<'_>,
+    instance_id: &str,
+    participant: &str,
+    request: &change_log::subscription::protocol::AppActivation,
+    now_ms: u64,
+    authority: &dyn ActivationAuthority,
+) -> Result<change_log::subscription::protocol::AppActivationReceipt> {
+    use change_log::subscription::protocol::{AppActivationReceipt, AppActivationState};
+    atomic(tx, || {
+        initialize(tx)?;
+        if instance_id.is_empty()
+            || participant.is_empty()
+            || request.app_id.is_empty()
+            || request.app_ver.is_empty()
+            || request.checkpoints.len() > 4096
+        {
+            return Err(invalid("invalid activation binding"));
+        }
+        authority.authorize_app(tx, participant, &request.app_id, &request.app_ver)?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT app_ver FROM _schema_apps WHERE app_id=?1",
+                [&request.app_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current.as_deref() != Some(request.app_ver.as_str()) {
+            return Err(invalid("activation publication differs"));
+        }
+        let head = change_log::head(tx)?;
+        if request.at_seq.0 > head.head_seq {
+            return Err(invalid("activation sequence is ahead"));
+        }
+        integer(now_ms)?;
+        if request.state == AppActivationState::Failed {
+            let reason = request
+                .reason
+                .as_deref()
+                .ok_or_else(|| invalid("activation failure needs reason"))?;
+            if reason.is_empty()
+                || reason.len() > 96
+                || !reason
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
+            {
+                return Err(invalid("activation reason must be a machine code"));
+            }
+        } else if request.reason.is_some() {
+            return Err(invalid("unexpected activation failure reason"));
+        }
+        if request.state == AppActivationState::Activated {
+            let watermark = validate_activation_checkpoints(
+                tx,
+                instance_id,
+                participant,
+                &request.app_id,
+                &request.app_ver,
+                &request.checkpoints,
+                authority,
+            )?;
+            if request.at_seq.0 < watermark
+                || request
+                    .checkpoints
+                    .iter()
+                    .any(|cp| cp.seq.0 < request.at_seq.0)
+            {
+                return Err(invalid(
+                    "activation requires_page: acknowledgement is behind",
+                ));
+            }
+        } else if !request.checkpoints.is_empty() {
+            return Err(invalid("only activated reports carry checkpoints"));
+        }
+        let previous = client_activation(tx, participant, &request.app_id, &request.app_ver)?;
+        if let Some(prior) = &previous {
+            if prior.state == request.state
+                && prior.at_seq == request.at_seq
+                && prior.reason == request.reason
+            {
+                return Ok(prior.clone());
+            }
+            if request.at_seq < prior.at_seq
+                || (prior.state == AppActivationState::Activated
+                    && request.state != AppActivationState::Activated)
+            {
+                return Err(invalid("stale activation acknowledgement"));
+            }
+        }
+        let receipt = AppActivationReceipt {
+            app_id: request.app_id.clone(),
+            app_ver: request.app_ver.clone(),
+            state: request.state,
+            at_seq: request.at_seq,
+            reason: request.reason.clone(),
+            recorded_at_ms: previous.map_or(now_ms, |p| now_ms.max(p.recorded_at_ms)),
+        };
+        let json = serde_json::to_string(&receipt).map_err(|e| invalid(e.to_string()))?;
+        let checkpoints =
+            serde_json::to_string(&request.checkpoints).map_err(|e| invalid(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO _client_app_activations(participant,app_id,app_ver,receipt_json,checkpoints_json) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(participant,app_id,app_ver) DO UPDATE SET receipt_json=excluded.receipt_json,checkpoints_json=excluded.checkpoints_json",
+            params![participant,request.app_id,request.app_ver,json,checkpoints])?;
+        Ok(receipt)
+    })
 }
 
 /// Core-side generation orchestration. Each call uses one bounded writer job;
@@ -2214,6 +2352,35 @@ impl GenerationRunner {
                         &page,
                         &outputs,
                         now,
+                    )?)
+                },
+            ))?
+            .await
+    }
+    /// The caller binds instance/participant to the admitted native session.
+    /// Receipt persistence and the current data/rights barrier share ONE writer transaction.
+    pub async fn acknowledge_activation(
+        &self,
+        instance_id: String,
+        participant: String,
+        request: change_log::subscription::protocol::AppActivation,
+        now_ms: u64,
+        authority: std::sync::Arc<dyn ActivationAuthority>,
+    ) -> std::result::Result<
+        change_log::subscription::protocol::AppActivationReceipt,
+        crate::StoreError,
+    > {
+        self.writer
+            .submit(crate::WriteJob::new(
+                crate::JobOptions::default(),
+                move |tx| {
+                    Ok(record_client_activation(
+                        tx,
+                        &instance_id,
+                        &participant,
+                        &request,
+                        now_ms,
+                        authority.as_ref(),
                     )?)
                 },
             ))?

@@ -1228,3 +1228,158 @@ async fn pending_generation_reopens_and_bootstraps_new_publication_receipts() {
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
+
+impl crate::schema::ActivationAuthority for NativePolicy {
+    fn authorize_app(
+        &self,
+        _: &Transaction<'_>,
+        participant: &str,
+        _: &str,
+        _: &str,
+    ) -> rusqlite::Result<()> {
+        if participant != "alice" {
+            return Err(invalid("app activation forbidden"));
+        }
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn core_activation_is_an_authenticated_client_ack_after_the_generation_barrier() {
+    let (_dir, runner, writer, readers) = generation_runtime().await;
+    runner
+        .prepare(generation_lock(), next_definition())
+        .await
+        .unwrap();
+    runner
+        .migrate_batch(generation_lock(), "items".into(), 100, transformed)
+        .await
+        .unwrap();
+    let watermark = runner.publish(generation_lock(), 101).await.unwrap();
+    readers
+        .read(|tx| {
+            assert!(
+                crate::schema::client_activation(tx, "alice", "test", "2")?.is_none(),
+                "publish never infers client activation"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let received = AppActivation {
+        app_id: "test".into(),
+        app_ver: "2".into(),
+        state: AppActivationState::Received,
+        at_seq: Seq(0),
+        checkpoints: vec![],
+        reason: None,
+    };
+    let json = serde_json::to_value(ClientMessage::AppActivation(received.clone())).unwrap();
+    assert_eq!(json["type"], "app_activation");
+    assert_eq!(json["at_seq"], "0");
+    assert!(runner
+        .acknowledge_activation(
+            "isolated-core".into(),
+            "mallory".into(),
+            received.clone(),
+            1000,
+            Arc::new(NativePolicy)
+        )
+        .await
+        .is_err());
+    runner
+        .acknowledge_activation(
+            "isolated-core".into(),
+            "alice".into(),
+            received.clone(),
+            1001,
+            Arc::new(NativePolicy),
+        )
+        .await
+        .unwrap();
+    let key = TestInstanceKey::new();
+    let mut sub =
+        Subscription::new(readers.clone(), &writer, generation_scope(2, "items"), None).unwrap();
+    next(&mut sub, &key, 10).await;
+    let checkpoint = sub.checkpoint().unwrap();
+    let mut activated = AppActivation {
+        state: AppActivationState::Activated,
+        at_seq: Seq(watermark),
+        checkpoints: vec![checkpoint],
+        ..received.clone()
+    };
+    activated.checkpoints[0].gen = 1;
+    assert!(runner
+        .acknowledge_activation(
+            "isolated-core".into(),
+            "alice".into(),
+            activated.clone(),
+            1002,
+            Arc::new(NativePolicy)
+        )
+        .await
+        .is_err());
+    readers
+        .read(|tx| {
+            assert_eq!(
+                crate::schema::client_activation(tx, "alice", "test", "2")?
+                    .unwrap()
+                    .state,
+                AppActivationState::Received,
+                "rejected report cannot advance state"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    activated.checkpoints[0].gen = 2;
+    let first = runner
+        .acknowledge_activation(
+            "isolated-core".into(),
+            "alice".into(),
+            activated.clone(),
+            1003,
+            Arc::new(NativePolicy),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.state, AppActivationState::Activated);
+    let replay = runner
+        .acknowledge_activation(
+            "isolated-core".into(),
+            "alice".into(),
+            activated,
+            1004,
+            Arc::new(NativePolicy),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first, replay, "same report retains its original receipt");
+    assert!(
+        runner
+            .acknowledge_activation(
+                "isolated-core".into(),
+                "alice".into(),
+                AppActivation {
+                    at_seq: Seq(watermark),
+                    ..received
+                },
+                1005,
+                Arc::new(NativePolicy)
+            )
+            .await
+            .is_err(),
+        "late received cannot downgrade activated"
+    );
+    let db = writer.db_id().clone();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+    let mut reopened = rusqlite::Connection::open(db.path()).unwrap();
+    let tx = reopened.transaction().unwrap();
+    assert_eq!(
+        crate::schema::client_activation(&tx, "alice", "test", "2").unwrap(),
+        Some(first.clone())
+    );
+    let wire = serde_json::to_value(CoreMessage::AppActivationResult(first)).unwrap();
+    assert_eq!(wire["type"], "app_activation_result");
+    assert_eq!(wire["at_seq"], watermark.to_string());
+}
