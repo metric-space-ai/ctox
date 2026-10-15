@@ -147,7 +147,9 @@ fn prior(
     row.map(|(json, expires)| {
         let mut result: WriteResult =
             serde_json::from_str(&json).map_err(|e| invalid(e.to_string()))?;
-        if now > expires {
+        let op_expired = operation_time(&result.op_id)
+            .is_ok_and(|issued| now.saturating_sub(issued) > OP_HORIZON_MS);
+        if now > expires || op_expired {
             result.status = WriteStatus::Rejected;
             result.reason = Some("expired".into());
             result.seq = None;
@@ -356,12 +358,16 @@ fn ingest(
             let invalid_previous = if known {
                 false
             } else if let Some(previous) = &request.prev_op_id {
-                operation_time(previous).is_err()
-                    || !tx.query_row(
+                match operation_time(previous) {
+                    Err(_) => true,
+                    // Preserve the original expired classification even after _ops GC.
+                    Ok(issued) if now.saturating_sub(issued) > OP_HORIZON_MS => false,
+                    Ok(_) => !tx.query_row(
                         "SELECT EXISTS(SELECT 1 FROM _ops WHERE op_id=?1)",
                         [previous],
                         |r| r.get::<_, bool>(0),
-                    )?
+                    )?,
+                }
             } else {
                 false
             };
