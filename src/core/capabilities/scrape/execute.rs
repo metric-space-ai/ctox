@@ -529,7 +529,8 @@ pub(crate) fn execute_scrape_with_probe_grant(
         target.script.script_path = path.clone();
     }
     let workspace_dir = resolve_workspace_dir(root, &target.view.workspace_dir);
-    let _run_lock = acquire_target_run_lock(&workspace_dir, target_key)?;
+    let _run_lock =
+        acquire_target_run_lock_waiting(&workspace_dir, target_key, TARGET_RUN_LOCK_WAIT)?;
     let run_started_at = now_iso_string();
     let run_id = format!(
         "scrape_run-{}",
@@ -1356,6 +1357,36 @@ pub(super) fn execute_registered_script(
         stdout_text: String::from_utf8_lossy(&stdout_bytes).to_string(),
         stderr_text: String::from_utf8_lossy(&stderr_bytes).to_string(),
     })
+}
+
+/// How long a run waits for another live run of the same target to finish.
+/// Measured 15 October 2026: ten research agents ran in parallel, and every
+/// second call to a single-session target (D&B Hoovers, Leadfeeder, Google)
+/// failed at once with "already has an active run"; the agents recorded the
+/// source as unavailable and left WZ code, revenue and employee counts open
+/// although the source answered the other agent seconds later.
+pub(super) const TARGET_RUN_LOCK_WAIT: Duration = Duration::from_secs(150);
+
+/// Like [`acquire_target_run_lock`], but waits up to `wait` while a live run
+/// holds the target. A stale lock is still reclaimed at once.
+pub(super) fn acquire_target_run_lock_waiting(
+    workspace_dir: &Path,
+    target_key: &str,
+    wait: Duration,
+) -> Result<TargetRunLock> {
+    let deadline = Instant::now() + wait;
+    loop {
+        match acquire_target_run_lock(workspace_dir, target_key) {
+            Ok(lock) => return Ok(lock),
+            Err(err)
+                if Instant::now() < deadline
+                    && format!("{err:#}").contains("already has an active run") =>
+            {
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 pub(super) fn acquire_target_run_lock(
