@@ -65,7 +65,7 @@ pub(super) async fn read_snapshot<T: Send + 'static>(
         let (before, callback) = measured.unwrap_or_default();
         eprintln!(
             "ctox_owner_read_timing={}",
-            serde_json::json!({"stage":stage,"outcome":outcome,"callback_entered":measured.is_some(),"pre_callback_us":before.as_micros(),"callback_us":callback.as_micros(),"post_callback_us":elapsed.saturating_sub(before+callback).as_micros(),"total_us":elapsed.as_micros()})
+            serde_json::json!({"stage":stage,"outcome":outcome,"callback_completed":measured.is_some(),"pre_callback_us":measured.map(|m|m.0.as_micros()),"callback_us":measured.map(|m|m.1.as_micros()),"post_callback_us":measured.map(|_|elapsed.saturating_sub(before+callback).as_micros()),"total_us":elapsed.as_micros()})
         );
     }
     result
