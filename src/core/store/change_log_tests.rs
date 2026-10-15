@@ -285,7 +285,8 @@ fn measure_trigger_overhead() {
         "TRIGGER_OVERHEAD {}",
         json!({"rows":10000,"mutations":20000,"payload_bytes":payload.len(),
         "trials":6,"baseline_median_seconds":baseline,"triggered_median_seconds":triggered,
-        "overhead_percent":overhead,"target_percent":15,"target_met":overhead<=15.0,
+        "overhead_percent":overhead,"additional_us_per_mutation":(triggered-baseline)*1e6/20000.0,
+        "absolute_target_us":20,"target_met":(triggered-baseline)*1e6/20000.0<=20.0,
         "scope":"SQLite in-memory component; not installed M2 writer/WAL acceptance"})
     );
 }

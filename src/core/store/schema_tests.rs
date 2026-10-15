@@ -1,4 +1,496 @@
 #[test]
+fn schema_archive_preserves_old_value_but_explicit_remove_erases_it_and_denies_deleted_revision_writes(
+) {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let old = definition("items");
+    create_collection(&tx, &old).unwrap();
+    put(&tx, "c_items", "one", "1");
+    reserve_publish(&tx, &lock()).unwrap();
+    prepare_migration(&tx, &lock(), &next(&old)).unwrap();
+    let page = change_log::read_page(&tx, "items", 1, 0, 500).unwrap();
+    apply_migration_page(
+        &tx,
+        &lock(),
+        "items",
+        0,
+        &page,
+        &[MigrationOutput::Archive {
+            reason: "not convertible".into(),
+        }],
+        100,
+    )
+    .unwrap();
+    assert_eq!(
+        count(&tx, "_archive"),
+        1,
+        "E4 archival survives target tombstone creation"
+    );
+    remove_document(&tx, "items", 1, "one", "1", "removed").unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert!(dual_write(
+        &tx,
+        &lock(),
+        "items",
+        &SourceWrite {
+            id: "one".into(),
+            base_rev: Some("removed".into()),
+            rev: "resurrect".into(),
+            body: json!({"value":"new"}),
+            deleted: false
+        },
+        &MigrationOutput::Upsert {
+            rev: "new".into(),
+            body: json!({"value":42})
+        },
+        101
+    )
+    .is_err());
+    assert!(tx
+        .query_row(
+            "SELECT data IS NULL FROM c_items__g2 WHERE id='one'",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+}
+fn with_online_index() -> CollectionDefinition {
+    let mut new = definition("items");
+    new.schema_ver = 2;
+    new.app_ver = "2".into();
+    new.schema_json["indexes"] = json!(["value", "other"]);
+    new
+}
+fn physical_rows(
+    tx: &Transaction<'_>,
+    table: &str,
+) -> Vec<(String, String, u32, Option<String>, bool)> {
+    tx.prepare(&format!(
+        "SELECT id,rev,schema_ver,data,deleted FROM {table} ORDER BY id"
+    ))
+    .unwrap()
+    .query_map([], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>>>()
+    .unwrap()
+}
+#[test]
+fn online_index_resumes_and_mirrors_concurrent_writes_without_changing_generation_or_sequences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("online.sqlite");
+    let mut db = Connection::open(&path).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        create_collection(&tx, &definition("items")).unwrap();
+        for n in 0..12 {
+            put(&tx, "c_items", &format!("{n:04}"), "1");
+        }
+        reserve_publish(&tx, &lock()).unwrap();
+        update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+        let page = build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+        assert_eq!(
+            (page.cursor.as_deref(), page.copied, page.complete),
+            (Some("0002"), 3, false)
+        );
+        tx.commit().unwrap();
+    }
+    drop(db);
+    let mut db = Connection::open(&path).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        tx.execute(
+            "UPDATE c_items SET rev='updated',data=json_set(data,'$.other',42) WHERE id='0000'",
+            [],
+        )
+        .unwrap();
+        tx.execute("UPDATE c_items SET id='Z2' WHERE id='0002'", [])
+            .unwrap();
+        tx.execute("DELETE FROM c_items WHERE id='0001'", [])
+            .unwrap();
+        put(&tx, "c_items", "000A", "new");
+        remove_document(&tx, "items", 1, "0003", "1", "deleted").unwrap();
+        tx.commit().unwrap();
+    }
+    loop {
+        let tx = db.transaction().unwrap();
+        let page = build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+        assert!(page.copied <= 3);
+        tx.commit().unwrap();
+        if page.complete {
+            break;
+        }
+    }
+    let tx = db.transaction().unwrap();
+    put(&tx, "c_items", "late", "latest");
+    let before = physical_rows(&tx, "c_items");
+    let head = change_log::head(&tx).unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(change_log::head(&tx).unwrap(), head); // No synthetic document mutations during physical swap.
+    assert_eq!(physical_rows(&tx, "c_items"), before);
+    assert_eq!(active_collection(&tx, "items").unwrap().unwrap().gen, 1);
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+    let column = indexed_column("other").unwrap();
+    let detail: String = tx
+        .query_row(
+            &format!("EXPLAIN QUERY PLAN SELECT id FROM c_items WHERE {column}=42"),
+            [],
+            |r| r.get(3),
+        )
+        .unwrap();
+    assert!(detail.contains("USING INDEX"), "{detail}");
+    let retired: String = tx
+        .query_row("SELECT retired_table FROM _index_builds", [], |r| r.get(0))
+        .unwrap();
+    // Both native remove and a foreign hard delete scrub old physical copies immediately.
+    tx.execute("DELETE FROM c_items WHERE id='0000'", [])
+        .unwrap();
+    let erased: bool = tx
+        .query_row(
+            &format!("SELECT data IS NULL AND deleted=1 FROM {retired} WHERE id='0000'"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(erased);
+    // A subsequent physical swap must reattach all older retained-copy privacy
+    // triggers to the new active table, even if its immediate predecessor is GC'd.
+    let second = PublishLock {
+        app_id: "app".into(),
+        base_app_ver: "2".into(),
+        target_app_ver: "3".into(),
+        operation_id: "second-index".into(),
+    };
+    reserve_publish(&tx, &second).unwrap();
+    let mut v3 = with_online_index();
+    v3.schema_ver = 3;
+    v3.app_ver = "3".into();
+    v3.schema_json["indexes"] = json!(["value", "other", "third"]);
+    update_compatible(&tx, &second, &v3).unwrap();
+    assert!(
+        build_online_index_page(&tx, &second, "items", 100)
+            .unwrap()
+            .complete
+    );
+    activate_publication(&tx, &second, 101).unwrap();
+    assert!(purge_online_index_page(&tx, &second.operation_id, "items", 500).unwrap());
+    tx.execute("DELETE FROM c_items WHERE id='0004'", [])
+        .unwrap();
+    let erased: bool = tx
+        .query_row(
+            &format!("SELECT data IS NULL AND deleted=1 FROM {retired} WHERE id='0004'"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        erased,
+        "older copy remains protected after a later copy is retired"
+    );
+
+    tx.commit().unwrap();
+}
+
+#[test]
+fn aborting_an_online_index_preserves_active_data_and_uses_bounded_private_copy_cleanup() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    for n in 0..7 {
+        put(&tx, "c_items", &n.to_string(), "1");
+    }
+    reserve_publish(&tx, &lock()).unwrap();
+    update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+    build_online_index_page(&tx, &lock(), "items", 3).unwrap();
+    let target: String = tx
+        .query_row("SELECT target_table FROM _index_builds", [], |r| r.get(0))
+        .unwrap();
+    abort_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(count(&tx, "c_items"), 7);
+    tx.execute("DELETE FROM c_items WHERE id='0'", []).unwrap();
+    assert!(tx
+        .query_row(
+            &format!("SELECT data IS NULL FROM {target} WHERE id='0'"),
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+    assert!(!purge_online_index_page(&tx, &lock().operation_id, "items", 2).unwrap());
+    assert_eq!(count(&tx, &target), 1);
+    assert!(purge_online_index_page(&tx, &lock().operation_id, "items", 2).unwrap());
+    assert_eq!(
+        active_collection(&tx, "items").unwrap().unwrap().definition,
+        definition("items")
+    );
+    put(&tx, "c_items", "still-writable", "1");
+}
+#[test]
+fn online_index_physical_swap_rolls_back_when_another_collection_cutover_fails() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    create_collection(&tx, &definition("z")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    reserve_publish(&tx, &lock()).unwrap();
+    update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+    let mut z = definition("z");
+    z.app_ver = "2".into();
+    update_compatible(&tx, &lock(), &z).unwrap();
+    build_online_index_page(&tx, &lock(), "items", 10).unwrap();
+    tx.execute("UPDATE _schema_updates SET gen=99 WHERE collection='z'", [])
+        .unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert_eq!(physical_rows(&tx, "c_items").len(), 1);
+    assert!(!has_index(&tx, "c_items", &["other".into()]).unwrap());
+    assert_eq!(
+        tx.query_row("SELECT state FROM _index_builds", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "ready"
+    );
+    tx.execute("UPDATE _schema_updates SET gen=1 WHERE collection='z'", [])
+        .unwrap();
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+}
+#[test]
+#[ignore = "subprocess-only crash fixture"]
+fn online_index_crash_writer_child() {
+    let path = std::env::var_os("CTOX_TEST_ONLINE_INDEX_CRASH_DB")
+        .expect("parent supplies isolated fixture");
+    let mut db = Connection::open(path).unwrap();
+    db.pragma_update(None, "journal_mode", "WAL").unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        create_collection(&tx, &definition("items")).unwrap();
+        for n in 0..5 {
+            put(&tx, "c_items", &n.to_string(), "1");
+        }
+        reserve_publish(&tx, &lock()).unwrap();
+        update_compatible(&tx, &lock(), &with_online_index()).unwrap();
+        build_online_index_page(&tx, &lock(), "items", 1).unwrap();
+        tx.commit().unwrap();
+    }
+    let tx = db.transaction().unwrap();
+    build_online_index_page(&tx, &lock(), "items", 1).unwrap();
+    std::process::exit(86); // No SQLite/Transaction destructors: committed cursor must survive, uncommitted page must not.
+}
+#[test]
+fn online_index_survives_a_process_crash_between_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("crash.sqlite");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "schema::tests::online_index_crash_writer_child",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env("CTOX_TEST_ONLINE_INDEX_CRASH_DB", &path)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(86));
+    let mut db = Connection::open(path).unwrap();
+    let tx = db.transaction().unwrap();
+    assert_eq!(
+        tx.query_row("SELECT cursor FROM _index_builds", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "0"
+    );
+    assert!(
+        build_online_index_page(&tx, &lock(), "items", 10)
+            .unwrap()
+            .complete
+    );
+    activate_publication(&tx, &lock(), 100).unwrap();
+    assert_eq!(count(&tx, "c_items"), 5);
+    assert!(has_index(&tx, "c_items", &["other".into()]).unwrap());
+}
+fn release_fixture() -> BaseReleaseInput {
+    serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json")).unwrap()
+}
+fn release_defaults() -> BaseReleaseDefaults {
+    BaseReleaseDefaults {
+        app_ver: "base-test".into(),
+        client_limit: 1000,
+        byte_budget: 16 * 1024 * 1024,
+        rights_ver: 1,
+    }
+}
+#[test]
+fn imports_real_199_collection_ownership_copy_and_platform_extensions_atomically_and_idempotently()
+{
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let mut input = release_fixture();
+    let mut corrected = input
+        .manifests
+        .iter()
+        .find(|m| m["app_id"] == "browser")
+        .unwrap()["collections"]["outbound_lead_generation_adapters"]["schema"]
+        .clone();
+    corrected["properties"]["nullable_correction"] =
+        json!({"type":["string","null"],"default":null});
+    input.schemas.insert(
+        "outbound-lead-generation".into(),
+        json!({"collections":{"outbound_lead_generation_adapters":corrected.clone()}}),
+    );
+    let report = import_base_release(&tx, &input, &release_defaults()).unwrap();
+    assert_eq!(report.source_ownership_count, 199);
+    assert_eq!(report.created, 208);
+    assert!(report.legacy_catalog_replaced);
+    assert_eq!(report.missing_addenda_definitions.len(), 4); // input producer has not supplied these definitions yet
+    let adapter = active_collection(&tx, "outbound_lead_generation_adapters")
+        .unwrap()
+        .unwrap();
+    assert_eq!(adapter.definition.app_id, "outbound-lead-generation");
+    assert_eq!(adapter.definition.schema_json, corrected);
+    for name in [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runtime_settings",
+        "business_apps",
+        "business_app_versions",
+        "_bench",
+    ] {
+        assert_eq!(
+            active_collection(&tx, name)
+                .unwrap()
+                .unwrap()
+                .definition
+                .app_id,
+            "ctox-platform"
+        );
+    }
+    assert!(active_collection(&tx, "business_module_catalog")
+        .unwrap()
+        .is_none());
+    let again = import_base_release(&tx, &input, &release_defaults()).unwrap();
+    assert_eq!((again.created, again.existing), (0, 208));
+    assert_eq!(change_log::head(&tx).unwrap().head_seq, 0);
+}
+#[test]
+fn invalid_late_base_schema_rolls_back_all_tables_triggers_and_registry_rows() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    initialize(&tx).unwrap();
+    let mut input = release_fixture();
+    let app = input
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "browser")
+        .unwrap();
+    app["collections"]["zz_invalid"] =
+        json!({"class":"full","schema":{"type":"object","indexes":["invalid;sql"]}});
+    assert!(import_base_release(&tx, &input, &release_defaults()).is_err());
+    assert_eq!(count(&tx, "_collections"), 0);
+    assert_eq!(
+        tx.query_row(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'c_%'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+#[test]
+fn base_loader_prefers_optional_corrected_schemas_without_loading_inside_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("tools/manifest/out")).unwrap();
+    std::fs::create_dir(root.join("manifests")).unwrap();
+    std::fs::create_dir(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("tools/manifest/out/ownership.json"),
+        r#"{"ownership":{"items":{"owner":"app"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("manifests/app.manifest.json"),
+        r#"{"app_id":"app","collections":{}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("schemas/app.collections.schema.json"),
+        r#"{"collections":{"items":{"type":"object","version":2}}}"#,
+    )
+    .unwrap();
+    let platform = root.join("platform.json");
+    std::fs::write(&platform, r#"{"app_id":"ctox-platform","collections":{}}"#).unwrap();
+    let loaded = load_base_release(root, &platform).unwrap();
+    assert_eq!(loaded.schemas["app"]["collections"]["items"]["version"], 2);
+    assert_eq!(loaded.manifests.len(), 2);
+}
+#[test]
+fn remove_is_cas_guarded_payload_free_and_scrubs_revisions_and_archives_atomically() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    tx.execute(
+        "INSERT INTO _revs(collection,id,rev,seq,gen,body) VALUES('items','one','1',1,1,?1)",
+        [json!({"secret":"old"}).to_string()],
+    )
+    .unwrap();
+    tx.execute("INSERT INTO _archive(app_id,collection,gen,id,rev,app_ver,data,reason,archived_at,expires_at)
+        VALUES('app','items',1,'one','1','1',?1,'migration',1,999)",[json!({"secret":"old"}).to_string()]).unwrap();
+    assert!(remove_document(&tx, "items", 1, "one", "stale", "2").is_err());
+    assert_eq!(count(&tx, "_archive"), 1);
+    tx.execute_batch("SAVEPOINT rollback_remove").unwrap();
+    remove_document(&tx, "items", 1, "one", "1", "2").unwrap();
+    tx.execute_batch("ROLLBACK TO rollback_remove; RELEASE rollback_remove")
+        .unwrap();
+    assert_eq!(count(&tx, "_archive"), 1);
+    let seq = remove_document(&tx, "items", 1, "one", "1", "2").unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert_eq!(count(&tx, "_revs"), 1);
+    let body: Option<String> = tx
+        .query_row("SELECT body FROM _revs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(body, None);
+    let deleted: (bool, Option<String>) = tx
+        .query_row("SELECT deleted,data FROM c_items WHERE id='one'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(deleted, (true, None));
+    let page = change_log::read_page(&tx, "items", 1, 0, 10).unwrap();
+    assert_eq!(page.docs[0].seq, seq);
+    assert_eq!(page.docs[0].body, None);
+    assert_eq!(page.docs[0].op, Operation::Delete);
+    assert!(remove_document(&tx, "items", 1, "one", "2", "3").is_err());
+    assert!(tx
+        .execute("UPDATE c_items SET data='{}' WHERE id='one'", [])
+        .is_err());
+}
+
+#[test]
+fn foreign_hard_delete_also_scrubs_revision_bodies_and_archives() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    tx.execute(
+        "INSERT INTO _revs(collection,id,rev,seq,gen,body) VALUES('items','one','1',1,1,'{}')",
+        [],
+    )
+    .unwrap();
+    tx.execute("INSERT INTO _archive(app_id,collection,gen,id,rev,app_ver,data,reason,archived_at,expires_at)
+        VALUES('app','items',1,'one','1','1','{}','migration',1,999)",[]).unwrap();
+    tx.execute("DELETE FROM c_items WHERE id='one'", [])
+        .unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert_eq!(
+        tx.query_row("SELECT body IS NULL FROM _revs", [], |r| r
+            .get::<_, bool>(0))
+            .unwrap(),
+        true
+    );
+}
+#[test]
 fn platform_window_collection_can_be_installed_and_published_without_a_new_layout() {
     let mut db = Connection::open_in_memory().unwrap();
     let tx = db.transaction().unwrap();
@@ -316,10 +808,13 @@ fn populated_compatible_index_requires_online_runner_and_rolls_back() {
     new.schema_ver = 2;
     new.app_ver = "2".into();
     new.schema_json["indexes"] = json!(["value", ["value", "other"]]);
-    let error = update_compatible(&tx, &lock(), &new)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("online_index_build_required"), "{error}");
+    update_compatible(&tx, &lock(), &new).unwrap();
+    assert!(activate_publication(&tx, &lock(), 100).is_err());
+    assert!(
+        build_online_index_page(&tx, &lock(), "items", 10)
+            .unwrap()
+            .complete
+    );
     assert_eq!(
         active_collection(&tx, "items").unwrap().unwrap().definition,
         old
