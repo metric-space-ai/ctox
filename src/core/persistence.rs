@@ -40,6 +40,19 @@ impl CorePersistence {
             readers.generation() == writer.generation().0,
             "Core reader pool does not belong to this owner generation"
         );
+        let reader_file: String = readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), |conn| {
+                Ok(conn.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            }))
+            .await?;
+        anyhow::ensure!(
+            std::path::Path::new(&reader_file) == writer.db_id().path(),
+            "Core reader pool belongs to another database"
+        );
         write_transaction::owner_write(&writer, "core.schema", Default::default(), |tx| {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_payload_store (payload_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS ctox_kv_store (kv_key TEXT PRIMARY KEY, kv_value TEXT NOT NULL, updated_at INTEGER NOT NULL);

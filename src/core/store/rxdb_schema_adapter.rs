@@ -92,7 +92,7 @@ impl RxdbOwner {
                 )?)
             }))
             .await?;
-        if crate::DbId::new(path)? != *writer.db_id() {
+        if std::path::Path::new(&path) != writer.db_id().path() {
             return Err(StoreError::Invalid("RxDB reader file mismatch".into()));
         }
         Ok(Self { writer, readers })
