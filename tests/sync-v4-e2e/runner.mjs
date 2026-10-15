@@ -1,15 +1,19 @@
 import fs from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
-import { Native, until, pause, owner } from './native.mjs';
+import { Native, until, pause, owner, verifiedBuild } from './native.mjs';
 import { schema, installRelay, warm, readAndRender, relayProof } from './browser.mjs';
-import K02 from './scenario-K02.mjs';
-import K08 from './scenario-K08.mjs';
-import ATTACH from './scenario-K04-ATTACH.mjs';
+
 const config = JSON.parse(fs.readFileSync(process.argv[2]));
 const here = dirname(fileURLToPath(import.meta.url));
+const scenarios = await Promise.all(fs.readdirSync(here).filter(name => /^scenario-.+\.mjs$/.test(name))
+  .map(async name => (await import(pathToFileURL(join(here, name)))).default));
+const order = ['K02', 'K08', 'K04-ATTACH'];
+scenarios.sort((a,b) => (order.indexOf(a.id) < 0 ? 999 : order.indexOf(a.id)) - (order.indexOf(b.id) < 0 ? 999 : order.indexOf(b.id)));
+for (const s of scenarios) if (!s.id || !Array.isArray(s.steps) || !s.criterion || typeof s.run !== 'function') throw Error('Invalid scenario contract');
+if (config.scenario && !scenarios.some(s => s.id === config.scenario)) throw Error('Unknown scenario');
 const report = { owner, startedAt: new Date().toISOString(), revision: config.revision,
   binarySha256: config.binarySha256, profile: config.profile, netem: config.netem,
   clientCount: config.clients, synthetic: true, scenarios: [], terminal: false, pass: false };
@@ -24,7 +28,7 @@ const hardDeadline = setTimeout(() => { interrupted = true; void shutdown(); }, 
 save();
 try {
   report.phase = 'seed'; save(); report.fixture = await native.prepare(schema, here); save();
-  const expected = native.seed('read', here).rows.filter(x => !x.deleted).map(x => x.id);
+
   native.start('signaling', process.execPath, [join(config.source, 'src/core/rxdb/tools/local_signaling_server.js'), String(config.signalingPort)],
     { ...process.env, SIGNALING_HOST: '127.0.0.1', SIGNALING_PORT: String(config.signalingPort) });
   native.start('turn', config.turnBin, ['-n','--lt-cred-mech','--realm=bench.test','--user=bench:bench','--no-cli','--no-tls','--no-dtls','--no-tcp-relay','--allow-loopback-peers','--relay-threads=2',
@@ -34,7 +38,15 @@ try {
   native.serve();
   const origin = `http://127.0.0.1:${config.port}`;
   report.phase = 'daemon-ready'; save();
-  await until(async () => { const r = await fetch(`${origin}/index.html?rxdbSmoke=1`, { signal: AbortSignal.timeout(2000) }); return r.ok && (await r.text()).includes('native_rxdb_peer_available'); }, 60000, 'isolated daemon boot');
+  await until(async () => {
+    const r = await fetch(origin + '/index.html?rxdbSmoke=1', { signal: AbortSignal.timeout(2000) });
+    if (!r.ok) return false;
+    const html = await r.text(), marker = 'window.CTOX_BUSINESS_OS_CONFIG=', start = html.indexOf(marker);
+    if (start < 0) return false;
+    const end = html.indexOf(';window.CTOX_BUSINESS_OS_DESIGN_TEMPLATES=', start);
+    if (end < 0) return false;
+    return JSON.parse(html.slice(start + marker.length, end)).native_rxdb_peer_available === true;
+  }, 60000, 'isolated daemon boot');
   const require = createRequire(join(config.modulesRoot, 'playwright/package.json'));
   const { chromium } = require('playwright');
   const { tmpdir } = await import('node:os');
@@ -49,13 +61,15 @@ try {
       report.browserDiagnostics ||= []; report.browserDiagnostics.push({ at: new Date().toISOString(), kind: m.type(),
         // Only synthetic origin and public status vocabulary, no auth/URLs/documents.
         classes: m.text().match(/timeout|failed|not.registered|query.ready|readiness|denied|WebRTC|signaling|error/gi) || [], length: m.text().length });
+      if (report.browserDiagnostics.length > 200) report.browserDiagnostics.shift();
     } });
     await page.goto(`${origin}/index.html?rxdbSmoke=1`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!globalThis.CTOX_BUSINESS_OS_APP?.db && !!globalThis.CTOX_BUSINESS_OS_APP?.sync, null, { timeout: 90000 });
     return page;
   };
-  for (const scenario of [K02, K08, ATTACH].filter(s => !config.scenario || s.id === config.scenario)) {
+  for (const scenario of scenarios.filter(s => !config.scenario || s.id === config.scenario)) {
     if (interrupted) throw Error('Run interrupted');
+    const expected = native.seed('read', here).rows.filter(x => !x.deleted).map(x => x.id);
     const row = { id: scenario.id, title: scenario.title, steps: scenario.steps, criterion: scenario.criterion, startedAt: new Date().toISOString(), status: 'setup', pass: false };
     report.scenarios.push(row); report.phase = scenario.id; save();
     const context = await browser.newContext(); contexts.push(context);
@@ -122,7 +136,32 @@ try {
         await cdp.detach();
       },
       restart: () => native.restart(),
-      changeRelease: async build => { await native.stop(native.daemon); native.config.binary = build.binary; native.serve(); },
+      schemaChange: async cliArgs => {
+        // Scenario supplies the revision's actual migration CLI, never a SQL
+        // schema rewrite or fabricated generation. Unsupported CLI stays red.
+        if (!Array.isArray(cliArgs) || !['business-os','sync'].includes(cliArgs[0]) || cliArgs.some(x => typeof x !== 'string')
+          || cliArgs.includes('--root')) throw Error('Schema transition requires the real isolated native CLI');
+        const result = native.cli([...cliArgs, '--root', config.root]);
+        report.schemaTransitions ||= [];
+        report.schemaTransitions.push({ at: new Date().toISOString(), cli: cliArgs.slice(0,3), stateRootPreserved: true,
+          responseBytes: Buffer.byteLength(result), scenarioMustVerifyGenerationAndRows: true }); save();
+        return result;
+      },
+      changeRelease: async receiptPath => {
+        const build = verifiedBuild(receiptPath);
+        await native.stop(native.daemon);
+        for (const part of ['src', 'contracts', 'Cargo.toml']) {
+          const target = join(config.root, part);
+          if (!fs.lstatSync(target).isSymbolicLink()) throw Error('Only owned source links may change');
+          fs.unlinkSync(target); fs.symlinkSync(join(build.source, part), target);
+        }
+        native.config.binary = build.binary; native.config.source = build.source;
+        native.serve();
+        report.releaseTransitions ||= [];
+        report.releaseTransitions.push({ at: new Date().toISOString(), revision: build.revision, binarySha256: build.binarySha256,
+          stateRootPreserved: true, scenarioMustVerifySchemaAndRows: true });
+        save();
+      },
     };
     try {
       const result = await scenario.run(h); Object.assign(row, result);
