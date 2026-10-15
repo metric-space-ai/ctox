@@ -368,8 +368,11 @@ pub fn run_secret_rewrite(
 }
 
 pub fn run_refresh_continuity(db_path: &Path, conversation_id: i64) -> Result<ContinuityRevision> {
-    owned_lcm_write(db_path, move |engine| {
-        engine.refresh_continuity(conversation_id)
+    run_continuity_init(db_path, conversation_id)?;
+    owned_lcm_session_read(db_path, move |engine| {
+        engine
+            .stored_latest_continuity(conversation_id)?
+            .context("continuity documents missing after init")
     })
 }
 
@@ -377,8 +380,9 @@ pub fn run_show_continuity(
     db_path: &Path,
     conversation_id: i64,
 ) -> Result<Option<ContinuityRevision>> {
-    owned_lcm_write(db_path, move |engine| {
-        engine.latest_continuity(conversation_id)
+    run_continuity_init(db_path, conversation_id)?;
+    owned_lcm_session_read(db_path, move |engine| {
+        engine.stored_latest_continuity(conversation_id)
     })
 }
 
@@ -472,8 +476,17 @@ pub fn run_continuity_log(
     conversation_id: i64,
     kind: Option<&str>,
 ) -> Result<Vec<ContinuityCommitRecord>> {
-    let kind = kind.map(str::to_owned);
+    let parsed_kind = kind.map(ContinuityKind::parse).transpose()?;
     owned_lcm_write(db_path, move |engine| {
+        if let Some(kind) = parsed_kind {
+            engine.ensure_continuity_document(conversation_id, kind)?;
+        } else {
+            load_or_init_continuity_show_all(&engine.conn, conversation_id)?;
+        }
+        Ok(())
+    })?;
+    let kind = kind.map(str::to_owned);
+    owned_lcm_session_read(db_path, move |engine| {
         let kind = kind.as_deref();
         engine.continuity_log(
             conversation_id,
@@ -500,9 +513,18 @@ pub fn run_continuity_forgotten(
     kind: Option<&str>,
     query: Option<&str>,
 ) -> Result<Vec<ContinuityForgottenEntry>> {
+    let parsed_kind = kind.map(ContinuityKind::parse).transpose()?;
+    owned_lcm_write(db_path, move |engine| {
+        if let Some(kind) = parsed_kind {
+            engine.ensure_continuity_document(conversation_id, kind)?;
+        } else {
+            load_or_init_continuity_show_all(&engine.conn, conversation_id)?;
+        }
+        Ok(())
+    })?;
     let kind = kind.map(str::to_owned);
     let query = query.map(str::to_owned);
-    owned_lcm_write(db_path, move |engine| {
+    owned_lcm_session_read(db_path, move |engine| {
         let kind = kind.as_deref();
         let query = query.as_deref();
         engine.continuity_forgotten(
@@ -518,11 +540,16 @@ pub fn run_continuity_build_prompt(
     conversation_id: i64,
     kind: &str,
 ) -> Result<ContinuityPromptPayload> {
-    let kind = kind.to_owned();
+    let kind = ContinuityKind::parse(kind)?;
     owned_lcm_write(db_path, move |engine| {
-        let kind = kind.as_str();
-        engine.continuity_build_prompt(conversation_id, ContinuityKind::parse(kind)?)
+        engine.ensure_continuity_document(conversation_id, kind)
+    })?;
+    let source = owned_lcm_session_read(db_path, move |engine| {
+        engine.continuity_prompt_source(conversation_id, kind)
     })
+    .context("read continuity prompt sources")?;
+    build_continuity_prompt_from_source(conversation_id, kind, source)
+        .context("assemble continuity prompt after snapshot release")
 }
 
 pub fn run_context_retrieve(
@@ -537,75 +564,24 @@ pub fn run_context_retrieve(
     include_messages: bool,
     token_cap: i64,
 ) -> Result<serde_json::Value> {
-    let mode = mode.to_owned();
-    let query = query.map(str::to_owned);
-    let continuity_kind = continuity_kind.map(str::to_owned);
-    let summary_id = summary_id.map(str::to_owned);
-    owned_lcm_write(db_path, move |engine| {
-        let mode = mode.as_str();
-        let query = query.as_deref();
-        let continuity_kind = continuity_kind.as_deref();
-        let summary_id = summary_id.as_deref();
-        match mode {
-            "current" => {
+    match mode {
+        "current" => {
+            run_continuity_init(db_path, conversation_id)?;
+            owned_lcm_session_read(db_path, move |engine| {
                 let snapshot = engine.snapshot(conversation_id)?;
-                let continuity = engine.continuity_show_all(conversation_id)?;
-                Ok(serde_json::json!({
-                    "mode": "current",
-                    "conversation_id": conversation_id,
-                    "continuity": continuity,
-                    "context_items": snapshot.context_items,
-                    "messages": snapshot.messages,
-                    "summaries": snapshot.summaries,
-                }))
-            }
-            "continuity" => {
-                if let Some(kind) = continuity_kind {
-                    Ok(serde_json::to_value(engine.continuity_show(
-                        conversation_id,
-                        ContinuityKind::parse(kind)?,
-                    )?)?)
-                } else {
-                    Ok(serde_json::to_value(
-                        engine.continuity_show_all(conversation_id)?,
-                    )?)
-                }
-            }
-            "forgotten" => Ok(serde_json::to_value(engine.continuity_forgotten(
-                conversation_id,
-                continuity_kind.map(ContinuityKind::parse).transpose()?,
-                query,
-            )?)?),
-            "search" => {
-                let query = query.context("context_retrieve mode=search requires query")?;
-                Ok(serde_json::to_value(engine.grep(
-                    Some(conversation_id),
-                    GrepScope::Both,
-                    GrepMode::FullText,
-                    query,
-                    limit,
-                )?)?)
-            }
-            "describe" => {
-                let summary_id =
-                    summary_id.context("context_retrieve mode=describe requires summary_id")?;
-                Ok(serde_json::to_value(engine.describe(summary_id)?)?)
-            }
-            "expand" => {
-                let summary_id =
-                    summary_id.context("context_retrieve mode=expand requires summary_id")?;
-                Ok(serde_json::to_value(engine.expand(
-                    summary_id,
-                    depth,
-                    include_messages,
-                    token_cap,
-                )?)?)
-            }
-            other => anyhow::bail!(
-                "unsupported context_retrieve mode: {other}; expected one of current, continuity, forgotten, search, describe, expand"
-            ),
+                let continuity = engine.stored_continuity_show_all(conversation_id)?;
+                Ok(serde_json::json!({"mode":"current","conversation_id":conversation_id,
+                    "continuity":continuity,"context_items":snapshot.context_items,
+                    "messages":snapshot.messages,"summaries":snapshot.summaries}))
+            })
         }
-    })
+        "continuity" => run_continuity_show(db_path, conversation_id, continuity_kind),
+        "forgotten" => Ok(serde_json::to_value(run_continuity_forgotten(db_path,conversation_id,continuity_kind,query)?)?),
+        "search" => Ok(serde_json::to_value(run_grep(db_path,Some(conversation_id),"both","full_text",query.context("context_retrieve mode=search requires query")?,limit)?)?),
+        "describe" => Ok(serde_json::to_value(run_describe(db_path,summary_id.context("context_retrieve mode=describe requires summary_id")?)?)?),
+        "expand" => Ok(serde_json::to_value(run_expand(db_path,summary_id.context("context_retrieve mode=expand requires summary_id")?,depth,include_messages,token_cap)?)?),
+        other => anyhow::bail!("unsupported context_retrieve mode: {other}; expected one of current, continuity, forgotten, search, describe, expand"),
+    }
 }
 
 pub fn run_fixture(db_path: &Path, fixture_path: &Path) -> Result<FixtureRunOutput> {

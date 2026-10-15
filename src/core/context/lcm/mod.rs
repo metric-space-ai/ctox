@@ -2389,7 +2389,12 @@ impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     }
 
     pub fn latest_continuity(&self, conversation_id: i64) -> Result<Option<ContinuityRevision>> {
-        let show_all = self.continuity_show_all(conversation_id)?;
+        let _ = self.continuity_show_all(conversation_id)?;
+        self.stored_latest_continuity(conversation_id)
+    }
+
+    fn stored_latest_continuity(&self, conversation_id: i64) -> Result<Option<ContinuityRevision>> {
+        let show_all = self.stored_continuity_show_all(conversation_id)?;
         let snapshot = self.snapshot(conversation_id)?;
         let revision_id = continuity_heads_revision_id(
             conversation_id,
@@ -3600,18 +3605,13 @@ impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
         Ok(out)
     }
 
-    pub fn continuity_build_prompt(
+    fn continuity_prompt_source(
         &self,
         conversation_id: i64,
         kind: ContinuityKind,
-    ) -> Result<ContinuityPromptPayload> {
+    ) -> Result<ContinuityPromptSource> {
         let document = self.ensure_continuity_document(conversation_id, kind)?;
         let snapshot = self.working_set_snapshot(conversation_id, 512)?;
-        let explicit_anchor_literals = if kind == ContinuityKind::Anchors {
-            collect_explicit_anchor_literals(&snapshot.messages)
-        } else {
-            Vec::new()
-        };
         let forgotten = self
             .continuity_forgotten_recent(conversation_id, Some(kind), 64)?
             .into_iter()
@@ -3619,63 +3619,23 @@ impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
             .take(8)
             .map(|entry| entry.line)
             .collect::<Vec<_>>();
-        let recent_messages = snapshot
-            .messages
-            .iter()
-            .rev()
-            .take(8)
-            .map(|message| {
-                format!(
-                    "[{} #{}] {}",
-                    message.role,
-                    message.seq,
-                    sentence_fragment(
-                        &message.content,
-                        if kind == ContinuityKind::Anchors {
-                            420
-                        } else if kind == ContinuityKind::Focus {
-                            520
-                        } else {
-                            220
-                        },
-                    )
-                )
-            })
-            .collect::<Vec<_>>();
-        let recent_summaries = snapshot
-            .summaries
-            .iter()
-            .rev()
-            .take(4)
-            .map(|summary| {
-                format!(
-                    "[{} depth={}] {}",
-                    summary.kind.as_str(),
-                    summary.depth,
-                    sentence_fragment(&summary.content, 240)
-                )
-            })
-            .collect::<Vec<_>>();
-        let document_view = continuity_document_prompt_view(&document.content);
-        let prompt = build_continuity_prompt_text(
-            conversation_id,
-            kind,
-            &document_view,
-            &recent_messages,
-            &recent_summaries,
-            &forgotten,
-            &explicit_anchor_literals,
-        );
-
-        Ok(ContinuityPromptPayload {
-            conversation_id,
-            kind,
-            current_document: document.content,
-            recent_messages,
-            recent_summaries,
-            forgotten_lines: forgotten,
-            prompt,
+        Ok(ContinuityPromptSource {
+            document,
+            snapshot,
+            forgotten,
         })
+    }
+
+    pub fn continuity_build_prompt(
+        &self,
+        conversation_id: i64,
+        kind: ContinuityKind,
+    ) -> Result<ContinuityPromptPayload> {
+        build_continuity_prompt_from_source(
+            conversation_id,
+            kind,
+            self.continuity_prompt_source(conversation_id, kind)?,
+        )
     }
 
     pub fn continuity_preserve_recent_anchor_literals(
@@ -3823,10 +3783,7 @@ impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
         };
         // The summarizer has no reusable authority. Re-read the exact selected
         // source, positions, tokens and metadata inside the owner transaction.
-        anyhow::ensure!(
-            current.as_ref() == Some(&plan),
-            "LCM compaction source changed; retry from a fresh snapshot"
-        );
+        anyhow::ensure!(current.as_ref() == Some(&plan), CompactionSourceChanged);
         let result = self.insert_summary_token_gated(
             plan.conversation_id,
             plan.kind,
@@ -6044,6 +6001,13 @@ mod legacy_owner_contract {
     async fn lcm_jobs_keep_domain_rejections_atomic_and_summarize_without_the_writer() -> Result<()>
     {
         let dir = tempfile::tempdir()?;
+        let absent = dir.path().join("missing-parent/core.sqlite");
+        let denied = run_add_message(&absent, 71, "user", "not admitted").unwrap_err();
+        anyhow::ensure!(
+            denied.to_string().contains("run_core_sync"),
+            "async misuse reached path lookup before admission"
+        );
+        anyhow::ensure!(!absent.exists());
         let path = dir.path().join("core.sqlite");
         drop(LcmEngine::open(&path, LcmConfig::default())?);
         let (writer, readers) =
@@ -6059,7 +6023,7 @@ mod legacy_owner_contract {
         let work_path = path.clone();
         let callback_writer = writer.clone();
         crate::persistence::run_core_sync(move || {
-            run_init(&work_path)?;
+            run_init(&work_path).context("verify registered LCM schema")?;
             for _ in 0..4 { run_add_message(&work_path,71,"user",&"source words for compacting durable work ".repeat(70))?; }
             run_add_assistant_turn(&work_path,71,"assistant completion",AgentOutcome::Success)?;
             let steps=[TaskExecutionPlanStepInput{label:"durable step".into(),status:"in_progress".into()}];
@@ -6077,6 +6041,25 @@ mod legacy_owner_contract {
             anyhow::ensure!(error.downcast_ref::<IncompleteTaskExecutionPlan>().is_some());
             run_continuity_full_replace(&work_path,71,"anchors","stable anchor")?;
             run_continuity_string_replace(&work_path,71,"anchors","stable","updated")?;
+            let _ = mission_state::drain_pending_mission_state_clobbers();
+            owned_lcm_write(&work_path, |engine| {
+                let mut record=engine.mission_state(71)?;
+                record.next_slice="protected next slice".into();
+                engine.overwrite_mission_state(&record)?;
+                record.next_slice.clear();
+                engine.overwrite_mission_state(&record)?;
+                anyhow::ensure!(engine.stored_mission_state(71)?.unwrap().next_slice == "protected next slice");
+                Ok(())
+            })?;
+            let notes=mission_state::drain_pending_mission_state_clobbers();
+            anyhow::ensure!(notes.iter().any(|note|note.conversation_id==71 && note.field=="next_slice" && note.previous_value=="protected next slice"),"writer audit did not return to the original caller");
+            let query_only=owned_lcm_session_read(&work_path,|engine| Ok(engine.conn.query_row("PRAGMA query_only",[],|r|r.get::<_,i64>(0))?))?;
+            anyhow::ensure!(query_only==1,"LCM inspection escaped the snapshot read pool");
+            let current=run_context_retrieve(&work_path,71,"current",None,None,None,10,1,true,8000).context("read LCM current view")?;
+            anyhow::ensure!(current["messages"].as_array().is_some_and(|messages|!messages.is_empty()));
+            let _=run_continuity_log(&work_path,71,None).context("read LCM continuity log")?;
+            let _=run_continuity_build_prompt(&work_path,71,"anchors").context("prepare LCM anchor prompt")?;
+
             let config=LcmConfig{fresh_tail_count:0,min_compaction_tokens:1,max_rounds:2,..LcmConfig::default()};
             struct Probe { writer:ctox_store::writer::WriterHandle, change_source:bool }
             impl Summarizer for Probe {
@@ -6093,7 +6076,8 @@ mod legacy_owner_contract {
                 }
             }
             let stale=owned_lcm_compact(&work_path,71,1,config.clone(),&Probe{writer:callback_writer.clone(),change_source:true},true);
-            anyhow::ensure!(stale.is_err(),"stale prepared source was committed");
+            let stale=stale.expect_err("stale prepared source was committed");
+            anyhow::ensure!(matches!(stale.downcast_ref::<ctox_store::StoreError>(),Some(ctox_store::StoreError::Busy)),"concurrent source change was not reported as retryable Busy");
             let result=owned_lcm_compact(&work_path,71,1,config,&Probe{writer:callback_writer,change_source:false},true)?;
             anyhow::ensure!(result.action_taken && result.tokens_after<=result.tokens_before);
             let snapshot=run_dump(&work_path,71)?;
@@ -6101,6 +6085,7 @@ mod legacy_owner_contract {
             let summary=snapshot.summaries[0].summary_id.clone();
             anyhow::ensure!(run_describe(&work_path,&summary)?.is_some());
             anyhow::ensure!(!run_expand(&work_path,&summary,1,true,8000)?.messages.is_empty());
+            let _ = mission_state::drain_pending_mission_state_clobbers();
             Ok(())
         }).await?;
         writer
@@ -6363,12 +6348,33 @@ fn owned_lcm_write<T: Send + 'static>(
     path: &Path,
     operation: impl FnOnce(&LcmEngine<&Connection>) -> Result<T> + Send + 'static,
 ) -> Result<T> {
+    crate::persistence::require_sync_owner_context()?;
     let owner = owner_adapter::OwnerAdapter::for_path(path)?;
-    // The bridge validates admission before waiting; schema setup remains with
-    // the registry/composition, not with a caller's opportunistic opener.
-    owner.write_blocking(move |tx| {
-        // Preserve typed domain rejections (e.g. IncompleteTaskExecutionPlan)
-        // without committing any partial effects from a failed LCM operation.
+    let (result, pending) = owner.write_blocking(move |tx| {
+        // The legacy clobber audit is thread-local. Return only this job's
+        // notes after the real commit acknowledgement; never publish governance
+        // recursively from the writer or steal another job's pending notes.
+        struct AuditScope(Option<Vec<mission_state::PendingMissionStateClobberAttempt>>);
+        impl AuditScope {
+            fn finish(mut self) -> Vec<mission_state::PendingMissionStateClobberAttempt> {
+                let pending = mission_state::drain_pending_mission_state_clobbers();
+                for previous in self.0.take().unwrap_or_default() {
+                    mission_state::push_pending_mission_state_clobber(previous);
+                }
+                pending
+            }
+        }
+        impl Drop for AuditScope {
+            fn drop(&mut self) {
+                if let Some(previous) = self.0.take() {
+                    let _ = mission_state::drain_pending_mission_state_clobbers();
+                    for note in previous {
+                        mission_state::push_pending_mission_state_clobber(note);
+                    }
+                }
+            }
+        }
+        let audit = AuditScope(Some(mission_state::drain_pending_mission_state_clobbers()));
         let phase = LcmTransaction::begin(tx)?;
         let result = operation(&LcmEngine::borrowed(tx, LcmConfig::default()));
         if result.is_ok() {
@@ -6376,8 +6382,12 @@ fn owned_lcm_write<T: Send + 'static>(
         } else {
             phase.rollback()?;
         }
-        Ok(result)
-    })?
+        Ok((result, audit.finish()))
+    })?;
+    for note in pending {
+        mission_state::push_pending_mission_state_clobber(note);
+    }
+    result
 }
 
 fn owned_lcm_session_read<T: Send + 'static>(
@@ -6388,6 +6398,15 @@ fn owned_lcm_session_read<T: Send + 'static>(
         operation(&LcmEngine::borrowed(conn, LcmConfig::default()))
     })
 }
+
+#[derive(Debug)]
+struct CompactionSourceChanged;
+impl std::fmt::Display for CompactionSourceChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LCM compaction source changed; retry from a fresh snapshot")
+    }
+}
+impl std::error::Error for CompactionSourceChanged {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PreparedSummary {
@@ -6497,12 +6516,13 @@ pub(crate) fn owned_lcm_compact<S: Summarizer>(
                 let session = LcmEngine::borrowed(tx, write_config);
                 let summary = session
                     .commit_prepared_summary(plan, content, force)
-                    .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
-                if summary.is_some() {
-                    session
-                        .resequence_context_items(conversation_id)
-                        .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
-                }
+                    .map_err(|error| {
+                        if error.downcast_ref::<CompactionSourceChanged>().is_some() {
+                            ctox_store::StoreError::Busy
+                        } else {
+                            ctox_store::StoreError::Invalid(error.to_string())
+                        }
+                    })?;
                 let tokens = session
                     .context_token_count(conversation_id)
                     .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
@@ -6520,5 +6540,97 @@ pub(crate) fn owned_lcm_compact<S: Summarizer>(
             }
         }
     }
+    if result.action_taken {
+        result.tokens_after = owner.write_blocking(move |tx| {
+            let session = LcmEngine::borrowed(tx, config);
+            session
+                .resequence_context_items(conversation_id)
+                .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))?;
+            session
+                .context_token_count(conversation_id)
+                .map_err(|e| ctox_store::StoreError::Invalid(e.to_string()))
+        })?;
+    }
     Ok(result)
+}
+
+struct ContinuityPromptSource {
+    document: ContinuityDocumentState,
+    snapshot: LcmSnapshot,
+    forgotten: Vec<String>,
+}
+// Regex construction, literal extraction, sentence shaping and prompt assembly
+// run after the reader returned its owned DTO and released the WAL snapshot.
+fn build_continuity_prompt_from_source(
+    conversation_id: i64,
+    kind: ContinuityKind,
+    source: ContinuityPromptSource,
+) -> Result<ContinuityPromptPayload> {
+    let ContinuityPromptSource {
+        document,
+        snapshot,
+        forgotten,
+    } = source;
+    let explicit_anchor_literals = if kind == ContinuityKind::Anchors {
+        collect_explicit_anchor_literals(&snapshot.messages)
+    } else {
+        Vec::new()
+    };
+    let recent_messages = snapshot
+        .messages
+        .iter()
+        .rev()
+        .take(8)
+        .map(|message| {
+            format!(
+                "[{} #{}] {}",
+                message.role,
+                message.seq,
+                sentence_fragment(
+                    &message.content,
+                    if kind == ContinuityKind::Anchors {
+                        420
+                    } else if kind == ContinuityKind::Focus {
+                        520
+                    } else {
+                        220
+                    },
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+    let recent_summaries = snapshot
+        .summaries
+        .iter()
+        .rev()
+        .take(4)
+        .map(|summary| {
+            format!(
+                "[{} depth={}] {}",
+                summary.kind.as_str(),
+                summary.depth,
+                sentence_fragment(&summary.content, 240)
+            )
+        })
+        .collect::<Vec<_>>();
+    let document_view = continuity_document_prompt_view(&document.content);
+    let prompt = build_continuity_prompt_text(
+        conversation_id,
+        kind,
+        &document_view,
+        &recent_messages,
+        &recent_summaries,
+        &forgotten,
+        &explicit_anchor_literals,
+    );
+
+    Ok(ContinuityPromptPayload {
+        conversation_id,
+        kind,
+        current_document: document.content,
+        recent_messages,
+        recent_summaries,
+        forgotten_lines: forgotten,
+        prompt,
+    })
 }
