@@ -15054,7 +15054,10 @@ pub fn refresh_business_command_queue_task_projection(
     // "direct session timeout" attempts) never reaches the `failed` paths that
     // call mark_news_command_failed, so the issue kept spinning on
     // "Ausgabe wird erstellt" with no retry button (welsch, 15.10.2026).
-    if matches!(terminal_command_status, Some("failed" | "blocked" | "cancelled")) {
+    if matches!(
+        terminal_command_status,
+        Some("failed" | "blocked" | "cancelled")
+    ) {
         let reason = task
             .status_note
             .as_deref()
@@ -15064,9 +15067,7 @@ pub fn refresh_business_command_queue_task_projection(
         if let Err(error) =
             super::store_news_commands::mark_news_command_failed(root, &conn, &command, reason)
         {
-            eprintln!(
-                "[business-os] news hold projection for `{command_id}` failed: {error:#}"
-            );
+            eprintln!("[business-os] news hold projection for `{command_id}` failed: {error:#}");
         }
     }
     Ok(Some(command_projection))
