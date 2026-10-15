@@ -73,7 +73,7 @@ fn active_manifest_declares_no_core_projection(
     let mut active_versions = app_rows.iter().map(|app| {
         let installed = app
             .get("state")
-            .map_or(true, |state| state.as_str() == Some("active"));
+            .is_none_or(|state| state.as_str() == Some("active"));
         app.get("active_ver")
             .and_then(Value::as_str)
             .filter(|ver| installed && !ver.is_empty())
