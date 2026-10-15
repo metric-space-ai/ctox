@@ -161,6 +161,17 @@ pub(super) fn control(
                         "retry requires a failed or blocked task"
                     );
                 }
+                if command.command_type == "ctox.queue.retry" {
+                    // A failed task whose Business OS command is already
+                    // terminal cannot be released back to pending: the queue
+                    // refuses it ("submit a new command to retry"). Before
+                    // this, the retry button was confirmed in the browser and
+                    // then silently failed here (Welsch news, 15.10.2026).
+                    let terminal = channels::linked_terminal_commands(root, task_id)?;
+                    if let Some((command_id, _)) = terminal.first() {
+                        return resubmit_terminal_command(root, command_id, task_id);
+                    }
+                }
                 let note = optional_text(
                     &command.payload,
                     if block { "reason" } else { "note" },
@@ -248,5 +259,90 @@ fn optional_text(payload: &Value, field: &str, max: usize) -> Result<Option<Stri
             Ok((!value.trim().is_empty()).then(|| value.trim().to_string()))
         }
         _ => anyhow::bail!("{field} must be text"),
+    }
+}
+
+/// Retry for a task whose linked command is terminal: submit the same typed
+/// command again under a fresh id. Module writebacks key on the payload
+/// (e.g. the news `issue_id`), so the new run lands on the same record.
+fn resubmit_terminal_command(root: &Path, command_id: &str, task_id: &str) -> Result<Value> {
+    let original = {
+        let conn = super::store::open_store(root)?;
+        super::store::load_business_command(&conn, command_id)?
+    };
+    let base = retry_base_command_id(command_id);
+    let new_id = format!("{base}_retry_{}", super::store::now_ms());
+    let mut client_context = match original.client_context.clone() {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    client_context.insert("retry_of".into(), json!(command_id));
+    client_context.insert("retry_task_id".into(), json!(task_id));
+    let accepted = super::store::accept_rxdb_business_command_with_origin(
+        root,
+        json!({
+            "id": new_id,
+            "command_id": new_id,
+            "module": original.module,
+            "command_type": original.command_type,
+            "record_id": original.record_id.clone().unwrap_or_default(),
+            "inbound_channel": format!("business_os.{}", original.module),
+            "payload": original.payload,
+            "client_context": Value::Object(client_context),
+        }),
+        super::store::CommandOrigin::TrustedLocal,
+    )?;
+    let new_task = accepted
+        .get("task_id")
+        .or_else(|| accepted.get("execution_task_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    anyhow::ensure!(
+        new_task.is_some() || accepted.get("ok").and_then(Value::as_bool) != Some(false),
+        "retry was not admitted: {}",
+        accepted
+            .get("error_message")
+            .or_else(|| accepted.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown reason")
+    );
+    if original.command_type == super::store_news_commands::NEWS_ISSUE_GENERATE {
+        super::store_news_commands::requeue_issue_for_retry(
+            root,
+            &original.payload,
+            &new_id,
+            new_task.as_deref().unwrap_or_default(),
+        )?;
+    }
+    Ok(json!({
+        "ok": true,
+        "resubmitted": true,
+        "retry_of": command_id,
+        "command_id": new_id,
+        "task_id": new_task,
+    }))
+}
+
+fn retry_base_command_id(command_id: &str) -> &str {
+    match command_id.rsplit_once("_retry_") {
+        Some((base, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => command_id,
+    }
+}
+
+#[cfg(test)]
+mod retry_id_tests {
+    use super::retry_base_command_id;
+
+    #[test]
+    fn retry_ids_do_not_grow_with_each_retry() {
+        assert_eq!(retry_base_command_id("cmd_a"), "cmd_a");
+        assert_eq!(retry_base_command_id("cmd_a_retry_123"), "cmd_a");
+        assert_eq!(retry_base_command_id("cmd_a_retry_x"), "cmd_a_retry_x");
     }
 }

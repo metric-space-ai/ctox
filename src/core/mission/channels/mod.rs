@@ -3828,6 +3828,35 @@ pub(crate) fn control_queue_task(
     )
 }
 
+/// Linked Business OS commands that already reached a terminal status. A
+/// queue retry cannot reopen them (release refuses terminal commands), so the
+/// cockpit resubmits them as a fresh command instead.
+pub(crate) fn linked_terminal_commands(
+    root: &Path,
+    task_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut statement = conn.prepare(
+        "SELECT aggregate.command_id, aggregate.terminal_status
+         FROM business_command_task_links link
+         JOIN business_command_aggregates aggregate
+           ON aggregate.command_id = link.command_id
+         WHERE link.task_id = ?1
+           AND aggregate.execution_phase = 'terminal'
+         ORDER BY aggregate.command_id",
+    )?;
+    let rows = statement
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 /// Every linked command must permit release, regardless of link insertion order.
 fn ensure_linked_commands_allow_queue_release(conn: &Connection, task_id: &str) -> Result<()> {
     let (validating, terminal_status): (bool, Option<String>) = conn.query_row(
