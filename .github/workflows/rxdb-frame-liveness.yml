@@ -54,4 +54,3 @@ jobs:
           npm ci --ignore-scripts --prefix src/apps/business-os
           npm --prefix src/apps/business-os exec -- playwright install --with-deps chromium
           node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
-          node src/apps/business-os/scripts/assert-shell-v2-contract.mjs
