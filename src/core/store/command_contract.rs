@@ -3,6 +3,16 @@ use super::super::WritePermission;
 use super::*;
 use serde::{Deserialize, Serialize};
 
+/// Canonical V4 document schema for the platform release publisher. This is an
+/// incompatible replacement of the V3 module/command_type shape: publish via
+/// the normal generation migration, never silently rewrite an active registry.
+pub fn command_document_schema() -> Value {
+    serde_json::from_str(include_str!(
+        "../rxdb/tests/fixtures/business-command-document-v4.json"
+    ))
+    .expect("checked-in command schema")
+}
+
 const TERMINAL: &[&str] = &["done", "failed", "cancelled", "rejected"];
 const NATIVE_INITIAL: &[&str] = &[
     "execution_mode",

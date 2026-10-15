@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "primaryKey": "id",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "type", "app_id", "actor_id", "created_at", "status", "payload"],
+  "indexes": ["app_id", "status"],
+  "properties": {
+    "id": {"type": "string", "maxLength": 180},
+    "type": {"type": "string", "minLength": 1},
+    "app_id": {"type": "string", "minLength": 1},
+    "actor_id": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "status": {"type": "string", "enum": ["queued", "accepted", "running", "done", "failed", "cancelled", "rejected"]},
+    "payload": {"type": "object", "additionalProperties": true},
+    "executor_fence": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "result": {},
+    "error": {}
+  }
+}

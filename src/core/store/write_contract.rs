@@ -15,7 +15,7 @@ mod command;
 pub(super) use command::check_command_input;
 pub use command::{
     activate_command_projections, backfill_command_projections, project_command,
-    read_command_projection, CommandProjection,
+    read_command_projection, command_document_schema, CommandProjection,
 };
 pub(super) use command::{check_command, duplicate_command};
 pub use command::{

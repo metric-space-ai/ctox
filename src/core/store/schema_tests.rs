@@ -335,7 +335,7 @@ fn imports_real_199_collection_ownership_copy_and_platform_extensions_atomically
         json!({"type":["string","null"],"default":null});
     input.schemas.insert(
         "outbound-lead-generation".into(),
-        json!({"collections":{"outbound_lead_generation_adapters":corrected.clone()}}),
+        json!({"collections":{"outbound_lead_generation_adapters":{"schema":corrected.clone(),"class":"full"}}}),
     );
     let report = import_base_release(&tx, &input, &release_defaults()).unwrap();
     assert_eq!(report.source_ownership_count, 199);

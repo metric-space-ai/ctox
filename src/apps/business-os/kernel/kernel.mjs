@@ -570,7 +570,7 @@ export function createKernel(opts = {}) {
       entry = {
         op_id, prev_op_id: cur?.pending && cur.rev?.startsWith('op:') ? cur.rev.slice(3) : null,
         collection: ns, id, op, body: clean, base_rev: cur?.rev ?? null, base_seq: decimalSeq(cur?.base?.seq ?? '0'),
-        gen: genOf(ns), schema_ver: 1, app_id: app.id, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId,
+        gen: genOf(ns), ...writeVersion(app, collection), app_id: app.id, created_at: Date.now(), origin_tab: tabId,
       };
       waiters.set(op_id, resolveResult);
       const base = cur?.base ?? emptyBase();
@@ -704,8 +704,8 @@ export function createKernel(opts = {}) {
     const scope = { ...page, epoch: page.epoch ?? opts.epoch ?? '1', scope_hash: page.scope_hash ?? opts.scopeHash ?? 'local', gen: page.gen ?? genOf(page.collection) };
     const expected=expectedScopes.get(page.collection)??{scope_hash:opts.scopeHash??'local',epoch:opts.epoch??'1'};
     if(scope.scope_hash !== expected.scope_hash || String(scope.epoch) !== String(expected.epoch)) throw new CtoxError('revoked', 'Unexpected scope or epoch');
-    if(!Number.isSafeInteger(scope.gen) || scope.gen!==genOf(page.collection))throw new CtoxError('invalid','Page generation does not match collection namespace');
-    const cursor = decimalSeq(page.cursor_to ?? page.head_seq ?? '0');
+    if(!Number.isSafeInteger(scope.gen) || scope.gen!==(expected.gen??genOf(page.collection)))throw new CtoxError('invalid','Page generation does not match collection namespace');
+    const cursor = decimalSeq(page.cursor_to ?? page.seq_to ?? page.head_seq ?? '0');
     const out = await db.tx(async (t) => {
       await assertGen(t);
       const key = checkpointKey(scope), previous = await t.get('meta', key);
@@ -720,10 +720,10 @@ export function createKernel(opts = {}) {
           const deleted = change.deleted || change.op === 'delete' || change.op === 'unproject';
           // K-1c Punkt 10: Befehlsdokumente nur in erlaubter Richtung; ein beendeter Befehl bleibt beendet (genau einmal)
           if (ns === 'business_commands' && !deleted && old?.base?.data) {
-            const bad = checkCommandTransition(old.base.data, change.data ?? change.doc);
+            const bad = checkCommandTransition(old.base.data, change.data ?? change.doc ?? change.body);
             if (bad) { refused.push({ id: change.id, ...bad }); continue; }
           }
-          const base = {data: deleted ? null : cloneValue(change.data ?? change.doc),deleted:!!deleted,seq,rev:change.rev};
+          const base = {data: deleted ? null : cloneValue(change.data ?? change.doc ?? change.body),deleted:!!deleted,seq,rev:change.rev,gen:scope.gen};
           const rec = recompute(ns,change.id,base,await t.outboxFor(ns,change.id));
           await putDoc(t,rec); recs.push(rec);
         }
@@ -731,11 +731,22 @@ export function createKernel(opts = {}) {
       await t.put('meta',{key,...scope,cursor_to:maxSeq(previous?.cursor_to ?? '0',cursor),complete:seqGreater(previous?.cursor_to??'0',cursor)?previous.complete:!!page.complete});
       const cp=maxSeq((await t.get('meta','checkpoint'))?.value ?? '0',cursor);
       await t.put('meta',{key:'checkpoint',value:cp});
-      return {recs,cp,refused};
+      // A receipt is not a document. Only the normal, scope-checked page can
+      // release a merged/migrated optimistic operation, including after restart.
+      const settled=[];
+      for(const entry of await t.all('outbox')) {
+        if(entry.collection!==page.collection || !entry.pending_result)continue;
+        const row=await t.get('docs',[entry.collection,entry.id]);
+        if(!canonicalReady(row?.base,entry.pending_result))continue;
+        settled.push(await settleWrite(t,entry,row.base,entry.pending_result));
+      }
+      return {recs,cp,refused,settled};
     }).catch(err => { if(err instanceof StaleLeader){stepDown();return null;} throw err; });
     if(!out)return;
     for (const r of out.refused) zoneReport('kernel', { level: 'warn', code: `command.${r.code}`, text: `Befehl ${r.id}: ${r.message} – Zustellung verworfen`, ref: r.id }, 'kernel');
     for(const rec of out.recs)mirrorPut(rec);
+    for(const completed of out.settled)publishWrite(completed);
+    if(out.settled.length)await refreshOutboxStat();
     scopeCursors.set(page.collection,maxSeq(scopeCursors.get(page.collection)??'0',cursor));notify('checkpoint');
     scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
     trackScope(page.collection, scope, { backlog: Math.max(0, Number(page.backlog ?? 0)), complete: !!page.complete, error: null });
@@ -744,22 +755,32 @@ export function createKernel(opts = {}) {
   }
   async function receiveResult(message) {
     const entry=await db.get('outbox',message.op_id);
-    if(entry){await applyResult(entry,message);const key=docKey(entry.collection,entry.id);if(inflight.get(key)===entry.op_id)inflight.delete(key);inflightOps.delete(entry.op_id);await refreshOutboxStat();schedulePump();}
+    if(entry){await applyResult(entry,message);await refreshOutboxStat();schedulePump();}
   }
   async function confirm(k,e) {
     let awaitingResult=false;
     try {
       // Mark dispatch and validate the generation in one durable transaction.
-      const sent = await db.tx(async t=>{await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return false;await t.put('outbox',{...entry,sent_gen:myGen});return true;});
+      const sent = await db.tx(async t=>{
+        await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return null;
+        // Allocate on first dispatch, not local creation: cancelling an unsent
+        // operation must not create a permanent gap. Reconnect reuses the slot.
+        if(entry.op!=='upload' && entry.client_seq===undefined) {
+          entry.client_seq=String(BigInt((await t.get('meta','write_client_seq'))?.value??'0')+1n);
+          await t.put('meta',{key:'write_client_seq',value:entry.client_seq});
+        }
+        const dispatched={...entry,sent_gen:myGen};await t.put('outbox',dispatched);return dispatched;
+      });
       if(!sent || closed || !isLeader)return;
+      e=sent;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
         await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
         setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');post({type:'upload_done',ref:e.id});
       } else {
         if(!subscriptions.has(e.collection))await subscribeCollection(e.collection);
-        const result=await transport.write(cloneValue(e));
-        if(result)await applyResult(e,result);
+        const result=e.pending_result??await transport.write(cloneValue(e));
+        if(result)awaitingResult=!await applyResult(e,result);
         else awaitingResult=true;
       }
     } catch(err) {
@@ -771,31 +792,63 @@ export function createKernel(opts = {}) {
       await refreshOutboxStat(); if(!awaitingResult && link.state==='online')schedulePump();
     }
   }
+  function canonicalReady(base,result) {
+    return !!base && !!result.seq && (base.gen===undefined || result.gen===undefined || base.gen===result.gen) && !seqGreater(result.seq,base.seq??'0');
+  }
+  async function settleWrite(t,e,base,res) {
+    await t.del('outbox',e.op_id);
+    const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
+    const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};
+    await t.put('meta',{key:`result:${e.op_id}`,info,result:res});
+    return {rec,res,info};
+  }
+  function publishWrite(out) {
+    mirrorPut(out.rec);setCheckpoint(out.rec.base.seq);
+    const key=docKey(out.info.collection,out.info.id);
+    if(inflight.get(key)===out.info.op_id)inflight.delete(key);
+    inflightOps.delete(out.info.op_id);
+    handleWriteResult(out.info,out.res);
+    post({type:'docs',keys:[[out.info.collection,out.info.id]]});post({type:'write_result',info:out.info,result:out.res});
+    schedulePump();
+  }
   async function applyResult(e,result) {
     const out=await db.tx(async t=>{
       await assertGen(t);
       if(!(await t.get('outbox',e.op_id)))return null;
       const stored=await t.get('docs',[e.collection,e.id]); let base=stored?.base??emptyBase();
       const res={...result};delete res.doc;delete res.deleted;
-      if(!['accepted','rejected','migrated'].includes(res.status))throw new CtoxError('invalid','Invalid write result');
+      if(!['accepted','merged','rejected','migrated'].includes(res.status))throw new CtoxError('invalid','Invalid write result');
+      const canonical=res.requires_page || res.status==='merged' || res.status==='migrated';
+      if(canonical && res.status!=='rejected') {
+        if(BigInt(decimalSeq(res.seq))===0n)throw new CtoxError('invalid','Canonical receipt needs a positive sequence');
+        if(res.gen!==undefined && res.gen!==e.gen)throw new CtoxError('conflict','Write receipt generation changed');
+        if(!canonicalReady(base,res)) {
+          await t.put('outbox',{...e,pending_result:res});
+          return {replay:true,res};
+        }
+      }
       if(res.status==='rejected'){
         res.archived_ref=`archive_local:${e.op_id}`;
         await t.put('archive_local',{...e,ref:res.archived_ref,reason:res.reason,rejected_at:Date.now()});
-      } else if(!seqGreater(base.seq??'0',result.seq??'0')) {
+      } else if(!canonical && !seqGreater(base.seq??'0',result.seq??'0')) {
         const state=result.doc!==undefined ? {data:result.doc,deleted:!!result.deleted} : applyOp(base,e);
-        base={...state,rev:res.rev,seq:decimalSeq(res.seq)};
+        base={...state,rev:res.rev,seq:decimalSeq(res.seq),gen:e.gen};
       }
-      await t.del('outbox',e.op_id);
-      const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
-      await t.put('meta',{key:`result:${e.op_id}`,info:{op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id},result:res});
-      return {rec,res};
+      return settleWrite(t,e,base,res);
     });
-    if(!out)return;
-    mirrorPut(out.rec);setCheckpoint(out.rec.base.seq);
-    const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};handleWriteResult(info,out.res);
-    post({type:'docs',keys:[[e.collection,e.id]]});post({type:'write_result',info,result:out.res});
+    if(!out)return true;
+    if(out.replay) {
+      // Explicit replay uses the SAME signed page path, without regressing any
+      // durable checkpoint. A no-write command replay still needs its older row.
+      const scope=expectedScopes.get(e.collection)??await transport.scope?.(e.collection)??{collection:e.collection,epoch:opts.epoch??'1',scope_hash:opts.scopeHash??'local',gen:e.gen};
+      expectedScopes.set(e.collection,scope);
+      await transport.subscribe({...scope,checkpoint_seq:String(BigInt(out.res.seq)-1n),priority:'P1'});
+      return false;
+    }
+    publishWrite(out);
     const dw=doubleWrite.get(e.collection);
     if(fakeCore && dw && out.res.status!=='rejected')await corePush(dw.ns_new,[out.rec.base.deleted ? {id:e.id,_deleted:true} : {...dw.migrate(cloneValue(out.rec.base.data)),id:e.id}]);
+    return true;
   }
   const corePush = async (collection, docs) => {
     if(!fakeCore)throw new CtoxError('unavailable','Test core not configured');
@@ -828,7 +881,20 @@ export function createKernel(opts = {}) {
     const collections=new Set(message.collections??[]),rows=await db.tx(async t=>{await assertGen(t);const changed=[];for(const row of await t.all('docs'))if(collections.has(row.collection)){const revoked={...row,data:null,base:emptyBase(),deleted:true,revoked:true};await putDoc(t,revoked);changed.push(revoked);}for(const hash of message.artifacts??[])await t.del('artifacts',hash);await t.put('meta',{key:'rights_ver',value:message.rights_ver});return changed;});
     for(const row of rows)mirrorPut(row);post({type:'docs',keys:rows.map(r=>[r.collection,r.id])});
   }
-  function schemaFor(app, collection) { const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;return versionDoc(owner,ver)?.manifest?.collections?.[collection]?.schema??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
+  function collectionVersion(app,collection) {
+    const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;
+    const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;
+    const manifest=versionDoc(owner,ver)?.manifest;
+    return {owner,ver,definition:manifest?.collections?.[collection],gen:manifest?.generations?.[collection]};
+  }
+  function schemaFor(app, collection) { const {owner,definition}=collectionVersion(app,collection);return definition?.schema??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
+  function writeVersion(app,collection) {
+    const {owner,ver,definition,gen}=collectionVersion(app,collection);
+    // Wire versions describe the collection owner, never the calling app.
+    // The fixed platform bootstrap version is not the sender's app version.
+    // An outdated bootstrap is rejected/migrated by the core's registry CAS.
+    return {schema_ver:definition?.schema?.version??1,app_ver:ver??(owner===PLATFORM_APP_ID?PLATFORM_APP.ver:app.ver),...(gen===undefined?{}:{gen})};
+  }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
   function ownRowOk(collection, id) {
     if (!OWN_ROW_COLLECTIONS.has(collection)) return true;

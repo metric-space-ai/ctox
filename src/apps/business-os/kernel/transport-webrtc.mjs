@@ -66,9 +66,9 @@ export class WebRTCKernelTransport extends KernelTransport {
  async apply(message,lane){
   if(this.closed)return;
   switch(message.type){
-   case 'page': {
+   case 'page': case 'live': {
     if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Page signature invalid');
-    const cursor=decimalSeq(message.cursor_to),head=decimalSeq(message.head_seq??message.watermark_seq),from=decimalSeq(message.seq_from??'0'),to=decimalSeq(message.seq_to??cursor);
+    const cursor=decimalSeq(message.cursor_to??message.seq_to),head=decimalSeq(message.head_seq??message.watermark_seq),from=decimalSeq(message.seq_from??'0'),to=decimalSeq(message.seq_to??cursor);
     const sub=this.scopes.get(message.collection);
     if(!sub || message.scope_hash!==sub.scope_hash || String(message.epoch)!==String(this.session.epoch) || message.gen!==sub.gen)throw new CtoxError('revoked','Page scope/epoch/generation mismatch');
     if(!message.package_id||seqGreater(cursor,head)||seqGreater(from,to)||seqGreater(to,cursor)||(message.complete&&cursor!==head))throw new CtoxError('invalid','Invalid page progress proof');
@@ -80,7 +80,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    }
    case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');await this.events.revoke?.(message);return;
    case 'write_result':
-    if(typeof message.op_id!=='string'||!['accepted','rejected','migrated'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
+    if(typeof message.op_id!=='string'||!['accepted','merged','rejected','migrated'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
     if(message.status!=='rejected')decimalSeq(message.seq);await this.events.write_result(message);return;
    case 'transfer_data':case 'transfer_result': {
     const pending=this.pending.get(message.request_id);if(!pending)return;
@@ -93,8 +93,19 @@ export class WebRTCKernelTransport extends KernelTransport {
   }
  }
  async scope(collection){await this.ready;const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
- async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);await this.scheduler.send('control',{type:'subscribe',...sub});}
- async write(entry){await this.ready;decimalSeq(entry.base_seq);if(!entry.op_id)throw new CtoxError('invalid','op_id missing');try{await this.scheduler.send('commands',{type:'write',...entry});}catch(error){this.fail(error);throw error;}}
+ async subscribe(scope){
+  await this.ready;const sub={...scope,epoch:this.session.epoch},seq=decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);
+  const checkpoint=seq==='0'?null:{instance_id:this.session.instance_id,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:sub.epoch,seq};
+  await this.scheduler.send('control',{type:'subscribe',collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,checkpoint,priority:sub.priority??'P2'});
+ }
+ async write(entry){
+  await this.ready;decimalSeq(entry.base_seq);if(!entry.op_id || entry.client_seq===undefined)throw new CtoxError('invalid','Ordered write identity missing');
+  const write={type:'write',client_seq:decimalSeq(entry.client_seq)};
+  // Local outbox metadata (app_id, sent_gen, origin_tab, pending_result) is not
+  // part of the strict native Write schema and must never cross the wire.
+  for(const key of ['op_id','prev_op_id','collection','id','base_rev','base_seq','gen','schema_ver','app_ver','op','body'])write[key]=entry[key];
+  try{await this.scheduler.send('commands',write);}catch(error){this.fail(error);throw error;}
+ }
  async appActivation(report){await this.ready;await this.scheduler.send('commands',{type:'app_activation',...report,at_seq:decimalSeq(report.at_seq)});}
  priority(hint){this.ready.then(()=>Promise.all(hint.collections.map(collection=>this.scheduler.send('control',{type:'priority',collection,priority:'P1'})))).catch(e=>this.events?.status?.('kernel',{level:'warn',code:'transport.priority',text:e.message}));}
  async request(type,body){
