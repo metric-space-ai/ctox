@@ -42,13 +42,16 @@ export default {
     const external=await control(owner,'startParticipants',{participants:f.externalParticipants,stopAfterMs:610000,intervalMs:50});
     assert.ok(external.owner && external.stopAt);
     const stats=peers.map(p=>({id:p.identity.id,accepted:0,rejected:[],errors:[]}));
-    const start=Date.now();let stopped=false,revoked=false,revocation,wire;
+    const start=Date.now();let stopped=false,revoked=false,revoking=false,revocation,wire;
+    const inflight=[];
     const producers=peers.map((p,index)=>(async()=>{
       let n=0;
       while(!stopped) {
+        if(revoking && p.identity.id===f.revokedUser){await h.pause(50);continue;}
         try {
           const change={id:f.writeDocs[p.identity.id],body:{[f.writeFields[p.identity.id]]:p.identity.id+'-'+n++}};
-          const result=(await write(p.page,f.appId,f.collection,change,true)).result;
+          inflight[index]=write(p.page,f.appId,f.collection,change,true);
+          const result=(await inflight[index]).result;
           if(['accepted','migrated'].includes(result.status))stats[index].accepted++;
           else stats[index].rejected.push({at:Date.now(),reason:result.reason,expected:revoked && p.identity.id===f.revokedUser});
         } catch(error) {stats[index].errors.push(error.message);}
@@ -64,19 +67,24 @@ export default {
       assert.match(forwarding.packetSha256,/^[a-f0-9]{64}$/);
       const local=(await rawStore(second.page,'docs')).find(r=>r.id===forwarding.documentId);
       assert.ok(local && local.data?.[forwarding.probeField]===forwarding.probeValue,'Peer positive control not persisted');
-      const target=peers.find(p=>p.identity.id===f.revokedUser),before=await trace(target.page);
+      revoking=true;
+      const targetIndex=peers.findIndex(p=>p.identity.id===f.revokedUser);
+      assert.ok(targetIndex>=0);
+      await inflight[targetIndex];
+      const target=peers[targetIndex],before=await trace(target.page);
       revocation=await control(owner,'setRights',f.revoke);revoked=true;
       await until(h,async()=>!(await rawStore(target.page,'docs')).some(r=>r.collection===f.collection),5000,'Revoked raw IDB cleanup');
       wire=await trace(target.page);
       const sendTrace=await control(owner,'sendTrace',{deviceId:target.identity.deviceId,rightsSeq:revocation.seq});
       assertRevocation(before,wire,revocation,f.collection,sendTrace);
-      const destination=await rawStore(second.page,'docs');
+      const targetRows=rows=>rows.filter(r=>r.id===forwarding.documentId);
+      const destination=targetRows(await rawStore(second.page,'docs'));
       invalid=[];
       for(const variant of ['old_rights_ver','forged_signature']) {
         const packet=await control(owner,'forwardPeer',{from:first.identity.deviceId,to:second.identity.deviceId,variant,pauseNativeDelivery:true});
         assertPeerRejected(packet);invalid.push(packet);
       }
-      assert.deepEqual(await rawStore(second.page,'docs'),destination,'Rejected packet changed persisted IDB');
+      assert.deepEqual(targetRows(await rawStore(second.page,'docs')),destination,'Rejected packet changed persisted IDB');
       await remaining(600000);
     } finally {
       stopped=true;await Promise.all(producers);

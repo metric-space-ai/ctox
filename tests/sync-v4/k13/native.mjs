@@ -10,7 +10,6 @@ export function notRun(reason, measured = {}) {
 }
 export async function connect(h, id) {
   const page = await h.page();
-  await h.warm(page);
   const availability = await h.os(page);
   if (!availability.available) return {result:notRun(
     'Native OS bootstrap unavailable; incident lifecycle was not executed',
@@ -48,7 +47,8 @@ export async function participant(h, fixture, identity) {
     if (!t || !t.channels || !t.session || typeof t.receive !== 'function' || !t.events)
       throw Error('Expose the actual WebRTCKernelTransport for wire observation');
     if (os.kernel.storageKind !== 'indexeddb') throw Error('Real IndexedDB required');
-    const trace={frame:0,pages:[],revokes:[],navigation:performance.timeOrigin};
+    const trace={frame:0,pages:[],revokes:[],activations:[],navigation:performance.timeOrigin};
+    os.shell.activation.onChange(event=>trace.activations.push({...event,at:Date.now()}));
     const receive=t.receive, page=t.events.page, revoke=t.events.revoke;
     t.receive=async function(data){trace.frame++;return receive.call(this,data);};
     t.events.page=async message=>{
@@ -101,21 +101,28 @@ export function assertExactScope(records, collection, expectedIds, forbiddenFiel
   }
 }
 export async function publish(page, appId, version, base) {
-  return page.evaluate(async ({appId,version,base})=>{
+  const result=await page.evaluate(async ({appId,version,base})=>{
     const draft=globalThis.__e2eOS.shell.source(appId).draft;
     for (const [path,text] of Object.entries(version.files)) await draft.write(path,text);
     await draft.setManifest(version.manifest);
     await draft.setCollections(version.collections);
     const write=draft.publish({base_app_ver:base});await write.local;return write.result;
   },{appId,version,base});
+  const stamp=await control(page,'commitReceipt',{seq:result.seq,appId,version:result.rev});
+  assert.equal(stamp.source,'store-commit');assert.ok(Number.isFinite(stamp.committedAtMs));
+  return {...result,committedAtMs:stamp.committedAtMs};
 }
-export async function activation(page, appId, version, timeout = 10000) {
-  const started=Date.now();
+export async function activation(page, appId, version, committedAtMs, timeout = 10000) {
+  assert.ok(Number.isFinite(committedAtMs),'Activation must be timed from the actual Core commit');
   await page.waitForFunction(({appId,version})=>{
     const a=globalThis.__e2eOS.shell.activation.get(appId).get();
     return a?.state==='activated' && a.activated_ver===version;
   },{appId,version},{timeout});
-  return Date.now()-started;
+  const at=await page.evaluate(({appId,version})=>globalThis.__p6Trace.activations
+    .find(e=>e.app_id===appId && e.ver===version && e.state==='activated')?.at,{appId,version});
+  assert.ok(Number.isFinite(at),'Missing measured activation event');
+  assert.ok(at>=committedAtMs,'Core/browser clocks disagree');
+  return at-committedAtMs;
 }
 export async function write(page, appId, collection, doc, patch = false) {
   return page.evaluate(async ({appId,collection,doc,patch})=>{

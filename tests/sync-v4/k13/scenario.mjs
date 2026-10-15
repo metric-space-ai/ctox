@@ -21,9 +21,9 @@ export default {
     const user=participants.find(p=>p.identity.role==='user');
     const published=await publish(owner,f.app.id,f.app.next,f.app.baseVersion);
     assert.ok(['accepted','migrated'].includes(published.status));
-    const activationStart=Date.now(), openings=[];
+    const activationStart=published.committedAtMs, openings=[];
     for (const p of participants) {
-      await activation(p.page,f.app.id,published.rev);
+      await activation(p.page,f.app.id,published.rev,published.committedAtMs);
       const opened=await p.page.evaluate(async ({appId,version})=>{
         const os=globalThis.__e2eOS;
         await os.openApp(appId);
@@ -54,7 +54,7 @@ export default {
     assert.ok((await rawStore(user.page,'outbox')).some(e=>e.op_id===pending),'No real pending write was queued');
     let pressure;
     try {
-      pressure=await control(owner,'startWrites',{collection:f.collection,intervalMs:25});
+      pressure=await control(owner,'startWrites',{collection:f.collection,intervalMs:25,stopAfterMs:30000});
       assert.ok(pressure.owner && pressure.stopAt,'Native load must have a bounded owner');
       const before=await trace(user.page);
       const revoked=await control(owner,'setRights',f.revoke);

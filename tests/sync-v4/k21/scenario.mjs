@@ -11,13 +11,20 @@ export function assertInventory(expected,completed) {
   assert.deepEqual([...completed].sort(),[...expected].sort(),'A missing app cannot become hot-plug acceptance');
 }
 async function command(page,type,payload) {
-  return page.evaluate(async ({type,payload})=>{
+  const accepted=await page.evaluate(async ({type,payload})=>{
     const os=globalThis.__e2eOS, api=os.kernel.appApi('ctox-platform',os.platformVersion);
-    const handle=api.command(type,payload);await handle.local;return handle.result;
+    const handle=api.command(type,payload);await handle.local;
+    globalThis.__p6Commands ||= new Map();globalThis.__p6Commands.set(handle.id,handle);
+    return {id:handle.id,result:await handle.result};
   },{type,payload});
-}
-async function activeVersion(page,id) {
-  return page.evaluate(id=>globalThis.__e2eOS.shell.apps.get().find(a=>a.id===id)?.active_ver??null,id);
+  assert.ok(['accepted','migrated'].includes(accepted.result.status),'App command admission failed');
+  await page.waitForFunction(id=>['done','failed'].includes(globalThis.__p6Commands.get(id).status.get().status),
+    accepted.id,{timeout:15000});
+  const state=await page.evaluate(id=>globalThis.__p6Commands.get(id).status.get(),accepted.id);
+  assert.equal(state.status,'done','Native lifecycle handler failed');
+  const stamp=await control(page,'commitReceipt',{commandId:accepted.id,appId:payload.app_id,operation:type});
+  assert.equal(stamp.source,'store-commit');assert.ok(Number.isFinite(stamp.committedAtMs));
+  return {...accepted.result,rev:stamp.app_ver,committedAtMs:stamp.committedAtMs};
 }
 export default {
   id:'K21',title:'Every installed app hot-plugs, migrates, rolls forward and archives without losing input',
@@ -45,10 +52,8 @@ export default {
       for (const app of f.apps) {
         const installed=await command(owner,'ctox.app.update',{app_id:app.id,base_app_ver:null,release_ver:app.release});
         assert.ok(['accepted','migrated'].includes(installed.status),'Install rejected: '+app.id);
-        const ver=await activeVersion(owner,app.id);assert.ok(ver);
-        const installAt=Date.now();
-        await Promise.all(peers.map(p=>activation(p.page,app.id,ver)));
-        const times=[Date.now()-installAt];
+        const ver=installed.rev;assert.ok(ver);
+        const times=await Promise.all(peers.map(p=>activation(p.page,app.id,ver,installed.committedAtMs)));
         for(const p of peers)await p.page.evaluate(id=>globalThis.__e2eOS.openApp(id),app.id);
         assert.ok(app.form?.selector && app.form?.value,'Real app-specific unsaved form fixture is required: '+app.id);
         await peers[0].page.locator(app.form.selector).fill(app.form.value);
@@ -60,24 +65,20 @@ export default {
           'Update must change schema field, index and rights, not just a title');
         const updated=await publish(owner,app.id,app.next,ver);
         assert.ok(['accepted','migrated'].includes(updated.status));
-        const updateAt=Date.now();
-        await Promise.all(peers.map(p=>activation(p.page,app.id,updated.rev)));
-        times.push(Date.now()-updateAt);
+        times.push(...await Promise.all(peers.map(p=>activation(p.page,app.id,updated.rev,updated.committedAtMs))));
         const retained=await peers[0].page.locator(app.form.selector).inputValue();
         assert.equal(retained,app.form.value,'Remount lost unsaved input: '+app.id);
         const balance=await control(owner,'readNative',{collection:app.collection});
         assert.deepEqual(balance.rows.map(r=>r.id).sort(),before.rows.map(r=>r.id).sort(),'Migration lost rows');
         const rolled=await command(owner,'ctox.app.rollback',{app_id:app.id,base_app_ver:updated.rev,target_ver:ver});
         assert.ok(['accepted','migrated'].includes(rolled.status));
-        const forward=await activeVersion(owner,app.id);
+        const forward=rolled.rev;
         assert.ok(forward && forward!==ver && forward!==updated.rev,'Rollback must publish a NEW forward version');
-        const rollbackAt=Date.now();
-        await Promise.all(peers.map(p=>activation(p.page,app.id,forward)));
-        times.push(Date.now()-rollbackAt);
+        times.push(...await Promise.all(peers.map(p=>activation(p.page,app.id,forward,rolled.committedAtMs))));
         assert.equal(await peers[0].page.locator(app.form.selector).inputValue(),app.form.value);
         const removed=await command(owner,'ctox.app.remove',{app_id:app.id,base_app_ver:forward});
         assert.ok(['accepted','migrated'].includes(removed.status));
-        const removedAt=Date.now();
+        const removedAt=removed.committedAtMs;
         await Promise.all(peers.map(p=>p.page.waitForFunction(id=>!globalThis.__e2eOS.shell.apps.get().some(a=>a.id===id),app.id,{timeout:10000})));
         times.push(Date.now()-removedAt);
         const exported=await control(owner,'exportArchive',{appId:app.id});
