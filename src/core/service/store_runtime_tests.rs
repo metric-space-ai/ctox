@@ -1,6 +1,6 @@
 use super::*;
 use ctox_store::{
-    ipc,
+    change_log, ipc,
     rxdb_schema_adapter::{self, CanonicalChangeLog, RxdbOwner, RxdbTable},
     WriteJob,
 };
@@ -14,6 +14,8 @@ async fn owner_composition_fences_aliases_and_keeps_changes_and_documents_in_one
     let mut stores = DaemonStores::start(endpoint.clone(), Handle::current()).unwrap();
     let id = DbId::new(dir.path().join("sync.sqlite3")).unwrap();
     let database = stores.register("sync", id.clone(), true, Arc::new(|tx| {
+        let registry_rows: i64 = tx.query_row("SELECT COUNT(*) FROM _collections", [], |r| r.get(0))?;
+        assert_eq!(registry_rows, 0, "the canonical registry must exist before domain initialization");
         tx.execute_batch("CREATE TABLE docs(id TEXT PRIMARY KEY,revision TEXT NOT NULL,data TEXT NOT NULL,deleted INTEGER NOT NULL);
             INSERT INTO docs VALUES('old','1-old',json_object('id','old'),0);
             CREATE TABLE __rxdb_changed_tables(table_name TEXT,changed_at INTEGER);

@@ -1,12 +1,12 @@
 //! Composition of the Phase-3 store owners. Registration is explicit: an
 //! unported legacy file must not acquire a second, nominal v4 owner.
 use ctox_store::{
-    change_log,
     config::{AdmissionBudget, ConnectionConfig},
     ipc::{DaemonIpc, Dispatcher, JobKind, Request, StoreEndpoint},
     publication,
     read_pool::ReadPool,
     registry::Registry,
+    schema,
     writer::{WriterHandle, WriterOptions},
     DbId, JobHandle, JobOptions, ReadJob, StoreError,
 };
@@ -136,7 +136,7 @@ impl DaemonStores {
                     )?;
                     publication::install(&tx)?;
                     if sync {
-                        change_log::initialize(&tx)?;
+                        schema::initialize(&tx)?;
                     }
                     initialize(&tx)?;
                     tx.commit()?;
