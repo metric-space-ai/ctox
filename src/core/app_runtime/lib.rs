@@ -195,7 +195,10 @@ fn receive(stream: &mut impl Read, limit: usize) -> Result<Value> {
     let mut byte = [0; 1];
     loop {
         ensure!(
-            stream.read(&mut byte)? != 0,
+            stream
+                .read(&mut byte)
+                .context("unavailable: app IPC read failed")?
+                != 0,
             "unavailable: app process closed IPC"
         );
         if byte[0] == b'\n' {
@@ -205,6 +208,65 @@ fn receive(stream: &mut impl Read, limit: usize) -> Result<Value> {
         ensure!(bytes.len() <= limit, "quota: runtime response");
     }
     serde_json::from_slice(&bytes).context("invalid: runtime protocol JSON")
+}
+/// Restrict inherited authority to the explicitly configured stdio handles.
+/// In particular, an inherited file descriptor would bypass Node fs permissions.
+fn restrict_inherited_handles(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: only async-signal-safe syscalls are used after fork. Descriptor
+        // flags change in the child fd table only; parent handles are untouched.
+        unsafe {
+            command.pre_exec(|| {
+                #[cfg(target_os = "linux")]
+                if libc::syscall(
+                    libc::SYS_close_range,
+                    3u32,
+                    u32::MAX,
+                    libc::CLOSE_RANGE_CLOEXEC,
+                ) == 0
+                {
+                    return Ok(());
+                }
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // Fail closed instead of scanning an unbounded descriptor range.
+                if limit.rlim_cur > 1_048_576 {
+                    return Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+                }
+                for fd in 3..limit.rlim_cur as i32 {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.raw_os_error() != Some(libc::EBADF) {
+                            return Err(error);
+                        }
+                        continue;
+                    }
+                    if libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+struct SocketCleanup(Option<PathBuf>);
+impl Drop for SocketCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 impl Process {
     fn start(node: &Path, root: &Path) -> Result<Self> {
@@ -218,12 +280,14 @@ impl Process {
             "forbidden: only private LocalTransport is permitted"
         );
         let mut listener = transport.bind()?;
+        let mut cleanup = SocketCleanup(transport.unix_socket_path().map(Path::to_path_buf));
         let inherited = transport.connect_blocking(Duration::from_secs(5))?;
         let stream = listener.accept()?;
         let stdout = inherited.try_clone()?.into_child_stdio()?;
         let stdin = inherited.into_child_stdio()?;
         let worker = format!("{MANGO}\n{WORKER}");
-        let child = Command::new(node)
+        let mut command = Command::new(node);
+        command
             .args([
                 "--permission",
                 "--max-old-space-size=256",
@@ -235,13 +299,15 @@ impl Process {
             .env_clear()
             .stdin(stdin)
             .stdout(stdout)
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        restrict_inherited_handles(&mut command);
+        let child = command
             .spawn()
             .context("unavailable: start permission-restricted Node app runtime")?;
         let mut process = Self {
             child: Arc::new(Mutex::new(child)),
             stream: BufReader::new(stream),
-            socket: transport.unix_socket_path().map(Path::to_path_buf),
+            socket: cleanup.0.take(),
         };
         process
             .stream
@@ -763,10 +829,10 @@ impl Deadline {
                     }
                     drop(cancelled);
                     let cpu = refresh(&mut system);
-                    let over_budget = cpu.is_none_or(|value| {
+                    let over_budget = cpu.is_some_and(|value| {
                         value.saturating_sub(baseline) >= cpu_limit.as_millis() as u64
                     }) || start.elapsed() >= Duration::from_secs(600);
-                    if interrupt.load(Ordering::SeqCst) || over_budget {
+                    if interrupt.load(Ordering::SeqCst) || cpu.is_none() || over_budget {
                         if over_budget {
                             exhausted.store(true, Ordering::SeqCst);
                         }
@@ -1144,6 +1210,67 @@ mod tests {
             assert!(running.join().unwrap().is_err());
             assert!(start.elapsed() < Duration::from_secs(3));
         });
+    }
+
+    #[test]
+    fn a_crash_during_a_call_is_unavailable_instead_of_cpu_exhaustion() {
+        let h = Harness::new(Duration::from_secs(5), IDLE_LIMIT);
+        h.register("export default input => { if(input.loop) { while(true){} } return true; };");
+        h.invoke(json!({"loop":false})).unwrap();
+        let owned_child = {
+            let slots = h.pool.inner.slots.lock().unwrap();
+            let slot = slots["test-app"].lock().unwrap();
+            slot.process.as_ref().unwrap().child.clone()
+        };
+        thread::scope(|scope| {
+            let running = scope.spawn(|| h.invoke(json!({"loop":true})));
+            thread::sleep(Duration::from_millis(100));
+            {
+                let mut child = owned_child.lock().unwrap();
+                child.kill().unwrap();
+                child.wait().unwrap();
+            }
+            let error = running.join().unwrap().unwrap_err();
+            assert_eq!(error_code(&error.to_string()), "unavailable");
+        });
+        assert_eq!(h.invoke(json!({"loop":false})).unwrap(), json!(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_inheritable_file_handles_are_closed_before_node_exec() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let h = Harness::new(Duration::from_secs(5), IDLE_LIMIT);
+        let path = h.root.join("owned-fd-sentinel");
+        std::fs::write(&path, "owned test data").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        // Deliberately create a high, inheritable descriptor, owned by this test.
+        let raw = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, 200) };
+        assert!(raw >= 200);
+        let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+        let script = format!("import fs from 'node:fs'; try {{ fs.readFileSync({raw}); process.exit(1); }} catch(e) {{ if(e.code !== 'EBADF') process.exit(2); }}");
+        let mut command = Command::new(&h.pool.inner.node);
+        command
+            .args(["--permission", "--input-type=module", "--eval", &script])
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        restrict_inherited_handles(&mut command);
+        assert!(command.status().unwrap().success());
+        let parent_flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        assert!(parent_flags >= 0);
+        assert_eq!(parent_flags & libc::FD_CLOEXEC, 0);
+        drop(owned);
+        // Child-only descriptor flags must not alter or close the parent's file.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "owned test data");
+    }
+    #[test]
+    fn failed_node_spawn_does_not_leave_socket_files() {
+        let h = Harness::new(Duration::from_secs(5), IDLE_LIMIT);
+        let before = std::fs::read_dir(&h.root).unwrap().count();
+        assert!(Process::start(&h.root.join("missing-node"), &h.root).is_err());
+        assert_eq!(std::fs::read_dir(&h.root).unwrap().count(), before);
     }
 
     #[test]

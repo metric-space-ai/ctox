@@ -62,7 +62,9 @@ nur vom Core verifizierte App-Releases dürfen registriert werden.
 
 Der Core öffnet einen privaten LocalTransport-Kanal vor dem Start und vererbt
 dessen Handles als stdin/stdout. Der App-Prozess erhält dadurch kein Recht,
-selbst Sockets zu öffnen. Es gibt keinen TCP-/HTTP-Fallback. App-Module werden
+selbst Sockets zu öffnen. Unter Unix werden zusätzliche geerbte Deskriptoren
+beim Exec geschlossen; die Eltern-Handles bleiben unverändert. Es gibt keinen
+TCP-/HTTP-Fallback. App-Module werden
 aus den geprüften In-Memory-Quellen geladen; relative Importe innerhalb des
 Bundles sind möglich, Node-Builtins und dynamische Importe nicht.
 Native Fähigkeiten stehen ausschließlich über ctx zur Verfügung.
