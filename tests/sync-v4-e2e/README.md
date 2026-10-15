@@ -32,7 +32,7 @@ but cannot run this namespace helper without a specific authorized setup. Copy
 only this producer's binary + matching source assets and rewrite the manifest
 paths with `e2e-export.mjs`/`e2e-import.mjs`; retain original SHA and custody.
 Never borrow another daemon or bypass namespace isolation to get a green run.
-`--seconds 900` bounds the full scenario run, at most 1800. `--scenario K02`,
+`--seconds 900` bounds the full scenario run, at most 2100. `--scenario K02`,
 `K08` or `K04-ATTACH` selects one incident. `--clients 1..3` opens real independent
 browser storage contexts. The selected local ICE candidate MUST be `relay`.
 Optional `--warm-rtt 20` establishes the real locally-held-data precondition at
