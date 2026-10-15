@@ -2469,6 +2469,7 @@ dependencies = [
  "ctox-qwen3-embedding-0-6b",
  "ctox-rxdb",
  "ctox-sqlserver-adapter",
+ "ctox-store",
  "ctox-sync",
  "ctox-transfers",
  "ctox-utils-absolute-path",
@@ -3385,6 +3386,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "ctox-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
