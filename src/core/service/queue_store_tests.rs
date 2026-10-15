@@ -252,5 +252,54 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
         json!({"parallel_producers":8,"ack_p99_us":elapsed[(elapsed.len()*99/100).min(elapsed.len()-1)],"ack_errors":[],"lock_busy":0,"durable_source_intents":receipt.1})
     );
     stores.shutdown().await?;
+    // Source content remains resolvable after both owners and private IPC restart.
+    let mut restarted = DaemonStores::start(endpoint(&root), Handle::current())?;
+    restarted
+        .register(
+            "core",
+            DbId::new(crate::paths::core_db(&root))?,
+            false,
+            Arc::new(|_| Ok(())),
+        )
+        .await?;
+    let request = super::super::queue_projection::ChunkRequest {
+        record_id: "queue-owner-fixture-129".into(),
+        sha256: reference["sha256"].as_str().unwrap().into(),
+        offset: 0,
+    };
+    let chunk = ipc::request(
+        endpoint(&root),
+        Request {
+            request_id: 1001,
+            kind: JobKind::Read,
+            method: "queue.projection.read".into(),
+            payload: serde_json::to_vec(&request)?,
+        },
+        options(),
+    )?
+    .await?;
+    assert_eq!(
+        chunk,
+        serde_json::to_vec(&full)?[..super::super::queue_projection::CHUNK_BYTES],
+        "projection content changed across restart"
+    );
+    let mut foreign = request;
+    foreign.record_id = "queue-owner-fixture-other".into();
+    assert!(
+        ipc::request(
+            endpoint(&root),
+            Request {
+                request_id: 1002,
+                kind: JobKind::Read,
+                method: "queue.projection.read".into(),
+                payload: serde_json::to_vec(&foreign)?
+            },
+            options()
+        )?
+        .await
+        .is_err(),
+        "hash alone became a reference grant"
+    );
+    restarted.shutdown().await?;
     Ok(())
 }

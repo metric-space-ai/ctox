@@ -59,13 +59,9 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
     );
     let native_root = root.to_owned();
     crate::persistence::run_core_sync(move || {
-        crate::runtime_env::set_runtime_env_value(
-            &native_root,
-            "CTOX_FIXTURE_NON_SECRET",
-            "owned",
-        )?;
+        crate::runtime_env::set_runtime_env_value(&native_root, "CTOX_FIXTURE_THEME", "owned")?;
         assert_eq!(
-            crate::runtime_env::get_runtime_env_value(&native_root, "CTOX_FIXTURE_NON_SECRET")
+            crate::runtime_env::get_runtime_env_value(&native_root, "CTOX_FIXTURE_THEME")
                 .as_deref(),
             Some("owned")
         );

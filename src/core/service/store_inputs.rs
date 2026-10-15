@@ -111,7 +111,7 @@ impl StoreInputs {
         if self.retired.load(Ordering::Acquire) || self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
         }
-        for db in [&self.core, &self.sync] {
+        for db in self.databases.values() {
             if db.writer.lifecycle() != Lifecycle::Ready {
                 return Err(StoreError::Closed);
             }
