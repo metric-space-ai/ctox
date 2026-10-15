@@ -18,6 +18,10 @@ if [ ! -x "$runtime_node" ]; then
   rm "$archive"
 fi
 export CTOX_APP_RUNTIME_TEST_NODE="$runtime_node"
+if [ "${1:-}" = prepare ]; then
+  "$runtime_node" --version
+  exit
+fi
 if [ "${1:-}" = kit ]; then
   "$runtime_node" --test --test-concurrency=2 src/core/app_runtime/handler-kit/*.test.mjs
   exit

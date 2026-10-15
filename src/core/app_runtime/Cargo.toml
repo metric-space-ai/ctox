@@ -21,7 +21,7 @@ ctox-store = { path = "../store", optional = true }
 ctox-app-capabilities-contract = { path = "../app_capabilities/contract", optional = true }
 rusqlite = { version = "0.32", optional = true }
 rxdb = { package = "ctox-rxdb", path = "../rxdb", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"], optional = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
