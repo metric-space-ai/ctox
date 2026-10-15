@@ -4,6 +4,7 @@ export function bufferedTransaction(snapshot, { query, error }) {
   const rows = structuredClone(snapshot.collections);
   const originals = structuredClone(snapshot.collections);
   const changes = new Map(), acknowledgements = new Map();
+  const writeOnly = new Set(snapshot.write_only ?? []);
   const collection = name => {
     if (!Object.hasOwn(rows,name) || !Array.isArray(rows[name])) error('forbidden','Collection absent from authorized snapshot');
     return rows[name];
@@ -11,10 +12,19 @@ export function bufferedTransaction(snapshot, { query, error }) {
   const bindings = {
     async read(name,mango) { return query(collection(name).filter(d => !d.deleted && !d._deleted),mango); },
     async write(name,op) {
-      const docs=collection(name);
       if (!op || !['put','patch','remove'].includes(op.type)) error('invalid','Invalid transaction write');
       const id=op.id ?? op.doc?.id;
       if (typeof id !== 'string' || !id) error('invalid','Document id required');
+      if (writeOnly.has(name)) {
+        // No document/revision is disclosed. Core applies this blind operation
+        // and its supplied base_rev atomically under current write authority.
+        const key=JSON.stringify([name,id]), ack={status:'accepted',id};
+        changes.set(Symbol(),{collection:name,op:structuredClone(op)});
+        if (!acknowledgements.has(key)) acknowledgements.set(key,[]);
+        acknowledgements.get(key).push(ack);
+        return ack;
+      }
+      const docs=collection(name);
       const index=docs.findIndex(d=>d.id===id), current=docs[index];
       if (current?.deleted) error('conflict','Document is deleted');
       if (Object.hasOwn(op,'base_rev') && op.base_rev !== (current?.rev ?? null)) error('conflict','Snapshot revision differs');

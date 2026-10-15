@@ -1,5 +1,5 @@
 //! Core bindings for the single Store writer and the CAP-1 registry.
-//! No SQL table names, alternate databases, HTTP or app-specific policy live here.
+//! App-data schemas stay in Core; scheduling metadata shares its Store writer.
 use crate::{HandlerError, RuntimeHost};
 use anyhow::{bail, ensure, Context, Result};
 use ctox_app_capabilities_contract::{
@@ -65,8 +65,8 @@ pub trait StoreCodec: Send + Sync + 'static {
         stamp: Option<&Value>,
         operations: &[StoreWrite],
     ) -> std::result::Result<Vec<Value>, StoreError>;
-    /// Core command acceptance, cursor, trigger/completion receipt jobs.
-    /// Claims must be atomic and durable, fenced and idempotent by event/task ID.
+    /// Core command acceptance; runtime cursor/trigger/completion metadata is
+    /// implemented by state.rs in the same writer transaction.
     fn platform(
         &self,
         tx: &Transaction<'_>,
@@ -381,6 +381,26 @@ impl CoreRuntimeHost {
                 names.push(name.clone());
             }
         }
+        // A declared write-only foreign collection must not leak a read snapshot.
+        let mut write_only = Vec::new();
+        for (name, rule) in binding["manifest"]["foreign_collections"]
+            .as_object()
+            .into_iter()
+            .flat_map(|m| m.iter())
+        {
+            if !names.contains(name)
+                && rule["ops"]
+                    .as_array()
+                    .is_some_and(|ops| ops.iter().any(|op| op == "write"))
+            {
+                ensure!(
+                    self.authority
+                        .exported(crate::string(rule, "owner_app")?, name, "write")?,
+                    "forbidden: foreign write export withdrawn"
+                );
+                write_only.push(name.clone());
+            }
+        }
         let codec = self.codec.clone();
         let context = binding.clone();
         let snapshot = self.wait(
@@ -411,7 +431,7 @@ impl CoreRuntimeHost {
                 snapshot,
             },
         );
-        Ok(json!({"token":token,"collections":collections}))
+        Ok(json!({"token":token,"collections":collections,"write_only":write_only}))
     }
     fn capability(&self, binding: &Value, name: &str, args: &Value) -> Result<Value> {
         let args = args.as_array().context("invalid: capability args")?;

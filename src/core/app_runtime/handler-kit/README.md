@@ -1,27 +1,21 @@
 # CTOX App Handler-Kit
 
-Dieses Kit führt App-Handler ohne laufenden CTOX-Core aus. Es besteht aus
-Node-ESM-Modulen ohne Installation oder Build. Der Speicher und die nativen
-Fähigkeiten werden für lokale Tests als Fixtures bereitgestellt.
+Plain Node-ESM ohne Installation oder Build. Das Kit ist für lokale Portierungs-
+und Vertragstests vertrauenswürdiger Handler gedacht; es ersetzt weder die
+Core-Autorität noch die Prozessgrenze der produktiven Laufzeit.
+Benötigt Node >=22.15 (ESM-Lader-Hooks); der gemeinsame Linux-Prüfer verwendet
+das gepinnte Node 26.
 
-## Handler und Manifest
-
-Ein Handler exportiert eine asynchrone Funktion `default(input, ctx)`. Sein
-Rückgabewert muss JSON sein und darf höchstens 1 MiB groß sein.
+## Handler und Beispiel
 
 ```js
-// handlers/add.mjs
-export default async function add(input, ctx) {
-  const existing = await ctx.read("entries", {
-    selector: { id: input.id },
+// handlers/add.js
+export default async function handle(command, ctx) {
+  const { id, title } = command.payload;
+  return ctx.transaction(async tx => {
+    const current = await tx.get("entries", id);
+    return tx.put("entries", { id, title }, { base_rev: current?.rev ?? null });
   });
-  await ctx.write("entries", {
-    type: "put",
-    doc: { id: input.id, title: input.title },
-    base_rev: existing[0]?.rev ?? null,
-  });
-  ctx.log("info", "Eintrag gespeichert", { id: input.id });
-  return { id: input.id };
 }
 ```
 
@@ -29,100 +23,106 @@ export default async function add(input, ctx) {
 import { runHandler } from "./index.mjs";
 
 const manifest = {
-  app_id: "example",
-  app_ver: "1",
+  app_id: "example", app_ver: "1",
   collections: { entries: { schema: {}, class: "business" } },
-  handlers: { "example.add": "handlers/add.mjs" },
+  handlers: { "example.add": "handlers/add.js" },
   capabilities_required: [],
 };
 const fixtures = {
   root: "/absolute/path/to/app",
+  actor: { id: "writer", role: "writer", display_name: "Autor", is_admin: false },
   collections: { entries: [] },
-  logs: [],
 };
-const result = await runHandler(manifest, "handlers/add.mjs", {
-  id: "entry-1", title: "Erster Eintrag",
+const result = await runHandler(manifest, "handlers/add.js", {
+  id: "command-1", type: "example.add",
+  payload: { id: "entry-1", title: "Erster Eintrag" },
 }, { fixtures });
 ```
 
-Pfade sind relativ zu `fixtures.root` (standardmäßig Arbeitsverzeichnis).
-Absolute Pfade, `..` und Symlinks aus dem App-Verzeichnis werden abgewiesen.
-Wenn `manifest.files` gesetzt ist, muss der SHA-256 des Moduls mit seinem Eintrag
-übereinstimmen. Produktive App-Versionen benötigen unveränderliche Verzeichnisse:
-der Einstieg wird anhand seines Hashes geladen, relative Modulimporte folgen
-aber dem normalen Node-Modulcache.
+Der Handler erhält den vollständigen Befehl:
+`{id,type,payload,actor,app_id,app_ver,record_id?,module?,client_context?}`.
+Export `handle` wird ebenfalls akzeptiert. Abschlussreferenzen dürfen benannte
+Exporte mit `handlers/queue.js#onReply` auswählen. Ein Datei-Basisname mit
+`_` ist eine Bibliothek und kein Einstieg.
+
+Relative statische Importe bleiben innerhalb von `handlers/`; statische
+Builtin- und Paketimporte werden abgewiesen. Der produktive Worker verbietet
+auch dynamische Importe. Das Kit ist keine Sandbox: nach dem Laden läuft der
+vertrauenswürdige Handler mit den Rechten des Testprozesses. Jede Ausführung lädt
+eine eigene Modul-Generation, auch bei unverändertem Einstieg und geändertem
+Helper. `manifest.files` enthält SHA-256 pro Datei. Alternativ zum lokalen
+`fixtures.root` liefert `fixtures.artifacts[hash]` die CAS-Quellen; Hashes
+werden geprüft. Absolute Pfade, ausbrechende Pfade und Symlinks sind verboten.
 
 ## Kontext
 
-- `await ctx.read(collection, { selector, sort?, limit?, skip? })` liefert Kopien.
-  Ohne `limit` gibt es keine implizite Zeilengrenze. Mango unterstützt
-  `$eq/$ne/$gt/$gte/$lt/$lte/$in/$nin/$exists/$regex` (nur Flag `i`),
-  `$and/$or/$not` und eine Ebene `$elemMatch`. Fehlend ist nicht `null`.
-  Sortierungen sind Listen aus `{ feld: "asc" | "desc" }`; Gleichstände
-  werden nach `id` aufgelöst.
-- `await ctx.write(collection, op)` unterstützt `{type:"put",doc}`,
-  `{type:"patch",id,patch}` und `{type:"remove",id}`.
-  Ein optionales `base_rev` muss zur vorhandenen Revision passen;
-  `null` bedeutet „noch nicht vorhanden“. IDs sind unveränderlich.
-  Fixture-Revisionen sind nur Testrevisionen. Das Kit simuliert keine
-  produktiven Tombstones, Transaktionen oder Replikation.
-- `await ctx.command(type, payload)` dispatcht ausschließlich im eigenen
-  Manifest deklarierte Befehle an `fixtures.command`.
-- `await ctx.model(req)`, `await ctx.http(req)` und
-  `await ctx.cap.name(...args)` / `ctx.cap.name.method(...args)` rufen
-  ausschließlich bereitgestellte Core-Fixtures auf.
-- `ctx.log(level, message, fields?)` schreibt mit App-Zuordnung in
-  `fixtures.logs`; Level: debug, info, warn oder error.
+- `read(collection,{selector,sort?,limit?,skip?})` liefert Kopien, ohne
+  implizites Zeilenlimit. Mango: Vergleichsoperatoren, `$in/$nin/$exists`,
+  `$regex` mit höchstens Flag `i`, `$and/$or/$not`, eine Ebene `$elemMatch`.
+  Fehlend unterscheidet sich von null; Sortiergleichstände werden nach id gelöst.
+- `get(collection,id)` liefert ein Dokument oder null.
+- `put(collection,doc,{base_rev?})`, `patch(collection,id,patch,{base_rev?})`,
+  `remove(collection,id,{base_rev?})`; alternativ `write(collection,op)`.
+  Revisionen des Kits sind ausschließlich Testrevisionen.
+  Remove hinterlässt nur id, rev und deleted; alte Revisionen erlauben keine
+  Wiederbelebung.
+- `transaction(async tx => …)` bündelt Datenänderungen atomar.
+  tx hat ausschließlich read/get/write/put/patch/remove. Fehler rollen zurück;
+  zwischenzeitliche Änderungen führen zu conflict. Äußeres ctx und externe
+  Wirkungen sind während des Callbacks gesperrt.
+- `command(type,payload,{id?,record_id?,module?,client_context?})` ruft
+  `fixtures.command` auf und liefert dessen Annahme:
+  `{id,status:"accepted"|"rejected",task_id?,reason?}`, keinen Abschluss.
+- `model(req)`, `http(req)`, `cap.<name>.<fn>(req)` benutzen ausschließlich
+  Fixtures. Fähigkeit muss deklariert, administrativ gewährt und implementiert
+  sein. Keine Netz- oder Ersatzroute. `fixtures.capabilities` unterstützt
+  flache oder verschachtelte Namen.
+- `now()` verwendet `fixtures.now` oder die lokale Testuhr; `uuid()` erzeugt
+  eine UUID. Globals: URL, URLSearchParams, TextEncoder/TextDecoder,
+  crypto.subtle.digest und crypto.randomUUID; CtoxError unterstützt
+  `new CtoxError({code,message,path?,uncertain?})`.
+- `cursor.get(key="default")`, `cursor.set(value,key="default")` benutzen
+  einen durch `fixtures.trigger_id` gebundenen Cursor.
+- `log(level,message,data)`: debug/info/warn/error in `fixtures.logs`.
 
-Fähigkeiten müssen sowohl in `manifest.capabilities_required` als auch in
-`fixtures.grants` stehen. Die Grants stellen die Core-/Admin-Freigabe dar,
-nicht eine selbst erteilte Manifest-Erlaubnis. HTTP ist nur mit expliziter
-Deklaration, Grant und `fixtures.http` verfügbar. Es gibt keinen Netz-Fallback.
-Die Implementierungen liegen in `fixtures.capabilities` (flache Namen oder
-verschachtelte Objekte) beziehungsweise `fixtures.model/http/command`.
-Die Deklaration eines Namespace erlaubt dessen Unterfunktionen.
+`fixtures.policy(request)` prüft optional jede Operation; nur true erlaubt sie.
+`command_rights` wird vor dem Laden des Einstiegs ausgewertet. Der produktive
+Core muss seine authentifizierte Policy und aktuelle Grants selbst durchsetzen;
+Fixture-Rollen sind kein Berechtigungsnachweis.
 
-Optional prüft `fixtures.policy(request)` jede Operation mit App-ID, Actor und
-Operation erneut. Nur der Rückgabewert `true` erlaubt sie. Ohne diese Fixture
-prüft das lokale Kit Manifest und Grants; im Core ist die Actor-Policy Pflicht.
+## Fremde Daten, Trigger und Abschlüsse
 
-## Fremde Collections
+Beide Manifeste müssen zustimmen: z. B.
+`foreign_collections: { people: {owner_app:"directory",ops:["read","watch"]} }`
+und `fixtures.apps.directory.exports: {people:["read","watch"]}`.
+Fixture-Daten müssen bereits auf erlaubte Zeilen/Felder reduziert sein.
 
-Die aufrufende App deklariert beispielsweise
-`foreign_collections: { people: { owner_app: "directory", ops: ["read"] } }`.
-Zusätzlich muss das Eigentümermanifest in
-`fixtures.apps.directory` die Collection besitzen und
-`exports: { people: ["read"] }` enthalten. Beide Seiten und die Actor-Policy
-werden bei jedem Zugriff geprüft. Fixtures dürfen nur bereits autorisierte
-Datensätze enthalten; das Kit ersetzt keine serverseitige Mandantentrennung.
+Das Kit validiert `triggers:[{handler,on:{collection,op}}|{handler,every:"PT1M"}]`
+und Mindestabstand eine Minute. Fremd-Trigger benötigen watch.
+Es startet selbst keinen Scheduler und keine Change-Stream-Verbindung.
+Trigger- und Abschluss-Einstiege können gezielt mit runHandler aufgerufen
+werden; die dauerhafte Auslieferung und höchstens einmalige Task-Bindung besitzt
+die produktive Core-Laufzeit. `agent.task.enqueue`-Fixtures müssen echte
+Annahmeobjekte ihrer Testumgebung liefern.
 
 ## Migrationen
 
-`runMigration(manifest, collection, docs, { fixtures })` lädt
-`manifest.migrations[collection].migrate_fn`. Der optionale vierte Parameter
-dient der lokalen Testumgebung; der Drei-Parameter-Aufruf verwendet das
-Arbeitsverzeichnis. Die Funktion exportiert `default(doc, ctx)` und gibt ein
-Dokument mit derselben ID oder exakt `{ archive: true }` zurück.
-Schreibzugriffe, Befehle und native Fähigkeiten sind während der Migration
-verboten. Originale werden nicht verändert.
+`runMigration(manifest,collection,docs,{fixtures})` lädt
+`manifest.migrations[collection].migrate_fn` (vierter Parameter optional).
+Signatur `default async(doc,ctx)`, Rückgabe Dokument mit gleicher ID oder
+exakt `{archive:true}`. Keine Datenänderungen oder externen Wirkungen.
 
-Das Ergebnis sind Vorschläge `{id, base_rev, action:"write", doc}` oder
-`{id, base_rev, action:"archive", archived_doc}`. Der Core muss sie in seinem
-Writer-Thread mit erneuter Prüfung von `base_rev` übernehmen, echte Revisionen
-erzeugen und archivierte Originale erhalten. Ein Ergebnis des Kits ist kein
-Commit und keine Berechtigung, einen Versionskonflikt zu überschreiben.
-Die Rückgabe ist auf 1 MiB begrenzt; größere Migrationen benötigen begrenzte
-Batches im Core.
+Ergebnis: Vorschläge `{id,base_rev,action:"write",doc}` oder
+`{id,base_rev,action:"archive",archived_doc}`.
+Der Core übernimmt sie separat in seinem Writer mit erneuter
+Basisrevisions-/Generationsprüfung. Ein Vorschlag ist kein Commit.
 
-## Tests und Grenzen
+## Prüfung
 
+Nur über die zugewiesene Linux-Lane:
 ```sh
-node --test src/core/app_runtime/handler-kit/handler-kit.test.mjs
+bash src/core/app_runtime/verify.sh kit
 ```
-
-Dies ist ein Testwerkzeug für vertrauenswürdigen App-Quelltext, keine Sandbox.
-Dynamisch importierter Testcode besitzt die Rechte des Testprozesses. Deshalb
-keinen fremden App-Code auf dem Operator-Host damit prüfen. Die produktive
-Laufzeit benötigt einen eigenen, dauerhaft überwachten Node-Prozess pro App,
-256 MiB Heap, Node-Permissions ohne zusätzliche Freigaben, ausschließlich
-LocalTransport, Policy-Prüfungen im Core und Abbruch bei CPU-Zeitüberschreitung.
+Die produktive Node-Prozessgrenze wird durch `verify.sh bundle` geprüft.
+Das Kit selbst läuft mit den Rechten seines Testprozesses; fremden, ungeprüften
+Code deshalb nicht auf dem Operator-Host ausführen.

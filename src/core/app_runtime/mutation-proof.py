@@ -62,6 +62,12 @@ cases = [
      "remove leaves only tombstone metadata and rejects stale resurrection; object CtoxError"),
 ]
 # Cursor authority is checked again at the persisted state boundary.
+cases.append(("core-migration-proposal", "worker.mjs",
+    r"base_rev:original\.rev,action:'write'", "base_rev:'forged',action:'write'",
+    "core_migration_reads_through_bound_context_and_returns_uncommitted_base_revisions"))
+cases.append(("write-only-without-read", "handler-kit/transaction.mjs",
+    r'if \(writeOnly\.has\(name\)\)', 'if (false)',
+    "transaction_is_one_atomic_store_job_and_failed_second_write_rolls_back_first"))
 cases.append(("cursor-not-client-metadata", "state.rs",
     r'if binding\["kind"\] != "trigger"', 'if false',
     "client_context_cannot_grant_trigger_cursor_authority"))
@@ -102,9 +108,10 @@ try:
                 "changed":[m.group() for m in matches],"replacement":replacement,"test":test}
         try:
             path.write_text(re.sub(pattern,lambda _:replacement,original))
-            cmd = kit_command(test) if file.startswith("handler-kit/") else native_command(test)
+            is_kit = file.startswith("handler-kit/") and label != "write-only-without-read"
+            cmd = kit_command(test) if is_kit else native_command(test)
             code, output = run(cmd,label)
-            reached = test in output and ("not ok" in output if file.startswith("handler-kit/") else "FAILED" in output)
+            reached = test in output and ("not ok" in output if is_kit else "FAILED" in output)
             detected = code!=0 and reached and "could not compile" not in output and "SyntaxError" not in output
             record.update({"mutant_exit":code,"reached_test_failure":reached,"detected":detected,"log":label+".log"})
             report["proofs"].append(record)

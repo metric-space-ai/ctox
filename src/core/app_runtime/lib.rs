@@ -604,6 +604,37 @@ impl RuntimePool {
             Some(binding),
         )
     }
+    /// Core-owned migration proposal run. Commit remains a separate writer job
+    /// with base_rev/generation checks; no app data is changed by this runner.
+    pub fn dispatch_migration(
+        &self,
+        command: Value,
+        fence: Value,
+        collection: &str,
+        docs: Vec<Value>,
+    ) -> Result<Value> {
+        let app = string(&command, "app_id")?.to_owned();
+        string(&command, "id")?;
+        string(&command, "app_ver")?;
+        ensure!(command["actor"].is_object(), "invalid: migration actor");
+        let mut ids = BTreeSet::new();
+        for doc in &docs {
+            ensure!(
+                ids.insert(string(doc, "id")?.to_owned()),
+                "invalid: duplicate migration id"
+            );
+            string(doc, "rev")?;
+        }
+        let binding = json!({"command":command,"fence":fence,"kind":"migration"});
+        self.call(
+            &app,
+            binding["command"]["actor"].clone(),
+            collection,
+            Value::Array(docs),
+            true,
+            Some(binding),
+        )
+    }
     pub fn migrate(
         &self,
         app: &str,

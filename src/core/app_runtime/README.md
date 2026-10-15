@@ -1,142 +1,157 @@
 # Native App-Laufzeit (Backend)
 
-Das Handler-Kit in `handler-kit/` ist unabhängig nutzbar (Slice A).
-Dieses Rust-Paket und das eingebettete `worker.mjs` bilden den Prozess-Supervisor
-für Slice B. Es benötigt keinen JS-Build und lädt zur Laufzeit keine Pakete.
+Ein dauerhaft beaufsichtigter Node-Prozess pro App, ein Core-Store und dessen
+vorhandener Writer, ausschließlich LocalTransport. Die ESM-Handler und das
+separat nutzbare Handler-Kit benötigen keinen JS-Build oder Paketdownload.
 
-## Schnittstelle zum Core
+## Produktive Einbindung
 
-`RuntimePool::new(node_path, private_runtime_root, Arc<dyn RuntimeHost>)`
-erhält absolute Pfade aus der Core-Konfiguration. Es setzt keine
-Produktions-Umgebungsvariablen. Der Node-Pfad muss auf die bereits ausgelieferte,
-verifizierte Laufzeit zeigen; es gibt keinen Download oder PATH-Fallback.
+`AppRuntimeService::production(root, Arc<CoreRuntimeHost>)` ist der
+Core-Einstieg. Der Core übergibt seinen vorhandenen Store-Writer, ReadPool,
+Tokio-Multi-Thread-Handle, die tatsächliche Autorität und die CAP-1-Registry.
+Es wird keine zweite Datenbank und kein weiterer Schreibdienst angelegt.
 
-`register(AppBundle::new(manifest, sources, approved_grants)?)` erhält
-Manifest/Quellen aus dem verifizierten installierten Release. Alle Quellen werden
-gegen `manifest.files` (SHA-256) geprüft. Die Signaturprüfung/Release-Auswahl und
-die Erteilung von Grants bleiben Aufgaben des Core. Ein Register-Aufruf ist
-kein öffentliches App- oder Browserrecht. Eine neue Version beendet die alte
-Prozessgeneration und verwirft ihren Modulzustand.
+Die API ist synchron; der Core ruft sie auf seinem begrenzten Blocking-Executor
+auf, niemals mit gehaltenem Writer-/Change-Stream-Lock. Er verbindet folgende
+Hooks nach seinem Commit, außerhalb des Writers:
+- `published(app_id, app_ver)` beim Start aus den aktiven App-Versionen und
+  nach Publish/Aktivierung. Die Version kommt über `StoreCodec::version`
+  aus business_app_versions; Quellbytes kommen ausschließlich aus dem
+  Transfer-CAS über `artifact(hash)`. Jeder Dateihash wird geprüft.
+- `command(command, fence)` mit authentifiziertem vollständigem Befehl und
+  tatsächlich gehaltenem Executor-Fence.
+- `change(ChangeEvent {seq,collection,op,record_id})` aus dem geordneten
+  Store-Änderungsstrom; keine Tabellenabfrage als Trigger-Ersatz.
+- `tick()` aus dem Core-Timer; Manifestintervalle mindestens PT1M.
+- `completed(binding,task_id,succeeded,outcome)` aus dem dauerhaften
+  Task-Abschluss. Die Referenz stammt aus der gespeicherten Task-Bindung,
+  nicht aus einem frei gewählten Callback-Pfad.
+- `migrate(command,fence,collection,docs)` erzeugt autorisierte Vorschläge
+  aus der zugelassenen CAS-Version; Übernahme bleibt im Core-Writer mit
+  erneuter Basisrevisions-/Generationsprüfung.
+- `removed(app_id)` bei Entfernung/Widerruf.
 
-`invoke(app_id, actor, command_type, input)` wählt ausschließlich einen
-deklarierten Handler. `migrate(app_id, actor, collection, docs)` erzeugt
-Migrationsvorschläge, keinen Commit. `unregister(app_id)` beendet den Prozess;
-bereits wartende Aufrufe der abgelösten Version werden abgewiesen.
+Neue Versionen warten auf den laufenden Aufruf und ersetzen danach die
+Prozessgeneration. Abschlüsse bleiben an die ursprüngliche unveränderliche
+Version gebunden; die Laufzeit wechselt dafür unter App-Sperre vorübergehend
+zur alten Version und anschließend zurück. Keine parallelen Generationen,
+kein automatisches Replay fehlgeschlagener Effekte.
 
-Der Core muss `RuntimeHost` implementieren:
-- `authorize(app, actor, operation)`: verbindliche Actor-/Policy-Prüfung vor
-  jedem Handler/Migrationsaufruf und jedem ctx-Callback, einschließlich aktuell
-  erforderlicher Bestätigungen und widerrufener Rechte. Actor stammt aus der
-  verifizierten Core-Session, nie aus App-Code.
-- `exported(owner, collection, operation)`: aktuelle Eigentümerschaft und
-  Exportfreigabe; wird bei jedem Fremdzugriff zusätzlich zum Manifest geprüft.
-- `capability_available(name)`: registrierte generische native Fähigkeit.
-- `invoke(app, actor, method, args)`: Store-/Befehls-/Capability-Adapter.
-  `read` bekommt `[collection, mango]` und liefert die gefilterte Dokumentliste;
-  `write` bekommt `[collection, op]` und muss den bestehenden Core-Schreibweg
-  benutzen, einschließlich Schema, Basisrevision und Commit-Ergebnis.
-  Keine Spiegel-Datenbank und keine JS-Schreibberechtigung auf Core-Dateien.
-  Capability-Aufrufe sind `["namespace.method", args[]]`.
-  Fehler erhalten einen V4-Code als Präfix, z.B. `conflict: source revision`.
+## Store- und Autoritätsvertrag
 
-Die konkrete Store-/Policy-Anbindung an den Core und dessen
-App-Publish-/Command-Lifecycle ist noch offen. Das Paket ist noch kein aktivierter
-Ersatz des vorhandenen Business-OS-Ausführungswegs.
+`CoreRuntimeHost` konsumiert die Store-Crate. Der Pflichtadapter
+`StoreCodec` besitzt die tatsächlichen Tabellen, Revisionen, Generationen,
+Zeilen-/Feldmasken, Schema-Prüfungen und atomaren Revision-/Lease-Vergleiche.
+Die Laufzeit erfindet kein zweites App-Datenschema. Folgende Pflichten bleiben
+beim Core-Integrator:
+- `CoreAuthority::admit`: command_rights und App-Schreibrechte **vor** Code,
+  authentifizierter Actor statt behaupteter Flags, aktuelle Grants/Fences.
+- `authorize/exported`: aktuelle Rechte und beidseitige Fremd-Freigabe pro
+  Operation. Watch-Export wird vor jedem Fremd-Trigger neu geprüft.
+- `StoreCodec::check_fence`: tatsächlicher Lease-Datensatz in derselben
+  Writer-Transaktion wie jeder Effekt; ein vorgelagerter Check reicht nicht.
+- `StoreCodec::write`: ganze Batch atomar, Basisrevision/Generation vergleichen,
+  native Revision erzeugen, geschützte Felder bewahren.
+  Remove schreibt einen nutzlastfreien Tombstone und löscht in derselben
+  Transaktion Revisions-/Archivkörper gemäß Architektur §16.23.
+- `StoreCodec::platform`: dauerhafte Annahme von Folgebefehlen mit
+  id/record_id/module/client_context und tatsächlichem task_id.
+- `version/artifact`: ausschließlich zugelassene unveränderliche Release-Daten.
 
-## Prozessgrenze
+Die Daten-Transaktion hält während des JS-Callbacks keine SQLite-Sperre.
+Ein autorisierter Snapshot und ein Core-Stempel werden an den Aufruf gebunden.
+Alle staged Writes laufen in **einem** Writer-Job mit erneuter CAS-, Policy-,
+Export- und Fence-Prüfung. Schreibzugriffe auf nur schreibbare Fremd-Collections
+werden ohne Datensnapshot geplant; tx.read bleibt dafür verboten.
+Externe Effekte sind darin gesperrt.
+Der aktuell bereitgestellte Snapshot-Query-Adapter wertet Mango einschließlich
+skip ohne impliziten Zeilendeckel aus; oberhalb des IPC-Budgets folgt explizit
+quota, niemals stille Kürzung. Ein nativer Query-Adapter für große Bestände
+bleibt eine Store-Integrationsaufgabe.
 
-Ein Prozess je App, lazy gestartet und zwischen Aufrufen wiederverwendet.
-Ein Core-Maintenance-Thread überwacht Prozesse und beendet sie nach zehn Minuten
-Leerlauf. Abgestürzte Prozesse werden ersetzt; ein fehlgeschlagener Start führt
-zu `unavailable`, ohne endlose Startversuche. Fehlgeschlagene Handler werden
-niemals automatisch erneut ausgeführt.
+Nur generische Ausführungsmetadaten gehören dieser Bibliothek:
+`_app_runtime_triggers` und `_app_runtime_completions`, angelegt und geändert
+über denselben Store-Writer. Sie speichern Cursor, seq, Fälligkeit, Fence,
+Laufzustand und Callback-Referenzen, keine App-Dokument- oder Ergebnis-Kopien.
+Trigger-Claim verhindert parallele/replayte Ausführung; Cursor benötigt einen
+Core-Trigger-Kontext. Task-Abschluss wird höchstens einmal beansprucht.
+Nach Absturz bleibt ein laufender Claim zur Core-Reconciliation erhalten;
+nicht idempotente Effekte werden nicht blind wiederholt. Eine Annahme ohne
+nachträglich gespeicherte Callback-Bindung liefert uncertain, kein Replay.
 
-Node startet mit leerer Umgebung, `--permission`, **keinen** allow-Flags,
-`--max-old-space-size=256` und einem eingebetteten ESM-Einstieg per `--eval`.
-Die Runtime erfordert Node >=25 und prüft die tatsächlich entzogenen Rechte
-(Netzwerk, Dateisystem, Prozesse, Worker, Addons) vor dem Ready-Signal.
-Node 22/24 erfüllen den benötigten Netzwerkentzug nicht; sie werden abgewiesen.
-Siehe [Node-Permissions](https://nodejs.org/download/release/v25.0.0/docs/api/permissions.html).
-Node selbst bezeichnet die Permissions nicht als Schutz vor bösartigem Code;
-nur vom Core verifizierte App-Releases dürfen registriert werden.
+`RegistryRouter` konsumiert das CAP-1-Protokoll cap.invoke/cap.result und die
+produktive Registry samt Policy, Fence und Audit. Der native Descriptor bestimmt
+Namespace, Funktion und geschlossenes Argumentformat. Nicht installierte
+Funktionen liefern unavailable. agent.task.enqueue ist der registrierte
+Action-Adapter und benötigt dessen action; keine eigene Capability-Abkürzung.
+ctx.model und ctx.http benötigen die nativen Registry-Deskriptoren model.invoke
+bzw. http.invoke (Request als payload). Fehlen diese, folgt unavailable; der
+Runtime-Adapter ersetzt sie nicht durch eine fremde Capability oder Netzroute.
 
-Der Core öffnet einen privaten LocalTransport-Kanal vor dem Start und vererbt
-dessen Handles als stdin/stdout. Der App-Prozess erhält dadurch kein Recht,
-selbst Sockets zu öffnen. Unter Unix werden zusätzliche geerbte Deskriptoren
-beim Exec geschlossen; die Eltern-Handles bleiben unverändert. Es gibt keinen
-TCP-/HTTP-Fallback. App-Module werden
-aus den geprüften In-Memory-Quellen geladen; relative Importe innerhalb des
-Bundles sind möglich, Node-Builtins und dynamische Importe nicht.
-Native Fähigkeiten stehen ausschließlich über ctx zur Verfügung.
+Diese Bibliothek aktiviert sich nicht selbst im Daemon. Core-Bootstrap,
+konkrete StoreCodec/CoreAuthority-Implementierung und Feed-/Timer-Anschluss
+liegen außerhalb der exklusiven app_runtime-Dateien und müssen bei der
+Core-Integration angeschlossen werden. Die isolierte Prüfung ist keine
+Abnahme des installierten Stacks.
 
-Ein Core-Watchdog misst die akkumulierte CPU-Zeit ausschließlich des eigenen
-Node-Kindprozesses (OS-Zähler, sysinfo, 25-ms-Abtastung) und beendet ihn bei
-30 Sekunden CPU je Aufruf. Wartende Core-I/O wird nicht als App-CPU verbucht.
-Zusätzlich gilt eine obere Wartefrist von zehn Minuten. Entfernen/Ablösen der App
-setzt ein Abbruchsignal; ein laufender Node-Aufruf wird beendet und nicht
-automatisch wiederholt. Der Adapter muss lange Core-Arbeit als dauerhaft
-gespeicherten Befehl einreihen und darf den Pool nicht synchron zurückrufen.
-Der Watchdog kann den App-Prozess stoppen, aber keinen beliebigen synchronen
-Core-Callback abbrechen. Die CPU-Zähler-API ist in der
-[sysinfo-Dokumentation](https://docs.rs/sysinfo/0.38.4/sysinfo/struct.Process.html#method.accumulated_cpu_time)
-beschrieben.
+## Node-Paket und Prozessgrenze
 
-Weitere Grenzen: 256 MiB V8-Heap (keine RSS-Garantie), 4 MiB App-Quelltext,
-1 MiB Handler-Eingabe/-Ergebnis, 8 MiB IPC-Rahmen. Migrationen liefern
-Vorschläge mit Basisrevision; die Übernahme in die nächste Generation erfolgt
-separat im Core-Writer und benötigt dort erneut einen Versionscheck.
+Produktionsbuild mit Feature `bundled-node` und dem **Build-Eingang**
+`CTOX_APP_RUNTIME_NODE_BUNDLE=/absolute/path/to/verified/native/node`.
+Die Datei wird mit include_bytes! eingebettet. Das Paket muss passend für den
+Zielhost gebaut und über den normalen signierten Release-Weg geliefert werden.
+Zur Laufzeit wird die hashadressierte Binärdatei mit Eigentümerrechten
+materialisiert und erneut gegen die eingebetteten Bytes geprüft.
+Kein Node aus PATH, kein Produktionsdownload, keine Runtime-Umgebungsschalter.
+Ohne eingebettetes Node schlägt der produktive Konstruktor geschlossen fehl.
 
-## Prüfung
+Node >=25 mit Netz-Permissions startet mit leerer Umgebung, --permission ohne
+allow-Liste und --max-old-space-size=256. Der Core vererbt nur private
+LocalTransport-Handles als stdin/stdout; zusätzliche Unix-FDs werden geschlossen.
+Kein HTTP-/TCP-Ersatzpfad. Handler erhalten keine Datei-/Netz-/Prozessrechte.
+Die Permissions allein sind keine Sicherheitsgrenze gegen bösartigen Code:
+nur vom Core verifizierte Releases dürfen geladen werden.
 
-Nur über die Build-Lane; Beispiel mit bereits bereitgestelltem Node:
+Handler: handle(command,ctx), relative statische Importe innerhalb handlers/,
+Bibliotheken mit _-Präfix, benannte Abschluss-Exporte. Gemeinsame ctx-Fabrik
+und Mango-Auswertung mit dem Handler-Kit. Globals und vollständige API siehe
+handler-kit/README.md. Migrationen liefern nur Vorschläge; der Core-Writer
+prüft Basisrevision/Zielgeneration nochmals vor Commit.
+
+Grenzen: 256 MiB V8-Heap (keine RSS-Garantie), 4 MiB Quellen,
+1 MiB Eingabe/Ergebnis, 8 MiB IPC-Rahmen, 6 MiB autorisierte Snapshots.
+Der Watchdog beendet ausschließlich das eigene Node-Kind bei 30 Sekunden
+tatsächlicher CPU pro Aufruf; Core-I/O-Wartezeit zählt nicht dazu.
+Zusätzlich zehn Minuten Wall-Zeit. Nach Crash wird beim nächsten zugelassenen
+Aufruf neu gestartet, ohne ungeprüften Hintergrund-Spawn. Zehn Minuten Idle
+führen zum Reaping. Entfernen/Widerruf unterbricht; Publish drainiert.
+Core-Callbacks bleiben kurz und dürfen nicht synchron denselben Pool aufrufen.
+
+## Prüfung und Mutationsnachweis
+
+Ausschließlich in der zugewiesenen Linux-Lane:
 ```sh
-CTOX_APP_RUNTIME_TEST_NODE=/absolute/path/to/node \
-CTOX_APP_RUNTIME_TEST_ROOT=/lane/owned/scratch \
-cargo test --manifest-path src/core/app_runtime/Cargo.toml -- --test-threads=2
-node --test src/core/app_runtime/handler-kit/handler-kit.test.mjs
+ctox-prep.sh &&
+cargo check --manifest-path src/core/app_runtime/Cargo.toml &&
+bash src/core/app_runtime/verify.sh bundle &&
+python3 src/core/app_runtime/mutation-proof.py \
+  --out "$CARGO_TARGET_DIR/app-runtime-mutation-proof"
 ```
+Der Prüfer provisioniert ausschließlich für Entwicklung das hashgeprüfte
+Node-Archiv. Der Mutationslauf verändert gezielt Vertragssicherungen, verlangt
+einen passenden roten Assertion-Test und stellt alle Dateien wieder her.
+proof.json enthält Quellzeilen, Mutationen, zugeordnete Tests und Logs;
+abschließend werden die wiederhergestellten Quellen erneut geprüft.
+Eine Compile-/Syntaxfehlermeldung zählt nicht als Mutationsnachweis.
 
-Die beiden Umgebungsvariablen gelten ausschließlich für Tests. Die Tests starten
-echte Node-Prozesse über den wiederverwendeten LocalTransport und prüfen
-Lesen/Schreiben, Prozesswiederverwendung, CPU-Schleifenabbruch, Neustart,
-Rechteentzug, Foreign-Exports, Migrationen und Ressourcenentzug.
-Linux ist das erste geprüfte Ziel; Windows-Named-Pipes und macOS müssen zusätzlich
-auf ihren nativen Hosts geprüft werden.
+Die Prüfung nutzt echte Node-Prozesse, LocalTransport, SQLite-Writer/ReadPool
+und die CAP-1-Registry. Der Test-Codec besitzt isolierte Testtabellen, kein
+Tenant und kein Modell. Native macOS-/Windows-Prüfung, Core-Einbindung und
+Regressionen am realen installierten System bleiben gesondert nachzuweisen.
 
-## Übergangsadapter zum bestehenden Core-Store
+## Vorhandener Übergangsadapter
 
-Mit Cargo-Feature `legacy-store` steht
-`legacy_store::LegacyStoreAdapter` zur Verfügung. Der Core übergibt seine
-bereits laufende `Arc<RxDatabase>`, seinen Tokio-Handle und eine
-`Arc<dyn LegacyStorePolicy>`. Es entsteht keine zweite Datenbank, Replik,
-Schreibdienst oder HTTP-Verbindung.
-
-Die Policy hat keine erlaubenden Standardimplementierungen:
-`project_read` muss Zeilensichtbarkeit und Feldmasken anwenden;
-`prepare_write` muss aktuelle Rollen, geschützte Felder und Schema prüfen
-und das erlaubte Dokument zurückgeben (bei erlaubtem Entfernen: None).
-Die normalen RuntimeHost-Prüfungen bleiben zusätzlich wirksam.
-Diese Implementierung kommt vom Core, niemals aus dem App-Bundle.
-
-Autorisierte Snapshots werden als `ctox.authorized_snapshot.v1` an den
-vertrauenswürdigen Node-Einstieg übergeben und dort mit demselben Mango-Code
-wie im Handler-Kit ausgewertet. Nicht freigegebene Zeilen/Felder erreichen
-den Kindprozess nicht. Es gibt keine implizite Zeilengrenze; ein Snapshot
-über 6 MiB schlägt mit quota fehl und wird nicht abgeschnitten. Für größere
-Bestände ersetzt der V4-Store diese Übergangsabfrage durch seinen Query-Adapter.
-
-Änderungen laufen über die bestehende native
-`RxCollection::incremental_write_queue`. Basisrevision und Dokument-Policy
-werden im Modifier bei jedem Konflikt-Retry erneut geprüft. Inserts verwenden
-den vorhandenen Insert-Pfad; Entfernen erzeugt einen nativen Tombstone.
-Native Fehlerparameter werden nicht zum Kindprozess weitergereicht, da sie
-ungemaskte Dokumente enthalten können.
-
-Prüfung des Adapters (ebenfalls nur in der Build-Lane):
-```sh
-bash src/core/app_runtime/verify.sh legacy-store
-```
-Der Core muss den Pool dauerhaft halten, registrierte Releases beim
-Publish/Uninstall austauschen und seine tatsächliche Actor-/Capability-Policy
-anbinden. Die Bibliothek aktiviert sich nicht selbst gegen eine installierte
-Instanz oder gegen das alte App-Manifest.
+Das optionale Feature legacy-store erhält den bisherigen RxDatabase-Adapter
+für die Vorgängerversion. Es ist kein Ausweichpfad der V4-Produktion.
+Dessen LegacyStorePolicy muss Zeilen/Felder und Writes im nativen Modifier
+prüfen. Separater bestehender Prüfweg: verify.sh legacy-store.

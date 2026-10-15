@@ -1,3 +1,33 @@
+#[test]
+fn core_migration_reads_through_bound_context_and_returns_uncommitted_base_revisions() {
+    let f = Fixture::new();
+    f.publish(
+        "v1",
+        "export default async (doc,ctx)=>({...doc,n:(await ctx.read('rows')).length});",
+        json!({"migrations":{"rows":{"migrate_fn":"handlers/run.js"}}}),
+    );
+    let service = f.service();
+    service.published("app", "v1").unwrap();
+    f.host
+        .invoke_bound(
+            &f.binding(),
+            "write",
+            &json!(["rows",{"type":"put","doc":{"id":"existing","n":7}}]),
+        )
+        .unwrap();
+    let proposals = service
+        .migrate(
+            command("app", "v1", "migration", json!({})),
+            fence(),
+            "rows",
+            vec![json!({"id":"source","rev":"source-revision","n":0})],
+        )
+        .unwrap();
+    assert_eq!(proposals[0]["base_rev"], "source-revision");
+    assert_eq!(proposals[0]["doc"]["n"], 1);
+    assert_eq!(f.raw("rows")[0]["id"], "existing");
+    assert_eq!(f.raw("rows")[0]["n"], 7);
+}
 #[cfg(feature = "bundled-node")]
 #[test]
 fn production_uses_embedded_node_and_rejects_changed_delivered_bytes() {
@@ -631,7 +661,7 @@ fn core_dispatch_preserves_envelope_and_writes_via_the_single_writer() {
 #[test]
 fn transaction_is_one_atomic_store_job_and_failed_second_write_rolls_back_first() {
     let f = Fixture::new();
-    f.publish("v1","export default async (command,ctx)=>ctx.transaction(async tx=>{await tx.put('rows',{id:'a',n:1});await tx.put('rows',{id:'b',...(command.payload.deny?{forbidden:1}:{n:2})});return (await tx.read('rows')).length;});",json!({}));
+    f.publish("v1","export default async (command,ctx)=>ctx.transaction(async tx=>{await tx.put('rows',{id:'a',n:1});await tx.put('blind',{id:'target',n:9});let denied=false;try{await tx.read('blind');}catch(e){denied=e.code==='forbidden';}if(!denied)throw Error('write must not grant read');await tx.put('rows',{id:'b',...(command.payload.deny?{forbidden:1}:{n:2})});return (await tx.read('rows')).length;});",json!({"foreign_collections":{"blind":{"owner_app":"foreign","ops":["write"]}}}));
     let service = f.service();
     service.published("app", "v1").unwrap();
     assert!(service
@@ -640,6 +670,7 @@ fn transaction_is_one_atomic_store_job_and_failed_second_write_rolls_back_first(
         .to_string()
         .starts_with("forbidden:"));
     assert!(f.raw("rows").is_empty());
+    assert!(f.raw("blind").is_empty());
     assert_eq!(
         service
             .command(command("app", "v1", "cmd2", json!({"deny":false})), fence())
@@ -647,6 +678,7 @@ fn transaction_is_one_atomic_store_job_and_failed_second_write_rolls_back_first(
         json!(2)
     );
     assert_eq!(f.raw("rows").len(), 2);
+    assert_eq!(f.raw("blind")[0]["n"], 9);
 }
 #[test]
 fn transaction_snapshot_rejects_concurrent_commit_and_tokens_cannot_cross_calls() {

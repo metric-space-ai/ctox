@@ -137,6 +137,22 @@ impl AppRuntimeService {
         let version = crate::string(&command, "app_ver")?.to_owned();
         self.at_version(&app, &version, || self.pool.dispatch(command, fence))
     }
+    /// Read-only migration proposals from the admitted CAS release. Core
+    /// commits them separately in its schema/generation writer transaction.
+    pub fn migrate(
+        &self,
+        command: Value,
+        fence: Value,
+        collection: &str,
+        docs: Vec<Value>,
+    ) -> Result<Value> {
+        let app = crate::string(&command, "app_id")?.to_owned();
+        let version = crate::string(&command, "app_ver")?.to_owned();
+        self.at_version(&app, &version, || {
+            self.pool
+                .dispatch_migration(command, fence, collection, docs)
+        })
+    }
     /// Feed this from the ordered Store _changes stream, never table polling.
     /// Core stream cursor replay is safe: trigger.claim is durable and fenced.
     pub fn change(&self, event: &ChangeEvent) -> Result<Vec<Value>> {
