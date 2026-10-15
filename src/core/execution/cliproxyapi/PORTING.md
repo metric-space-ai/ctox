@@ -10,7 +10,10 @@
   earlier caller deadline. Dropping a stream, malformed/truncated frames or a
   deadline kills and reaps the child; a provider's normal error end preserves
   the healthy process. Explicit shutdown interrupts an active stream and
-  acknowledges only after cleanup. Unary calls keep their 30-second bound.
+  acknowledges only after cleanup. The typed RPC relay propagates consumer
+  closure even while waiting for the first or next chunk. Unary calls keep
+  their 30-second bound.
+
   This loader remains opt-in; native credential/config/startup composition,
   Windows runtime acceptance and installed provider acceptance remain open.
 

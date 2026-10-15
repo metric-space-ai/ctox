@@ -385,3 +385,32 @@ async fn queued_stream_deadline_is_honored_behind_an_active_stream() {
     client.shutdown().await.unwrap();
     assert_reaped(root.path()).await;
 }
+
+#[tokio::test]
+async fn dropping_typed_rpc_stream_reaches_actual_process_and_reaps_pid() {
+    let root = short_root();
+    let client = fixture(root.path()).open(&artifact()).await.unwrap();
+    let rpc = RpcPluginClient::new(client.clone());
+    let mut stream = rpc
+        .call_stream::<_, serde_json::Value>(
+            "fixture.stream",
+            &serde_json::json!({"mode":"stall"}),
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(3), stream.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let pid = first["pid"].as_u64().unwrap();
+    drop(stream);
+    assert_reaped(root.path()).await;
+    assert_pid_gone(pid);
+    assert!(matches!(
+        client.call(hanging_call(None)).await,
+        Err(PluginClientError::Closed)
+    ));
+}

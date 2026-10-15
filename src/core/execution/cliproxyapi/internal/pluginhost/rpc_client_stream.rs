@@ -39,7 +39,16 @@ impl RpcPluginClient {
             .await?;
         let (sender, receiver) = mpsc::channel(output_capacity);
         tokio::spawn(async move {
-            while let Some(chunk) = stream.chunks.recv().await {
+            loop {
+                let chunk = tokio::select! {
+                    biased;
+                    _ = sender.closed() => break,
+                    chunk = stream.chunks.recv() => chunk,
+                };
+                let Some(chunk) = chunk else {
+                    break;
+                };
+
                 let decoded = chunk.and_then(|raw| {
                     serde_json::from_str::<Chunk>(raw.get())
                         .map_err(|_| PluginClientError::InvalidResponse)

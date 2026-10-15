@@ -1,4 +1,4 @@
-# Candidate: executable unary plugin transport
+# Candidate: executable unary and streaming plugin transport
 
 Depends on the quota RPC candidate (#752). This adds the previously missing
 `PluginLoader` implementation on top of CTOX's existing authenticated local
@@ -19,15 +19,27 @@ IDs, even within the same plugin. Callback failures use a fixed error envelope;
 credential values and arbitrary handler error strings are never echoed. The
 host and transport can share the same explicit callback-context registry.
 
-Streaming capability calls are explicitly unsupported in this slice. Before
-production composition, complete streaming transport, wire the official CTOX
-credential resolver and typed plugin runtime configuration, attach the quota
-service during actual management startup, then measure through the installed
-management endpoint. No empty/rejecting loader stands in for that work.
+Streaming calls reuse the existing frame sequencer, including exact request IDs,
+chunk ordering and terminal sequence checks. Two data chunks and a reserved error
+slot bound buffering while preserving terminal failures under backpressure.
+Streams have a 180-second total ceiling including queue time; unary calls retain
+30 seconds. Dropping raw or typed streams cancels pending reads and reaps the
+child. Explicit shutdown interrupts active streams and acknowledges cleanup.
+Normal provider error ends remain visible without retiring a healthy child.
+
+Production composition still needs the official CTOX credential resolver, typed
+plugin runtime configuration and quota-service attachment during actual management
+startup, followed by measurement through the installed management endpoint.
+No empty/rejecting loader stands in for that work.
+
 
 The Unix integration tests run the actual child binary: lifecycle, independent
 reload endpoints, caller drop, idle-client drop, queued deadlines, invalid input,
 and a complete quota fetch through the host with an account-scoped HTTP callback.
 Denied account HTTP authority must not fall back to the broader host client.
-Separate framed-transport tests reject cross-call and cross-plugin callbacks.
+Real-process streams also test malformed/truncated frames, exact request IDs,
+backpressure timeouts, graceful error ends and typed-consumer cancellation. Linux
+checks captured child PIDs disappear after cancellation/shutdown. Shared callback
+tests reject cross-call and cross-plugin authority for unary and streaming calls.
+
 Windows runtime acceptance is not claimed by these Linux results.
