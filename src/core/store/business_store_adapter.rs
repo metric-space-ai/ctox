@@ -150,10 +150,23 @@ pub(super) fn write_legacy_projection(
     write_time: f64,
     guard: Option<String>,
 ) -> anyhow::Result<()> {
+    let mut document = payload.clone();
+    if table_columns.contains("lastWriteTime") {
+        let object = document
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("projection is not a document"))?;
+        let metadata = object
+            .entry("_meta")
+            .or_insert_with(|| serde_json::json!({}));
+        metadata
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("invalid projection metadata"))?
+            .insert("lwt".into(), Value::from(write_time));
+    }
     let mut columns = vec!["id".to_string(), "data".to_string()];
     let mut values = vec![
         SqlValue::Text(id.into()),
-        SqlValue::Text(serde_json::to_string(payload)?),
+        SqlValue::Text(serde_json::to_string(&document)?),
     ];
     let mut updates = vec!["data = excluded.data".to_string()];
     for column in ["deleted", "_deleted"] {
@@ -173,6 +186,7 @@ pub(super) fn write_legacy_projection(
         }
     }
     if table_columns.contains("lastWriteTime") {
+        updates[0] = "data = json_set(excluded.data, '$._meta.lwt', MAX(lastWriteTime + 1, excluded.lastWriteTime))".into();
         columns.push("lastWriteTime".into());
         values.push(SqlValue::Real(write_time));
         updates.push(format!(
@@ -330,5 +344,16 @@ mod tests {
             .query_row("SELECT lastWriteTime FROM projection", [], |r| r.get(0))
             .unwrap();
         assert_eq!(time, 1001.0);
+        let document_time: f64 = conn
+            .query_row(
+                "SELECT json_extract(data, '$._meta.lwt') FROM projection",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            time, document_time,
+            "indexed and document clocks must agree"
+        );
     }
 }
