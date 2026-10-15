@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { collections } from '../../modules/ctox/schema.js';
+import { packagedSchema } from './packaged-schema.mjs';
+const { collections } = await packagedSchema('ctox');
 const cases = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/workjet-project-configuration-v1.json', import.meta.url)));
 const native = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
 assert.deepEqual(native.workjet_projects, collections.workjet_projects);

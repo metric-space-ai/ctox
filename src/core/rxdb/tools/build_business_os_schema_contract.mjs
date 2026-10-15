@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { access, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
+import { readModuleSchemaArtifact } from './module_schema_artifact.mjs';
 
 const OUTPUT_PATH = new URL('../../business_os/business_os_schema_contract.json', import.meta.url);
 const MODULES_ROOT = new URL('../../../apps/business-os/modules/', import.meta.url);
@@ -9,7 +11,7 @@ async function buildContract() {
   const modules = await discoverModules();
   const manifestCollections = [];
   for (const moduleInfo of modules) {
-    const mod = await importSchemaModule(moduleInfo.schemaUrl, moduleInfo.id);
+    const mod = await readModuleSchemaArtifact(moduleInfo.schemaUrl);
     for (const [collection, definition] of Object.entries(mod.collections || {})) {
       const schema = definition?.schema || definition;
       schemas[collection] = schemas[collection]
@@ -176,7 +178,7 @@ async function discoverModules() {
     const collections = Array.isArray(manifest.collections)
       ? manifest.collections.map((name) => String(name || '').trim()).filter(Boolean)
       : [];
-    const schemaUrl = new URL('schema.js', dirUrl);
+    const schemaUrl = new URL('collections.schema.json', dirUrl);
     if (!(await fileExists(schemaUrl))) {
       if (collections.length && !isInstalledOnlyRuntimeSchemaPath({ manifest, dirUrl })) {
         throw new Error(`${entry}/module.json declares collections but ${schemaUrl.pathname} is missing.`);
@@ -198,23 +200,6 @@ async function discoverModules() {
   return modules;
 }
 
-async function importSchemaModule(url, moduleId) {
-  // Real ESM import instead of the old strip-exports/Function() transform:
-  // module schema files may use any import/re-export pattern (full re-exports
-  // like modules/reports, partial cross-module imports like
-  // modules/conversations pulling the outbound-owned collections). The
-  // emitted contract content is unchanged — same exported objects either way.
-  let mod;
-  try {
-    mod = await import(url.href);
-  } catch (error) {
-    throw new Error(`Failed to import schema.js for ${moduleId}: ${error?.message || error}`);
-  }
-  return {
-    collections: mod.collections || {},
-    migrationStrategies: mod.migrationStrategies || {},
-  };
-}
 
 function isInstalledOnlyRuntimeSchemaPath(moduleInfo) {
   const manifest = moduleInfo.manifest || {};
@@ -238,7 +223,9 @@ if (process.argv.includes('--write')) {
   console.log(`wrote ${OUTPUT_PATH.pathname}`);
 } else {
   const current = await readFile(OUTPUT_PATH, 'utf8');
-  if (current !== next) {
+  // Object-key order is not schema identity. The JSON artifact formatter and
+  // the native contract may serialize the same declaration in different order.
+  if (!isDeepStrictEqual(JSON.parse(current), JSON.parse(next))) {
     console.error('Business OS schema contract is stale. Run with --write.');
     process.exit(1);
   }
