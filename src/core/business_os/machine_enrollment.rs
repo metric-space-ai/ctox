@@ -496,7 +496,7 @@ pub(crate) fn machine_step(
                     && row
                         .invite_user_id
                         .as_deref()
-                        .map_or(true, |user| user == actor_id),
+                        .is_none_or(|user| user == actor_id),
                 JoinError::BindRejected
             );
             row.redeemed_at_ms = Some(now);

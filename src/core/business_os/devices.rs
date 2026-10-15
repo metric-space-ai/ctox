@@ -74,6 +74,10 @@ pub(crate) fn observe_presence(
 }
 
 /// Read right (§16.43): own devices; with `machines.manage` all devices.
+/// Declared as manifest right `own|role:machines.manage`; the v4 rights layer
+/// (P6 scope/_rights) is its consumer, the v3 replication filter has no
+/// per-record hook for it yet.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn may_read(viewer_id: &str, viewer_manages_machines: bool, device: &Value) -> bool {
     viewer_manages_machines
         || (!viewer_id.is_empty()
@@ -175,6 +179,7 @@ pub(super) fn handle_command(
 ) -> anyhow::Result<Value> {
     use super::policy::BusinessOsPermission;
     use super::store_policy::{enforce_command_policy, CommandPolicyRequirement};
+    anyhow::ensure!(command.command_type == UNBIND, "unsupported device command");
     enforce_command_policy(
         root,
         command,
