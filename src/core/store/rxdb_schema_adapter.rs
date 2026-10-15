@@ -39,10 +39,15 @@ impl ChangeLogSink for CanonicalChangeLog {
                 gen: binding.generation,
                 table: binding.table.clone(),
                 id_column: "id".into(),
-                rev_column: "revision".into(),
+                rev_column: if binding.table.starts_with("c_") {
+                    "rev"
+                } else {
+                    "revision"
+                }
+                .into(),
                 data_column: "data".into(),
                 deleted_column: "deleted".into(),
-                schema_column: None,
+                schema_column: binding.table.starts_with("c_").then(|| "schema_ver".into()),
                 schema_ver: binding.schema_version,
                 app_ver: binding.app_version.clone(),
             },

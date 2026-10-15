@@ -1,0 +1,148 @@
+{
+  "commit": "1ab7ceb03ceaeac763ea7ec99be56896608f83cb",
+  "source": "metric-space-ai/ctox (Shell v4 K24PREP)",
+  "copiedAt": "2026-10-15T17:18:01.573654+00:00",
+  "files": [
+    {
+      "path": "app/v1/k24-probe/collections.schema.json",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/collections.schema.json",
+      "sha256": "3373561bedf625b6db1961606d073ec19976b606fd984038c112781a5e8adbe1"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/_runs.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/_runs.js",
+      "sha256": "e2c3ed16dab5b45081988f0e9fc48ba252b0549cb1f3e8187963797966a3cdb5"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/k24.agent.done.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/k24.agent.done.js",
+      "sha256": "5f7268b6194675b2d1a03fdf0fe9902f6a8087464e4c211d7825f04c5fb749c0"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/k24.agent.failed.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/k24.agent.failed.js",
+      "sha256": "0edad5e53c4873b83ffb9c763c508f979ba5c522757603999d0920df71084fd2"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/k24.agent.start.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/k24.agent.start.js",
+      "sha256": "962472258306c4adf8547a2c44002463a0729595bd9eecc2b4c77ffa6d05c989"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/k24.tick.add.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/k24.tick.add.js",
+      "sha256": "cf9b898045d547e82940dc9e3095d526cd3c2c5befa1509ce0f6ef74c42aefd3"
+    },
+    {
+      "path": "app/v1/k24-probe/handlers/k24.tick.every.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/handlers/k24.tick.every.js",
+      "sha256": "3e29412753f986e9fac978e8ce98cd1b042b9bf57354bce102be9b5cab0a3c14"
+    },
+    {
+      "path": "app/v1/k24-probe/icon.svg",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/icon.svg",
+      "sha256": "d2d7e355c6ff1ed01d1df5cb690405e370e06bd71b9d815f060b2c589b04a988"
+    },
+    {
+      "path": "app/v1/k24-probe/index.css",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/index.css",
+      "sha256": "4db38bccc29c392f33142cb115d2d0e299fe29a71131d3bf2a6065b6f131eac4"
+    },
+    {
+      "path": "app/v1/k24-probe/index.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/index.js",
+      "sha256": "4d85d6eae415365338ba032a08aec93e720822bfa8de389c8182f335107aeee5"
+    },
+    {
+      "path": "app/v1/k24-probe/manifest.json",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/manifest.json",
+      "sha256": "0871541d21d7044e63062875ab343f51e55cd984d87779e26ebd0a6b073d1434"
+    },
+    {
+      "path": "app/v1/k24-probe/prompts/k24-summary.md",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/prompts/k24-summary.md",
+      "sha256": "a19919e1d4d9091ed13ac8f727f971c900718ab8884f147a59978917160f1b9c"
+    },
+    {
+      "path": "app/v1/k24-probe/skills/k24-summary/SKILL.md",
+      "originPath": "src/apps/business-os/v4/k24/app/v1/k24-probe/skills/k24-summary/SKILL.md",
+      "sha256": "9316fc22afed4138223c17b337295dcae153fad8fc3e50f446b40585fc965abc"
+    },
+    {
+      "path": "app/v2/k24-probe/collections.schema.json",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/collections.schema.json",
+      "sha256": "4bd6be2d10cc1e66e442ab1d9cff212819962972f25d4af34c7b9654e1334d99"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/_runs.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/_runs.js",
+      "sha256": "e2c3ed16dab5b45081988f0e9fc48ba252b0549cb1f3e8187963797966a3cdb5"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/k24.agent.done.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/k24.agent.done.js",
+      "sha256": "5f7268b6194675b2d1a03fdf0fe9902f6a8087464e4c211d7825f04c5fb749c0"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/k24.agent.failed.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/k24.agent.failed.js",
+      "sha256": "0edad5e53c4873b83ffb9c763c508f979ba5c522757603999d0920df71084fd2"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/k24.agent.start.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/k24.agent.start.js",
+      "sha256": "962472258306c4adf8547a2c44002463a0729595bd9eecc2b4c77ffa6d05c989"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/k24.tick.add.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/k24.tick.add.js",
+      "sha256": "50a35bdde74c61709425b4589d7e4077fcba1fffd045c59ff9f69d47786d5e0d"
+    },
+    {
+      "path": "app/v2/k24-probe/handlers/k24.tick.every.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/handlers/k24.tick.every.js",
+      "sha256": "342e51443f43df79aba69d46a3c7c0b32eefbd924c753acd443c97fe9b53842c"
+    },
+    {
+      "path": "app/v2/k24-probe/icon.svg",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/icon.svg",
+      "sha256": "d2d7e355c6ff1ed01d1df5cb690405e370e06bd71b9d815f060b2c589b04a988"
+    },
+    {
+      "path": "app/v2/k24-probe/index.css",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/index.css",
+      "sha256": "4db38bccc29c392f33142cb115d2d0e299fe29a71131d3bf2a6065b6f131eac4"
+    },
+    {
+      "path": "app/v2/k24-probe/index.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/index.js",
+      "sha256": "5d3bc66782a1ae79af97e38ca4e128320e8472c199d2ec6442917bc6ee778b13"
+    },
+    {
+      "path": "app/v2/k24-probe/manifest.json",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/manifest.json",
+      "sha256": "9dfcd87172ce5e5d60e7620ba9bf5ef87d14ef5ada82d2e081f15f7bc64e8f66"
+    },
+    {
+      "path": "app/v2/k24-probe/migrations/k24_ticks.js",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/migrations/k24_ticks.js",
+      "sha256": "24edac8ab6516f049ca8b599d610afa7d28db20f5fa311e7b197679a8b807a82"
+    },
+    {
+      "path": "app/v2/k24-probe/prompts/k24-summary.md",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/prompts/k24-summary.md",
+      "sha256": "a19919e1d4d9091ed13ac8f727f971c900718ab8884f147a59978917160f1b9c"
+    },
+    {
+      "path": "app/v2/k24-probe/skills/k24-summary/SKILL.md",
+      "originPath": "src/apps/business-os/v4/k24/app/v2/k24-probe/skills/k24-summary/SKILL.md",
+      "sha256": "9316fc22afed4138223c17b337295dcae153fad8fc3e50f446b40585fc965abc"
+    },
+    {
+      "path": "run.mjs",
+      "originPath": "src/apps/business-os/v4/k24/run.mjs",
+      "sha256": "f5799615e29eb78cacad5346a1b807c970d2e1e610b181368a4c8524001cb9a1"
+    }
+  ],
+  "policy": "Exact upstream bytes; out/, shots/ and previous RESULTS.md excluded. Runtime paths are assembled in private lane artifacts; bind is not native acceptance."
+}

@@ -1,10 +1,12 @@
-export const CTOX_ERROR_CODES = ['invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable'];
+export const CTOX_ERROR_CODES = ['invalid', 'forbidden', 'not_found', 'conflict', 'revoked', 'expired', 'quota', 'unavailable', 'stale_base', 'migration_required', 'locally_modified', 'token_expired', 'token_used'];
 export class CtoxError extends Error {
   constructor(code, message, extra = {}) {
     super(message || code);
     this.name = 'CtoxError';
     this.code = CTOX_ERROR_CODES.includes(code) ? code : 'invalid';
     if (extra.path !== undefined) this.path = extra.path;
+    if (extra.reason !== undefined) this.reason = extra.reason;
+    if (extra.detail !== undefined) this.detail = extra.detail;
   }
 }
 export class StaleLeader extends Error {}
@@ -21,6 +23,7 @@ export function cloneValue(v) {
   return structuredClone(v);
 }
 export function deepFreeze(v) {
+  if(typeof HTMLElement==='function' && v instanceof HTMLElement)return v;
   if (v === null || typeof v !== 'object' || Object.isFrozen(v) || isBlob(v) || ArrayBuffer.isView(v)) return v;
   Object.freeze(v);
   for (const k of Object.keys(v)) deepFreeze(v[k]);

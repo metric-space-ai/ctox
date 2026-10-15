@@ -129,6 +129,14 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<()> {
           app_ver TEXT NOT NULL,table_name TEXT NOT NULL UNIQUE,migrated_at_seq INTEGER,
           archived_at INTEGER,retire_after INTEGER,PRIMARY KEY(name,gen));
          CREATE UNIQUE INDEX IF NOT EXISTS _collections_active ON _collections(name) WHERE state='active';
+         CREATE TABLE IF NOT EXISTS _client_app_activations(
+          participant TEXT NOT NULL,app_id TEXT NOT NULL,app_ver TEXT NOT NULL,
+          receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+          checkpoints_json TEXT NOT NULL CHECK(json_valid(checkpoints_json)),
+          PRIMARY KEY(participant,app_id,app_ver)) WITHOUT ROWID;
+         CREATE TABLE IF NOT EXISTS _schema_publications(
+          operation_id TEXT PRIMARY KEY,app_id TEXT NOT NULL,base_app_ver TEXT NOT NULL,
+          target_app_ver TEXT NOT NULL,migrated_at_seq INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS _schema_apps(
           app_id TEXT PRIMARY KEY,app_ver TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS _schema_updates(
@@ -979,6 +987,22 @@ pub fn dual_write(
 /// The app-catalog owner must publish its version + watermark in this same transaction.
 pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> Result<u64> {
     atomic(tx, || {
+        initialize(tx)?;
+        let replay: Option<(String,String,String,u64)> = tx.query_row(
+            "SELECT app_id,base_app_ver,target_app_ver,migrated_at_seq FROM _schema_publications WHERE operation_id=?1",
+            [&lock.operation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        if let Some((app, base, target, watermark)) = replay {
+            if (app, base, target)
+                != (
+                    lock.app_id.clone(),
+                    lock.base_app_ver.clone(),
+                    lock.target_app_ver.clone(),
+                )
+            {
+                return Err(invalid("publication operation binding differs"));
+            }
+            return Ok(watermark);
+        }
         verify_publish(tx, lock)?;
         let mut statement = tx.prepare(
             "SELECT collection FROM _migrations WHERE publication_id=?1 ORDER BY collection",
@@ -1045,8 +1069,8 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
             )?;
         }
         tx.execute(
-            "UPDATE _collections SET app_ver=?2 WHERE app_id=?1 AND state='active'",
-            params![lock.app_id, lock.target_app_ver],
+            "UPDATE _collections SET app_ver=?2,migrated_at_seq=?3 WHERE app_id=?1 AND state='active'",
+            params![lock.app_id, lock.target_app_ver, integer(watermark)?],
         )?;
         tx.execute("INSERT INTO _schema_apps VALUES(?1,?2) ON CONFLICT(app_id) DO UPDATE SET app_ver=excluded.app_ver",
             params![lock.app_id,lock.target_app_ver])?;
@@ -1075,6 +1099,8 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
             "DELETE FROM publish_lock WHERE app_id=?1 AND operation_id=?2",
             params![lock.app_id, lock.operation_id],
         )?;
+        tx.execute("INSERT INTO _schema_publications(operation_id,app_id,base_app_ver,target_app_ver,migrated_at_seq) VALUES(?1,?2,?3,?4,?5)",
+            params![lock.operation_id,lock.app_id,lock.base_app_ver,lock.target_app_ver,integer(watermark)?])?;
         Ok(watermark)
     })
 }
@@ -1901,8 +1927,10 @@ pub fn import_base_release(
                 .and_then(|v| v.get(&name));
             let schema = corrected
                 .or_else(|| metadata.get("schema"))
-                .ok_or_else(|| invalid(format!("schema missing: {name}")))?
-                .clone();
+                .ok_or_else(|| invalid(format!("schema missing: {name}")))?;
+            // Corrected Shell schema files carry collection metadata around
+            // `schema`; older release fixtures contain the schema directly.
+            let schema = schema.get("schema").unwrap_or(schema).clone();
             let version = schema.get("version").and_then(Value::as_u64).unwrap_or(0);
             let def = CollectionDefinition {
                 name: name.clone(),
@@ -1938,6 +1966,470 @@ pub fn import_base_release(
         }
         Ok(report)
     })
+}
+
+/// Pending target of this active generation. The publication lock bounds this to
+/// the single admitted app publication; callers must provide revision-bound output.
+pub fn preparing_target(
+    tx: &Transaction<'_>,
+    name: &str,
+    source_gen: u64,
+) -> Result<Option<(PublishLock, Collection)>> {
+    let row: Option<(String, String, String, String, u64)> = tx
+        .query_row(
+            "SELECT p.app_id,p.base_app_ver,p.target_app_ver,p.operation_id,m.gen
+         FROM _migrations m JOIN publish_lock p ON p.operation_id=m.publication_id
+         WHERE m.collection=?1 AND m.source_gen=?2 AND m.state IN ('backfilling','ready')",
+            params![name, integer(source_gen)?],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    row.map(
+        |(app_id, base_app_ver, target_app_ver, operation_id, gen)| {
+            Ok((
+                PublishLock {
+                    app_id,
+                    base_app_ver,
+                    target_app_ver,
+                    operation_id,
+                },
+                collection(tx, name, gen)?,
+            ))
+        },
+    )
+    .transpose()
+}
+/// Mirror an already-written source in the SAME writer transaction. The output
+/// must be prepared outside the writer and bound by native authority to this input.
+pub(crate) fn mirror_generation_write(
+    tx: &Transaction<'_>,
+    lock: &PublishLock,
+    name: &str,
+    source: &change_log::ChangeDocument,
+    output: &MigrationOutput,
+    now: i64,
+) -> Result<()> {
+    atomic(tx, || {
+        verify_publish(tx, lock)?;
+        let saved = migration(tx, &lock.operation_id, name)?;
+        if saved.source_gen != source.gen
+            || !matches!(saved.state.as_str(), "backfilling" | "ready")
+        {
+            return Err(invalid("dual write generation changed"));
+        }
+        let target = collection(tx, &saved.collection, saved.gen)?;
+        write_output(tx, &target, source, output, now)?;
+        tx.execute("UPDATE _migrations SET state='backfilling',migrated_at_seq=NULL WHERE publication_id=?1 AND collection=?2",
+        params![lock.operation_id,saved.collection])?;
+        Ok(())
+    })
+}
+
+/// Validate an authenticated participant's durable checkpoint acknowledgements.
+/// This is the data-ready barrier only: artifact verification and the client's
+/// atomic activation pointer belong to the Kernel. Sending pages is not an ack.
+pub fn validate_activation_checkpoints<A: change_log::subscription::ReadAuthority + ?Sized>(
+    tx: &Transaction<'_>,
+    instance_id: &str,
+    participant: &str,
+    app_id: &str,
+    app_ver: &str,
+    checkpoints: &[change_log::subscription::protocol::Checkpoint],
+    authority: &A,
+) -> Result<u64> {
+    let current: Option<String> = tx
+        .query_row(
+            "SELECT app_ver FROM _schema_apps WHERE app_id=?1",
+            [app_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if instance_id.is_empty() || participant.is_empty() || current.as_deref() != Some(app_ver) {
+        return Err(invalid("activation publication differs"));
+    }
+    let head = change_log::head(tx)?;
+    let mut statement = tx.prepare(
+        "SELECT name,gen,COALESCE(migrated_at_seq,0) FROM _collections
+         WHERE app_id=?1 AND state='active' ORDER BY name",
+    )?;
+    let collections = statement
+        .query_map([app_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u64>(1)?,
+                r.get::<_, u64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    let mut barrier = 0;
+    for (name, gen, watermark) in collections {
+        let matches = checkpoints
+            .iter()
+            .filter(|cp| cp.collection == name)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(invalid(
+                "activation requires_page: missing/ambiguous checkpoint",
+            ));
+        }
+        let cp = matches[0];
+        if cp.instance_id != instance_id
+            || cp.participant != participant
+            || cp.gen != gen
+            || cp.epoch != head.epoch
+            || cp.seq.0 < watermark
+            || cp.seq.0 > head.head_seq
+        {
+            return Err(invalid(
+                "activation requires_page: checkpoint generation/watermark differs",
+            ));
+        }
+        authority.authorize(
+            tx,
+            &change_log::subscription::SubscriptionKey {
+                participant: participant.into(),
+                collection: name,
+                scope_hash: cp.scope_hash.clone(),
+                gen,
+            },
+        )?;
+        barrier = barrier.max(watermark);
+    }
+    Ok(barrier)
+}
+
+/// App admission comes from the native authenticated session, never from this payload.
+pub trait ActivationAuthority: change_log::subscription::ReadAuthority {
+    fn authorize_app(
+        &self,
+        tx: &Transaction<'_>,
+        participant: &str,
+        app_id: &str,
+        app_ver: &str,
+    ) -> Result<()>;
+}
+/// Historical client acknowledgement, not proof that an offline client still has
+/// current rights, artifacts, or an active pointer. Consumers must not infer it
+/// from publication or from a sender's read cursor.
+pub fn client_activation(
+    tx: &Transaction<'_>,
+    participant: &str,
+    app_id: &str,
+    app_ver: &str,
+) -> Result<Option<change_log::subscription::protocol::AppActivationReceipt>> {
+    let json: Option<String> = tx.query_row(
+        "SELECT receipt_json FROM _client_app_activations WHERE participant=?1 AND app_id=?2 AND app_ver=?3",
+        params![participant,app_id,app_ver],|r|r.get(0)).optional()?;
+    json.map(|s| serde_json::from_str(&s).map_err(|e| invalid(e.to_string())))
+        .transpose()
+}
+pub fn record_client_activation(
+    tx: &Transaction<'_>,
+    instance_id: &str,
+    participant: &str,
+    request: &change_log::subscription::protocol::AppActivation,
+    now_ms: u64,
+    authority: &dyn ActivationAuthority,
+) -> Result<change_log::subscription::protocol::AppActivationReceipt> {
+    use change_log::subscription::protocol::{AppActivationReceipt, AppActivationState};
+    atomic(tx, || {
+        initialize(tx)?;
+        if instance_id.is_empty()
+            || participant.is_empty()
+            || request.app_id.is_empty()
+            || request.app_ver.is_empty()
+            || request.checkpoints.len() > 4096
+        {
+            return Err(invalid("invalid activation binding"));
+        }
+        authority.authorize_app(tx, participant, &request.app_id, &request.app_ver)?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT app_ver FROM _schema_apps WHERE app_id=?1",
+                [&request.app_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current.as_deref() != Some(request.app_ver.as_str()) {
+            return Err(invalid("activation publication differs"));
+        }
+        let head = change_log::head(tx)?;
+        if request.at_seq.0 > head.head_seq {
+            return Err(invalid("activation sequence is ahead"));
+        }
+        integer(now_ms)?;
+        if request.state == AppActivationState::Failed {
+            let reason = request
+                .reason
+                .as_deref()
+                .ok_or_else(|| invalid("activation failure needs reason"))?;
+            if reason.is_empty()
+                || reason.len() > 96
+                || !reason
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b))
+            {
+                return Err(invalid("activation reason must be a machine code"));
+            }
+        } else if request.reason.is_some() {
+            return Err(invalid("unexpected activation failure reason"));
+        }
+        if request.state == AppActivationState::Activated {
+            let watermark = validate_activation_checkpoints(
+                tx,
+                instance_id,
+                participant,
+                &request.app_id,
+                &request.app_ver,
+                &request.checkpoints,
+                authority,
+            )?;
+            if request.at_seq.0 < watermark
+                || request
+                    .checkpoints
+                    .iter()
+                    .any(|cp| cp.seq.0 < request.at_seq.0)
+            {
+                return Err(invalid(
+                    "activation requires_page: acknowledgement is behind",
+                ));
+            }
+        } else if !request.checkpoints.is_empty() {
+            return Err(invalid("only activated reports carry checkpoints"));
+        }
+        let previous = client_activation(tx, participant, &request.app_id, &request.app_ver)?;
+        if let Some(prior) = &previous {
+            if prior.state == request.state
+                && prior.at_seq == request.at_seq
+                && prior.reason == request.reason
+            {
+                return Ok(prior.clone());
+            }
+            if request.at_seq < prior.at_seq
+                || (prior.state == AppActivationState::Activated
+                    && request.state != AppActivationState::Activated)
+            {
+                return Err(invalid("stale activation acknowledgement"));
+            }
+        }
+        let receipt = AppActivationReceipt {
+            app_id: request.app_id.clone(),
+            app_ver: request.app_ver.clone(),
+            state: request.state,
+            at_seq: request.at_seq,
+            reason: request.reason.clone(),
+            recorded_at_ms: previous.map_or(now_ms, |p| now_ms.max(p.recorded_at_ms)),
+        };
+        let json = serde_json::to_string(&receipt).map_err(|e| invalid(e.to_string()))?;
+        let checkpoints =
+            serde_json::to_string(&request.checkpoints).map_err(|e| invalid(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO _client_app_activations(participant,app_id,app_ver,receipt_json,checkpoints_json) VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(participant,app_id,app_ver) DO UPDATE SET receipt_json=excluded.receipt_json,checkpoints_json=excluded.checkpoints_json",
+            params![participant,request.app_id,request.app_ver,json,checkpoints])?;
+        Ok(receipt)
+    })
+}
+
+/// Core-side generation orchestration. Each call uses one bounded writer job;
+/// transforms run on a blocking worker outside the SQLite writer transaction.
+/// This publishes core schema availability, never a client activation acknowledgement.
+#[derive(Clone)]
+pub struct GenerationRunner {
+    writer: crate::writer::WriterHandle,
+    readers: crate::read_pool::ReadPool,
+}
+impl GenerationRunner {
+    pub fn new(
+        writer: crate::writer::WriterHandle,
+        readers: crate::read_pool::ReadPool,
+    ) -> std::result::Result<Self, crate::StoreError> {
+        if readers.generation() != writer.generation().0 {
+            return Err(crate::StoreError::Invalid(
+                "migration reader owner changed".into(),
+            ));
+        }
+        Ok(Self { writer, readers })
+    }
+    pub async fn prepare(
+        &self,
+        lock: PublishLock,
+        definition: CollectionDefinition,
+    ) -> std::result::Result<Migration, crate::StoreError> {
+        self.writer
+            .submit(crate::WriteJob::new(
+                crate::JobOptions::default(),
+                move |tx| {
+                    reserve_publish(tx, &lock)?;
+                    Ok(prepare_migration(tx, &lock, &definition)?)
+                },
+            ))?
+            .await
+    }
+    pub async fn migrate_batch<F>(
+        &self,
+        lock: PublishLock,
+        name: String,
+        now: i64,
+        transform: F,
+    ) -> std::result::Result<Migration, crate::StoreError>
+    where
+        F: FnOnce(&ChangePage) -> std::result::Result<Vec<MigrationOutput>, crate::StoreError>
+            + Send
+            + 'static,
+    {
+        let read_lock = lock.clone();
+        let read_name = name.clone();
+        let expected_database = self.writer.db_id().path().to_path_buf();
+        let (saved, page) = self
+            .readers
+            .read(move |tx| {
+                let file: String = tx.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if std::fs::canonicalize(file)
+                    .map_err(|_| invalid("migration reader identity unavailable"))?
+                    != expected_database
+                {
+                    return Err(invalid("migration reader differs from writer owner"));
+                }
+                verify_publish(tx, &read_lock)?;
+                let saved = migration(tx, &read_lock.operation_id, &read_name)?;
+                if !matches!(saved.state.as_str(), "backfilling" | "ready") {
+                    return Err(invalid("migration is not runnable"));
+                }
+                let page = if saved.source_gen == 0 {
+                    None
+                } else {
+                    Some(change_log::read_page(
+                        tx,
+                        &read_name,
+                        saved.source_gen,
+                        saved.cursor,
+                        MIGRATION_BATCH,
+                    )?)
+                };
+                Ok((saved, page))
+            })
+            .await?;
+        // A repeated completed batch must not rewrite rows, archive twice, or advance seq.
+        // Revalidate readiness in the writer: a source write may have committed after our snapshot.
+        if page.as_ref().is_none_or(|p| p.docs.is_empty()) && saved.state == "ready" {
+            return self.writer.submit(crate::WriteJob::new(crate::JobOptions::default(), move |tx| {
+                verify_publish(tx, &lock)?;
+                let current = migration(tx, &lock.operation_id, &name)?;
+                if current != saved {
+                    return Err(crate::StoreError::Invalid("migration changed; retry batch".into()));
+                }
+                if current.source_gen != 0 {
+                    let pending: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM _changes WHERE collection=?1 AND gen=?2 AND seq>?3)",
+                        params![name, integer(current.source_gen)?, integer(current.cursor)?], |r| r.get(0))?;
+                    if pending {
+                        return Err(crate::StoreError::Invalid("source changed; retry batch".into()));
+                    }
+                }
+                Ok(current)
+            }))?.await;
+        }
+        let page =
+            page.ok_or_else(|| crate::StoreError::Invalid("migration source missing".into()))?;
+        let (page, outputs) = tokio::task::spawn_blocking(move || {
+            let outputs = transform(&page)?;
+            Ok::<_, crate::StoreError>((page, outputs))
+        })
+        .await
+        .map_err(|_| crate::StoreError::Panicked)??;
+        self.writer
+            .submit(crate::WriteJob::new(
+                crate::JobOptions::default(),
+                move |tx| {
+                    Ok(apply_migration_page(
+                        tx,
+                        &lock,
+                        &name,
+                        saved.cursor,
+                        &page,
+                        &outputs,
+                        now,
+                    )?)
+                },
+            ))?
+            .await
+    }
+    /// The caller binds instance/participant to the admitted native session.
+    /// Receipt persistence and the current data/rights barrier share ONE writer transaction.
+    pub async fn acknowledge_activation(
+        &self,
+        instance_id: String,
+        participant: String,
+        request: change_log::subscription::protocol::AppActivation,
+        now_ms: u64,
+        authority: std::sync::Arc<dyn ActivationAuthority>,
+    ) -> std::result::Result<
+        change_log::subscription::protocol::AppActivationReceipt,
+        crate::StoreError,
+    > {
+        self.writer
+            .submit(crate::WriteJob::new(
+                crate::JobOptions::default(),
+                move |tx| {
+                    Ok(record_client_activation(
+                        tx,
+                        &instance_id,
+                        &participant,
+                        &request,
+                        now_ms,
+                        authority.as_ref(),
+                    )?)
+                },
+            ))?
+            .await
+    }
+    /// Registry-only publication. App release owners use publish_with to write
+    /// their version/catalog documents in this same transaction.
+    pub async fn publish(
+        &self,
+        lock: PublishLock,
+        now: i64,
+    ) -> std::result::Result<u64, crate::StoreError> {
+        self.publish_with(lock, now, |_, _| Ok(())).await
+    }
+    /// The finalizer may perform SQLite effects only, never I/O or JS.
+    /// Its failure rolls back both publication receipt and all schema switches.
+    /// A committed retry returns the receipt without running the finalizer again.
+    pub async fn publish_with<F>(
+        &self,
+        lock: PublishLock,
+        now: i64,
+        finalize: F,
+    ) -> std::result::Result<u64, crate::StoreError>
+    where
+        F: FnOnce(&Transaction<'_>, u64) -> std::result::Result<(), crate::StoreError>
+            + Send
+            + 'static,
+    {
+        self.writer
+            .submit(crate::WriteJob::new(
+                crate::JobOptions::default(),
+                move |tx| {
+                    initialize(tx)?;
+                    let replay: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM _schema_publications WHERE operation_id=?1)",
+                        [&lock.operation_id],
+                        |r| r.get(0),
+                    )?;
+                    let watermark = activate_publication(tx, &lock, now)?;
+                    if !replay {
+                        finalize(tx, watermark)?;
+                    }
+                    Ok(watermark)
+                },
+            ))?
+            .await
+    }
 }
 
 #[cfg(test)]

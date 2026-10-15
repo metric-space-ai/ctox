@@ -113,6 +113,7 @@ use rxdb::plugins::replication_webrtc::{
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
+#[cfg(test)]
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
 use serde::{Deserialize, Serialize};
@@ -827,11 +828,17 @@ fn validate_and_bind_mobile_device_proof(
     {
         return Reject;
     }
-    if !super::mobile_invites::authorize_or_bind_device_proof(
+    // §16.43: optional self-declared device type, validated against the
+    // fixed list; an invalid declaration rejects the handshake.
+    let Ok(descriptor) = super::mobile_invites::device_descriptor(proof) else {
+        return Reject;
+    };
+    if !super::mobile_invites::authorize_or_bind_device_proof_with(
         root,
         user_id,
         &thumbprint,
         chrono::Utc::now().timestamp_millis(),
+        descriptor.as_ref(),
     ) {
         return Reject;
     }
@@ -1395,6 +1402,8 @@ pub(super) struct NativePeer {
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
     _iot_agent_supervisors: Vec<Arc<AtomicBool>>,
     _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
+    /// §16.43 device presence from admitted peers (not load-bearing).
+    _device_presence: tokio::task::JoinHandle<()>,
     /// Work backlog, not lifecycle state. Keeping it on the active peer lets
     /// heartbeat diagnostics read it without opening SQLite and without adding
     /// another global lifecycle truth.
@@ -1535,6 +1544,7 @@ impl NativePeer {
             stop.store(true, Ordering::SeqCst);
         }
         self._browser_runtime_maintenance.abort();
+        self._device_presence.abort();
         // FIX 2: stop the dedicated heartbeat OS thread.
         if let Ok(mut heartbeat) = self._status_heartbeat.lock() {
             if let Some(handle) = heartbeat.as_mut() {
@@ -2790,11 +2800,8 @@ async fn run_native_peer(
         peer_session_id.clone(),
         database_path.clone(),
     );
-    let repaired_revisions = repair_legacy_business_command_revisions(&database_path)
-        .context("repair legacy Business OS command revisions")?;
-    if repaired_revisions > 0 {
-        eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
-    }
+    // Revision/envelope normalization now commits with each bounded legacy
+    // import page on the registered writer, not through a second raw writer.
     for collection in ["business_commands", "business_chats"] {
         let repaired_envelopes = store::repair_missing_rxdb_envelopes(&root, collection)
             .with_context(|| format!("repair malformed Business OS {collection} envelopes"))?;
@@ -3385,6 +3392,13 @@ async fn run_native_peer(
             eprintln!("[business-os] browser session recovery failed: {err:#}");
         }
     }
+    let device_presence = tokio::spawn(super::devices::presence_loop(
+        root.clone(),
+        pools
+            .iter()
+            .map(|session| std::sync::Arc::downgrade(&session.pool_clone()))
+            .collect(),
+    ));
     let browser_runtime_maintenance = tokio::spawn(browser_runtime_maintenance_loop(
         root.clone(),
         Arc::clone(&database),
@@ -3417,6 +3431,7 @@ async fn run_native_peer(
         _business_record_projection_sync: business_record_projection_sync,
         _iot_agent_supervisors: iot_agent_supervisors,
         _browser_runtime_maintenance: browser_runtime_maintenance,
+        _device_presence: device_presence,
         pending_outbox: AtomicU64::new(0),
         _status_heartbeat: Mutex::new(Some(status_heartbeat)),
     });
@@ -8516,6 +8531,7 @@ fn valid_rxdb_revision(revision: &str) -> bool {
     !hash.is_empty() && !hash.contains('-') && height.parse::<u64>().is_ok()
 }
 
+#[cfg(test)]
 fn repair_legacy_business_command_revisions(database_path: &Path) -> anyhow::Result<usize> {
     if !database_path.is_file() {
         return Ok(0);
@@ -8673,7 +8689,7 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
 }
 
 pub(super) async fn open_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {
-    let storage = get_rx_storage_sqlite(RxStorageSqliteSettings { database_path });
+    let storage = crate::service::store_rxdb::native_storage(database_path).await?;
     create_rx_database(RxDatabaseCreator {
         name: "ctox-business-os".to_string(),
         storage,
@@ -22474,5 +22490,48 @@ mod command_plane_query_tests {
             (2, Some(3)),
             "deleted rows still count, as before"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod owner_factory_contract_tests {
+    use super::*;
+    use crate::service::store_runtime::DaemonStores;
+    use ctox_store::{ipc::StoreEndpoint, DbId};
+
+    #[tokio::test]
+    async fn native_open_requires_daemon_owner_and_never_uses_legacy_tables() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("sync.sqlite3");
+        assert!(
+            open_database(path.clone()).await.is_err(),
+            "raw-opener bypass"
+        );
+        assert!(!path.exists(), "raw factory opened an unowned file");
+        let mut stores = DaemonStores::start(
+            StoreEndpoint::UnixSocket {
+                path: dir.path().join("ipc/store.sock"),
+            },
+            tokio::runtime::Handle::current(),
+        )?;
+        let owner = stores
+            .register("sync", DbId::new(&path)?, true, Arc::new(|_| Ok(())))
+            .await?;
+        stores.install_native_rxdb(owner.clone()).await?;
+        let database = open_database(path.clone()).await?;
+        owner.readers.read(|tx| {
+            let rows:i64=tx.query_row("SELECT COUNT(*) FROM c__rxdb_internal",[],|r|r.get(0))?;
+            assert!(rows>0,"native factory did not persist through canonical owner");
+            assert!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='ctox_business_os___rxdb_internal__v0')",[],|r|r.get::<_,bool>(0))?,"legacy table activated beside canonical one");
+            Ok(())
+        }).await?;
+        database.close().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        stores.shutdown().await?;
+        assert!(
+            open_database(path).await.is_err(),
+            "closed owner silently reopened"
+        );
+        Ok(())
     }
 }

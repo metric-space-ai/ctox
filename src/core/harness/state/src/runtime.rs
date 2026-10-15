@@ -1,3 +1,8 @@
+#[path = "../../../store/harness_sqlx_adapter.rs"]
+mod owned_sqlx;
+#[path = "../../../store/harness_adapter.rs"]
+mod owner_adapter;
+
 use crate::AgentJob;
 use crate::AgentJobCreateParams;
 use crate::AgentJobItem;
@@ -29,19 +34,13 @@ use chrono::Utc;
 use ctox_protocol::ThreadId;
 use ctox_protocol::dynamic_tools::DynamicToolSpec;
 use ctox_protocol::protocol::RolloutItem;
-use log::LevelFilter;
 use serde_json::Value;
-use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqliteJournalMode;
-use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::sqlite::SqliteSynchronous;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -57,8 +56,6 @@ mod memories;
 mod test_support;
 mod threads;
 
-const HARNESS_STATE_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
-
 // "Partition" is the retention bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
@@ -70,8 +67,8 @@ const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
 pub struct StateRuntime {
     codex_home: PathBuf,
     default_provider: String,
-    pool: Arc<sqlx::SqlitePool>,
-    logs_pool: Arc<sqlx::SqlitePool>,
+    pool: owner_adapter::OwnedResource<SqlitePool>,
+    logs_pool: owner_adapter::OwnedResource<SqlitePool>,
 }
 
 impl StateRuntime {
@@ -84,6 +81,22 @@ impl StateRuntime {
         tokio::fs::create_dir_all(&codex_home).await?;
         let current_state_name = state_db_filename();
         let current_logs_name = logs_db_filename();
+        let state_path = state_db_path(codex_home.as_path());
+        let logs_path = logs_db_path(codex_home.as_path());
+        let pool = match open_sqlite(&state_path, &STATE_MIGRATOR).await {
+            Ok(db) => db,
+            Err(err) => {
+                warn!("failed to open state db at {}: {err}", state_path.display());
+                return Err(err);
+            }
+        };
+        let logs_pool = match open_sqlite(&logs_path, &LOGS_MIGRATOR).await {
+            Ok(db) => db,
+            Err(err) => {
+                warn!("failed to open logs db at {}: {err}", logs_path.display());
+                return Err(err);
+            }
+        };
         remove_legacy_db_files(
             &codex_home,
             current_state_name.as_str(),
@@ -98,22 +111,6 @@ impl StateRuntime {
             "logs",
         )
         .await;
-        let state_path = state_db_path(codex_home.as_path());
-        let logs_path = logs_db_path(codex_home.as_path());
-        let pool = match open_sqlite(&state_path, &STATE_MIGRATOR).await {
-            Ok(db) => Arc::new(db),
-            Err(err) => {
-                warn!("failed to open state db at {}: {err}", state_path.display());
-                return Err(err);
-            }
-        };
-        let logs_pool = match open_sqlite(&logs_path, &LOGS_MIGRATOR).await {
-            Ok(db) => Arc::new(db),
-            Err(err) => {
-                warn!("failed to open logs db at {}: {err}", logs_path.display());
-                return Err(err);
-            }
-        };
         let runtime = Arc::new(Self {
             pool,
             logs_pool,
@@ -129,19 +126,44 @@ impl StateRuntime {
     }
 }
 
-async fn open_sqlite(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(HARNESS_STATE_SQLITE_BUSY_TIMEOUT)
-        .log_statements(LevelFilter::Off);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await?;
-    migrator.run(&pool).await?;
+async fn open_sqlite(
+    path: &Path,
+    migrator: &'static Migrator,
+) -> anyhow::Result<owner_adapter::OwnedResource<SqlitePool>> {
+    type Pools = std::collections::HashMap<PathBuf, owner_adapter::WeakResource<SqlitePool>>;
+    static POOLS: std::sync::OnceLock<tokio::sync::Mutex<Pools>> = std::sync::OnceLock::new();
+    let key = owner_adapter::FileOwner::identity(path)?;
+    let mut pools = POOLS.get_or_init(Default::default).lock().await;
+    pools.retain(|_, entry| !entry.finished());
+    if let Some(entry) = pools.get(&key) {
+        if let Some(pool) = entry.upgrade() {
+            anyhow::ensure!(!pool.is_closed(), "harness file owner is closing");
+            return Ok(pool);
+        }
+    }
+    if let Some(entry) = pools.remove(&key) {
+        // A borrowed SQLx connection may outlive the last runtime wrapper.
+        // Wait for actual closure, without starting another file owner.
+        let mut closed = entry.closed_signal();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await?;
+            }
+            Ok::<_, tokio::sync::watch::error::RecvError>(())
+        })
+        .await??;
+    }
+    let pool = owner_adapter::open_async_owned(
+        key.clone(),
+        move |lease| async move {
+            owned_sqlx::open_pool(lease, migrator)
+                .await
+                .map_err(std::io::Error::other)
+        },
+        |pool| async move { pool.close().await },
+    )
+    .await?;
+    pools.insert(key, pool.downgrade());
     Ok(pool)
 }
 
@@ -230,4 +252,80 @@ fn should_remove_db_file(file_name: &str, current_name: &str, base_name: &str) -
         return false;
     };
     !version_suffix.is_empty() && version_suffix.chars().all(|ch| ch.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod owner_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn harness_owners_keep_migrations_and_pool_lifetime() {
+        let home = test_support::unique_temp_dir();
+        let runtime = StateRuntime::init(home.clone(), "fixture".into())
+            .await
+            .unwrap();
+        for pool in [runtime.pool.as_ref(), runtime.logs_pool.as_ref()] {
+            let applied: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            assert!(applied > 0);
+            let timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+            assert_eq!(timeout, 0);
+        }
+        sqlx::query("CREATE TEMP TABLE owner_marker(value INTEGER)")
+            .execute(runtime.pool.as_ref())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO owner_marker VALUES(73)")
+            .execute(runtime.pool.as_ref())
+            .await
+            .unwrap();
+        let duplicate = StateRuntime::init(home.clone(), "another-provider".into())
+            .await
+            .unwrap();
+        let marker: i64 = sqlx::query_scalar("SELECT value FROM owner_marker")
+            .fetch_one(duplicate.pool.as_ref())
+            .await
+            .unwrap();
+        assert_eq!(marker, 73);
+        assert_eq!(duplicate.default_provider, "another-provider");
+        assert!(owner_adapter::FileOwner::acquire(&state_db_path(&home)).is_err());
+        for pool in [runtime.pool.as_ref(), runtime.logs_pool.as_ref()] {
+            let first = pool.acquire().await.unwrap();
+            let extra = pool.acquire().await;
+            assert!(matches!(extra, Err(sqlx::Error::PoolTimedOut)));
+            drop(first);
+        }
+        drop(duplicate);
+        let pool = runtime.pool.clone();
+        let logs = runtime.logs_pool.clone();
+        let mut state_closed = pool.closed_signal();
+        let mut logs_closed = logs.closed_signal();
+        drop(runtime);
+        assert!(owner_adapter::FileOwner::acquire(&state_db_path(&home)).is_err());
+        assert!(owner_adapter::FileOwner::acquire(&logs_db_path(&home)).is_err());
+        let connection = pool.acquire().await.unwrap();
+        drop(pool);
+        assert!(owner_adapter::FileOwner::acquire(&state_db_path(&home)).is_err());
+        drop(connection);
+        drop(logs);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !*state_closed.borrow_and_update() {
+                state_closed.changed().await.unwrap();
+            }
+            while !*logs_closed.borrow_and_update() {
+                logs_closed.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert!(owner_adapter::FileOwner::acquire(&state_db_path(&home)).is_ok());
+        assert!(owner_adapter::FileOwner::acquire(&logs_db_path(&home)).is_ok());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }

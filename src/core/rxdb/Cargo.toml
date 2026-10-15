@@ -10,6 +10,7 @@ name = "rxdb"
 path = "src/lib.rs"
 
 [dependencies]
+ctox-store = { path = "../store" }
 # Async runtime (pinned to match CTOX root)
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -35,6 +36,8 @@ base64 = "0.22"
 # DecompressionStream (built-in to every modern browser). Cuts wire bytes
 # 5-10x on repetitive JSON.
 flate2 = "1"
+# V4 negotiated per-frame zstd (gzip uses the existing flate2 fallback).
+zstd = { version = "0.13", default-features = false }
 
 # Errors (anyhow is forbidden inside this crate per PORT_STYLE.md §2)
 thiserror = "1"
