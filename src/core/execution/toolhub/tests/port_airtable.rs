@@ -562,6 +562,7 @@ fn airtable_actions_are_ported() {
         run(&a, c);
     }
     support::assert_full_coverage(&a, &cases);
+    support::spec_parity("airtable", &a, &cases);
 }
 
 /// Provider errors surface as an `Err`, not as data.

@@ -796,6 +796,8 @@ fn monday_actions_are_ported() {
     ];
 
     assert_full_coverage(&a, &cases);
+
+    support::spec_parity("monday", &a, &cases);
     for c in &cases {
         support::run(&a, c);
     }

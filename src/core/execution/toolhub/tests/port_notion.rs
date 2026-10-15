@@ -630,6 +630,7 @@ fn recorded_cases() {
         },
     ];
     support::assert_full_coverage(&notion, cases);
+    support::spec_parity("notion", &notion, cases);
     for c in cases {
         support::run(&notion, c);
     }

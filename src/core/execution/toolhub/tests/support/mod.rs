@@ -192,3 +192,36 @@ pub fn live_hotplug_public(spec_json: &str, calls: &[(&str, Value)]) -> Option<V
     let _ = std::fs::remove_dir_all(&root);
     Some(out)
 }
+
+/// Parity of a hot-plug spec (`specs/<slug>.json`, if present) with the compiled
+/// adapter on the recorded port cases: identical request (method, URL incl. sorted
+/// query, body) and identical parsed output on the recorded response.
+pub fn spec_parity(slug: &str, rust: &dyn ToolkitAdapter, cases: &[Case]) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("specs/{slug}.json"));
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let spec = ctox_toolhub::spec::SpecAdapter::from_json(&text).unwrap_or_else(|e| panic!("{slug} spec: {e:#}"));
+    let norm = |r: &HttpRequest| {
+        let u = url::Url::parse(&r.url).unwrap();
+        let mut q: Vec<(String, String)> = u.query_pairs().map(|(a, b)| (a.into_owned(), b.into_owned())).collect();
+        q.sort();
+        let body = r.body.as_ref().map(|b| serde_json::from_slice::<Value>(b).unwrap_or(Value::String(String::from_utf8_lossy(b).into())));
+        // Host ignored: port tests point the compiled adapter at a `.test` base.
+        (r.method.clone(), u.path().to_string(), q, body)
+    };
+    let mut diffs = vec![];
+    for c in cases {
+        let a = rust.build_request(c.tool, &c.args).map(|r| norm(&r)).map_err(|e| e.to_string());
+        let b = spec.build_request(c.tool, &c.args).map(|r| norm(&r)).map_err(|e| e.to_string());
+        if a.is_ok() != b.is_ok() || (a.is_ok() && a != b) {
+            diffs.push(format!("{} request {}\n  rust: {a:?}\n  spec: {b:?}", c.tool, c.args));
+        }
+        let resp = HttpResponse { status: c.response_status, body: serde_json::to_vec(&c.response).unwrap(), session_id: None };
+        let a = rust.parse_response(c.tool, &resp).map_err(|e| e.to_string());
+        let b = spec.parse_response(c.tool, &resp).map_err(|e| e.to_string());
+        if a.is_ok() != b.is_ok() || (a.is_ok() && a != b) {
+            diffs.push(format!("{} response\n  rust: {a:?}\n  spec: {b:?}", c.tool));
+        }
+    }
+    assert!(diffs.is_empty(), "{slug}: {} of {} recorded cases differ:\n{}", diffs.len(), cases.len() * 2, diffs.join("\n"));
+    println!("{slug}: spec identical on {} recorded request/response cases", cases.len() * 2);
+}

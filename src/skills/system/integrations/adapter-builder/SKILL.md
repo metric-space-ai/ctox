@@ -92,6 +92,11 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 - **Stripe (2026-10-15):** hot-plug only (`specs/stripe.json`, 21 actions). All
   live-passed on a `sk_test_` key; leftovers cleaned up. Needed two format
   extensions: nested form flattening and a `-` pointer segment for cursor pages.
+- **Airtable (2026-10-15): converted Rust -> spec** (`specs/airtable.json`, 22 actions).
+  Parity: identical on all 44 recorded port cases (`support::spec_parity`) and 244
+  differential cases. Live: 15 PASS via spec, 3 scope-missing (comments; same with
+  Rust), 5 schema writes skipped (not reversible). 17/22 actions came straight from
+  the generator; 5 needed hand edits plus format extensions (see Lessons).
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -197,3 +202,39 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   including the auth-scheme extension and one webhook retry (wrong callback
   path). Auth was the only format change; the rest fitted existing JSON bodies
   and path params.
+
+### Converting a compiled adapter to a spec (Rust -> hot-plug)
+
+1. Draft: `cargo run --example spec_from_builtin -- <slug> > /tmp/draft.json 2>/tmp/todo.txt`.
+   The generator *probes* the compiled adapter (no source parsing for requests):
+   marked sample args -> method, path params (`{arg}`; `component` if spaces pass),
+   query/body args, required flags, defaults (from a required-only probe),
+   `$omit_empty`, `nonempty_body`; responses by *marker probing* (every key the
+   adapter source reads gets a unique marker; output shows the source pointer,
+   `each` projections and `count`). `/tmp/todo.txt` lists what it could not infer.
+2. Check: `CTOX_SPEC_DRAFT=<slug>:<path> cargo test --test spec_adapters differential_report -- --ignored --nocapture`
+   (partial drafts allowed), then put the file at `specs/<slug>.json` and run
+   `cargo test --test port_<slug>`: `support::spec_parity` replays every recorded
+   port case against the spec. **Recorded cases are the real parity check** —
+   the synthetic differential missed every response projection on Airtable.
+3. Hand-fix only the reported tools; keep the fixes in a small script (re-runnable
+   after regenerating). 4. Live via `support::use_spec`, same scenario as Rust.
+
+Why it was fast/slow (Airtable): fast = plain REST CRUD with path ids and JSON
+bodies (generator got 17/22 right). Slow = per-tool Rust logic: formula strings
+built from args with escaping, arrays sent as `fields[0]`/`sort[0][field]`
+query keys, `""` -> `null` rewrites, field projections (`createdTime` ->
+`created_time`, nested tables/fields/views). Each became one small, reusable
+format feature instead of per-service code.
+
+Format features added for conversions (all tested in `spec_adapters.rs`):
+- `{"template": "FIND(\"{v}\",{{{f}}})", "escape": {"v": "backslash_quote"}, "forbid": {"f": "{}"}}`
+- `{"switch": "match_mode", "default": "contains", "cases": {...}}` (unknown case = error)
+- arg options `max_items`, `items_segment`, `wrap_object`, `require_key`, `blank_to_null`
+- query values that are objects/arrays use bracketed keys (like form bodies)
+- response object fields: `each` (item projection, nested), `count`, `"default": null`
+  keeps a missing projected list null
+- body objects: `"$omit_empty": true`
+
+Ideas not yet automated: nested `each` inference (markers inside nested lists),
+template inference for computed strings, switch inference from enum args.

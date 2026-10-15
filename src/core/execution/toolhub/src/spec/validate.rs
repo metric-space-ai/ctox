@@ -37,6 +37,62 @@ pub enum Format {
 pub enum Val {
     Const(Value),
     Arg(ArgRef),
+    /// String built from a template: `{name}` = string arg, `{{`/`}}` = literal braces.
+    Template { parts: Vec<TmplPart> },
+    /// Pick one value by the string value of `arg` (`default` when absent).
+    Switch { arg: String, cases: Vec<(String, Val)>, default: Option<String> },
+}
+
+/// Object-mode field post-processing.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FieldShape {
+    /// `"each": {"out": "/in", …}`: project every array item (missing -> null).
+    pub each: Option<Vec<EachField>>,
+    /// `"count": true`: the length of the array at `pointer` (0 when absent).
+    pub count: bool,
+}
+
+/// One output key of an `each` projection: `"/ptr"` or `{"pointer": "/ptr", "each": {…}}`
+/// (nested list projection; a missing nested list becomes `[]`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EachField {
+    pub key: String,
+    pub pointer: String,
+    pub each: Option<Vec<EachField>>,
+}
+
+pub fn parse_each(e: &Value, ctx: &str) -> Result<Vec<EachField>> {
+    e.as_object()
+        .ok_or_else(|| anyhow!("{ctx}: `each` maps output keys to item pointers"))?
+        .iter()
+        .map(|(k, p)| {
+            let (pointer, each) = match p {
+                Value::String(s) => (s.clone(), None),
+                Value::Object(o) => (
+                    o.get("pointer").and_then(Value::as_str).unwrap_or("").to_string(),
+                    Some(parse_each(o.get("each").ok_or_else(|| anyhow!("{ctx}: `each.{k}` object needs `each`"))?, ctx)?),
+                ),
+                _ => bail!("{ctx}: `each.{k}` must be a pointer or {{pointer, each}}"),
+            };
+            if !pointer.starts_with('/') {
+                bail!("{ctx}: `each.{k}` pointer must start with `/`");
+            }
+            Ok(EachField { key: k.clone(), pointer, each })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TmplPart {
+    Lit(String),
+    Arg { name: String, escape: Escape, forbid: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Escape {
+    None,
+    /// `\` -> `\\`, `"` -> `\"` (formula / string-literal contexts).
+    BackslashQuote,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +111,16 @@ pub struct ArgRef {
     /// Resource-URI APIs (Calendly): a bare id becomes `<prefix><id>`; a full
     /// URI must already start with the prefix (an https URL on an allowed host).
     pub uri_prefix: Option<String>,
+    /// List args: at most this many items.
+    pub max_items: Option<usize>,
+    /// List args: every string item must be an id-like path segment.
+    pub items_segment: bool,
+    /// A single object is accepted and wrapped into a one-element list.
+    pub wrap_object: bool,
+    /// Object args: `""` values become `null` (clear a field).
+    pub blank_to_null: bool,
+    /// List args: keep only object items that have a string value at this key.
+    pub require_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +134,8 @@ pub enum Entry {
     Field(String, Tmpl),
     /// Route one string arg to a field by its shape (date / date-time / other).
     SwitchFormat { arg: String, date: String, datetime: String, other: String },
+    /// `"$omit_empty": true`: drop this object when none of its fields resolved.
+    OmitEmpty,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +170,7 @@ pub enum Response {
     Body,
     Pick { pointer: String, required: bool, empty_error: String },
     List { pointer: String, key: String },
-    Object(Vec<(String, String, Option<Value>)>),
+    Object(Vec<(String, String, Option<Value>, FieldShape)>),
     MergeSuccess { pointer: String },
     Const(Value),
 }
@@ -228,7 +296,62 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         known_keys(v, &["const"], ctx)?;
         return Ok(Val::Const(c.clone()));
     }
-    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix"], ctx)?;
+    if let Some(t) = v.get("template") {
+        known_keys(v, &["template", "escape", "forbid"], ctx)?;
+        let t = t.as_str().ok_or_else(|| anyhow!("{ctx}: template must be a string"))?;
+        let mut parts = Vec::new();
+        let mut lit = String::new();
+        let mut it = t.chars().peekable();
+        while let Some(c) = it.next() {
+            match (c, it.peek()) {
+                ('{', Some('{')) | ('}', Some('}')) => {
+                    lit.push(c);
+                    it.next();
+                }
+                ('{', _) => {
+                    let name: String = it.by_ref().take_while(|&x| x != '}').collect();
+                    if !props.contains_key(&name) {
+                        bail!("{ctx}: template arg `{name}` is not declared in input_schema.properties");
+                    }
+                    used.insert(name.clone());
+                    if !lit.is_empty() {
+                        parts.push(TmplPart::Lit(std::mem::take(&mut lit)));
+                    }
+                    let escape = match v.get("escape").and_then(|e| e.get(&name)).and_then(Value::as_str) {
+                        None | Some("none") => Escape::None,
+                        Some("backslash_quote") => Escape::BackslashQuote,
+                        Some(o) => bail!("{ctx}: unknown escape `{o}`"),
+                    };
+                    let forbid = v.get("forbid").and_then(|e| e.get(&name)).and_then(Value::as_str).unwrap_or("").to_string();
+                    parts.push(TmplPart::Arg { name, escape, forbid });
+                }
+                ('}', _) => bail!("{ctx}: unmatched `}}` in template (use `}}}}` for a literal brace)"),
+                _ => lit.push(c),
+            }
+        }
+        if !lit.is_empty() {
+            parts.push(TmplPart::Lit(lit));
+        }
+        return Ok(Val::Template { parts });
+    }
+    if let Some(arg) = v.get("switch") {
+        known_keys(v, &["switch", "cases", "default"], ctx)?;
+        let arg = arg.as_str().ok_or_else(|| anyhow!("{ctx}: switch names a string arg"))?.to_string();
+        if !props.contains_key(&arg) {
+            bail!("{ctx}: switch arg `{arg}` is not declared in input_schema.properties");
+        }
+        used.insert(arg.clone());
+        let mut cases = Vec::new();
+        for (k, x) in v.get("cases").and_then(Value::as_object).ok_or_else(|| anyhow!("{ctx}: switch needs `cases`"))? {
+            cases.push((k.clone(), parse_val(x, props, &format!("{ctx} case {k}"), used)?));
+        }
+        let default = v.get("default").and_then(Value::as_str).map(String::from);
+        if default.as_ref().is_some_and(|d| !cases.iter().any(|(k, _)| k == d)) {
+            bail!("{ctx}: switch default is not one of the cases");
+        }
+        return Ok(Val::Switch { arg, cases, default });
+    }
+    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key"], ctx)?;
     let name = s(v, "arg", ctx)?.to_string();
     let prop = props.get(&name).ok_or_else(|| anyhow!("{ctx}: arg `{name}` is not declared in input_schema.properties"))?;
     used.insert(name.clone());
@@ -279,11 +402,16 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
                 Some(p.to_string())
             }
         },
+        max_items: v.get("max_items").and_then(Value::as_u64).map(|n| n as usize),
+        items_segment: v.get("items_segment").and_then(Value::as_bool).unwrap_or(false),
+        wrap_object: v.get("wrap_object").and_then(Value::as_bool).unwrap_or(false),
+        blank_to_null: v.get("blank_to_null").and_then(Value::as_bool).unwrap_or(false),
+        require_key: v.get("require_key").and_then(Value::as_str).map(String::from),
     }))
 }
 
 fn is_val(v: &Value) -> bool {
-    v.get("arg").is_some() || v.get("const").is_some()
+    v.get("arg").is_some() || v.get("const").is_some() || v.get("template").is_some() || v.get("switch").is_some()
 }
 
 fn parse_tmpl(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeSet<String>) -> Result<Tmpl> {
@@ -293,7 +421,11 @@ fn parse_tmpl(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTree
     let m = v.as_object().ok_or_else(|| anyhow!("{ctx}: body template entries must be objects ({{\"arg\":…}}, {{\"const\":…}} or nested)"))?;
     let mut entries = Vec::new();
     for (k, x) in m {
-        if k == "$switch_format" {
+        if k == "$omit_empty" {
+            if x.as_bool() == Some(true) {
+                entries.push(Entry::OmitEmpty);
+            }
+        } else if k == "$switch_format" {
             let arg = s(x, "arg", ctx)?.to_string();
             if !props.contains_key(&arg) {
                 bail!("{ctx}: arg `{arg}` is not declared in input_schema.properties");
@@ -376,7 +508,13 @@ fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
                 if !p.starts_with('/') {
                     bail!("{ctx}: pointer must start with `/`");
                 }
-                out.push((k.clone(), p, x.get("default").cloned()));
+                known_keys(x, &["pointer", "default", "each", "count"], ctx)?;
+                let each = match x.get("each") {
+                    None => None,
+                    Some(e) => Some(parse_each(e, ctx)?),
+                };
+                let shape = FieldShape { each, count: x.get("count").and_then(Value::as_bool).unwrap_or(false) };
+                out.push((k.clone(), p, x.get("default").cloned(), shape));
             }
             Response::Object(out)
         }

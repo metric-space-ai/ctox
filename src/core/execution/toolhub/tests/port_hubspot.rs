@@ -524,6 +524,7 @@ fn recorded_cases_match_the_typescript_actions() {
     let adapter = HubSpot::with_api_base("https://api.hubapi.com");
     let cases = cases();
     assert_full_coverage(&adapter, &cases);
+    support::spec_parity("hubspot", &adapter, &cases);
     for c in &cases {
         run(&adapter, c);
     }

@@ -72,13 +72,23 @@ fn norm(r: &HttpRequest) -> (String, String, Vec<(String, String)>, Option<Value
 }
 
 fn differential(slug: &str, text: &str) -> (usize, Vec<String>) {
+    differential_opts(slug, text, false)
+}
+
+/// `partial`: compare only the tools present in the spec (builder drafts).
+fn differential_opts(slug: &str, text: &str, partial: bool) -> (usize, Vec<String>) {
     let rust = builtin(slug);
     let spec = SpecAdapter::from_json(text).unwrap();
-    assert_eq!(rust.spec().tools.len(), spec.spec().tools.len(), "{slug} tool count");
+    if !partial {
+        assert_eq!(rust.spec().tools.len(), spec.spec().tools.len(), "{slug} tool count");
+    }
     let mut compared = 0;
     let mut diffs = vec![];
     for t in &rust.spec().tools {
-        let st = spec.spec().tools.iter().find(|x| x.slug == t.slug).expect("tool in spec");
+        let Some(st) = spec.spec().tools.iter().find(|x| x.slug == t.slug) else {
+            assert!(partial, "{} missing in spec", t.slug);
+            continue;
+        };
         assert_eq!(st.input_schema, t.input_schema, "{} schema", t.slug);
         assert_eq!(st.mutating, t.mutating, "{} mutating", t.slug);
         for args in arg_sets(&t.input_schema) {
@@ -557,4 +567,77 @@ fn oauth_header_puts_key_and_token_in_authorization_not_in_url() {
     assert!(hub.connect_with_credential("c", "p", "a", "KEY123").is_err(), "needs key:token");
     assert!(hub.connect_with_credential("c", "p", "a", "KEY\"bad:TOK").is_err());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Builder-agent loop: `CTOX_SPEC_DRAFT=<slug>:<path> cargo test --test spec_adapters differential_report -- --ignored --nocapture`
+/// prints compile errors or the per-tool differential against the compiled adapter.
+#[test]
+#[ignore]
+fn differential_report() {
+    let Ok(v) = std::env::var("CTOX_SPEC_DRAFT") else { return };
+    let (slug, path) = v.split_once(':').expect("slug:path");
+    let text = std::fs::read_to_string(path).unwrap();
+    if let Err(e) = SpecAdapter::from_json(&text) {
+        println!("COMPILE ERROR: {e:#}");
+        return;
+    }
+    let (n, d) = differential_opts(slug, &text, true);
+    let mut per: std::collections::BTreeMap<String, usize> = Default::default();
+    for x in &d {
+        *per.entry(x.split_whitespace().next().unwrap().to_string()).or_default() += 1;
+    }
+    println!("DIFF {slug}: {} of {n} differ; tools: {per:?}", d.len());
+    for x in d.iter().take(std::env::var("CTOX_SPEC_SHOW").ok().and_then(|s| s.parse().ok()).unwrap_or(6)) {
+        println!("{x}\n");
+    }
+}
+
+// ------------------------------------------------------------------ Airtable (converted from Rust)
+
+const AIRTABLE: &str = include_str!("../specs/airtable.json");
+
+#[test]
+fn airtable_spec_matches_compiled_adapter() {
+    let (n, d) = differential("airtable", AIRTABLE);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+}
+
+#[test]
+fn template_switch_and_list_options() {
+    let a = SpecAdapter::from_json(AIRTABLE).unwrap();
+    let base = json!({"base_id": "app1", "table_id_or_name": "tbl1", "search_field": "Name", "search_value": "a \"b\" \\ c"});
+    let q = |r: HttpRequest| url::Url::parse(&r.url).unwrap().query_pairs().find(|(k, _)| k == "filterByFormula").map(|(_, v)| v.into_owned()).unwrap();
+    assert_eq!(q(a.build_request("AIRTABLE_SEARCH_RECORDS", &base).unwrap()), r#"FIND("a \"b\" \\ c",{Name})"#);
+    let mut exact = base.clone();
+    exact["match_mode"] = json!("exact");
+    assert_eq!(q(a.build_request("AIRTABLE_SEARCH_RECORDS", &exact).unwrap()), r#"{Name}&""="a \"b\" \\ c""#);
+    exact["match_mode"] = json!("fuzzy");
+    assert!(a.build_request("AIRTABLE_SEARCH_RECORDS", &exact).is_err(), "unknown switch case");
+    let mut bad = base.clone();
+    bad["search_field"] = json!("Na{me}");
+    assert!(a.build_request("AIRTABLE_SEARCH_RECORDS", &bad).is_err(), "forbidden brace");
+    // max_items / items_segment
+    let ids: Vec<String> = (0..11).map(|i| format!("rec{i}")).collect();
+    assert!(a.build_request("AIRTABLE_DELETE_RECORDS_BATCH", &json!({"base_id": "app1", "table_id_or_name": "tbl1", "record_ids": ids})).is_err());
+    assert!(a.build_request("AIRTABLE_DELETE_RECORDS_BATCH", &json!({"base_id": "app1", "table_id_or_name": "tbl1", "record_ids": ["rec/../x"]})).is_err());
+    // wrap_object + require_key + bracketed query arrays
+    let r = a.build_request("AIRTABLE_LIST_RECORDS", &json!({"base_id": "app1", "table_id_or_name": "tbl1",
+        "sort": {"field": "Due", "direction": "asc"}, "fields": ["Name", "Status"]})).unwrap();
+    let u = url::Url::parse(&r.url).unwrap();
+    let mut pairs: Vec<(String, String)> = u.query_pairs().map(|(k, v)| (k.into(), v.into())).collect();
+    pairs.sort();
+    assert_eq!(pairs, vec![("fields[0]".into(), "Name".into()), ("fields[1]".into(), "Status".into()),
+        ("sort[0][direction]".into(), "asc".into()), ("sort[0][field]".into(), "Due".into())]);
+    // blank_to_null
+    let r = a.build_request("AIRTABLE_CLEAR_RECORD", &json!({"base_id": "app1", "table_id_or_name": "tbl1", "record_id": "rec1", "fields": {"Due": "", "Name": "x"}})).unwrap();
+    let b: Value = serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
+    assert_eq!(b["fields"], json!({"Due": null, "Name": "x"}));
+    // nested each + count
+    let resp = HttpResponse { status: 200, session_id: None, body: serde_json::to_vec(&json!({"tables": [{"id": "t1", "name": "T", "primaryFieldId": "f1",
+        "fields": [{"id": "f1", "name": "Name", "type": "singleLineText", "options": {}}]}]})).unwrap() };
+    let out = a.parse_response("AIRTABLE_GET_BASE_SCHEMA", &resp).unwrap();
+    assert_eq!(out["count"], json!(1));
+    assert_eq!(out["tables"][0]["fields"], json!([{"id": "f1", "name": "Name", "type": "singleLineText", "description": null}]));
+    assert_eq!(out["tables"][0]["views"], json!([]), "missing nested list -> []");
+    assert_eq!(out["tables"][0]["primary_field_id"], json!("f1"));
 }

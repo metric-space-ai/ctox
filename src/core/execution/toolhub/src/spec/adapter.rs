@@ -97,6 +97,45 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
     let a = match v {
         Val::Const(c) => return Ok(Some(c.clone())),
         Val::Arg(a) => a,
+        Val::Template { parts } => {
+            let mut out = String::new();
+            for p in parts {
+                match p {
+                    TmplPart::Lit(l) => out.push_str(l),
+                    TmplPart::Arg { name, escape, forbid } => {
+                        let raw = match args.get(name) {
+                            Some(Value::String(s)) => s.trim().to_string(),
+                            Some(Value::Number(n)) => n.to_string(),
+                            _ => String::new(),
+                        };
+                        if raw.is_empty() {
+                            bail!("missing argument `{name}`");
+                        }
+                        if let Some(c) = raw.chars().find(|c| forbid.contains(*c)) {
+                            bail!("`{name}` must not contain \"{c}\"");
+                        }
+                        match escape {
+                            Escape::None => out.push_str(&raw),
+                            Escape::BackslashQuote => out.push_str(&raw.replace('\\', "\\\\").replace('"', "\\\"")),
+                        }
+                    }
+                }
+            }
+            return Ok(Some(Value::String(out)));
+        }
+        Val::Switch { arg, cases, default } => {
+            let key = match args.get(arg).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+                Some(k) => k.to_string(),
+                None => match default {
+                    Some(d) => d.clone(),
+                    None => return Ok(None),
+                },
+            };
+            let (_, v) = cases.iter().find(|(k, _)| *k == key).ok_or_else(|| {
+                anyhow!("`{arg}` must be one of {}, got `{key}`", cases.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", "))
+            })?;
+            return eval(v, args);
+        }
     };
     let raw = args.get(&a.name).filter(|x| !x.is_null());
     let mut out: Option<Value> = match (a.kind, raw) {
@@ -119,9 +158,32 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
             (!v.is_empty()).then_some(Value::Array(v))
         }
         (Kind::StringList, Some(_)) => bail!("`{}` must be a list of strings", a.name),
+        (Kind::Object, Some(Value::Object(m))) if a.blank_to_null => Some(Value::Object(
+            m.iter().map(|(k, v)| (k.clone(), if v.as_str() == Some("") { Value::Null } else { v.clone() })).collect(),
+        )),
         (Kind::Object, Some(x)) => x.is_object().then(|| x.clone()),
+        (Kind::Raw, Some(Value::Object(m))) if a.wrap_object => Some(Value::Array(vec![Value::Object(m.clone())])),
         (Kind::Raw, Some(x)) => Some(x.clone()),
     };
+    if let (Some(key), Some(Value::Array(items))) = (&a.require_key, &out) {
+        let kept: Vec<Value> = items.iter().filter(|it| it.get(key).is_some_and(Value::is_string)).cloned().collect();
+        out = (!kept.is_empty()).then_some(Value::Array(kept));
+    }
+    if let Some(Value::Array(items)) = &out {
+        if let Some(max) = a.max_items {
+            if items.len() > max {
+                bail!("`{}` takes at most {max} items; received {}. Split into batches of {max}.", a.name, items.len());
+            }
+        }
+        if a.items_segment {
+            for it in items {
+                let s = it.as_str().unwrap_or_default();
+                if crate::toolkits::path_segment(&json!({"v": s}), "v").is_err() {
+                    bail!("invalid item `{s}` in `{}`", a.name);
+                }
+            }
+        }
+    }
     if out.is_none() {
         if let Some(d) = &a.default {
             out = Some(d.clone());
@@ -186,7 +248,11 @@ fn eval_tmpl(t: &Tmpl, args: &Value) -> Result<Option<Value>> {
                             m.insert(field.clone(), json!(s));
                         }
                     }
+                    Entry::OmitEmpty => {}
                 }
+            }
+            if m.is_empty() && entries.contains(&Entry::OmitEmpty) {
+                return Ok(None);
             }
             Ok(Some(Value::Object(m)))
         }
@@ -241,6 +307,26 @@ fn pointer_last<'a>(v: &'a Value, p: &str) -> Option<&'a Value> {
         };
     }
     Some(cur)
+}
+
+fn project_list(list: &[Value], each: &[EachField]) -> Value {
+    Value::Array(
+        list.iter()
+            .map(|it| {
+                Value::Object(
+                    each.iter()
+                        .map(|f| {
+                            let v = match &f.each {
+                                None => it.pointer(&f.pointer).cloned().unwrap_or(Value::Null),
+                                Some(sub) => it.pointer(&f.pointer).and_then(Value::as_array).map_or(json!([]), |l| project_list(l, sub)),
+                            };
+                            (f.key.clone(), v)
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
@@ -299,8 +385,13 @@ impl ToolkitAdapter for SpecAdapter {
         let mut any = false;
         for (k, v) in &a.query {
             if let Some(v) = eval(v, args)? {
-                ser.append_pair(k, &query_string(&v));
-                any = true;
+                // Objects/arrays use bracketed keys (`fields[0]=a`, `sort[0][field]=x`).
+                let mut pairs = Vec::new();
+                flatten_form(k, &v, &mut pairs, 0)?;
+                for (k, v) in pairs {
+                    ser.append_pair(&k, &v);
+                    any = true;
+                }
             }
         }
         let url = format!("{}{}{}", self.c.api_base, path, if any { format!("?{}", ser.finish()) } else { String::new() });
@@ -383,7 +474,21 @@ impl ToolkitAdapter for SpecAdapter {
             }
             Response::Object(fields) => {
                 let mut m = Map::new();
-                for (k, p, d) in fields {
+                for (k, p, d, shape) in fields {
+                    if shape.count {
+                        m.insert(k.clone(), json!(pointer_last(&body, p).and_then(Value::as_array).map_or(0, Vec::len)));
+                        continue;
+                    }
+                    if let Some(each) = &shape.each {
+                        let v = match pointer_last(&body, p).and_then(Value::as_array) {
+                            Some(list) => project_list(list, each),
+                            // explicit `"default": null` keeps an absent list null
+                            None if d == &Some(Value::Null) => Value::Null,
+                            None => json!([]),
+                        };
+                        m.insert(k.clone(), v);
+                        continue;
+                    }
                     let v = pointer_last(&body, p).filter(|v| !v.is_null() && v.as_str() != Some("")).cloned();
                     let v = match (v, d) {
                         (Some(v), Some(d)) if std::mem::discriminant(&v) != std::mem::discriminant(d) => d.clone(),

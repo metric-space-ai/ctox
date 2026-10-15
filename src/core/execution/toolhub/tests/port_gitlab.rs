@@ -465,6 +465,7 @@ fn gitlab_actions_are_ported() {
         },
     ];
     assert_full_coverage(&a, &cases);
+    support::spec_parity("gitlab", &a, &cases);
     for c in &cases {
         run(&a, c);
     }
