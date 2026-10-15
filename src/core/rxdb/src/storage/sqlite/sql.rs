@@ -71,6 +71,23 @@ pub fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
+/// Owner DDL deliberately creates no per-table sequence. P3-05 installs the
+/// global `_changes` triggers in this same transaction before it commits.
+pub fn ensure_owned_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
+    let table_id = quote_identifier(table);
+    let lwt_index = quote_identifier(&format!("{table}_lwt_id_idx"));
+    let deleted_index = quote_identifier(&format!("{table}_deleted_lwt_id_idx"));
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {table_id}(
+            id TEXT NOT NULL PRIMARY KEY UNIQUE, revision TEXT,
+            deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),
+            lastWriteTime REAL NOT NULL, data TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS {lwt_index} ON {table_id}(lastWriteTime,id);
+         CREATE INDEX IF NOT EXISTS {deleted_index} ON {table_id}(deleted,lastWriteTime,id);"
+    ))
+    .map_err(sqlite_error)
+}
+
 pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {
     let quoted = quote_identifier(table);
     let lwt_index = quote_identifier(&format!("{table}_lwt_id_idx"));

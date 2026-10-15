@@ -6,7 +6,7 @@ use crate::plugins::utils::utils_time::now;
 use crate::rx_error::RxResult;
 
 use super::sql::quote_identifier;
-use super::types::{sqlite_error, SharedSqliteConnection};
+use super::types::sqlite_error;
 
 /// How many tombstones one cleanup call may delete.
 ///
@@ -25,12 +25,20 @@ const CLEANUP_BATCH_LIMIT: usize = 2_000;
 /// The `bool` is the upstream RxDB contract and it was previously a lie: this
 /// function always returned `true`. Nothing called it, so nothing noticed.
 pub fn cleanup_deleted_documents(
-    connection: &SharedSqliteConnection,
+    conn: &rusqlite::Connection,
     table_name: &str,
     minimum_deleted_time: i64,
 ) -> RxResult<bool> {
+    cleanup_deleted_documents_batch(conn, table_name, minimum_deleted_time, CLEANUP_BATCH_LIMIT)
+}
+
+pub(crate) fn cleanup_deleted_documents_batch(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    minimum_deleted_time: i64,
+    batch_limit: usize,
+) -> RxResult<bool> {
     let max_deletion_time = now() - minimum_deleted_time as f64;
-    let conn = crate::storage::sqlite::instance::lock_sqlite_writer(connection);
     let _statement_timer = crate::storage::sqlite::instance::timed_sqlite_statement();
     let quoted = quote_identifier(table_name);
     let deleted = conn
@@ -42,8 +50,8 @@ pub fn cleanup_deleted_documents(
                      LIMIT ?
                  )"
             ),
-            params![max_deletion_time, CLEANUP_BATCH_LIMIT as i64],
+            params![max_deletion_time, batch_limit as i64],
         )
         .map_err(sqlite_error)?;
-    Ok(deleted < CLEANUP_BATCH_LIMIT)
+    Ok(deleted < batch_limit)
 }
