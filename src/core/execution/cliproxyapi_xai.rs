@@ -692,7 +692,7 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let data = bounded_response_kind(upstream.send().await?, 32 * 1024 * 1024, true).await?;
     let data = if stream {
         data
     } else {
@@ -722,10 +722,24 @@ async fn bounded_response(
     response: native_http::Response,
     limit: usize,
 ) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(
-        response.status().is_success(),
-        "Grok upstream rejected request"
-    );
+    bounded_response_kind(response, limit, false).await
+}
+async fn bounded_response_kind(
+    response: native_http::Response,
+    limit: usize,
+    inference: bool,
+) -> anyhow::Result<Vec<u8>> {
+    let status = response.status().as_u16();
+    if inference {
+        ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(status, &[]);
+    }
+    // Error bodies are read only to derive the existing closed error class.
+    // Catalog responses never become an inference witness.
+    let limit = if (200..300).contains(&status) {
+        limit
+    } else {
+        limit.min(65_536)
+    };
     use futures_util::StreamExt as _;
     let mut response = response.bytes_stream();
     let mut body = Vec::new();
@@ -736,6 +750,13 @@ async fn bounded_response(
         );
         body.extend_from_slice(&chunk);
     }
+    if inference {
+        ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(status, &body);
+    }
+    anyhow::ensure!(
+        (200..300).contains(&status),
+        "Grok upstream rejected request"
+    );
     Ok(body)
 }
 impl Drop for Stored {
