@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {connect,participant,control,rawStore,assertExactScope,write,trace,assertRevocation,until,notRun} from '../k13/native.mjs';
+import {nativeScenario,connect,participant,control,rawStore,assertExactScope,write,trace,assertRevocation,until,notRun} from '../k13/native.mjs';
 
 export function assertPeerRejected(result) {
   assert.equal(result.receiverApplied,false,'An unauthorized peer packet was applied');
@@ -8,7 +8,7 @@ export function assertPeerRejected(result) {
   assert.match(result.packetSha256,/^[a-f0-9]{64}$/);
   assert.equal(result.transportKind,'native-webrtc');
 }
-export default {
+export default nativeScenario({
   id:'K22',title:'Concurrent authenticated roles retain exact scopes and reject stale or forged peer packets',
   coverage:'Ten minutes; three users/two roles plus Workjet, mobile and native participants, conflict merge and raw IDB inspection.',
   steps:['Connect distinct authenticated participants to the isolated WELSCH-shaped fixture',
@@ -124,4 +124,4 @@ export default {
     return {status:'measured',pass:true,acceptanceComplete:true,
       measured:{durationMs,stats,forwarding,invalid,revocation,wire,external:externalTerminal}};
   }
-};
+});

@@ -4,6 +4,18 @@ import assert from 'node:assert/strict';
 // supplies only authenticated fixture/control operations; all acceptance
 // assertions below read the real kernel, IndexedDB and WebRTC receive path.
 // No fake core, HTTP record bridge, SQL write or role override is permitted.
+export function nativeScenario(spec) {
+  return {...spec,async run(h) {
+    let started=false;
+    const measured={...h,markNativeScenarioStarted:()=>{started=true;}};
+    try {return await spec.run(measured);}
+    catch(error) {
+      const message=String(error?.message??error).replace(/(?:https?|wss?):\/\/\S+/g,'[endpoint]');
+      return {status:started?'failed':'not_run',pass:false,acceptanceComplete:false,error:message};
+    }
+  }};
+}
+
 export const CONTROL_CONTRACT = 'ctox.sync-v4.regression-control.v1';
 export function notRun(reason, measured = {}) {
   return {status:'not_run',pass:false,acceptanceComplete:false,reason,measured};
@@ -28,6 +40,8 @@ export async function connect(h, id) {
   assert.equal(fixture.revision,h.config.revision,'Fixture must use the checksum-bound daemon revision');
   assert.equal(fixture.root,h.config.root,'Fixture control must target this runner-owned tenant');
   assert.equal(fixture.instanceId,await page.evaluate(()=>globalThis.__e2eOS.kernel.instanceId));
+  h.markNativeScenarioStarted?.();
+  h.observe('native-scenario-ready',{scenario:id});
   return {page,fixture};
 }
 export async function control(page,operation,args = {}) {

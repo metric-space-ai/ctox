@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import {connect,participant,control,publish,activation,rawStore,assertExactScope,
+import {nativeScenario,connect,participant,control,publish,activation,rawStore,assertExactScope,
   collectionRecords,queueOffline,pendingResult,trace,assertRevocation,until} from './native.mjs';
 
-export default {
+export default nativeScenario({
   id:'K13',title:'Manifest and rights changes reach non-admin clients without stale catalog authority',
   coverage:'Real source publication, three server-authenticated roles, raw IDB scope, signed revoke, artifacts and pending outbox.',
   steps:['Authenticate admin, chef and user in separate browser contexts',
@@ -92,4 +92,4 @@ export default {
       }
     }
   }
-};
+});

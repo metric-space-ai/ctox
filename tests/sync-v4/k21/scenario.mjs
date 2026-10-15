@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {connect,participant,control,publish,activation,write,rawStore,notRun} from '../k13/native.mjs';
+import {nativeScenario,connect,participant,control,publish,activation,write,rawStore,notRun} from '../k13/native.mjs';
 
 export const p95 = values => {
   assert.ok(values.length>0 && values.every(v=>Number.isFinite(v) && v>=0),'Empty/non-finite activation sample');
@@ -26,7 +26,7 @@ async function command(page,type,payload) {
   assert.equal(stamp.source,'store-commit');assert.ok(Number.isFinite(stamp.committedAtMs));
   return {...accepted.result,rev:stamp.app_ver,committedAtMs:stamp.committedAtMs};
 }
-export default {
+export default nativeScenario({
   id:'K21',title:'Every installed app hot-plugs, migrates, rolls forward and archives without losing input',
   coverage:'Complete native app inventory; source update and platform commands, real app mounts, raw IDB balances, migration and export.',
   steps:['Load all 46 real app release fixtures from the isolated native catalog',
@@ -112,4 +112,4 @@ export default {
       return {status:'measured',pass:true,acceptanceComplete:true,measured:{inventory,events,migration:migrated}};
     } finally {await control(owner,'stopMigration',{owner:migration.owner});}
   }
-};
+});
