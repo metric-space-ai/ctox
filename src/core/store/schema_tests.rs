@@ -431,7 +431,11 @@ fn base_loader_prefers_optional_corrected_schemas_without_loading_inside_writer(
     )
     .unwrap();
     let platform = root.join("platform.json");
-    std::fs::write(&platform, r#"{"app_id":"ctox-platform","collections":{}}"#).unwrap();
+    std::fs::write(
+        &platform,
+        r#"{"app_id":"ctox-platform","collections":{"business_commands":{"class":"full"}}}"#,
+    )
+    .unwrap();
     let loaded = load_base_release(root, &platform).unwrap();
     assert_eq!(loaded.schemas["app"]["collections"]["items"]["version"], 2);
     assert_eq!(loaded.manifests.len(), 2);

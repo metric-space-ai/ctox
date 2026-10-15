@@ -1770,6 +1770,42 @@ pub struct BaseReleaseReport {
     pub legacy_catalog_replaced: bool,
     pub missing_addenda_definitions: Vec<String>,
 }
+/// The Core owns the platform command wire contract. Bind it before artifact
+/// signing and registry publication so both describe the exact same schema.
+/// Only release input changes; incompatible stores still need normal migration.
+pub fn bind_platform_command_schema(input: &mut BaseReleaseInput) -> Result<()> {
+    let platform = input
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .ok_or_else(|| invalid("platform manifest missing"))?;
+    let metadata = platform
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .and_then(|c| c.get_mut("business_commands"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform command metadata missing"))?;
+    let schema = crate::change_log::subscription::write_contract::command_document_schema();
+    metadata.insert("schema".into(), schema.clone());
+    let corrected = input
+        .schemas
+        .entry("ctox-platform".into())
+        .or_insert_with(|| serde_json::json!({"_base_release":"main@4794af03d","collections":{}}));
+    let collections = corrected
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform schema collections missing"))?;
+    let entry = collections
+        .entry("business_commands")
+        .or_insert_with(|| serde_json::json!({}));
+    if entry.get("schema").is_some() {
+        entry["schema"] = schema;
+    } else {
+        *entry = serde_json::json!({"schema":schema});
+    }
+    Ok(())
+}
+
 /// Read immutable release inputs outside the Store writer. No ambient paths/config.
 pub fn load_base_release(
     v4_root: &std::path::Path,
@@ -1814,11 +1850,13 @@ pub fn load_base_release(
             schemas.insert(app.to_owned(), json(&path)?);
         }
     }
-    Ok(BaseReleaseInput {
+    let mut input = BaseReleaseInput {
         ownership,
         manifests,
         schemas,
-    })
+    };
+    bind_platform_command_schema(&mut input)?;
+    Ok(input)
 }
 const OLG_COLLECTIONS: [&str; 5] = [
     "outbound_lead_generation_adapters",

@@ -2,6 +2,53 @@ use super::*;
 #[path = "../business_os/command_projection_reads.rs"]
 mod native_projection_reads;
 
+// Frozen release source copied into actual loader inputs; no registry seeding.
+fn command_release_fixture() -> crate::import::base_release::ReleasePlan {
+    let release: crate::schema::BaseReleaseInput =
+        serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for path in ["tools/manifest/out", "manifests", "schemas"] {
+        std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    std::fs::write(
+        root.join("tools/manifest/out/ownership.json"),
+        serde_json::to_vec(&release.ownership).unwrap(),
+    )
+    .unwrap();
+    for manifest in release.manifests {
+        let app = manifest["app_id"].as_str().unwrap();
+        let file = if app == "ctox-platform" {
+            root.join("platform.json")
+        } else {
+            root.join(format!("manifests/{app}.manifest.json"))
+        };
+        std::fs::write(file, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+    // This is deliberately the pre-v4 shape, not the canonical test expectation.
+    std::fs::write(root.join("schemas/ctox-platform.collections.schema.json"),
+        r#"{"_base_release":"main@4794af03d","collections":{"business_commands":{"schema":{"version":2,"type":"object","properties":{"command_type":{"type":"string"}},"required":["command_type"]}}}}"#).unwrap();
+    crate::import::base_release::load(
+        root,
+        &root.join("platform.json"),
+        &crate::schema::BaseReleaseDefaults {
+            app_ver: "platform-7".into(),
+            client_limit: 1000,
+            byte_budget: 16 * 1024 * 1024,
+            rights_ver: 1,
+        },
+    )
+    .unwrap()
+}
+struct NoLegacyCommandMigration;
+impl crate::import::base_release::MigrationEvaluator for NoLegacyCommandMigration {
+    fn migrate(&self, _: &str, _: &Value, _: Value) -> Result<Value, StoreError> {
+        Err(StoreError::Invalid(
+            "legacy command migration must be supplied by publisher".into(),
+        ))
+    }
+}
+
 #[tokio::test]
 async fn command_release_change_retires_a_live_fence_and_old_metadata_requires_cas() {
     let (_dir, writer, readers, ingress) = commands().await;
@@ -73,32 +120,37 @@ async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
-    let schema = command_document_schema();
-    let schema_copy = schema.clone();
-    writer
-        .submit(WriteJob::new(JobOptions::default(), move |tx| {
-            let mut release: crate::schema::BaseReleaseInput =
-                serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json"))
-                    .unwrap();
-            release.schemas.insert(
-                "ctox-platform".into(),
-                json!({"collections":{"business_commands":{"schema":schema_copy}}}),
-            );
-            crate::schema::import_base_release(
-                tx,
-                &release,
-                &crate::schema::BaseReleaseDefaults {
-                    app_ver: "platform-7".into(),
-                    client_limit: 1000,
-                    byte_budget: 16 * 1024 * 1024,
-                    rights_ver: 1,
-                },
-            )?;
-            Ok(())
-        }))
-        .unwrap()
+    let plan = command_release_fixture();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
         .await
         .unwrap();
+    let schema = readers
+        .read(|tx| {
+            let active = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(active.definition.app_id, "ctox-platform");
+            assert_eq!(active.definition.schema_ver, 3);
+            assert_eq!(active.definition.app_ver, "platform-7");
+            Ok(active.definition.schema_json)
+        })
+        .await
+        .unwrap();
+    assert_eq!(schema, command_document_schema());
+    assert_eq!(
+        plan.manifests
+            .iter()
+            .find(|m| m["app_id"] == "ctox-platform")
+            .unwrap()["collections"]["business_commands"]["schema"],
+        schema
+    );
+    let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let after = readers.read(|tx| change_log::head(tx)).await.unwrap();
+    assert_eq!(
+        before.head_seq, after.head_seq,
+        "publication replay must not mint changes"
+    );
     let epoch = readers
         .read(|tx| Ok(change_log::head(tx)?.epoch))
         .await
