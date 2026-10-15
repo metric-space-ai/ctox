@@ -1259,7 +1259,11 @@ export function createKernel(opts = {}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
         const id = uuidv7();
         const write = localWrite(app, 'put', 'business_commands', id, {
-          id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}), type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}),
+          // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App als Felder am Befehlsdokument (Core-PR #848 liest sie dort)
+          ...(typeof commandOptions.on_complete === 'string' ? { on_complete: commandOptions.on_complete } : {}),
+          ...(typeof commandOptions.on_failed === 'string' ? { on_failed: commandOptions.on_failed } : {}),
+          type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
         });
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
@@ -1419,7 +1423,8 @@ export function createKernel(opts = {}) {
           if (!d) return null;
           const files = {};
           for (const [p, h] of Object.entries(d.files)) files[p] = h === null ? null : await draftContent(h);
-          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at };
+          // rev = Revision der app_drafts-Zeile im Core (base_draft_rev für ctox.coding.turn, §16.44)
+          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at, rev: mirrorGet('app_drafts', draftId(appId))?.base?.rev ?? null };
         },
         // Text oder Bytes (Binärdateien wie PNG-Icons bleiben Bytes, Hash beim publish über die Bytes)
         async write(path, content) {
@@ -2131,6 +2136,6 @@ export function createStubKernel(opts = {}) {
   // K-1c Punkt 4: coreNamespace = ein Core je Instanz für mehrere Nutzer (eigene DB je Nutzer, §16.7); der Core kennt
   // dann den Nutzer (Rolle, Rechte) und setzt Zeilen-, Collection- und Befehlsrechte durch.
   const shared = typeof opts.coreNamespace === 'string' && opts.coreNamespace;
-  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs,deviceLabel:opts.deviceLabel});
+  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs,deviceLabel:opts.deviceLabel,codingDelayMs:opts.codingDelayMs});
   return createKernel({instanceId:'stub',userId:'local',...opts,actor,transport});
 }
