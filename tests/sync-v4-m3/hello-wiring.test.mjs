@@ -12,7 +12,7 @@ function setup(overrides = {}) {
         device_proof: { ...fixture.hello.device_proof, nonce: challenge } }), ...overrides } });
   peer.recordConnectionEvent = () => {};
   peer.scheduleReconnect = () => {};
-  for (const name of ['peer-open', 'peer-state', 'error']) peer.on(name, value => events.push({ name, value }));
+  for (const name of ['peer-open', 'peer-state', 'error']) peer.on(name, event => events.push({ name, value: event.detail }));
   const channel = { label: 'rxdb', readyState: 'open', send: text => sent.push(JSON.parse(text)), close() {} };
   const connection = { remotePeerId: 'native', channel, inboundFrameGeneration: 0,
     pendingCandidates: [], peer: { close() {} }, signalStats: {} };
