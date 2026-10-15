@@ -530,14 +530,6 @@ fn ensure_index_build_safe(tx: &Transaction<'_>, table: &str, schema: &Value) ->
         return Ok(());
     }
     for fields in indexes(schema)? {
-        let index_name = format!(
-            "i_{table}_{}",
-            fields
-                .iter()
-                .map(|f| encoded(f))
-                .collect::<Vec<_>>()
-                .join("_")
-        );
         let exists = has_index(tx, table, &fields)?;
         if !exists {
             return Err(invalid("online_index_build_required: populated generation must use the bounded index runner"));
@@ -1383,6 +1375,29 @@ pub fn remove_document(
                 )?;
             }
         }
+        let mut statement = tx.prepare(
+            "SELECT CASE WHEN state='committed' THEN retired_table ELSE target_table END
+            FROM _index_builds WHERE collection=?1 AND state<>'retired'",
+        )?;
+        let retained = statement
+            .query_map([name], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>>>()?;
+        for table in retained {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+                [&table],
+                |r| r.get(0),
+            )?;
+            if exists {
+                tx.execute(
+                    &format!(
+                        "UPDATE {} SET data=NULL,deleted=1 WHERE id=?1",
+                        identifier(&table)?
+                    ),
+                    [id],
+                )?;
+            }
+        }
         tx.execute(
             "UPDATE _revs SET body=NULL WHERE collection=?1 AND id=?2",
             params![name, id],
@@ -1444,6 +1459,10 @@ fn retain_privacy(tx: &Transaction<'_>, source: &str, retained: &str) -> Result<
             ""
         };
         tx.execute_batch(&format!(
+            "DROP TRIGGER IF EXISTS {}",
+            identifier(&format!("v4_privacy_{retained}_{event}"))?
+        ))?;
+        tx.execute_batch(&format!(
             "CREATE TRIGGER {} AFTER {event} ON {}{condition} BEGIN
             UPDATE {} SET data=NULL,deleted=1 WHERE id={row}.id; END",
             identifier(&format!("v4_privacy_{retained}_{event}"))?,
@@ -1453,6 +1472,28 @@ fn retain_privacy(tx: &Transaction<'_>, source: &str, retained: &str) -> Result<
     }
     Ok(())
 }
+
+fn refresh_retained_privacy(tx: &Transaction<'_>, name: &str, source: &str) -> Result<()> {
+    let mut statement = tx.prepare(
+        "SELECT CASE WHEN state='committed' THEN retired_table ELSE target_table END
+        FROM _index_builds WHERE collection=?1 AND state IN('committed','aborted')",
+    )?;
+    let tables = statement
+        .query_map([name], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    for table in tables {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+            [&table],
+            |r| r.get(0),
+        )?;
+        if exists {
+            retain_privacy(tx, source, &table)?;
+        }
+    }
+    Ok(())
+}
+
 fn prepare_online_index(
     tx: &Transaction<'_>,
     lock: &PublishLock,
@@ -1604,11 +1645,11 @@ fn finish_online_index(
         tx,
         &TableBinding::generic(name, gen, &source, def.schema_ver, &def.app_ver),
     )?;
-    retain_privacy(tx, &source, &retired)?;
     tx.execute(
         "UPDATE _index_builds SET state='committed' WHERE publication_id=?1 AND collection=?2",
         params![lock.operation_id, name],
     )?;
+    refresh_retained_privacy(tx, name, &source)?;
     Ok(())
 }
 fn abort_online_indexes(tx: &Transaction<'_>, lock: &PublishLock) -> Result<()> {

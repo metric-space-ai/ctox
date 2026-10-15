@@ -1,3 +1,59 @@
+#[test]
+fn schema_archive_preserves_old_value_but_explicit_remove_erases_it_and_denies_deleted_revision_writes(
+) {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let old = definition("items");
+    create_collection(&tx, &old).unwrap();
+    put(&tx, "c_items", "one", "1");
+    reserve_publish(&tx, &lock()).unwrap();
+    prepare_migration(&tx, &lock(), &next(&old)).unwrap();
+    let page = change_log::read_page(&tx, "items", 1, 0, 500).unwrap();
+    apply_migration_page(
+        &tx,
+        &lock(),
+        "items",
+        0,
+        &page,
+        &[MigrationOutput::Archive {
+            reason: "not convertible".into(),
+        }],
+        100,
+    )
+    .unwrap();
+    assert_eq!(
+        count(&tx, "_archive"),
+        1,
+        "E4 archival survives target tombstone creation"
+    );
+    remove_document(&tx, "items", 1, "one", "1", "removed").unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert!(dual_write(
+        &tx,
+        &lock(),
+        "items",
+        &SourceWrite {
+            id: "one".into(),
+            base_rev: Some("removed".into()),
+            rev: "resurrect".into(),
+            body: json!({"value":"new"}),
+            deleted: false
+        },
+        &MigrationOutput::Upsert {
+            rev: "new".into(),
+            body: json!({"value":42})
+        },
+        101
+    )
+    .is_err());
+    assert!(tx
+        .query_row(
+            "SELECT data IS NULL FROM c_items__g2 WHERE id='one'",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+}
 fn with_online_index() -> CollectionDefinition {
     let mut new = definition("items");
     new.schema_ver = 2;
@@ -98,6 +154,41 @@ fn online_index_resumes_and_mirrors_concurrent_writes_without_changing_generatio
         )
         .unwrap();
     assert!(erased);
+    // A subsequent physical swap must reattach all older retained-copy privacy
+    // triggers to the new active table, even if its immediate predecessor is GC'd.
+    let second = PublishLock {
+        app_id: "app".into(),
+        base_app_ver: "2".into(),
+        target_app_ver: "3".into(),
+        operation_id: "second-index".into(),
+    };
+    reserve_publish(&tx, &second).unwrap();
+    let mut v3 = with_online_index();
+    v3.schema_ver = 3;
+    v3.app_ver = "3".into();
+    v3.schema_json["indexes"] = json!(["value", "other", "third"]);
+    update_compatible(&tx, &second, &v3).unwrap();
+    assert!(
+        build_online_index_page(&tx, &second, "items", 100)
+            .unwrap()
+            .complete
+    );
+    activate_publication(&tx, &second, 101).unwrap();
+    assert!(purge_online_index_page(&tx, &second.operation_id, "items", 500).unwrap());
+    tx.execute("DELETE FROM c_items WHERE id='0004'", [])
+        .unwrap();
+    let erased: bool = tx
+        .query_row(
+            &format!("SELECT data IS NULL AND deleted=1 FROM {retired} WHERE id='0004'"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        erased,
+        "older copy remains protected after a later copy is retired"
+    );
+
     tx.commit().unwrap();
 }
 
@@ -117,7 +208,7 @@ fn aborting_an_online_index_preserves_active_data_and_uses_bounded_private_copy_
         .unwrap();
     abort_publication(&tx, &lock(), 100).unwrap();
     assert_eq!(count(&tx, "c_items"), 7);
-    remove_document(&tx, "items", 1, "0", "1", "2").unwrap();
+    tx.execute("DELETE FROM c_items WHERE id='0'", []).unwrap();
     assert!(tx
         .query_row(
             &format!("SELECT data IS NULL FROM {target} WHERE id='0'"),
