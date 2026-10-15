@@ -1,9 +1,7 @@
 //! Native cron/calendar persistence with an app-independent command envelope.
 //! The daemon consumes `dispatch_emitted` before considering an emitted cron
 //! message for model execution. This hook does not start a private polling loop.
-use super::{
-    task::{self, decode, invalid, native, AppCommand, Backend},
-};
+use super::task::{self, decode, invalid, native, AppCommand, Backend};
 use crate::app_capabilities::{CapCallContext, CtoxError, ErrorCode};
 use crate::mission::{channels, schedule as engine};
 use rusqlite::OptionalExtension;

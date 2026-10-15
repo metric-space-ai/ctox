@@ -1,5 +1,5 @@
 //! Typed route catalog; native implementation lives in cap4.
-use super::{NativeRoute, task::route};
+use super::{task::route, NativeRoute};
 pub(super) const ROUTES: &[NativeRoute] = &[
     route(
         "schedule",

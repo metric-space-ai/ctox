@@ -6,7 +6,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 
-
 #[derive(Clone)]
 struct Predicate {
     message_key: String,

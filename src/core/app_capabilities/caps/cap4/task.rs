@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component, Path};
 
-
 pub(super) fn invalid() -> CtoxError {
     CtoxError::invalid("$.args")
 }

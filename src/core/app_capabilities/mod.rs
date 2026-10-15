@@ -4,9 +4,9 @@
 pub mod cap2;
 #[path = "caps/cap3.rs"]
 pub mod cap3;
-pub mod caps;
 #[path = "caps/cap4.rs"]
 pub mod cap4;
+pub mod caps;
 pub mod native;
 pub mod policy;
 pub mod protocol;
