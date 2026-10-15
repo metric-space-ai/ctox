@@ -43,6 +43,21 @@ pub(crate) struct Platform {
 }
 
 impl Platform {
+    /// The daemon composition root passes its already registered sync database.
+    /// This adapter clones its writer; it never opens a file or registers a
+    /// second owner. Key loading is complete before the bounded signer arrives.
+    pub(crate) fn from_database(
+        database: &crate::service::store_runtime::Database,
+        signer: Signer,
+    ) -> Result<Self, StoreError> {
+        if database.readers.generation() != database.writer.generation().0 {
+            return Err(StoreError::Invalid(
+                "app platform owner generation differs".into(),
+            ));
+        }
+        Ok(Self::new(database.writer.clone(), signer))
+    }
+
     pub(crate) fn new(writer: WriterHandle, signer: Signer) -> Self {
         Self {
             writer,

@@ -891,6 +891,12 @@ fn accept_rxdb_business_command_with_runtimes(
                 policy_actor_from_session(&session),
                 app_platform::CommandDocument {
                     id: command_id.clone(),
+                    app_id: document
+                        .get("app_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .context("platform command app_id is required")?
+                        .to_owned(),
                     module: command.module.clone(),
                     command_type: command.command_type.clone(),
                     payload: command.payload.clone(),

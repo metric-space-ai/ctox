@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub(crate) struct CommandDocument {
     pub id: String,
     /// The calling app comes from the command document, not payload metadata.
+    pub app_id: String,
     pub module: String,
     pub command_type: String,
     pub payload: Value,
@@ -167,7 +168,7 @@ fn record(
         "business_commands",
         &command.id,
         &json!({
-            "id":command.id,"command_id":command.id,"module":command.module,"command_type":command.command_type,
+            "id":command.id,"command_id":command.id,"app_id":command.app_id,"module":command.module,"command_type":command.command_type,
             "payload":command.payload,"client_context":{"actor":{"id":actor.id}},
             "status":if outcome["status"] == "preparing" {"running"} else if outcome["status"] == "rejected" {"failed"} else {"completed"},
             "result":outcome,"updated_at_ms":now
@@ -186,11 +187,16 @@ pub(super) fn execute(
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
-    if !handles(&command.command_type) || command.id.is_empty() || command.module.is_empty() {
+    if !handles(&command.command_type)
+        || command.id.is_empty()
+        || command.app_id.is_empty()
+        || command.module.is_empty()
+    {
         return Err(invalid("invalid platform command document"));
     }
     if let Some(saved) = get(tx, "business_commands", &command.id)? {
         if saved["payload"] != command.payload
+            || saved["app_id"] != command.app_id
             || saved["module"] != command.module
             || saved["command_type"] != command.command_type
             || saved.pointer("/client_context/actor/id") != Some(&json!(actor.id))
@@ -540,7 +546,7 @@ pub(super) fn execute(
         "discard_local":command.command_type == "ctox.app.update" && request.discard_local
             && current.as_ref().is_some_and(|a| a["locally_modified"] == true),
         "owner_id":current.as_ref().and_then(|a| a.pointer("/provenance/owner_id")).cloned().unwrap_or(json!(actor.id)),
-        "calling_app":command.module});
+        "calling_app":command.app_id});
     record(tx, actor, command, pending, now)?;
     // A populated compatible collection may require the bounded online-index
     // runner. Its completion resumes through `Platform::complete`.

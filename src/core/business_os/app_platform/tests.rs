@@ -8,10 +8,9 @@ use super::{
 };
 use ctox_store::{
     change_log,
-    registry::Registry,
     schema::{self, CollectionDefinition, MigrationOutput, PublishLock},
     types::{DbId, JobOptions, WriteJob},
-    writer::{WriterHandle, WriterOptions},
+    writer::WriterHandle,
 };
 use ring::{
     rand::SystemRandom,
@@ -22,6 +21,56 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 
+use ctox_store::change_log::subscription::{
+    protocol::{InstanceSigner, StreamKind},
+    ReadAuthority, Subscription, SubscriptionKey,
+};
+
+struct StreamKey(Arc<Ed25519KeyPair>);
+impl InstanceSigner for StreamKey {
+    fn instance_id(&self) -> &str {
+        "isolated-core"
+    }
+    fn key_id(&self) -> &str {
+        "isolated-instance-key"
+    }
+    fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        Ok(self.0.sign(bytes).as_ref().to_vec())
+    }
+}
+
+// The existing stream runs over the real snapshot reader and writer's retained
+// commit wake. Its synthetic installer is authorized through native policy.
+struct InstallerReadAuthority;
+impl ReadAuthority for InstallerReadAuthority {
+    fn authorize(
+        &self,
+        _: &rusqlite::Transaction<'_>,
+        key: &SubscriptionKey,
+    ) -> rusqlite::Result<()> {
+        use super::super::super::policy::{self, BusinessOsPermission, BusinessOsScope};
+        if key.participant != "owner"
+            || key.collection != "business_apps"
+            || !policy::evaluate(
+                &admin(),
+                BusinessOsPermission::AppsInstall,
+                &BusinessOsScope::module("ctox-platform", false),
+            )
+            .allowed
+        {
+            return Err(rusqlite::Error::InvalidParameterName("forbidden".into()));
+        }
+        Ok(())
+    }
+    fn project(
+        &self,
+        _: &rusqlite::Transaction<'_>,
+        _: &SubscriptionKey,
+        doc: &change_log::ChangeDocument,
+    ) -> rusqlite::Result<Option<Value>> {
+        Ok(doc.body.clone())
+    }
+}
 fn admin() -> BusinessOsActor {
     BusinessOsActor::new(Some("owner".into()), "admin")
 }
@@ -31,41 +80,36 @@ fn manifest(version: u64) -> Value {
             "schema":{"version":version,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"label":{"type":"string"}},"required":["id"]}}}})
 }
 struct Fixture {
-    _directory: tempfile::TempDir,
+    stores: crate::service::store_runtime::DaemonStores,
+    readers: ctox_store::read_pool::ReadPool,
     writer: WriterHandle,
     platform: Platform,
     public_key: Vec<u8>,
+    stream_key: StreamKey,
     // Opened before any app installation: no reconnect/reset/rebuild permitted.
     reader: Connection,
+    _directory: tempfile::TempDir,
 }
 impl Fixture {
     async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("store.sqlite");
-        let writer = Registry
-            .open(
-                DbId::new(&path).unwrap(),
-                WriterOptions {
-                    head_seq: Some(Arc::new(|c| {
-                        Ok(c.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))?)
-                    })),
-                    configure: Some(Arc::new(|c| {
-                        ctox_store::config::ConnectionConfig::default().apply_writer(c)?;
-                        Ok(())
-                    })),
-                },
-            )
-            .unwrap();
-        writer.ready().await.unwrap();
-        writer.submit(WriteJob::new(JobOptions::default(), |tx| {
-            schema::initialize(tx)?;
+        let mut stores = crate::service::store_runtime::DaemonStores::start(
+            ctox_store::ipc::StoreEndpoint::UnixSocket {
+                path: directory.path().join("ipc/store.sock"),
+            },
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let database = stores.register("sync", DbId::new(&path).unwrap(), true, Arc::new(|tx| {
             for name in ["business_commands","business_apps","business_app_versions","app_catalog","app_drafts","app_activations"] {
                 schema::create_collection(tx, &CollectionDefinition {name:name.into(),app_id:"ctox-platform".into(),schema_ver:1,
                     schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"}},"required":["id"]}),
                     class:"full".into(),client_limit:0,byte_budget:1_048_576,rights_ver:1,app_ver:"platform-1".into()})?;
             }
             Ok(())
-        })).unwrap().await.unwrap();
+        })).await.unwrap();
+        let writer = database.writer.clone();
         let key = Arc::new(
             Ed25519KeyPair::from_pkcs8(
                 Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
@@ -75,8 +119,9 @@ impl Fixture {
             .unwrap(),
         );
         let public_key = key.public_key().as_ref().to_vec();
-        let platform = Platform::new(
-            writer.clone(),
+        let stream_key = StreamKey(key.clone());
+        let platform = Platform::from_database(
+            &database,
             Arc::new(move |bytes| {
                 Ok(key
                     .sign(bytes)
@@ -86,15 +131,19 @@ impl Fixture {
                     .collect())
             }),
         );
+        let platform = platform.unwrap();
         let reader = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         ctox_store::config::ConnectionConfig::default()
             .apply_reader(&reader)
             .unwrap();
         Self {
+            stores,
+            readers: database.readers,
             _directory: directory,
             writer,
             platform,
             public_key,
+            stream_key,
             reader,
         }
     }
@@ -144,7 +193,8 @@ impl Fixture {
             .extend(extra.as_object().unwrap().clone());
         CommandDocument {
             id: id.into(),
-            module: "app-store".into(),
+            app_id: "app-store".into(),
+            module: "ctox-platform".into(),
             command_type: format!("ctox.app.{kind}"),
             payload,
         }
@@ -206,7 +256,7 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
     f.seed(
         "business_commands",
         "publish",
-        json!({"id":"publish","module":admitted.module,"command_type":admitted.command_type,
+        json!({"id":"publish","app_id":admitted.app_id,"module":admitted.module,"command_type":admitted.command_type,
         "payload":admitted.payload,"client_context":{"actor":{"id":"owner"}},"status":"pending"}),
     )
     .await;
@@ -221,6 +271,10 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
     assert_eq!(result["status"], "accepted");
     let app = f.read("business_apps", "unknown-at-boot").unwrap();
     assert_eq!(app["active_ver"], result["app_ver"]);
+    assert_eq!(
+        app["provenance"]["calling_app"], "app-store",
+        "sender is document app_id, never module or payload.app_id"
+    );
     assert_eq!(app["locally_modified"], true);
     assert_eq!(
         app["visible_roles"],
@@ -275,12 +329,41 @@ async fn publish_signed_draft_without_fabricating_client_activation() {
         result,
         "replay must not republish"
     );
+    let mut rebound = admitted;
+    rebound.app_id = "another-app".into();
+    assert!(
+        f.platform
+            .execute(admin(), rebound, 1000)
+            .unwrap()
+            .await
+            .is_err(),
+        "a command receipt cannot be rebound to another document app_id"
+    );
 }
 
 #[tokio::test]
 async fn update_hot_plugs_unknown_app_on_existing_connection() {
-    let f = Fixture::new().await;
+    let mut f = Fixture::new().await;
     assert!(f.read("business_apps", "unknown-at-boot").is_none());
+    let readers = f.readers.clone();
+    let mut stream = Subscription::new(
+        readers.clone(),
+        &f.writer,
+        SubscriptionKey {
+            participant: "owner".into(),
+            collection: "business_apps".into(),
+            scope_hash: "installer-apps".into(),
+            gen: 1,
+        },
+        None,
+    )
+    .unwrap();
+    let initial = stream
+        .next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 1)
+        .await
+        .unwrap();
+    assert_eq!(initial.kind, StreamKind::Page);
+    assert!(initial.docs.is_empty());
     let mut feed = f.writer.subscribe_commits();
     feed.latest();
     let installed = f.install().await;
@@ -289,6 +372,20 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
         .unwrap()
         .unwrap();
     assert!(notification.head_seq > 0);
+    let live = tokio::time::timeout(
+        Duration::from_secs(2),
+        stream.next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 2),
+    )
+    .await
+    .expect("existing subscription must receive the unknown app")
+    .unwrap();
+    assert_eq!(live.kind, StreamKind::Live);
+    assert!(live.seq_to > initial.seq_to);
+    assert!(live.docs.iter().any(|doc| doc.id == "unknown-at-boot"
+        && doc
+            .body
+            .as_ref()
+            .is_some_and(|body| body["active_ver"] == installed)));
     assert_eq!(
         f.read("business_apps", "unknown-at-boot").unwrap()["active_ver"],
         installed
@@ -347,6 +444,21 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
         .unwrap();
     assert!(page.docs.iter().any(|d| d.id == "unknown-at-boot"
         && d.body.as_ref().unwrap()["title"] == "Updated while connected"));
+    let updated = tokio::time::timeout(
+        Duration::from_secs(2),
+        stream.next_page(100, Arc::new(InstallerReadAuthority), &f.stream_key, || 3),
+    )
+    .await
+    .expect("same subscription must adopt the update")
+    .unwrap();
+    assert_eq!(updated.kind, StreamKind::Live);
+    assert!(updated.seq_to > live.seq_to);
+    assert!(updated.docs.iter().any(|doc| doc.id == "unknown-at-boot"
+        && doc
+            .body
+            .as_ref()
+            .is_some_and(|body| body["title"] == "Updated while connected")));
+    f.stores.shutdown().await.unwrap();
 }
 
 #[tokio::test]
