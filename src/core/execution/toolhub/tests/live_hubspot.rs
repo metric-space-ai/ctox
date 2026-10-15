@@ -10,6 +10,18 @@ const CONTACT: &str = "890251478207";
 #[test]
 #[ignore]
 fn live_all_read_actions() {
+    scenario();
+}
+
+/// Same scenario through the hot-plug spec `specs/hubspot.json` (hybrid: 3 actions stay Rust).
+#[test]
+#[ignore]
+fn live_all_read_actions_via_spec() {
+    support::use_spec(include_str!("../specs/hubspot.json"));
+    scenario();
+}
+
+fn scenario() {
     if std::env::var("CTOX_TOOLHUB_LIVE_HUBSPOT_TOKEN").is_err() { return; }
     let mut fails = vec![];
     let mut run = |tool: &str, args: Value| -> Value {

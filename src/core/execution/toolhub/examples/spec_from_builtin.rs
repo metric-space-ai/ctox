@@ -384,7 +384,14 @@ fn infer_response(a: &dyn ToolkitAdapter, tool: &str, keys: &[String]) -> Value 
                     }
                     let c = container.unwrap_or_default();
                     containers.push(c.clone());
-                    json!({"pointer": format!("/{c}"), "each": each})
+                    // Every probed key came back under its own name: the items are copied
+                    // whole, not projected.
+                    let identity = each.iter().all(|(k, v)| v.as_str() == Some(&format!("/{k}")));
+                    if identity && each.len() * 5 >= keys.len() * 4 {
+                        json!({"pointer": format!("/{c}")})
+                    } else {
+                        json!({"pointer": format!("/{c}"), "each": each})
+                    }
                 }
                 Some(_) => {
                     // whole items copied: find the container whose list equals this one

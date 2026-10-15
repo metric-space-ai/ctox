@@ -700,3 +700,56 @@ fn gitlab_format_features() {
     let resp = HttpResponse { status: 200, session_id: None, body: br#"[{"id":1},{"id":2}]"#.to_vec() };
     assert_eq!(a.parse_response("GITLAB_LIST_LABELS", &resp).unwrap(), json!({"items": [{"id": 1}, {"id": 2}], "count": 2}));
 }
+
+const HUBSPOT: &str = include_str!("../specs/hubspot.json");
+
+#[test]
+fn hubspot_spec_matches_compiled_adapter() {
+    let (n, d) = differential("hubspot", HUBSPOT);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+}
+
+/// Hybrid delegation, array templates, `$if`, `$merge`(+`$merge_wins`),
+/// `stringify_values`, `prepend`, path encodings `digits` / `form`.
+#[test]
+fn hubspot_format_features() {
+    let a = SpecAdapter::from_json(HUBSPOT).unwrap();
+    let rust = builtin("hubspot");
+    let body = |r: HttpRequest| serde_json::from_slice::<Value>(r.body.as_ref().unwrap()).unwrap();
+    // hybrid: listed tools exist in the spec's tool list and are served by the compiled adapter
+    assert_eq!(a.rust_actions().len(), 3);
+    assert_eq!(a.spec().tools.len(), rust.spec().tools.len());
+    let note = json!({"note_body": "x", "object_type": "contact", "object_id": "5", "timestamp": "2026-10-15T10:00:00Z"});
+    assert_eq!(body(a.build_request("HUBSPOT_CREATE_NOTE", &note).unwrap()), body(rust.build_request("HUBSPOT_CREATE_NOTE", &note).unwrap()));
+    assert!(a.risk("HUBSPOT_CREATE_NOTE").is_some_and(|r| r != ctox_toolhub::spec::validate::Risk::Read));
+    // array template + `$if`
+    let b = body(a.build_request("HUBSPOT_FIND_CONTACT", &json!({"value": "a@b.c"})).unwrap());
+    assert_eq!(b["filterGroups"][0]["filters"].as_array().unwrap().len(), 1);
+    assert_eq!(b["properties"][0], json!("firstname"), "prepend keeps the defaults first");
+    let b = body(a.build_request("HUBSPOT_FIND_CONTACT", &json!({"value": "a@b.c", "property_name_2": "lastname", "value_2": "X", "properties": ["email", "custom"]})).unwrap());
+    assert_eq!(b["filterGroups"][0]["filters"][1], json!({"propertyName": "lastname", "operator": "EQ", "value": "X"}));
+    let props = b["properties"].as_array().unwrap();
+    assert_eq!((props.iter().filter(|p| *p == "email").count(), props.last().unwrap().clone()), (1, json!("custom")));
+    let b = body(a.build_request("HUBSPOT_SEARCH_OBJECTS", &json!({"object_type": "contacts"})).unwrap());
+    assert!(b.get("sorts").is_none(), "array of only dropped items is omitted");
+    // `$merge` + stringify: explicit field wins (upsert) vs. properties win (deal)
+    let b = body(a.build_request("HUBSPOT_UPSERT_CONTACT", &json!({"email": "a@b.c", "properties": {"email": "other", "tags": ["x", "y"], "n": 3, "z": null}})).unwrap());
+    assert_eq!(b["inputs"][0]["properties"], json!({"email": "a@b.c", "tags": "x;y", "n": "3"}));
+    let b = body(a.build_request("HUBSPOT_CREATE_DEAL", &json!({"dealname": "A", "properties": {"dealname": "B"}})).unwrap());
+    assert_eq!(b["properties"]["dealname"], json!("B"));
+    // digits / form path encodings
+    assert!(a.build_request("HUBSPOT_GET_OWNER_BY_ID", &json!({"owner_id": "12a"})).is_err());
+    assert!(a.build_request("HUBSPOT_UNSUBSCRIBE_EMAIL", &json!({"email": "a+b@c.d"})).unwrap().url.ends_with("/a%2Bb%40c.d"));
+    assert!(a.build_request("HUBSPOT_UNSUBSCRIBE_EMAIL", &json!({"email": "a/b"})).is_err());
+}
+
+#[test]
+fn hybrid_spec_is_validated() {
+    let mut doc: Value = serde_json::from_str(HUBSPOT).unwrap();
+    doc["hybrid"]["rust_actions"] = json!(["HUBSPOT_NOPE"]);
+    assert!(SpecAdapter::from_json(&doc.to_string()).unwrap_err().to_string().contains("no tool"));
+    doc["hybrid"]["rust_actions"] = json!(["HUBSPOT_GET_CONTACT"]);
+    assert!(SpecAdapter::from_json(&doc.to_string()).unwrap_err().to_string().contains("both"));
+    doc["hybrid"] = json!({"rust_actions": ["HUBSPOT_CREATE_NOTE"]});
+    assert!(SpecAdapter::from_json(&doc.to_string()).is_err(), "reason is required");
+}

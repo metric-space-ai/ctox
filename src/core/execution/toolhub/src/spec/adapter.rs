@@ -12,6 +12,8 @@ use crate::toolkits::ToolkitAdapter;
 pub struct SpecAdapter {
     c: Compiled,
     sha256: String,
+    /// Compiled adapter serving `hybrid.rust_actions`.
+    rust: Option<Box<dyn ToolkitAdapter>>,
 }
 
 impl std::fmt::Debug for SpecAdapter {
@@ -24,7 +26,20 @@ impl SpecAdapter {
     /// Validate and compile a spec document (JSON text).
     pub fn from_json(text: &str) -> Result<Self> {
         let doc: Value = serde_json::from_str(text).map_err(|e| anyhow!("spec is not valid JSON: {e}"))?;
-        Ok(Self { c: compile(&doc)?, sha256: sha256_hex(text.as_bytes()) })
+        let mut c = compile(&doc)?;
+        let mut rust = None;
+        if !c.rust_actions.is_empty() {
+            let r = crate::toolkits::builtin().into_iter().find(|a| a.spec().slug == c.toolkit.slug).ok_or_else(|| anyhow!("spec.hybrid: no compiled `{}` adapter in this build", c.toolkit.slug))?;
+            for t in &c.rust_actions {
+                if c.actions.iter().any(|a| &a.slug == t) {
+                    bail!("spec.hybrid: `{t}` is both a spec action and a Rust action");
+                }
+                let tool = r.spec().tools.iter().find(|x| &x.slug == t).ok_or_else(|| anyhow!("spec.hybrid: compiled adapter has no tool `{t}`"))?;
+                c.toolkit.tools.push(tool.clone());
+            }
+            rust = Some(r);
+        }
+        Ok(Self { c, sha256: sha256_hex(text.as_bytes()), rust })
     }
 
     pub fn version(&self) -> &str {
@@ -37,7 +52,18 @@ impl SpecAdapter {
         self.c.replaces_builtin
     }
     pub fn risk(&self, tool: &str) -> Option<Risk> {
+        if let Some(t) = self.rust_tool(tool) {
+            return Some(if t { Risk::Write } else { Risk::Read });
+        }
         self.action(tool).ok().map(|a| a.risk)
+    }
+    /// Actions this spec delegates to the compiled adapter.
+    pub fn rust_actions(&self) -> &[String] {
+        &self.c.rust_actions
+    }
+    /// `Some(mutating)` when `tool` is a hybrid Rust action.
+    fn rust_tool(&self, tool: &str) -> Option<bool> {
+        self.c.rust_actions.iter().any(|t| t == tool).then(|| self.c.toolkit.tools.iter().find(|t| t.slug == tool).is_some_and(|t| t.mutating))
     }
 
     fn action(&self, tool: &str) -> Result<&Action> {
@@ -190,10 +216,33 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
         (Kind::Object, Some(Value::Object(m))) if a.blank_to_null => Some(Value::Object(
             m.iter().map(|(k, v)| (k.clone(), if v.as_str() == Some("") { Value::Null } else { v.clone() })).collect(),
         )),
+        (Kind::Object, Some(Value::Object(m))) if a.stringify_values.is_some() => {
+            let sep = a.stringify_values.as_deref().unwrap_or_default();
+            let str_of = |x: &Value| match x {
+                Value::String(s) => s.clone(),
+                o => o.to_string(),
+            };
+            Some(Value::Object(m.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| {
+                let s = match v {
+                    Value::Array(items) => items.iter().map(str_of).collect::<Vec<_>>().join(sep),
+                    o => str_of(o),
+                };
+                (k.clone(), Value::String(s))
+            }).collect()))
+        }
         (Kind::Object, Some(x)) => x.is_object().then(|| x.clone()),
         (Kind::Raw, Some(Value::Object(m))) if a.wrap_object => Some(Value::Array(vec![Value::Object(m.clone())])),
         (Kind::Raw, Some(x)) => Some(x.clone()),
     };
+    if !a.prepend.is_empty() && a.kind == Kind::StringList {
+        let mut all: Vec<Value> = a.prepend.iter().map(|p| json!(p)).collect();
+        for x in out.as_ref().and_then(Value::as_array).into_iter().flatten() {
+            if !all.contains(x) {
+                all.push(x.clone());
+            }
+        }
+        out = Some(Value::Array(all));
+    }
     if let (Some(key), Some(Value::Array(items))) = (&a.require_key, &out) {
         let kept: Vec<Value> = items.iter().filter(|it| it.get(key).is_some_and(Value::is_string)).cloned().collect();
         out = (!kept.is_empty()).then_some(Value::Array(kept));
@@ -300,12 +349,38 @@ fn eval_tmpl(t: &Tmpl, args: &Value) -> Result<Option<Value>> {
                         }
                     }
                     Entry::OmitEmpty => {}
+                    Entry::If(names) => {
+                        if !names.iter().all(|n| has_value(args, n)) {
+                            return Ok(None);
+                        }
+                    }
+                    Entry::Merge(..) => {}
+                }
+            }
+            for e in entries {
+                if let Entry::Merge(v, wins) = e {
+                    if let Some(Value::Object(extra)) = eval(v, args)? {
+                        for (k, x) in extra {
+                            if *wins || !m.contains_key(&k) {
+                                m.insert(k, x);
+                            }
+                        }
+                    }
                 }
             }
             if m.is_empty() && entries.contains(&Entry::OmitEmpty) {
                 return Ok(None);
             }
             Ok(Some(Value::Object(m)))
+        }
+        Tmpl::Arr(items) => {
+            let mut out = Vec::new();
+            for t in items {
+                if let Some(v) = eval_tmpl(t, args)? {
+                    out.push(v);
+                }
+            }
+            Ok((!out.is_empty()).then_some(Value::Array(out)))
         }
     }
 }
@@ -399,6 +474,23 @@ fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
             let v = v.strip_prefix(p.as_str()).unwrap_or(v);
             crate::toolkits::path_segment(&json!({ "v": v }), "v").map(str::to_string).map_err(|_| anyhow!("invalid argument `{name}`"))
         }
+        PathEnc::Digits => {
+            let v = match args.get(name) {
+                Some(Value::Number(n)) => n.to_string(),
+                x => x.and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string(),
+            };
+            if v.is_empty() || v.len() > 40 || !v.bytes().all(|b| b.is_ascii_digit()) {
+                bail!("invalid argument `{name}`");
+            }
+            Ok(v)
+        }
+        PathEnc::Form => {
+            let v = args.get(name).and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
+            if v.len() > 200 || v.contains(['/', '?', '#']) {
+                bail!("invalid argument `{name}`");
+            }
+            Ok(url::form_urlencoded::byte_serialize(v.as_bytes()).collect())
+        }
         PathEnc::Name => {
             let v = args.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
             if v.len() > 200 || v.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '%')) {
@@ -437,6 +529,9 @@ impl ToolkitAdapter for SpecAdapter {
     }
 
     fn build_request(&self, tool: &str, args: &Value) -> Result<HttpRequest> {
+        if let (Some(r), Some(_)) = (&self.rust, self.rust_tool(tool)) {
+            return r.build_request(tool, args);
+        }
         let a = self.action(tool)?;
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };
@@ -525,6 +620,9 @@ impl ToolkitAdapter for SpecAdapter {
     }
 
     fn parse_response(&self, tool: &str, response: &HttpResponse) -> Result<Value> {
+        if let (Some(r), Some(_)) = (&self.rust, self.rust_tool(tool)) {
+            return r.parse_response(tool, response);
+        }
         let a = self.action(tool)?;
         let body = response.json().or_else(|_| {
             let text: String = String::from_utf8_lossy(&response.body).chars().take(2000).collect();

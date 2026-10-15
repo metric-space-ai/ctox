@@ -15,6 +15,7 @@
     "description": {"$ref": "#/$defs/localized"},
     "docs": {"type": "array", "items": {"type": "string", "format": "uri"}},
     "notes": {"type": "string"},
+    "hybrid": {"type": "object", "additionalProperties": false, "required": ["rust_actions", "reason"], "description": "Actions served by the compiled adapter of the same slug (runtime logic the format deliberately does not cover).", "properties": {"rust_actions": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "reason": {"type": "string"}}},
     "api_base": {"type": "string", "pattern": "^https://"},
     "api_base_template": {"type": "string", "pattern": "^https://", "description": "Per-connection base URL; placeholders {key} refer to connection_fields and must be single DNS labels."},
     "allowed_hosts": {"type": "array", "minItems": 1, "items": {"type": "string", "description": "DNS name or *.domain; no IP literals, no local/internal names."}},
@@ -57,7 +58,7 @@
             "one_of": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"},
             "join": {"type": "string"}, "wrap_array": {"type": "boolean"},
             "uri_prefix": {"type": "string", "pattern": "^https://.*/$"},
-            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"}, "items_integer": {"type": "boolean"}, "segment": {"type": "boolean"}, "strip_prefix": {"type": "string"},
+            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"}, "items_integer": {"type": "boolean"}, "segment": {"type": "boolean"}, "strip_prefix": {"type": "string"}, "stringify_values": {"type": "string"}, "prepend": {"type": "array", "items": {"type": "string"}},
             "wrap_object": {"type": "boolean"}, "blank_to_null": {"type": "boolean"}, "require_key": {"type": "string"}
           }
         },
@@ -78,8 +79,8 @@
       ]
     },
     "template": {
-      "description": "A value, or an object whose entries are templates. The special key $switch_format routes one string arg by its shape; \"$omit_empty\": true drops the object when no field resolved.",
-      "oneOf": [{"$ref": "#/$defs/value"}, {"type": "object", "additionalProperties": {"$ref": "#/$defs/template"}}]
+      "description": "A value, an array of templates (unresolved items dropped, empty array omitted), or an object whose entries are templates. Special object keys: $switch_format routes one string arg by its shape; \"$omit_empty\": true drops the object when no field resolved; \"$if\": [args] drops it unless every arg is set; \"$merge\": <value> merges an object arg in (explicit fields win unless \"$merge_wins\": true).",
+      "oneOf": [{"$ref": "#/$defs/value"}, {"type": "array", "items": {"$ref": "#/$defs/template"}}, {"type": "object", "additionalProperties": {"$ref": "#/$defs/template"}}]
     },
     "response": {
       "type": "object", "required": ["mode"],
@@ -107,7 +108,7 @@
             "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
             "path": {"type": "string", "pattern": "^/"},
             "paths": {"type": "array", "description": "Path alternatives: first entry whose `when` arg is set wins; the last may omit `when`.", "items": {"type": "object", "required": ["path"], "properties": {"when": {"type": "string"}, "path": {"type": "string"}}}},
-            "path_encoding": {"type": "object", "additionalProperties": {"oneOf": [{"enum": ["segment", "component", "uri_tail", "namespaced", "name"]}, {"type": "object", "additionalProperties": false, "properties": {"strip_prefix": {"type": "string"}, "namespaced": {"type": "string"}}}]}},
+            "path_encoding": {"type": "object", "additionalProperties": {"oneOf": [{"enum": ["segment", "component", "uri_tail", "namespaced", "name", "digits", "form"]}, {"type": "object", "additionalProperties": false, "properties": {"strip_prefix": {"type": "string"}, "namespaced": {"type": "string"}}}]}},
             "query": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
             "headers": {"type": "object", "additionalProperties": {"type": "string"}},
             "body": {

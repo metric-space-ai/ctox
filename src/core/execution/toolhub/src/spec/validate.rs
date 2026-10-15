@@ -131,6 +131,10 @@ pub struct ArgRef {
     pub strip_prefix: Option<String>,
     /// Validate the value (or each list item) with the path-segment charset.
     pub segment: bool,
+    /// Object values become strings: arrays joined with this separator, numbers/bools via to_string, nulls dropped.
+    pub stringify_values: Option<String>,
+    /// Fixed items placed before the given list items (duplicates removed).
+    pub prepend: Vec<String>,
     /// List args: keep only object items that have a string value at this key.
     pub require_key: Option<String>,
 }
@@ -139,6 +143,8 @@ pub struct ArgRef {
 pub enum Tmpl {
     Val(Val),
     Obj(Vec<Entry>),
+    /// JSON array of templates; unresolved items are dropped, an empty array is omitted.
+    Arr(Vec<Tmpl>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -148,10 +154,19 @@ pub enum Entry {
     SwitchFormat { arg: String, date: String, datetime: String, other: String },
     /// `"$omit_empty": true`: drop this object when none of its fields resolved.
     OmitEmpty,
+    /// `"$if": ["a", "b"]`: drop this object unless every listed arg has a value.
+    If(Vec<String>),
+    /// `"$merge": {"arg": …}`: merge an object arg into this object. Explicit
+    /// fields win unless `"$merge_wins": true`.
+    Merge(Val, bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathEnc {
+    /// ASCII digits only (numeric ids passed as strings).
+    Digits,
+    /// `application/x-www-form-urlencoded` byte encoding (space -> `+`), refusing `/ ? #`.
+    Form,
     /// A namespaced id such as `group/project`: `[A-Za-z0-9._/-]{1,200}`, no `.`/`..`
     /// part, sent as one segment with `/` as `%2F` (GitLab project and group ids).
     /// `{"namespaced": ": "}` additionally allows the listed characters (percent-encoded).
@@ -242,6 +257,9 @@ pub struct Compiled {
     pub actions: Vec<Action>,
     pub error_check: Vec<ErrorCheck>,
     pub replaces_builtin: bool,
+    /// `"hybrid": {"rust_actions": [...], "reason": "..."}`: actions served by the
+    /// compiled adapter of the same slug (logic the spec format deliberately does not cover).
+    pub rust_actions: Vec<String>,
 }
 
 const FORBIDDEN_HEADERS: &[&str] = &[
@@ -386,7 +404,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         }
         return Ok(Val::Switch { arg, cases, default, otherwise });
     }
-    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key", "items_integer", "strip_prefix", "segment"], ctx)?;
+    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key", "items_integer", "strip_prefix", "segment", "stringify_values", "prepend"], ctx)?;
     let name = s(v, "arg", ctx)?.to_string();
     let prop = props.get(&name).ok_or_else(|| anyhow!("{ctx}: arg `{name}` is not declared in input_schema.properties"))?;
     used.insert(name.clone());
@@ -443,6 +461,8 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         max_items: v.get("max_items").and_then(Value::as_u64).map(|n| n as usize),
         items_segment: v.get("items_segment").and_then(Value::as_bool).unwrap_or(false),
         wrap_object: v.get("wrap_object").and_then(Value::as_bool).unwrap_or(false),
+        stringify_values: v.get("stringify_values").and_then(Value::as_str).map(String::from),
+        prepend: v.get("prepend").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
         segment: v.get("segment").and_then(Value::as_bool).unwrap_or(false),
         strip_prefix: v.get("strip_prefix").and_then(Value::as_str).map(String::from),
         items_integer: v.get("items_integer").and_then(Value::as_bool).unwrap_or(false),
@@ -459,6 +479,9 @@ fn parse_tmpl(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTree
     if is_val(v) {
         return Ok(Tmpl::Val(parse_val(v, props, ctx, used)?));
     }
+    if let Some(items) = v.as_array() {
+        return Ok(Tmpl::Arr(items.iter().enumerate().map(|(i, x)| parse_tmpl(x, props, &format!("{ctx}[{i}]"), used)).collect::<Result<_>>()?));
+    }
     let m = v.as_object().ok_or_else(|| anyhow!("{ctx}: body template entries must be objects ({{\"arg\":…}}, {{\"const\":…}} or nested)"))?;
     let mut entries = Vec::new();
     for (k, x) in m {
@@ -466,6 +489,18 @@ fn parse_tmpl(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTree
             if x.as_bool() == Some(true) {
                 entries.push(Entry::OmitEmpty);
             }
+        } else if k == "$if" {
+            let names: Vec<String> = x.as_array().ok_or_else(|| anyhow!("{ctx}: `$if` lists arg names"))?.iter().filter_map(|n| n.as_str().map(String::from)).collect();
+            for n in &names {
+                if !props.contains_key(n) {
+                    bail!("{ctx}: `$if` arg `{n}` is not declared in input_schema.properties");
+                }
+            }
+            entries.push(Entry::If(names));
+        } else if k == "$merge_wins" {
+        } else if k == "$merge" {
+            let wins = m.get("$merge_wins").and_then(Value::as_bool).unwrap_or(false);
+            entries.push(Entry::Merge(parse_val(x, props, &format!("{ctx}.$merge"), used)?, wins));
         } else if k == "$switch_format" {
             let arg = s(x, "arg", ctx)?.to_string();
             if !props.contains_key(&arg) {
@@ -512,6 +547,8 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
             Some("uri_tail") => PathEnc::UriTail,
             Some("namespaced") => PathEnc::Namespaced(String::new()),
             Some("name") => PathEnc::Name,
+            Some("digits") => PathEnc::Digits,
+            Some("form") => PathEnc::Form,
             Some(o) => bail!("{ctx}: unknown path encoding `{o}`"),
             },
         };
@@ -770,7 +807,7 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
 pub fn compile(doc: &Value) -> Result<Compiled> {
     known_keys(
         doc,
-        &["$schema", "schema", "slug", "version", "name", "description", "docs", "api_base", "api_base_template", "allowed_hosts", "connection_fields", "auth_schemes", "error_check", "replaces_builtin", "actions", "notes"],
+        &["$schema", "schema", "slug", "version", "name", "description", "docs", "api_base", "api_base_template", "allowed_hosts", "connection_fields", "auth_schemes", "error_check", "replaces_builtin", "actions", "notes", "hybrid"],
         "spec",
     )?;
     if doc.get("schema").and_then(Value::as_str) != Some(SCHEMA_ID) {
@@ -883,5 +920,17 @@ pub fn compile(doc: &Value) -> Result<Compiled> {
         actions,
         error_check,
         replaces_builtin: doc.get("replaces_builtin").and_then(Value::as_bool).unwrap_or(false),
+        rust_actions: match doc.get("hybrid") {
+            None => Vec::new(),
+            Some(h) => {
+                known_keys(h, &["rust_actions", "reason"], "spec.hybrid")?;
+                s(h, "reason", "spec.hybrid")?;
+                let list: Vec<String> = h.get("rust_actions").and_then(Value::as_array).ok_or_else(|| anyhow!("spec.hybrid: `rust_actions` must be a list"))?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                if list.is_empty() {
+                    bail!("spec.hybrid: `rust_actions` must not be empty");
+                }
+                list
+            }
+        },
     })
 }

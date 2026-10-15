@@ -102,6 +102,12 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   (incl. adversarial values). Live: 30/30 distinct actions PASS via spec and via
   Rust (issue, note, MR, label created in the test project and cleaned up).
   13/30 actions straight from the generator; 8 write/list tools hand-mapped.
+- **HubSpot (2026-10-15): converted Rust -> hybrid spec** (`specs/hubspot.json`,
+  29 spec actions + 3 Rust actions via `hybrid`). Parity: all recorded port cases
+  identical, 0 of 650 differential cases differ. Live (read-only key): 18 read
+  actions PASS via spec and via Rust; FIND_TICKET scope-missing, GET_DEAL /
+  GET_TICKET skipped (no record / scope). Writes not live-tested (key is read-only).
+  11/32 straight from the generator.
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -268,6 +274,32 @@ Added for GitLab (tested in `gitlab_format_features`):
 Generator now infers: `strip_prefix` (path + query), `namespaced` path ids,
 `date-prefix` formats on query args, integer id-list samples (`*_ids`), hex
 colour samples. Ratchet: gitlab 13/30.
+
+### When a hybrid (spec + Rust) is the right call
+
+Keep an action in Rust (`"hybrid": {"rust_actions": [...], "reason": "..."}`)
+when its logic is **runtime behaviour, not request shape**:
+- values computed at call time (HubSpot note/task default `hs_timestamp` = now;
+  a spec has no clock and should not get one),
+- fan-out: one request item built per element of an input list with shared
+  fields (HubSpot CREATE_ASSOCIATIONS),
+- multi-request flows, signing, pagination loops, binary/markdown conversion.
+Add a format feature instead when it is a *shape* that recurs across APIs:
+JSON arrays in bodies, conditional objects (`$if`), merging a free-form
+property map (`$merge`), CRM "all values are strings" (`stringify_values`),
+"always request these fields" (`prepend`). Rule of thumb: if the feature needs
+a loop, a clock, or per-service constants tables, it is Rust.
+Hybrid specs only load where the binary ships the compiled adapter of that slug
+(validated at load: unknown tool, duplicate spec+Rust action, missing reason
+all fail). The differential/port parity still cover all tools.
+
+Why it was fast/slow (HubSpot): fast = reads, after fixing one generator bug
+(whole items copied through were mistaken for a projection of every probed
+key; now detected as pass-through). Slow = the Find/Get family (default
+property lists + user extras, a second filter only when both its args are set)
+and property maps (arrays joined with `;`, numbers stringified, explicit field
+vs. map precedence differs between upsert and deal). Port cases + adversarial
+values were again what proved parity.
 
 Ideas not yet automated: `tristate` inference (enum `["true","false"]` sent as
 bool), `clear_*`->switch-`else` inference, `segment` on body ids, label-style
