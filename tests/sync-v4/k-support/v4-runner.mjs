@@ -35,8 +35,9 @@ try{
   for(const path of ['/','/app.js?v=m7-'+c.revision.slice(0,12)]){
    const at=Date.now();
    try{
-    const response=await fetch(origin+path,{signal:AbortSignal.timeout(10000)}),body=Buffer.from(await response.arrayBuffer());
+    const response=await fetch(origin+path,{redirect:'manual',signal:AbortSignal.timeout(10000)}),body=Buffer.from(await response.arrayBuffer());
     const row={path,status:response.status,durationMs:Date.now()-at,bytes:body.length,sha256:createHash('sha256').update(body).digest('hex')};
+    if(response.headers.has('location')){const next=new URL(response.headers.get('location'),origin);row.redirect={origin:next.origin,path:next.pathname};}
     if(path.startsWith('/app.js'))row.appBuild=body.toString('utf8').match(/\bAPP_BUILD\s*=\s*['"]([^'"]+)['"]/)?.[1]??null;
     result.shellStatic.push(row);
    }catch(error){result.shellStatic.push({path,status:null,durationMs:Date.now()-at,error:error.name,message:error.message,budgetMs:10000});}
