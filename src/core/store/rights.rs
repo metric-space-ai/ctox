@@ -126,38 +126,7 @@ pub fn replace_with_manifests(
             .checked_add(1)
             .filter(|v| *v <= i64::MAX as u64)
             .ok_or_else(|| invalid("rights version exhausted"))?;
-        if rules.len() > 4096 {
-            return Err(invalid("too many rights rules"));
-        }
-        let mut owners = BTreeSet::new();
-        let mut apps = BTreeSet::new();
-        if manifests.len() > 256 {
-            return Err(invalid("too many app policies"));
-        }
-        for manifest in manifests {
-            manifest.validate().map_err(invalid)?;
-            if !apps.insert(manifest.app_id()) {
-                return Err(invalid("duplicate app policy"));
-            }
-            for collection in manifest.collections() {
-                if !owners.insert(collection) {
-                    return Err(invalid("ambiguous policy ownership"));
-                }
-            }
-        }
-        let mut identities = BTreeSet::new();
-        for rule in rules {
-            if rule.role.is_empty()
-                || rule.role.len() > 128
-                || rule.collection.is_empty()
-                || rule.collection.len() > 256
-                || !identities.insert((&rule.role, &rule.collection))
-            {
-                return Err(invalid("invalid or duplicate rights rule"));
-            }
-            rule.row_filter.resolve("validate-actor").map_err(invalid)?;
-            rule.field_mask.normalize().map_err(invalid)?;
-        }
+        validate_rules(rules, manifests)?;
         let old = {
             let mut stmt = tx.prepare(
                 "SELECT role,collection FROM c_rights__g1 WHERE id!='0:' ORDER BY role,collection",
@@ -207,6 +176,45 @@ pub fn replace_with_manifests(
         }
     }
 }
+fn validate_rules(rules: &[Right], manifests: &[ManifestRules]) -> rusqlite::Result<()> {
+    if rules.len() > 4096 {
+        return Err(invalid("too many rights rules"));
+    }
+    let mut owners = BTreeSet::new();
+    let mut apps = BTreeSet::new();
+    if manifests.len() > 256 {
+        return Err(invalid("too many app policies"));
+    }
+    for manifest in manifests {
+        manifest.validate().map_err(invalid)?;
+        if !apps.insert(manifest.app_id()) {
+            return Err(invalid("duplicate app policy"));
+        }
+        for collection in manifest.collections() {
+            if !owners.insert(collection) {
+                return Err(invalid("ambiguous policy ownership"));
+            }
+        }
+    }
+    for manifest in manifests {
+        manifest.validate_registry(manifests).map_err(invalid)?;
+    }
+    let mut identities = BTreeSet::new();
+    for rule in rules {
+        if rule.role.is_empty()
+            || rule.role.len() > 128
+            || rule.collection.is_empty()
+            || rule.collection.len() > 256
+            || !identities.insert((&rule.role, &rule.collection))
+        {
+            return Err(invalid("invalid or duplicate rights rule"));
+        }
+        rule.row_filter.resolve("validate-actor").map_err(invalid)?;
+        rule.field_mask.normalize().map_err(invalid)?;
+    }
+    Ok(())
+}
+
 fn record_change(
     tx: &Transaction<'_>,
     role: &str,
@@ -285,10 +293,88 @@ fn read_manifests(tx: &Transaction<'_>) -> rusqlite::Result<Vec<ManifestRules>> 
     };
     for m in &manifests {
         m.validate().map_err(invalid)?;
+        m.validate_registry(&manifests).map_err(invalid)?;
     }
     Ok(manifests)
 }
 impl RightsSnapshot {
+    /// A legacy boolean reader cannot consume a row filter or field mask.
+    /// It may enter only with an unrestricted grant; typed readers/writers below
+    /// enforce restricted access on the actual document.
+    pub fn allows_unrestricted_collection(
+        &self,
+        role: &str,
+        actor: &str,
+        collection: &str,
+        op: Operation,
+    ) -> bool {
+        self.rules
+            .iter()
+            .find(|r| r.role == role && r.collection == collection && r.ops.contains(&op))
+            .is_some_and(|r| {
+                self.resolved_filter(r, role, actor)
+                    .is_ok_and(|f| f == RowFilter::All)
+                    && r.field_mask == FieldMask::All
+                    && (op == Operation::Read
+                        || !self
+                            .manifest_for(collection)
+                            .is_some_and(|m| m.has_write_guard(collection)))
+            })
+    }
+    pub fn resolve_app_collection(
+        &self,
+        app: &str,
+        role: &str,
+        actor: &str,
+        collection: &str,
+    ) -> scope::Result<ResolvedScope> {
+        use manifest_rules::AppOperation;
+        self.manifests
+            .iter()
+            .find(|m| m.app_id() == app)
+            .ok_or("unknown app policy")?
+            .authorize_collection(&self.manifests, collection, AppOperation::Read)?;
+        self.resolve_collection(role, actor, collection)
+    }
+    pub fn authorize_app_read(
+        &self,
+        app: &str,
+        role: &str,
+        actor: &str,
+        collection: &str,
+        doc: &serde_json::Value,
+    ) -> scope::Result<serde_json::Value> {
+        let scope = self.resolve_app_collection(app, role, actor, collection)?;
+        let p = scope.projection(collection).ok_or("forbidden")?;
+        if !p.row_filter.matches(doc) {
+            return Err("forbidden".into());
+        }
+        p.field_mask.apply(doc)
+    }
+    pub fn authorize_app_write(
+        &self,
+        app: &str,
+        role: &str,
+        actor: &str,
+        collection: &str,
+        before: Option<&serde_json::Value>,
+        after: Option<&serde_json::Value>,
+        permit: Option<&CommandPermit>,
+    ) -> scope::Result<()> {
+        use manifest_rules::AppOperation;
+        let caller = self
+            .manifests
+            .iter()
+            .find(|m| m.app_id() == app)
+            .ok_or("unknown app policy")?;
+        caller.authorize_collection(&self.manifests, collection, AppOperation::Write)?;
+        if let Some(p) = permit {
+            caller.validate_permit(p, self.rights_ver, actor, role)?;
+        }
+        // A handler's app-bound permit can cross only an explicitly exported
+        // write boundary. User row/field/operation checks remain mandatory.
+        self.authorize_write_inner(role, actor, collection, before, after, permit)
+    }
     fn manifest_for(&self, collection: &str) -> Option<&ManifestRules> {
         self.manifests.iter().find(|m| m.owns(collection))
     }
@@ -385,7 +471,19 @@ impl RightsSnapshot {
     ) -> scope::Result<()> {
         if let Some(m) = self.manifest_for(collection) {
             match permit {
-                Some(p) => m.validate_permit(p, self.rights_ver, actor, role)?,
+                Some(p) => {
+                    let caller = self
+                        .manifests
+                        .iter()
+                        .find(|m| m.app_id() == p.app_id)
+                        .ok_or("unknown app policy")?;
+                    caller.validate_permit(p, self.rights_ver, actor, role)?;
+                    caller.authorize_collection(
+                        &self.manifests,
+                        collection,
+                        manifest_rules::AppOperation::Write,
+                    )?;
+                }
                 None => m.guard_direct_write(collection, before, after)?,
             }
         } else if permit.is_some() {
@@ -832,6 +930,9 @@ impl StoreRightsAuthority {
         rules: Vec<Right>,
         manifests: Vec<ManifestRules>,
     ) -> scope::Result<Vec<SubscriptionUpdate>> {
+        // Reject malformed manifests before suspending live delivery. This is the
+        // same validator used in the writer transaction, not a second policy.
+        validate_rules(&rules, &manifests).map_err(|e| e.to_string())?;
         let _publication = self.publication.lock().await;
         let pending = self.router.begin_rights_update()?;
         let expected = pending.expected_version();
@@ -867,6 +968,15 @@ impl StoreRightsAuthority {
     }
 }
 impl RightsRouter {
+    /// Bounded policy decision on the same live committed state as replication.
+    /// Callbacks must not await, enqueue Store jobs or re-enter this router.
+    pub fn with_current_rights<T>(
+        &self,
+        f: impl FnOnce(&RightsSnapshot) -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let state = self.0.lock().map_err(|_| "rights authority poisoned")?;
+        f(state.current_rights()?)
+    }
     /// No guard or borrowed authority escapes this synchronous boundary.
     pub fn with_snapshot<T>(
         &self,
