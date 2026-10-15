@@ -16,15 +16,28 @@ pub enum Lane {
     Transfer = 5,
 }
 impl Lane {
-    pub const ALL: [Self; 6] = [Self::Control, Self::Commands, Self::Interactive,
-        Self::Live, Self::InitialSync, Self::Transfer];
-    pub fn index(self) -> usize { self as usize }
-    pub fn from_index(index: usize) -> Option<Self> { Self::ALL.get(index).copied() }
+    pub const ALL: [Self; 6] = [
+        Self::Control,
+        Self::Commands,
+        Self::Interactive,
+        Self::Live,
+        Self::InitialSync,
+        Self::Transfer,
+    ];
+    pub fn index(self) -> usize {
+        self as usize
+    }
+    pub fn from_index(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Control => "ctox-v4-control", Self::Commands => "ctox-v4-commands",
-            Self::Interactive => "ctox-v4-interactive", Self::Live => "ctox-v4-live",
-            Self::InitialSync => "ctox-v4-initial-sync", Self::Transfer => "ctox-v4-transfer",
+            Self::Control => "ctox-v4-control",
+            Self::Commands => "ctox-v4-commands",
+            Self::Interactive => "ctox-v4-interactive",
+            Self::Live => "ctox-v4-live",
+            Self::InitialSync => "ctox-v4-initial-sync",
+            Self::Transfer => "ctox-v4-transfer",
         }
     }
 }
