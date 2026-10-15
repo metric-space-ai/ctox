@@ -5,6 +5,44 @@ The launcher creates a fresh lane artifact directory and a private network names
 starts a checksum-verified CTOX binary, local signaling and coturn, and retires its
 own process groups. No record HTTP bridge, no mocked query/replication/readiness.
 
+## M7 rehearsal (isolated only)
+
+`tests/sync-v4/k11/m7-rehearse.mjs --before OLD/build.json --after NEW/build.json
+--kernel-revision COMMIT --output NEW_PRIVATE_OUTPUT --modules-root NODE_MODULES
+--turn-bin COTURN --turn-lib COTURN_LIB` runs the real supported installer on the
+synthetic profile, SQLite API snapshots/restores before and after, then binds the
+regression preflight to that **same upgraded state**. Pass all runtime paths from
+the accepted bench: coturn and Playwright need not live in system/default paths.
+`--rollback-roundtrip yes` additionally attempts the official rollback followed
+by exact forward installation; a refusal stops the run and remains a negative
+result. The current masked-bus namespace cannot satisfy the installer's User
+Service Manager requirement, so full rollback/forward is not qualified there.
+Never expose the host bus or stub systemctl to make that result green.
+Run through the canonical lane. `--installed-evidence /private/install/result.json`
+reuses a verified completed transition after a fixture setup correction instead
+of repeating the installer; both revisions, binary hash, owner, cleanup and
+snapshot custody must match. `--installed-profile` on `e2e-run.mjs` is accepted
+only for this verified synthetic installation, never a tenant path.
+
+The backup helper rejects unmarked/foreign profiles and writes only new lane
+artifact prefixes. It uses SQLite backup APIs (including committed WAL pages),
+checks integrity, complete row/schema fingerprints and inventories, and restores
+only into a new empty prefix. It does **not** provide a cross-database transaction:
+the profile owner is quiescent for a common checkpoint. Existing recovery copies
+under runtime/backups are retained, not recursively snapshotted. Nonstandard DB
+filenames require a separately approved inventory; do not use this fixture tool
+as a production backup command. `m7-guard-mutation.py` disables the actual
+row/schema guard in a private runner copy: loss of the committed row then fails
+the invariant; restored source passes. Shared source is never mutated.
+
+`upgrade --dev` follows main, not a supplied V4 branch. The rehearsal therefore
+exercises exact `update apply --version` with a loopback release-package fixture.
+Missing productive base import, signed Shell and generation/publication hooks
+remain explicit not_run. Physical RTC or SQLite preservation never means M7/K11
+passed. `gate.mjs --gate-output NEW_PRIVATE_DIRECTORY` changes only the evidence
+location, not scenario selection or thresholds. The WELSCH deployment runbook
+and measured durations stay in the controller's private docs, not this repo.
+
 ## Build and run
 
 From the assigned clone, use the canonical GPU lane. Build a supplied immutable
@@ -132,10 +170,16 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
   query RPCs and unclassified binary sends; absence cannot be inferred from a
   missing decoder. Real file-CAS upload and app/CPU matrix remain outstanding.
 - K11 accepts `--upgrade-build /absolute/build.json` and `--schema-cli file.json`
-  (`compatible` and `incompatible`: actual revision CLI argv arrays). It switches
-  only the owned supervised daemon and state links. It will not invoke host
-  service management or manufacture installer-maintenance flags. The isolated
-  managed-installer lifecycle still needs an adapter.
+  (`compatible`, `incompatible`: real revision CLI argv arrays; `database`: path
+  relative to the isolated tenant root). The installer now runs the real
+  `update apply --version` against a private loopback release-package fixture,
+  using two checksum-verified binaries, a private managed prefix and the
+  installer's own backup/maintenance/link-switch lifecycle. A nested private
+  PID/mount/network namespace masks `/run` before dropping to the fixture UID;
+  no host service bus or host PID can be reached. There is no restart fallback.
+  The migration CLI must change the actual `_collections` generation registry;
+  read-only proofs retain schema, row-ID and data hashes. Missing native
+  migration bindings remain `not_run`; code or a binary switch is not proof.
 - K15 runs eight continuously committing SQLite connections plus real browser
   producers, native read commands and queue CLI. `--catalog-duration full`
   selects thirty minutes, three clients via `--clients 3`, midpoint daemon
@@ -147,12 +191,76 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
   Actual Outbound UI, quota status/outbox assertions and the named pre-fix red
   witness remain outstanding. `--prime yes` records one explicit cold bootstrap
   before the fresh measured context; it is not a hidden retry loop.
-- K24 includes an unknown app's real source/schema/handler/one-minute-trigger
-  fixture. `--os-bootstrap /exact/same-origin/module.mjs` must export
-  `connectScenario()` returning a native-WebRTC-backed `{kernel, openApp,
-  nativePeerId, transportKind:'native-webrtc'}`. It uses `shell.source().draft`,
-  handler execution, trigger and incompatible migration/remount. No fake-core
-  fallback. Non-admin/Workjet clients, archive and native handler truth remain.
+- K24 uses the delivered Shell tool, exact `run.mjs` and app v1/v2 bytes pinned
+  per file in `tests/sync-v4/k24/ORIGIN.json` (upstream `1ab7ceb03`). The adapter
+  `k24/execute.mjs` retains every PASS/OFFEN/FAIL criterion verbatim. Bind uses
+  MemoryCoreTransport and cannot establish native acceptance. Its private
+  static server serves the additional `/rxdb/src/` module dependency of #823;
+  before/after hashes of this fixture-only adaptation are recorded. No data
+  frame or command is intercepted. Native URL mode permits only an explicitly
+  marked isolated loopback instance; no WELSCH tunnel is contacted.
+
+## E2E-K3 revision selection and comparison
+
+```sh
+scripts/sync-v4/gate-regression.sh --target v3 --build /absolute/old/build.json
+scripts/sync-v4/gate-regression.sh --target v4=v4/cutover
+scripts/sync-v4/gate-regression.sh --target v4=<immutable-sha> \
+  --build /absolute/verified/build.json --kernel-revision <sha-of-823>
+```
+
+V3 reference values are frozen in `k-support/baseline-v3.json`; reruns never
+rewrite them. The gate writes `comparison.json` and `comparison.md` alongside
+`gate.json`: V3 value, V4 value, target, red/green/not_run and evidence. A missing
+revision/build/browser/native adapter yields exit 2 and `not_run`, never red as
+if the product had been measured, and never a green empty gate. V4 default
+build host is auto; V3/Chromium uses gpu4 because its namespace permission is
+required. A supplied producer is rehashed and must match the requested SHA.
+
+The V4 gate builds/verifies the requested daemon and executes an isolated native
+bootstrap/Chromium/forced-TURN preflight. It freezes a separate immutable #823
+kernel archive and records its SHA; `--kernel-archive` plus
+`--kernel-archive-sha256` can supply the same tracked assets to a sparse lane
+stage without a Git object database. Credentials stay in the browser; evidence
+contains only endpoint locality, identities, phases and connection statistics.
+No V3 app collection/query/pull is substituted for a V4 scenario.
+The probe document is served by the actual daemon, not `route.fulfill`:
+Chromium classifies a synthetic document differently for local-network access.
+`k-support/v4-document-mutation.mjs` restores that former document path and
+requires `ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`/no RTC connection, followed
+by a real served document with a selected TURN relay. This is a transport
+bring-up invariant, not a V4 application acceptance claim.
+
+
+**Open:** native host-owned hello/device enrollment, canonical scopes and package
+verification still need to be connected to the browser adapter. Preflight alone
+does not satisfy any K scenario: missing authority is `not_run` with the actual
+phase and logs, never a fabricated signature or MemoryCoreTransport success.
+T8/Z9 and full K11 migration remain open.
+
+K24 keeps the delivered upstream tool byte-identical. The platform adapter brings
+the actual upload page to the foreground before selecting its directory, and
+observes the Shell's real completed upload if its FileList has already reset.
+`k24/chooser-mutation.mjs` removes that foreground step in a private runner copy:
+the real upload must stall; restoration must complete. Bind criteria remain
+PASS/OFFEN/FAIL exactly as upstream reports and cannot count as native success.
+
+`k11/installer-smoke.mjs <old receipt> <new receipt> <new artifact prefix>` runs
+the actual supported installer in private PID/mount/network namespaces, verifies
+its active binary/backup and compares synthetic row hashes read-only before and
+after. It explicitly records `migrationExecuted:false` and never claims K11
+acceptance. The real compatible/incompatible publication path is still required.
+`--k11-evidence` attaches that partial receipt to the comparison only when its
+terminal namespace cleanup, full-document coverage and target binary SHA match.
+It remains `not_run` for catalog acceptance until real migration is measured.
+
+`prepare-install-source.mjs` can supplement a minimal portable source snapshot
+with an explicitly SHA-pinned tracked archive from the same revision; the
+original producer and portable package remain untouched.
+
+The controller owns one admission attempt, bounded to 40 minutes; no successor
+polling chain is created. Expiry only retires its own verified queued group;
+admitted jobs are not treated as queued and are not cancelled by this timer.
 
 `--lead-profile demand-only --scenario K08` runs the lease/window slice with an
 actual demand-only collection. It is not the historical Outbound startup code
