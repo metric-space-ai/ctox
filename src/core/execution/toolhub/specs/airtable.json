@@ -1,0 +1,1792 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Liest Identität und Scopes des verbundenen Personal Access Tokens.",
+        "en": "Reads the identity and scopes of the connected personal access token."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/meta/whoami"
+      },
+      "response": {
+        "fields": {
+          "email": {
+            "pointer": "/email"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "scopes": {
+            "pointer": "/scopes"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [],
+      "slug": "AIRTABLE_GET_CURRENT_USER",
+      "title": {
+        "de": "Aktuellen Token prüfen",
+        "en": "Get current user"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet alle Bases, auf die der Token zugreifen darf.",
+        "en": "Lists every base the token can access."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/meta/bases"
+      },
+      "response": {
+        "fields": {
+          "bases": {
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "permission_level": "/permissionLevel",
+              "workspace_id": "/workspaceId"
+            },
+            "pointer": "/bases"
+          },
+          "count": {
+            "count": true,
+            "pointer": "/bases"
+          },
+          "offset": {
+            "pointer": "/offset"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "schema.bases:read"
+      ],
+      "slug": "AIRTABLE_LIST_BASES",
+      "title": {
+        "de": "Bases auflisten",
+        "en": "List bases"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest Name, Berechtigungsstufe und Workspace einer Base.",
+        "en": "Reads one base's name, permission level and workspace."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/meta/bases/{base_id}"
+      },
+      "response": {
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "permission_level": {
+            "pointer": "/permissionLevel"
+          },
+          "workspace_id": {
+            "pointer": "/workspaceId"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "schema.bases:read"
+      ],
+      "slug": "AIRTABLE_GET_BASE",
+      "title": {
+        "de": "Base lesen",
+        "en": "Get base"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet alle Tabellen einer Base mit Feldern und Views.",
+        "en": "Lists every table of a base with its fields and views."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/meta/bases/{base_id}/tables"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "tables": {
+            "pointer": "/tables",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "description": "/description",
+              "primary_field_id": "/primaryFieldId",
+              "fields": {
+                "pointer": "/fields",
+                "each": {
+                  "id": "/id",
+                  "name": "/name",
+                  "type": "/type",
+                  "description": "/description"
+                }
+              },
+              "views": {
+                "pointer": "/views",
+                "each": {
+                  "id": "/id",
+                  "name": "/name",
+                  "type": "/type"
+                }
+              }
+            }
+          },
+          "count": {
+            "pointer": "/tables",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "schema.bases:read"
+      ],
+      "slug": "AIRTABLE_GET_BASE_SCHEMA",
+      "title": {
+        "de": "Base-Schema lesen",
+        "en": "Get base schema"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Datensätze einer Tabelle, optional mit Formel, View, Sortierung und Feldwahl.",
+        "en": "Lists records of a table, optionally with formula, view, sorting and field selection."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "fields": {
+            "description": "Feldnamen, die zurückgegeben werden sollen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "filter_by_formula": {
+            "description": "Airtable-Formel, z. B. {Status}=\"Done\"",
+            "type": "string"
+          },
+          "max_records": {
+            "description": "Höchstzahl zurückgegebener Datensätze",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Offset eines vorherigen Aufrufs zum Weiterblättern",
+            "type": "string"
+          },
+          "page_size": {
+            "description": "Datensätze pro Seite (1–100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sort": {
+            "description": "JSON-Array, z. B. [{\"field\":\"Name\",\"direction\":\"asc\"}]",
+            "type": "array"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "view": {
+            "description": "View-ID oder -Name; leer = ganze Tabelle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}",
+        "query": {
+          "filterByFormula": {
+            "arg": "filter_by_formula",
+            "trim": true
+          },
+          "view": {
+            "arg": "view",
+            "trim": true
+          },
+          "maxRecords": {
+            "arg": "max_records",
+            "clamp": [
+              1,
+              100000
+            ]
+          },
+          "pageSize": {
+            "arg": "page_size",
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "type": "raw",
+            "wrap_object": true,
+            "require_key": "field"
+          },
+          "fields": {
+            "arg": "fields",
+            "type": "string_list"
+          }
+        },
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "records": {
+            "pointer": "/records",
+            "each": {
+              "id": "/id",
+              "created_time": "/createdTime",
+              "fields": "/fields"
+            }
+          },
+          "count": {
+            "pointer": "/records",
+            "count": true
+          },
+          "offset": {
+            "pointer": "/offset"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "data.records:read"
+      ],
+      "slug": "AIRTABLE_LIST_RECORDS",
+      "title": {
+        "de": "Datensätze auflisten",
+        "en": "List records"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet Datensätze, in denen ein Feld einen Wert enthält oder exakt gleich ist.",
+        "en": "Finds records where a field contains or exactly equals a value."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "match_mode": {
+            "description": "contains (Standard) oder exact",
+            "enum": [
+              "contains",
+              "exact"
+            ],
+            "type": "string"
+          },
+          "max_records": {
+            "description": "Höchstzahl passender Datensätze",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "search_field": {
+            "description": "Exakter Feldname",
+            "type": "string"
+          },
+          "search_value": {
+            "description": "Gesuchter Wert",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "view": {
+            "description": "View-ID oder -Name; leer = ganze Tabelle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "search_field",
+          "search_value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}",
+        "query": {
+          "filterByFormula": {
+            "switch": "match_mode",
+            "default": "contains",
+            "cases": {
+              "contains": {
+                "template": "FIND(\"{search_value}\",{{{search_field}}})",
+                "escape": {
+                  "search_value": "backslash_quote"
+                },
+                "forbid": {
+                  "search_field": "{}"
+                }
+              },
+              "exact": {
+                "template": "{{{search_field}}}&\"\"=\"{search_value}\"",
+                "escape": {
+                  "search_value": "backslash_quote"
+                },
+                "forbid": {
+                  "search_field": "{}"
+                }
+              }
+            }
+          },
+          "view": {
+            "arg": "view",
+            "trim": true
+          },
+          "maxRecords": {
+            "arg": "max_records",
+            "clamp": [
+              1,
+              100000
+            ]
+          }
+        },
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "records": {
+            "pointer": "/records",
+            "each": {
+              "id": "/id",
+              "created_time": "/createdTime",
+              "fields": "/fields"
+            }
+          },
+          "count": {
+            "pointer": "/records",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "data.records:read"
+      ],
+      "slug": "AIRTABLE_SEARCH_RECORDS",
+      "title": {
+        "de": "Datensätze suchen",
+        "en": "Search records"
+      }
+    },
+    {
+      "description": {
+        "de": "Wie AIRTABLE_SEARCH_RECORDS, aber fest auf \"enthält\" und bis zu 1000 Treffer.",
+        "en": "Like AIRTABLE_SEARCH_RECORDS, but fixed to \"contains\" and up to 1000 hits."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "search_field": {
+            "description": "Exakter Feldname",
+            "type": "string"
+          },
+          "search_value": {
+            "description": "Gesuchter Wert; Groß-/Kleinschreibung beachtet",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "view": {
+            "description": "View-ID oder -Name; leer = ganze Tabelle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "search_field",
+          "search_value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}",
+        "query": {
+          "filterByFormula": {
+            "template": "FIND(\"{search_value}\",{{{search_field}}})",
+            "escape": {
+              "search_value": "backslash_quote"
+            },
+            "forbid": {
+              "search_field": "{}"
+            }
+          },
+          "pageSize": {
+            "const": "100"
+          },
+          "view": {
+            "arg": "view",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "records": {
+            "pointer": "/records",
+            "each": {
+              "id": "/id",
+              "created_time": "/createdTime",
+              "fields": "/fields"
+            }
+          },
+          "count": {
+            "pointer": "/records",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "data.records:read"
+      ],
+      "slug": "AIRTABLE_FIND_RECORD",
+      "title": {
+        "de": "Datensatz finden",
+        "en": "Find record"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen einzelnen Datensatz per ID.",
+        "en": "Reads one record by ID."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "fields": {
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "data.records:read"
+      ],
+      "slug": "AIRTABLE_GET_RECORD",
+      "title": {
+        "de": "Datensatz lesen",
+        "en": "Get record"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen einzelnen Datensatz per ID (Alias).",
+        "en": "Reads one record by ID (alias)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "fields": {
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "data.records:read"
+      ],
+      "slug": "AIRTABLE_GET_RECORD_BY_ID",
+      "title": {
+        "de": "Datensatz per ID lesen",
+        "en": "Get record by ID"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest den Kommentar-Thread eines Datensatzes.",
+        "en": "Reads a record's comment thread."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Offset eines vorherigen Aufrufs zum Weiterblättern",
+            "type": "string"
+          },
+          "page_size": {
+            "description": "Kommentare pro Seite (max. 100)",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}/comments",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        },
+        "query": {
+          "offset": {
+            "arg": "offset",
+            "trim": true
+          },
+          "pageSize": {
+            "arg": "page_size"
+          }
+        }
+      },
+      "response": {
+        "fields": {
+          "comments": {
+            "each": {
+              "author": "/author",
+              "created_time": "/createdTime",
+              "id": "/id",
+              "last_updated_time": "/lastUpdatedTime",
+              "parent_comment_id": "/parentCommentId",
+              "text": "/text"
+            },
+            "pointer": "/comments"
+          },
+          "count": {
+            "count": true,
+            "pointer": "/comments"
+          },
+          "offset": {
+            "pointer": "/offset"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "data.recordComments:read"
+      ],
+      "slug": "AIRTABLE_LIST_RECORD_COMMENTS",
+      "title": {
+        "de": "Kommentare auflisten",
+        "en": "List record comments"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt einen Datensatz an (typecast aktiv); braucht --confirm.",
+        "en": "Creates a record (typecast on); requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "fields": {
+            "description": "JSON-Objekt Feldname -> Wert, z. B. {\"Name\":\"Acme\"}",
+            "type": "object"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "fields": {
+              "arg": "fields",
+              "required": true
+            },
+            "typecast": {
+              "const": true
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/{base_id}/{table_id_or_name}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "fields": {
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_CREATE_RECORD",
+      "title": {
+        "de": "Datensatz anlegen",
+        "en": "Create record"
+      }
+    },
+    {
+      "description": {
+        "de": "Ändert nur die übergebenen Felder eines Datensatzes; braucht --confirm.",
+        "en": "Changes only the fields you pass on a record; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "fields": {
+            "description": "JSON-Objekt Feldname -> neuer Wert; null leert das Feld",
+            "type": "object"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "typecast": {
+            "default": false,
+            "description": "Airtable wandelt Strings in Feldtypen um und legt Select-Optionen an.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "fields": {
+              "arg": "fields",
+              "required": true
+            },
+            "typecast": {
+              "arg": "typecast"
+            }
+          }
+        },
+        "method": "PATCH",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "fields": {
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_UPDATE_RECORD",
+      "title": {
+        "de": "Datensatz ändern",
+        "en": "Update record"
+      }
+    },
+    {
+      "description": {
+        "de": "Leert jedes Feld, das du leer übergibst (leerer String -> null); braucht --confirm.",
+        "en": "Empties every field you leave blank (empty string -> null); requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "fields": {
+            "description": "JSON-Objekt Feldname -> Wert; \"\" oder null leert das Feld",
+            "type": "object"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "fields": {
+              "arg": "fields",
+              "required": true,
+              "blank_to_null": true,
+              "type": "object"
+            },
+            "typecast": {
+              "const": true
+            }
+          }
+        },
+        "method": "PATCH",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "fields": {
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_CLEAR_RECORD",
+      "title": {
+        "de": "Datensatz leeren",
+        "en": "Clear record"
+      }
+    },
+    {
+      "description": {
+        "de": "Löscht einen Datensatz; braucht --confirm.",
+        "en": "Deletes one record; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "deleted": {
+            "pointer": "/deleted"
+          },
+          "id": {
+            "pointer": "/id"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "destructive",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_DELETE_RECORD",
+      "title": {
+        "de": "Datensatz löschen",
+        "en": "Delete record"
+      }
+    },
+    {
+      "description": {
+        "de": "Löscht bis zu 10 Datensätze in einem Aufruf; braucht --confirm.",
+        "en": "Deletes up to 10 records in one call; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "record_ids": {
+            "description": "Höchstens 10 Record-IDs",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_ids"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/{base_id}/{table_id_or_name}",
+        "query": {
+          "records": {
+            "arg": "record_ids",
+            "type": "string_list",
+            "required": true,
+            "max_items": 10,
+            "items_segment": true
+          }
+        },
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "records": {
+            "pointer": "/records",
+            "each": {
+              "id": "/id",
+              "deleted": "/deleted"
+            }
+          },
+          "count": {
+            "pointer": "/records",
+            "count": true
+          }
+        }
+      },
+      "risk": "destructive",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_DELETE_RECORDS_BATCH",
+      "title": {
+        "de": "Datensätze löschen (Stapel)",
+        "en": "Delete records batch"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt an oder ändert bis zu 10 Datensätze in einem Aufruf; braucht --confirm.",
+        "en": "Creates or updates up to 10 records in one call; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "fields_to_merge_on": {
+            "description": "Felder als Merge-Schlüssel, z. B. [\"Email\"]",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "records": {
+            "description": "JSON-Array, z. B. [{\"id\":\"recX\",\"fields\":{…}}] (max. 10)",
+            "type": "array"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "typecast": {
+            "default": true,
+            "description": "Airtable wandelt Strings in Feldtypen um und legt Select-Optionen an.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "records"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "performUpsert": {
+              "$omit_empty": true,
+              "fieldsToMergeOn": {
+                "arg": "fields_to_merge_on"
+              }
+            },
+            "records": {
+              "arg": "records",
+              "required": true,
+              "type": "raw"
+            },
+            "typecast": {
+              "arg": "typecast",
+              "default": true
+            }
+          }
+        },
+        "method": "PATCH",
+        "path": "/{base_id}/{table_id_or_name}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/records"
+          },
+          "created_records": {
+            "pointer": "/createdRecords"
+          },
+          "records": {
+            "each": {
+              "created_time": "/createdTime",
+              "fields": "/fields",
+              "id": "/id"
+            },
+            "pointer": "/records"
+          },
+          "updated_records": {
+            "pointer": "/updatedRecords"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "data.records:write"
+      ],
+      "slug": "AIRTABLE_UPSERT_RECORDS",
+      "title": {
+        "de": "Datensätze Upsert (Stapel)",
+        "en": "Upsert records"
+      }
+    },
+    {
+      "description": {
+        "de": "Postet einen Kommentar auf einen Datensatz; braucht --confirm.",
+        "en": "Posts a comment on a record; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "parent_comment_id": {
+            "description": "ID des Elternkommentars für eine Antwort",
+            "type": "string"
+          },
+          "record_id": {
+            "description": "Record-ID (recXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "text": {
+            "description": "Kommentartext; Nutzer mit @[userId] oder @[userEmail] erwähnen",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "record_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "parentCommentId": {
+              "arg": "parent_comment_id",
+              "trim": true
+            },
+            "text": {
+              "arg": "text",
+              "required": true,
+              "trim": true
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/{base_id}/{table_id_or_name}/{record_id}/comments",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "author": {
+            "pointer": "/author"
+          },
+          "created_time": {
+            "pointer": "/createdTime"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "last_updated_time": {
+            "pointer": "/lastUpdatedTime"
+          },
+          "parent_comment_id": {
+            "pointer": "/parentCommentId"
+          },
+          "text": {
+            "pointer": "/text"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "data.recordComments:write"
+      ],
+      "slug": "AIRTABLE_ADD_COMMENT_TO_RECORD",
+      "title": {
+        "de": "Kommentar schreiben",
+        "en": "Add comment to record"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt eine Base mit Tabellenstruktur in einem Workspace an; braucht --confirm.",
+        "en": "Creates a base with a table structure in a workspace; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name der neuen Base",
+            "type": "string"
+          },
+          "tables": {
+            "description": "JSON-Array der Tabellen; das erste Feld wird das Primärfeld",
+            "type": "array"
+          },
+          "workspace_id": {
+            "description": "Workspace-ID (wspXXXXXXXXXXXXXX)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "name",
+          "tables"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "required": true,
+              "trim": true
+            },
+            "tables": {
+              "arg": "tables",
+              "required": true,
+              "type": "raw"
+            },
+            "workspaceId": {
+              "arg": "workspace_id",
+              "required": true,
+              "trim": true,
+              "segment": true
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/meta/bases"
+      },
+      "response": {
+        "fields": {
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "permission_level": {
+            "pointer": "/permissionLevel"
+          },
+          "tables": {
+            "pointer": "/tables",
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "description": "/description",
+              "primary_field_id": "/primaryFieldId",
+              "fields": {
+                "pointer": "/fields",
+                "each": {
+                  "id": "/id",
+                  "name": "/name",
+                  "type": "/type",
+                  "description": "/description"
+                }
+              },
+              "views": {
+                "pointer": "/views",
+                "each": {
+                  "id": "/id",
+                  "name": "/name",
+                  "type": "/type"
+                }
+              }
+            },
+            "default": null
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "schema.bases:write"
+      ],
+      "slug": "AIRTABLE_CREATE_BASE",
+      "title": {
+        "de": "Base anlegen",
+        "en": "Create base"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt eine Tabelle mit Feldern in einer Base an; braucht --confirm.",
+        "en": "Creates a table with fields in a base; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "description": {
+            "description": "Beschreibung unter dem Tabellennamen",
+            "type": "string"
+          },
+          "fields": {
+            "description": "JSON-Array der Felder; das erste wird das Primärfeld",
+            "type": "array"
+          },
+          "name": {
+            "description": "Name der Tabelle",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "name",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "fields": {
+              "arg": "fields",
+              "required": true,
+              "type": "raw"
+            },
+            "name": {
+              "arg": "name",
+              "required": true,
+              "trim": true
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/meta/bases/{base_id}/tables"
+      },
+      "response": {
+        "fields": {
+          "description": {
+            "pointer": "/description"
+          },
+          "fields": {
+            "each": {
+              "description": "/description",
+              "id": "/id",
+              "name": "/name",
+              "type": "/type"
+            },
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "primary_field_id": {
+            "pointer": "/primaryFieldId"
+          },
+          "views": {
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "type": "/type"
+            },
+            "pointer": "/views"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "schema.bases:write"
+      ],
+      "slug": "AIRTABLE_CREATE_TABLE",
+      "title": {
+        "de": "Tabelle anlegen",
+        "en": "Create table"
+      }
+    },
+    {
+      "description": {
+        "de": "Benennt eine Tabelle um oder ändert ihre Beschreibung; braucht --confirm.",
+        "en": "Renames a table or changes its description; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "description": {
+            "description": "Neue Beschreibung",
+            "type": "string"
+          },
+          "name": {
+            "description": "Neuer Name",
+            "type": "string"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true
+            }
+          }
+        },
+        "method": "PATCH",
+        "nonempty_body": "supply at least one of new name or new description",
+        "path": "/meta/bases/{base_id}/tables/{table_id_or_name}",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "description": {
+            "pointer": "/description"
+          },
+          "fields": {
+            "each": {
+              "description": "/description",
+              "id": "/id",
+              "name": "/name",
+              "type": "/type"
+            },
+            "pointer": "/fields"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "primary_field_id": {
+            "pointer": "/primaryFieldId"
+          },
+          "views": {
+            "each": {
+              "id": "/id",
+              "name": "/name",
+              "type": "/type"
+            },
+            "pointer": "/views"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "schema.bases:write"
+      ],
+      "slug": "AIRTABLE_UPDATE_TABLE",
+      "title": {
+        "de": "Tabelle ändern",
+        "en": "Update table"
+      }
+    },
+    {
+      "description": {
+        "de": "Fügt einer Tabelle ein Feld (Spalte) hinzu; braucht --confirm.",
+        "en": "Adds a field (column) to a table; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "description": {
+            "description": "Beschreibung des Feldes",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name des Feldes",
+            "type": "string"
+          },
+          "options": {
+            "description": "Typspezifische Optionen, z. B. {\"choices\":[{\"name\":\"Todo\"}]}",
+            "type": "object"
+          },
+          "table_id_or_name": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX) oder exakter Tabellenname",
+            "type": "string"
+          },
+          "type": {
+            "description": "Airtable-Feldtyp, z. B. singleLineText, number, date, singleSelect",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id_or_name",
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "name": {
+              "arg": "name",
+              "required": true,
+              "trim": true
+            },
+            "options": {
+              "arg": "options"
+            },
+            "type": {
+              "arg": "type",
+              "required": true,
+              "trim": true
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/meta/bases/{base_id}/tables/{table_id_or_name}/fields",
+        "path_encoding": {
+          "table_id_or_name": "name"
+        }
+      },
+      "response": {
+        "fields": {
+          "description": {
+            "pointer": "/description"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "type": {
+            "pointer": "/type"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "schema.bases:write"
+      ],
+      "slug": "AIRTABLE_CREATE_FIELD",
+      "title": {
+        "de": "Feld anlegen",
+        "en": "Create field"
+      }
+    },
+    {
+      "description": {
+        "de": "Benennt ein Feld um oder ändert seine Beschreibung; braucht --confirm.",
+        "en": "Renames a field or changes its description; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "base_id": {
+            "description": "Base-ID (appXXXXXXXXXXXXXX), auflösen mit AIRTABLE_LIST_BASES",
+            "type": "string"
+          },
+          "description": {
+            "description": "Neue Beschreibung",
+            "type": "string"
+          },
+          "field_id": {
+            "description": "Feld-ID (fldXXXXXXXXXXXXXX)",
+            "type": "string"
+          },
+          "name": {
+            "description": "Neuer Name",
+            "type": "string"
+          },
+          "table_id": {
+            "description": "Table-ID (tblXXXXXXXXXXXXXX); dieser Endpunkt braucht die ID, nicht den Namen",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "table_id",
+          "field_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true
+            }
+          }
+        },
+        "method": "PATCH",
+        "nonempty_body": "supply at least one of new name or new description",
+        "path": "/meta/bases/{base_id}/tables/{table_id}/fields/{field_id}"
+      },
+      "response": {
+        "fields": {
+          "description": {
+            "pointer": "/description"
+          },
+          "id": {
+            "pointer": "/id"
+          },
+          "name": {
+            "pointer": "/name"
+          },
+          "type": {
+            "pointer": "/type"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "write",
+      "scopes": [
+        "schema.bases:write"
+      ],
+      "slug": "AIRTABLE_UPDATE_FIELD",
+      "title": {
+        "de": "Feld ändern",
+        "en": "Update field"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "api.airtable.com"
+  ],
+  "api_base": "https://api.airtable.com/v0",
+  "auth_schemes": [
+    {
+      "type": "bearer"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "Bases, Tabellen und Datensätze in Airtable lesen, suchen und bearbeiten.",
+    "en": "Read, search and change bases, tables and records in Airtable."
+  },
+  "name": "Airtable",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/airtable.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "airtable",
+  "version": "1.0.0",
+  "docs": [
+    "https://airtable.com/developers/web/api/introduction"
+  ]
+}

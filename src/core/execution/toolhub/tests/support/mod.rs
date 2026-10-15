@@ -104,21 +104,54 @@ pub fn live(adapter: &dyn ToolkitAdapter, tool: &str, args: Value) -> Option<Res
 /// Credential from env `CTOX_TOOLHUB_LIVE_<SLUG>_TOKEN`; never printed.
 pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str, args: Value) -> Option<Result<Value, String>> {
     use ctox_toolhub::*;
-    let var = format!("CTOX_TOOLHUB_LIVE_{}_TOKEN", toolkit.to_ascii_uppercase().replace('-', "_"));
-    let token = std::env::var(&var).ok()?;
-    let hub = ToolHub::new(
+    let base = format!("CTOX_TOOLHUB_LIVE_{}", toolkit.to_ascii_uppercase().replace('-', "_"));
+    let token = std::env::var(format!("{base}_TOKEN")).ok()?;
+    // Optional companion KEY (Trello): credential becomes `key:token` for oauth_header / Basic.
+    let credential = match std::env::var(format!("{base}_KEY")) {
+        Ok(k) => format!("{}:{}", k.trim(), token.trim()),
+        Err(_) => token.trim().to_string(),
+    };
+    #[allow(unused_mut)]
+    let mut hub = ToolHub::new(
         MemorySecretBackend::default(),
-        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::default())
+        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::with_options(
+            // The CTOX box resolves public hosts to 198.18.x.x behind its egress proxy.
+            ctox_toolhub::http::TransportOptions { fake_ip_egress: true },
+        ))
     );
+    if let Some(spec) = SPEC_MODE.with(|m| m.borrow().clone()) {
+        // Hot-plug path: the bundled spec is installed into a throwaway instance
+        // store, activated and loaded; it replaces the compiled adapter.
+        let root = std::env::temp_dir().join(format!("ctox-live-spec-{}-{toolkit}", std::process::id()));
+        let store = ctox_toolhub::spec::SpecStore::for_instance_root(&root);
+        let v = store.install(&spec).expect("install spec");
+        store.activate(&v.slug, &v.version, "live-test").expect("activate spec");
+        let rep = hub.reload_specs(&store).expect("reload specs");
+        // Brand-new services (no compiled adapter) are just loaded; known ones are replaced.
+        let has_builtin = ctox_toolhub::toolkits::builtin().iter().any(|a| a.spec().slug == toolkit);
+        assert!(rep.loaded.iter().any(|(s, _)| s == toolkit), "spec not loaded: {rep:?}");
+        assert_eq!(rep.replaced_builtins.contains(&toolkit.to_string()), has_builtin, "{rep:?}");
+        assert!(hub.is_spec_toolkit(toolkit));
+    }
     let cfg = AuthConfig { id: "live".into(), toolkit: toolkit.into(), scheme, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
     hub.upsert_auth_config(&cfg, None).expect("auth config");
-    hub.connect_with_credential("live", "_instance", "live-test", token.trim()).expect("connect");
+    hub.connect_with_credential("live", "_instance", "live-test", &credential).expect("connect");
     Some(match hub.execute("_instance", tool, &args, None) {
         Ok(ToolOutcome::Success { data }) => Ok(data),
         Ok(ToolOutcome::ProviderError { status, data }) => Err(format!("provider {status}: {data}")),
         Ok(other) => Err(format!("{other:?}")),
         Err(e) => Err(format!("error: {e:#}")),
     })
+}
+
+thread_local! {
+    static SPEC_MODE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run following `live_exec` calls on this thread through the hot-plug spec
+/// (`specs/<slug>.json`) instead of the compiled adapter.
+pub fn use_spec(spec_json: &str) {
+    SPEC_MODE.with(|m| *m.borrow_mut() = Some(spec_json.to_string()));
 }
 
 /// First string value under key `key` anywhere in `v` (depth-first).
@@ -128,4 +161,67 @@ pub fn find_str(v: &Value, key: &str) -> Option<String> {
         Value::Array(a) => a.iter().find_map(|x| find_str(x, key)),
         _ => None,
     }
+}
+
+/// Pure hot-plug path for a brand-new service (no compiled adapter, no credential):
+/// install the spec into a fresh instance store, activate it, let the running hub
+/// pick it up via `reload_specs_if_changed`, then execute. `None` when
+/// `CTOX_TOOLHUB_LIVE_PUBLIC` is unset (live calls stay opt-in).
+pub fn live_hotplug_public(spec_json: &str, calls: &[(&str, Value)]) -> Option<Vec<Result<Value, String>>> {
+    use ctox_toolhub::*;
+    std::env::var("CTOX_TOOLHUB_LIVE_PUBLIC").ok()?;
+    let mut hub = ToolHub::new(
+        MemorySecretBackend::default(),
+        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::with_options(ctox_toolhub::http::TransportOptions { fake_ip_egress: true })),
+    );
+    let root = std::env::temp_dir().join(format!("ctox-live-hotplug-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = ctox_toolhub::spec::SpecStore::for_instance_root(&root);
+    assert!(hub.reload_specs_if_changed(&store).expect("initial load").is_some());
+    let v = store.install(spec_json).expect("install spec");
+    assert!(hub.tool(calls[0].0).is_err(), "not served before activation");
+    store.activate(&v.slug, &v.version, "live-test").expect("activate spec");
+    let rep = hub.reload_specs_if_changed(&store).expect("reload").expect("store changed");
+    assert!(rep.replaced_builtins.is_empty() && rep.loaded.iter().any(|(s, _)| s == &v.slug), "{rep:?}");
+    let out = calls.iter().map(|(tool, args)| match hub.execute("_instance", tool, args, None) {
+        Ok(ToolOutcome::Success { data }) => Ok(data),
+        Ok(ToolOutcome::ProviderError { status, data }) => Err(format!("provider {status}: {data}")),
+        Ok(other) => Err(format!("{other:?}")),
+        Err(e) => Err(format!("error: {e:#}")),
+    }).collect();
+    let _ = std::fs::remove_dir_all(&root);
+    Some(out)
+}
+
+/// Parity of a hot-plug spec (`specs/<slug>.json`, if present) with the compiled
+/// adapter on the recorded port cases: identical request (method, URL incl. sorted
+/// query, body) and identical parsed output on the recorded response.
+pub fn spec_parity(slug: &str, rust: &dyn ToolkitAdapter, cases: &[Case]) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("specs/{slug}.json"));
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let spec = ctox_toolhub::spec::SpecAdapter::from_json(&text).unwrap_or_else(|e| panic!("{slug} spec: {e:#}"));
+    let norm = |r: &HttpRequest| {
+        let u = url::Url::parse(&r.url).unwrap();
+        let mut q: Vec<(String, String)> = u.query_pairs().map(|(a, b)| (a.into_owned(), b.into_owned())).collect();
+        q.sort();
+        let body = r.body.as_ref().map(|b| serde_json::from_slice::<Value>(b).unwrap_or(Value::String(String::from_utf8_lossy(b).into())));
+        // Host ignored: port tests point the compiled adapter at a `.test` base.
+        (r.method.clone(), u.path().to_string(), q, body)
+    };
+    let mut diffs = vec![];
+    for c in cases {
+        let a = rust.build_request(c.tool, &c.args).map(|r| norm(&r)).map_err(|e| e.to_string());
+        let b = spec.build_request(c.tool, &c.args).map(|r| norm(&r)).map_err(|e| e.to_string());
+        if a.is_ok() != b.is_ok() || (a.is_ok() && a != b) {
+            diffs.push(format!("{} request {}\n  rust: {a:?}\n  spec: {b:?}", c.tool, c.args));
+        }
+        let resp = HttpResponse { status: c.response_status, body: serde_json::to_vec(&c.response).unwrap(), session_id: None };
+        let a = rust.parse_response(c.tool, &resp).map_err(|e| e.to_string());
+        let b = spec.parse_response(c.tool, &resp).map_err(|e| e.to_string());
+        if a.is_ok() != b.is_ok() || (a.is_ok() && a != b) {
+            diffs.push(format!("{} response\n  rust: {a:?}\n  spec: {b:?}", c.tool));
+        }
+    }
+    assert!(diffs.is_empty(), "{slug}: {} of {} recorded cases differ:\n{}", diffs.len(), cases.len() * 2, diffs.join("\n"));
+    println!("{slug}: spec identical on {} recorded request/response cases", cases.len() * 2);
 }

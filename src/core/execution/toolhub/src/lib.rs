@@ -14,6 +14,7 @@ pub mod http;
 pub mod hub;
 pub mod ids;
 pub mod model;
+pub mod spec;
 pub mod store;
 pub mod toolkits;
 

@@ -55,6 +55,19 @@ pub struct ToolHub<B: SecretBackend> {
     transport: Arc<dyn HttpTransport>,
     toolkits: BTreeMap<String, Box<dyn ToolkitAdapter>>,
     clock: Clock,
+    /// Builtins temporarily replaced by an active spec (restored on reload).
+    shadowed: BTreeMap<String, Box<dyn ToolkitAdapter>>,
+    /// Slugs currently served by runtime specs.
+    spec_slugs: std::collections::BTreeSet<String>,
+    spec_fingerprint: Option<String>,
+}
+
+/// Outcome of loading the active runtime specs into the hub.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SpecReload {
+    pub loaded: Vec<(String, String)>,
+    pub failed: Vec<(String, String)>,
+    pub replaced_builtins: Vec<String>,
 }
 
 impl<B: SecretBackend> ToolHub<B> {
@@ -64,6 +77,9 @@ impl<B: SecretBackend> ToolHub<B> {
             transport,
             toolkits: BTreeMap::new(),
             clock: system_clock(),
+            shadowed: BTreeMap::new(),
+            spec_slugs: Default::default(),
+            spec_fingerprint: None,
         };
         for t in crate::toolkits::builtin() {
             hub.register(t);
@@ -78,6 +94,52 @@ impl<B: SecretBackend> ToolHub<B> {
 
     pub fn register(&mut self, toolkit: Box<dyn ToolkitAdapter>) {
         self.toolkits.insert(toolkit.spec().slug.clone(), toolkit);
+    }
+
+    /// (Re)load the active adapter specs of this instance without a restart.
+    /// Previously loaded specs are removed first; builtins they replaced come back.
+    /// A spec may only replace a builtin when it says so (`replaces_builtin`).
+    pub fn reload_specs(&mut self, specs: &crate::spec::SpecStore) -> Result<SpecReload> {
+        for slug in std::mem::take(&mut self.spec_slugs) {
+            self.toolkits.remove(&slug);
+            if let Some(b) = self.shadowed.remove(&slug) {
+                self.toolkits.insert(slug, b);
+            }
+        }
+        let (adapters, mut failed) = specs.load_active()?;
+        let mut report = SpecReload::default();
+        for a in adapters {
+            let slug = a.spec().slug.clone();
+            if self.toolkits.contains_key(&slug) {
+                if !a.replaces_builtin() {
+                    failed.push((slug, "a built-in adapter with this name exists; set `replaces_builtin` to replace it".into()));
+                    continue;
+                }
+                if let Some(b) = self.toolkits.remove(&slug) {
+                    self.shadowed.insert(slug.clone(), b);
+                }
+                report.replaced_builtins.push(slug.clone());
+            }
+            report.loaded.push((slug.clone(), a.version().to_string()));
+            self.spec_slugs.insert(slug.clone());
+            self.toolkits.insert(slug, Box::new(a));
+        }
+        report.failed = failed;
+        self.spec_fingerprint = Some(specs.fingerprint());
+        Ok(report)
+    }
+
+    /// Reload only when an active pointer changed since the last load.
+    pub fn reload_specs_if_changed(&mut self, specs: &crate::spec::SpecStore) -> Result<Option<SpecReload>> {
+        if self.spec_fingerprint.as_deref() == Some(specs.fingerprint().as_str()) {
+            return Ok(None);
+        }
+        self.reload_specs(specs).map(Some)
+    }
+
+    /// Whether `toolkit` is served by a runtime spec.
+    pub fn is_spec_toolkit(&self, toolkit: &str) -> bool {
+        self.spec_slugs.contains(toolkit)
     }
 
     pub fn store(&self) -> &AccountStore<B> {
@@ -100,7 +162,7 @@ impl<B: SecretBackend> ToolHub<B> {
     /// Static-credential scheme for `toolkit` (API key, bearer token or Basic).
     pub fn credential_scheme(&self, toolkit: &str) -> Result<AuthSchemeKind> {
         let kinds: Vec<AuthSchemeKind> = self.toolkit(toolkit)?.spec().auth_schemes.iter().map(|s| s.kind()).collect();
-        [AuthSchemeKind::ApiKey, AuthSchemeKind::Bearer, AuthSchemeKind::Basic]
+        [AuthSchemeKind::ApiKey, AuthSchemeKind::Bearer, AuthSchemeKind::Basic, AuthSchemeKind::OAuthHeader]
             .into_iter()
             .find(|k| kinds.contains(k))
             .ok_or_else(|| anyhow!("toolkit `{toolkit}` only supports OAuth2"))
@@ -261,6 +323,11 @@ impl<B: SecretBackend> ToolHub<B> {
         if credential.trim().is_empty() {
             bail!("empty credential");
         }
+        if cfg.scheme == AuthSchemeKind::OAuthHeader
+            && !credential.trim().split_once(':').is_some_and(|(k, t)| !k.is_empty() && !t.is_empty() && !k.contains('"') && !t.contains('"'))
+        {
+            bail!("this connection needs `key:token` (API key and token, colon-separated, no quotes)");
+        }
         let params = self.resolve_connection_params(&cfg.toolkit, Some(credential.trim()), &BTreeMap::new(), params)?;
         let mut account = self.new_account(&cfg, project, actor, ConnectionStatus::Active);
         account.status = ConnectionStatus::Active;
@@ -332,6 +399,14 @@ impl<B: SecretBackend> ToolHub<B> {
         Ok(match cfg.scheme {
             AuthSchemeKind::OAuth2 | AuthSchemeKind::Bearer => {
                 request.header("authorization", format!("Bearer {}", secret.access_token))
+            }
+            AuthSchemeKind::None => request,
+            AuthSchemeKind::OAuthHeader => {
+                let (key, token) = secret.access_token.split_once(':').ok_or_else(|| anyhow!("oauth_header credential must be `key:token`"))?;
+                if key.is_empty() || token.is_empty() || key.contains('"') || token.contains('"') {
+                    bail!("invalid oauth_header credential");
+                }
+                request.header("authorization", format!(r#"OAuth oauth_consumer_key="{key}", oauth_token="{token}""#))
             }
             AuthSchemeKind::Basic => request.header(
                 "authorization",
@@ -406,6 +481,23 @@ impl<B: SecretBackend> ToolHub<B> {
             }
         }
         let toolkit = spec.toolkit.clone();
+        if adapter.spec().auth_schemes == [AuthScheme::None] {
+            // Public API: no account, no credential. Only allowed with an egress
+            // policy (hot-plug specs), so the allowed-hosts rule still applies.
+            let policy = adapter.egress_policy().ok_or_else(|| anyhow!("credential-free toolkit `{toolkit}` has no egress policy"))?;
+            let request = adapter.build_request(tool_slug, args)?;
+            policy.check_url(&request.url)?;
+            let response = self.transport.send_restricted(request)?;
+            return Ok(if (200..300).contains(&response.status) {
+                match adapter.parse_response(tool_slug, &response) {
+                    Ok(data) => ToolOutcome::Success { data },
+                    Err(e) => ToolOutcome::ProviderError { status: response.status, data: serde_json::json!({"error": e.to_string()}) },
+                }
+            } else {
+                let text: String = String::from_utf8_lossy(&response.body).chars().take(500).collect();
+                ToolOutcome::ProviderError { status: response.status, data: response.json().ok().filter(|v| !v.is_null()).unwrap_or_else(|| serde_json::json!({"error": text})) }
+            });
+        }
         let Some(account) = self.select_account(project, &toolkit, account_id)? else {
             return Ok(self.credential_required(&toolkit, None));
         };
@@ -439,9 +531,14 @@ impl<B: SecretBackend> ToolHub<B> {
                 .store
                 .secret(&account)?
                 .ok_or_else(|| anyhow!("account has no credential"))?;
-            let response =
-                self.transport
-                    .send(self.authorize(request.clone(), &account, &secret)?)?;
+            let authorized = self.authorize(request.clone(), &account, &secret)?;
+            let response = match adapter.egress_policy() {
+                Some(policy) => {
+                    policy.check_url(&authorized.url)?;
+                    self.transport.send_restricted(authorized)?
+                }
+                None => self.transport.send(authorized)?,
+            };
             if response.status == 401 {
                 self.expire(account.clone(), "provider rejected credential (401)")?;
                 return Ok(self.credential_required(&toolkit, Some(account.id)));

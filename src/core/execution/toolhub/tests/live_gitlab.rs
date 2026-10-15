@@ -31,6 +31,18 @@ fn raw(method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
 #[test]
 #[ignore]
 fn live_gitlab_read_write() {
+    scenario();
+}
+
+/// Same scenario through the hot-plug spec `specs/gitlab.json` (SpecAdapter).
+#[test]
+#[ignore]
+fn live_gitlab_read_write_via_spec() {
+    support::use_spec(include_str!("../specs/gitlab.json"));
+    scenario();
+}
+
+fn scenario() {
     if std::env::var("CTOX_TOOLHUB_LIVE_GITLAB_TOKEN").is_err() { return; }
     let p = std::env::var("CTOX_TOOLHUB_LIVE_GITLAB_PROJECT").unwrap_or("metric-space-toolhub/toolhub-test".into());
     let grp = std::env::var("CTOX_TOOLHUB_LIVE_GITLAB_GROUP").unwrap_or("metric-space-toolhub".into());

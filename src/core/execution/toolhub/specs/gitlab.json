@@ -1,0 +1,2917 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Liest das GitLab-Konto, zu dem die Verbindung gehört.",
+        "en": "Reads the GitLab user the connection belongs to."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/user"
+      },
+      "risk": "read",
+      "scopes": [
+        "api",
+        "read_user"
+      ],
+      "slug": "GITLAB_GET_CURRENT_USER",
+      "title": {
+        "de": "Aktuellen Nutzer lesen",
+        "en": "Get current user"
+      }
+    },
+    {
+      "description": {
+        "de": "Sucht Nutzer nach Name, Benutzername oder öffentlicher E-Mail.",
+        "en": "Searches users by name, username or public email."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "search": {
+            "description": "Name, Benutzername oder öffentliche E-Mail.",
+            "type": "string"
+          },
+          "username": {
+            "description": "Exakter Benutzername, ohne @.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "constraints": [
+          {
+            "args": [
+              "search",
+              "username"
+            ],
+            "kind": "at_least_one",
+            "message": "`search` or `username` is required; without either gitlab.com returns an arbitrary list of users"
+          }
+        ],
+        "method": "GET",
+        "path": "/users",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "username": {
+            "arg": "username",
+            "trim": true,
+            "strip_prefix": "@"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api",
+        "read_user"
+      ],
+      "slug": "GITLAB_LIST_USERS",
+      "title": {
+        "de": "Nutzer suchen",
+        "en": "List users"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest Emoji, Nachricht und Verfügbarkeit eines Nutzers.",
+        "en": "Reads the emoji, message and availability of a user."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "description": "Nutzer-ID oder Benutzername; leer = das verbundene Konto.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "paths": [
+          {
+            "path": "/users/{user}/status",
+            "when": "user"
+          },
+          {
+            "path": "/user/status"
+          }
+        ],
+        "path_encoding": {
+          "user": {
+            "strip_prefix": "@"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api",
+        "read_user"
+      ],
+      "slug": "GITLAB_GET_USER_STATUS",
+      "title": {
+        "de": "Status lesen",
+        "en": "Get user status"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet oder durchsucht die Issues eines Projekts, Seite für Seite.",
+        "en": "Lists or searches the issues of a project, one page at a time."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_id": {
+            "description": "Nur Issues dieses Assignees.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "author_id": {
+            "description": "Nur Issues dieses Autors.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "labels": {
+            "description": "Issues müssen alle diese Labels haben.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "description": "Exakter Meilenstein-Titel.",
+            "type": "string"
+          },
+          "order_by": {
+            "description": "Sortierung",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "due_date",
+              "priority"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "search": {
+            "description": "Trifft auf Titel und Beschreibung.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "description": "opened, closed oder all",
+            "enum": [
+              "opened",
+              "closed",
+              "all"
+            ],
+            "type": "string"
+          },
+          "updated_after": {
+            "description": "Nur Issues, die nach diesem ISO-Zeitpunkt aktualisiert wurden.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/issues",
+        "query": {
+          "assignee_id": {
+            "arg": "assignee_id"
+          },
+          "author_id": {
+            "arg": "author_id"
+          },
+          "labels": {
+            "arg": "labels",
+            "join": ",",
+            "type": "string_list"
+          },
+          "milestone": {
+            "arg": "milestone",
+            "trim": true
+          },
+          "order_by": {
+            "arg": "order_by",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "state": {
+            "arg": "state",
+            "trim": true
+          },
+          "updated_after": {
+            "arg": "updated_after",
+            "trim": true,
+            "format": "date-prefix"
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_ISSUES",
+      "title": {
+        "de": "Issues auflisten",
+        "en": "List issues"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest ein Issue eines Projekts anhand seiner IID.",
+        "en": "Reads one issue of a project by its IID."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`, im GitLab als #12).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/issues/{issue_iid}",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_ISSUE",
+      "title": {
+        "de": "Issue lesen",
+        "en": "Get issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt ein Issue in einem Projekt an; braucht --confirm.",
+        "en": "Creates an issue in a project; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_ids": {
+            "description": "Numerische Nutzer-IDs der Assignees.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "confidential": {
+            "description": "Nur für Mitglieder ab Rolle Planner sichtbar.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "Markdown-Beschreibung.",
+            "type": "string"
+          },
+          "due_date": {
+            "description": "Fälligkeitsdatum, YYYY-MM-DD.",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Label-Namen; noch nicht vorhandene Labels werden angelegt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone_id": {
+            "description": "Globale Meilenstein-ID (nicht die iid).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Titel des Issues",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}/issues",
+        "body": {
+          "json": {
+            "title": {
+              "arg": "title",
+              "trim": true,
+              "required": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "labels": {
+              "arg": "labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "assignee_ids": {
+              "arg": "assignee_ids",
+              "type": "string_list",
+              "items_integer": true
+            },
+            "milestone_id": {
+              "arg": "milestone_id"
+            },
+            "due_date": {
+              "arg": "due_date",
+              "trim": true,
+              "format": "date-prefix"
+            },
+            "confidential": {
+              "arg": "confidential",
+              "type": "tristate"
+            }
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_CREATE_ISSUE",
+      "title": {
+        "de": "Issue anlegen",
+        "en": "Create issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Ändert nur die übergebenen Felder eines Issues; braucht --confirm.",
+        "en": "Changes only the fields you pass on an issue; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "add_labels": {
+            "description": "Labels hinzufügen, vorhandene bleiben.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assignee_ids": {
+            "description": "Ersetzt alle Assignees.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "clear_assignees": {
+            "default": false,
+            "description": "Alle Assignees entfernen",
+            "type": "boolean"
+          },
+          "clear_description": {
+            "default": false,
+            "description": "Beschreibung leeren",
+            "type": "boolean"
+          },
+          "clear_due_date": {
+            "default": false,
+            "description": "Fälligkeitsdatum entfernen",
+            "type": "boolean"
+          },
+          "clear_milestone": {
+            "default": false,
+            "description": "Meilenstein entfernen",
+            "type": "boolean"
+          },
+          "confidential": {
+            "description": "Leer = aktuellen Wert behalten.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "description": {
+            "description": "Neue Beschreibung in Markdown",
+            "type": "string"
+          },
+          "discussion_locked": {
+            "description": "Leer = aktuellen Wert behalten.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "due_date": {
+            "description": "Fälligkeitsdatum, YYYY-MM-DD.",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "milestone_id": {
+            "description": "Globale Meilenstein-ID.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "remove_labels": {
+            "description": "Labels entfernen, Rest bleibt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state_event": {
+            "description": "Issue schließen oder wieder öffnen",
+            "enum": [
+              "close",
+              "reopen"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Neuer Titel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/projects/{project_id}/issues/{issue_iid}",
+        "body": {
+          "json": {
+            "title": {
+              "arg": "title",
+              "trim": true
+            },
+            "description": {
+              "switch": "clear_description",
+              "cases": {
+                "true": {
+                  "const": ""
+                }
+              },
+              "else": {
+                "arg": "description",
+                "trim": true
+              }
+            },
+            "state_event": {
+              "arg": "state_event",
+              "trim": true,
+              "one_of": [
+                "close",
+                "reopen"
+              ],
+              "strict": true
+            },
+            "add_labels": {
+              "arg": "add_labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "remove_labels": {
+              "arg": "remove_labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "assignee_ids": {
+              "switch": "clear_assignees",
+              "cases": {
+                "true": {
+                  "const": [
+                    0
+                  ]
+                }
+              },
+              "else": {
+                "arg": "assignee_ids",
+                "type": "string_list",
+                "items_integer": true
+              }
+            },
+            "milestone_id": {
+              "switch": "clear_milestone",
+              "cases": {
+                "true": {
+                  "const": 0
+                }
+              },
+              "else": {
+                "arg": "milestone_id"
+              }
+            },
+            "discussion_locked": {
+              "arg": "discussion_locked",
+              "type": "tristate"
+            },
+            "due_date": {
+              "switch": "clear_due_date",
+              "cases": {
+                "true": {
+                  "const": ""
+                }
+              },
+              "else": {
+                "arg": "due_date",
+                "trim": true,
+                "format": "date-prefix"
+              }
+            },
+            "confidential": {
+              "arg": "confidential",
+              "type": "tristate"
+            },
+            "$omit_empty": true
+          }
+        },
+        "nonempty_body": "nothing to update: pass at least one field to change",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_UPDATE_ISSUE",
+      "title": {
+        "de": "Issue ändern",
+        "en": "Update issue"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Kommentare (Notes) eines Issues.",
+        "en": "Lists the comments (notes) of an issue."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "order_by": {
+            "description": "Sortierung",
+            "enum": [
+              "created_at",
+              "updated_at"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/issues/{issue_iid}/notes",
+        "query": {
+          "order_by": {
+            "arg": "order_by",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_ISSUE_NOTES",
+      "title": {
+        "de": "Issue-Kommentare auflisten",
+        "en": "List issue notes"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Kommentar eines Issues anhand seiner ID.",
+        "en": "Reads one comment of an issue by its ID."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "note_id": {
+            "description": "Numerische ID des Kommentars.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid",
+          "note_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/issues/{issue_iid}/notes/{note_id}",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_ISSUE_NOTE",
+      "title": {
+        "de": "Issue-Kommentar lesen",
+        "en": "Get issue note"
+      }
+    },
+    {
+      "description": {
+        "de": "Schreibt einen Kommentar auf ein Issue; braucht --confirm.",
+        "en": "Posts a comment on an issue; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "description": "Kommentartext in Markdown",
+            "type": "string"
+          },
+          "internal": {
+            "description": "Nur für Mitglieder ab Rolle Reporter sichtbar.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid",
+          "body"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}/issues/{issue_iid}/notes",
+        "body": {
+          "json": {
+            "body": {
+              "arg": "body",
+              "trim": true,
+              "required": true
+            },
+            "internal": {
+              "arg": "internal",
+              "type": "tristate"
+            }
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_CREATE_ISSUE_NOTE",
+      "title": {
+        "de": "Issue-Kommentar schreiben",
+        "en": "Create issue note"
+      }
+    },
+    {
+      "description": {
+        "de": "Löscht einen Kommentar eines Issues; braucht --confirm.",
+        "en": "Deletes a comment of an issue; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "note_id": {
+            "description": "Numerische ID des Kommentars.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid",
+          "note_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/projects/{project_id}/issues/{issue_iid}/notes/{note_id}",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "fields": {
+          "deleted": {
+            "default": true,
+            "pointer": "/__ctox_missing__"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "destructive",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_DELETE_ISSUE_NOTE",
+      "title": {
+        "de": "Issue-Kommentar löschen",
+        "en": "Delete issue note"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest verbrauchte und geschätzte Zeit eines Issues.",
+        "en": "Reads the spent and estimated time of an issue."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "issue_iid": {
+            "description": "Issue-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "issue_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/issues/{issue_iid}/time_stats",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_ISSUE_TIME_STATS",
+      "title": {
+        "de": "Issue-Zeitstatistik lesen",
+        "en": "Get issue time stats"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Merge Requests eines Projekts oder, ohne Projekt, projektübergreifend.",
+        "en": "Lists the merge requests of a project or, without a project, across projects."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "author_id": {
+            "description": "Nur MRs dieses Autors.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "labels": {
+            "description": "Labels; mindestens eines muss passen.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Optional. Leer = projektübergreifend suchen.",
+            "type": "string"
+          },
+          "reviewer_id": {
+            "description": "Nur MRs mit diesem Reviewer.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scope": {
+            "description": "Wessen Merge Requests",
+            "enum": [
+              "created_by_me",
+              "assigned_to_me",
+              "all"
+            ],
+            "type": "string"
+          },
+          "search": {
+            "description": "Trifft auf Titel und Beschreibung.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          },
+          "source_branch": {
+            "description": "Nur MRs aus diesem Branch.",
+            "type": "string"
+          },
+          "state": {
+            "description": "Status",
+            "enum": [
+              "opened",
+              "closed",
+              "locked",
+              "merged",
+              "all"
+            ],
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "Nur MRs in diesen Ziel-Branch.",
+            "type": "string"
+          },
+          "updated_after": {
+            "description": "Nur MRs, die nach diesem ISO-Zeitpunkt aktualisiert wurden.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "paths": [
+          {
+            "path": "/projects/{project_id}/merge_requests",
+            "when": "project_id"
+          },
+          {
+            "path": "/merge_requests"
+          }
+        ],
+        "query": {
+          "author_id": {
+            "arg": "author_id"
+          },
+          "labels": {
+            "arg": "labels",
+            "join": ",",
+            "type": "string_list"
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "reviewer_id": {
+            "arg": "reviewer_id"
+          },
+          "scope": {
+            "arg": "scope",
+            "trim": true
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "source_branch": {
+            "arg": "source_branch",
+            "trim": true
+          },
+          "state": {
+            "arg": "state",
+            "trim": true
+          },
+          "target_branch": {
+            "arg": "target_branch",
+            "trim": true
+          },
+          "updated_after": {
+            "arg": "updated_after",
+            "trim": true,
+            "format": "date-prefix"
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_MERGE_REQUESTS",
+      "title": {
+        "de": "Merge Requests auflisten",
+        "en": "List merge requests"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Merge Request anhand seiner IID.",
+        "en": "Reads one merge request by its IID."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "merge_request_iid": {
+            "description": "MR-Nummer im Projekt (die `iid`, im GitLab als !12).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "merge_request_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/merge_requests/{merge_request_iid}",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_MERGE_REQUEST",
+      "title": {
+        "de": "Merge Request lesen",
+        "en": "Get merge request"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest Freigabestatus und offene Anforderungen eines Merge Requests.",
+        "en": "Reads the approval status and open approval rules of a merge request."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "merge_request_iid": {
+            "description": "MR-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "merge_request_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/merge_requests/{merge_request_iid}/approvals",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_MERGE_REQUEST_APPROVALS",
+      "title": {
+        "de": "Merge-Request-Freigaben lesen",
+        "en": "Get merge request approvals"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Commits eines Merge Requests.",
+        "en": "Lists the commits of a merge request."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "merge_request_iid": {
+            "description": "MR-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "merge_request_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/merge_requests/{merge_request_iid}/commits",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_MERGE_REQUEST_COMMITS",
+      "title": {
+        "de": "Merge-Request-Commits auflisten",
+        "en": "List merge request commits"
+      }
+    },
+    {
+      "description": {
+        "de": "Öffnet einen Merge Request zwischen zwei Branches; braucht --confirm.",
+        "en": "Opens a merge request between two branches; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_ids": {
+            "description": "Numerische Nutzer-IDs der Assignees.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "Beschreibung in Markdown",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Label-Namen.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone_id": {
+            "description": "Globale Meilenstein-ID (nicht die iid).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "remove_source_branch": {
+            "description": "Quell-Branch nach dem Merge löschen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "reviewer_ids": {
+            "description": "Numerische Nutzer-IDs der Reviewer.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_branch": {
+            "description": "Branch mit den Änderungen.",
+            "type": "string"
+          },
+          "squash": {
+            "description": "Commits beim Merge squashen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "Ziel-Branch, z. B. main.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Titel; Präfix \"Draft:\" öffnet ihn als Entwurf.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "source_branch",
+          "target_branch",
+          "title"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}/merge_requests",
+        "body": {
+          "json": {
+            "source_branch": {
+              "arg": "source_branch",
+              "trim": true,
+              "required": true
+            },
+            "target_branch": {
+              "arg": "target_branch",
+              "trim": true,
+              "required": true
+            },
+            "title": {
+              "arg": "title",
+              "trim": true,
+              "required": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "labels": {
+              "arg": "labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "assignee_ids": {
+              "arg": "assignee_ids",
+              "type": "string_list",
+              "items_integer": true
+            },
+            "reviewer_ids": {
+              "arg": "reviewer_ids",
+              "type": "string_list",
+              "items_integer": true
+            },
+            "milestone_id": {
+              "arg": "milestone_id"
+            },
+            "remove_source_branch": {
+              "arg": "remove_source_branch",
+              "type": "tristate"
+            },
+            "squash": {
+              "arg": "squash",
+              "type": "tristate"
+            }
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_CREATE_MERGE_REQUEST",
+      "title": {
+        "de": "Merge Request anlegen",
+        "en": "Create merge request"
+      }
+    },
+    {
+      "description": {
+        "de": "Ändert nur die übergebenen Felder eines Merge Requests; braucht --confirm.",
+        "en": "Changes only the fields you pass on a merge request; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "add_labels": {
+            "description": "Labels hinzufügen, vorhandene bleiben.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "assignee_ids": {
+            "description": "Ersetzt alle Assignees.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "clear_assignees": {
+            "default": false,
+            "description": "Alle Assignees entfernen",
+            "type": "boolean"
+          },
+          "clear_description": {
+            "default": false,
+            "description": "Beschreibung leeren",
+            "type": "boolean"
+          },
+          "clear_milestone": {
+            "default": false,
+            "description": "Meilenstein entfernen",
+            "type": "boolean"
+          },
+          "clear_reviewers": {
+            "default": false,
+            "description": "Alle Reviewer entfernen",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "Neue Beschreibung in Markdown",
+            "type": "string"
+          },
+          "discussion_locked": {
+            "description": "Leer = aktuellen Wert behalten.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "merge_request_iid": {
+            "description": "MR-Nummer im Projekt (die `iid`).",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "milestone_id": {
+            "description": "Globale Meilenstein-ID.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "remove_labels": {
+            "description": "Labels entfernen, Rest bleibt.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "remove_source_branch": {
+            "description": "Quell-Branch nach dem Merge löschen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "reviewer_ids": {
+            "description": "Ersetzt alle Reviewer.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "squash": {
+            "description": "Commits beim Merge squashen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "state_event": {
+            "description": "Merge Request schließen oder wieder öffnen",
+            "enum": [
+              "close",
+              "reopen"
+            ],
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "Neuer Ziel-Branch.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Neuer Titel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "merge_request_iid"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/projects/{project_id}/merge_requests/{merge_request_iid}",
+        "body": {
+          "json": {
+            "title": {
+              "arg": "title",
+              "trim": true
+            },
+            "description": {
+              "switch": "clear_description",
+              "cases": {
+                "true": {
+                  "const": ""
+                }
+              },
+              "else": {
+                "arg": "description",
+                "trim": true
+              }
+            },
+            "state_event": {
+              "arg": "state_event",
+              "trim": true,
+              "one_of": [
+                "close",
+                "reopen"
+              ],
+              "strict": true
+            },
+            "add_labels": {
+              "arg": "add_labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "remove_labels": {
+              "arg": "remove_labels",
+              "type": "string_list",
+              "join": ","
+            },
+            "assignee_ids": {
+              "switch": "clear_assignees",
+              "cases": {
+                "true": {
+                  "const": [
+                    0
+                  ]
+                }
+              },
+              "else": {
+                "arg": "assignee_ids",
+                "type": "string_list",
+                "items_integer": true
+              }
+            },
+            "milestone_id": {
+              "switch": "clear_milestone",
+              "cases": {
+                "true": {
+                  "const": 0
+                }
+              },
+              "else": {
+                "arg": "milestone_id"
+              }
+            },
+            "discussion_locked": {
+              "arg": "discussion_locked",
+              "type": "tristate"
+            },
+            "target_branch": {
+              "arg": "target_branch",
+              "trim": true
+            },
+            "reviewer_ids": {
+              "switch": "clear_reviewers",
+              "cases": {
+                "true": {
+                  "const": [
+                    0
+                  ]
+                }
+              },
+              "else": {
+                "arg": "reviewer_ids",
+                "type": "string_list",
+                "items_integer": true
+              }
+            },
+            "remove_source_branch": {
+              "arg": "remove_source_branch",
+              "type": "tristate"
+            },
+            "squash": {
+              "arg": "squash",
+              "type": "tristate"
+            },
+            "$omit_empty": true
+          }
+        },
+        "nonempty_body": "nothing to update: pass at least one field to change",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_UPDATE_MERGE_REQUEST",
+      "title": {
+        "de": "Merge Request ändern",
+        "en": "Update merge request"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Projekte, standardmäßig nur solche, in denen du Mitglied bist.",
+        "en": "Lists projects, by default only the ones you are a member of."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "description": "Ja = nur archivierte, Nein = nur aktive.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "membership": {
+            "description": "Nur Mitgliedschaften; Standard ja.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "order_by": {
+            "description": "Sortierung",
+            "enum": [
+              "created_at",
+              "last_activity_at",
+              "name",
+              "path",
+              "updated_at",
+              "id"
+            ],
+            "type": "string"
+          },
+          "owned": {
+            "description": "Nur eigene Projekte.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "search": {
+            "description": "Trifft auf Projektname und -pfad.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          },
+          "visibility": {
+            "description": "Sichtbarkeit",
+            "enum": [
+              "private",
+              "internal",
+              "public"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "membership": {
+            "switch": "membership",
+            "cases": {
+              "false": {
+                "const": null
+              }
+            },
+            "else": {
+              "const": "true"
+            }
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "owned": {
+            "arg": "owned",
+            "type": "tristate"
+          },
+          "archived": {
+            "arg": "archived",
+            "type": "tristate"
+          },
+          "visibility": {
+            "arg": "visibility",
+            "trim": true
+          },
+          "order_by": {
+            "arg": "order_by",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "simple": {
+            "const": "true"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "when": {
+              "arg": "membership",
+              "equals": false
+            },
+            "args": [
+              "search",
+              {
+                "arg": "owned",
+                "equals": true
+              }
+            ],
+            "message": "`membership` can be turned off only together with `search` or `owned`."
+          }
+        ]
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_PROJECTS",
+      "title": {
+        "de": "Projekte auflisten",
+        "en": "List projects"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest ein Projekt anhand seiner ID oder seines Pfades.",
+        "en": "Reads one project by its ID or path."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}",
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_PROJECT",
+      "title": {
+        "de": "Projekt lesen",
+        "en": "Get project"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet alle Mitglieder eines Projekts, inklusive inheritsierter Rollen.",
+        "en": "Lists all members of a project, including inherited roles."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "query": {
+            "description": "Trifft auf Name, Benutzername oder öffentliche E-Mail.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/members/all",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "query": {
+            "arg": "query",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_PROJECT_MEMBERS",
+      "title": {
+        "de": "Projektmitglieder auflisten",
+        "en": "List project members"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Gruppen, die für das verbundene Konto sichtbar sind.",
+        "en": "Lists the groups visible to the connected account."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "min_access_level": {
+            "description": "Mindestrolle",
+            "enum": [
+              "10",
+              "15",
+              "20",
+              "30",
+              "40",
+              "50"
+            ],
+            "type": "string"
+          },
+          "order_by": {
+            "description": "Sortierung",
+            "enum": [
+              "name",
+              "path",
+              "id"
+            ],
+            "type": "string"
+          },
+          "owned": {
+            "description": "Nur eigene Gruppen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "search": {
+            "description": "Trifft auf Gruppenname und -pfad.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          },
+          "top_level_only": {
+            "description": "Untergruppen ausblenden.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/groups",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "owned": {
+            "arg": "owned",
+            "type": "tristate"
+          },
+          "top_level_only": {
+            "arg": "top_level_only",
+            "type": "tristate"
+          },
+          "min_access_level": {
+            "arg": "min_access_level",
+            "trim": true
+          },
+          "order_by": {
+            "arg": "order_by",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_GROUPS",
+      "title": {
+        "de": "Gruppen auflisten",
+        "en": "List groups"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest eine Gruppe anhand ihrer ID oder ihres Pfades.",
+        "en": "Reads one group by its ID or path."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "description": "Numerische Gruppen-ID oder vollständiger Pfad, z. B. `my-group/sub-group`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/groups/{group_id}",
+        "query": {
+          "with_projects": {
+            "const": "false"
+          }
+        },
+        "path_encoding": {
+          "group_id": "namespaced"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_GROUP",
+      "title": {
+        "de": "Gruppe lesen",
+        "en": "Get group"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Labels eines Projekts.",
+        "en": "Lists the labels of a project."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_ancestor_groups": {
+            "description": "Labels der übergeordneten Gruppen einbeziehen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "search": {
+            "description": "Trifft auf den Label-Namen.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/labels",
+        "query": {
+          "include_ancestor_groups": {
+            "arg": "include_ancestor_groups",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_LABELS",
+      "title": {
+        "de": "Labels auflisten",
+        "en": "List labels"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest ein Label anhand seiner ID oder seines Namens.",
+        "en": "Reads one label by its ID or name."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_ancestor_groups": {
+            "description": "Auch in Labels aus übergeordneten Gruppen suchen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "label_id": {
+            "description": "Numerische Label-ID oder der exakte Label-Name.",
+            "type": "string"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "label_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/labels/{label_id}",
+        "path_encoding": {
+          "label_id": {
+            "namespaced": ": "
+          },
+          "project_id": "namespaced"
+        },
+        "query": {
+          "include_ancestor_groups": {
+            "arg": "include_ancestor_groups",
+            "trim": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_GET_LABEL",
+      "title": {
+        "de": "Label lesen",
+        "en": "Get label"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt ein Label in einem Projekt an; braucht --confirm.",
+        "en": "Creates a label in a project; requires --confirm."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "description": "Hex-Farbe wie #FF0000 oder ein CSS-Farbname.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Beschreibung",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name des Labels",
+            "type": "string"
+          },
+          "priority": {
+            "description": "Ganze Zahl ab 0; niedrigere Werte sortieren zuerst.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "name",
+          "color"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project_id}/labels",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "color": {
+              "arg": "color",
+              "trim": true,
+              "required": true,
+              "format": "color"
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "priority": {
+              "arg": "priority"
+            }
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_CREATE_LABEL",
+      "title": {
+        "de": "Label anlegen",
+        "en": "Create label"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Meilensteine eines Projekts.",
+        "en": "Lists the milestones of a project."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "include_ancestors": {
+            "description": "Meilensteine der übergeordneten Gruppen einbeziehen.",
+            "enum": [
+              "true",
+              "false"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "search": {
+            "description": "Trifft auf Titel und Beschreibung.",
+            "type": "string"
+          },
+          "state": {
+            "description": "Status",
+            "enum": [
+              "active",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Exakter Titel.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/milestones",
+        "query": {
+          "include_ancestors": {
+            "arg": "include_ancestors",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          },
+          "state": {
+            "arg": "state",
+            "trim": true
+          },
+          "title": {
+            "arg": "title",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_MILESTONES",
+      "title": {
+        "de": "Meilensteine auflisten",
+        "en": "List milestones"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Branches eines Repositorys.",
+        "en": "Lists the branches of a repository."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "search": {
+            "description": "Trifft auf den Branch-Namen.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/repository/branches",
+        "query": {
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "search": {
+            "arg": "search",
+            "trim": true
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_BRANCHES",
+      "title": {
+        "de": "Branches auflisten",
+        "en": "List branches"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet Commits eines Repositorys, optional auf einen Ref oder Pfad gefiltert.",
+        "en": "Lists commits of a repository, optionally filtered by ref or path."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "description": "Name oder E-Mail des Autors.",
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "Nur Commits, die diesen Pfad berühren.",
+            "type": "string"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "ref_name": {
+            "description": "Branch oder Tag; Standard = Default-Branch.",
+            "type": "string"
+          },
+          "since": {
+            "description": "Nur Commits nach diesem ISO-Zeitpunkt.",
+            "type": "string"
+          },
+          "until": {
+            "description": "Nur Commits vor diesem ISO-Zeitpunkt.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/repository/commits",
+        "query": {
+          "author": {
+            "arg": "author",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "path": {
+            "arg": "path",
+            "trim": true
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "ref_name": {
+            "arg": "ref_name",
+            "trim": true
+          },
+          "since": {
+            "arg": "since",
+            "trim": true,
+            "format": "date-prefix"
+          },
+          "until": {
+            "arg": "until",
+            "trim": true,
+            "format": "date-prefix"
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_COMMITS",
+      "title": {
+        "de": "Commits auflisten",
+        "en": "List commits"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die CI/CD-Pipelines eines Projekts.",
+        "en": "Lists the CI/CD pipelines of a project."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "order_by": {
+            "description": "Sortierung",
+            "enum": [
+              "id",
+              "status",
+              "ref",
+              "updated_at",
+              "user_id"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "default": 1,
+            "description": "Seitenzahl, beginnend bei 1. Nimm `page` aus dem vorigen Ergebnis.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "per_page": {
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100. Standard 20.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "description": "Numerische Projekt-ID oder vollständiger Pfad, z. B. `my-group/my-project`.",
+            "type": "string"
+          },
+          "ref": {
+            "description": "Branch oder Tag.",
+            "type": "string"
+          },
+          "sha": {
+            "description": "Commit-SHA.",
+            "type": "string"
+          },
+          "sort": {
+            "description": "Richtung",
+            "enum": [
+              "desc",
+              "asc"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "description": "Auslöser, z. B. push, web, api, schedule, merge_request_event.",
+            "type": "string"
+          },
+          "status": {
+            "description": "Status der Pipeline",
+            "enum": [
+              "created",
+              "waiting_for_resource",
+              "preparing",
+              "pending",
+              "running",
+              "success",
+              "failed",
+              "canceled",
+              "skipped",
+              "manual",
+              "scheduled"
+            ],
+            "type": "string"
+          },
+          "updated_after": {
+            "description": "Nur Pipelines, die nach diesem ISO-Zeitpunkt aktualisiert wurden.",
+            "type": "string"
+          },
+          "updated_before": {
+            "description": "Nur Pipelines, die vor diesem ISO-Zeitpunkt aktualisiert wurden.",
+            "type": "string"
+          },
+          "username": {
+            "description": "Benutzername, der die Pipeline ausgelöst hat, ohne @.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project_id}/pipelines",
+        "query": {
+          "order_by": {
+            "arg": "order_by",
+            "trim": true
+          },
+          "page": {
+            "arg": "page",
+            "default": 1
+          },
+          "per_page": {
+            "arg": "per_page",
+            "default": 20
+          },
+          "ref": {
+            "arg": "ref",
+            "trim": true
+          },
+          "sha": {
+            "arg": "sha",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "source": {
+            "arg": "source",
+            "trim": true
+          },
+          "status": {
+            "arg": "status",
+            "trim": true
+          },
+          "updated_after": {
+            "arg": "updated_after",
+            "trim": true,
+            "format": "date-prefix"
+          },
+          "updated_before": {
+            "arg": "updated_before",
+            "trim": true,
+            "format": "date-prefix"
+          },
+          "username": {
+            "arg": "username",
+            "trim": true,
+            "strip_prefix": "@"
+          }
+        },
+        "path_encoding": {
+          "project_id": "namespaced"
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "items": {
+            "pointer": "",
+            "default": []
+          },
+          "count": {
+            "pointer": "",
+            "count": true
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "api"
+      ],
+      "slug": "GITLAB_LIST_PIPELINES",
+      "title": {
+        "de": "Pipelines auflisten",
+        "en": "List pipelines"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "gitlab.com"
+  ],
+  "api_base": "https://gitlab.com/api/v4",
+  "auth_schemes": [
+    {
+      "authorize_url": "https://gitlab.com/oauth/authorize",
+      "default_scopes": [
+        "api",
+        "read_user"
+      ],
+      "extra_authorize_params": [],
+      "pkce": false,
+      "refreshable": true,
+      "scope_separator": " ",
+      "token_url": "https://gitlab.com/oauth/token",
+      "type": "oauth2"
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "Projekte, Issues, Merge Requests, Labels und CI-Pipelines in GitLab lesen und bearbeiten.",
+    "en": "Read and change projects, issues, merge requests, labels and CI pipelines in GitLab."
+  },
+  "name": "GitLab",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/gitlab.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "gitlab",
+  "version": "1.0.0",
+  "docs": [
+    "https://docs.gitlab.com/api/rest/"
+  ]
+}

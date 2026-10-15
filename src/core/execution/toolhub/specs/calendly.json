@@ -1,0 +1,1137 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "calendly",
+  "version": "1.0.0",
+  "docs": [
+    "https://developer.calendly.com/api-docs"
+  ],
+  "notes": "Hot-plug only spec (no new compiled code); replaces the compiled src/toolkits/calendly.rs at runtime. References are Calendly resource URIs; bare UUIDs are expanded via uri_prefix / uri_tail. Pagination: count + page_token, next token at /pagination/next_page_token.",
+  "api_base": "https://api.calendly.com",
+  "allowed_hosts": [
+    "api.calendly.com"
+  ],
+  "replaces_builtin": true,
+  "name": "Calendly",
+  "description": {
+    "de": "Terminarten, gebuchte Termine, Teilnehmer, Verfügbarkeiten, Buchungslinks und Webhooks in Calendly.",
+    "en": "Event types, booked events, invitees, availability, scheduling links and webhooks in Calendly."
+  },
+  "auth_schemes": [
+    {
+      "type": "bearer"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "CALENDLY_GET_CURRENT_USER",
+      "title": {
+        "de": "Eigenes Konto lesen",
+        "en": "Get current user"
+      },
+      "description": {
+        "de": "Liest das verbundene Calendly-Konto (URI, Organisation, Buchungslink).",
+        "en": "Reads the connected Calendly account (URI, organization, booking link)."
+      },
+      "risk": "read",
+      "scopes": [
+        "users:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/users/me"
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_USER",
+      "title": {
+        "de": "Nutzer lesen",
+        "en": "Get user"
+      },
+      "description": {
+        "de": "Liest einen Calendly-Nutzer.",
+        "en": "Reads one Calendly user."
+      },
+      "risk": "read",
+      "scopes": [
+        "users:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          }
+        },
+        "required": [
+          "user"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/users/{user}",
+        "path_encoding": {
+          "user": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_EVENT_TYPES",
+      "title": {
+        "de": "Terminarten auflisten",
+        "en": "List event types"
+      },
+      "description": {
+        "de": "Listet die Terminarten eines Nutzers oder einer Organisation.",
+        "en": "Lists the event types of a user or organization."
+      },
+      "risk": "read",
+      "scopes": [
+        "event_types:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Organisations-URI (https://api.calendly.com/organizations/…) oder UUID; CALENDLY_GET_CURRENT_USER liefert sie im Feld current_organization."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Nur aktive (true) oder nur inaktive (false) Terminarten."
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sortierung, z. B. name:asc oder position:asc."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 20)."
+          },
+          "page_token": {
+            "type": "string",
+            "description": "`next_page_token` des vorherigen Aufrufs, um die nächste Seite zu holen."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/event_types",
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "args": [
+              "user",
+              "organization"
+            ],
+            "message": "Bitte `user` oder `organization` angeben (URI aus CALENDLY_GET_CURRENT_USER)."
+          }
+        ],
+        "query": {
+          "user": {
+            "arg": "user",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/users/"
+          },
+          "organization": {
+            "arg": "organization",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/organizations/"
+          },
+          "active": {
+            "arg": "active"
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "count": {
+            "arg": "count",
+            "default": 20,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "page_token": {
+            "arg": "page_token",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "collection": {
+            "pointer": "/collection",
+            "default": []
+          },
+          "next_page_token": {
+            "pointer": "/pagination/next_page_token"
+          }
+        }
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_EVENT_TYPE",
+      "title": {
+        "de": "Terminart lesen",
+        "en": "Get event type"
+      },
+      "description": {
+        "de": "Liest eine Terminart mit allen Feldern.",
+        "en": "Reads one event type with all fields."
+      },
+      "risk": "read",
+      "scopes": [
+        "event_types:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "description": "Event-Typ-URI oder UUID, z. B. aus CALENDLY_LIST_EVENT_TYPES."
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/event_types/{event_type}",
+        "path_encoding": {
+          "event_type": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_SCHEDULED_EVENTS",
+      "title": {
+        "de": "Gebuchte Termine auflisten",
+        "en": "List scheduled events"
+      },
+      "description": {
+        "de": "Listet gebuchte Termine eines Nutzers oder einer Organisation, optional nach Zeitraum, Status oder Teilnehmer-E-Mail gefiltert.",
+        "en": "Lists booked events of a user or organization, optionally filtered by time window, status or invitee email."
+      },
+      "risk": "read",
+      "scopes": [
+        "scheduled_events:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Organisations-URI (https://api.calendly.com/organizations/…) oder UUID; CALENDLY_GET_CURRENT_USER liefert sie im Feld current_organization."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "canceled"
+            ],
+            "description": "active oder canceled."
+          },
+          "min_start_time": {
+            "type": "string",
+            "description": "Frühester Beginn, ISO 8601 mit Zone, z. B. 2026-10-01T00:00:00Z."
+          },
+          "max_start_time": {
+            "type": "string",
+            "description": "Spätester Beginn, ISO 8601 mit Zone."
+          },
+          "invitee_email": {
+            "type": "string",
+            "description": "Nur Termine mit diesem Teilnehmer."
+          },
+          "sort": {
+            "type": "string",
+            "description": "z. B. start_time:asc oder start_time:desc."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 20)."
+          },
+          "page_token": {
+            "type": "string",
+            "description": "`next_page_token` des vorherigen Aufrufs, um die nächste Seite zu holen."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/scheduled_events",
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "args": [
+              "user",
+              "organization"
+            ],
+            "message": "Bitte `user` oder `organization` angeben (URI aus CALENDLY_GET_CURRENT_USER)."
+          }
+        ],
+        "query": {
+          "user": {
+            "arg": "user",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/users/"
+          },
+          "organization": {
+            "arg": "organization",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/organizations/"
+          },
+          "status": {
+            "arg": "status",
+            "one_of": [
+              "active",
+              "canceled"
+            ]
+          },
+          "min_start_time": {
+            "arg": "min_start_time",
+            "trim": true,
+            "format": "date-time"
+          },
+          "max_start_time": {
+            "arg": "max_start_time",
+            "trim": true,
+            "format": "date-time"
+          },
+          "invitee_email": {
+            "arg": "invitee_email",
+            "trim": true
+          },
+          "sort": {
+            "arg": "sort",
+            "trim": true
+          },
+          "count": {
+            "arg": "count",
+            "default": 20,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "page_token": {
+            "arg": "page_token",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "collection": {
+            "pointer": "/collection",
+            "default": []
+          },
+          "next_page_token": {
+            "pointer": "/pagination/next_page_token"
+          }
+        }
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_SCHEDULED_EVENT",
+      "title": {
+        "de": "Gebuchten Termin lesen",
+        "en": "Get scheduled event"
+      },
+      "description": {
+        "de": "Liest einen gebuchten Termin.",
+        "en": "Reads one booked event."
+      },
+      "risk": "read",
+      "scopes": [
+        "scheduled_events:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Termin-URI oder UUID, z. B. aus CALENDLY_LIST_SCHEDULED_EVENTS."
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/scheduled_events/{event}",
+        "path_encoding": {
+          "event": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_EVENT_INVITEES",
+      "title": {
+        "de": "Teilnehmer auflisten",
+        "en": "List event invitees"
+      },
+      "description": {
+        "de": "Listet die Teilnehmer eines gebuchten Termins.",
+        "en": "Lists the invitees of one booked event."
+      },
+      "risk": "read",
+      "scopes": [
+        "scheduled_events:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Termin-URI oder UUID, z. B. aus CALENDLY_LIST_SCHEDULED_EVENTS."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "canceled"
+            ],
+            "description": "active oder canceled."
+          },
+          "email": {
+            "type": "string",
+            "description": "Nur diesen Teilnehmer."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 20)."
+          },
+          "page_token": {
+            "type": "string",
+            "description": "`next_page_token` des vorherigen Aufrufs, um die nächste Seite zu holen."
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/scheduled_events/{event}/invitees",
+        "path_encoding": {
+          "event": "uri_tail"
+        },
+        "query": {
+          "status": {
+            "arg": "status",
+            "one_of": [
+              "active",
+              "canceled"
+            ]
+          },
+          "email": {
+            "arg": "email",
+            "trim": true
+          },
+          "count": {
+            "arg": "count",
+            "default": 20,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "page_token": {
+            "arg": "page_token",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "collection": {
+            "pointer": "/collection",
+            "default": []
+          },
+          "next_page_token": {
+            "pointer": "/pagination/next_page_token"
+          }
+        }
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_EVENT_INVITEE",
+      "title": {
+        "de": "Teilnehmer lesen",
+        "en": "Get event invitee"
+      },
+      "description": {
+        "de": "Liest einen Teilnehmer eines gebuchten Termins (inkl. Antworten auf Fragen).",
+        "en": "Reads one invitee of a booked event (including question answers)."
+      },
+      "risk": "read",
+      "scopes": [
+        "scheduled_events:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Termin-URI oder UUID, z. B. aus CALENDLY_LIST_SCHEDULED_EVENTS."
+          },
+          "invitee": {
+            "type": "string",
+            "description": "Teilnehmer-URI oder UUID aus CALENDLY_LIST_EVENT_INVITEES."
+          }
+        },
+        "required": [
+          "event",
+          "invitee"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/scheduled_events/{event}/invitees/{invitee}",
+        "path_encoding": {
+          "event": "uri_tail",
+          "invitee": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_AVAILABILITY_SCHEDULES",
+      "title": {
+        "de": "Verfügbarkeiten auflisten",
+        "en": "List availability schedules"
+      },
+      "description": {
+        "de": "Listet die Verfügbarkeitszeitpläne (Arbeitszeiten) eines Nutzers.",
+        "en": "Lists a user's availability schedules (working hours)."
+      },
+      "risk": "read",
+      "scopes": [
+        "availability:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          }
+        },
+        "required": [
+          "user"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/user_availability_schedules",
+        "query": {
+          "user": {
+            "arg": "user",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/users/",
+            "required": true
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/collection",
+        "as": "schedules"
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_AVAILABILITY_SCHEDULE",
+      "title": {
+        "de": "Verfügbarkeit lesen",
+        "en": "Get availability schedule"
+      },
+      "description": {
+        "de": "Liest einen Verfügbarkeitszeitplan.",
+        "en": "Reads one availability schedule."
+      },
+      "risk": "read",
+      "scopes": [
+        "availability:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schedule": {
+            "type": "string",
+            "description": "Zeitplan-URI oder UUID aus CALENDLY_LIST_AVAILABILITY_SCHEDULES."
+          }
+        },
+        "required": [
+          "schedule"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/user_availability_schedules/{schedule}",
+        "path_encoding": {
+          "schedule": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_USER_BUSY_TIMES",
+      "title": {
+        "de": "Belegte Zeiten auflisten",
+        "en": "List user busy times"
+      },
+      "description": {
+        "de": "Listet belegte Zeiten eines Nutzers (Calendly-Termine und verbundene Kalender) in einem Zeitraum von höchstens 7 Tagen.",
+        "en": "Lists a user's busy times (Calendly events and connected calendars) in a window of at most 7 days."
+      },
+      "risk": "read",
+      "scopes": [
+        "availability:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Beginn, ISO 8601 mit Zone, nicht in der Vergangenheit."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "Ende, ISO 8601 mit Zone, höchstens 7 Tage nach start_time."
+          }
+        },
+        "required": [
+          "user",
+          "start_time",
+          "end_time"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/user_busy_times",
+        "query": {
+          "user": {
+            "arg": "user",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/users/",
+            "required": true
+          },
+          "start_time": {
+            "arg": "start_time",
+            "trim": true,
+            "required": true,
+            "format": "date-time"
+          },
+          "end_time": {
+            "arg": "end_time",
+            "trim": true,
+            "required": true,
+            "format": "date-time"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "/collection",
+        "as": "busy_times"
+      }
+    },
+    {
+      "slug": "CALENDLY_CANCEL_EVENT",
+      "title": {
+        "de": "Termin absagen",
+        "en": "Cancel event"
+      },
+      "description": {
+        "de": "Sagt einen gebuchten Termin ab; die Teilnehmer werden von Calendly benachrichtigt. Nicht rückgängig zu machen.",
+        "en": "Cancels a booked event; Calendly notifies the invitees. Cannot be undone."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "scheduled_events:write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Termin-URI oder UUID, z. B. aus CALENDLY_LIST_SCHEDULED_EVENTS."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Begründung, die die Teilnehmer sehen."
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/scheduled_events/{event}/cancellation",
+        "path_encoding": {
+          "event": "uri_tail"
+        },
+        "body": {
+          "json": {
+            "reason": {
+              "arg": "reason",
+              "trim": true
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_CREATE_SCHEDULING_LINK",
+      "title": {
+        "de": "Einmal-Buchungslink erstellen",
+        "en": "Create single-use scheduling link"
+      },
+      "description": {
+        "de": "Erstellt einen Buchungslink für eine Terminart, der nach max_event_count Buchungen (Standard 1) ungültig wird.",
+        "en": "Creates a booking link for an event type that expires after max_event_count bookings (default 1)."
+      },
+      "risk": "write",
+      "scopes": [
+        "scheduling_links:write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "description": "Event-Typ-URI oder UUID, z. B. aus CALENDLY_LIST_EVENT_TYPES."
+          },
+          "max_event_count": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Anzahl möglicher Buchungen, Standard 1."
+          }
+        },
+        "required": [
+          "event_type"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/scheduling_links",
+        "body": {
+          "json": {
+            "max_event_count": {
+              "arg": "max_event_count",
+              "default": 1,
+              "clamp": [
+                1,
+                1000
+              ]
+            },
+            "owner": {
+              "arg": "event_type",
+              "trim": true,
+              "uri_prefix": "https://api.calendly.com/event_types/",
+              "required": true
+            },
+            "owner_type": {
+              "const": "EventType"
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_LIST_WEBHOOK_SUBSCRIPTIONS",
+      "title": {
+        "de": "Webhooks auflisten",
+        "en": "List webhook subscriptions"
+      },
+      "description": {
+        "de": "Listet Webhook-Abos einer Organisation, wahlweise nur die eines Nutzers.",
+        "en": "Lists webhook subscriptions of an organization, optionally only those of one user."
+      },
+      "risk": "read",
+      "scopes": [
+        "webhooks:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "organization": {
+            "type": "string",
+            "description": "Organisations-URI (https://api.calendly.com/organizations/…) oder UUID; CALENDLY_GET_CURRENT_USER liefert sie im Feld current_organization."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "organization"
+            ],
+            "description": "user oder organization."
+          },
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 20)."
+          },
+          "page_token": {
+            "type": "string",
+            "description": "`next_page_token` des vorherigen Aufrufs, um die nächste Seite zu holen."
+          }
+        },
+        "required": [
+          "organization",
+          "scope"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/webhook_subscriptions",
+        "query": {
+          "organization": {
+            "arg": "organization",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/organizations/",
+            "required": true
+          },
+          "scope": {
+            "arg": "scope",
+            "required": true,
+            "one_of": [
+              "user",
+              "organization"
+            ]
+          },
+          "user": {
+            "arg": "user",
+            "trim": true,
+            "uri_prefix": "https://api.calendly.com/users/"
+          },
+          "count": {
+            "arg": "count",
+            "default": 20,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "page_token": {
+            "arg": "page_token",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "collection": {
+            "pointer": "/collection",
+            "default": []
+          },
+          "next_page_token": {
+            "pointer": "/pagination/next_page_token"
+          }
+        }
+      }
+    },
+    {
+      "slug": "CALENDLY_GET_WEBHOOK_SUBSCRIPTION",
+      "title": {
+        "de": "Webhook lesen",
+        "en": "Get webhook subscription"
+      },
+      "description": {
+        "de": "Liest ein Webhook-Abo.",
+        "en": "Reads one webhook subscription."
+      },
+      "risk": "read",
+      "scopes": [
+        "webhooks:read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "description": "Webhook-URI oder UUID."
+          }
+        },
+        "required": [
+          "webhook"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/webhook_subscriptions/{webhook}",
+        "path_encoding": {
+          "webhook": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_CREATE_WEBHOOK_SUBSCRIPTION",
+      "title": {
+        "de": "Webhook anlegen",
+        "en": "Create webhook subscription"
+      },
+      "description": {
+        "de": "Legt ein Webhook-Abo an; Calendly schickt die gewählten Ereignisse an die HTTPS-Adresse.",
+        "en": "Creates a webhook subscription; Calendly posts the chosen events to the HTTPS URL."
+      },
+      "risk": "write",
+      "scopes": [
+        "webhooks:write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Öffentliche HTTPS-Adresse, die die Ereignisse empfängt."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "invitee.created",
+                "invitee.canceled",
+                "invitee_no_show.created",
+                "invitee_no_show.deleted",
+                "routing_form_submission.created",
+                "event_type.created",
+                "event_type.updated",
+                "event_type.deleted"
+              ]
+            },
+            "description": "Ereignisse, z. B. invitee.created, invitee.canceled."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Organisations-URI (https://api.calendly.com/organizations/…) oder UUID; CALENDLY_GET_CURRENT_USER liefert sie im Feld current_organization."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "organization"
+            ],
+            "description": "user oder organization."
+          },
+          "user": {
+            "type": "string",
+            "description": "Nutzer-URI (https://api.calendly.com/users/…) oder UUID; die eigene liefert CALENDLY_GET_CURRENT_USER (Feld uri)."
+          },
+          "signing_key": {
+            "type": "string",
+            "description": "Optionaler Schlüssel, mit dem Calendly die Zustellungen signiert."
+          }
+        },
+        "required": [
+          "url",
+          "events",
+          "organization",
+          "scope"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/webhook_subscriptions",
+        "body": {
+          "json": {
+            "url": {
+              "arg": "url",
+              "trim": true,
+              "required": true
+            },
+            "events": {
+              "arg": "events",
+              "type": "string_list",
+              "required": true
+            },
+            "organization": {
+              "arg": "organization",
+              "trim": true,
+              "uri_prefix": "https://api.calendly.com/organizations/",
+              "required": true
+            },
+            "scope": {
+              "arg": "scope",
+              "required": true,
+              "one_of": [
+                "user",
+                "organization"
+              ]
+            },
+            "user": {
+              "arg": "user",
+              "trim": true,
+              "uri_prefix": "https://api.calendly.com/users/"
+            },
+            "signing_key": {
+              "arg": "signing_key",
+              "trim": true
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/resource",
+        "required": true,
+        "empty_error": "Calendly returned no resource"
+      }
+    },
+    {
+      "slug": "CALENDLY_DELETE_WEBHOOK_SUBSCRIPTION",
+      "title": {
+        "de": "Webhook löschen",
+        "en": "Delete webhook subscription"
+      },
+      "description": {
+        "de": "Löscht ein Webhook-Abo.",
+        "en": "Deletes one webhook subscription."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "webhooks:write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "description": "Webhook-URI oder UUID."
+          }
+        },
+        "required": [
+          "webhook"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/webhook_subscriptions/{webhook}",
+        "path_encoding": {
+          "webhook": "uri_tail"
+        }
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "deleted": true
+        }
+      }
+    }
+  ]
+}

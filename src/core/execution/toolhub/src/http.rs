@@ -54,19 +54,71 @@ impl HttpResponse {
 
 pub trait HttpTransport: Send + Sync {
     fn send(&self, request: HttpRequest) -> anyhow::Result<HttpResponse>;
+    /// Send for runtime (spec) adapters: no redirects are followed and the host
+    /// must resolve to public addresses only (the connection is pinned to the
+    /// checked addresses). Test transports may keep the default.
+    fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+        self.send(request)
+    }
 }
 
 #[cfg(feature = "ureq-transport")]
 pub struct UreqTransport {
     agent: ureq::Agent,
+    restricted: ureq::Agent,
+}
+
+/// Resolver for spec adapters: drops every non-public address, fails if none remain.
+#[cfg(feature = "ureq-transport")]
+fn public_only_resolve(netloc: &str, fake_ip_egress: bool) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    let all: Vec<std::net::SocketAddr> = netloc.to_socket_addrs()?.collect();
+    let public: Vec<std::net::SocketAddr> = all
+        .into_iter()
+        .filter(|a| {
+            !crate::spec::egress::is_forbidden_ip(a.ip())
+                || (fake_ip_egress && crate::spec::egress::is_benchmark_range(a.ip()))
+        })
+        .collect();
+    if public.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "host resolves only to private or reserved addresses",
+        ));
+    }
+    Ok(public)
 }
 
 #[cfg(feature = "ureq-transport")]
 impl Default for UreqTransport {
     fn default() -> Self {
+        Self::with_options(TransportOptions::default())
+    }
+}
+
+/// Typed transport options (set by the caller from instance config; no env switches).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportOptions {
+    /// The host network answers DNS with 198.18.0.0/15 "fake IPs" and routes
+    /// them through an egress proxy (sandboxes, some corporate networks). Only
+    /// then may spec adapters connect to that range; all other private ranges
+    /// stay blocked.
+    pub fake_ip_egress: bool,
+}
+
+#[cfg(feature = "ureq-transport")]
+impl UreqTransport {
+    pub fn with_options(options: TransportOptions) -> Self {
+        let fake = options.fake_ip_egress;
         Self {
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(30))
+                .user_agent(concat!("ctox-toolhub/", env!("CARGO_PKG_VERSION")))
+                .build(),
+            restricted: ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(30))
+                .redirects(0)
+                .resolver(move |netloc: &str| public_only_resolve(netloc, fake))
                 .user_agent(concat!("ctox-toolhub/", env!("CARGO_PKG_VERSION")))
                 .build(),
         }
@@ -76,7 +128,17 @@ impl Default for UreqTransport {
 #[cfg(feature = "ureq-transport")]
 impl HttpTransport for UreqTransport {
     fn send(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
-        let mut req = self.agent.request(&request.method, &request.url);
+        send_with(&self.agent, request)
+    }
+    fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+        send_with(&self.restricted, request)
+    }
+}
+
+#[cfg(feature = "ureq-transport")]
+fn send_with(agent: &ureq::Agent, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+    {
+        let mut req = agent.request(&request.method, &request.url);
         for (k, v) in &request.headers {
             req = req.set(k, v);
         }

@@ -1,0 +1,1204 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "trello",
+  "version": "1.0.0",
+  "docs": [
+    "https://developer.atlassian.com/cloud/trello/rest/"
+  ],
+  "notes": "Hot-plug spec modelled on the Activepieces Trello piece; replaces the compiled src/toolkits/trello.rs. Auth via the `oauth_header` scheme (credential `key:token`), so key and token never appear in URLs.",
+  "api_base": "https://api.trello.com/1",
+  "allowed_hosts": [
+    "api.trello.com"
+  ],
+  "replaces_builtin": true,
+  "name": "Trello",
+  "description": {
+    "de": "Boards, Listen, Karten, Labels, Kommentare, Checklisten, Suche und Webhooks in Trello.",
+    "en": "Boards, lists, cards, labels, comments, checklists, search and webhooks in Trello."
+  },
+  "auth_schemes": [
+    {
+      "type": "oauth_header"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "TRELLO_GET_CURRENT_MEMBER",
+      "title": {
+        "de": "Eigenes Konto lesen",
+        "en": "Get current member"
+      },
+      "description": {
+        "de": "Liest das verbundene Trello-Konto.",
+        "en": "Reads the connected Trello account."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/members/me",
+        "query": {
+          "fields": {
+            "const": "id,username,fullName,url,idOrganizations"
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_LIST_BOARDS",
+      "title": {
+        "de": "Boards auflisten",
+        "en": "List boards"
+      },
+      "description": {
+        "de": "Listet die Boards des verbundenen Kontos.",
+        "en": "Lists the boards of the connected account."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "filter": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "all",
+              "starred"
+            ],
+            "description": "open (Standard), closed, all oder starred."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/members/me/boards",
+        "query": {
+          "filter": {
+            "arg": "filter",
+            "default": "open",
+            "one_of": [
+              "open",
+              "closed",
+              "all",
+              "starred"
+            ]
+          },
+          "fields": {
+            "const": "id,name,desc,closed,url,idOrganization,dateLastActivity"
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "",
+        "as": "boards"
+      }
+    },
+    {
+      "slug": "TRELLO_GET_BOARD",
+      "title": {
+        "de": "Board lesen",
+        "en": "Get board"
+      },
+      "description": {
+        "de": "Liest ein Board.",
+        "en": "Reads one board."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          }
+        },
+        "required": [
+          "board"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/boards/{board}"
+      }
+    },
+    {
+      "slug": "TRELLO_CREATE_BOARD",
+      "title": {
+        "de": "Board anlegen",
+        "en": "Create board"
+      },
+      "description": {
+        "de": "Legt ein Board an, optional in einem Workspace.",
+        "en": "Creates a board, optionally in a workspace."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Board-Name."
+          },
+          "desc": {
+            "type": "string",
+            "description": "Beschreibung."
+          },
+          "idOrganization": {
+            "type": "string",
+            "description": "Workspace-ID (aus TRELLO_GET_CURRENT_MEMBER, Feld idOrganizations)."
+          },
+          "defaultLists": {
+            "type": "boolean",
+            "description": "Standardlisten (To Do/Doing/Done) anlegen, Standard true."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/boards",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "desc": {
+              "arg": "desc",
+              "trim": true
+            },
+            "idOrganization": {
+              "arg": "idOrganization",
+              "trim": true
+            },
+            "defaultLists": {
+              "arg": "defaultLists"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_CLOSE_BOARD",
+      "title": {
+        "de": "Board schließen",
+        "en": "Close board"
+      },
+      "description": {
+        "de": "Schließt (archiviert) ein Board; es lässt sich wieder öffnen.",
+        "en": "Closes (archives) a board; it can be reopened."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          }
+        },
+        "required": [
+          "board"
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/boards/{board}",
+        "body": {
+          "json": {
+            "closed": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_DELETE_BOARD",
+      "title": {
+        "de": "Board löschen",
+        "en": "Delete board"
+      },
+      "description": {
+        "de": "Löscht ein Board endgültig mit allen Listen und Karten.",
+        "en": "Permanently deletes a board with all lists and cards."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          }
+        },
+        "required": [
+          "board"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/boards/{board}"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "success": true
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_LIST_LISTS",
+      "title": {
+        "de": "Listen eines Boards auflisten",
+        "en": "List lists"
+      },
+      "description": {
+        "de": "Listet die Listen eines Boards.",
+        "en": "Lists the lists of a board."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          },
+          "filter": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "all"
+            ],
+            "description": "open (Standard), closed oder all."
+          }
+        },
+        "required": [
+          "board"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/boards/{board}/lists",
+        "query": {
+          "filter": {
+            "arg": "filter",
+            "default": "open",
+            "one_of": [
+              "open",
+              "closed",
+              "all"
+            ]
+          }
+        }
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "",
+        "as": "lists"
+      }
+    },
+    {
+      "slug": "TRELLO_CREATE_LIST",
+      "title": {
+        "de": "Liste anlegen",
+        "en": "Create list"
+      },
+      "description": {
+        "de": "Legt eine Liste auf einem Board an.",
+        "en": "Creates a list on a board."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Listenname."
+          },
+          "pos": {
+            "type": "string",
+            "description": "Position: top, bottom oder eine positive Zahl."
+          }
+        },
+        "required": [
+          "board",
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/lists",
+        "body": {
+          "json": {
+            "idBoard": {
+              "arg": "board",
+              "trim": true,
+              "required": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "pos": {
+              "arg": "pos",
+              "trim": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_LIST_CARDS",
+      "title": {
+        "de": "Karten einer Liste auflisten",
+        "en": "List cards in list"
+      },
+      "description": {
+        "de": "Listet die offenen Karten einer Liste.",
+        "en": "Lists the open cards of a list."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "Listen-ID, z. B. aus TRELLO_LIST_LISTS."
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/lists/{list}/cards"
+      },
+      "response": {
+        "mode": "list",
+        "pointer": "",
+        "as": "cards"
+      }
+    },
+    {
+      "slug": "TRELLO_CREATE_CARD",
+      "title": {
+        "de": "Karte anlegen",
+        "en": "Create card"
+      },
+      "description": {
+        "de": "Legt eine Karte in einer Liste an.",
+        "en": "Creates a card in a list."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "Listen-ID, z. B. aus TRELLO_LIST_LISTS."
+          },
+          "name": {
+            "type": "string",
+            "description": "Kartentitel."
+          },
+          "desc": {
+            "type": "string",
+            "description": "Beschreibung (Markdown)."
+          },
+          "due": {
+            "type": "string",
+            "description": "Fälligkeit, ISO 8601 mit Zone, z. B. 2026-11-01T12:00:00Z."
+          },
+          "pos": {
+            "type": "string",
+            "description": "Position: top, bottom oder eine positive Zahl."
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Label-IDs."
+          }
+        },
+        "required": [
+          "list",
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/cards",
+        "body": {
+          "json": {
+            "idList": {
+              "arg": "list",
+              "trim": true,
+              "required": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "desc": {
+              "arg": "desc"
+            },
+            "due": {
+              "arg": "due",
+              "trim": true,
+              "format": "date-time"
+            },
+            "pos": {
+              "arg": "pos",
+              "trim": true
+            },
+            "idLabels": {
+              "arg": "labels",
+              "type": "string_list",
+              "join": ","
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_GET_CARD",
+      "title": {
+        "de": "Karte lesen",
+        "en": "Get card"
+      },
+      "description": {
+        "de": "Liest eine Karte.",
+        "en": "Reads one card."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          }
+        },
+        "required": [
+          "card"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/cards/{card}"
+      }
+    },
+    {
+      "slug": "TRELLO_UPDATE_CARD",
+      "title": {
+        "de": "Karte ändern",
+        "en": "Update card"
+      },
+      "description": {
+        "de": "Ändert Titel, Beschreibung, Fälligkeit oder Erledigt-Status einer Karte; closed=true archiviert sie.",
+        "en": "Updates title, description, due date or completion of a card; closed=true archives it."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Kartentitel."
+          },
+          "desc": {
+            "type": "string",
+            "description": "Beschreibung (Markdown)."
+          },
+          "due": {
+            "type": "string",
+            "description": "Fälligkeit, ISO 8601 mit Zone, z. B. 2026-11-01T12:00:00Z."
+          },
+          "pos": {
+            "type": "string",
+            "description": "Position: top, bottom oder eine positive Zahl."
+          },
+          "dueComplete": {
+            "type": "boolean",
+            "description": "Fälligkeit als erledigt markieren."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "Karte archivieren (true) oder wiederherstellen (false)."
+          }
+        },
+        "required": [
+          "card"
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/cards/{card}",
+        "nonempty_body": "Bitte mindestens ein Feld zum Ändern angeben.",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true
+            },
+            "desc": {
+              "arg": "desc"
+            },
+            "due": {
+              "arg": "due",
+              "trim": true,
+              "format": "date-time"
+            },
+            "pos": {
+              "arg": "pos",
+              "trim": true
+            },
+            "dueComplete": {
+              "arg": "dueComplete"
+            },
+            "closed": {
+              "arg": "closed"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_MOVE_CARD",
+      "title": {
+        "de": "Karte verschieben",
+        "en": "Move card"
+      },
+      "description": {
+        "de": "Verschiebt eine Karte in eine andere Liste, optional auf ein anderes Board.",
+        "en": "Moves a card to another list, optionally on another board."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          },
+          "list": {
+            "type": "string",
+            "description": "Ziel-Listen-ID."
+          },
+          "board": {
+            "type": "string",
+            "description": "Ziel-Board-ID, nur bei Wechsel des Boards."
+          },
+          "pos": {
+            "type": "string",
+            "description": "Position: top, bottom oder eine positive Zahl."
+          }
+        },
+        "required": [
+          "card",
+          "list"
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/cards/{card}",
+        "body": {
+          "json": {
+            "idList": {
+              "arg": "list",
+              "trim": true,
+              "required": true
+            },
+            "idBoard": {
+              "arg": "board",
+              "trim": true
+            },
+            "pos": {
+              "arg": "pos",
+              "trim": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_DELETE_CARD",
+      "title": {
+        "de": "Karte löschen",
+        "en": "Delete card"
+      },
+      "description": {
+        "de": "Löscht eine Karte endgültig (zum Archivieren TRELLO_UPDATE_CARD mit closed=true).",
+        "en": "Permanently deletes a card (to archive use TRELLO_UPDATE_CARD with closed=true)."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          }
+        },
+        "required": [
+          "card"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/cards/{card}"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "success": true
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_CREATE_LABEL",
+      "title": {
+        "de": "Label anlegen",
+        "en": "Create label"
+      },
+      "description": {
+        "de": "Legt ein Label auf einem Board an.",
+        "en": "Creates a label on a board."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "type": "string",
+            "description": "Board-ID (24 Zeichen) oder Kurz-ID aus der Board-URL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Labelname."
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "green",
+              "yellow",
+              "orange",
+              "red",
+              "purple",
+              "blue",
+              "sky",
+              "lime",
+              "pink",
+              "black"
+            ],
+            "description": "Farbe, z. B. green, red, blue."
+          }
+        },
+        "required": [
+          "board",
+          "name",
+          "color"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/labels",
+        "body": {
+          "json": {
+            "idBoard": {
+              "arg": "board",
+              "trim": true,
+              "required": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "color": {
+              "arg": "color",
+              "required": true,
+              "one_of": [
+                "green",
+                "yellow",
+                "orange",
+                "red",
+                "purple",
+                "blue",
+                "sky",
+                "lime",
+                "pink",
+                "black"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_ADD_LABEL_TO_CARD",
+      "title": {
+        "de": "Label an Karte hängen",
+        "en": "Add label to card"
+      },
+      "description": {
+        "de": "Hängt ein vorhandenes Label an eine Karte.",
+        "en": "Adds an existing label to a card."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          },
+          "label": {
+            "type": "string",
+            "description": "Label-ID (aus TRELLO_CREATE_LABEL)."
+          }
+        },
+        "required": [
+          "card",
+          "label"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/cards/{card}/idLabels",
+        "body": {
+          "json": {
+            "value": {
+              "arg": "label",
+              "trim": true,
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_ADD_COMMENT",
+      "title": {
+        "de": "Kommentar schreiben",
+        "en": "Add comment"
+      },
+      "description": {
+        "de": "Schreibt einen Kommentar an eine Karte.",
+        "en": "Adds a comment to a card."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          },
+          "text": {
+            "type": "string",
+            "description": "Kommentartext."
+          }
+        },
+        "required": [
+          "card",
+          "text"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/cards/{card}/actions/comments",
+        "body": {
+          "json": {
+            "text": {
+              "arg": "text",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_ADD_CHECKLIST",
+      "title": {
+        "de": "Checkliste hinzufügen",
+        "en": "Add checklist"
+      },
+      "description": {
+        "de": "Fügt einer Karte eine Checkliste hinzu.",
+        "en": "Adds a checklist to a card."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card": {
+            "type": "string",
+            "description": "Karten-ID oder Kurz-ID aus der Karten-URL."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name der Checkliste."
+          }
+        },
+        "required": [
+          "card",
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/cards/{card}/checklists",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_ADD_CHECKLIST_ITEM",
+      "title": {
+        "de": "Checklisten-Punkt hinzufügen",
+        "en": "Add checklist item"
+      },
+      "description": {
+        "de": "Fügt einer Checkliste einen Punkt hinzu.",
+        "en": "Adds an item to a checklist."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checklist": {
+            "type": "string",
+            "description": "Checklisten-ID (aus TRELLO_ADD_CHECKLIST)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Text des Punkts."
+          },
+          "checked": {
+            "type": "boolean",
+            "description": "Gleich abgehakt."
+          }
+        },
+        "required": [
+          "checklist",
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/checklists/{checklist}/checkItems",
+        "body": {
+          "json": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "checked": {
+              "arg": "checked"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_SEARCH",
+      "title": {
+        "de": "Suchen",
+        "en": "Search"
+      },
+      "description": {
+        "de": "Durchsucht Boards, Karten und mehr nach einem Begriff.",
+        "en": "Searches boards, cards and more for a term."
+      },
+      "risk": "read",
+      "scopes": [
+        "read"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Suchbegriff (Trello-Suchsyntax, z. B. board:Name is:open)."
+          },
+          "modelTypes": {
+            "type": "string",
+            "description": "Kommagetrennt: cards, boards, organizations, members, actions (Standard cards,boards)."
+          },
+          "boards": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Nur in diesen Boards suchen (IDs)."
+          },
+          "cards_limit": {
+            "type": "integer",
+            "description": "Höchstzahl Karten, 1 bis 1000 (Standard 10).",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/search",
+        "query": {
+          "query": {
+            "arg": "query",
+            "trim": true,
+            "required": true
+          },
+          "modelTypes": {
+            "arg": "modelTypes",
+            "trim": true,
+            "default": "cards,boards"
+          },
+          "idBoards": {
+            "arg": "boards",
+            "type": "string_list",
+            "join": ","
+          },
+          "cards_limit": {
+            "arg": "cards_limit",
+            "default": 10,
+            "clamp": [
+              1,
+              1000
+            ]
+          },
+          "partial": {
+            "const": "true"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "cards": {
+            "pointer": "/cards",
+            "default": []
+          },
+          "boards": {
+            "pointer": "/boards",
+            "default": []
+          },
+          "options": {
+            "pointer": "/options"
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_CREATE_WEBHOOK",
+      "title": {
+        "de": "Webhook anlegen",
+        "en": "Create webhook"
+      },
+      "description": {
+        "de": "Legt einen Webhook für ein Board, eine Liste oder Karte an. Trello prüft die Adresse vorab mit einer HEAD-Anfrage (Antwort 200 nötig).",
+        "en": "Creates a webhook for a board, list or card. Trello checks the URL first with a HEAD request (must answer 200)."
+      },
+      "risk": "write",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "callbackURL": {
+            "type": "string",
+            "description": "Öffentliche HTTPS-Adresse."
+          },
+          "idModel": {
+            "type": "string",
+            "description": "ID des beobachteten Boards/der Liste/Karte."
+          },
+          "description": {
+            "type": "string",
+            "description": "Beschreibung."
+          }
+        },
+        "required": [
+          "callbackURL",
+          "idModel"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/webhooks",
+        "body": {
+          "json": {
+            "callbackURL": {
+              "arg": "callbackURL",
+              "trim": true,
+              "required": true
+            },
+            "idModel": {
+              "arg": "idModel",
+              "trim": true,
+              "required": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "TRELLO_DELETE_WEBHOOK",
+      "title": {
+        "de": "Webhook löschen",
+        "en": "Delete webhook"
+      },
+      "description": {
+        "de": "Löscht einen Webhook.",
+        "en": "Deletes a webhook."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "write"
+      ],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "description": "Webhook-ID."
+          }
+        },
+        "required": [
+          "webhook"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/webhooks/{webhook}"
+      },
+      "response": {
+        "mode": "const",
+        "value": {
+          "success": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "zippopotam",
+  "version": "1.0.0",
+  "docs": ["https://www.zippopotam.us/"],
+  "notes": "Brand-new service with no compiled adapter and no credential (auth `none`). Proves the pure hot-plug path: registry install + activate + reload, no restart, no recompile.",
+  "api_base": "https://api.zippopotam.us",
+  "allowed_hosts": ["api.zippopotam.us"],
+  "name": "Zippopotam",
+  "description": {
+    "de": "Postleitzahlen nachschlagen: Orte und Koordinaten zu einer PLZ, PLZ zu einem Ort.",
+    "en": "Look up postal codes: places and coordinates for a code, codes for a place."
+  },
+  "auth_schemes": [{"type": "none"}],
+  "actions": [
+    {
+      "slug": "ZIPPOPOTAM_LOOKUP_POSTAL_CODE",
+      "title": {"de": "Postleitzahl nachschlagen", "en": "Look up postal code"},
+      "description": {"de": "Liefert Orte, Bundesland und Koordinaten zu einer Postleitzahl.", "en": "Returns places, state and coordinates for a postal code."},
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "country": {"type": "string", "description": "Ländercode nach ISO 3166-1 alpha-2, z. B. de, at, ch, us."},
+          "postal_code": {"type": "string", "description": "Postleitzahl, z. B. 10115."}
+        },
+        "required": ["country", "postal_code"]
+      },
+      "request": {"method": "GET", "path": "/{country}/{postal_code}"},
+      "response": {"mode": "object", "fields": {
+        "country": {"pointer": "/country"}, "postal_code": {"pointer": "/post code"}, "places": {"pointer": "/places", "default": []}
+      }}
+    },
+    {
+      "slug": "ZIPPOPOTAM_FIND_POSTAL_CODES",
+      "title": {"de": "Postleitzahlen eines Orts finden", "en": "Find postal codes of a place"},
+      "description": {"de": "Liefert die Postleitzahlen eines Orts (Land, Bundesland-Kürzel, Ortsname).", "en": "Returns the postal codes of a place (country, state code, place name)."},
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "country": {"type": "string", "description": "Ländercode, z. B. us oder de."},
+          "state": {"type": "string", "description": "Bundesland-/Staatskürzel, z. B. ma oder be."},
+          "city": {"type": "string", "description": "Ortsname, z. B. Belmont oder Berlin."}
+        },
+        "required": ["country", "state", "city"]
+      },
+      "request": {"method": "GET", "path": "/{country}/{state}/{city}", "path_encoding": {"city": "component"}},
+      "response": {"mode": "object", "fields": {"place": {"pointer": "/place name"}, "places": {"pointer": "/places", "default": []}}}
+    }
+  ]
+}

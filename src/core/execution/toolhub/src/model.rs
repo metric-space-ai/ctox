@@ -58,6 +58,14 @@ pub enum AuthScheme {
     },
     Basic,
     Bearer,
+    /// Public API without any credential (hot-plug specs only; must be the
+    /// only scheme). Requests still go through the spec's egress policy.
+    None,
+    /// Static key + token sent as `Authorization: OAuth oauth_consumer_key="…", oauth_token="…"`.
+    /// Credential is stored as `key:token` (colon-separated, like Basic). Used by
+    /// Trello so the secrets stay out of the URL.
+    #[serde(rename = "oauth_header")]
+    OAuthHeader,
 }
 
 impl AuthScheme {
@@ -67,6 +75,8 @@ impl AuthScheme {
             Self::ApiKey { .. } => AuthSchemeKind::ApiKey,
             Self::Basic => AuthSchemeKind::Basic,
             Self::Bearer => AuthSchemeKind::Bearer,
+            Self::None => AuthSchemeKind::None,
+            Self::OAuthHeader => AuthSchemeKind::OAuthHeader,
         }
     }
 }
@@ -79,6 +89,8 @@ pub enum AuthSchemeKind {
     ApiKey,
     Basic,
     Bearer,
+    None,
+    OAuthHeader,
 }
 
 /// A tool (Composio: Tool / Action) with JSON-schema input.

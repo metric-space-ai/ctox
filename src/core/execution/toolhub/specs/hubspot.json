@@ -1,0 +1,2120 @@
+{
+  "actions": [
+    {
+      "description": {
+        "de": "Durchsucht beliebige CRM-Objekte mit voller Filter-, Sortier- und Paging-Unterstützung.",
+        "en": "Searches any CRM object type with full filter, sort and paging support."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Paging-Cursor (paging.next.after)",
+            "type": "string"
+          },
+          "filter_groups": {
+            "description": "HubSpot filterGroups; Gruppen werden ODER-verknüpft, Filter einer Gruppe UND.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 10,
+            "description": "1-200",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "object_type": {
+            "description": "contacts, companies, deals, tickets, notes, tasks",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Zurückzugebende interne Property-Namen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "query": {
+            "description": "Freitextsuche",
+            "type": "string"
+          },
+          "sort_direction": {
+            "default": "DESCENDING",
+            "description": "Sortierrichtung",
+            "enum": [
+              "DESCENDING",
+              "ASCENDING"
+            ],
+            "type": "string"
+          },
+          "sort_property_name": {
+            "description": "Interne Property zum Sortieren, z.B. createdate",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/{object_type}/search",
+        "body": {
+          "json": {
+            "filterGroups": {
+              "arg": "filter_groups",
+              "type": "raw"
+            },
+            "query": {
+              "arg": "query"
+            },
+            "properties": {
+              "arg": "properties",
+              "type": "string_list"
+            },
+            "sorts": [
+              {
+                "$if": [
+                  "sort_property_name"
+                ],
+                "propertyName": {
+                  "arg": "sort_property_name"
+                },
+                "direction": {
+                  "arg": "sort_direction",
+                  "default": "DESCENDING"
+                }
+              }
+            ],
+            "limit": {
+              "arg": "limit",
+              "clamp": [
+                1,
+                200
+              ]
+            },
+            "after": {
+              "arg": "after"
+            }
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "total": {
+            "pointer": "/total"
+          },
+          "results": {
+            "pointer": "/results",
+            "default": []
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.contacts.read"
+      ],
+      "slug": "HUBSPOT_SEARCH_OBJECTS",
+      "title": {
+        "de": "CRM-Objekte durchsuchen",
+        "en": "Search CRM objects"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet bis zu 200 Kontakte, die auf ein oder zwei Property-Werte passen.",
+        "en": "Finds up to 200 contacts matching one or two property values."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "property_name": {
+            "description": "Internal property to compare, e.g. email, firstname, hs_object_id. List names via HUBSPOT_LIST_OBJECT_PROPERTIES.",
+            "type": "string"
+          },
+          "property_name_2": {
+            "description": "Optional second property; the record must match both conditions.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Exact match value",
+            "type": "string"
+          },
+          "value_2": {
+            "description": "Ignored unless `property_name_2` is also set",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/contacts/search",
+        "body": {
+          "json": {
+            "limit": {
+              "const": 200
+            },
+            "properties": {
+              "arg": "properties",
+              "type": "string_list",
+              "prepend": [
+                "firstname",
+                "lastname",
+                "email",
+                "company",
+                "website",
+                "mobilephone",
+                "phone",
+                "fax",
+                "address",
+                "city",
+                "state",
+                "zip",
+                "salutation",
+                "country",
+                "jobtitle",
+                "hs_createdate",
+                "hs_email_domain",
+                "hs_object_id",
+                "lastmodifieddate",
+                "hs_persona",
+                "hs_language",
+                "lifecyclestage",
+                "createdate",
+                "numemployees",
+                "annualrevenue",
+                "industry"
+              ]
+            },
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": {
+                      "arg": "property_name",
+                      "default": "email"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value",
+                      "required": true
+                    }
+                  },
+                  {
+                    "$if": [
+                      "property_name_2",
+                      "value_2"
+                    ],
+                    "propertyName": {
+                      "arg": "property_name_2"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value_2"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "total": {
+            "pointer": "/total"
+          },
+          "results": {
+            "pointer": "/results",
+            "default": []
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.contacts.read"
+      ],
+      "slug": "HUBSPOT_FIND_CONTACT",
+      "title": {
+        "de": "Kontakt suchen",
+        "en": "Find contact"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet bis zu 200 Firmen, die auf ein oder zwei Property-Werte passen.",
+        "en": "Finds up to 200 companies matching one or two property values."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "property_name": {
+            "description": "Internal property to compare, e.g. domain, name, hs_object_id. List names via HUBSPOT_LIST_OBJECT_PROPERTIES.",
+            "type": "string"
+          },
+          "property_name_2": {
+            "description": "Optional second property; the record must match both conditions.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Exact match value",
+            "type": "string"
+          },
+          "value_2": {
+            "description": "Ignored unless `property_name_2` is also set",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/companies/search",
+        "body": {
+          "json": {
+            "limit": {
+              "const": 200
+            },
+            "properties": {
+              "arg": "properties",
+              "type": "string_list",
+              "prepend": [
+                "name",
+                "domain",
+                "industry",
+                "about_us",
+                "phone",
+                "address",
+                "address2",
+                "city",
+                "state",
+                "zip",
+                "country",
+                "website",
+                "type",
+                "description",
+                "founded_year",
+                "hs_createdate",
+                "hs_lastmodifieddate",
+                "hs_object_id",
+                "is_public",
+                "timezone",
+                "total_money_raised",
+                "total_revenue",
+                "owneremail",
+                "ownername",
+                "numberofemployees",
+                "annualrevenue",
+                "lifecyclestage",
+                "createdate",
+                "web_technologies"
+              ]
+            },
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": {
+                      "arg": "property_name",
+                      "default": "domain"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value",
+                      "required": true
+                    }
+                  },
+                  {
+                    "$if": [
+                      "property_name_2",
+                      "value_2"
+                    ],
+                    "propertyName": {
+                      "arg": "property_name_2"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value_2"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "total": {
+            "pointer": "/total"
+          },
+          "results": {
+            "pointer": "/results",
+            "default": []
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.companies.read"
+      ],
+      "slug": "HUBSPOT_FIND_COMPANY",
+      "title": {
+        "de": "Firma suchen",
+        "en": "Find company"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet bis zu 200 Deals, die auf ein oder zwei Property-Werte passen.",
+        "en": "Finds up to 200 deals matching one or two property values."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "property_name": {
+            "description": "Internal property to compare, e.g. dealname, amount, hs_object_id. List names via HUBSPOT_LIST_OBJECT_PROPERTIES.",
+            "type": "string"
+          },
+          "property_name_2": {
+            "description": "Optional second property; the record must match both conditions.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Exact match value",
+            "type": "string"
+          },
+          "value_2": {
+            "description": "Ignored unless `property_name_2` is also set",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/deals/search",
+        "body": {
+          "json": {
+            "limit": {
+              "const": 200
+            },
+            "properties": {
+              "arg": "properties",
+              "type": "string_list",
+              "prepend": [
+                "dealtype",
+                "dealname",
+                "amount",
+                "description",
+                "closedate",
+                "createdate",
+                "num_associated_contacts",
+                "hs_forecast_amount",
+                "hs_forecast_probability",
+                "hs_manual_forecast_category",
+                "hs_next_step",
+                "hs_object_id",
+                "hs_lastmodifieddate",
+                "hubspot_owner_id",
+                "hubspot_team_id"
+              ]
+            },
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": {
+                      "arg": "property_name",
+                      "default": "dealname"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value",
+                      "required": true
+                    }
+                  },
+                  {
+                    "$if": [
+                      "property_name_2",
+                      "value_2"
+                    ],
+                    "propertyName": {
+                      "arg": "property_name_2"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value_2"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "total": {
+            "pointer": "/total"
+          },
+          "results": {
+            "pointer": "/results",
+            "default": []
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.deals.read"
+      ],
+      "slug": "HUBSPOT_FIND_DEAL",
+      "title": {
+        "de": "Deal suchen",
+        "en": "Find deal"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet bis zu 200 Tickets, die auf ein oder zwei Property-Werte passen.",
+        "en": "Finds up to 200 tickets matching one or two property values."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "property_name": {
+            "description": "Internal property to compare, e.g. subject, hs_ticket_id, hs_object_id. List names via HUBSPOT_LIST_OBJECT_PROPERTIES.",
+            "type": "string"
+          },
+          "property_name_2": {
+            "description": "Optional second property; the record must match both conditions.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Exact match value",
+            "type": "string"
+          },
+          "value_2": {
+            "description": "Ignored unless `property_name_2` is also set",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/tickets/search",
+        "body": {
+          "json": {
+            "limit": {
+              "const": 200
+            },
+            "properties": {
+              "arg": "properties",
+              "type": "string_list",
+              "prepend": [
+                "subject",
+                "content",
+                "source_type",
+                "createdate",
+                "hs_pipeline",
+                "hs_pipeline_stage",
+                "hs_resolution",
+                "hs_ticket_category",
+                "hs_ticket_id",
+                "hs_ticket_priority",
+                "hs_lastmodifieddate",
+                "hubspot_owner_id",
+                "hubspot_team_id"
+              ]
+            },
+            "filterGroups": [
+              {
+                "filters": [
+                  {
+                    "propertyName": {
+                      "arg": "property_name",
+                      "default": "subject"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value",
+                      "required": true
+                    }
+                  },
+                  {
+                    "$if": [
+                      "property_name_2",
+                      "value_2"
+                    ],
+                    "propertyName": {
+                      "arg": "property_name_2"
+                    },
+                    "operator": {
+                      "const": "EQ"
+                    },
+                    "value": {
+                      "arg": "value_2"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "total": {
+            "pointer": "/total"
+          },
+          "results": {
+            "pointer": "/results",
+            "default": []
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_FIND_TICKET",
+      "title": {
+        "de": "Ticket suchen",
+        "en": "Find ticket"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Kontakt samt der Standard-Properties.",
+        "en": "Reads a contact including the default properties."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "contact_id": {
+            "description": "Contact ID, z.B. aus HUBSPOT_FIND_CONTACT",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "contact_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/objects/contacts/{contact_id}",
+        "query": {
+          "properties": {
+            "arg": "properties",
+            "type": "string_list",
+            "prepend": [
+              "firstname",
+              "lastname",
+              "email",
+              "company",
+              "website",
+              "mobilephone",
+              "phone",
+              "fax",
+              "address",
+              "city",
+              "state",
+              "zip",
+              "salutation",
+              "country",
+              "jobtitle",
+              "hs_createdate",
+              "hs_email_domain",
+              "hs_object_id",
+              "lastmodifieddate",
+              "hs_persona",
+              "hs_language",
+              "lifecyclestage",
+              "createdate",
+              "numemployees",
+              "annualrevenue",
+              "industry"
+            ],
+            "join": ","
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.contacts.read"
+      ],
+      "slug": "HUBSPOT_GET_CONTACT",
+      "title": {
+        "de": "Kontakt lesen",
+        "en": "Get contact"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest eine Firma samt der Standard-Properties.",
+        "en": "Reads a company including the default properties."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "company_id": {
+            "description": "Company ID, z.B. aus HUBSPOT_FIND_COMPANY",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/objects/companies/{company_id}",
+        "query": {
+          "properties": {
+            "arg": "properties",
+            "type": "string_list",
+            "prepend": [
+              "name",
+              "domain",
+              "industry",
+              "about_us",
+              "phone",
+              "address",
+              "address2",
+              "city",
+              "state",
+              "zip",
+              "country",
+              "website",
+              "type",
+              "description",
+              "founded_year",
+              "hs_createdate",
+              "hs_lastmodifieddate",
+              "hs_object_id",
+              "is_public",
+              "timezone",
+              "total_money_raised",
+              "total_revenue",
+              "owneremail",
+              "ownername",
+              "numberofemployees",
+              "annualrevenue",
+              "lifecyclestage",
+              "createdate",
+              "web_technologies"
+            ],
+            "join": ","
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.companies.read"
+      ],
+      "slug": "HUBSPOT_GET_COMPANY",
+      "title": {
+        "de": "Firma lesen",
+        "en": "Get company"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Deal samt der Standard-Properties.",
+        "en": "Reads a deal including the default properties."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "deal_id": {
+            "description": "Deal ID, z.B. aus HUBSPOT_FIND_DEAL",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "deal_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/objects/deals/{deal_id}",
+        "query": {
+          "properties": {
+            "arg": "properties",
+            "type": "string_list",
+            "prepend": [
+              "dealtype",
+              "dealname",
+              "amount",
+              "description",
+              "closedate",
+              "createdate",
+              "num_associated_contacts",
+              "hs_forecast_amount",
+              "hs_forecast_probability",
+              "hs_manual_forecast_category",
+              "hs_next_step",
+              "hs_object_id",
+              "hs_lastmodifieddate",
+              "hubspot_owner_id",
+              "hubspot_team_id"
+            ],
+            "join": ","
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.deals.read"
+      ],
+      "slug": "HUBSPOT_GET_DEAL",
+      "title": {
+        "de": "Deal lesen",
+        "en": "Get deal"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest ein Ticket samt der Standard-Properties.",
+        "en": "Reads a ticket including the default properties."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Additional properties to return",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ticket_id": {
+            "description": "Ticket ID, z.B. aus HUBSPOT_FIND_TICKET",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/objects/tickets/{ticket_id}",
+        "query": {
+          "properties": {
+            "arg": "properties",
+            "type": "string_list",
+            "prepend": [
+              "subject",
+              "content",
+              "source_type",
+              "createdate",
+              "hs_pipeline",
+              "hs_pipeline_stage",
+              "hs_resolution",
+              "hs_ticket_category",
+              "hs_ticket_id",
+              "hs_ticket_priority",
+              "hs_lastmodifieddate",
+              "hubspot_owner_id",
+              "hubspot_team_id"
+            ],
+            "join": ","
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_GET_TICKET",
+      "title": {
+        "de": "Ticket lesen",
+        "en": "Get ticket"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Properties eines CRM-Objekttyps; jede Property trägt `hubspotDefined`, um eigene Felder zu filtern.",
+        "en": "Lists the properties of a CRM object type; each property carries `hubspotDefined` so custom fields can be filtered."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "object_type": {
+            "description": "contacts, companies, deals, tickets, notes, tasks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/properties/{object_type}"
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "properties": {
+            "default": [],
+            "pointer": "/results"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.schemas.contacts.read",
+        "crm.schemas.companies.read",
+        "crm.schemas.deals.read",
+        "crm.schemas.custom.read"
+      ],
+      "slug": "HUBSPOT_LIST_OBJECT_PROPERTIES",
+      "title": {
+        "de": "Objekt-Properties auflisten",
+        "en": "List object properties"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die CRM-Owner; optional nach E-Mail gefiltert.",
+        "en": "Lists the CRM owners; optionally filtered by email."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Paging-Cursor",
+            "type": "string"
+          },
+          "email": {
+            "description": "Nur der Owner mit dieser E-Mail",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "description": "1-500",
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/owners",
+        "query": {
+          "after": {
+            "arg": "after",
+            "trim": true
+          },
+          "email": {
+            "arg": "email",
+            "trim": true
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 100
+          }
+        }
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "owners": {
+            "default": [],
+            "pointer": "/results"
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "settings.users.read"
+      ],
+      "slug": "HUBSPOT_LIST_OWNERS",
+      "title": {
+        "de": "Owner auflisten",
+        "en": "List owners"
+      }
+    },
+    {
+      "description": {
+        "de": "Findet den HubSpot-Benutzer mit dieser E-Mail.",
+        "en": "Finds the HubSpot user with this email address."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "E-Mail des Owners",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/owners",
+        "query": {
+          "email": {
+            "arg": "email",
+            "required": true
+          }
+        }
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "owners": {
+            "default": [],
+            "pointer": "/results"
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "settings.users.read"
+      ],
+      "slug": "HUBSPOT_GET_OWNER_BY_EMAIL",
+      "title": {
+        "de": "Owner nach E-Mail",
+        "en": "Get owner by email"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest einen Owner über seine `hubspot_owner_id`.",
+        "en": "Reads an owner by its `hubspot_owner_id`."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "description": "Numerische Owner-ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/owners/{owner_id}",
+        "path_encoding": {
+          "owner_id": "digits"
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "settings.users.read"
+      ],
+      "slug": "HUBSPOT_GET_OWNER_BY_ID",
+      "title": {
+        "de": "Owner nach ID",
+        "en": "Get owner by ID"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Pipelines für Deals oder Tickets, inklusive Stages.",
+        "en": "Lists the pipelines for deals or tickets, including their stages."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "object_type": {
+            "default": "deals",
+            "description": "Art der Pipeline",
+            "enum": [
+              "deals",
+              "tickets"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/pipelines/{object_type}"
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "pipelines": {
+            "default": [],
+            "pointer": "/results"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.deals.read",
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_LIST_PIPELINES",
+      "title": {
+        "de": "Pipelines auflisten",
+        "en": "List pipelines"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Stages einer Pipeline in Anzeigereihenfolge.",
+        "en": "Lists the stages of a single pipeline in display order."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "object_type": {
+            "default": "deals",
+            "description": "Art der Pipeline",
+            "enum": [
+              "deals",
+              "tickets"
+            ],
+            "type": "string"
+          },
+          "pipeline_id": {
+            "description": "Pipeline-ID aus HUBSPOT_LIST_PIPELINES",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type",
+          "pipeline_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/pipelines/{object_type}/{pipeline_id}/stages"
+      },
+      "response": {
+        "fields": {
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "stages": {
+            "default": [],
+            "pointer": "/results"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.deals.read",
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_LIST_PIPELINE_STAGES",
+      "title": {
+        "de": "Pipeline-Stages auflisten",
+        "en": "List pipeline stages"
+      }
+    },
+    {
+      "description": {
+        "de": "Liest eine einzelne Stage (z.B. \"Closed Won\").",
+        "en": "Reads a single pipeline stage (e.g. \"Closed Won\")."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "object_type": {
+            "description": "Art der Pipeline",
+            "enum": [
+              "deals",
+              "tickets"
+            ],
+            "type": "string"
+          },
+          "pipeline_id": {
+            "description": "Pipeline-ID",
+            "type": "string"
+          },
+          "stage_id": {
+            "description": "Stage-ID aus HUBSPOT_LIST_PIPELINES",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type",
+          "pipeline_id",
+          "stage_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v3/pipelines/{object_type}/{pipeline_id}/stages/{stage_id}"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.deals.read",
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_GET_PIPELINE_STAGE",
+      "title": {
+        "de": "Pipeline-Stage lesen",
+        "en": "Get pipeline stage"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Typ-IDs, mit denen zwei Objekttypen verknüpft werden können.",
+        "en": "Lists the type ids available for linking two object types."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "from_object_type": {
+            "description": "contact, company, deal, ticket",
+            "type": "string"
+          },
+          "to_object_type": {
+            "description": "contact, company, deal, ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_object_type",
+          "to_object_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v4/associations/{from_object_type}/{to_object_type}/labels"
+      },
+      "response": {
+        "fields": {
+          "association_types": {
+            "default": [],
+            "pointer": "/results"
+          },
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.deals.read",
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_LIST_ASSOCIATION_TYPES",
+      "title": {
+        "de": "Assoziations-Typen auflisten",
+        "en": "List association types"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Objekte, mit denen ein Datensatz verknüpft ist.",
+        "en": "Lists the objects a record is associated with."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Paging-Cursor",
+            "type": "string"
+          },
+          "from_object_id": {
+            "description": "ID des Ausgangsdatensatzes",
+            "type": "string"
+          },
+          "from_object_type": {
+            "description": "contact, company, deal, ticket",
+            "type": "string"
+          },
+          "to_object_type": {
+            "description": "contact, company, deal, ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_object_id",
+          "from_object_type",
+          "to_object_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/crm/v4/objects/{from_object_type}/{from_object_id}/associations/{to_object_type}",
+        "query": {
+          "after": {
+            "arg": "after",
+            "trim": true
+          },
+          "limit": {
+            "const": "100"
+          }
+        }
+      },
+      "response": {
+        "fields": {
+          "associations": {
+            "default": [],
+            "pointer": "/results"
+          },
+          "count": {
+            "count": true,
+            "pointer": "/results"
+          },
+          "paging": {
+            "pointer": "/paging"
+          }
+        },
+        "mode": "object"
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.objects.contacts.read",
+        "crm.objects.companies.read",
+        "crm.objects.deals.read",
+        "crm.objects.tickets.read"
+      ],
+      "slug": "HUBSPOT_FIND_ASSOCIATIONS",
+      "title": {
+        "de": "Assoziationen auflisten",
+        "en": "Find associations"
+      }
+    },
+    {
+      "description": {
+        "de": "Listet die Kontaktlisten des Accounts (Namensfilter optional).",
+        "en": "Lists the contact lists in the account (optional name filter)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "default": 20,
+            "description": "1-100",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Offset aus einem vorherigen Aufruf",
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Name enthält diesen Text",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/lists/search",
+        "body": {
+          "json": {
+            "query": {
+              "arg": "query"
+            },
+            "count": {
+              "arg": "count",
+              "clamp": [
+                1,
+                100
+              ]
+            },
+            "offset": {
+              "arg": "offset"
+            }
+          }
+        },
+        "read_only_post": true
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "lists": {
+            "pointer": "/lists",
+            "default": []
+          },
+          "total": {
+            "pointer": "/total"
+          },
+          "offset": {
+            "pointer": "/offset"
+          },
+          "has_more": {
+            "pointer": "/hasMore"
+          }
+        }
+      },
+      "risk": "read",
+      "scopes": [
+        "crm.lists.read"
+      ],
+      "slug": "HUBSPOT_LIST_STATIC_LISTS",
+      "title": {
+        "de": "Kontaktlisten auflisten",
+        "en": "List static lists"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt einen Kontakt an (schreibend, braucht --confirm).",
+        "en": "Creates a contact (writes data; requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Interne Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "properties": {
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              }
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/crm/v3/objects/contacts"
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.contacts.write"
+      ],
+      "slug": "HUBSPOT_CREATE_CONTACT",
+      "title": {
+        "de": "Kontakt anlegen",
+        "en": "Create contact"
+      }
+    },
+    {
+      "description": {
+        "de": "Aktualisiert die Properties eines Kontakts (braucht --confirm).",
+        "en": "Updates the properties of a contact (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "contact_id": {
+            "description": "Contact ID, z.B. aus HUBSPOT_FIND_CONTACT",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Interne Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "contact_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "properties": {
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              }
+            }
+          }
+        },
+        "method": "PATCH",
+        "path": "/crm/v3/objects/contacts/{contact_id}"
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.contacts.write"
+      ],
+      "slug": "HUBSPOT_UPDATE_CONTACT",
+      "title": {
+        "de": "Kontakt aktualisieren",
+        "en": "Update contact"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt den Kontakt mit dieser E-Mail an oder aktualisiert ihn (Batch-Upsert, braucht --confirm).",
+        "en": "Creates or updates the contact with this email (batch upsert; requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "E-Mail des Kontakts",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Interne Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/contacts/batch/upsert",
+        "body": {
+          "json": {
+            "idProperty": {
+              "const": "email"
+            },
+            "inputs": [
+              {
+                "id": {
+                  "arg": "email",
+                  "required": true
+                },
+                "properties": {
+                  "email": {
+                    "arg": "email",
+                    "required": true
+                  },
+                  "$merge": {
+                    "arg": "properties",
+                    "type": "object",
+                    "stringify_values": ";"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.contacts.write"
+      ],
+      "slug": "HUBSPOT_UPSERT_CONTACT",
+      "title": {
+        "de": "Kontakt anlegen oder aktualisieren",
+        "en": "Upsert contact"
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "id": {
+            "pointer": "/results/0/id"
+          },
+          "properties": {
+            "pointer": "/results/0/properties"
+          }
+        }
+      }
+    },
+    {
+      "description": {
+        "de": "Legt eine Firma an (braucht --confirm).",
+        "en": "Creates a company (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "properties": {
+            "description": "Interne Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "properties": {
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              }
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/crm/v3/objects/companies"
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.companies.write"
+      ],
+      "slug": "HUBSPOT_CREATE_COMPANY",
+      "title": {
+        "de": "Firma anlegen",
+        "en": "Create company"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt einen Deal in Pipeline und Stage an (braucht --confirm).",
+        "en": "Creates a deal in a pipeline and stage (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "dealname": {
+            "description": "Name des Deals",
+            "type": "string"
+          },
+          "pipeline_id": {
+            "description": "Pipeline-ID, leer für die Standardpipeline",
+            "type": "string"
+          },
+          "pipeline_stage_id": {
+            "description": "Stage-ID, leer für die Standardstage",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Weitere Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "dealname"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/deals",
+        "body": {
+          "json": {
+            "properties": {
+              "dealname": {
+                "arg": "dealname",
+                "required": true
+              },
+              "pipeline": {
+                "arg": "pipeline_id"
+              },
+              "dealstage": {
+                "arg": "pipeline_stage_id"
+              },
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              },
+              "$merge_wins": true
+            }
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.deals.write"
+      ],
+      "slug": "HUBSPOT_CREATE_DEAL",
+      "title": {
+        "de": "Deal anlegen",
+        "en": "Create deal"
+      }
+    },
+    {
+      "description": {
+        "de": "Ändert Name, Pipeline oder Stage eines Deals (braucht --confirm).",
+        "en": "Changes the name, pipeline or stage of a deal (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "deal_id": {
+            "description": "Deal ID, z.B. aus HUBSPOT_FIND_DEAL",
+            "type": "string"
+          },
+          "dealname": {
+            "description": "Neuer Name; leer lässt den Namen unverändert",
+            "type": "string"
+          },
+          "pipeline_id": {
+            "description": "Neue Pipeline-ID",
+            "type": "string"
+          },
+          "pipeline_stage_id": {
+            "description": "Neue Stage-ID",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Weitere Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "deal_id"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "PATCH",
+        "path": "/crm/v3/objects/deals/{deal_id}",
+        "body": {
+          "json": {
+            "properties": {
+              "dealname": {
+                "arg": "dealname"
+              },
+              "pipeline": {
+                "arg": "pipeline_id"
+              },
+              "dealstage": {
+                "arg": "pipeline_stage_id"
+              },
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              },
+              "$merge_wins": true
+            }
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.deals.write"
+      ],
+      "slug": "HUBSPOT_UPDATE_DEAL",
+      "title": {
+        "de": "Deal aktualisieren",
+        "en": "Update deal"
+      }
+    },
+    {
+      "description": {
+        "de": "Legt ein Ticket in Pipeline und Stage an (braucht --confirm).",
+        "en": "Creates a ticket in a pipeline and stage (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pipeline_id": {
+            "description": "Pipeline-ID, leer für die Standardpipeline",
+            "type": "string"
+          },
+          "pipeline_stage_id": {
+            "description": "Stage-ID, leer für die Standardstage",
+            "type": "string"
+          },
+          "properties": {
+            "description": "Weitere Property-Namen zu Werten; Listen werden mit ';' verbunden.",
+            "type": "object"
+          },
+          "ticket_name": {
+            "description": "Betreff des Tickets",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/crm/v3/objects/tickets",
+        "body": {
+          "json": {
+            "properties": {
+              "subject": {
+                "arg": "ticket_name",
+                "required": true
+              },
+              "hs_pipeline": {
+                "arg": "pipeline_id"
+              },
+              "hs_pipeline_stage": {
+                "arg": "pipeline_stage_id"
+              },
+              "$merge": {
+                "arg": "properties",
+                "type": "object",
+                "stringify_values": ";"
+              },
+              "$merge_wins": true
+            }
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.tickets.write"
+      ],
+      "slug": "HUBSPOT_CREATE_TICKET",
+      "title": {
+        "de": "Ticket anlegen",
+        "en": "Create ticket"
+      }
+    },
+    {
+      "description": {
+        "de": "Trägt eine E-Mail in eine statische Kontaktliste ein (braucht --confirm).",
+        "en": "Adds an email address to a static contact list (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "E-Mail des Kontakts",
+            "type": "string"
+          },
+          "list_id": {
+            "description": "Listen-ID aus HUBSPOT_LIST_STATIC_LISTS",
+            "type": "string"
+          }
+        },
+        "required": [
+          "list_id",
+          "email"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/contacts/v1/lists/{list_id}/add",
+        "body": {
+          "json": {
+            "emails": [
+              {
+                "arg": "email",
+                "required": true
+              }
+            ]
+          }
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.lists.write"
+      ],
+      "slug": "HUBSPOT_ADD_CONTACT_TO_LIST",
+      "title": {
+        "de": "Kontakt zur Liste hinzufügen",
+        "en": "Add contact to list"
+      }
+    },
+    {
+      "description": {
+        "de": "Meldet eine E-Mail-Adresse von allen Marketing-Mails ab (braucht --confirm).",
+        "en": "Unsubscribes an email address from all marketing email (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "E-Mail des Kontakts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "body": {
+          "json": {
+            "unsubscribeFromAll": {
+              "const": true
+            }
+          }
+        },
+        "method": "PUT",
+        "path": "/email/public/v1/subscriptions/{email}",
+        "path_encoding": {
+          "email": "form"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "crm.objects.contacts.write"
+      ],
+      "slug": "HUBSPOT_UNSUBSCRIBE_EMAIL",
+      "title": {
+        "de": "E-Mail-Abmeldung setzen",
+        "en": "Unsubscribe email"
+      }
+    },
+    {
+      "description": {
+        "de": "Nimmt einen Kontakt per E-Mail in einen Workflow auf (braucht --confirm).",
+        "en": "Enrolls a contact by email into a workflow (requires --confirm)."
+      },
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "E-Mail des Kontakts",
+            "type": "string"
+          },
+          "workflow_id": {
+            "description": "ID des aktiven Workflows",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_id",
+          "email"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/automation/v2/workflows/{workflow_id}/enrollments/contacts/{email}",
+        "path_encoding": {
+          "email": "form"
+        }
+      },
+      "risk": "write",
+      "scopes": [
+        "automation"
+      ],
+      "slug": "HUBSPOT_ADD_CONTACT_TO_WORKFLOW",
+      "title": {
+        "de": "Kontakt in Workflow aufnehmen",
+        "en": "Enroll contact in workflow"
+      }
+    }
+  ],
+  "allowed_hosts": [
+    "api.hubapi.com"
+  ],
+  "api_base": "https://api.hubapi.com",
+  "auth_schemes": [
+    {
+      "authorize_url": "https://app.hubspot.com/oauth/authorize",
+      "default_scopes": [
+        "crm.lists.read",
+        "crm.lists.write",
+        "crm.objects.companies.read",
+        "crm.objects.companies.write",
+        "crm.objects.contacts.read",
+        "crm.objects.contacts.write",
+        "crm.objects.custom.read",
+        "crm.objects.custom.write",
+        "crm.objects.deals.read",
+        "crm.objects.deals.write",
+        "crm.objects.line_items.read",
+        "crm.objects.leads.read",
+        "crm.objects.leads.write",
+        "crm.objects.tickets.read",
+        "crm.objects.tickets.write",
+        "crm.schemas.companies.read",
+        "crm.schemas.contacts.read",
+        "crm.schemas.custom.read",
+        "crm.schemas.deals.read",
+        "crm.schemas.line_items.read",
+        "automation",
+        "e-commerce",
+        "tickets",
+        "content",
+        "settings.currencies.read",
+        "settings.users.read",
+        "settings.users.teams.read",
+        "files",
+        "forms",
+        "scheduler.meetings.meeting-link.read"
+      ],
+      "extra_authorize_params": [],
+      "pkce": false,
+      "refreshable": true,
+      "scope_separator": " ",
+      "token_url": "https://api.hubapi.com/oauth/v1/token",
+      "type": "oauth2"
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "connection_fields": [],
+  "description": {
+    "de": "HubSpot-CRM: Kontakte, Firmen, Deals und Tickets suchen, lesen und anlegen.",
+    "en": "HubSpot CRM: search, read and write contacts, companies, deals and tickets."
+  },
+  "name": "HubSpot",
+  "notes": "Drafted by examples/spec_from_builtin.rs from the compiled adapter src/toolkits/hubspot.rs; verified by the differential test.",
+  "replaces_builtin": true,
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "hubspot",
+  "version": "1.0.0",
+  "hybrid": {
+    "rust_actions": [
+      "HUBSPOT_CREATE_NOTE",
+      "HUBSPOT_CREATE_TASK",
+      "HUBSPOT_CREATE_ASSOCIATIONS"
+    ],
+    "reason": "CREATE_NOTE/CREATE_TASK default their timestamp to the current time (a spec has no clock); CREATE_ASSOCIATIONS fans one input object out per id in `to_object_ids`. Both are runtime logic, not request shape, so they stay in the compiled adapter."
+  },
+  "docs": [
+    "https://developers.hubspot.com/docs/api-reference/overview"
+  ]
+}

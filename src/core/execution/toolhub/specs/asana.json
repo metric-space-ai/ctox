@@ -1,0 +1,2280 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "asana",
+  "version": "1.0.0",
+  "docs": [
+    "https://developers.asana.com/reference/rest-api-reference"
+  ],
+  "notes": "Ported from the compiled adapter src/toolkits/asana.rs (Activepieces piece-asana, MIT) as a hot-plug proof.",
+  "api_base": "https://app.asana.com/api/1.0",
+  "allowed_hosts": [
+    "app.asana.com"
+  ],
+  "replaces_builtin": true,
+  "error_check": [
+    {
+      "kind": "present",
+      "pointer": "/errors",
+      "message_key": "message",
+      "prefix": "Asana API error"
+    }
+  ],
+  "name": "Asana",
+  "description": {
+    "de": "Tasks, Projekte, Abschnitte, Tags, Teams und Kommentare in Asana lesen und bearbeiten.",
+    "en": "Read and change tasks, projects, sections, tags, teams and comments in Asana."
+  },
+  "auth_schemes": [
+    {
+      "type": "oauth2",
+      "authorize_url": "https://app.asana.com/-/oauth_authorize",
+      "token_url": "https://app.asana.com/-/oauth_token",
+      "default_scopes": [
+        "default"
+      ],
+      "pkce": false,
+      "scope_separator": " ",
+      "refreshable": true,
+      "extra_authorize_params": []
+    },
+    {
+      "type": "bearer"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "ASANA_GET_CURRENT_USER",
+      "title": {
+        "de": "Aktuellen Nutzer lesen",
+        "en": "Get current user"
+      },
+      "description": {
+        "de": "Liest den Nutzer hinter der Verbindung (gid, Name, E-Mail) samt Workspaces.",
+        "en": "Reads the user behind this connection (gid, name, email) with their workspaces."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/users/me",
+        "query": {
+          "opt_fields": {
+            "const": "name,email,workspaces.name"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_GET_USER",
+      "title": {
+        "de": "Nutzer lesen",
+        "en": "Get user"
+      },
+      "description": {
+        "de": "Liest einen Nutzer per \"me\", E-Mail-Adresse oder User-gid.",
+        "en": "Reads one user by \"me\", email address or user gid."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "description": "\"me\", eine E-Mail-Adresse oder eine User-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/users/{user}",
+        "query": {
+          "opt_fields": {
+            "const": "name,email,workspaces.name"
+          }
+        },
+        "path_encoding": {
+          "user": "component"
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_USERS",
+      "title": {
+        "de": "Nutzer auflisten",
+        "en": "List users"
+      },
+      "description": {
+        "de": "Listet die Nutzer eines Workspace oder eines Teams.",
+        "en": "Lists the users of a workspace or a team."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of users to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "team": {
+            "description": "Gid des Teams; leer lassen, wenn `workspace` gesetzt ist",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid des Workspace; leer lassen, wenn `team` gesetzt ist",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/users",
+        "query": {
+          "workspace": {
+            "arg": "workspace",
+            "trim": true
+          },
+          "team": {
+            "arg": "team",
+            "trim": true
+          },
+          "opt_fields": {
+            "const": "name,email"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "args": [
+              "workspace",
+              "team"
+            ],
+            "message": "Set Workspace GID or Team GID so Asana knows which users to list."
+          }
+        ]
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_WORKSPACE",
+      "title": {
+        "de": "Workspace lesen",
+        "en": "Get workspace"
+      },
+      "description": {
+        "de": "Liest einen Workspace bzw. eine Organisation.",
+        "en": "Reads one workspace or organization."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "workspace": {
+            "description": "Workspace- bzw. Organisations-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/workspaces/{workspace}",
+        "query": {
+          "opt_fields": {
+            "const": "name,is_organization,email_domains"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_WORKSPACES",
+      "title": {
+        "de": "Workspaces auflisten",
+        "en": "List workspaces"
+      },
+      "description": {
+        "de": "Listet die Workspaces und Organisationen der Verbindung.",
+        "en": "Lists the workspaces and organizations the connection can see."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of workspaces to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/workspaces",
+        "query": {
+          "opt_fields": {
+            "const": "name,is_organization,email_domains"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_TEAM",
+      "title": {
+        "de": "Team lesen",
+        "en": "Get team"
+      },
+      "description": {
+        "de": "Liest ein Team; Teams gibt es nur in Organisationen.",
+        "en": "Reads one team; teams exist only inside organizations."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "team": {
+            "description": "Team-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "team"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/teams/{team}",
+        "query": {
+          "opt_fields": {
+            "const": "name,description,html_description,visibility,endorsed,organization.name,permalink_url"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_TEAMS",
+      "title": {
+        "de": "Teams auflisten",
+        "en": "List teams"
+      },
+      "description": {
+        "de": "Listet die Teams einer Organisation.",
+        "en": "Lists the teams of one organization."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of teams to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid der Organisation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/workspaces/{workspace}/teams",
+        "query": {
+          "opt_fields": {
+            "const": "name,description,visibility,organization.name,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_PROJECT",
+      "title": {
+        "de": "Projekt lesen",
+        "en": "Get project"
+      },
+      "description": {
+        "de": "Liest ein Projekt mit Status, Team, Mitgliedern und Link.",
+        "en": "Reads one project with status, team, members and link."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "project": {
+            "description": "Projekt-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project}",
+        "query": {
+          "opt_fields": {
+            "const": "name,archived,color,completed,completed_at,created_at,modified_at,default_view,due_on,start_on,notes,owner.name,privacy_setting,team.name,workspace.name,current_status_update.title,current_status_update.status_type,project_brief,members.name,followers.name,permalink_url"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_PROJECTS",
+      "title": {
+        "de": "Projekte auflisten",
+        "en": "List projects"
+      },
+      "description": {
+        "de": "Listet die Projekte eines Workspace, optional nur archivierte oder aktive.",
+        "en": "Lists the projects of a workspace, optionally only archived or only active ones."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "description": "Ja nur archivierte, Nein nur aktive Projekte; leer = beide",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of projects to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid des Workspace bzw. der Organisation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects",
+        "query": {
+          "workspace": {
+            "arg": "workspace",
+            "trim": true,
+            "required": true
+          },
+          "archived": {
+            "arg": "archived"
+          },
+          "opt_fields": {
+            "const": "name,archived,color,created_at,modified_at,due_on,owner.name,privacy_setting,team.name,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_SECTION",
+      "title": {
+        "de": "Abschnitt lesen",
+        "en": "Get section"
+      },
+      "description": {
+        "de": "Liest einen Abschnitt (Listenüberschrift oder Board-Spalte).",
+        "en": "Reads one section (list heading or board column)."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "section": {
+            "description": "Abschnitts-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/sections/{section}",
+        "query": {
+          "opt_fields": {
+            "const": "name,created_at,project.name"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_SECTIONS",
+      "title": {
+        "de": "Abschnitte auflisten",
+        "en": "List sections"
+      },
+      "description": {
+        "de": "Listet die Abschnitte eines Projekts in Anzeigereihenfolge.",
+        "en": "Lists the sections of a project in display order."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of sections to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "project": {
+            "description": "Projekt-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project}/sections",
+        "query": {
+          "opt_fields": {
+            "const": "name,created_at,project.name"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_TAG",
+      "title": {
+        "de": "Tag lesen",
+        "en": "Get tag"
+      },
+      "description": {
+        "de": "Liest einen Tag mit Farbe, Followern und Workspace.",
+        "en": "Reads one tag with color, followers and workspace."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tag": {
+            "description": "Tag-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tags/{tag}",
+        "query": {
+          "opt_fields": {
+            "const": "name,color,notes,created_at,followers.name,workspace.name,permalink_url"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_TAGS",
+      "title": {
+        "de": "Tags auflisten",
+        "en": "List tags"
+      },
+      "description": {
+        "de": "Listet die Tags eines Workspace.",
+        "en": "Lists the tags of a workspace."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of tags to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid des Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tags",
+        "query": {
+          "workspace": {
+            "arg": "workspace",
+            "trim": true,
+            "required": true
+          },
+          "opt_fields": {
+            "const": "name,color,created_at,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_TASK",
+      "title": {
+        "de": "Task lesen",
+        "en": "Get task"
+      },
+      "description": {
+        "de": "Liest einen Task mit Beschreibung, Terminen, Assignee, Tags und Link.",
+        "en": "Reads one task with description, dates, assignee, tags and link."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/{task}",
+        "query": {
+          "opt_fields": {
+            "const": "name,resource_subtype,notes,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,start_at,assignee.name,assignee.email,parent.name,projects.name,memberships.project.name,memberships.section.name,tags.name,followers.name,workspace.name,num_subtasks,permalink_url"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_PROJECT_TASKS",
+      "title": {
+        "de": "Projekt-Tasks auflisten",
+        "en": "List project tasks"
+      },
+      "description": {
+        "de": "Listet die Tasks eines Projekts in Projektreihenfolge.",
+        "en": "Lists the tasks of one project in project order."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_since": {
+            "description": "Nur unfertige Tasks plus Tasks, die nach diesem ISO-Zeitpunkt fertig wurden; \"now\" = nur unfertige",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of tasks to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "project": {
+            "description": "Projekt-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/projects/{project}/tasks",
+        "query": {
+          "completed_since": {
+            "arg": "completed_since",
+            "trim": true
+          },
+          "opt_fields": {
+            "const": "name,resource_subtype,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,assignee.name,parent.name,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_LIST_SUBTASKS",
+      "title": {
+        "de": "Subtasks auflisten",
+        "en": "List subtasks"
+      },
+      "description": {
+        "de": "Listet die direkten Subtasks eines Tasks.",
+        "en": "Lists the direct subtasks of one task."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of subtasks to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "task": {
+            "description": "Gid des Eltern-Tasks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/{task}/subtasks",
+        "query": {
+          "opt_fields": {
+            "const": "name,resource_subtype,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,assignee.name,parent.name,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_LIST_TASK_TAGS",
+      "title": {
+        "de": "Task-Tags auflisten",
+        "en": "List task tags"
+      },
+      "description": {
+        "de": "Listet die Tags, die aktuell an einem Task hängen.",
+        "en": "Lists the tags currently applied to one task."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of tags to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/{task}/tags",
+        "query": {
+          "opt_fields": {
+            "const": "name,color,created_at,permalink_url"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_GET_STORY",
+      "title": {
+        "de": "Kommentar lesen",
+        "en": "Get story"
+      },
+      "description": {
+        "de": "Liest einen Kommentar bzw. einen Aktivitätseintrag (Story) per gid.",
+        "en": "Reads one comment or activity entry (story) by gid."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "story": {
+            "description": "Story-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "story"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/stories/{story}",
+        "query": {
+          "opt_fields": {
+            "const": "created_at,created_by.name,resource_subtype,type,text,html_text,is_pinned,is_edited,is_editable,sticker_name,target.name"
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_LIST_TASK_STORIES",
+      "title": {
+        "de": "Task-Kommentare auflisten",
+        "en": "List task stories"
+      },
+      "description": {
+        "de": "Listet die Kommentare und Aktivitäten eines Tasks, älteste zuerst.",
+        "en": "Lists the comments and activity of a task, oldest first."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of stories to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Pagination token for the next page; pass the `next_offset` of the previous call. Tokens expire after a while.",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/tasks/{task}/stories",
+        "query": {
+          "opt_fields": {
+            "const": "created_at,created_by.name,resource_subtype,type,text,is_pinned,is_edited"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "offset": {
+            "arg": "offset"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "next_offset": {
+            "pointer": "/next_page/offset"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_SEARCH_TASKS",
+      "title": {
+        "de": "Tasks durchsuchen",
+        "en": "Search tasks"
+      },
+      "description": {
+        "de": "Asana Advanced Search über einen Workspace (nur bezahlte Pläne).",
+        "en": "Asana advanced search over one workspace (paid plans only)."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_ids": {
+            "description": "Users, von denen einer der Assignee sein darf",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "completed": {
+            "description": "Ja nur fertige, Nein nur offene Tasks; leer = beide",
+            "type": "boolean"
+          },
+          "created_at_after": {
+            "description": "Nur Tasks, die nach diesem ISO-Zeitpunkt erstellt wurden (Z oder ±hh:mm)",
+            "type": "string"
+          },
+          "due_on_after": {
+            "description": "Nur Tasks mit Fälligkeit nach diesem Datum",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "due_on_before": {
+            "description": "Nur Tasks mit Fälligkeit vor diesem Datum",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "is_blocked": {
+            "description": "Ja nur blockierte, Nein nur unblockierte Tasks; leer = beide",
+            "type": "boolean"
+          },
+          "is_subtask": {
+            "description": "Ja nur Subtasks, Nein nur Top-Level-Tasks; leer = beide",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Maximum number of tasks to return in this page, 1 to 100. Defaults to 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "modified_at_after": {
+            "description": "Nur Tasks, die nach diesem ISO-Zeitpunkt geändert wurden (Z oder ±hh:mm)",
+            "type": "string"
+          },
+          "project_ids": {
+            "description": "Projekt-gids; Tasks in einem davon treffen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resource_subtype": {
+            "description": "Nur Tasks dieses Typs; leer = alle",
+            "enum": [
+              "default_task",
+              "milestone",
+              "approval",
+              "custom"
+            ],
+            "type": "string"
+          },
+          "section_ids": {
+            "description": "Abschnitts-gids; Tasks in einem davon treffen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sort_ascending": {
+            "description": "Ja = älteste/kleinste zuerst; leer = absteigend",
+            "type": "boolean"
+          },
+          "sort_by": {
+            "description": "Sortierung; leer = zuletzt geändert zuerst",
+            "enum": [
+              "modified_at",
+              "created_at",
+              "due_date",
+              "completed_at",
+              "likes",
+              "relevance"
+            ],
+            "type": "string"
+          },
+          "tag_ids": {
+            "description": "Tag-gids; Tasks mit einem davon treffen",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "Wörter für Name und Beschreibung; leer = nur filtern",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid des zu durchsuchenden Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/workspaces/{workspace}/tasks/search",
+        "query": {
+          "text": {
+            "arg": "text",
+            "trim": true
+          },
+          "resource_subtype": {
+            "arg": "resource_subtype",
+            "one_of": [
+              "default_task",
+              "milestone",
+              "approval",
+              "custom"
+            ],
+            "strict": false
+          },
+          "assignee.any": {
+            "arg": "assignee_ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "projects.any": {
+            "arg": "project_ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "sections.any": {
+            "arg": "section_ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "tags.any": {
+            "arg": "tag_ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "completed": {
+            "arg": "completed"
+          },
+          "is_blocked": {
+            "arg": "is_blocked"
+          },
+          "is_subtask": {
+            "arg": "is_subtask"
+          },
+          "due_on.after": {
+            "arg": "due_on_after",
+            "trim": true,
+            "format": "date"
+          },
+          "due_on.before": {
+            "arg": "due_on_before",
+            "trim": true,
+            "format": "date"
+          },
+          "modified_at.after": {
+            "arg": "modified_at_after",
+            "trim": true,
+            "format": "date-time"
+          },
+          "created_at.after": {
+            "arg": "created_at_after",
+            "trim": true,
+            "format": "date-time"
+          },
+          "sort_by": {
+            "arg": "sort_by",
+            "one_of": [
+              "modified_at",
+              "created_at",
+              "due_date",
+              "completed_at",
+              "likes",
+              "relevance"
+            ],
+            "strict": false
+          },
+          "sort_ascending": {
+            "arg": "sort_ascending"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 50,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "opt_fields": {
+            "const": "name,resource_subtype,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,assignee.name,parent.name,permalink_url"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_SEARCH_WORKSPACE_OBJECTS",
+      "title": {
+        "de": "Objekte finden",
+        "en": "Search workspace objects"
+      },
+      "description": {
+        "de": "Typeahead-Suche nach Objektnamen im Workspace (Tasks, Projekte, Nutzer …).",
+        "en": "Typeahead lookup by object name in a workspace (tasks, projects, users, …)."
+      },
+      "risk": "read",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Anzahl der Treffer, 1 bis 100; leer = Asana-Standard.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "query": {
+            "description": "Text für Objektnamen; leer = zuletzt relevante Objekte",
+            "type": "string"
+          },
+          "resource_type": {
+            "description": "Welche Objektart zurückgegeben wird",
+            "enum": [
+              "task",
+              "project",
+              "user",
+              "tag",
+              "team",
+              "portfolio",
+              "goal",
+              "custom_field",
+              "project_template"
+            ],
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Gid des Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace",
+          "resource_type"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "GET",
+        "path": "/workspaces/{workspace}/typeahead",
+        "query": {
+          "resource_type": {
+            "arg": "resource_type",
+            "trim": true,
+            "required": true,
+            "one_of": [
+              "task",
+              "project",
+              "user",
+              "tag",
+              "team",
+              "portfolio",
+              "goal",
+              "custom_field",
+              "project_template"
+            ]
+          },
+          "query": {
+            "arg": "query",
+            "trim": true
+          },
+          "count": {
+            "arg": "count"
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data"
+          }
+        }
+      }
+    },
+    {
+      "slug": "ASANA_CREATE_TASK",
+      "title": {
+        "de": "Task anlegen",
+        "en": "Create task"
+      },
+      "description": {
+        "de": "Legt einen Task in einem Projekt an; Tags werden als gid übergeben. Braucht --confirm.",
+        "en": "Creates a task in a project; tags are passed as gids. Requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "description": "Assignee: \"me\", E-Mail oder User-gid",
+            "type": "string"
+          },
+          "due_at": {
+            "description": "Fälligkeit als ISO-Zeitpunkt mit Z oder ±hh:mm",
+            "type": "string"
+          },
+          "name": {
+            "description": "Titel des Tasks",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Beschreibung des Tasks",
+            "type": "string"
+          },
+          "project": {
+            "description": "Projekt-gid, in dem der Task landet",
+            "type": "string"
+          },
+          "tag_gids": {
+            "description": "Tag-gids zum Setzen (aus ASANA_LIST_TAGS)",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "name",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks",
+        "body": {
+          "json": {
+            "data": {
+              "name": {
+                "arg": "name",
+                "trim": true,
+                "required": true
+              },
+              "projects": {
+                "arg": "project",
+                "trim": true,
+                "required": true,
+                "wrap_array": true
+              },
+              "notes": {
+                "arg": "notes",
+                "required": true
+              },
+              "assignee": {
+                "arg": "assignee"
+              },
+              "due_at": {
+                "arg": "due_at",
+                "trim": true,
+                "format": "date-time"
+              },
+              "tags": {
+                "arg": "tag_gids",
+                "type": "string_list"
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_UPDATE_TASK",
+      "title": {
+        "de": "Task ändern",
+        "en": "Update task"
+      },
+      "description": {
+        "de": "Ändert nur die übergebenen Felder eines Tasks; braucht --confirm.",
+        "en": "Changes only the fields you pass on a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "description": "Neuer Assignee: \"me\", E-Mail oder User-gid",
+            "type": "string"
+          },
+          "completed": {
+            "description": "Ja = Task abschließen, Nein = wieder öffnen; leer = unverändert",
+            "type": "boolean"
+          },
+          "due_at": {
+            "description": "Neuer Fälligkeitszeitpunkt, ISO mit Z oder ±hh:mm; nicht mit `due_on`",
+            "type": "string"
+          },
+          "due_on": {
+            "description": "Neues Ganztags-Fälligkeitsdatum; nicht mit `due_at`",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "html_notes": {
+            "description": "Neue Rich-Text-Beschreibung in <body>…</body>; nicht mit `notes`",
+            "type": "string"
+          },
+          "name": {
+            "description": "Neuer Titel; leer lassen zum Beibehalten",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Neue Beschreibung; nicht mit `html_notes` kombinieren",
+            "type": "string"
+          },
+          "start_on": {
+            "description": "Neues Startdatum; Asana verlangt dafür ein Fälligkeitsdatum",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/tasks/{task}",
+        "body": {
+          "json": {
+            "data": {
+              "name": {
+                "arg": "name"
+              },
+              "notes": {
+                "arg": "notes"
+              },
+              "html_notes": {
+                "arg": "html_notes"
+              },
+              "assignee": {
+                "arg": "assignee"
+              },
+              "due_on": {
+                "arg": "due_on",
+                "trim": true,
+                "format": "date"
+              },
+              "due_at": {
+                "arg": "due_at",
+                "trim": true,
+                "format": "date-time"
+              },
+              "start_on": {
+                "arg": "start_on",
+                "trim": true,
+                "format": "date"
+              },
+              "completed": {
+                "arg": "completed"
+              }
+            }
+          }
+        },
+        "query": {
+          "opt_fields": {
+            "const": "name,resource_subtype,notes,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,start_at,assignee.name,assignee.email,parent.name,projects.name,memberships.project.name,memberships.section.name,tags.name,followers.name,workspace.name,num_subtasks,permalink_url"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "notes",
+              "html_notes"
+            ],
+            "message": "Set either Description or HTML Description, not both; Asana accepts only one of them."
+          },
+          {
+            "kind": "at_most_one",
+            "args": [
+              "due_on",
+              "due_at"
+            ],
+            "message": "Set either Due Date or Due Date and Time, not both; Asana accepts only one of them."
+          }
+        ],
+        "nonempty_body": "Nothing to update: set at least one of Task Name, Description, HTML Description, Assignee, Due Date, Due Date and Time, Start Date or Completed."
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_DELETE_TASK",
+      "title": {
+        "de": "Task löschen",
+        "en": "Delete task"
+      },
+      "description": {
+        "de": "Verschiebt einen Task in den Papierkorb (30 Tage wiederherstellbar); braucht --confirm.",
+        "en": "Moves a task to the trash (restorable for 30 days); requires --confirm."
+      },
+      "risk": "destructive",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/tasks/{task}"
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": "/data"
+      }
+    },
+    {
+      "slug": "ASANA_CREATE_SUBTASK",
+      "title": {
+        "de": "Subtask anlegen",
+        "en": "Create subtask"
+      },
+      "description": {
+        "de": "Legt einen Subtask unter einem Task an; braucht --confirm.",
+        "en": "Creates a subtask under a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "description": "Assignee: \"me\", E-Mail oder User-gid",
+            "type": "string"
+          },
+          "due_at": {
+            "description": "Fälligkeitszeitpunkt, ISO mit Z oder ±hh:mm; nicht mit `due_on`",
+            "type": "string"
+          },
+          "due_on": {
+            "description": "Ganztags-Fälligkeit; nicht mit `due_at` kombinieren",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "followers": {
+            "description": "User-gids bzw. \"me\" als Follower",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "html_notes": {
+            "description": "Rich-Text-Beschreibung; nicht mit `notes` kombinieren",
+            "type": "string"
+          },
+          "name": {
+            "description": "Titel des Subtasks",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Beschreibung; nicht mit `html_notes` kombinieren",
+            "type": "string"
+          },
+          "start_on": {
+            "description": "Startdatum; braucht ein Fälligkeitsdatum",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "task": {
+            "description": "Gid des Eltern-Tasks",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task}/subtasks",
+        "body": {
+          "json": {
+            "data": {
+              "name": {
+                "arg": "name",
+                "trim": true,
+                "required": true
+              },
+              "notes": {
+                "arg": "notes"
+              },
+              "html_notes": {
+                "arg": "html_notes"
+              },
+              "assignee": {
+                "arg": "assignee"
+              },
+              "due_on": {
+                "arg": "due_on",
+                "trim": true,
+                "format": "date"
+              },
+              "due_at": {
+                "arg": "due_at",
+                "trim": true,
+                "format": "date-time"
+              },
+              "start_on": {
+                "arg": "start_on",
+                "trim": true,
+                "format": "date"
+              },
+              "followers": {
+                "arg": "followers",
+                "type": "string_list"
+              }
+            }
+          }
+        },
+        "query": {
+          "opt_fields": {
+            "const": "name,resource_subtype,notes,completed,completed_at,created_at,modified_at,due_on,due_at,start_on,start_at,assignee.name,assignee.email,parent.name,projects.name,memberships.project.name,memberships.section.name,tags.name,followers.name,workspace.name,num_subtasks,permalink_url"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "notes",
+              "html_notes"
+            ],
+            "message": "Set either Description or HTML Description, not both; Asana accepts only one of them."
+          },
+          {
+            "kind": "at_most_one",
+            "args": [
+              "due_on",
+              "due_at"
+            ],
+            "message": "Set either Due Date or Due Date and Time, not both; Asana accepts only one of them."
+          }
+        ]
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_ADD_TASK_COMMENT",
+      "title": {
+        "de": "Kommentar schreiben",
+        "en": "Add task comment"
+      },
+      "description": {
+        "de": "Postet einen Kommentar auf einem Task; braucht --confirm.",
+        "en": "Posts a comment on a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "html_text": {
+            "description": "Rich-Text-Kommentar in <body>…</body>; nicht mit `text` kombinieren",
+            "type": "string"
+          },
+          "is_pinned": {
+            "description": "Ja pinnt den Kommentar an; leer = nicht angeheftet",
+            "type": "boolean"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          },
+          "text": {
+            "description": "Klartext-Kommentar; nicht mit `html_text` kombinieren",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task}/stories",
+        "body": {
+          "json": {
+            "data": {
+              "text": {
+                "arg": "text"
+              },
+              "html_text": {
+                "arg": "html_text"
+              },
+              "is_pinned": {
+                "arg": "is_pinned"
+              }
+            }
+          }
+        },
+        "query": {
+          "opt_fields": {
+            "const": "created_at,created_by.name,resource_subtype,type,text,html_text,is_pinned,is_edited,is_editable,sticker_name,target.name"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "text",
+              "html_text"
+            ],
+            "message": "Set either Text or HTML Text, not both; Asana accepts only one of them."
+          },
+          {
+            "kind": "at_least_one",
+            "args": [
+              "text",
+              "html_text"
+            ],
+            "message": "Provide the comment in Text or HTML Text."
+          }
+        ]
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    },
+    {
+      "slug": "ASANA_ADD_TAG_TO_TASK",
+      "title": {
+        "de": "Tag hinzufügen",
+        "en": "Add tag to task"
+      },
+      "description": {
+        "de": "Hängt einen bestehenden Tag an einen Task; braucht --confirm.",
+        "en": "Applies an existing tag to a task; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "tag": {
+            "description": "Tag-gid (aus ASANA_LIST_TAGS)",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "tag"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task}/addTag",
+        "body": {
+          "json": {
+            "data": {
+              "tag": {
+                "arg": "tag",
+                "trim": true,
+                "required": true
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": "/data"
+      }
+    },
+    {
+      "slug": "ASANA_ADD_TASK_TO_PROJECT",
+      "title": {
+        "de": "Task zum Projekt hinzufügen",
+        "en": "Add task to project"
+      },
+      "description": {
+        "de": "Fügt einen bestehenden Task (optional in einen Abschnitt) einem Projekt hinzu; braucht --confirm.",
+        "en": "Adds an existing task (optionally into a section) to a project; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "insert_after": {
+            "description": "Task-gid, nach dem eingefügt wird; nicht mit `insert_before`",
+            "type": "string"
+          },
+          "insert_before": {
+            "description": "Task-gid, vor dem eingefügt wird; nicht mit `insert_after`",
+            "type": "string"
+          },
+          "project": {
+            "description": "Projekt-gid",
+            "type": "string"
+          },
+          "section": {
+            "description": "Abschnitts-gid, in den der Task am Ende eingefügt wird",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "project"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/tasks/{task}/addProject",
+        "body": {
+          "json": {
+            "data": {
+              "project": {
+                "arg": "project",
+                "trim": true,
+                "required": true
+              },
+              "section": {
+                "arg": "section"
+              },
+              "insert_before": {
+                "arg": "insert_before"
+              },
+              "insert_after": {
+                "arg": "insert_after"
+              }
+            }
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "insert_before",
+              "insert_after"
+            ],
+            "message": "Set either Insert Before Task or Insert After Task, not both; Asana accepts only one of them."
+          }
+        ]
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": "/data"
+      }
+    },
+    {
+      "slug": "ASANA_MOVE_TASK_TO_SECTION",
+      "title": {
+        "de": "Task in Abschnitt verschieben",
+        "en": "Move task to section"
+      },
+      "description": {
+        "de": "Verschiebt einen Task in einen Abschnitt; braucht --confirm.",
+        "en": "Moves a task into a section; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "insert_after": {
+            "description": "Task-gid, nach dem eingefügt wird; nicht mit `insert_before`",
+            "type": "string"
+          },
+          "insert_before": {
+            "description": "Task-gid, vor dem eingefügt wird; nicht mit `insert_after`",
+            "type": "string"
+          },
+          "section": {
+            "description": "Gid des Zielabschnitts",
+            "type": "string"
+          },
+          "task": {
+            "description": "Task-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section",
+          "task"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/sections/{section}/addTask",
+        "body": {
+          "json": {
+            "data": {
+              "task": {
+                "arg": "task",
+                "trim": true,
+                "required": true
+              },
+              "insert_before": {
+                "arg": "insert_before"
+              },
+              "insert_after": {
+                "arg": "insert_after"
+              }
+            }
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "insert_before",
+              "insert_after"
+            ],
+            "message": "Set either Insert Before Task or Insert After Task, not both; Asana accepts only one of them."
+          }
+        ]
+      },
+      "response": {
+        "mode": "merge_success",
+        "pointer": "/data"
+      }
+    },
+    {
+      "slug": "ASANA_CREATE_SECTION",
+      "title": {
+        "de": "Abschnitt anlegen",
+        "en": "Create section"
+      },
+      "description": {
+        "de": "Legt einen Abschnitt (Listenüberschrift oder Board-Spalte) in einem Projekt an; braucht --confirm.",
+        "en": "Creates a section (list heading or board column) in a project; requires --confirm."
+      },
+      "risk": "write",
+      "scopes": [
+        "default"
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "insert_after": {
+            "description": "Abschnitts-gid, nach dem eingefügt wird; nicht mit `insert_before`",
+            "type": "string"
+          },
+          "insert_before": {
+            "description": "Abschnitts-gid, vor dem eingefügt wird; nicht mit `insert_after`",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name des Abschnitts, z. B. \"In review\"",
+            "type": "string"
+          },
+          "project": {
+            "description": "Projekt-gid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "name"
+        ],
+        "type": "object"
+      },
+      "request": {
+        "method": "POST",
+        "path": "/projects/{project}/sections",
+        "body": {
+          "json": {
+            "data": {
+              "name": {
+                "arg": "name",
+                "trim": true,
+                "required": true
+              },
+              "insert_before": {
+                "arg": "insert_before"
+              },
+              "insert_after": {
+                "arg": "insert_after"
+              }
+            }
+          }
+        },
+        "query": {
+          "opt_fields": {
+            "const": "name,created_at,project.name"
+          }
+        },
+        "constraints": [
+          {
+            "kind": "at_most_one",
+            "args": [
+              "insert_before",
+              "insert_after"
+            ],
+            "message": "Set either Insert Before Section or Insert After Section, not both; Asana accepts only one of them."
+          }
+        ]
+      },
+      "response": {
+        "mode": "pick",
+        "pointer": "/data",
+        "required": true,
+        "empty_error": "Asana returned an empty response"
+      }
+    }
+  ]
+}

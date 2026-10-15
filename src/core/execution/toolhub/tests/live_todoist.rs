@@ -17,9 +17,7 @@ fn project_id(v: &Value, name: &str) -> Option<String> {
     }
 }
 
-#[test]
-#[ignore]
-fn live_read_and_scoped_write_actions() {
+fn scenario() {
     if std::env::var("CTOX_TOOLHUB_LIVE_TODOIST_TOKEN").is_err() {
         return;
     }
@@ -82,4 +80,18 @@ fn live_read_and_scoped_write_actions() {
         println!("LIVE SKIP {t} (würde dauerhafte Objekte außerhalb der Testaufgabe anlegen/ändern)");
     }
     assert!(fails.is_empty(), "live failures: {fails:?}");
+}
+
+#[test]
+#[ignore]
+fn live_read_and_scoped_write_actions() {
+    scenario();
+}
+
+/// Same scenario through the hot-plug spec `specs/todoist.json` (SpecAdapter).
+#[test]
+#[ignore]
+fn live_read_and_scoped_write_actions_via_spec() {
+    support::use_spec(include_str!("../specs/todoist.json"));
+    scenario();
 }

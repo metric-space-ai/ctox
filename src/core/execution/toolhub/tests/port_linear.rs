@@ -680,6 +680,7 @@ fn linear_actions_are_ported() {
         },
     ];
     support::assert_full_coverage(&a, &cases);
+    support::spec_parity("linear", &a, &cases);
     for c in &cases {
         run(&a, c);
     }
