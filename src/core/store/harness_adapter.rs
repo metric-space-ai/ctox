@@ -13,6 +13,7 @@ use std::{
 pub struct FileOwner {
     file: File,
     path: PathBuf,
+    exclusive: bool,
 }
 
 impl FileOwner {
@@ -55,7 +56,7 @@ impl FileOwner {
             .open(lock)?;
         file.try_lock()
             .map_err(|error| io::Error::other(format!("database already owned: {error}")))?;
-        Ok(Self { file, path })
+        Ok(Self { file, path, exclusive: true })
     }
 
     /// Temporary compatibility access: multiple legacy connections may coexist,
@@ -72,7 +73,11 @@ impl FileOwner {
             .open(lock)?;
         file.try_lock_shared()
             .map_err(|error| io::Error::other(format!("database already owned: {error}")))?;
-        Ok(Self { file, path })
+        Ok(Self { file, path, exclusive: false })
+    }
+
+    pub fn require_exclusive(&self) -> io::Result<()> {
+        if self.exclusive { Ok(()) } else { Err(io::Error::other("exclusive file owner required")) }
     }
 
     pub fn path(&self) -> &Path {
@@ -288,7 +293,7 @@ fn finish_on_owner_thread<F: Future>(future: F) -> F::Output {
 
 pub async fn open_async_owned<C, F, Close>(
     path: PathBuf,
-    initialize: impl FnOnce(PathBuf) -> F + Send + 'static,
+    initialize: impl FnOnce(Arc<FileOwner>) -> F + Send + 'static,
     close: impl FnOnce(C) -> Close + Send + 'static,
 ) -> io::Result<OwnedResource<C>>
 where
@@ -304,14 +309,14 @@ where
         .name("ctox-sqlx-owner".into())
         .spawn(move || {
             let lease = match FileOwner::acquire(&path) {
-                Ok(lease) => lease,
+                Ok(lease) => Arc::new(lease),
                 Err(error) => {
                     let _ = ready.send(Err(error));
                     return;
                 }
             };
             let _context = handle.enter();
-            match finish_on_owner_thread(initialize(lease.path().to_path_buf())) {
+            match finish_on_owner_thread(initialize(lease.clone())) {
                 Ok(resource) => {
                     // If startup's caller was cancelled, send drops this wrapper,
                     // disconnects receiver and still closes before releasing lease.

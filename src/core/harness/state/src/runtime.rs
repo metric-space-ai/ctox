@@ -1,5 +1,7 @@
 #[path = "../../../store/harness_adapter.rs"]
 mod owner_adapter;
+#[path = "../../../store/harness_sqlx_adapter.rs"]
+mod owned_sqlx;
 
 use crate::AgentJob;
 use crate::AgentJobCreateParams;
@@ -32,19 +34,13 @@ use chrono::Utc;
 use ctox_protocol::ThreadId;
 use ctox_protocol::dynamic_tools::DynamicToolSpec;
 use ctox_protocol::protocol::RolloutItem;
-use log::LevelFilter;
 use serde_json::Value;
-use sqlx::ConnectOptions;
 use sqlx::QueryBuilder;
 use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqliteJournalMode;
-use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::sqlite::SqliteSynchronous;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -60,7 +56,6 @@ mod memories;
 mod test_support;
 mod threads;
 
-const HARNESS_STATE_SQLITE_BUSY_TIMEOUT: Duration = Duration::ZERO;
 
 // "Partition" is the retention bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
@@ -161,8 +156,8 @@ async fn open_sqlite(
     }
     let pool = owner_adapter::open_async_owned(
         key.clone(),
-        move |path| async move {
-            open_sqlite_pool(&path, migrator)
+        move |lease| async move {
+            owned_sqlx::open_pool(lease, migrator)
                 .await
                 .map_err(std::io::Error::other)
         },
@@ -173,28 +168,7 @@ async fn open_sqlite(
     Ok(pool)
 }
 
-async fn open_sqlite_pool(path: &Path, migrator: &'static Migrator) -> anyhow::Result<SqlitePool> {
-    let options = SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(HARNESS_STATE_SQLITE_BUSY_TIMEOUT)
-        .log_statements(LevelFilter::Off);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .min_connections(1)
-        .max_lifetime(None)
-        .idle_timeout(None)
-        .acquire_timeout(Duration::from_millis(50))
-        .connect_with(options)
-        .await?;
-    if let Err(error) = migrator.run(&pool).await {
-        pool.close().await;
-        return Err(error.into());
-    }
-    Ok(pool)
-}
+
 
 fn db_filename(base_name: &str, version: u32) -> String {
     format!("{base_name}_{version}.sqlite")
