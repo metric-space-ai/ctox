@@ -33,9 +33,9 @@ async fn installed_inputs_keep_owner_generation_and_capture_commits_during_activ
             }),
         )
         .await?;
-    owner.publish_inputs(root)?;
+    owner.publish_inputs(root).await?;
     assert!(matches!(
-        owner.publish_inputs(root),
+        owner.publish_inputs(root).await,
         Err(StoreError::AlreadyOwned)
     ));
     let inputs = store_inputs(root)?;

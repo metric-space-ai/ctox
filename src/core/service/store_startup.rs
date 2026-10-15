@@ -92,7 +92,7 @@ impl Foreground {
                 .await?;
             stores.install_native_rxdb(sync.clone()).await?;
             stores.install_queue(root.clone(), core, sync).await?;
-            stores.publish_inputs(&root)?;
+            stores.publish_inputs(&root).await?;
             store_inputs(&root)
         }
         .await;

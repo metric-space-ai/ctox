@@ -233,19 +233,29 @@ impl DaemonStores {
 
     /// Publish the existing canonical handles once, only after both owners are ready.
     /// The daemon retains the registration until before admission closes on drain.
-    pub fn publish_inputs(&mut self, root: &std::path::Path) -> Result<(), StoreError> {
+    pub async fn publish_inputs(&mut self, root: &std::path::Path) -> Result<(), StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
         }
         if self.inputs.is_some() {
             return Err(StoreError::AlreadyOwned);
         }
+        let checked_root = root.to_owned();
+        let (core_id, sync_id) = tokio::task::spawn_blocking(move || {
+            Ok::<_, StoreError>((
+                DbId::new(crate::paths::core_db(&checked_root))?,
+                DbId::new(crate::paths::sync_db(&checked_root))?,
+            ))
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)??;
+        if self.closing.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
         let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
         let core = databases.get("core").cloned().ok_or(StoreError::Closed)?;
         let sync = databases.get("sync").cloned().ok_or(StoreError::Closed)?;
-        if core.writer.db_id().path() != crate::paths::core_db(root)
-            || sync.writer.db_id().path() != crate::paths::sync_db(root)
-        {
+        if core.writer.db_id() != &core_id || sync.writer.db_id() != &sync_id {
             return Err(StoreError::Invalid(
                 "composition root/file identity mismatch".into(),
             ));
