@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {catalogAccepted} from '../../tests/sync-v4-e2e/criteria.mjs';
+import {catalogAccepted} from '../../sync-v4-e2e/criteria.mjs';
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
 const expected=['K01','K07','K11','K15','K02','K24'];
 const declared=fs.readdirSync('tests/sync-v4').filter(n=>/^k[0-9]+$/.test(n)).map(n=>'K'+n.slice(1));
