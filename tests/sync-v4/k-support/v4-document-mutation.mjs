@@ -27,5 +27,5 @@ const result={mutation:'real served document → synthetic route.fulfill documen
 try{fs.writeFileSync(file,altered);saveManifest(altered);result.mutated=run('fulfilled');}
 finally{fs.writeFileSync(file,before);saveManifest(before);}
 result.restored=run('served');
-result.pass=result.mutated.binding?.bootstrapHttpStatus===200&&result.mutated.binding?.kernelImported===true&&result.mutated.binding?.nativeConnected===false&&result.restored.binding?.nativeConnected===true&&result.restored.binding?.relay?.forced===true&&result.mutated.groupAbsent===true&&result.restored.groupAbsent===true;
+result.pass=result.mutated.diagnostics?.some(e=>e.classes?.includes('ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS'))===true&&result.mutated.binding?.bootstrapHttpStatus===200&&result.mutated.binding?.kernelImported===true&&result.mutated.binding?.nativeConnected===false&&result.restored.binding?.nativeConnected===true&&result.restored.binding?.relay?.forced===true&&result.mutated.groupAbsent===true&&result.restored.groupAbsent===true;
 result.finishedAt=new Date().toISOString();fs.writeFileSync(join(output,'mutation.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));if(!result.pass)process.exitCode=1;

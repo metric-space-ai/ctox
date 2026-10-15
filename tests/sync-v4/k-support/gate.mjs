@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {parseTarget,resolveRevision,comparison,markdown} from './target.mjs';
 import {catalogAccepted} from '../../sync-v4-e2e/criteria.mjs';
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
@@ -13,7 +14,7 @@ const output=resolve(process.env.BUILD_LANE_BIN,'../artifacts/e2e-k-'+Date.now()
 fs.mkdirSync(output,{recursive:false,mode:0o700});
 const raw=process.argv.slice(2),options={};const args=[];
 for(let i=0;i<raw.length;i+=2){if(!raw[i]?.startsWith('--')||raw[i+1]===undefined)throw Error('Expected --key value');
- if(['target','target-requested','kernel-revision','k24-source','k24-mode','k24-evidence'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
+ if(['target','target-requested','kernel-revision','k24-source','k24-mode','k24-evidence','k11-evidence'].includes(raw[i].slice(2)))options[raw[i].slice(2)]=raw[i+1];else args.push(raw[i],raw[i+1]);}
 const target=parseTarget(options.target);
 const baseline=JSON.parse(fs.readFileSync(new URL('./baseline-v3.json',import.meta.url)));
 
@@ -72,18 +73,30 @@ if(target.kind==='v4'){
    if(fs.existsSync(summary.nativePreflight.evidence)){
     const measured=JSON.parse(fs.readFileSync(summary.nativePreflight.evidence));summary.nativePreflight.result=measured;
     summary.browserKernel.sourcePresent=measured.browserKernel?.revision===target.kernelRevision;
-    summary.browserKernel.nativeBindingExecuted=measured.binding?.nativeConnected===true;
+    summary.browserKernel.nativeRtcPreflightConnected=measured.binding?.nativeConnected===true;
+    summary.browserKernel.nativeBindingExecuted=measured.binding?.scenarioBinding===true;
     reason=measured.reason??measured.error??'Native V4 preflight did not produce a binding';
    }else reason='Native V4 preflight failed before producing a terminal result; inspect '+join(output,'native-v4-preflight.log');
 
   }catch(e){reason='V4 build unverified: '+e.message;summary.buildReceipt=receipt;}
+ }
+ if(options['k11-evidence']){
+  const file=resolve(options['k11-evidence']),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
+  if(!file.startsWith(allowed))throw Error('K11 evidence must be an owned lane artifact');
+  const bytes=fs.readFileSync(file),row=JSON.parse(bytes);
+  if(row.id!=='K11'||row.terminal!==true||row.controller?.groupAbsent!==true||row.installerExecuted!==true||row.dataPreserved!==true||!Number.isInteger(row.fixture?.documentsCovered)||row.fixture.documentsCovered!==row.fixture.rows||row.afterRevision!==target.revision||row.installer?.after?.binarySha256!==summary.build?.binarySha256)throw Error('K11 installer evidence is incomplete or for a different target');
+  summary.k11Installer={evidence:file,sha256:createHash('sha256').update(bytes).digest('hex'),result:row};
  }
  for(const id of expected){
   if(id==='K24'&&options['k24-evidence']){
    const file=resolve(options['k24-evidence']),row=JSON.parse(fs.readFileSync(file));
    if(row.id!=='K24'||row.terminal!==true||row.cleanup!=='owned groups absent'||row.originCommit!=='1ab7ceb03ceaeac763ea7ec99be56896608f83cb')throw Error('K24 evidence is not terminal, owned, or from the pinned tool');
    summary.scenarios.push({...row,id,evidence:file,measured:{target:row.target,criteria:row.criteria,measures:row.measured},bindingOnly:row.target==='bind'});
-  }else summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,measured:summary.nativePreflight?.result?{phase:summary.nativePreflight.result.phase,binding:summary.nativePreflight.result.binding??null}:null,evidence:summary.nativePreflight?.evidence??summary.build?.receipt??summary.buildReceipt??null});
+  }else{
+   const measured=summary.nativePreflight?.result?{phase:summary.nativePreflight.result.phase,binding:summary.nativePreflight.result.binding??null}:{};
+   if(id==='K11'&&summary.k11Installer)measured.installerOnly=summary.k11Installer;
+   summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,measured:Object.keys(measured).length?measured:null,evidence:summary.nativePreflight?.evidence??summary.build?.receipt??summary.buildReceipt??null});
+  }
  }
 
  summary.terminal=true;summary.finishedAt=new Date().toISOString();summary.actuallyRan=summary.scenarios.filter(r=>r.status==='measured').map(r=>r.id);summary.pass=false;save();

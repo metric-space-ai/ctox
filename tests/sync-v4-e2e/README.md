@@ -212,6 +212,10 @@ the actual supported installer in private PID/mount/network namespaces, verifies
 its active binary/backup and compares synthetic row hashes read-only before and
 after. It explicitly records `migrationExecuted:false` and never claims K11
 acceptance. The real compatible/incompatible publication path is still required.
+`--k11-evidence` attaches that partial receipt to the comparison only when its
+terminal namespace cleanup, full-document coverage and target binary SHA match.
+It remains `not_run` for catalog acceptance until real migration is measured.
+
 `prepare-install-source.mjs` can supplement a minimal portable source snapshot
 with an explicitly SHA-pinned tracked archive from the same revision; the
 original producer and portable package remain untouched.

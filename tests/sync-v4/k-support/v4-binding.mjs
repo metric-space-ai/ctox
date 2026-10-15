@@ -2,7 +2,7 @@
 // existing signaling/RTC implementation: no V3 collection, query, lease, pull
 // or write path is imported into the V4 scenario adapter.
 export async function probeNativeV4({timeoutMs=30000}) {
- const result={startedAt:new Date().toISOString(),phase:'native-bootstrap',nativeConnected:false,kernelImported:false,scenarioBinding:false,events:[],businessRequestsSent:0};
+ const result={startedAt:new Date().toISOString(),phase:'native-bootstrap',nativeConnected:false,kernelImported:false,protocolV4Negotiated:false,scenarioBinding:false,events:[],businessRequestsSent:0};
  const response=await fetch('/api/business-os/sync/config');
  result.bootstrapHttpStatus=response.status;
  if(!response.ok)throw Error('Native control-plane bootstrap HTTP '+response.status);
