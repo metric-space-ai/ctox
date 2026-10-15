@@ -273,11 +273,12 @@ fn build_engine(named: Vec<(String, SignalHandle)>, fired: Rc<RefCell<Vec<String
 }
 
 /// Convert a JSON object into a Rhai `state` map. Non-objects become an empty map.
-fn json_to_state_map(state_in: &Value) -> Map {
-    match rhai::serde::to_dynamic(state_in) {
-        Ok(d) => d.try_cast::<Map>().unwrap_or_default(),
-        Err(_) => Map::new(),
-    }
+fn json_to_state_map(engine: &Engine, state_in: &Value) -> Map {
+    // serde_json/arbitrary_precision serializes numbers through a private map.
+    // Parse actual JSON so Rhai receives numeric values, not Serde's transport tags.
+    engine
+        .parse_json(state_in.to_string(), true)
+        .unwrap_or_default()
 }
 
 /// Read the (possibly mutated) `state` back out as a JSON object.
@@ -349,7 +350,7 @@ pub(crate) fn evaluate(
         },
     );
     scope.push("now_ms", ctx.now_ms);
-    scope.push("state", json_to_state_map(state_in));
+    scope.push("state", json_to_state_map(&engine, state_in));
 
     let run = engine.run_with_scope(&mut scope, trigger_code);
 
