@@ -6,7 +6,7 @@ import {sha256Hex} from '../values.mjs';
 const tick=()=>new Promise(r=>setTimeout(r,5));
 function fixture(opts={}){const pair=protocolChannels(),peer=new FakeNativePeer(pair.server,opts),transport=new WebRTCKernelTransport({channels:pair.client,hello:offer(opts.instanceId??'instance'),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature',...opts.transport});return {peer,transport};}
 test('P4 hello and exact V4 subscribe/write/result/activation/priority wire',async()=>{
- const {peer,transport}=fixture(),pages=[],results=[],timings=[];
+ const {peer,transport}=fixture({transport:{hello:async()=>{await new Promise(resolve=>setTimeout(resolve,450));return offer("instance");}}}),pages=[],results=[],timings=[];
  try {
   await transport.connect({instanceId:'instance',userId:'alice'},{link(){},page:async p=>pages.push(p),write_result:async r=>results.push(r),timing:t=>timings.push(t)});
   const scope=await transport.scope('notes');await transport.subscribe({...scope,collection:'notes',checkpoint_seq:'9007199254740998',priority:'P0'});
@@ -16,11 +16,11 @@ test('P4 hello and exact V4 subscribe/write/result/activation/priority wire',asy
   for(let i=0;i<20&&(!results.length||!timings.length||!peer.messages.some(m=>m.type==='priority'));i++)await tick();
   assert.equal(pages[0].cursor_to,'9007199254740999');assert.equal(results[0].seq,'9007199254741000');
   assert.equal(peer.messages.find(m=>m.type==='subscribe').checkpoint_seq,'9007199254740998');assert.equal(peer.messages.find(m=>m.type==='write').prev_op_id,'prior');
-  assert.ok(peer.messages.some(m=>m.type==='app_activation'));assert.ok(timings[0].push_latency_ms>=0);assert.ok(Math.abs(timings[0].clock_offset_ms-5000)<200);assert.deepEqual(peer.errors,[]);
+  assert.ok(peer.messages.some(m=>m.type==='app_activation'));assert.ok(timings[0].push_latency_ms>=0);assert.ok(Math.abs(timings[0].clock_offset_ms-5000)<50);assert.deepEqual(peer.errors,[]);
  }finally{transport.close();peer.close();}
 });
 test('bad signature/progress proof fails closed without page application',async()=>{
- for(const extra of [{sig:'tampered'},{cursor_to:'9007199254741000'},{complete:true,cursor_to:'1',seq_to:'1'}]){
+ for(const extra of [{sig:'tampered'},{cursor_to:'9007199254741000',complete:false},{complete:true,cursor_to:'1',seq_to:'1'}]){
   const {peer,transport}=fixture();let applied=0,offline=false;
   try {
    await transport.connect({instanceId:'instance',userId:'alice'},{link:l=>offline=l.state==='offline',page:async()=>applied++,write_result(){}});
@@ -36,6 +36,7 @@ test('CAS upload pipelines four chunks and download/hash crosses frame boundarie
   await transport.connect({instanceId:'instance',userId:'alice'},{link(){},page(){},write_result(){}});
   const blob=new Blob(['ä'.repeat(140000)],{type:'text/plain'}),ref=await sha256Hex(blob);await transport.upload(ref,blob);
   assert.equal(await(await transport.blob(ref)).text(),await blob.text());assert.ok(peer.messages.filter(m=>m.type==='transfer_put').length>=4);assert.deepEqual(peer.errors,[]);
+  peer.blobs.set(ref,new Blob(['x'.repeat(blob.size)]));await assert.rejects(transport.blob(ref),e=>e.code==='invalid');
  }finally{transport.close();peer.close();}
 });
 test('wrong pairing and missing verifier never open a data path',async()=>{

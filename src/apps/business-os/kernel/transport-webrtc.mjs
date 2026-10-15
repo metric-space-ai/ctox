@@ -21,7 +21,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    if(hello?.instance_id!==identity.instanceId)throw new CtoxError('forbidden','Hello identity mismatch');
    if(typeof this.options.verifyPackage!=='function')throw new CtoxError('forbidden','Authenticated package verifier required');
    this.hello=new HelloConnection(hello,state=>{if(state.state==='closed'&&state.rejection)this.fail(new CtoxError('unavailable',`hello rejected: ${state.rejection.reason}`));},{handshakeTimeoutMs:this.options.handshakeTimeoutMs??10000});
-   const endpoint=this.options.channels?{channels:this.options.channels,peer:this.options.peer}:await this.options.createPeer(this.options.address,identity);
+   const endpoint=this.options.channels?{channels:this.options.channels,peer:this.options.peer}:await Promise.race([this.options.createPeer(this.options.address,identity),this.ready.then(()=>{throw new CtoxError('unavailable','Handshake ended before connection setup');})]);
    if(this.closed){endpoint.close?.();throw new CtoxError('unavailable','Transport closed');}
    this.endpoint=endpoint;this.channels=endpoint.channels;
    if(!this.channels?.[0])throw new CtoxError('invalid','Control data channel missing');
@@ -39,7 +39,7 @@ export class WebRTCKernelTransport extends KernelTransport {
   }catch(error){this.fail(error);throw error;}
  }
  listen(target,name,fn){target.addEventListener(name,fn);this.listeners.push([target,name,fn]);}
- async startHello(){await this.scheduler.plain(this.hello.connected());}
+ async startHello(){this.started=this.now();await this.scheduler.plain(this.hello.connected());}
  async receive(data){
   if(this.closed)return;
   if(typeof data==='string'){
@@ -54,6 +54,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    const {core_time_ms,...contract}=message;
    const selected=this.hello.receive(JSON.stringify(contract));
    if(selected.type!=='hello_ok')throw new CtoxError('unavailable','Negotiation rejected');
+   if(selected.transport.codec==='zstd'&&!this.options.codecs?.zstd)throw new CtoxError('unavailable','Negotiated codec adapter unavailable');
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();this.events.link({state:'online',rtt_ms:this.now()-this.started,relay:!!this.endpoint.relay});this.readyState.resolve(selected);return;
@@ -72,8 +73,10 @@ export class WebRTCKernelTransport extends KernelTransport {
     if(!sub || message.scope_hash!==sub.scope_hash || String(message.epoch)!==String(this.session.epoch) || message.gen!==sub.gen)throw new CtoxError('revoked','Page scope/epoch/generation mismatch');
     if(!message.package_id||seqGreater(cursor,head)||seqGreater(from,to)||seqGreater(to,cursor)||(message.complete&&cursor!==head))throw new CtoxError('invalid','Invalid page progress proof');
     for(const doc of message.docs??[])if(seqGreater(decimalSeq(doc.seq),cursor))throw new CtoxError('invalid','Document exceeds cursor');
-    if(message.core_sent_at_ms!==undefined){if(!Number.isFinite(message.core_sent_at_ms))throw new CtoxError('invalid','Invalid send timestamp');if(this.offset!==null)this.events.timing?.({push_latency_ms:Math.max(0,this.now()+this.offset-message.core_sent_at_ms),clock_offset_ms:this.offset,clock_uncertainty_ms:this.rtt/2,samples:++this.samples});}
-    await this.events.page(message);return;
+    if(!Number.isFinite(message.core_sent_at_ms)||message.core_sent_at_ms<0)throw new CtoxError('invalid','Invalid send timestamp');
+    await this.events.page(message);
+    if(this.offset!==null)this.events.timing?.({push_latency_ms:Math.max(0,this.now()+this.offset-message.core_sent_at_ms),clock_offset_ms:this.offset,clock_uncertainty_ms:this.rtt/2,samples:++this.samples});
+    return;
    }
    case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');await this.events.revoke?.(message);return;
    case 'write_result':
@@ -91,7 +94,7 @@ export class WebRTCKernelTransport extends KernelTransport {
  }
  async scope(collection){await this.ready;const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
  async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);await this.scheduler.send('control',{type:'subscribe',...sub});}
- async write(entry){await this.ready;decimalSeq(entry.base_seq);if(!entry.op_id)throw new CtoxError('invalid','op_id missing');await this.scheduler.send('commands',{type:'write',...entry});}
+ async write(entry){await this.ready;decimalSeq(entry.base_seq);if(!entry.op_id)throw new CtoxError('invalid','op_id missing');try{await this.scheduler.send('commands',{type:'write',...entry});}catch(error){this.fail(error);throw error;}}
  async appActivation(report){await this.ready;await this.scheduler.send('commands',{type:'app_activation',...report,at_seq:decimalSeq(report.at_seq)});}
  priority(hint){this.ready.then(()=>Promise.all(hint.collections.map(collection=>this.scheduler.send('control',{type:'priority',collection,priority:'P1'})))).catch(e=>this.events?.status?.('kernel',{level:'warn',code:'transport.priority',text:e.message}));}
  async request(type,body){
@@ -101,26 +104,34 @@ export class WebRTCKernelTransport extends KernelTransport {
   this.scheduler.send('transfer',{type,request_id,...body}).catch(error=>{clearTimeout(timer);this.pending.delete(request_id);done.reject(error)});return done.promise;
  }
  async download(ref,kind){
-  const parts=[];let offset=0,total=null,mime='application/octet-stream';
-  do{
-   const first=await this.request('transfer_get',{ref,kind,offset,limit:size});
-   const take=reply=>{if(reply.ref!==ref||reply.offset!==offset||!Number.isSafeInteger(reply.total)||reply.total<offset||reply.total>2_000_000_000)throw new CtoxError('invalid','Invalid transfer range');const part=unb64(reply.data);if(part.length>size||(!part.length&&reply.total>offset)||offset+part.length>reply.total)throw new CtoxError('invalid','Invalid transfer chunk');parts.push(part);offset+=part.length;total=reply.total;mime=reply.mime??mime;};
-   take(first);
-  }while(offset<total);
+  const parts=[];let total=null,mime='application/octet-stream';
+  const take=(reply,offset)=>{
+   if(reply.ref!==ref||reply.offset!==offset||!Number.isSafeInteger(reply.total)||reply.total<offset||reply.total>2_000_000_000||(total!==null&&reply.total!==total))throw new CtoxError('invalid','Invalid transfer range');
+   let part;try{part=unb64(reply.data);}catch{throw new CtoxError('invalid','Invalid transfer encoding');}
+   if(part.length!==Math.min(size,reply.total-offset))throw new CtoxError('invalid','Invalid transfer chunk length');parts.push(part);total=reply.total;mime=reply.mime??mime;
+  };
+  take(await this.request('transfer_get',{ref,kind,offset:0,limit:size}),0);
+  for(let offset=size;offset<total;){const batch=[];for(let n=0;n<4&&offset<total;n++,offset+=size){const at=offset;batch.push(this.request('transfer_get',{ref,kind,offset:at,limit:size}).then(reply=>({reply,offset:at})));}for(const item of await Promise.all(batch))take(item.reply,item.offset);}
   const blob=new Blob(parts,{type:mime});if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Transfer hash mismatch');return blob;
  }
  async artifact(hash){return (await this.download(hash,'artifact')).text();}
  async blob(ref){return this.download(ref,'blob');}
  async upload(ref,blob){
   if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','Upload hash mismatch');
-  for(let offset=0;offset<blob.size || offset===0;){
-   const batch=[];for(let n=0;n<4&&(offset<blob.size||offset===0);n++){
-    const at=offset,data=new Uint8Array(await blob.slice(at,at+size).arrayBuffer());offset+=data.length;
-    batch.push(this.request('transfer_put',{ref,offset:at,total:blob.size,mime:blob.type,data:b64(data),final:offset===blob.size}));if(!blob.size)break;
-   }
-   for(const result of await Promise.all(batch))if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');
-   if(!blob.size)break;
+  const accepted=result=>{if(result.status!=='accepted'||result.ref!==ref)throw new CtoxError('unavailable','Upload not accepted');};
+  let batch=[];
+  for(let offset=0;offset<blob.size||offset===0;){
+   const at=offset,data=new Uint8Array(await blob.slice(at,at+size).arrayBuffer());offset+=data.length;const final=offset===blob.size;
+   if(final){for(const result of await Promise.all(batch))accepted(result);batch=[];accepted(await this.request('transfer_put',{ref,offset:at,total:blob.size,mime:blob.type,data:b64(data),final:true}));break;}
+   batch.push(this.request('transfer_put',{ref,offset:at,total:blob.size,mime:blob.type,data:b64(data),final:false}));
+   if(batch.length===4){for(const result of await Promise.all(batch))accepted(result);batch=[];}
   }
+ }
+ async reconnect(address=this.options.address){
+  if(!this.options.createPeer)throw new CtoxError('unavailable','Host connection factory required for reconnect');
+  const identity=this.identity,events=this.events;events.link({state:'offline',rtt_ms:0,relay:false});this.close();
+  this.options={...this.options,address,channels:undefined,peer:undefined};this.closed=false;this.events=null;this.session=null;this.offset=null;this.readyState=deferred();this.ready=this.readyState.promise;
+  return this.connect(identity,events);
  }
  fail(error){if(this.closed)return;this.events?.status?.('kernel',{level:'error',code:'transport.failed',text:error.message});this.events?.link({state:'offline',rtt_ms:0,relay:false});this.readyState.reject(error);this.close();}
  close(){

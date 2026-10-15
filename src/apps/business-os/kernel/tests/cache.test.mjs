@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createStubKernel} from '../kernel.mjs';
+import {createStubKernel} from './legacy-kernel.mjs';
 import {MemoryBackend} from '../store-idb-v5.mjs';
 import {evictCollection,reclaimCache} from '../cache.mjs';
 import {checkpointKey} from '../transport.mjs';
