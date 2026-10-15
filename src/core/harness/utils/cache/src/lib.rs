@@ -28,6 +28,13 @@ where
         }
     }
 
+    pub fn clear(&self) {
+        self.inner
+            .lock()
+            .expect("BlockingLruCache mutex poisoned")
+            .clear();
+    }
+
     pub fn get_or_try_insert_with<E, F>(&self, key: K, f: F) -> Result<V, E>
     where
         F: FnOnce() -> Result<V, E>,
@@ -50,5 +57,23 @@ where
         }
         cache.put(key, value.clone());
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockingLruCache;
+    use std::num::NonZeroUsize;
+
+    #[test]
+    fn clear_invalidates_every_cached_entry() {
+        let cache = BlockingLruCache::new(NonZeroUsize::new(2).unwrap());
+        for key in [1, 2] {
+            assert_eq!(cache.get_or_try_insert_with(key, || Ok::<_, ()>(key)), Ok(key));
+        }
+        cache.clear();
+        for key in [1, 2] {
+            assert_eq!(cache.get_or_try_insert_with(key, || Ok::<_, ()>(key + 10)), Ok(key + 10));
+        }
     }
 }
