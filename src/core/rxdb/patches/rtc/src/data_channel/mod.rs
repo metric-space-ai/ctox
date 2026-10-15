@@ -181,14 +181,24 @@ where
     /// Read under the same peer-connection lock as send; threshold events alone
     /// are not credit receipts (they may predate a subsequent send).
     pub fn buffered_amount(&mut self) -> Result<usize> {
-        let dc = self.peer_connection.data_channels.get(&self.id)
+        let dc = self
+            .peer_connection
+            .data_channels
+            .get(&self.id)
             .ok_or(Error::ErrDataChannelClosed)?;
-        let Some(channel) = dc.data_channel.as_ref() else { return Ok(0); };
+        let Some(channel) = dc.data_channel.as_ref() else {
+            return Ok(0);
+        };
         let handle = sctp::AssociationHandle(channel.association_handle());
-        self.peer_connection.pipeline_context.sctp_handler_context.sctp_transport
-            .sctp_associations.get_mut(&handle)
+        self.peer_connection
+            .pipeline_context
+            .sctp_handler_context
+            .sctp_transport
+            .sctp_associations
+            .get_mut(&handle)
             .ok_or(Error::ErrAssociationNotExisted)?
-            .stream(self.id)?.buffered_amount()
+            .stream(self.id)?
+            .buffered_amount()
     }
 
     /// buffered_amount_high_threshold represents the threshold at which the
