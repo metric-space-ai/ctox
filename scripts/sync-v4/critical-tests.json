@@ -81,6 +81,10 @@
       "test": "quota LRU reclaim protects pending input, release code and archive"
     },
     {
+      "file": "src/apps/business-os/kernel/tests/command-state.test.mjs",
+      "test": "Core: doppelte Befehls-id mit geänderter Absicht → idempotency_conflict, gleiche Absicht → kein Rückschritt"
+    },
+    {
       "file": "src/apps/business-os/kernel/tests/contract.test.mjs",
       "test": "Abmelden schließt DB und sperrt Zugriff; Outbox wird bei erneuter Anmeldung derselben Identität gesendet"
     },
@@ -597,24 +601,8 @@
       "test": "index and bundle signatures verify with the generated Ed25519 key"
     },
     {
-      "file": "src/apps/business-os/scripts/build-shell-artifact.test.mjs",
-      "test": "global shell releases reject customer-bound modules and runtime state"
-    },
-    {
-      "file": "src/apps/business-os/scripts/build-shell-artifact.test.mjs",
-      "test": "identity and archive path validation is strict"
-    },
-    {
-      "file": "src/apps/business-os/scripts/build-shell-artifact.test.mjs",
-      "test": "symlinks in runtime trees are rejected and never archived"
-    },
-    {
       "file": "src/apps/business-os/scripts/module-local-controls.browser.mjs",
       "test": "(script)"
-    },
-    {
-      "file": "src/apps/business-os/scripts/sign-shell-release.test.mjs",
-      "test": "signatures fail after release or channel metadata is changed"
     },
     {
       "file": "src/apps/business-os/scripts/tests/outbound-current-export.test.mjs",
@@ -669,10 +657,6 @@
       "test": "runtime installed 0.x app is private unless actor can view that app"
     },
     {
-      "file": "src/apps/business-os/shared/audience-route-denial.test.mjs",
-      "test": "hidden route preserves its denial after lazy dialogs and fallback ${fallbackId}"
-    },
-    {
       "file": "src/apps/business-os/shared/branding.test.mjs",
       "test": "workspace branding import rejects unknown tokens and unsafe css values"
     },
@@ -715,10 +699,6 @@
     {
       "file": "src/apps/business-os/shared/business-chat.test.mjs",
       "test": "unknown terminal command outcome stays pending and does not publish nested success"
-    },
-    {
-      "file": "src/apps/business-os/shared/command-bus.test.mjs",
-      "test": "duplicate command id rejects a changed immutable payload without regressing state"
     },
     {
       "file": "src/apps/business-os/shared/command-lifecycle.test.mjs",
@@ -767,22 +747,6 @@
     {
       "file": "src/apps/business-os/shared/notifications.test.mjs",
       "test": "rejects empty content and strips unsafe routing tokens"
-    },
-    {
-      "file": "src/apps/business-os/shared/permissions.test.mjs",
-      "test": "app source view is hidden from team by default but can be explicitly granted"
-    },
-    {
-      "file": "src/apps/business-os/shared/permissions.test.mjs",
-      "test": "app visibility grants do not imply edit, source or data permissions"
-    },
-    {
-      "file": "src/apps/business-os/shared/permissions.test.mjs",
-      "test": "module assignments and founder fallback allow only assigned app modification"
-    },
-    {
-      "file": "src/apps/business-os/shared/permissions.test.mjs",
-      "test": "workspace grants authorize targeted workspace permissions only"
     },
     {
       "file": "src/apps/business-os/shared/react-settings.test.mjs",
@@ -1826,6 +1790,10 @@
     },
     {
       "file": "src/core/business_os/shell_update.rs",
+      "test": "inventory_rejects_duplicates_and_unsafe_paths"
+    },
+    {
+      "file": "src/core/business_os/shell_update.rs",
       "test": "release_signatures_and_unknown_keys_fail_closed"
     },
     {
@@ -2111,6 +2079,10 @@
     {
       "file": "src/core/business_os/store.rs",
       "test": "workspace_branding_command_rejects_founder_and_invalid_tokens"
+    },
+    {
+      "file": "src/core/business_os/store.rs",
+      "test": "workspace_permission_grant_allows_user_upsert_without_admin_role"
     },
     {
       "file": "src/core/business_os/store_catalog_projections.rs",
@@ -5347,14 +5319,6 @@
     {
       "file": "tests/portable_journal_roundtrip.rs",
       "test": "harness_journal_roundtrips_through_strict_checkpoint_capture_and_restore"
-    },
-    {
-      "file": "tests/shell_release_workflow_test.py",
-      "test": "test_dispatch_signing_is_reachable"
-    },
-    {
-      "file": "tests/shell_release_workflow_test.py",
-      "test": "test_source_guard_uses_actual_main_ancestry"
     },
     {
       "file": "tests/test_build_cache.py",

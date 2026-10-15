@@ -24,15 +24,11 @@
     "qa:accessibility": "node scripts/assert-accessibility-contract.mjs",
     "qa:app-starter-browser": "node scripts/assert-app-starter-browser.mjs",
     "qa:creator-browser": "node scripts/assert-creator-browser.mjs",
-    "qa:shell-generation-native": "node scripts/shell-generation-native.browser.mjs",
     "audit:app-quality": "node scripts/audit-app-quality.mjs",
     "qa:shell-office-height": "node scripts/shell-office-height.browser.mjs",
     "qa:office-notifications": "node scripts/office-notifications.browser.mjs",
     "qa:design-gates": "node scripts/run-design-quality-gates.mjs",
-    "shell:artifact": "node scripts/build-shell-artifact.mjs",
-    "shell:sign-release": "node scripts/sign-shell-release.mjs",
     "shell:sbom": "node scripts/build-shell-sbom.mjs",
-    "test:shell-artifact": "node --test scripts/build-shell-artifact.test.mjs scripts/build-shell-sbom.test.mjs scripts/sign-shell-release.test.mjs && node scripts/shell-asset-routing.browser.mjs",
     "test:shared": "node --test shared/*.test.mjs",
     "test:app-store": "node modules/app-store/app-store.test.mjs",
     "test:app-stories": "node scripts/run-app-story-tests.mjs",
@@ -40,7 +36,8 @@
     "test:document-format": "node --test modules/documents/document-format/document-format.test.mjs",
     "check:release-docs": "node scripts/assert-production-release-docs.mjs",
     "check:security-signoff": "node scripts/assert-security-privacy-signoff.mjs --self-test && node scripts/assert-security-privacy-signoff.mjs",
-    "test": "npm run check:deps && npm run check:office && npm run check:platform-freeze && npm run check:app-inventory && npm run check:app-starter && npm run check:app-quality-contracts && npm run check:design-system && npm run check:content && npm run test:content && npm run check:context-contracts && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store && npm run test:app-stories"
+    "test": "npm run check:deps && npm run check:office && npm run check:platform-freeze && npm run check:app-inventory && npm run check:app-starter && npm run check:app-quality-contracts && npm run check:design-system && npm run check:content && npm run test:content && npm run check:context-contracts && npm run check:release-docs && npm run check:security-signoff && npm run test:shared && npm run test:app-store && npm run test:app-stories",
+    "test:shell-sbom": "node --test scripts/build-shell-sbom.test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.1",
