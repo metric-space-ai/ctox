@@ -233,3 +233,19 @@ test('K-1c 9: Veröffentlichen direkt nach Veröffentlichen ohne busy – die zw
   const rs = await Promise.all([p1.result, p2.result]);
   assert.deepEqual(rs.map((r) => r.status === 'accepted' ? 'accepted' : r.reason).sort(), ['accepted', 'stale_base'], JSON.stringify(rs));
 });
+
+test('K-1d 2: meta files:<appId>@<ver> = manifest.files nach jeder Aktivierung (App, Shell) und für die geholte Lib-Minor', async (t) => {
+  const k = await mk(t);
+  await k.sim.publishAppVersion('shell', '5', { files: { 'index.js': MOUNT, 'shared/a.js': 'a' }, manifestExtra: { libs: { monaco: '0' } } });
+  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT, 'icon.png': Uint8Array.from([137, 80, 78, 71]) } });
+  await k.sim.publishAppVersion('crm', '2', { files: { 'index.js': `${MOUNT}\n// 2` } });
+  for (const [app, ver] of [['shell', '5'], ['crm', '1'], ['crm', '2']]) {
+    const m = await k.artifacts.manifest(app, ver);
+    assert.deepEqual((await k.sim.inspectMeta(`files:${app}@${ver}`))?.value, m.files, `${app}@${ver}`);
+    for (const [path, hash] of Object.entries(m.files)) assert.ok((await k.sim.artifactRows()).some((r) => r.hash === hash), `artifacts[${path}]`);
+  }
+  await k.sim.publishAppVersion('lib:monaco', '0.3', { files: { 'a.js': 'A' } });
+  assert.equal(await k.sim.inspectMeta('files:lib:monaco@0.3'), undefined, 'Bibliothek nie eager');
+  await k.libs.onSwMessage({ type: 'ctox:lib-miss', lib: 'monaco', major: '0', path: 'a.js', ver: '0.3', sha: null, reason: 'manifest' }, { postMessage() {} });
+  assert.deepEqual((await k.sim.inspectMeta('files:lib:monaco@0.3'))?.value, (await k.artifacts.manifest('lib:monaco', '0.3')).files);
+});

@@ -49,8 +49,11 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   own row is readable/writable. Draft publish (§16.22/§16.26): `manifest.json` is never a draft file, references to
   missing files are `invalid`, and every non-computed base manifest field (triggers, command_rights, …) is inherited (B4).
   Artifacts are bytes: `string` stays UTF-8, `Blob`/`ArrayBuffer`/`Uint8Array` are hashed and stored as bytes.
-- K-1c (§16.39): `artifacts.url(appId, ver, path, {shellVer?})` is synchronous; the instance root carries `~shell@<sv>` and
-  `~lib:<name>@<M.m>` for every library of the shell manifest (`libs`), pinned on the first call (= mount). Libraries are
+- K-1c/K-1d (§16.39): `artifacts.url(appId, ver, path, {shellVer?})` is synchronous and remembers nothing; the root carries
+  `~shell@<sv>` and `~lib:<name>@<M.m>` for every library of the shell manifest (`libs`). `artifacts.bind(appId, ver)` is
+  called once per mount (testkit app host, loader via loadModule) and freezes that binding. Every activation (app, shell)
+  and every fetched lib minor writes meta `files:<appId>@<ver>` = {path: sha256}; the SW resolves path → sha256 there and
+  reads `artifacts[sha256].content` (string | Uint8Array). There is no `manifests` store. Libraries are
   platform artifacts `lib:<name>` (never activated eagerly); the SW reports `ctox:lib-miss` (kernel fetches exactly the
   URL's minor, sha256-checked) and `ctox:lib-hit` (LRU over IDB `artifacts` within `libByteBudget`). Source drafts live in
   the platform collection `app_drafts` (`<user>/<app>`, files as sha256 in the local CAS). `kernel.shell.publishApp|

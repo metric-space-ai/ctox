@@ -918,6 +918,7 @@ export function createKernel(opts = {}) {
     await waitUntil(() => dataReady() || superseded() || closed || !isLeader);
     if (superseded() || closed || !isLeader) return;
     await setActivation(appId, { target_ver: ver, state: 'data-ready' });
+    await writeFilesMeta(appId, ver, manifest.files); // K-1d: SW löst Pfad → sha256 aus der Kernel-IDB auf
     const previous=activations.get(appId);
     await setActivation(appId,{target_ver:ver,activated_ver:ver,previous_ver:previous?.activated_ver??null,good_vers:[...(previous?.good_vers??[]).filter(v=>v!==ver),ver].slice(-10),state:'activated',at_seq:checkpoint});
   }
@@ -990,9 +991,18 @@ export function createKernel(opts = {}) {
   }
 
   // ---- Mount / Remount (§10.2a Nr. 1, §16.10) ----
-  async function loadModule(appId, ver) {
-    const shellVer=appId==='shell'?ver:activations.get('shell')?.activated_ver??'0';
-    const key = `${appId}@${ver}~shell@${shellVer}`;
+  // K-1d (Entscheidung: Kernel-IDB ist maßgeblich, der SW passt sich an): meta `files:<appId>@<ver>` = {pfad: sha256};
+  // der SW liest daraus die sha256 und dann artifacts[sha256].content (string | Uint8Array). Kein Store `manifests`.
+  async function writeFilesMeta(appId, ver, files) {
+    const key = `files:${appId}@${ver}`, value = { ...(files ?? {}) };
+    const cur = await db.get('meta', key);
+    if (cur && jsonEq(cur.value, value)) return;
+    await db.tx((t) => t.put('meta', { key, value }));
+  }
+  // binding = die beim Mount erzeugte Bindung (Shell-Host/testkit); ohne: eine neue Bindung je Ladevorgang (Mount)
+  async function loadModule(appId, ver, binding = null) {
+    const shellVer=appId==='shell'?ver:binding?.shellVer??activations.get('shell')?.activated_ver??'0';
+    const key = binding ? binding.root : `${appId}@${ver}~shell@${shellVer}`;
     if (moduleCache.has(key)) return moduleCache.get(key);
     const manifest = versionDoc(appId, ver)?.manifest;
     if (!manifest) throw new CtoxError('not_found', `Manifest ${key} fehlt`);
@@ -1001,7 +1011,7 @@ export function createKernel(opts = {}) {
     if (!art) throw new CtoxError('not_found', `Einstiegsdatei ${manifest.entry} von ${key} nicht lokal`);
     let url, revoke = null;
     if (globalThis.navigator?.serviceWorker?.controller) {
-      url = artifactsUrl(appId, ver, manifest.entry); // §16.39: Wurzel mit Shell- und Lib-Bindung
+      url = (binding ?? bindArtifacts(appId, ver)).url(manifest.entry); // §16.39: Wurzel mit Shell- und Lib-Bindung
     } else if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function' && hasBlob) {
       url = URL.createObjectURL(new Blob([art.content], { type: 'text/javascript' }));
       revoke = url;
@@ -1503,10 +1513,9 @@ export function createKernel(opts = {}) {
   });
   // ---- §16.39 Nr. 1/2 (+ Ergänzung LIBS2), §16.37: Artefakt-URLs mit Instanz-Bindung ----
   // Eine App-Instanz = eine URL-Wurzel: /~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<pfad> (Libs nach Name sortiert).
-  // Die Bindung (Shell-Version + je Bibliothek aus dem Shell-Manifest `libs` die Minor) wird beim ersten url()-Aufruf
-  // für die Instanz (= Mount) synchron aus dem Spiegel aufgelöst und fixiert; spätere Shell-/Lib-Wechsel ändern sie nicht.
+  // Die Bindung (Shell-Version + je Bibliothek aus dem Shell-Manifest `libs` die Minor) entsteht synchron aus dem Spiegel:
+  // artifacts.bind() beim Mount friert sie ein; artifacts.url() ohne Bindung nimmt immer die aktuell aktive Shell (K-1d).
   // Die Shell selbst: /~a/shell@<sv>~lib:…/…; Bibliotheken: /~a/lib:<name>@<M.m>[~lib:…]/… (immutable).
-  const instancePins = new Map();
   const activeShellVer = () => activations.get('shell')?.activated_ver ?? visible(mirrorGet('business_apps', 'shell'))?.active_ver ?? null;
   const LIB_NAME = /^[a-z0-9][a-z0-9._-]*$/;
   const SEG = /^[A-Za-z0-9._+-]+$/;
@@ -1545,29 +1554,32 @@ export function createKernel(opts = {}) {
     }
     return libs;
   }
-  function pinInstance(appId, ver, o = {}) {
-    const key = `${appId}@${ver}`;
-    if (instancePins.has(key) && o.shellVer === undefined) return instancePins.get(key);
-    const shellVer = appId === 'shell' ? String(ver) : String(o.shellVer ?? instancePins.get(key)?.shellVer ?? activeShellVer() ?? '');
-    const pin = deepFreeze({ shellVer: shellVer || null, libs: resolveLibs(appId, ver, shellVer || null) });
-    if (o.shellVer === undefined) instancePins.set(key, pin);
-    return pin;
-  }
   const libSuffix = (libs, skip = null) => Object.keys(libs).filter((n) => n !== skip).sort().map((n) => `~lib:${n}@${libs[n]}`).join('');
   function encPath(path) { return artifactUrl('x', '0', path, 'x').slice('/~a/x@0~shell@x/'.length); } // gleiche Pfadprüfung
-  /** A6: synchron. /~a/<app>@<ver>~shell@<sv>~lib:…/<path>; lib:<name> mit "<M.m>" → /~a/lib:<name>@<M.m>[~lib:…]/<path>. */
-  function artifactsUrl(appId, ver, path, o = {}) {
+  // K-1d / §16.39 „beim Mount der App-Instanz“: Bindung = {appId, ver, shellVer, libs, root}; NICHTS wird je app@ver gemerkt.
+  // Gleiche Regeln wie der Stub (@68b83a3, artifacts-Block).
+  function makeBinding(appId, ver, o = {}) {
     if (typeof appId !== 'string' || !appId || ver == null || ver === '') throw new CtoxError('invalid', 'appId und ver nötig', { path: 'appId' });
-    if (!SEG.test(String(ver))) throw new CtoxError('invalid', 'Version mit unzulässigen Zeichen', { path: 'ver' });
+    ver = String(ver);
+    if (!SEG.test(ver)) throw new CtoxError('invalid', 'Version mit unzulässigen Zeichen', { path: 'ver' });
     if (isLib(appId)) {
       const name = appId.slice(LIB_PREFIX.length);
-      if (!LIB_NAME.test(name) || !/^\d+\.\d+$/.test(String(ver))) throw new CtoxError('invalid', 'lib-URL braucht lib:<name> und <major>.<minor>', { path: 'ver' });
-      return `/~a/${LIB_PREFIX}${name}@${ver}${libSuffix(o.libs ?? {}, name)}/${encPath(path)}`;
+      if (!LIB_NAME.test(name) || !/^\d+\.\d+$/.test(ver)) throw new CtoxError('invalid', 'lib-URL braucht lib:<name> und <major>.<minor>', { path: 'ver' });
+      const libs = { ...(o.libs ?? {}) };
+      return deepFreeze({ appId, ver, shellVer: null, libs, root: `/~a/${LIB_PREFIX}${name}@${ver}${libSuffix(libs, name)}/` });
     }
-    const pin = pinInstance(appId, String(ver), o);
-    if (appId === 'shell') return `/~a/shell@${encodeURIComponent(String(ver))}${libSuffix(pin.libs)}/${encPath(path)}`;
-    if (!pin.shellVer) throw new CtoxError('unavailable', 'Keine aktive Shell-Version für die Instanz-URL', { path: 'shellVer' });
-    return `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(String(ver))}~shell@${encodeURIComponent(pin.shellVer)}${libSuffix(pin.libs)}/${encPath(path)}`;
+    const shellVer = appId === 'shell' ? ver : String(o.shellVer ?? activeShellVer() ?? '');
+    if (!shellVer) throw new CtoxError('unavailable', 'Keine aktive Shell-Version für die Instanz-URL', { path: 'shellVer' });
+    const libs = resolveLibs(appId, ver, shellVer);
+    const root = appId === 'shell' ? `/~a/shell@${encodeURIComponent(ver)}${libSuffix(libs)}/` : `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(ver)}~shell@${encodeURIComponent(shellVer)}${libSuffix(libs)}/`;
+    return deepFreeze({ appId, ver, shellVer, libs, root });
+  }
+  /** §16.39 Nr. 1 (A6), synchron; ohne Bindung: aktuell aktive Shell (oder o.shellVer). */
+  function artifactsUrl(appId, ver, path, o = {}) { return makeBinding(appId, ver, o).root + encPath(path); }
+  /** §16.39 Bindung je MOUNT: einmal beim Mount, eingefroren; url(path) synchron. */
+  function bindArtifacts(appId, ver, o = {}) {
+    const b = makeBinding(appId, ver, o);
+    return Object.freeze({ ...b, url: (path) => b.root + encPath(path) });
   }
   const contentBytes = (c) => (typeof c === 'string' ? new TextEncoder().encode(c).byteLength : c?.byteLength ?? 0);
   // SW-Miss (Vertrag v4/sw.js 9b414f663): genau diese eine Datei über Spur 4 holen, sha256 prüfen, in artifacts ablegen.
@@ -1578,6 +1590,7 @@ export function createKernel(opts = {}) {
     if (!v) return { ok: false, reason: 'invalid' };
     const hash = versionDoc(`${LIB_PREFIX}${lib}`, v)?.manifest?.files?.[path];
     if (!hash) return { ok: false, reason: versionDoc(`${LIB_PREFIX}${lib}`, v) ? 'not_found' : 'manifest' };
+    await writeFilesMeta(`${LIB_PREFIX}${lib}`, v, versionDoc(`${LIB_PREFIX}${lib}`, v).manifest.files); // K-1d: Zuordnung der Bibliotheks-Minor
     if (!libInflight.has(hash)) {
       libInflight.set(hash, (async () => {
         const have = await db.get('artifacts', hash);
@@ -1691,8 +1704,8 @@ export function createKernel(opts = {}) {
       async manifest(appId, ver) { return versionDoc(appId, ver)?.manifest ?? null; },
       /** §16.39 Nr. 1 (A6): /~a/<app>@<ver>~shell@<sv>/<path>; sv = opts.shellVer, sonst beim Mount fixierte Shell-Version. */
       url: (appId, ver, path, o) => { guardAlive(); return artifactsUrl(appId, ver, path, o); },
-      /** Bindung einer App-Instanz ({shellVer, libs}); url() fixiert sie beim ersten Aufruf. */
-      binding: (appId, ver) => { guardAlive(); return pinInstance(appId, String(ver)); },
+      /** §16.39 Bindung je MOUNT (K-1d): einmal beim Mount aufrufen → {appId, ver, shellVer, libs, root, url(path)}. */
+      bind: (appId, ver, o) => { guardAlive(); return bindArtifacts(appId, ver, o); },
     }),
     /** §16.39 Nr. 2: SW-Nachrichten (ctox:lib-hit, ctox:lib-miss) – im Browser automatisch an navigator.serviceWorker gebunden. */
     libs: Object.freeze({ onSwMessage, resolve: resolveLibMinor, enforceBudget: () => enforceLibBudget(), get byteBudget() { return libByteBudget; } }),

@@ -191,19 +191,22 @@ test('0 §16.15a Nr. 3: Hash-Fehlschlag beim Artefaktabruf → einmal neu holen,
   assert.equal(k.apps.get()[0].activated_ver, '1', 'letzte funktionierende Version läuft weiter');
 });
 
-test('K-1c 1 §16.39 Nr. 1 (A6): artifacts.url synchron → /~a/<app>@<ver>~shell@<sv>/<path>, sv beim Mount fixiert', async (t) => {
+test('K-1c 1 / K-1d §16.39: artifacts.url synchron ohne Merkfunktion, artifacts.bind friert die Bindung je Mount ein', async (t) => {
   const k = await mk(t);
   await k.sim.publishAppVersion('shell', '7', { files: { 'index.js': MOUNT } });
   await k.sim.publishAppVersion('crm', '3', { files: { 'index.js': MOUNT, 'img/a b.png': 'x' } });
   const url = k.artifacts.url('crm', '3', 'img/a b.png');
   assert.equal(typeof url, 'string', 'synchron, kein Promise');
   assert.equal(url, '/~a/crm@3~shell@7/img/a%20b.png');
+  const mount = k.artifacts.bind('crm', '3');
+  assert.deepEqual([mount.appId, mount.ver, mount.shellVer, mount.root, Object.isFrozen(mount)], ['crm', '3', '7', '/~a/crm@3~shell@7/', true]);
   await k.sim.publishAppVersion('shell', '8', { files: { 'index.js': `${MOUNT}\n// 8` } });
-  assert.equal(k.artifacts.url('crm', '3', 'index.js'), '/~a/crm@3~shell@7/index.js', 'App-Instanz bleibt auf ihrer Shell-Version');
-  assert.equal(k.artifacts.url('crm', '3', 'index.js', { shellVer: '8' }), '/~a/crm@3~shell@8/index.js');
-  assert.equal(k.artifacts.url('notes', '1', 'index.js'), '/~a/notes@1~shell@8/index.js', 'neue Instanz: aktive Shell-Version');
+  assert.equal(mount.url('index.js'), '/~a/crm@3~shell@7/index.js', 'Mount-Bindung bleibt auf ihrer Shell-Version');
+  assert.equal(k.artifacts.url('crm', '3', 'index.js'), '/~a/crm@3~shell@8/index.js', 'ohne Bindung: aktuell aktive Shell (neuer Mount)');
+  assert.equal(k.artifacts.url('crm', '3', 'index.js', { shellVer: '7' }), '/~a/crm@3~shell@7/index.js');
   assert.equal(k.artifacts.url('shell', '8', 'index.js'), '/~a/shell@8/index.js');
   assert.throws(() => k.artifacts.url('crm', '3', '../x'), (e) => e.code === 'invalid');
+  assert.throws(() => mount.url('../x'), (e) => e.code === 'invalid');
 });
 
 test('K-1c 2 §16.39 Nr. 2 + LIBS2: Lib-Bindung aus dem Shell-Manifest in der Instanz-Wurzel; SW-Miss holt genau die Minor der URL; lib-hit → LRU', async (t) => {
@@ -213,12 +216,14 @@ test('K-1c 2 §16.39 Nr. 2 + LIBS2: Lib-Bindung aus dem Shell-Manifest in der In
   assert.deepEqual(k.apps.get(), [], 'Bibliotheken sind keine Apps und werden nicht eager aktiviert');
   await k.sim.publishAppVersion('shell', '5', { files: { 'index.js': MOUNT }, manifestExtra: { libs: { monaco: '0', 'ctox-office': '1' } } });
   await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': MOUNT } });
-  assert.equal(k.artifacts.url('crm', '1', 'index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js');
+  const mount = k.artifacts.bind('crm', '1');
+  assert.equal(mount.url('index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js');
   assert.equal(k.artifacts.url('shell', '5', 'index.js'), '/~a/shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js');
   assert.equal(k.artifacts.url('lib:monaco', '0.3', 'a.js'), '/~a/lib:monaco@0.3/a.js');
+  assert.throws(() => k.artifacts.url('lib:monaco', '0', 'x.js'), (e) => e.code === 'invalid');
   await k.sim.publishAppVersion('lib:monaco', '0.4', { files: { 'a.js': 'a'.repeat(10) } });
-  assert.equal(k.artifacts.url('crm', '1', 'index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js', 'Instanz bleibt auf 0.3');
-  assert.equal(k.artifacts.url('notes', '1', 'index.js'), '/~a/notes@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.4/index.js', 'neue Instanz: höchste Minor');
+  assert.equal(mount.url('index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.3/index.js', 'Mount bleibt auf 0.3');
+  assert.equal(k.artifacts.url('crm', '1', 'index.js'), '/~a/crm@1~shell@5~lib:ctox-office@1.4~lib:monaco@0.4/index.js', 'neuer Mount: höchste Minor');
   await k.sim.settle();
   assert.equal((await k.sim.inspectMeta('active:lib:monaco@0')).value, '0.4');
   // SW-Miss mit alter Minor in der URL, obwohl 0.4 aktiv ist → genau die alte Datei

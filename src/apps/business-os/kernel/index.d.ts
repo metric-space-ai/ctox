@@ -352,14 +352,11 @@ export interface ShellKernelApi {
   artifacts: {
     read(hash: string): Promise<Blob>;
     manifest(appId: string, ver: string): Promise<AppManifest | null>;
-    /**
-     * §16.39 Nr. 1/2 (A6, LIBS2), synchron: `/~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<path>`. Die Bindung (Shell-Version,
-     * je Bibliothek aus dem Shell-Manifest `libs` die Minor) wird beim ersten Aufruf für die Instanz fixiert.
-     * `shell` → `/~a/shell@<sv>~lib:…/…`; `lib:<name>` mit `<M.m>` → `/~a/lib:<name>@<M.m>/…`.
-     */
+    /** §16.39 Nr. 1 (A6), synchron: /~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<path>; sv = opts.shellVer, sonst aktuell aktive Shell.
+     *  lib:<name> mit "<M.m>" → /~a/lib:<name>@<M.m>[~lib:…]/<path>; Shell: /~a/shell@<sv>~lib:…/<path>. Merkt sich nichts je app@ver. */
     url(appId: string, ver: string, path: string, opts?: { shellVer?: string; libs?: Record<string, string> }): string;
-    /** Fixierte Bindung einer App-Instanz. */
-    binding(appId: string, ver: string): Readonly<{ shellVer: string | null; libs: Record<string, string> }>;
+    /** §16.39 Bindung je MOUNT: beim Mount einmal aufrufen; eingefroren (Shell-Version + Lib-Minors), url(path) synchron. */
+    bind(appId: string, ver: string, opts?: { shellVer?: string; libs?: Record<string, string> }): ArtifactBinding;
   };
   /** §16.39 Nr. 2: SW-Nachrichten; im Browser automatisch an navigator.serviceWorker gebunden. */
   libs: {
@@ -658,3 +655,12 @@ export declare function createReliableChannels(peer:RTCPeerConnection):Record<nu
 export declare const PLATFORM_APP_ID:'ctox-platform';
 export declare const PLATFORM_COLLECTIONS:readonly string[];
 export declare function collectionOwner(collection:string,appId:string):string;
+
+export interface ArtifactBinding {
+  readonly appId: string;
+  readonly ver: string;
+  readonly shellVer: string | null;
+  readonly libs: Readonly<Record<string, string>>;
+  readonly root: string;
+  url(path: string): string;
+}
