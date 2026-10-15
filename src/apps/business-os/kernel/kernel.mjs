@@ -69,6 +69,8 @@ export function artifactMime(path) {
   return MIME_BY_EXT[ext] ?? 'application/octet-stream';
 }
 const MANIFEST_FILE = 'manifest.json';
+const LIB_PREFIX = 'lib:';
+const isLib = (appId) => typeof appId === 'string' && appId.startsWith(LIB_PREFIX);
 // Migrationsfunktion (migrate_fn) aus Entwurfstext laden: Blob-URL im Browser, sonst data:-URL.
 async function importModuleText(text) {
   let url, revoke = null;
@@ -96,6 +98,8 @@ export function createKernel(opts = {}) {
   let transportConnected = false;
   const remountTimeoutMs = opts.remountTimeoutMs ?? 10000;
   const tabKey = opts.tabKey ?? sessionTabKey();
+  // §16.37/§16.39 Nr. 2: Byte-Budget der bei Bedarf geholten Bibliotheksdateien (LRU über IDB artifacts)
+  const libByteBudget = opts.libByteBudget ?? 512 * 1024 * 1024;
   const capabilities = new Set(opts.capabilities ?? []);
   const tabId = uuidv7();
   const channelName = `ctox-kernel:${dbName}`;
@@ -799,7 +803,7 @@ export function createKernel(opts = {}) {
     } finally { publishing.delete(appId); }
   }
   function scheduleActivation(appId) {
-    if (!isLeader || closed) return;
+    if (!isLeader || closed || isLib(appId)) return; // §16.37: lib:<name> nie eager, nur dateiweise bei SW-Miss
     const prev = activationChains.get(appId) ?? Promise.resolve();
     const next = prev.then(() => runActivation(appId)).catch((err) => {
       if (err instanceof StaleLeader) stepDown();
@@ -952,6 +956,7 @@ export function createKernel(opts = {}) {
     return fn;
   }
   async function mountVersion(root, appId, ver, ctx) {
+    await pinInstance(appId, ver); // §16.39 Nr. 1/2: Shell-Version und Lib-Minors für diese App-Instanz fixieren
     const mod = await loadModule(appId, ver);
     const api = makeAppApi(appId, ver);
     const handle = await mountFnOf(mod)(root, api, ctx);
@@ -1417,7 +1422,7 @@ export function createKernel(opts = {}) {
     const out = [];
     for (const r of mirror.get('business_apps')?.values() ?? []) {
       const d = visible(r);
-      if (!d) continue;
+      if (!d || isLib(d.id)) continue;
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
       // §16.19 Nr. 6: layout/styles der laufenden (sonst der veröffentlichten) Version
@@ -1451,6 +1456,145 @@ export function createKernel(opts = {}) {
     delete: windowStateDelete,
     del: windowStateDelete,
   });
+  // ---- §16.39 Nr. 1/2, §16.37: Artefakt-URLs mit Shell-Version, Standardbibliotheken lib:<name>@<major>.<minor> ----
+  // Je App-Instanz (appId@ver) fixiert der Mount die aktive Shell-Version und je gebundener Bibliothek die Minor.
+  const instancePins = new Map();
+  const activeShellVer = () => activations.get('shell')?.activated_ver ?? null;
+  const LIB_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+  function libVersionsOf(name, major) {
+    const out = [];
+    for (const r of mirror.get('business_app_versions')?.values() ?? []) {
+      const d = visible(r);
+      const m = d && d.app_id === `${LIB_PREFIX}${name}` ? /^(\d+)\.(\d+)$/.exec(String(d.app_ver)) : null;
+      if (m && m[1] === String(major)) out.push(Number(m[2]));
+    }
+    return out.sort((a, b) => a - b);
+  }
+  /** Höchste veröffentlichte Minor der Major (§16.37) als "<major>.<minor>" oder null. */
+  function resolveLibMinor(name, major) {
+    const minors = libVersionsOf(name, major);
+    return minors.length ? `${major}.${minors.at(-1)}` : null;
+  }
+  async function setActiveLib(name, major, ver) {
+    await db.tx(async (t) => {
+      const key = `active:lib:${name}@${major}`;
+      const cur = await t.get('meta', key);
+      const minorOf = (v) => Number(String(v).split('.')[1] ?? -1);
+      if (!cur || minorOf(cur.value) < minorOf(ver)) await t.put('meta', { key, value: ver });
+    });
+  }
+  async function pinInstance(appId, ver, o = {}) {
+    const key = `${appId}@${ver}`;
+    if (instancePins.has(key) && !o.libs) return instancePins.get(key);
+    const libs = {};
+    const bound = o.libs ?? versionDoc(appId, ver)?.manifest?.libs ?? {};
+    for (const [name, majorRaw] of Object.entries(bound)) {
+      const major = String(majorRaw).split('.')[0];
+      const resolved = resolveLibMinor(name, major);
+      if (!resolved) continue;
+      libs[`${name}@${major}`] = resolved;
+      await setActiveLib(name, major, resolved);
+    }
+    const pin = deepFreeze({ shellVer: o.shellVer ?? activeShellVer(), libs });
+    instancePins.set(key, pin);
+    return pin;
+  }
+  function encPath(path) { return artifactUrl('x', '0', path).slice('/~a/x@0/'.length); } // gleiche Pfadprüfung wie artifactUrl
+  /** A6: /~a/<app>@<ver>~shell@<sv>/<path>; lib:<name> mit ver "<major>.<minor>" → /~a/lib:<name>@<major>.<minor>/<path>. */
+  function artifactsUrl(appId, ver, path, o = {}) {
+    if (typeof appId !== 'string' || !appId || ver == null || ver === '') throw new CtoxError('invalid', 'appId und ver nötig', { path: 'appId' });
+    if (isLib(appId)) {
+      const name = appId.slice(LIB_PREFIX.length);
+      if (!LIB_NAME.test(name) || !/^\d+\.\d+$/.test(String(ver))) throw new CtoxError('invalid', 'lib-URL braucht lib:<name> und <major>.<minor>', { path: 'ver' });
+      return `/~a/${LIB_PREFIX}${name}@${ver}/${encPath(path)}`;
+    }
+    const sv = o.shellVer ?? instancePins.get(`${appId}@${ver}`)?.shellVer ?? activeShellVer();
+    if (sv == null) return artifactUrl(appId, String(ver), path);
+    return `/~a/${encodeURIComponent(appId)}@${encodeURIComponent(String(ver))}~shell@${encodeURIComponent(String(sv))}/${encPath(path)}`;
+  }
+  /** URL einer Bibliotheksdatei für eine App-Instanz: fixierte Minor, sonst aktuell höchste. */
+  function libUrl(appId, ver, name, major, path) {
+    const m = String(major).split('.')[0];
+    const pinned = instancePins.get(`${appId}@${ver}`)?.libs?.[`${name}@${m}`] ?? resolveLibMinor(name, m);
+    if (!pinned) throw new CtoxError('not_found', `lib:${name}@${m} nicht veröffentlicht`, { path: 'name' });
+    return artifactsUrl(`${LIB_PREFIX}${name}`, pinned, path);
+  }
+  const contentBytes = (c) => (typeof c === 'string' ? new TextEncoder().encode(c).byteLength : c?.byteLength ?? 0);
+  // SW-Miss (Vertrag v4/sw.js 9b414f663): genau diese eine Datei über Spur 4 holen, sha256 prüfen, in artifacts ablegen.
+  const libInflight = new Map();
+  async function libFetchLeader(lib, major, path, ver) {
+    const v = ver ?? resolveLibMinor(lib, major);
+    const hash = v ? versionDoc(`${LIB_PREFIX}${lib}`, v)?.manifest?.files?.[path] : null;
+    if (!hash) return { ok: false, reason: v ? 'not_found' : 'manifest' };
+    if (!libInflight.has(hash)) {
+      libInflight.set(hash, (async () => {
+        const have = await db.get('artifacts', hash);
+        if (have && (await sha256Hex(have.content)) === hash) return { ok: true, ver: v, hash };
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const got = await transport.artifact(hash).then(artifactContent).catch(() => null);
+          if (got == null) return { ok: false, reason: 'artifact_missing' };
+          if ((await sha256Hex(got)) !== hash) { simRecord.refetches++; continue; }
+          const now = Date.now();
+          await db.tx((t) => t.put('artifacts', { hash, content: got, app_id: `${LIB_PREFIX}${lib}`, app_ver: v, path, size: contentBytes(got), stored_at: now, hit_at: now }));
+          await setActiveLib(lib, String(major), v);
+          await enforceLibBudget();
+          return { ok: true, ver: v, hash };
+        }
+        return { ok: false, reason: 'hash_mismatch' };
+      })().finally(() => libInflight.delete(hash)));
+    }
+    return libInflight.get(hash);
+  }
+  // LRU je Byte-Budget über die Bibliotheksdateien in artifacts (App-Release-Artefakte bleiben unberührt).
+  async function enforceLibBudget() {
+    const rows = (await db.all('artifacts')).filter((r) => isLib(r.app_id));
+    let total = rows.reduce((a, r) => a + (r.size ?? contentBytes(r.content)), 0);
+    if (total <= libByteBudget) return [];
+    rows.sort((a, b) => (a.hit_at ?? a.stored_at ?? 0) - (b.hit_at ?? b.stored_at ?? 0));
+    const evict = [];
+    for (const r of rows) { if (total <= libByteBudget) break; evict.push(r.hash); total -= r.size ?? contentBytes(r.content); }
+    if (evict.length) await db.tx(async (t) => { for (const h of evict) await t.del('artifacts', h); });
+    return evict;
+  }
+  // SW meldet Treffer gebündelt (ctox:lib-hit, ≤ 1/s); der Kernel bündelt zusätzlich auf ≤ 1 Schreibvorgang je Sekunde.
+  const pendingHits = new Map();
+  let hitFlush = null;
+  let lastHitFlush = 0;
+  async function flushLibHits() {
+    hitFlush = null; lastHitFlush = Date.now();
+    const hits = [...pendingHits]; pendingHits.clear();
+    if (!hits.length || closed) return;
+    await db.tx(async (t) => {
+      for (const [hash, at] of hits) {
+        const r = await t.get('artifacts', hash);
+        if (r && isLib(r.app_id) && (r.hit_at ?? 0) < at) await t.put('artifacts', { ...r, hit_at: at });
+      }
+    });
+  }
+  function noteLibHits(list) {
+    for (const h of Array.isArray(list) ? list : []) {
+      const hash = typeof h === 'string' ? h : h?.sha;
+      if (typeof hash === 'string' && hash) pendingHits.set(hash, Math.max(pendingHits.get(hash) ?? 0, Number(h?.at) || Date.now()));
+    }
+    if (!hitFlush && pendingHits.size) {
+      const wait = Math.max(0, lastHitFlush + 1000 - Date.now());
+      hitFlush = new Promise((r) => later(r, wait)).then(flushLibHits);
+      track(hitFlush);
+    }
+    return hitFlush ?? Promise.resolve();
+  }
+  /** Nachrichten des Service Workers (ctox:lib-hit, ctox:lib-miss); Antwort auf lib-miss über den übergebenen Port. */
+  async function onSwMessage(data, port) {
+    if (closed || !data || typeof data !== 'object') return;
+    if (data.type === 'ctox:lib-hit') { await noteLibHits(data.hits ?? data.shas); return; }
+    if (data.type !== 'ctox:lib-miss') return;
+    let r;
+    try { r = await callLeader('libFetch', [String(data.lib), String(data.major), String(data.path), data.ver ?? null]); } catch (e) { r = { ok: false, reason: e?.code ?? 'unavailable' }; }
+    try { port?.postMessage(r.ok ? { type: 'ctox:lib-ready' } : { type: 'ctox:lib-abort', reason: r.reason }); } catch { /* Port zu */ }
+    return r;
+  }
+  const swMessageListener = (ev) => { void onSwMessage(ev.data, ev.ports?.[0]); };
+  try { globalThis.navigator?.serviceWorker?.addEventListener?.('message', swMessageListener); } catch { /* kein SW */ }
   // §16.19 Nr. 2: Version für diesen Client failed, Zeiger zurück auf die letzte funktionierende, app_activation failed.
   function reportFailed(appId, ver, reason) {
     guardAlive();
@@ -1478,7 +1622,15 @@ export function createKernel(opts = {}) {
         return new Blob([a.content], { type: artifactMime(a.path) }); // Bytes unverändert, Typ nach Endung (PNG → image/png)
       },
       async manifest(appId, ver) { return versionDoc(appId, ver)?.manifest ?? null; },
+      /** §16.39 Nr. 1 (A6): /~a/<app>@<ver>~shell@<sv>/<path>; sv = opts.shellVer, sonst beim Mount fixierte Shell-Version. */
+      url: (appId, ver, path, o) => { guardAlive(); return artifactsUrl(appId, ver, path, o); },
+      /** §16.39 Nr. 2: Bibliotheksdatei für eine App-Instanz → /~a/lib:<name>@<major>.<minor>/<path>. */
+      libUrl: (appId, ver, name, major, path) => { guardAlive(); return libUrl(appId, ver, name, major, path); },
+      /** Shell: beim Mount fixieren (mountVersion tut es selbst). libs = {name: major}, sonst aus dem Manifest. */
+      pin: (appId, ver, o) => { guardAlive(); return pinInstance(appId, ver, o); },
     }),
+    /** §16.39 Nr. 2: SW-Nachrichten (ctox:lib-hit, ctox:lib-miss) – im Browser automatisch an navigator.serviceWorker gebunden. */
+    libs: Object.freeze({ onSwMessage, resolve: resolveLibMinor, enforceBudget: () => enforceLibBudget(), get byteBudget() { return libByteBudget; } }),
     source: sourceApi,
     identity: Object.freeze({
       get instance_id() { return instanceId; },
@@ -1536,6 +1688,7 @@ export function createKernel(opts = {}) {
     failCommand(type, error) { fakeCore?.failures.set(type, error); },
     async publishAppVersion(appId, ver, o) {
       await publishInternal(appId, ver, o);
+      if (isLib(appId)) { await waitUntil(() => versionDoc(appId, ver) || closed); return null; } // Bibliotheken werden nie aktiviert
       await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed);
       await (remountChains.get(appId) ?? Promise.resolve());
       return activations.has(appId) ? { ...activations.get(appId) } : null;
@@ -1601,6 +1754,7 @@ export function createKernel(opts = {}) {
       }
       return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
+    libFetch(lib, major, path, ver) { return libFetchLeader(lib, major, path, ver); },
     async reportFailed(appId, ver, reason) {
       const cur = activations.get(appId) ?? {};
       const good = (cur.good_vers ?? []).filter((v) => v !== ver);
@@ -1626,6 +1780,7 @@ export function createKernel(opts = {}) {
       if (isLeader || !bc) return simImpl.publishAppVersion(appId, ver, { ...rest, migrate });
       return (async () => {
         await callLeader('publishAppVersion', [appId, ver, rest]); // migrate-Funktionen sind nicht übertragbar
+        if (isLib(appId)) return null;
         await waitUntil(() => isTerminalFor(appId, ver) || closed);
         await (remountChains.get(appId) ?? Promise.resolve());
         return activations.has(appId) ? { ...activations.get(appId) } : null;
@@ -1681,6 +1836,8 @@ export function createKernel(opts = {}) {
     outbox: async () => (await db.all('outbox')).sort(byOpId),
     archiveLocal: async () => db.all('archive_local'),
     windowStateRows: async () => db.all('window_state'),
+    artifactRows: async () => db.all('artifacts'),
+    inspectMeta: async (key) => db.get('meta', key),
     /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
     windowState: async () => db.all('window_state'),
     coreHead: async () => Number(fakeCore?.head ?? '0'),
@@ -1733,6 +1890,7 @@ export function createKernel(opts = {}) {
     for (const w of waitList.splice(0)) w.resolve();
     for (const w of rpcWaiters.values()) w.rej(new CtoxError('unavailable', 'Kernel geschlossen'));
     rpcWaiters.clear();
+    try { globalThis.navigator?.serviceWorker?.removeEventListener?.('message', swMessageListener); } catch { /* kein SW */ }
     try { bc?.close(); } catch { /* egal */ }
     bc = null;
     try { transport.close(); } catch {}
@@ -1766,6 +1924,7 @@ export function createKernel(opts = {}) {
     status: shellApi.status,
     windowState: shellApi.windowState,
     artifacts: shellApi.artifacts,
+    libs: shellApi.libs,
     source: shellApi.source,
     identity: shellApi.identity,
     shellApi: () => shellApi,
