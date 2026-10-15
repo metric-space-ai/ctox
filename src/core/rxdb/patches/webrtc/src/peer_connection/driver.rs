@@ -713,6 +713,174 @@ mod p4_backpressure_tests {
         assert_eq!(received, 1024);
     }
 
+    /// The real UDP/DTLS/SCTP driver must await its bounded OnMessage queue.
+    /// A helper-only test cannot detect try_send at handle_rtc_message.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn p4_loopback_slow_consumer_applies_backpressure_without_loss() {
+        use crate::data_channel::DataChannel;
+        use crate::peer_connection::{
+            PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, PeerConnectionImpl,
+            RTCIceGatheringState,
+        };
+
+        struct Events {
+            gathered: crate::runtime::Sender<()>,
+            channel: crate::runtime::Sender<Arc<dyn DataChannel>>,
+        }
+        #[async_trait::async_trait]
+        impl PeerConnectionEventHandler for Events {
+            async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+                if state == RTCIceGatheringState::Complete {
+                    self.gathered.send(()).await.unwrap();
+                }
+            }
+            async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
+                assert!(self.channel.send(channel).await.is_ok());
+            }
+        }
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (offer_gathered, mut offer_gather_rx) = channel(1);
+            let (answer_gathered, mut answer_gather_rx) = channel(1);
+            let (remote_channel, mut remote_channel_rx) = channel(1);
+            let (unused_channel, _unused_rx) = channel(1);
+            let runtime = crate::runtime::default_runtime().unwrap();
+            let offerer = PeerConnectionBuilder::new()
+                .with_handler(Arc::new(Events {
+                    gathered: offer_gathered,
+                    channel: unused_channel,
+                }))
+                .with_udp_addrs(vec!["127.0.0.1:0"])
+                .build()
+                .await
+                .unwrap();
+
+            // Construct the same production peer implementation directly so
+            // the test can observe the real event queue, without a test hook
+            // in the receive branch or a replacement transport.
+            let core = rtc::peer_connection::RTCPeerConnectionBuilder::new()
+                .build()
+                .unwrap();
+            let configuration = core.get_configuration();
+            let opts = crate::peer_connection::ice_gatherer::RTCIceGatherOptions {
+                ice_servers: configuration.ice_servers().to_vec(),
+                ice_gather_policy: configuration.ice_transport_policy(),
+            };
+            let answerer = PeerConnectionImpl::new(
+                core,
+                runtime,
+                Arc::new(Events {
+                    gathered: answer_gathered,
+                    channel: remote_channel,
+                }),
+                opts,
+                vec!["127.0.0.1:0"],
+                vec![],
+            )
+            .await
+            .unwrap();
+            let sending = offerer
+                .create_data_channel(
+                    "p4-wiring",
+                    Some(crate::data_channel::RTCDataChannelInit {
+                        ordered: true,
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .unwrap();
+            offerer
+                .set_local_description(offerer.create_offer(None).await.unwrap())
+                .await
+                .unwrap();
+            offer_gather_rx.recv().await.unwrap();
+            answerer
+                .set_remote_description(offerer.local_description().await.unwrap())
+                .await
+                .unwrap();
+            answerer
+                .set_local_description(answerer.create_answer(None).await.unwrap())
+                .await
+                .unwrap();
+            answer_gather_rx.recv().await.unwrap();
+            offerer
+                .set_remote_description(answerer.local_description().await.unwrap())
+                .await
+                .unwrap();
+            while !matches!(sending.poll().await, Some(DataChannelEvent::OnOpen)) {}
+            let receiving = remote_channel_rx.recv().await.unwrap();
+            while !matches!(receiving.poll().await, Some(DataChannelEvent::OnOpen)) {}
+            assert!(sending.ordered().await.unwrap());
+            assert_eq!(sending.max_retransmits().await.unwrap(), None);
+            assert_eq!(sending.max_packet_life_time().await.unwrap(), None);
+
+            let queue = answerer
+                .inner
+                .data_channel_events_tx
+                .lock()
+                .await
+                .get(&receiving.id())
+                .unwrap()
+                .clone();
+            let burst = DATA_CHANNEL_EVENT_CHANNEL_CAPACITY * 4;
+            // Deliberately stop polling the receiving DataChannel. Messages
+            // still traverse the real loopback UDP/DTLS/SCTP stack.
+            for sequence in 0..burst {
+                sending
+                    .send_text(&format!("p4-loopback:{sequence}"))
+                    .await
+                    .unwrap();
+                tokio::task::yield_now().await;
+            }
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while queue.0.capacity() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the paused consumer must fill the bounded event queue");
+            assert!(
+                queue.0.reserve().now_or_never().is_none(),
+                "a full receive queue must exert backpressure"
+            );
+            // Keep the consumer paused beyond one driver turn. try_send at
+            // the actual OnMessage branch loses the tail of this burst.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            for sequence in 0..burst {
+                loop {
+                    match receiving.poll().await {
+                        Some(DataChannelEvent::OnMessage(message)) => {
+                            assert_eq!(
+                                message.data.as_ref(),
+                                format!("p4-loopback:{sequence}").as_bytes(),
+                                "reliable messages must arrive exactly once and in order"
+                            );
+                            break;
+                        }
+                        Some(_) => {}
+                        None => panic!("receive channel closed before the reliable burst drained"),
+                    }
+                }
+            }
+            let extra = tokio::time::timeout(Duration::from_millis(50), async {
+                loop {
+                    if let Some(DataChannelEvent::OnMessage(_)) = receiving.poll().await {
+                        break;
+                    }
+                }
+            })
+            .await;
+            assert!(
+                extra.is_err(),
+                "the driver must not duplicate reliable messages"
+            );
+            offerer.close().await.unwrap();
+            answerer.close().await.unwrap();
+        })
+        .await
+        .expect("real loopback must drain every message after the slow consumer resumes");
+    }
+
     #[tokio::test]
     async fn p4_closed_receive_queue_returns_the_unsent_event() {
         let (tx, rx) = channel(1);
