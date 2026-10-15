@@ -15050,6 +15050,26 @@ pub fn refresh_business_command_queue_task_projection(
             payload,
         )?;
     }
+    // A news run that ends on a hold (e.g. a technical hold after repeated
+    // "direct session timeout" attempts) never reaches the `failed` paths that
+    // call mark_news_command_failed, so the issue kept spinning on
+    // "Ausgabe wird erstellt" with no retry button (welsch, 15.10.2026).
+    if matches!(
+        terminal_command_status,
+        Some("failed" | "blocked" | "cancelled")
+    ) {
+        let reason = task
+            .status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|note| !note.is_empty())
+            .unwrap_or("CTOX hat die Ausgabe nicht abgeschlossen.");
+        if let Err(error) =
+            super::store_news_commands::mark_news_command_failed(root, &conn, &command, reason)
+        {
+            eprintln!("[business-os] news hold projection for `{command_id}` failed: {error:#}");
+        }
+    }
     Ok(Some(command_projection))
 }
 
