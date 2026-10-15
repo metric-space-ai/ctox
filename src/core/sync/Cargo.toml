@@ -41,3 +41,5 @@ tokio-tungstenite = "0.28"
 # Cargo ignores dependency patches; standalone tests must mirror the host.
 [patch.crates-io]
 rtc-ice = { path = "../rxdb/patches/rtc-ice" }
+rtc = { path = "../rxdb/patches/rtc" }
+webrtc = { path = "../rxdb/patches/webrtc" }

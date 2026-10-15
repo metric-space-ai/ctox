@@ -53,6 +53,9 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 # Logging
 tracing = "0.1"
+log = "0.4"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
 
 # IDs
 uuid = { version = "1", features = ["v4"] }
@@ -73,3 +76,5 @@ tempfile = "3"
 # Cargo ignores dependency patches; standalone tests must mirror the host.
 [patch.crates-io]
 rtc-ice = { path = "patches/rtc-ice" }
+rtc = { path = "patches/rtc" }
+webrtc = { path = "patches/webrtc" }
