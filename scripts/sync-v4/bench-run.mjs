@@ -43,8 +43,10 @@ try {
     const profileOut = path.join(out, `rtt-${rttMs}`); fs.mkdirSync(profileOut, { recursive: true });
     const config = { out: profileOut, durationSeconds, peers, rttMs, lossPercent,
       uid: process.getuid(), gid: process.getgid(), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
-      nativeBin: path.resolve(arg('--native-bin', path.join(process.env.CARGO_TARGET_DIR || '', 'debug/ctox-transport-bench-peer'))),
+      nativeBin: path.resolve(arg('--native-bin', path.join(process.env.CARGO_TARGET_DIR || '', 'release/ctox-transport-bench-peer'))),
       nativeRevision: arg('--native-revision', manifest.sourceHead),
+      nativeBuildProfileDeclared: arg('--native-profile', 'release'),
+
       browserRoot: path.resolve(arg('--browser-root', path.join(root, 'src/apps/business-os/rxdb/src'))),
       browserRevision: arg('--browser-revision', manifest.sourceHead),
       browserAdapter: path.resolve(arg('--browser-adapter', path.join(root, 'tests/sync-v4-bench/browser.mjs'))),

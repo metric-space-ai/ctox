@@ -40,7 +40,7 @@ greppy bash-smart -- ~/.codex/bin/gpu-build-run.sh \
   --owner YOUR_THREAD_ID --task v4-bench-transport \
   --target-key v4-bench-transport --host gpu4 --jobs 2 --src YOUR_SOURCE \
   -- bash -lc 'ctox-prep.sh && \
-    cargo build --manifest-path tests/sync-v4-bench/native/Cargo.toml --jobs 2 && \
+    cargo build --release --locked --manifest-path tests/sync-v4-bench/native/Cargo.toml --jobs 2 && \
     node --test tests/sync-v4-bench/counters.test.mjs && \
     node scripts/sync-v4/bench-run.mjs --owner YOUR_THREAD_ID --out OWN_ARTIFACT_PATH'
 ```
@@ -67,6 +67,10 @@ not modify host routes or qdiscs, install a system service or use customer data.
 Chrome uses `iceTransportPolicy: relay`; sampled selected-candidate pairs must
 show relay or the run fails before load. Native gathers host candidates inside
 that namespace. All browser/native traffic therefore crosses local coturn.
+The native fixture is built in release mode. Keep the same optimization profile
+for both baseline and candidate; `--native-profile` records a supplied binary's
+declared profile, which is not inferred from its filename or hash.
+
 Signaling is local and is not delayed; this measures the transport data path.
 
 Only UDP packets to/from the TURN listening socket are shaped. The requested
