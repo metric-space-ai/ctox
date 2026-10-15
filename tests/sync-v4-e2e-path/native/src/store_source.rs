@@ -122,11 +122,11 @@ impl ReadAuthority for Policy {
     }
 }
 impl WriteAuthority for Policy {
-    fn authorize(&self, _: &Transaction<'_>, actor: &str, r: &Write) -> rusqlite::Result<()> {
+    fn authorize(&self, _: &Transaction<'_>, actor: &str, r: &Write) -> rusqlite::Result<subscription::WritePermission> {
         if actor != "alice" || resolved().projection(&r.collection).is_none() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        Ok(())
+        Ok(subscription::WritePermission::Permit)
     }
     fn validate_document(
         &self,
@@ -134,11 +134,11 @@ impl WriteAuthority for Policy {
         _: &str,
         _: &ctox_store::schema::Collection,
         doc: &Value,
-    ) -> rusqlite::Result<()> {
+    ) -> rusqlite::Result<subscription::WritePermission> {
         if !doc.is_object() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        Ok(())
+        Ok(subscription::WritePermission::Permit)
     }
 }
 #[derive(Clone)]
@@ -199,6 +199,16 @@ impl Source {
     pub async fn shutdown(&self) {
         let _ = self.reader.shutdown().await;
         let _ = self.writer.shutdown().await;
+    }
+    pub async fn expire(&self)->RxResult<()> {
+        let ordered=subscription::write_contract::OrderedWriter::new(self.writer.clone(),Arc::new(Policy{hash:resolved().hash().map_err(error)?}));
+        let batch=ordered.expire("alice".into(),now()).await.map_err(error)?;
+        crate::emit(json!({"kind":"gap_deadline","at_ms":batch.next_deadline_ms}));
+        for result in batch.results {
+            let mut value=serde_json::to_value(result).map_err(error)?;value["type"]="write_result".into();
+            if self.results.receiver_count()>0 {self.results.send(value).map_err(error)?;} else {crate::emit(json!({"kind":"result_retained_offline","op_id":value["op_id"]}));}
+        }
+        Ok(())
     }
 }
 struct Guard;
@@ -268,34 +278,16 @@ impl V4StreamSource for Source {
             else {
                 return Err(error("write required"));
             };
-            let result = source
-                .writer
-                .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                    Ok(subscription::apply_write(
-                        tx,
-                        "alice",
-                        &write,
-                        now(),
-                        &Policy {
-                            hash: resolved().hash().unwrap(),
-                        },
-                    )?)
-                }))
-                .map_err(error)?
+            let ordered=subscription::write_contract::OrderedWriter::new(source.writer.clone(),Arc::new(Policy{hash:resolved().hash().map_err(error)?}));
+            let batch=ordered.submit("alice".into(),write,now())
                 .await
                 .map_err(error)?;
-            crate::emit(
-                json!({"kind":"write_committed","op_id":result.op_id,"seq":result.seq,"status":result.status}),
-            );
-            if source
-                .drop_next
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                std::future::pending::<()>().await;
+            crate::emit(json!({"kind":"gap_deadline","at_ms":batch.next_deadline_ms}));
+            for result in batch.results {
+                crate::emit(json!({"kind":"write_committed","op_id":result.result.op_id,"seq":result.result.seq,"status":result.result.status,"client_seq":result.client_seq}));
+                if source.drop_next.swap(false,std::sync::atomic::Ordering::SeqCst){std::future::pending::<()>().await;}
+                let mut value=serde_json::to_value(result).map_err(error)?;value["type"]="write_result".into();source.results.send(value).map_err(error)?;
             }
-            let mut value = serde_json::to_value(result).map_err(error)?;
-            value["type"] = "write_result".into();
-            source.results.send(value).map_err(error)?;
             Ok(())
         })
     }

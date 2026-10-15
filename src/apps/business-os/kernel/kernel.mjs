@@ -318,6 +318,7 @@ export function createKernel(opts = {}) {
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
     for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
+    await settleAwaitingPages();
     notify('leader');
     post({ type: 'leader', gen: myGen });
     if (!transportConnected) {
@@ -568,6 +569,7 @@ export function createKernel(opts = {}) {
         for (const e of entries) { const k = docKey(e.collection, e.id); if (!first.has(k)) first.set(k, e); }
         for (const [k, e] of first) {
           if (inflight.has(k) || !isLeader || link.state !== 'online') continue;
+          if (e.awaiting_page) continue;
           if (e.client_seq != null && BigInt(e.client_seq) >= BigInt(floor) + 64n) continue;
           inflight.set(k, e.op_id);
           inflightOps.add(e.op_id);
@@ -623,9 +625,16 @@ export function createKernel(opts = {}) {
     scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
     setCheckpoint(out.cp); extraBacklog=[...scopeBacklog.values()].reduce((a,b)=>a+b,0); netChanged();
     post({type:'docs',keys:out.recs.map(r=>[r.collection,r.id]),checkpoint:out.cp});
+    await settleAwaitingPages(page.collection);
+  }
+  async function settleAwaitingPages(collection) {
+    let touched=false;
+    for (const entry of await db.all('outbox')) if (entry.awaiting_page && (!collection || entry.collection===collection)) {await applyResult(entry,entry.awaiting_page);touched=true;}
+    if(touched){await refreshOutboxStat();schedulePump();}
   }
   async function receiveResult(message) {
     const entry=await db.get('outbox',message.op_id);
+    if(entry && message.client_seq!==undefined && message.client_seq!==entry.client_seq)throw new CtoxError('invalid','write_result client_seq mismatch');
     if(entry){await applyResult(entry,message);const key=docKey(entry.collection,entry.id);if(inflight.get(key)===entry.op_id)inflight.delete(key);inflightOps.delete(entry.op_id);await refreshOutboxStat();schedulePump();}
   }
   async function confirm(k,e) {
@@ -657,23 +666,33 @@ export function createKernel(opts = {}) {
   async function applyResult(e,result) {
     const out=await db.tx(async t=>{
       await assertGen(t);
-      if(!(await t.get('outbox',e.op_id)))return null;
+      const queued=await t.get('outbox',e.op_id);if(!queued)return null;
       const stored=await t.get('docs',[e.collection,e.id]); let base=stored?.base??emptyBase();
       const res={...result};delete res.doc;delete res.deleted;
-      if(!['accepted','rejected','migrated'].includes(res.status))throw new CtoxError('invalid','Invalid write result');
+      if(!['accepted','merged','rejected','migrated'].includes(res.status))throw new CtoxError('invalid','Invalid write result');
+      const requiresPage=res.requires_page===true || res.status==='merged';
+      if(requiresPage && res.status!=='rejected' && (typeof res.seq!=='string'||decimalSeq(res.seq)==='0'))throw new CtoxError('invalid','Canonical page sequence missing');
+      if(requiresPage && res.status!=='rejected' && seqGreater(decimalSeq(res.seq),base.seq??'0')){
+        await t.put('outbox',{...queued,awaiting_page:cloneValue(result)});return {waiting:true};
+      }
       if(res.status==='rejected'){
         res.archived_ref=`archive_local:${e.op_id}`;
         await t.put('archive_local',{...e,ref:res.archived_ref,reason:res.reason,rejected_at:Date.now()});
-      } else if(!seqGreater(base.seq??'0',result.seq??'0')) {
+      } else if(!requiresPage && !seqGreater(base.seq??'0',result.seq??'0')) {
         const state=result.doc!==undefined ? {data:result.doc,deleted:!!result.deleted} : applyOp(base,e);
         base={...state,rev:res.rev,seq:decimalSeq(res.seq)};
       }
       await t.del('outbox',e.op_id);
       const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));await putDoc(t,rec);
+      // Wire 'merged' is an accepted App-API write; its canonical page was
+      // required above. Keep transport bookkeeping out of App-API 4.0 results.
+      if(res.status==='merged')res.status='accepted';
+      delete res.type;delete res.client_seq;delete res.requires_page;
       await t.put('meta',{key:`result:${e.op_id}`,info:{op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id},result:res});
       return {rec,res};
     });
     if(!out)return;
+    if(out.waiting)return;
     mirrorPut(out.rec);setCheckpoint(out.rec.base.seq);
     reservedOps.delete(e.op_id);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};handleWriteResult(info,out.res);

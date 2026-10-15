@@ -195,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let request: Value = serde_json::from_str(&line)?;
         match request["kind"].as_str() {
             Some("shutdown") => break,
+            Some("expire") => source.expire().await?,
             Some("arm_drop") => {
                 source
                     .drop_next

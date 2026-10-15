@@ -34,7 +34,7 @@ try{
  const url=`http://127.0.0.1:${server.address().port}`;await page.goto(url);
  await page.evaluate(async()=>{
   const {IdbBackend}=await import('/store-idb-v5.mjs');const db=await IdbBackend.open('ctox-owned-close-invariant');let completed=false,closed;
-  const tx=db.trackTransaction(db.db.transaction('meta','readwrite'));
+  const raw=db.db.transaction('meta','readwrite');raw.addEventListener('complete',()=>{completed=true;},{once:true});const tx=db.trackTransaction(raw);
   await new Promise((resolve,reject)=>{const request=tx.objectStore('meta').put({key:'close-proof',value:1});request.onerror=()=>reject(request.error);request.onsuccess=()=>{closed=db.close().then(()=>{if(!completed)throw Error('Close resolved before owned transaction completed');});closed.catch(()=>{});tx.addEventListener('complete',()=>{completed=true;resolve();},{once:true});};});await closed;
  });
  const external = await page.evaluate(async()=>{
@@ -135,7 +135,7 @@ try{
   try {
    await a.setLocalDescription(await a.createOffer());await gathered(a);await b.setRemoteDescription(a.localDescription);await b.setLocalDescription(await b.createAnswer());await gathered(b);await a.setRemoteDescription(b.localDescription);
    await Promise.all(Object.values(client).map(c=>c.readyState==='open'?Promise.resolve():new Promise((r,j)=>{const t=setTimeout(()=>j(Error('RTC open deadline')),10000);c.addEventListener('open',()=>{clearTimeout(t);r()},{once:true});})));
-   await serverReady;
+   serverCheck();await serverReady;
    if(Object.keys(server).length!==6)throw Error('native channels missing');
    native=new FakeNativePeer(server,{instanceId:'rtc-browser',onSubscribe:async(sub,p)=>p.page(sub.collection,sub.collection==='notes'?[{id:'server',data:{id:'server',title:'native page'},seq:p.head,rev:'native'}]:[])});
    let allow;const transport=new WebRTCKernelTransport({wireFormat:"k2-fixture",channels:client,peer:a,hello:()=>new Promise(r=>allow=r),resolveScope:scopeFor,verifyPackage:async p=>p.sig==='test-signature'});
@@ -167,6 +167,41 @@ try{
   }finally{await loader.close();ServiceWorker.prototype.postMessage=post;navigator.serviceWorker.removeEventListener('message',listener);await loader.registration?.unregister();}
  });
  await capture(reader,'06-shell-claim.png');
+ // Real IDB + Web Locks: dispatch reservations survive a leader tab closing,
+ // then a navigation with an empty outbox must retain the sequence high-water.
+ const installSequenceKernel=async(page,online)=>page.evaluate(async online=>{
+  const {createKernel}=await import('/kernel.mjs');globalThis.seqSent=[];
+  globalThis.seqTransport={async connect(identity,events){this.events=events;if(online)events.link({state:'online'});},async subscribe(){},async write(entry){seqSent.push(entry);},close(){}};
+  globalThis.seqKernel=createKernel({instanceId:'client-seq-browser',userId:'alice',transport:seqTransport,latencyMs:5});await seqKernel.ready;
+  return {storage:seqKernel.storageKind,leader:seqKernel.isLeader,gen:seqKernel.leader.get().leader_gen};
+ },online);
+ const sequenceFirst=await installSequenceKernel(reader,false);
+ if(sequenceFirst.storage!=='indexeddb'||!sequenceFirst.leader)throw Error('client_seq needs a real IDB leader');
+ await reader.evaluate(async()=>{
+  const api=seqKernel.appApi('notes','1');await api.put('notes',{id:'a',value:1}).local;await api.patch('notes','a',{value:2}).local;await api.command('bench.read',{id:'a'}).local;seqTransport.events.link({state:'online'});
+ });
+ await reader.waitForFunction(()=>seqSent.length===2,null,{timeout:5000});
+ const reserved=await reader.evaluate(async()=>({rows:(await seqKernel.sim.outbox()).sort((a,b)=>Number(BigInt(a.client_seq)-BigInt(b.client_seq))),sent:seqSent.map(e=>[e.op_id,e.client_seq])}));
+ if(reserved.rows.map(e=>e.client_seq).join(',')!=='1,2,3')throw Error('client_seq reservation order differs from submission');
+ const successor=await context.newPage();await successor.goto(url);
+ const sequenceReader=await installSequenceKernel(successor,true);if(sequenceReader.leader)throw Error('client_seq has two leaders');
+ await reader.evaluate(()=>seqKernel.close());
+ await successor.waitForFunction(()=>seqKernel.isLeader&&seqSent.length===2,null,{timeout:10000});
+ const resumed=await successor.evaluate(()=>({gen:seqKernel.leader.get().leader_gen,sent:seqSent.map(e=>[e.op_id,e.client_seq])}));
+ if(resumed.gen<=sequenceFirst.gen||JSON.stringify(resumed.sent.sort())!==JSON.stringify(reserved.sent.sort()))throw Error('leader takeover renumbered a reserved operation');
+ await successor.evaluate(async first=>seqTransport.events.write_result({op_id:first.op_id,status:'accepted',rev:'r1',seq:'1'}),reserved.rows[0]);
+ await successor.waitForFunction(()=>seqSent.length===3,null,{timeout:5000});
+ await successor.evaluate(async rows=>{for(const row of rows)await seqTransport.events.write_result({op_id:row.op_id,status:'accepted',rev:'r'+row.client_seq,seq:row.client_seq});},reserved.rows.slice(1));
+ await successor.evaluate(async()=>{if((await seqKernel.sim.outbox()).length)throw Error('sequence outbox did not drain');seqTransport.events.link({state:'offline'});await seqKernel.appApi('notes','1').put('notes',{id:'reload',value:'survives'}).local;await seqKernel.close();});
+ await successor.reload();await installSequenceKernel(successor,true);
+ await successor.waitForFunction(()=>seqSent.length===1,null,{timeout:5000});
+ const sequenceReload=await successor.evaluate(()=>{
+  if(seqSent[0].client_seq!=='4'||seqKernel.appApi('notes','1').get('notes','reload').get()?.value!=='survives')throw Error('reload lost input or reset client_seq high-water');
+  document.querySelector('#result').textContent='PASS: client_seq 1,2,3 reserved in IDB; Web Lock successor replayed stable IDs; reload continued at 4';
+  return {gen:seqKernel.leader.get().leader_gen,client_seq:seqSent[0].client_seq};
+ });
+ await capture(successor,'07-client-seq-reload.png');await successor.evaluate(()=>seqKernel.logout({deleteData:true}));await successor.close();
+ const clientSequence={storage:sequenceFirst.storage,initial_gen:sequenceFirst.gen,successor_gen:resumed.gen,reload_gen:sequenceReload.gen,continued_at:sequenceReload.client_seq};
  if(errors.length)throw Error(errors.join('\n'));
- const result={pass:true,external,first,reopened,follower,files,takeover,quota,rtc,claims,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
+ const result={pass:true,external,first,reopened,follower,files,takeover,quota,rtc,claims,clientSequence,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

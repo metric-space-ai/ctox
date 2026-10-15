@@ -51,7 +51,7 @@ export function applyOp(state, entry) {
 }
 export function recompute(ns, id, base, outboxEntries) {
   let st = { data: base.data, deleted: base.deleted };
-  const mine = outboxEntries.filter((e) => e.collection === ns && e.id === id && e.op !== 'upload').sort(byOpId);
+  const mine = outboxEntries.filter((e) => e.collection === ns && e.id === id && e.op !== 'upload' && !e.awaiting_page).sort(byOpId);
   for (const e of mine) st = applyOp(st, e);
   const last = mine[mine.length - 1];
   return {

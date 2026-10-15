@@ -35,7 +35,15 @@ const cases=[
  ['wire-endian','framing.mjs','d.setUint32(0,MAGIC);','d.setUint32(0,MAGIC,true);','webrtc.test.mjs','P4 hello'],
 ];
 const receipts=[];
-try{for(const [id,file,before,after,test,pattern]of cases){const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Mutation anchor missing: ${id}`);const line=original.slice(0,original.indexOf(before)).split('\n').length;
+const browserCases=[
+ ['claim-before-import','loader.mjs',"worker.postMessage('ctox:claim');",'/* omitted claim */',/Shell replacement failed|claim deadline|Shell imported before claim/],
+ ['claim-every-start','loader.mjs',"worker.postMessage('ctox:claim');","if(!container.controller)worker.postMessage('ctox:claim');",/Shell replacement failed|Shell imported before claim/],
+ ['close-owned-transactions','store-idb-v5.mjs','await Promise.allSettled([...this.transactions.values()]);','',/Close other identity tabs|Close resolved before owned transaction completed/],
+];
+const selected=new Set((process.env.KERNEL_MUTATIONS??'').split(',').filter(Boolean));
+for(const id of selected)if(![...cases,...browserCases].some(item=>item[0]===id))throw Error(`Unknown mutation: ${id}`);
+const wanted=([id])=>!selected.size||selected.has(id);
+try{for(const [id,file,before,after,test,pattern]of cases.filter(wanted)){const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Mutation anchor missing: ${id}`);const line=original.slice(0,original.indexOf(before)).split('\n').length;
  const baseline=spawnSync(process.execPath,['--test','--test-concurrency=1','--test-timeout=3500',`--test-name-pattern=${pattern}`,join(base,'tests',test)],{encoding:'utf8',timeout:7000,maxBuffer:2*1024*1024});
  if(baseline.status!==0)throw Error(`Mutation baseline is red: ${id}\n${baseline.stdout}\n${baseline.stderr}`);
  await writeFile(path,original.split(before).join(after));
@@ -45,12 +53,8 @@ try{for(const [id,file,before,after,test,pattern]of cases){const path=join(base,
  console.log(`${killed?'MUTATION_KILLED':'MUTATION_SURVIVED'} ${id} ${file}:${line} -> ${test} /${pattern}/`);if(!killed)process.exitCode=1;
  }
  const browser=id=>spawnSync('bash',[join(base,'tests/run-browser.sh')],{cwd:scratch,encoding:'utf8',timeout:40000,maxBuffer:2*1024*1024,env:{...process.env,KERNEL_EVIDENCE_DIR:join(out,id)}});
- const control=browser('browser-control');if(control.status!==0)throw Error(`Browser mutation baseline is red\n${control.stdout}\n${control.stderr}`);
- for(const [id,file,before,after,expected]of [
-  ['claim-before-import','loader.mjs',"worker.postMessage('ctox:claim');",'/* omitted claim */',/Shell replacement failed|claim deadline|Shell imported before claim/],
-  ['claim-every-start','loader.mjs',"worker.postMessage('ctox:claim');","if(!container.controller)worker.postMessage('ctox:claim');",/Shell replacement failed|Shell imported before claim/],
-  ['close-owned-transactions','store-idb-v5.mjs','await Promise.allSettled([...this.transactions.values()]);','',/Close other identity tabs|Close resolved before owned transaction completed/],
- ]){
+ const control=browserCases.some(wanted)?browser('browser-control'):null;if(control&&control.status!==0)throw Error(`Browser mutation baseline is red\n${control.stdout}\n${control.stderr}`);
+ for(const [id,file,before,after,expected]of browserCases.filter(wanted)){
   const path=join(base,file),original=await readFile(path,'utf8');if(!original.includes(before))throw Error(`Browser mutation anchor missing: ${id}`);
   await writeFile(path,original.replace(before,after));const run=browser(id);await writeFile(path,original);
   const output=(run.stdout??'')+(run.stderr??'');const killed=run.status!==0&&expected.test(output);
