@@ -150,10 +150,12 @@ pub fn install(tx: &Transaction<'_>) -> Result<(), StoreError> {
         created_at_ms INTEGER NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','inflight','delivered','dead_letter')),
         attempts INTEGER NOT NULL DEFAULT 0, next_attempt_ms INTEGER NOT NULL, lease_until_ms INTEGER NOT NULL DEFAULT 0,
         error_code TEXT);
-        CREATE INDEX IF NOT EXISTS _publication_ready ON _publication_outbox(target,state,next_attempt_ms,lease_until_ms);
+        CREATE INDEX IF NOT EXISTS _publication_pending ON _publication_outbox(target,state,next_attempt_ms,op_id);
+        CREATE INDEX IF NOT EXISTS _publication_leased ON _publication_outbox(target,state,lease_until_ms,op_id);
         CREATE TABLE IF NOT EXISTS _publication_inbox (
         op_id TEXT PRIMARY KEY, target TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, payload BLOB NOT NULL,
         created_at_ms INTEGER NOT NULL, applied_at_ms INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS _publication_age ON _publication_inbox(created_at_ms,op_id);
         CREATE TABLE IF NOT EXISTS _publication_horizon (id INTEGER PRIMARY KEY CHECK(id=1), accept_since_ms INTEGER NOT NULL);
         INSERT OR IGNORE INTO _publication_horizon VALUES(1,0);")?;
     Ok(())
@@ -195,6 +197,33 @@ fn read_publication(
     }
 }
 
+// Separate indexed top-one queries avoid OR + sorting every ready row while
+// holding the only writer. Recoverable leases and pending work each cost O(log n).
+const PENDING_SQL: &str = "SELECT op_id,target,kind,subject,payload,created_at_ms,attempts FROM _publication_outbox WHERE target=? AND state='pending' AND next_attempt_ms<=? ORDER BY next_attempt_ms,op_id LIMIT 1";
+const LEASED_SQL: &str = "SELECT op_id,target,kind,subject,payload,created_at_ms,attempts FROM _publication_outbox WHERE target=? AND state='inflight' AND lease_until_ms<=? ORDER BY lease_until_ms,op_id LIMIT 1";
+fn candidate(
+    tx: &Transaction<'_>,
+    sql: &str,
+    target: &str,
+    now_ms: i64,
+) -> Result<Option<(Publication, i64, u32)>, StoreError> {
+    Ok(tx
+        .query_row(sql, params![target, now_ms], |r| {
+            Ok((
+                Publication {
+                    op_id: r.get(0)?,
+                    target: r.get(1)?,
+                    kind: r.get(2)?,
+                    subject: r.get(3)?,
+                    payload: r.get(4)?,
+                },
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        })
+        .optional()?)
+}
+
 pub async fn claim_next(
     source: &WriterHandle,
     options: JobOptions,
@@ -204,8 +233,9 @@ pub async fn claim_next(
 ) -> Result<Option<Claim>, StoreError> {
     policy.validate()?;
     source.submit(WriteJob::new(options, move |tx| {
-        let row = tx.query_row("SELECT op_id,target,kind,subject,payload,created_at_ms,attempts FROM _publication_outbox WHERE target=? AND ((state='pending' AND next_attempt_ms<=?) OR (state='inflight' AND lease_until_ms<=?)) ORDER BY created_at_ms,op_id LIMIT 1",
-            params![target,now_ms,now_ms], |r| Ok((Publication { op_id:r.get(0)?,target:r.get(1)?,kind:r.get(2)?,subject:r.get(3)?,payload:r.get(4)? },r.get::<_,i64>(5)?,r.get::<_,u32>(6)?))).optional()?;
+        let pending=candidate(tx,PENDING_SQL,&target,now_ms)?;
+        let leased=candidate(tx,LEASED_SQL,&target,now_ms)?;
+        let row=pending.into_iter().chain(leased).min_by_key(|(publication,created,_)|(*created,publication.op_id.clone()));
         let Some((publication, created_at_ms, previous)) = row else { return Ok(None); };
         // An abandoned attempt may have committed on B. It must still be
         // re-delivered once to inspect B's dedupe receipt, even at retry limit.
@@ -329,18 +359,31 @@ pub async fn status(
     source.submit(WriteJob::new(options, move |tx| Ok(tx.query_row("SELECT state,attempts,next_attempt_ms,error_code FROM _publication_outbox WHERE op_id=?", [op_id], |r| Ok(Status {state:r.get(0)?,attempts:r.get(1)?,next_attempt_ms:r.get(2)?,error_code:r.get(3)?})).optional()?)))?.await
 }
 
-/// Horizon advancement and dedupe compaction are atomic. Old IDs stay expired,
-/// even after their receipts have been removed; never blindly execute them again.
+/// Persist a monotonic acceptance floor before compacting old dedupe receipts.
+/// Old IDs stay expired after compaction; never blindly execute them again.
 pub async fn advance_horizon(
     target: &WriterHandle,
     options: JobOptions,
     accept_since_ms: i64,
 ) -> Result<(), StoreError> {
-    target.submit(WriteJob::new(options, move |tx| {
-        tx.execute("UPDATE _publication_horizon SET accept_since_ms=MAX(accept_since_ms,?) WHERE id=1", [accept_since_ms])?;
-        tx.execute("DELETE FROM _publication_inbox WHERE created_at_ms < (SELECT accept_since_ms FROM _publication_horizon WHERE id=1)", [])?;
-        Ok(())
-    }))?.await
+    target
+        .submit(WriteJob::new(options, move |tx| {
+            tx.execute(
+                "UPDATE _publication_horizon SET accept_since_ms=MAX(accept_since_ms,?) WHERE id=1",
+                [accept_since_ms],
+            )?;
+            Ok(())
+        }))?
+        .await
+}
+
+/// Bounded maintenance: at most 256 indexed receipts per transaction. Advancing
+/// the durable horizon already fences old IDs; compaction never re-enables them.
+pub async fn compact_receipts(
+    target: &WriterHandle,
+    options: JobOptions,
+) -> Result<usize, StoreError> {
+    target.submit(WriteJob::new(options,move |tx| Ok(tx.execute("DELETE FROM _publication_inbox WHERE op_id IN (SELECT op_id FROM _publication_inbox WHERE created_at_ms < (SELECT accept_since_ms FROM _publication_horizon WHERE id=1) ORDER BY created_at_ms,op_id LIMIT 256)",[])?)))?.await
 }
 
 #[cfg(test)]

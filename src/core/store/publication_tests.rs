@@ -434,6 +434,10 @@ async fn dedupe_binding_and_compaction_floor_prevent_blind_reexecution() {
     advance_horizon(&b, JobOptions::default(), 101)
         .await
         .unwrap();
+    assert_eq!(
+        compact_receipts(&b, JobOptions::default()).await.unwrap(),
+        1
+    );
     assert_eq!(rows(&b, "_publication_inbox").await, 0);
     assert_eq!(
         apply_claim(
@@ -535,4 +539,43 @@ async fn authority_permit_survives_until_target_commit_and_drops_before_source_r
     checking.store(false, Ordering::Release);
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn claim_queries_use_ordered_indexes_and_receipt_compaction_is_bounded() {
+    let d = tempfile::tempdir().unwrap();
+    let a = open(&d.path().join("a")).await;
+    a.submit(WriteJob::new(JobOptions::default(), |tx| {
+        for (sql, index) in [
+            (PENDING_SQL, "_publication_pending"),
+            (LEASED_SQL, "_publication_leased"),
+        ] {
+            let mut explain = tx.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let details = explain
+                .query_map(params!["b", 100], |row| row.get::<_, String>(3))?
+                .collect::<Result<Vec<_>, _>>()?;
+            assert!(details.iter().any(|row| row.contains(index)), "{details:?}");
+            assert!(
+                !details.iter().any(|row| row.contains("TEMP B-TREE")),
+                "{details:?}"
+            );
+        }
+        for id in 0..600 {
+            tx.execute(
+                "INSERT INTO _publication_inbox VALUES(?,'b','fixture','owner',X'00',1,1)",
+                [id.to_string()],
+            )?;
+        }
+        Ok(())
+    }))
+    .unwrap()
+    .await
+    .unwrap();
+    advance_horizon(&a, JobOptions::default(), 2).await.unwrap();
+    assert_eq!(
+        compact_receipts(&a, JobOptions::default()).await.unwrap(),
+        256
+    );
+    assert_eq!(rows(&a, "_publication_inbox").await, 344);
+    a.shutdown().await.unwrap();
 }
