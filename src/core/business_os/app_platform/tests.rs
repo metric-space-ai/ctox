@@ -300,6 +300,7 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
     .await;
     let mut changed = manifest(2);
     changed["title"] = json!("Updated while connected");
+    changed["collections"]["runtime_records"]["rights"] = json!({"read":"admin","write":"admin"});
     f.release_input("release-2", changed, true).await;
     let result = f
         .run(
@@ -318,6 +319,22 @@ async fn update_hot_plugs_unknown_app_on_existing_connection() {
         f.read("runtime_records", "persisted").unwrap()["label"],
         "survives"
     );
+    f.writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let collection = schema::active_collection(tx, "runtime_records")?.unwrap();
+            assert_eq!(
+                collection.gen, 1,
+                "compatible rights/schema changes preserve generation"
+            );
+            assert_eq!(
+                collection.definition.rights_ver, 2,
+                "rights changes invalidate old admissions"
+            );
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
     let page = f
         .writer
         .submit(WriteJob::new(JobOptions::default(), |tx| {

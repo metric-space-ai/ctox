@@ -403,6 +403,16 @@ pub(super) fn execute(
         return Err(invalid("manifest exceeds draft byte budget"));
     }
     let mut definitions = definitions(&manifest, &request.app_id, &version)?;
+    let prior_manifest = if let Some(active) = active.as_str() {
+        get(
+            tx,
+            "business_app_versions",
+            &version_id(&request.app_id, active),
+        )?
+        .map(|v| v["manifest"].clone())
+    } else {
+        None
+    };
     // Only a native runner resolution permits a generation migration.
     let mut generation_changes = Vec::new();
     for definition in definitions.values_mut() {
@@ -417,6 +427,20 @@ pub(super) fn execute(
         if let Some(old) = schema::active_collection(tx, &definition.name)? {
             if old.definition.app_id != request.app_id {
                 return reject("forbidden");
+            }
+            definition.rights_ver = old.definition.rights_ver;
+            let before = prior_manifest
+                .as_ref()
+                .ok_or_else(|| invalid("active manifest missing"))?
+                .get("collections")
+                .and_then(|c| c.get(&definition.name))
+                .and_then(|c| c.get("rights"));
+            let after = manifest["collections"][&definition.name].get("rights");
+            if before != after {
+                definition.rights_ver = definition
+                    .rights_ver
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("rights version overflow"))?;
             }
             let older = definition.schema_ver < old.definition.schema_ver;
             let incompatible = older
@@ -561,7 +585,7 @@ fn definitions(
                     byte_budget: def["byte_budget"]
                         .as_u64()
                         .ok_or_else(|| invalid("byte_budget missing"))?,
-                    rights_ver: def["rights_ver"].as_u64().unwrap_or(1),
+                    rights_ver: 1,
                     app_ver: version.into(),
                 },
             ))
