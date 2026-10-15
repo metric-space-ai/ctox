@@ -19,12 +19,18 @@ pub mod audit;
 pub mod browser;
 #[path = "config.rs"]
 pub mod config;
+#[path = "directory.rs"]
+pub mod directory;
+#[path = "files.rs"]
+pub mod files;
 #[path = "flow.rs"]
 pub mod flow;
 #[path = "ingest.rs"]
 pub mod ingest;
 #[path = "lock.rs"]
 pub mod lock;
+#[path = "process.rs"]
+pub mod process;
 #[path = "secrets.rs"]
 pub mod secrets;
 #[cfg(test)]
@@ -219,6 +225,77 @@ pub static ROUTES: &[NativeRoute] = &[
         "app_capability_ingest_subscriptions (core db)",
         "src/core/app_capabilities/caps/ingest.rs",
     ),
+    // ---- CAP-3b
+    route(
+        "files",
+        "put",
+        "cap.files.put",
+        "files collection + transfer CAS (FileStore)",
+        "src/core/app_capabilities/caps/files.rs",
+    ),
+    route(
+        "files",
+        "get",
+        "cap.files.get",
+        "files collection + transfer CAS (FileStore)",
+        "src/core/app_capabilities/caps/files.rs",
+    ),
+    route(
+        "files",
+        "list",
+        "cap.files.list",
+        "files collection (FileStore)",
+        "src/core/app_capabilities/caps/files.rs",
+    ),
+    route(
+        "files",
+        "delete",
+        "cap.files.delete",
+        "files collection (FileStore)",
+        "src/core/app_capabilities/caps/files.rs",
+    ),
+    route(
+        "process",
+        "run",
+        "cap.process.run",
+        "std::process::Command (allowlist, env_clear, app workspace)",
+        "src/core/app_capabilities/caps/process.rs",
+    ),
+    route(
+        "browser.auth_assist",
+        "request",
+        "web_stack.auth_assist.request",
+        "service::business_os::enqueue_web_stack_auth_assist_request",
+        "src/core/service/business_os.rs:5059",
+    ),
+    route(
+        "directory",
+        "user",
+        "cap.directory.user",
+        "business_os::store::pull_business_users_for_rxdb",
+        "src/core/business_os/store.rs:2267",
+    ),
+    route(
+        "identity.users",
+        "list",
+        "cap.directory.users",
+        "business_os::store::pull_business_users_for_rxdb",
+        "src/core/business_os/store.rs:2267",
+    ),
+    route(
+        "policy",
+        "module_decision",
+        "cap.policy.module_decision",
+        "business_os::policy::evaluate",
+        "src/core/business_os/policy.rs:397",
+    ),
+    route(
+        "command",
+        "get",
+        "cap.command.get",
+        "business_commands SELECT (own app)",
+        "src/core/business_os/store.rs:28099",
+    ),
 ];
 
 pub fn register(registry: &mut CapabilityRegistry) -> Result<(), CtoxError> {
@@ -325,6 +402,16 @@ pub struct Cap3Backend<'a> {
     pub ingest: &'a dyn ingest::IngestRuntime,
     /// Core clock (§16.8), milliseconds.
     pub now_ms: &'a dyn Fn() -> u64,
+    /// None in production: the composition root binds files::bind_file_store.
+    pub files: Option<&'a dyn files::FileStore>,
+}
+impl Cap3Backend<'_> {
+    fn file_store(&self) -> Result<&dyn files::FileStore, CtoxError> {
+        match self.files {
+            Some(store) => Ok(store),
+            None => files::bound(),
+        }
+    }
 }
 impl CapabilityBackend for Cap3Backend<'_> {
     fn execute(&self, ctx: &CapCallContext, call: &NativeCall) -> Result<Value, CtoxError> {
@@ -332,7 +419,7 @@ impl CapabilityBackend for Cap3Backend<'_> {
         let payload = call.payload();
         match call.route().capability {
             "audit" => audit::execute(self.root, ctx, function, payload, (self.now_ms)()),
-            "config" => config::execute(self.root, function, payload),
+            "config" => config::execute(self.root, ctx, function, payload),
             "secret" | "secrets" => {
                 secrets::execute(self.root, self.intake, ctx, function, payload)
             }
@@ -348,6 +435,12 @@ impl CapabilityBackend for Cap3Backend<'_> {
                 (self.now_ms)(),
             ),
             "mail.server" => cap2::mail::server(self.root, self.intake, ctx, call),
+            "files" => files::execute(self.file_store()?, ctx, function, payload),
+            "process" => process::execute(self.root, self.file_store(), ctx, payload),
+            "browser.auth_assist" => browser::auth_assist_request(self.root, ctx, payload),
+            "directory" | "identity.users" | "policy" | "command" => {
+                directory::execute(self.root, ctx, call.route().capability, function, payload)
+            }
             _ => cap2::Cap2Backend {
                 root: self.root,
                 blobs: self.blobs,
@@ -377,7 +470,7 @@ pub fn contract() -> Value {
         ),
         (
             "config.get",
-            json!({"required":["key"],"properties":{"key":{"enum":config::ALLOWED_KEYS}}}),
+            json!({"required":["key"],"properties":{"key":{"enum":config::ALLOWED_KEYS.iter().chain(config::PLATFORM_KEYS).collect::<Vec<_>>(),"description":"platform keys only for platform callers"}}}),
             json!({"key":"string","value":"string|null"}),
             vec!["invalid", "forbidden"],
         ),
@@ -494,6 +587,66 @@ pub fn contract() -> Value {
             json!({"required":["module_id"],"properties":{"module_id":s("128"),"prompt":s("65536"),"faux":{"type":"boolean"},"preset_id":s("128")},"not":{"required":["model"]}}),
             json!({"type":"object","description":"pi-sidecar turn summary"}),
             vec!["invalid", "forbidden", "unavailable"],
+        ),
+        (
+            "files.put",
+            json!({"required":["name"],"oneOf":[{"required":["text"]},{"required":["base64"]}],"properties":{"name":s("255"),"mime":s("128"),"text":{"type":"string"},"base64":{"type":"string","description":"input only"}},"maxBytes":files::MAX_PUT_BYTES}),
+            json!({"id":"string","ref":"sha256"}),
+            vec!["invalid", "quota", "unavailable", "unavailable(uncertain)"],
+        ),
+        (
+            "files.get",
+            json!({"oneOf":[{"required":["id"]},{"required":["ref"]}]}),
+            json!({"id":"string","ref":"sha256","name":"string","mime":"string","size":"integer","owner_app":"string","created_at_ms":"integer","text":"string, only UTF-8 <= 512 KiB; never base64"}),
+            vec!["invalid", "not_found", "unavailable"],
+        ),
+        (
+            "files.list",
+            json!({"properties":{"limit":{"type":"integer","minimum":1,"maximum":1000}}}),
+            json!({"files":["files.get without text"]}),
+            vec!["invalid", "unavailable"],
+        ),
+        (
+            "files.delete",
+            json!({"required":["id"]}),
+            json!({"id":"string","deleted":"boolean"}),
+            vec!["invalid", "unavailable"],
+        ),
+        (
+            "process.run",
+            json!({"required":["program"],"properties":{"program":{"description":"name in platform allowlist business_os.process_allowlist"},"args":{"type":"array","maxItems":128},"cwd_ref":{"description":"relative path inside the app workspace"},"stdin":{"type":"string"},"stdin_ref":{"description":"files.ref of the app"},"env":{"type":"object","maxProperties":32,"description":"the complete child environment; nothing inherited"},"timeout_ms":{"type":"integer","minimum":1,"maximum":process::MAX_TIMEOUT_MS}}}),
+            json!({"exit":"integer|null","timed_out":"boolean","duration_ms":"integer","stdout":"string","stdout_truncated":"boolean","stderr":"string","stderr_truncated":"boolean"}),
+            vec!["invalid", "forbidden", "not_found", "unavailable"],
+        ),
+        (
+            "browser.auth_assist.request",
+            json!({"required":["source_id"],"properties":{"source_id":s("256"),"target_url_override":{"format":"http(s) URL"},"credential_ref":{"pattern":"^ctox-secret://credentials/"},"login_hint":s("256"),"preferred_auth_assist":{"type":"object"},"requesting_task_id":s("256"),"source_module":{"description":"must equal the calling app"},"command_path":s("256")}}),
+            json!({"command_id":"string","status":"string","session_id":"string","tab_id":"string","target_url":"string","credential_ref":"string|null"}),
+            vec!["invalid", "forbidden", "unavailable"],
+        ),
+        (
+            "directory.user",
+            json!({"required":["user_id"]}),
+            json!({"found":"boolean","user_id":"string","display_name":"string","active":"boolean"}),
+            vec!["invalid", "unavailable"],
+        ),
+        (
+            "identity.users.list",
+            json!({"properties":{"active":{"type":"boolean"},"roles":{"type":"array"},"order":{"items":{"enum":["created_at_ms:asc","created_at_ms:desc","user_id:asc","user_id:desc"]}}}}),
+            json!({"users":[{"user_id":"string","display_name":"string","role":"string","active":"boolean"}]}),
+            vec!["invalid", "unavailable"],
+        ),
+        (
+            "policy.module_decision",
+            json!({"required":["permission","module"],"properties":{"permission":{"enum":["data.read","data.write","apps.modify"]}}}),
+            json!({"allowed":"boolean","display_reason":"string","reason_code":"string"}),
+            vec!["invalid"],
+        ),
+        (
+            "command.get",
+            json!({"required":["command_id"]}),
+            json!({"found":"boolean","command_id":"string","command_type":"string","module":"string","record_id":"string|null","status":"string","payload":"object"}),
+            vec!["invalid", "unavailable"],
         ),
         (
             "mail.server.user.save",

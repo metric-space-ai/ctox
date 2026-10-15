@@ -231,8 +231,69 @@ impl ingest::IngestRuntime for Runtime {
             .ok_or_else(|| CtoxError::new(ErrorCode::NotFound, "missing"))
     }
 }
+/// Deliberately unscoped store: returns any record for any app, so the
+/// capability's own owner check is what keeps apps apart.
+#[derive(Default)]
+struct Files {
+    records: std::sync::Mutex<Vec<(files::FileMeta, Vec<u8>)>>,
+    corrupt_ref: std::sync::atomic::AtomicBool,
+}
+impl files::FileStore for Files {
+    fn put(
+        &self,
+        owner_app: &str,
+        _: &str,
+        name: &str,
+        mime: &str,
+        bytes: &[u8],
+    ) -> Result<files::FileMeta, CtoxError> {
+        let mut records = self.records.lock().unwrap();
+        let reference = if self.corrupt_ref.load(std::sync::atomic::Ordering::SeqCst) {
+            "0".repeat(64)
+        } else {
+            sha256_hex(bytes)
+        };
+        let meta = files::FileMeta {
+            id: format!("file-{}", records.len() + 1),
+            reference,
+            name: name.into(),
+            mime: mime.into(),
+            size: bytes.len() as u64,
+            owner_app: owner_app.into(),
+            created_at_ms: 1,
+        };
+        records.push((meta.clone(), bytes.to_vec()));
+        Ok(meta)
+    }
+    fn get(&self, _: &str, key: &str) -> Result<Option<(files::FileMeta, Vec<u8>)>, CtoxError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(m, _)| m.id == key || m.reference == key)
+            .cloned())
+    }
+    fn list(&self, _: &str, limit: usize) -> Result<Vec<files::FileMeta>, CtoxError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .map(|(m, _)| m.clone())
+            .collect())
+    }
+    fn delete(&self, owner_app: &str, id: &str) -> Result<bool, CtoxError> {
+        let mut records = self.records.lock().unwrap();
+        let before = records.len();
+        records.retain(|(m, _)| !(m.id == id && m.owner_app == owner_app));
+        Ok(records.len() != before)
+    }
+}
 struct Fixture {
     root: tempfile::TempDir,
+    files: Files,
     blobs: Blobs,
     intake: Intake,
     engine: Engine,
@@ -247,6 +308,7 @@ impl Fixture {
             intake: Intake::default(),
             engine: Engine::default(),
             runtime: Runtime::default(),
+            files: Files::default(),
             clock: Cell::new(1_000_000),
         }
     }
@@ -265,6 +327,7 @@ impl Fixture {
             browser: &self.engine,
             ingest: &self.runtime,
             now_ms: &now,
+            files: Some(&self.files),
         };
         invoke(host, &backend, &host.ctx, name, function, args)
     }
@@ -986,4 +1049,316 @@ fn app_capabilities_cap3_ingest_body_ref_contract() {
     );
     let both = json!({"status":200,"body":"x","body_ref":{"ref":reference}});
     assert!(ingest::admissible_response(&both).is_none());
+}
+
+// ------------------------------------------------------------------ CAP-3b
+
+#[test]
+fn app_capabilities_cap3_secret_intake_live_contract() {
+    // The production intake reads the value the native intake detached from
+    // exactly this command (replicated-document sanitizer path), once.
+    let mut document = json!({"id":"cmd-secret-1","type":"ctox.secret.put","payload":{"name":"X","value":"synthetic-intake"}});
+    crate::business_os::store::detach_secret_from_replicated_document(
+        "business_commands",
+        &mut document,
+    );
+    assert!(document["payload"].get("value").is_none());
+    let owner = Host::call("credentials", "admin", "cmd-secret-1", "c");
+    let other = Host::call("credentials", "admin", "cmd-secret-2", "c");
+    let intake = secrets::CoreSecretIntake;
+    use secrets::SecretIntake as _;
+    assert_eq!(intake.take(&other.ctx, "value"), None);
+    assert_eq!(intake.take(&owner.ctx, "password"), None);
+    assert_eq!(
+        intake.take(&owner.ctx, "value").as_deref(),
+        Some("synthetic-intake")
+    );
+    assert_eq!(
+        intake.take(&owner.ctx, "value"),
+        None,
+        "an intake value must be consumed once"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_platform_origin_contract() {
+    let f = Fixture::new();
+    crate::inference::runtime_env::set_runtime_env_value(
+        f.root.path(),
+        config::PUBLIC_ORIGIN_KEY,
+        "https://core.example.test/",
+    )
+    .unwrap();
+    let key = json!({"key":config::PUBLIC_ORIGIN_KEY});
+    assert_eq!(
+        code(f.call(
+            &Host::new("outbound", "admin"),
+            "config",
+            "get",
+            key.clone()
+        )),
+        ErrorCode::Forbidden
+    );
+    let platform = f
+        .call(&Host::new("ctox-platform", "admin"), "config", "get", key)
+        .unwrap();
+    assert_eq!(platform["value"], "https://core.example.test");
+    // The production runtime uses this origin, and refuses while no app
+    // runtime ingress is bound (never a fallback dispatch).
+    let runtime = ingest::CoreIngestRuntime {
+        root: f.root.path(),
+    };
+    use ingest::IngestRuntime as _;
+    assert_eq!(
+        runtime.public_origin().as_deref(),
+        Some("https://core.example.test")
+    );
+    assert_eq!(
+        runtime.has_handler("outbound", "x").unwrap_err().code,
+        ErrorCode::Unavailable
+    );
+    crate::inference::runtime_env::set_runtime_env_value(
+        f.root.path(),
+        config::PUBLIC_ORIGIN_KEY,
+        "https://core.example.test/path",
+    )
+    .unwrap();
+    assert_eq!(config::public_origin(f.root.path()), None);
+    // HTTP routing: /ingest always, a legacy alias only once registered.
+    assert!(ingest::serves(f.root.path(), "/ingest/outbound/tracking"));
+    assert!(!ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
+    f.call(
+        &Host::new("outbound", "staff"),
+        "net.ingest.webhook",
+        "register",
+        json!({"path":"tracking","command":"outbound.tracking.event","aliases":["/mail/track/o/"]}),
+    )
+    .unwrap();
+    assert!(ingest::serves(f.root.path(), "/mail/track/o/abc.gif"));
+    assert!(!ingest::serves(f.root.path(), "/mail/track/c/abc"));
+}
+
+#[test]
+fn app_capabilities_cap3_files_owner_contract() {
+    let f = Fixture::new();
+    let docs = Host::new("documents", "staff");
+    let put = f
+        .call(
+            &docs,
+            "files",
+            "put",
+            json!({"name":"a.txt","mime":"text/plain","text":"hello"}),
+        )
+        .unwrap();
+    assert_eq!(put["ref"], sha256_hex(b"hello"));
+    let binary = f
+        .call(
+            &docs,
+            "files",
+            "put",
+            json!({"name":"b.bin","base64":"AAEC"}),
+        )
+        .unwrap();
+    let got = f
+        .call(&docs, "files", "get", json!({"ref":put["ref"]}))
+        .unwrap();
+    assert_eq!(got["text"], "hello");
+    let raw = f
+        .call(&docs, "files", "get", json!({"id":binary["id"]}))
+        .unwrap();
+    assert!(
+        raw.get("text").is_none() && raw.get("base64").is_none(),
+        "binary content must not be inlined"
+    );
+    // Another app never reads, lists or deletes these records.
+    let other = Host::new("news", "staff");
+    assert_eq!(
+        code(f.call(&other, "files", "get", json!({"id":put["id"]}))),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        f.call(&other, "files", "list", json!({})).unwrap()["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        f.call(&other, "files", "delete", json!({"id":put["id"]}))
+            .unwrap()["deleted"],
+        false
+    );
+    assert_eq!(
+        f.call(&docs, "files", "list", json!({})).unwrap()["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    f.files
+        .corrupt_ref
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let wrong = f
+        .call(&docs, "files", "put", json!({"name":"c","text":"x"}))
+        .unwrap_err();
+    assert!(
+        wrong.uncertain,
+        "a store addressing other content is not a successful put"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_process_env_contract() {
+    let f = Fixture::new();
+    let host = Host::new("outbound-lead-generation", "staff");
+    crate::inference::runtime_env::set_runtime_env_value(
+        f.root.path(),
+        process::ALLOWLIST_KEY,
+        r#"{"sh":"/bin/sh"}"#,
+    )
+    .unwrap();
+    let run = f
+        .call(&host, "process", "run", json!({"program":"sh","args":["-c","printf '[%s][%s]' \"$HOME\" \"$CTOX_SCRAPE_TARGET\"; pwd"],
+            "env":{"CTOX_SCRAPE_TARGET":"t1"},"cwd_ref":"scrape/t1","timeout_ms":10000}))
+        .unwrap();
+    let stdout = run["stdout"].as_str().unwrap();
+    assert!(
+        stdout.starts_with("[][t1]"),
+        "environment was inherited: {stdout}"
+    );
+    assert!(
+        stdout
+            .trim_end()
+            .ends_with("app-workspaces/outbound-lead-generation/scrape/t1"),
+        "{stdout}"
+    );
+    assert_eq!(run["exit"], 0);
+    let slow = f
+        .call(
+            &host,
+            "process",
+            "run",
+            json!({"program":"sh","args":["-c","while :; do :; done"],"timeout_ms":200}),
+        )
+        .unwrap();
+    assert_eq!(slow["timed_out"], true);
+    for args in [
+        json!({"program":"sh","env":{"LD_PRELOAD":"/x.so"}}),
+        json!({"program":"sh","env":{"OPENAI_API_KEY":"k"}}),
+        json!({"program":"sh","cwd_ref":"../other-app"}),
+        json!({"program":"sh","cwd_ref":"/etc"}),
+    ] {
+        assert_eq!(
+            code(f.call(&host, "process", "run", args)),
+            ErrorCode::Invalid
+        );
+    }
+    assert_eq!(
+        code(f.call(&host, "process", "run", json!({"program":"/bin/sh"}))),
+        ErrorCode::Forbidden
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_directory_policy_contract() {
+    let f = Fixture::new();
+    let decide = json!({"permission":"apps.modify","module":"news"});
+    let admin = f
+        .call(
+            &Host::new("threads", "admin"),
+            "policy",
+            "module_decision",
+            decide.clone(),
+        )
+        .unwrap();
+    let user = f
+        .call(
+            &Host::new("threads", "user"),
+            "policy",
+            "module_decision",
+            decide,
+        )
+        .unwrap();
+    assert_eq!(
+        (admin["allowed"].clone(), user["allowed"].clone()),
+        (json!(true), json!(false))
+    );
+    let forged = json!({"permission":"apps.modify","module":"news","actor":{"role":"admin"}});
+    assert_eq!(
+        code(f.call(
+            &Host::new("threads", "user"),
+            "policy",
+            "module_decision",
+            forged
+        )),
+        ErrorCode::Invalid
+    );
+    assert_eq!(
+        f.call(
+            &Host::new("threads", "user"),
+            "directory",
+            "user",
+            json!({"user_id":"nobody"})
+        )
+        .unwrap()["found"],
+        false
+    );
+    assert!(f.call(&Host::new("kundenpipeline", "user"), "identity.users", "list", json!({"active":true,"roles":["chef","admin"],"order":["created_at_ms:asc","user_id:asc"]})).unwrap()["users"].is_array());
+    // command.get: own app's command intent only.
+    let conn = crate::business_os::store::open_store(f.root.path()).unwrap();
+    conn.execute("INSERT INTO business_commands (command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
+                  VALUES ('cmd-r1','outbound-lead-generation','web_stack.person_research','lead-1','completed','{\"company\":\"ACME\"}','{}',1)", []).unwrap();
+    let own = f
+        .call(
+            &Host::new("outbound-lead-generation", "staff"),
+            "command",
+            "get",
+            json!({"command_id":"cmd-r1"}),
+        )
+        .unwrap();
+    assert_eq!(
+        (own["found"].clone(), own["payload"]["company"].clone()),
+        (json!(true), json!("ACME"))
+    );
+    let foreign = f
+        .call(
+            &Host::new("news", "staff"),
+            "command",
+            "get",
+            json!({"command_id":"cmd-r1"}),
+        )
+        .unwrap();
+    assert_eq!(
+        foreign["found"], false,
+        "command.get crossed the app boundary"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_auth_assist_contract() {
+    let f = Fixture::new();
+    let host = Host::new("news", "staff");
+    for (args, expected) in [
+        (
+            json!({"source_id":"s1","source_module":"outbound"}),
+            ErrorCode::Forbidden,
+        ),
+        (
+            json!({"source_id":"s1","credential_ref":"plain-password"}),
+            ErrorCode::Invalid,
+        ),
+        (
+            json!({"source_id":"s1","credential_ref":"ctox-secret://app:other/X"}),
+            ErrorCode::Invalid,
+        ),
+        (
+            json!({"source_id":"s1","target_url":"file:///etc/passwd"}),
+            ErrorCode::Invalid,
+        ),
+    ] {
+        assert_eq!(
+            code(f.call(&host, "browser.auth_assist", "request", args)),
+            expected
+        );
+    }
 }

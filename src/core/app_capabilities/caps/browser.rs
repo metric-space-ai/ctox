@@ -232,3 +232,96 @@ pub(super) fn execute(
         )),
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthAssistRequest {
+    source_id: String,
+    #[serde(alias = "target_url")]
+    target_url_override: Option<String>,
+    credential_ref: Option<String>,
+    login_hint: Option<String>,
+    preferred_auth_assist: Option<Value>,
+    requesting_task_id: Option<String>,
+    source_module: Option<String>,
+    command_path: Option<String>,
+}
+/// `browser.auth_assist.request` — parameters 1:1 as the native
+/// `enqueue_web_stack_auth_assist_request` (§16.21). Module and session owner
+/// are the Core-bound app and actor; a payload claiming another app is refused.
+pub(super) fn auth_assist_request(
+    root: &Path,
+    ctx: &CapCallContext,
+    args: &Value,
+) -> Result<Value, CtoxError> {
+    use crate::app_capabilities::protocol::identifier;
+    let request: AuthAssistRequest = decode(args)?;
+    identifier(&request.source_id, "$.source_id")?;
+    if request
+        .source_module
+        .as_deref()
+        .is_some_and(|module| module != ctx.app_id)
+    {
+        return Err(forbidden("auth assist belongs to the calling app"));
+    }
+    if let Some(url) = &request.target_url_override {
+        if !web_url(url) {
+            return Err(invalid("$.target_url_override"));
+        }
+    }
+    if let Some(reference) = &request.credential_ref {
+        // A reference into the instance keychain, never a value.
+        let name = reference
+            .strip_prefix("ctox-secret://credentials/")
+            .ok_or_else(|| invalid("$.credential_ref"))?;
+        identifier(name, "$.credential_ref")?;
+    }
+    if let Some(hint) = &request.login_hint {
+        text(hint, 256, true, "$.login_hint")?;
+    }
+    if request
+        .preferred_auth_assist
+        .as_ref()
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        return Err(invalid("$.preferred_auth_assist"));
+    }
+    let task = request
+        .requesting_task_id
+        .clone()
+        .unwrap_or_else(|| ctx.command_id.clone());
+    identifier(&task, "$.requesting_task_id")?;
+    let path = request
+        .command_path
+        .clone()
+        .unwrap_or_else(|| "cap.browser.auth_assist.request".into());
+    identifier(&path, "$.command_path")?;
+    let effect = crate::service::business_os::enqueue_web_stack_auth_assist_request(
+        root,
+        &request.source_id,
+        request.target_url_override.as_deref(),
+        request.credential_ref.as_deref(),
+        request.login_hint.as_deref(),
+        request
+            .preferred_auth_assist
+            .as_ref()
+            .filter(|v| v.is_object()),
+        &task,
+        &ctx.app_id,
+        &path,
+        Some(&ctx.actor.id),
+        true,
+        true,
+    )
+    .map_err(native_error)?;
+    let payload = effect.get("payload").cloned().unwrap_or(Value::Null);
+    let pick = |key: &str| effect.get(key).cloned().unwrap_or(Value::Null);
+    let field = |key: &str| payload.get(key).cloned().unwrap_or(Value::Null);
+    Ok(strip_secrets(json!({
+        "command_id": pick("command_id"), "status": pick("status"), "task_id": pick("task_id"),
+        "source_id": field("source_id"), "session_id": field("session_id"), "tab_id": field("tab_id"),
+        "target_url": field("target_url"), "allowed_domains": field("allowed_domains"),
+        "credential_ref": field("credential_ref"),
+        "expires_at_ms": field("expires_at_ms"),
+    })))
+}
