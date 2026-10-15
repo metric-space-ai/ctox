@@ -1409,8 +1409,55 @@ fn project_person_field_status(lead: &mut Value) {
         if combined.is_empty() {
             continue;
         }
+        fill_empty_contact_values(contact, &combined);
         let merged = merge_field_status(contact.get("field_status"), Value::Object(combined));
         contact["field_status"] = merged;
+    }
+}
+
+/// Contact fields the app and the export read a person's value from.
+const CONTACT_VALUE_FIELDS: &[&str] = &[
+    "person_email",
+    "person_telefon",
+    "person_linkedin",
+    "person_xing",
+    "person_position",
+    "person_funktion",
+    "person_titel",
+    "person_geschlecht",
+];
+
+/// A verified status delivered for a person who is already a contact carries
+/// its value only in `result.person_field_status`; the projection used to copy
+/// the status but not the value, so the contact field stayed empty and the app
+/// and the export showed nothing (15.10.2026: a research verified
+/// h.scheske@… with a quote from the company page; the contact had no
+/// e-mail). An empty contact field takes the verified value; a value the
+/// contact already carries is never overwritten here.
+fn fill_empty_contact_values(contact: &mut Value, statuses: &Map<String, Value>) {
+    for field in CONTACT_VALUE_FIELDS {
+        let Some(status) = statuses.get(*field) else {
+            continue;
+        };
+        if status.get("status").and_then(Value::as_str) != Some("verified") {
+            continue;
+        }
+        let Some(value) = status
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let current = contact
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if current.is_empty() {
+            contact[*field] = Value::String(value.to_string());
+        }
     }
 }
 
@@ -4685,6 +4732,10 @@ mod tests {
             lead["contacts"][1]["field_status"]["person_email"]["person_key"],
             "B"
         );
+        // The verified value reaches the contact field the app reads; the
+        // no_match of A leaves A's field empty.
+        assert_eq!(lead["contacts"][1]["person_email"], "b@firma.test");
+        assert!(lead["contacts"][0].get("person_email").is_none());
         assert_eq!(
             lead["contacts"][2]["field_status"]["person_geschlecht"]["status"],
             "no_match"
@@ -4702,6 +4753,18 @@ mod tests {
             lead["contacts"][1]["field_status"]["person_email"]["status"],
             "verified"
         );
+    }
+
+    #[test]
+    fn projection_never_overwrites_a_contact_value() {
+        let mut lead = serde_json::json!({
+            "contacts": [{"id": "a", "person_key": "A", "person_email": "a@firma.test"}],
+            "person_field_status": {"A": {"person_email": {"status": "verified", "value": "x@firma.test"},
+                                          "person_telefon": {"status": "no_match", "value": "+49 1"}}}
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(lead["contacts"][0]["person_email"], "a@firma.test");
+        assert!(lead["contacts"][0].get("person_telefon").is_none());
     }
 
     #[test]
