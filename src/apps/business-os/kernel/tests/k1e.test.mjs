@@ -75,3 +75,16 @@ test('§16.43: identity.device_id = eigene device_pairing_id; Fake-Core determin
   assert.equal(fixed.identity.device_id, 'pair-123', 'Gerätebindung des Bootstraps geht vor');
   assert.equal(a.shell.identity.device_id, a.identity.device_id);
 });
+
+test('§16.45: abonnierte, noch leere Collection erscheint sofort (catching_up bis zur ersten vollständigen Seite, dann live mit 0 Dokumenten) – auch nach reconnect', async (t) => {
+  const k = await mk(t);
+  const seen = [];
+  const off = k.metrics.subscribe((m) => { if (m.collections.leads) seen.push(m.collections.leads.state); });
+  t.after(off);
+  await k.sim.publishAppVersion('crm', '1', { files: { 'index.js': 'export function mount(){ return { unmount(){} }; }' }, collections: { leads: { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } } } } } });
+  await until(() => cols(k).leads?.state === 'live', 4000, 'leads live');
+  assert.equal(seen[0], 'catching_up', 'sofort sichtbar, zuerst catching_up');
+  assert.deepEqual([cols(k).leads.backlog, k.appApi('crm', '1').query('leads', {}).get().length], [0, 0], 'live auch mit 0 Dokumenten');
+  await k.reconnect();
+  await until(() => cols(k).leads?.state === 'live', 4000, 'leads nach reconnect live');
+});
