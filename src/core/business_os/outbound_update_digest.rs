@@ -450,9 +450,16 @@ fn source_target_key(source: &Value) -> String {
 fn source_wide_failure(run: &RegistryRun) -> bool {
     matches!(
         registry_problem(run),
-        "Konto beim Anbieter inaktiv" | "Zugang fehlt oder wurde abgelehnt"
+        "Konto beim Anbieter inaktiv" | MISSING_CREDENTIALS | "Zugang wurde abgelehnt"
     )
 }
+
+/// The owner reads "Zugang fehlt oder wurde abgelehnt" as "something is broken";
+/// when no credentials are stored at all (COMPANYHOUSE_API_TOKEN missing,
+/// RocketReach "missing credentials"), the mail says exactly that and where to
+/// enter them (15.10.2026).
+const MISSING_CREDENTIALS: &str =
+    "Keine Zugangsdaten hinterlegt – in den Recherche-Einstellungen unter Quellen & Zugänge eintragen";
 
 fn registry_problem(run: &RegistryRun) -> &'static str {
     let text = format!("{} {}", run.status, run.detail).to_ascii_lowercase();
@@ -461,11 +468,20 @@ fn registry_problem(run: &RegistryRun) -> &'static str {
         || text.contains("provider_account_inactive")
     {
         "Konto beim Anbieter inaktiv"
+    } else if (text.contains("missing")
+        || text.contains("not configured")
+        || text.contains("fehlt"))
+        && (text.contains("credential")
+            || text.contains("token")
+            || text.contains("api key")
+            || text.contains("login"))
+    {
+        MISSING_CREDENTIALS
     } else if text.contains("authorization")
         || text.contains("auth_required")
         || text.contains("credential")
     {
-        "Zugang fehlt oder wurde abgelehnt"
+        "Zugang wurde abgelehnt"
     } else if text.contains("portal_drift") {
         "Seitenaufbau geändert, Abruf muss angepasst werden"
     } else if text.contains("blocked") {
@@ -1969,6 +1985,33 @@ mod tests {
             None
         );
         assert_eq!(explicit_since_ms(&json!({}), now), None);
+    }
+
+    #[test]
+    fn missing_credentials_are_named_as_such() {
+        let run = |status: &str, detail: &str| RegistryRun {
+            status: status.to_string(),
+            at_ms: 1,
+            detail: detail.to_string(),
+            last_ok_ms: 0,
+        };
+        let missing = run(
+            "authorization_required",
+            "COMPANYHOUSE_API_TOKEN missing · authorization_required",
+        );
+        assert_eq!(registry_problem(&missing), MISSING_CREDENTIALS);
+        assert!(source_wide_failure(&missing));
+        let rocket = run(
+            "authorization_required",
+            "RocketReach requires an authenticated provider session; missing credentials must be entered in source settings",
+        );
+        assert_eq!(registry_problem(&rocket), MISSING_CREDENTIALS);
+        let rejected = run(
+            "authorization_required",
+            "owner-bound Google authentication did not complete",
+        );
+        assert_eq!(registry_problem(&rejected), "Zugang wurde abgelehnt");
+        assert!(source_wide_failure(&rejected));
     }
 
     #[test]
