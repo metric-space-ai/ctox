@@ -14,6 +14,9 @@ mod tests;
 mod api;
 #[path = "cliproxyapi_account_control_binding.rs"]
 mod binding;
+#[path = "cliproxyapi_account_control_codex_catalog.rs"]
+mod codex_catalog;
+pub(crate) use codex_catalog::observe as observe_codex_catalog;
 
 pub(crate) fn account_binding(
     root: &Path,

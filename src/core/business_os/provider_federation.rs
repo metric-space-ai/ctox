@@ -346,6 +346,11 @@ pub(super) fn handle_command(
             // endpoints, credentials and model lists are never accepted.
             let observation = if target.local_account_id == INHERITED_NATIVE_ACCOUNT_ID {
                 crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?
+            } else if target.provider == "codex" {
+                crate::execution::cliproxyapi_host::account_controls::observe_codex_catalog(
+                    root,
+                    &target.local_account_id,
+                )?
             } else if target.provider == "claude" {
                 crate::execution::cliproxyapi_claude_catalog::observe(
                     root,
@@ -680,7 +685,7 @@ fn native_catalog_target(
     conn.query_row(
         "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
          WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
-           AND (private_local_account_id=?4 OR provider='claude' OR (provider IN ('zai','minimax','xai','kimi') AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'api-key:v1:%')))
+           AND (private_local_account_id=?4 OR provider='claude' OR (provider='codex' AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id)) OR (provider IN ('zai','minimax','xai','kimi') AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'api-key:v1:%')))
            AND revision=?5 AND enabled=1 AND credential_ready=1",
         params![
             request.account_id,

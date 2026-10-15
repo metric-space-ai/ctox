@@ -18,6 +18,32 @@ fn model_observation(time: i64) -> crate::coding_agents::pi_sidecar::NativeModel
 }
 
 #[test]
+fn native_codex_catalog_target_requires_private_binding_owner_holder_and_revision() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut native = account("codex-owned-holder");
+    native.provider = "codex".into();
+    // Without current holder discovery, a configured account is insufficient.
+    let state = f.adopt(std::slice::from_ref(&native))?;
+    let mut request = ObserveNativeRequest {
+        _inbound_channel: None,
+        account_id: account_id(&state).into(),
+        expected_account_revision: 1,
+    };
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &request).is_err());
+    native.private_binding = Some("holder-private-generation".into());
+    let state = f.adopt(&[native])?;
+    request.account_id = account_id(&state).into();
+    request.expected_account_revision = state["accounts"][0]["revision"].as_i64().unwrap();
+    let target = native_catalog_target(&f.conn, "owner", "native-instance", &request)?;
+    assert_eq!(target.provider, "codex");
+    assert_eq!(target.local_account_id, "codex-owned-holder");
+    assert!(native_catalog_target(&f.conn, "foreign", "native-instance", &request).is_err());
+    assert!(native_catalog_target(&f.conn, "owner", "foreign-holder", &request).is_err());
+    request.expected_account_revision += 1;
+    assert!(native_catalog_target(&f.conn, "owner", "native-instance", &request).is_err());
+    Ok(())
+}
+#[test]
 fn native_catalog_target_is_owner_holder_revision_and_account_bound() -> Result<()> {
     let f = Fixture::new()?;
     let mut native = account(INHERITED_NATIVE_ACCOUNT_ID);

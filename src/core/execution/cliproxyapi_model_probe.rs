@@ -25,10 +25,12 @@ use tokio::sync::Semaphore;
 pub(crate) enum ModelReservation {
     Claude(super::cliproxyapi_claude_sdk::NativeClaudeSdkAccountReservation),
     Api(super::cliproxyapi_api_model::NativeApiModelReservation),
+    Codex(super::cliproxyapi_codex_model::NativeCodexModelReservation),
 }
 pub(crate) enum ModelPublicationCheck {
     Claude(super::cliproxyapi_claude_sdk::NativeClaudeSdkPublicationCheck),
     Api(super::cliproxyapi_api_model::NativeApiPublicationCheck),
+    Codex(super::cliproxyapi_codex_model::NativeCodexPublicationCheck),
 }
 impl ModelReservation {
     pub(crate) fn prepare_model_check(
@@ -51,6 +53,12 @@ impl ModelReservation {
                 )
                 .map(Self::Api)
             }
+            "codex" => {
+                super::cliproxyapi_codex_model::NativeCodexModelReservation::prepare_model_check(
+                    authority, id, revision, model,
+                )
+                .map(Self::Codex)
+            }
             _ => anyhow::bail!("model check provider unsupported"),
         }
     }
@@ -58,6 +66,7 @@ impl ModelReservation {
         match self {
             Self::Claude(r) => &r.selected,
             Self::Api(r) => &r.selected,
+            Self::Codex(r) => &r.selected,
         }
     }
     fn with_current<T>(
@@ -68,12 +77,14 @@ impl ModelReservation {
         match self {
             Self::Claude(r) => r.with_current_configuration(authority, |_| publish()),
             Self::Api(r) => r.with_current(authority, publish),
+            Self::Codex(r) => r.with_current(authority, publish),
         }
     }
     pub(crate) fn release(&self) {
         match self {
             Self::Claude(r) => r.release(),
             Self::Api(r) => r.release(),
+            Self::Codex(r) => r.release(),
         }
     }
 }
@@ -83,6 +94,10 @@ impl ModelPublicationCheck {
             ModelReservation::Claude(r) => {
                 super::cliproxyapi_claude_sdk::NativeClaudeSdkPublicationCheck::prepare(r)
                     .map(Self::Claude)
+            }
+            ModelReservation::Codex(r) => {
+                super::cliproxyapi_codex_model::NativeCodexPublicationCheck::prepare(r)
+                    .map(Self::Codex)
             }
             ModelReservation::Api(r) => {
                 super::cliproxyapi_api_model::NativeApiPublicationCheck::prepare(r).map(Self::Api)
@@ -101,6 +116,9 @@ impl ModelPublicationCheck {
                 c.with_current_in_held_policy(r, facts, policy, publish)
             }
             (Self::Api(c), ModelReservation::Api(r)) => {
+                c.with_current_in_held_policy(r, facts, policy, publish)
+            }
+            (Self::Codex(c), ModelReservation::Codex(r)) => {
                 c.with_current_in_held_policy(r, facts, policy, publish)
             }
             _ => anyhow::bail!("model check reservation type changed"),
