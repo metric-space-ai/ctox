@@ -6,13 +6,9 @@ use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::time::UNIX_EPOCH;
 
 use crate::inference::engine;
 use crate::inference::model_adapters;
@@ -47,77 +43,6 @@ pub const CTOX_LLM_PROXY_API_KEY_ENV: &str = "CTOX_LLM_PROXY_API_KEY";
 pub const CTOX_LLM_PROXY_BASE_URL_ENV: &str = "CTOX_LLM_PROXY_BASE_URL";
 pub const CTOX_SUBSCRIPTION_PROVIDER_ENV: &str = "CTOX_SUBSCRIPTION_PROVIDER";
 const CTOX_SUBSCRIPTION_PROXY_BASE_URL: &str = "http://127.0.0.1:12435/v1";
-
-type RuntimeStateFileStamp = (u64, u128);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeStateStoreStamp {
-    db: RuntimeStateFileStamp,
-    wal: RuntimeStateFileStamp,
-    shm: RuntimeStateFileStamp,
-}
-
-#[derive(Debug, Clone)]
-struct CachedRuntimeState {
-    stamp: RuntimeStateStoreStamp,
-    state: Option<InferenceRuntimeState>,
-}
-
-fn initialized_runtime_state_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-    INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-fn cached_runtime_states() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeState>> {
-    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedRuntimeState>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-fn runtime_state_file_stamp(path: &Path) -> RuntimeStateFileStamp {
-    match fs::metadata(path) {
-        Ok(metadata) => (
-            metadata.len(),
-            metadata
-                .modified()
-                .ok()
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0),
-        ),
-        Err(_) => (0, 0),
-    }
-}
-
-fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut raw = path.as_os_str().to_os_string();
-    raw.push(suffix);
-    PathBuf::from(raw)
-}
-
-fn runtime_state_store_stamp(path: &Path) -> RuntimeStateStoreStamp {
-    RuntimeStateStoreStamp {
-        db: runtime_state_file_stamp(path),
-        wal: runtime_state_file_stamp(&sqlite_sidecar_path(path, "-wal")),
-        shm: runtime_state_file_stamp(&sqlite_sidecar_path(path, "-shm")),
-    }
-}
-
-fn invalidate_runtime_state_cache(root: &Path) {
-    let path = runtime_state_path(root);
-    cached_runtime_states()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .remove(&path);
-}
-
-fn update_runtime_state_cache(root: &Path, state: Option<InferenceRuntimeState>) {
-    let path = runtime_state_path(root);
-    let stamp = runtime_state_store_stamp(&path);
-    cached_runtime_states()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .insert(path, CachedRuntimeState { stamp, state });
-}
 
 fn default_auxiliary_enabled() -> bool {
     true
@@ -536,48 +461,29 @@ pub fn is_local_loopback_base_url(base_url: &str) -> bool {
 }
 
 pub fn load_runtime_state(root: &Path) -> Result<Option<InferenceRuntimeState>> {
-    let path = runtime_state_path(root);
-    let stamp = runtime_state_store_stamp(&path);
-    if let Some(cached) = cached_runtime_states()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .get(&path)
-        .filter(|cached| cached.stamp == stamp)
-        .cloned()
-    {
-        return Ok(cached.state);
-    }
-
-    let state = load_runtime_state_uncached(root)?;
-    let stamp = runtime_state_store_stamp(&path);
-    cached_runtime_states()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .insert(
-            path,
-            CachedRuntimeState {
-                stamp,
-                state: state.clone(),
-            },
-        );
-    Ok(state)
+    load_runtime_state_uncached(root)
 }
 
 fn load_runtime_state_uncached(root: &Path) -> Result<Option<InferenceRuntimeState>> {
-    let conn = open_runtime_state_db(root)?;
-    if let Some(raw) = load_runtime_state_json_from_db(&conn)? {
-        let mut state: InferenceRuntimeState = serde_json::from_str(&raw).with_context(|| {
-            format!(
-                "failed to decode runtime state {}",
-                runtime_state_path(root).display()
+    crate::persistence::require_sync_owner_context()?;
+    let owner = crate::lcm::owner_adapter::OwnerAdapter::for_path(&runtime_state_path(root))?;
+    let raw = owner.read_blocking(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT state_json FROM runtime_state_store WHERE state_id=1",
+                [],
+                |row| row.get::<_, String>(0),
             )
-        })?;
+            .optional()?)
+    })?;
+    raw.map(|raw| -> Result<InferenceRuntimeState> {
+        let mut state = serde_json::from_str(&raw).context("failed to decode runtime state")?;
         if migrate_runtime_state(root, &mut state)? {
             persist_runtime_state(root, &state)?;
         }
-        return Ok(Some(state));
-    }
-    Ok(None)
+        Ok(state)
+    })
+    .transpose()
 }
 
 impl crate::inference::runtime_env::RuntimeStore {
@@ -618,7 +524,6 @@ impl crate::inference::runtime_env::RuntimeStore {
             tx.execute("INSERT INTO runtime_state_store (state_id, state_json) VALUES (1, ?1) ON CONFLICT(state_id) DO UPDATE SET state_json = excluded.state_json", params![raw])?;
             Ok(())
         }).await?;
-        invalidate_runtime_state_cache(&self.root);
         // Async completions may resume out of commit order. Reload the committed
         // row on the next read instead of caching this caller's older snapshot.
         Ok(())
@@ -626,24 +531,12 @@ impl crate::inference::runtime_env::RuntimeStore {
 }
 
 pub fn persist_runtime_state(root: &Path, state: &InferenceRuntimeState) -> Result<()> {
-    let conn = open_runtime_state_db(root)?;
-    let raw =
-        serde_json::to_string_pretty(state).context("failed to encode inference runtime state")?;
-    conn.execute(
-        &format!(
-            "INSERT INTO {RUNTIME_STATE_TABLE} (state_id, state_json) VALUES (1, ?1)
-             ON CONFLICT(state_id) DO UPDATE SET state_json = excluded.state_json"
-        ),
-        params![raw],
-    )
-    .with_context(|| {
-        format!(
-            "failed to write runtime state {}",
-            runtime_state_path(root).display()
-        )
+    crate::persistence::require_sync_owner_context()?;
+    let raw = serde_json::to_string_pretty(state).context("failed to encode runtime state")?;
+    crate::lcm::owner_adapter::OwnerAdapter::for_path(&runtime_state_path(root))?.write_blocking(move|tx| {
+        tx.execute("INSERT INTO runtime_state_store (state_id,state_json) VALUES(1,?1) ON CONFLICT(state_id) DO UPDATE SET state_json=excluded.state_json",[raw])?;
+        Ok(())
     })?;
-    invalidate_runtime_state_cache(root);
-    update_runtime_state_cache(root, Some(state.clone()));
     Ok(())
 }
 
@@ -1037,77 +930,6 @@ fn derive_runtime_state(
     })
 }
 
-fn open_runtime_state_db(root: &Path) -> Result<Connection> {
-    let path = runtime_state_path(root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create runtime db dir {}", parent.display()))?;
-    }
-    let existed_before_open = path.exists();
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open runtime db {}", path.display()))?;
-    let needs_init = {
-        let guard = initialized_runtime_state_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        !existed_before_open || !guard.contains(&path)
-    };
-    if needs_init {
-        conn.execute_batch(&format!(
-            "PRAGMA journal_mode=WAL;
-             CREATE TABLE IF NOT EXISTS {RUNTIME_STATE_TABLE} (
-                 state_id INTEGER PRIMARY KEY CHECK (state_id = 1),
-                 state_json TEXT NOT NULL
-             );"
-        ))
-        .context("failed to initialize runtime state table")?;
-        migrate_legacy_runtime_state_store(root, &conn)?;
-        initialized_runtime_state_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(path);
-    }
-    Ok(conn)
-}
-
-fn migrate_legacy_runtime_state_store(root: &Path, conn: &Connection) -> Result<()> {
-    let current_count: i64 = conn
-        .query_row(
-            &format!("SELECT COUNT(*) FROM {RUNTIME_STATE_TABLE}"),
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    if current_count > 0 {
-        return Ok(());
-    }
-    let legacy_path = crate::persistence::sqlite_path(root);
-    if legacy_path == runtime_state_path(root) || !legacy_path.exists() {
-        return Ok(());
-    }
-    let legacy = Connection::open(&legacy_path)
-        .with_context(|| format!("failed to open legacy runtime db {}", legacy_path.display()))?;
-    let Some(raw) = legacy
-        .query_row(
-            &format!("SELECT state_json FROM {RUNTIME_STATE_TABLE} WHERE state_id = 1"),
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .unwrap_or(None)
-    else {
-        return Ok(());
-    };
-    conn.execute(
-        &format!(
-            "INSERT OR IGNORE INTO {RUNTIME_STATE_TABLE} (state_id, state_json) VALUES (1, ?1)"
-        ),
-        params![raw],
-    )
-    .context("failed to migrate runtime state into dedicated runtime db")?;
-    Ok(())
-}
-
 fn load_runtime_state_json_from_db(conn: &Connection) -> Result<Option<String>> {
     conn.query_row(
         &format!("SELECT state_json FROM {RUNTIME_STATE_TABLE} WHERE state_id = 1"),
@@ -1356,7 +1178,6 @@ mod tests {
     use crate::inference::runtime_plan::PlannedGpuAllocation;
     use crate::inference::runtime_plan::TheoreticalResourceBreakdown;
     use std::time::SystemTime;
-    use std::time::UNIX_EPOCH;
 
     fn make_temp_root() -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -1368,9 +1189,12 @@ mod tests {
         path
     }
 
-    #[test]
-    fn load_runtime_state_accepts_legacy_ggml_local_runtime() {
+    #[tokio::test]
+    async fn load_runtime_state_accepts_legacy_ggml_local_runtime() {
         let root = make_temp_root();
+        let fixture = crate::inference::runtime_env::RuntimeOwnerFixture::open(&root)
+            .await
+            .unwrap();
         let state = InferenceRuntimeState {
             version: 11,
             source: InferenceSource::Api,
@@ -1394,19 +1218,38 @@ mod tests {
         let raw = serde_json::to_string(&state)
             .unwrap()
             .replace("\"local_runtime\":\"candle\"", "\"local_runtime\":\"ggml\"");
-        let conn = open_runtime_state_db(&root).unwrap();
-        conn.execute(
-            &format!("INSERT INTO {RUNTIME_STATE_TABLE} (state_id, state_json) VALUES (1, ?1)"),
-            params![raw],
-        )
-        .unwrap();
-
-        let loaded = load_runtime_state(&root).unwrap().unwrap();
+        fixture
+            .store
+            .owner
+            .write(Default::default(), move |tx| {
+                tx.execute(
+                    "INSERT INTO runtime_state_store (state_id,state_json) VALUES(1,?1)",
+                    [raw],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let path = root.clone();
+        let loaded = crate::persistence::run_core_sync(move || load_runtime_state(&path))
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(loaded.local_runtime, LocalRuntimeKind::Candle);
         assert_eq!(loaded.version, 12);
-        let persisted = load_runtime_state_json_from_db(&conn).unwrap().unwrap();
+        let persisted = fixture
+            .store
+            .owner
+            .read(Default::default(), |conn| {
+                Ok(load_runtime_state_json_from_db(conn)
+                    .map_err(|_| ctox_store::StoreError::Invalid("state read".into()))?)
+            })
+            .await
+            .unwrap()
+            .unwrap();
         assert!(persisted.contains("\"local_runtime\": \"candle\""));
+        fixture.close().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 
