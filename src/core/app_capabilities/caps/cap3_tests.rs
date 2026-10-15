@@ -1672,3 +1672,91 @@ fn app_capabilities_cap3_policy_assignment_contract() {
         true
     );
 }
+
+// ------------------------------------------------------------------ CAP-3e (§16.48)
+
+#[test]
+fn app_capabilities_cap3_browser_extract_contract() {
+    let f = Fixture::new();
+    let host = Host::new("outbound-lead-generation", "staff");
+    let fields = json!({"name":{"selector":":scope h2","text":true},"href":{"selector":":scope a","attr":"href"}});
+    let ok = f
+        .call(
+            &host,
+            "browser.automation",
+            "run",
+            json!({"session":"s-x","steps":[
+            {"op":"wait","selector":"ul.results"},
+            {"op":"extract","selector":"ul.results > li","fields":fields,"limit":50},
+            {"op":"click","selector":"a.next"},
+            {"op":"wait","ms":500}]}),
+        )
+        .unwrap();
+    assert_eq!(ok["completed"], 4);
+    let ops = f.engine.ops.borrow().clone();
+    assert_eq!(
+        ops[1],
+        (
+            "extract".to_owned(),
+            json!({"selector":"ul.results > li","fields":fields,"limit":50})
+        )
+    );
+    // Every malformed step refuses the whole run before its first step.
+    for bad in [
+        json!({"op":"extract","selector":"li","fields":fields}),
+        json!({"op":"extract","selector":"li","fields":fields,"limit":0}),
+        json!({"op":"extract","selector":"li","fields":{"x":{"selector":"a","attr":"href","text":true}},"limit":5}),
+        json!({"op":"extract","selector":"li","fields":{"x":{"selector":"a","script":"alert(1)"}},"limit":5}),
+        json!({"op":"wait","ms":30001}),
+        json!({"op":"wait","selector":"a","ms":5}),
+        json!({"op":"click"}),
+        json!({"op":"click","selector":"a","params":{"selector":"b"}}),
+    ] {
+        let steps = json!([{"op":"reload"}, bad]);
+        assert_eq!(
+            code(f.call(&host, "browser.automation", "run", json!({"steps":steps}))),
+            ErrorCode::Invalid,
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        f.engine.ops.borrow().len(),
+        4,
+        "a refused run executed a step"
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_process_untrusted_contract() {
+    let f = Fixture::new();
+    let host = Host::new("outbound-lead-generation", "staff");
+    let host_script = f.root.path().join("host.mjs");
+    std::fs::write(&host_script, "generated code host").unwrap();
+    let allowlist = json!({
+        "olg-scrape-js": {"interpreter":"/bin/cat","script":host_script.to_string_lossy(),"untrusted_code":true,"env":{"PATH":"/usr/bin:/bin"}},
+        "olg-scrape-sh": {"interpreter":"/bin/bash","script":host_script.to_string_lossy(),"untrusted_code":true},
+        "trusted-cat": {"interpreter":"/bin/cat","script":host_script.to_string_lossy()}
+    });
+    crate::inference::runtime_env::set_runtime_env_value(
+        f.root.path(),
+        process::ALLOWLIST_KEY,
+        &allowlist.to_string(),
+    )
+    .unwrap();
+    // Without the E20 sandbox, generated code never runs.
+    assert_eq!(
+        code(f.call(&host, "process", "run", json!({"program":"olg-scrape-js","stdin":"console.log(1)","allowed_domains":["example.test"]}))),
+        ErrorCode::Unavailable
+    );
+    // A shell is never an interpreter for generated code.
+    assert_eq!(
+        code(f.call(&host, "process", "run", json!({"program":"olg-scrape-sh"}))),
+        ErrorCode::Forbidden
+    );
+    // The same interpreter without the flag is an ordinary allowlisted tool.
+    assert_eq!(
+        f.call(&host, "process", "run", json!({"program":"trusted-cat"}))
+            .unwrap()["stdout"],
+        "generated code host"
+    );
+}
