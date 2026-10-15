@@ -49,6 +49,18 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   own row is readable/writable. Draft publish (§16.22/§16.26): `manifest.json` is never a draft file, references to
   missing files are `invalid`, and every non-computed base manifest field (triggers, command_rights, …) is inherited (B4).
   Artifacts are bytes: `string` stays UTF-8, `Blob`/`ArrayBuffer`/`Uint8Array` are hashed and stored as bytes.
+- K-1c (§16.39): `artifacts.url(appId, ver, path, {shellVer?})` is synchronous; the instance root carries `~shell@<sv>` and
+  `~lib:<name>@<M.m>` for every library of the shell manifest (`libs`), pinned on the first call (= mount). Libraries are
+  platform artifacts `lib:<name>` (never activated eagerly); the SW reports `ctox:lib-miss` (kernel fetches exactly the
+  URL's minor, sha256-checked) and `ctox:lib-hit` (LRU over IDB `artifacts` within `libByteBudget`). Source drafts live in
+  the platform collection `app_drafts` (`<user>/<app>`, files as sha256 in the local CAS). `kernel.shell.publishApp|
+  updateApp|rollbackApp|releaseApp|removeApp` issue `ctox.app.*` with CAS on `base_app_ver`. Publishing the same app twice
+  queues (no `busy`). An activated version clears kernel status entries of other versions in every tab.
+- `fake-core.mjs` + `fake-core-runtime.mjs` (tests/Shell development only): one core per `coreNamespace` for several users
+  (own DB each, core-authoritative role), row/collection/command rights, in-process handler runtime routed by
+  (app_id, type) with relative imports and `ctx.read/get/put/patch/remove/command/asset/cap`, `on`/`every` triggers
+  (foreign collections only with owner `exports:['watch']`), `audit.event` and `agent.task.*` with a fake harness and
+  exactly-once callbacks, and `ctox.app.*` (archives, never deletes). Commands without a handler fail with `no_handler`.
 - `fake-core.mjs`: explicit in-memory core from the executable stub contract; isolated from client IDB.
 - `shell-api.mjs`/`loader.mjs`: Shell-only API and live Shell bootstrap/replacement. `/sw.js` belongs to Shell v4;
   artifact route `/~a/<app>@<version>~shell@<shellVersion>/<path>` and `ctox:claim` before every Shell import.

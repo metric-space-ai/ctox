@@ -312,7 +312,7 @@ export interface SourceApi {
     rebase(ver: string | null): Promise<void>;
     /**
      * A2/A3 – Vergleich-und-Setzen gegen die aktive Version; base_app_ver = null legt eine neue App an; ohne Angabe gilt
-     * die Basis des Entwurfs. result.rev = neue Version. Gründe: forbidden | stale_base | busy | invalid (detail z. B.
+     * die Basis des Entwurfs. result.rev = neue Version. Gründe: forbidden | stale_base | invalid (kein busy: eine laufende Veröffentlichung wird abgewartet, K-1c; detail z. B.
      * „Migration fehlt: <coll>“ oder „Verweis auf fehlende Datei: …“, §16.26). Bei Ablehnung bleibt der Entwurf erhalten.
      */
     publish(opts?: { base_app_ver?: string | null }): WriteHandle<{ diff?: Array<{ name: string; kind: CollectionDiff['kind'] }> }>;
@@ -352,7 +352,28 @@ export interface ShellKernelApi {
   artifacts: {
     read(hash: string): Promise<Blob>;
     manifest(appId: string, ver: string): Promise<AppManifest | null>;
+    /**
+     * §16.39 Nr. 1/2 (A6, LIBS2), synchron: `/~a/<app>@<ver>~shell@<sv>~lib:<name>@<M.m>…/<path>`. Die Bindung (Shell-Version,
+     * je Bibliothek aus dem Shell-Manifest `libs` die Minor) wird beim ersten Aufruf für die Instanz fixiert.
+     * `shell` → `/~a/shell@<sv>~lib:…/…`; `lib:<name>` mit `<M.m>` → `/~a/lib:<name>@<M.m>/…`.
+     */
+    url(appId: string, ver: string, path: string, opts?: { shellVer?: string; libs?: Record<string, string> }): string;
+    /** Fixierte Bindung einer App-Instanz. */
+    binding(appId: string, ver: string): Readonly<{ shellVer: string | null; libs: Record<string, string> }>;
   };
+  /** §16.39 Nr. 2: SW-Nachrichten; im Browser automatisch an navigator.serviceWorker gebunden. */
+  libs: {
+    onSwMessage(data: { type: 'ctox:lib-miss'; lib: string; major: string; path: string; ver: string; sha?: string | null; reason?: string } | { type: 'ctox:lib-hit'; hits: Array<{ lib: string; major: string; ver: string; path: string; sha?: string; n?: number; last_ms?: number }> }, port?: { postMessage(m: unknown): void }): Promise<unknown>;
+    resolve(name: string, major: string | number): string | null;
+    enforceBudget(): Promise<string[]>;
+    readonly byteBudget: number;
+  };
+  /** K-1c Punkt 7, §16.29 B / §16.33: App-Store-Wege. Ablehnung im write_result: stale_base | migration_required | locally_modified | forbidden | not_found. */
+  publishApp(appId: string, opts: { base_app_ver: string | null; draft_id?: string }): CommandHandle;
+  updateApp(appId: string, opts: { base_app_ver: string | null; release_ver: string; discard_local?: boolean }): CommandHandle;
+  rollbackApp(appId: string, opts: { base_app_ver: string; target_ver: string }): CommandHandle;
+  releaseApp(appId: string, opts: { base_app_ver: string; channel?: string }): CommandHandle;
+  removeApp(appId: string, opts: { base_app_ver: string }): CommandHandle;
   source(appId: string): SourceApi;
   metrics: LiveDoc<Metrics>;
   leader: LiveDoc<{ isLeader: boolean; leader_gen: number; tab_id: string }>;
@@ -404,6 +425,16 @@ export interface StubKernelOptions {
   generationGraceMs?: number;
   /** Tab-Identität für windowState (Standard: sessionStorage, sonst je Kernel neu). */
   tabKey?: string;
+  /** K-1c Punkt 4: ein Fake-Core je Instanz für mehrere Nutzer (eigene DB je Nutzer); der Core setzt Rechte durch. */
+  coreNamespace?: string;
+  /** Nutzer, wie der Core ihn kennt (Rolle/Rechte überstimmen die Behauptung des Clients). */
+  coreUser?: Partial<{ role: string; permissions: string[] }>;
+  /** Takt der every-Trigger im Fake-Core (Test), Standard: Manifestwert, mindestens 60 s. */
+  everyMs?: number;
+  /** Laufzeit eines Fake-Harness-Agentenlaufs (Standard 100 ms). */
+  agentDelayMs?: number;
+  /** §16.37: Byte-Budget der Bibliotheksdateien (LRU), Standard 512 MiB. */
+  libByteBudget?: number;
   /** false = Ein-Tab-Betrieb erzwingen. */
   multiTab?: boolean;
 }
@@ -468,6 +499,13 @@ export interface StubSim {
   outbox(): Promise<any[]>;
   archiveLocal(): Promise<any[]>;
   windowStateRows(): Promise<any[]>;
+  artifactRows(): Promise<any[]>;
+  inspectMeta(key: string): Promise<any>;
+  /** Fake-Core: Zeilen einer Collection im Core (auch nicht abonnierte wie _audit). */
+  coreRows(collection: string): Promise<any[]>;
+  /** Fake-Harness: Ergebnis der nächsten Agentenläufe. */
+  agentOutcome(fn: ((task: unknown) => { status: 'done' | 'failed'; result?: unknown } | Promise<{ status: 'done' | 'failed'; result?: unknown }>) | null): void;
+  coreLog(): Array<{ app_id: string; level: string; msg: string; at: number }>;
   /** @deprecated Alias für `windowStateRows` (seit §16.19). */
   windowState(): Promise<any[]>;
   coreHead(): Promise<number>;
