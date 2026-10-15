@@ -16,7 +16,7 @@ test('queries remain local; transport gets resumable subscriptions and chained w
  const first=api.put('notes',{id:'a',n:1});await first.local;
  const second=api.patch('notes','a',{n:2});await second.local;
  for(let i=0;i<20 && !transport.sent?.length;i++)await tick();
- assert.equal(transport.sent.length,1);assert.equal(transport.sent[0].op_id,first.op_id);
+ assert.equal(transport.sent.length,1);assert.equal(transport.sent[0].op_id,first.op_id);assert.equal(transport.sent[0].base_seq,'0');assert.equal(transport.sent[0].schema_ver,1);
  assert.ok(Object.isFrozen(api.query('notes',{}).get()));
  await transport.events.write_result({op_id:first.op_id,status:'accepted',seq:'1',rev:'r1'});await first.result;
  for(let i=0;i<20 && transport.sent.length<2;i++)await tick();

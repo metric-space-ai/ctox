@@ -1,7 +1,7 @@
 import { artifactUrl, utf8Base64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
-import { evictCollection, reclaimCache } from './cache.mjs';
+import { evictCollection, reclaimCache, CLIENT_CACHE_BUDGET } from './cache.mjs';
 import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from './transport.mjs';
 import { MemoryCoreTransport } from './fake-core.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
@@ -186,6 +186,7 @@ export function createKernel(opts = {}) {
     await t.put('meta', { key: 'local_seq', value: ls });
     rec.lseq = ls;
     await t.put('docs', rec);
+    scheduleCacheBudget();
   }
   async function bumpLocalSeq(t) {
     const ls = ((await t.get('meta', 'local_seq'))?.value ?? 0) + 1;
@@ -194,6 +195,24 @@ export function createKernel(opts = {}) {
   }
   const assertGen = (t) => assertLeader(t, isLeader && !closed, myGen);
   const getCore = async () => ({ head: fakeCore?.head ?? checkpoint });
+
+  let cacheBudgetTimer=null;
+  function applyReclaim(result){
+    for(const row of result.records)mirrorPut(row);
+    for(const collection of result.collections){evicted.add(collection);scopeCursors.delete(collection);subscriptions.delete(collection);}
+    if(result.records.length)post({type:'docs',keys:result.records.map(row=>[row.collection,row.id])});
+  }
+  function scheduleCacheBudget(){
+    if(!isLeader || closed || cacheBudgetTimer)return;
+    cacheBudgetTimer=later(()=>{
+      cacheBudgetTimer=null;
+      track(reclaimCache(db,assertGen,lastUsed,SYSTEM_COLLECTIONS,CLIENT_CACHE_BUDGET).then(result=>{
+        applyReclaim(result);
+        if(!result.within_budget)zoneReport('kernel',{level:'warn',code:'storage.cache_budget',text:'Cache budget exceeded by protected input; nothing was discarded'},'kernel');
+        else zoneClear('kernel','storage.cache_budget');
+      }).catch(err=>{if(err instanceof StaleLeader)stepDown();else throw err;}));
+    },500);
+  }
 
   // ---- Metriken ----
   async function refreshOutboxStat() {
@@ -299,7 +318,7 @@ export function createKernel(opts = {}) {
       });
     }
     for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', ...mirror.keys()])) await subscribeCollection(collection);
-    netChanged();
+    netChanged();scheduleCacheBudget();
     track(deliver());
     schedulePump();
     for (const id of mirror.get('business_apps')?.keys() ?? []) scheduleActivation(id);
@@ -419,7 +438,7 @@ export function createKernel(opts = {}) {
       if (st.data) validateSchema(st.data, schemaFor(app, collection), ''); // lokale Schemaprüfung am Ergebnisdokument
       entry = {
         op_id, prev_op_id: cur?.pending && cur.rev?.startsWith('op:') ? cur.rev.slice(3) : null,
-        collection: ns, id, op, body: clean, base_rev: cur?.rev ?? null, base_seq: cur?.base?.seq ?? 0,
+        collection: ns, id, op, body: clean, base_rev: cur?.rev ?? null, base_seq: decimalSeq(cur?.base?.seq ?? '0'),
         gen: genOf(ns), schema_ver: 1, app_id: app.id, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId,
       };
       waiters.set(op_id, resolveResult);
@@ -925,6 +944,7 @@ export function createKernel(opts = {}) {
     if(!blob)throw new CtoxError('not_found',`File ${ref} missing`);
     if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','File content hash mismatch');
     await db.tx(async t=>{await assertGen(t);await t.put('blobs',{ref,blob,size:blob.size,type:blob.type,pinned:false,last_used:Date.now()});});
+    scheduleCacheBudget();
     return ref; // readers consume the shared IDB cache, not a Blob over BroadcastChannel
   }
 
@@ -1440,9 +1460,7 @@ export function createKernel(opts = {}) {
     db.recoverQuota = async () => {
       if(!isLeader || closed)return false;
       const reclaimed=await reclaimCache(db,assertGen,lastUsed,SYSTEM_COLLECTIONS);
-      for(const row of reclaimed.records)mirrorPut(row);
-      if(reclaimed.collection){evicted.add(reclaimed.collection);scopeCursors.delete(reclaimed.collection);subscriptions.delete(reclaimed.collection);}
-      post({type:'docs',keys:reclaimed.records.map(row=>[row.collection,row.id])});
+      applyReclaim(reclaimed);
       zoneReport('kernel',{level:reclaimed.reclaimed?'warn':'error',code:'storage.quota',text:reclaimed.reclaimed?'Local cache reclaimed after storage quota was reached':'Storage full; pending input is protected'},'kernel');
       return reclaimed.reclaimed;
     };

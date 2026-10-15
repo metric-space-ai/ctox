@@ -1,6 +1,6 @@
 import { cloneValue, mergePatch } from './values.mjs';
 // ---------------------------------------------------------------------------------------------------------------
-export const emptyBase = () => ({ data: null, deleted: false, rev: null, seq: 0 });
+export const emptyBase = () => ({ data: null, deleted: false, rev: null, seq: '0' });
 export const byOpId = (a, b) => (a.op_id < b.op_id ? -1 : a.op_id > b.op_id ? 1 : 0);
 export const docKey = (ns, id) => `${ns}\u0000${id}`;
 export const nsName = (collection, gen) => (gen > 1 ? `${collection}@g${gen}` : collection);

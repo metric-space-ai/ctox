@@ -438,7 +438,7 @@ export interface KernelPage {
 }
 export interface KernelWrite {
   op_id:string; prev_op_id?:string|null; collection:string; id:string;
-  base_rev:string|null; base_seq:string; gen:number; app_ver:string;
+  base_rev:string|null; base_seq:string; gen:number; schema_ver:number; app_ver:string;
   app_id:string; op:'put'|'patch'|'delete'; body:unknown;
 }
 export declare class KernelTransport {
@@ -446,6 +446,7 @@ export declare class KernelTransport {
     page(page:KernelPage):Promise<void>;
     write_result(result:WriteResult & {op_id:string}):Promise<void>;
     link(state:Metrics['link']):void;
+    actor(state:Partial<{id:string;display_name:string;role:string;permissions:string[]}> & {id:string}):void;
   }):Promise<void>;
   subscribe(scope:Subscription):Promise<void>;
   write(entry:KernelWrite):Promise<(WriteResult & {doc?:unknown;deleted?:boolean})|void>;

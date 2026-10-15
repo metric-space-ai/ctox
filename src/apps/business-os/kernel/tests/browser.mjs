@@ -74,6 +74,17 @@ try{
   const handle=kernel.appApi('notes','1').put('notes',{id:'reader',title:'reader write'});await handle.local;await handle.result;
   document.querySelector('#result').textContent='PASS: second tab is reader; write accepted by leader through shared IDB';return {leader:kernel.isLeader};
  });
+ const files=await reader.evaluate(async()=>{
+  kernel.sim.dropBroadcasts(true);
+  try {
+   const file=kernel.appApi('notes','1').files.put(new Blob(['reader file persistence']),{name:'reader.txt'});await file.local;
+   await new Promise(r=>setTimeout(r,300));await kernel.sim.reconcile();
+   if((await file.result).status!=='accepted')throw Error('reader upload not accepted');
+   const ref=await file.ref;if(await(await kernel.appApi('notes','1').files.get(ref)).text()!=='reader file persistence')throw Error('reader file differs');
+   document.querySelector('#result').textContent+='; file completion recovered from durable IDB despite dropped broadcasts';
+   return {readerUpload:true,droppedEventsRecovered:true};
+  } finally {kernel.sim.dropBroadcasts(false);}
+ });
  await reader.screenshot({path:resolve(out,'02-reader-write.png')});
  await page.close();await reader.waitForFunction(()=>globalThis.kernel?.isLeader,undefined,{timeout:10000});
  const takeover=await reader.evaluate(async()=>{
@@ -99,5 +110,5 @@ try{
  await reader.screenshot({path:resolve(out,'04-quota-reclaim.png')});
  await reader.evaluate(()=>kernel.logout({deleteData:true}));
  if(errors.length)throw Error(errors.join('\n'));
- const result={pass:true,external,first,reopened,follower,takeover,quota,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
+ const result={pass:true,external,first,reopened,follower,files,takeover,quota,errors};await writeFile(resolve(out,'result.json'),JSON.stringify(result,null,2));console.log('KERNEL_BROWSER '+JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

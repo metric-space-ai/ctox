@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createLoader,artifactUrl} from '../loader.mjs';
+import {createLoader,artifactUrl} from '../index.mjs';
 import {MemoryCoreTransport} from '../fake-core.mjs';
 
 test('loader follows shell activation, persists snapshot and falls back on failed shell start',async()=>{

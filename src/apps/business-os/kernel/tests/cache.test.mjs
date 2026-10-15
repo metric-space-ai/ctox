@@ -58,3 +58,15 @@ test('IDB quota handling retries once after reclaim and exposes typed failure',a
  db.recoverQuota=async()=>true;tries=0;db.transaction=async()=>{if(++tries===1)throw new DOMException('full','QuotaExceededError');return 'durable'};
  assert.equal(await db.tx(()=>{}),'durable');assert.equal(tries,2);
 });
+
+test('byte budget reclaims oldest cache collections while preserving protected input',async()=>{
+ const db=new MemoryBackend('budget');await db.tx(async t=>{
+  for(const collection of ['cold','hot','pending'])await t.put('docs',{collection,id:'a',data:{id:'a',text:'ä'.repeat(1000)}});
+  await t.put('outbox',{op_id:'p',collection:'pending',id:'a'});
+  await t.put('blobs',{ref:'pinned',pinned:true,size:100});
+ });
+ const result=await reclaimCache(db,async()=>{},new Map([['cold',1],['hot',2]]),new Set(),2500);
+ assert.deepEqual(result.collections,['cold','hot']);assert.equal(result.within_budget,true);
+ assert.ok((await db.get('docs',['pending','a'])).data);assert.equal((await db.get('blobs','pinned')).pinned,true);
+ const full=await reclaimCache(db,async()=>{},new Map(),new Set(),1);assert.equal(full.within_budget,false);assert.equal(full.reclaimed,false);assert.equal((await db.all('outbox')).length,1);
+});

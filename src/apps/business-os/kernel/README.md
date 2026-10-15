@@ -24,6 +24,10 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
 ## Modules
 
 - `store-idb-v5.mjs`: seven generic client stores, atomic IndexedDB and rollback-capable memory backend.
+- `cache.mjs`: conservative 2 GB document/blob cache budget, collection LRU, one quota reclaim/retry;
+  pending input, archive, window state and release artifacts are protected. Eviction drops both visible/base data,
+  invalidates the scoped cursor, and resumes the normal P1 subscription on the next local access (also from readers).
+  Protected input may exceed the soft cache budget and is surfaced in the status zone.
 - `migrate-v3.mjs`: version4 `documents` takeover in the upgrade transaction; identity-owned database only.
   Confirmed rows retain their base; V3 unconfirmed input is also archived, never blindly dispatched under V4 authority.
 - `leader.mjs`: Web Lock generations; effect and generation check share an IDB transaction.
@@ -50,6 +54,9 @@ On the admitted GPU lane: `node --test --test-concurrency=2 src/apps/business-os
 Browser: `PLAYWRIGHT_MODULE=<existing package> CHROME_BIN=<existing chromium> node src/apps/business-os/kernel/tests/browser.mjs`.
 The latter starts only its own bounded loopback static fixture and isolated headless context; no tenant or credentials.
 The explicit Node lock adapter is test-only; browsers use actual navigator.locks and IndexedDB.
+
+Without a controlling SW, the Blob/data fallback supports a self-contained entry; relative module imports
+use the Shell-owned versioned SW artifact route. Publication/authorization remain Core responsibilities.
 
 No old runtime is switched off by this slice. Integration and real WebRTC are phases5/8; no production hot-plug
 claim until the installed all-app acceptance. Old runtime retirement requires zero usage for24h on WELSCH.
