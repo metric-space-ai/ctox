@@ -97,6 +97,11 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   differential cases. Live: 15 PASS via spec, 3 scope-missing (comments; same with
   Rust), 5 schema writes skipped (not reversible). 17/22 actions came straight from
   the generator; 5 needed hand edits plus format extensions (see Lessons).
+- **GitLab (2026-10-15): converted Rust -> spec** (`specs/gitlab.json`, 30 actions).
+  Parity: all recorded port cases identical, 0 of 723 differential cases differ
+  (incl. adversarial values). Live: 30/30 distinct actions PASS via spec and via
+  Rust (issue, note, MR, label created in the test project and cleaned up).
+  13/30 actions straight from the generator; 8 write/list tools hand-mapped.
 - **Trello (2026-10-15):** hot-plug only (`specs/trello.json`, 22 actions). All
   live-passed; a throwaway board is created and deleted. Needed auth scheme
   `oauth_header` (key+token in the Authorization header). Webhooks need a
@@ -236,5 +241,35 @@ Format features added for conversions (all tested in `spec_adapters.rs`):
   keeps a missing projected list null
 - body objects: `"$omit_empty": true`
 
-Ideas not yet automated: nested `each` inference (markers inside nested lists),
+Why it was fast/slow (GitLab): fast = the 22 read tools (generator + one
+re-runnable fix script). Slow = things the synthetic samples never exercise:
+`group/project` ids (`%2F`), `@user` stripping, tri-state `"true"/"false"`
+dropdowns sent as booleans, string id lists sent as integers, `clear_*` flags
+overriding a value, a cross-arg rule (`membership=false` needs `search` or
+`owned=true`), top-level array responses. Port cases caught the first two; the
+generator now probes them. **Lesson: the differential now also feeds
+adversarial strings (`not-a-date`, `@handle`, `grp/sub`, `a b`) into every free
+string arg** — that immediately exposed id-charset gaps in the already committed
+Airtable and Todoist specs (fixed with `name` encoding / `segment: true`).
+
+Added for GitLab (tested in `gitlab_format_features`):
+- request `paths: [{when, path}, …]`; integer path params are sent as decimals
+- path encodings `namespaced` (`a/b` -> `a%2Fb`, `{"namespaced": ": "}` allows
+  extra chars), `name` (component, but refuses `/ \ ? # %`), `{"strip_prefix": "@"}`
+- arg type `tristate`; arg options `items_integer`, `segment`, `strip_prefix`
+- formats `date-prefix` (date or date-time), `color`
+- switch `else` (fallback value; boolean args switch on `"true"`/`"false"`):
+  `{"switch": "clear_x", "cases": {"true": {"const": ""}}, "else": {"arg": "x"}}`
+- constraints: args may be `{"arg", "equals"}`; `when: {"arg", "equals"}` makes
+  the rule conditional
+- response field pointer `""` = the whole document (top-level arrays)
+- `nonempty_body` also fires when `$omit_empty` removed every field
+
+Generator now infers: `strip_prefix` (path + query), `namespaced` path ids,
+`date-prefix` formats on query args, integer id-list samples (`*_ids`), hex
+colour samples. Ratchet: gitlab 13/30.
+
+Ideas not yet automated: `tristate` inference (enum `["true","false"]` sent as
+bool), `clear_*`->switch-`else` inference, `segment` on body ids, label-style
+`namespaced` extra chars, nested `each` inference (markers inside nested lists),
 template inference for computed strings, switch inference from enum args.

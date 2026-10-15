@@ -23,7 +23,7 @@ fn same_request(rust: &dyn ToolkitAdapter, spec: &SpecAdapter, tool: &str, schem
 #[test]
 fn drafts_cover_every_tool_and_mostly_match_before_hand_edits() {
     // Ratchet: measured floors; raise them when the generator improves.
-    for (slug, floor) in [("todoist", 23), ("asana", 11), ("airtable", 17)] {
+    for (slug, floor) in [("todoist", 23), ("asana", 11), ("airtable", 17), ("gitlab", 13)] {
         let rust = toolkits::builtin().into_iter().find(|a| a.spec().slug == slug).unwrap();
         let mut draft = generator::draft(rust.as_ref());
         assert_eq!(draft["schema"], "ctox.adapter-spec/v1");

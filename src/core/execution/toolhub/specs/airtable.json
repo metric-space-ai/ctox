@@ -299,7 +299,7 @@
           }
         },
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -424,7 +424,7 @@
           }
         },
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -513,7 +513,7 @@
           }
         },
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -575,7 +575,7 @@
         "method": "GET",
         "path": "/{base_id}/{table_id_or_name}/{record_id}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -634,7 +634,7 @@
         "method": "GET",
         "path": "/{base_id}/{table_id_or_name}/{record_id}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -703,7 +703,7 @@
         "method": "GET",
         "path": "/{base_id}/{table_id_or_name}/{record_id}/comments",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         },
         "query": {
           "offset": {
@@ -791,7 +791,7 @@
         "method": "POST",
         "path": "/{base_id}/{table_id_or_name}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -871,7 +871,7 @@
         "method": "PATCH",
         "path": "/{base_id}/{table_id_or_name}/{record_id}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -948,7 +948,7 @@
         "method": "PATCH",
         "path": "/{base_id}/{table_id_or_name}/{record_id}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1007,7 +1007,7 @@
         "method": "DELETE",
         "path": "/{base_id}/{table_id_or_name}/{record_id}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1075,7 +1075,7 @@
           }
         },
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1167,7 +1167,7 @@
         "method": "PATCH",
         "path": "/{base_id}/{table_id_or_name}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1257,7 +1257,7 @@
         "method": "POST",
         "path": "/{base_id}/{table_id_or_name}/{record_id}/comments",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1337,7 +1337,8 @@
             "workspaceId": {
               "arg": "workspace_id",
               "required": true,
-              "trim": true
+              "trim": true,
+              "segment": true
             }
           }
         },
@@ -1541,7 +1542,7 @@
         "nonempty_body": "supply at least one of new name or new description",
         "path": "/meta/bases/{base_id}/tables/{table_id_or_name}",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {
@@ -1654,7 +1655,7 @@
         "method": "POST",
         "path": "/meta/bases/{base_id}/tables/{table_id_or_name}/fields",
         "path_encoding": {
-          "table_id_or_name": "component"
+          "table_id_or_name": "name"
         }
       },
       "response": {

@@ -59,6 +59,16 @@ fn arg_sets(schema: &Value) -> Vec<Value> {
             out.push(Value::Object(m));
         }
     }
+    // adversarial string values: catch missing format checks, `@` stripping, namespaced ids
+    for (k, p) in &props {
+        if p["type"] == "string" && p.get("enum").is_none() {
+            for v in ["not-a-date", "@handle", "grp/sub", "a b"] {
+                let mut m = all.clone();
+                m.insert(k.clone(), json!(v));
+                out.push(Value::Object(m));
+            }
+        }
+    }
     out.push(json!({}));
     out
 }
@@ -640,4 +650,53 @@ fn template_switch_and_list_options() {
     assert_eq!(out["tables"][0]["fields"], json!([{"id": "f1", "name": "Name", "type": "singleLineText", "description": null}]));
     assert_eq!(out["tables"][0]["views"], json!([]), "missing nested list -> []");
     assert_eq!(out["tables"][0]["primary_field_id"], json!("f1"));
+}
+
+const GITLAB: &str = include_str!("../specs/gitlab.json");
+
+#[test]
+fn gitlab_spec_matches_compiled_adapter() {
+    let (n, d) = differential("gitlab", GITLAB);
+    assert!(d.is_empty(), "{} of {n} differ:\n{}", d.len(), d.join("\n"));
+}
+
+/// `paths`, numeric path params, `namespaced` / `strip_prefix` path encodings,
+/// `tristate`, `items_integer`, switch `else`, conditional constraints, `date-prefix` / `color`,
+/// and the root (`""`) response pointer.
+#[test]
+fn gitlab_format_features() {
+    let a = SpecAdapter::from_json(GITLAB).unwrap();
+    let path = |r: HttpRequest| { let u = url::Url::parse(&r.url).unwrap(); (u.path().to_string(), u.query().unwrap_or("").to_string()) };
+    let body = |r: HttpRequest| serde_json::from_slice::<Value>(r.body.as_ref().unwrap()).unwrap();
+    // namespaced id + integer path param
+    assert_eq!(path(a.build_request("GITLAB_GET_ISSUE", &json!({"project_id": "grp/sub", "issue_iid": 7})).unwrap()).0, "/api/v4/projects/grp%2Fsub/issues/7");
+    assert!(a.build_request("GITLAB_GET_ISSUE", &json!({"project_id": "grp/../x", "issue_iid": 7})).is_err());
+    // paths alternatives + strip_prefix
+    assert_eq!(path(a.build_request("GITLAB_GET_USER_STATUS", &json!({"user": "@ada"})).unwrap()).0, "/api/v4/users/ada/status");
+    assert_eq!(path(a.build_request("GITLAB_GET_USER_STATUS", &json!({})).unwrap()).0, "/api/v4/user/status");
+    assert!(path(a.build_request("GITLAB_LIST_USERS", &json!({"username": "@ada"})).unwrap()).1.contains("username=ada"));
+    // tristate + items_integer
+    let b = body(a.build_request("GITLAB_CREATE_ISSUE", &json!({"project_id": "1", "title": "t", "confidential": "true", "assignee_ids": ["3", "4"]})).unwrap());
+    assert_eq!((b["confidential"].clone(), b["assignee_ids"].clone()), (json!(true), json!([3, 4])));
+    assert!(a.build_request("GITLAB_CREATE_ISSUE", &json!({"project_id": "1", "title": "t", "confidential": "yes"})).is_err());
+    assert!(a.build_request("GITLAB_CREATE_ISSUE", &json!({"project_id": "1", "title": "t", "assignee_ids": ["x"]})).is_err());
+    // switch with `else`: clear flag wins over the value
+    let b = body(a.build_request("GITLAB_UPDATE_ISSUE", &json!({"project_id": "1", "issue_iid": 2, "clear_assignees": true, "assignee_ids": ["3"]})).unwrap());
+    assert_eq!(b, json!({"assignee_ids": [0]}));
+    let b = body(a.build_request("GITLAB_UPDATE_ISSUE", &json!({"project_id": "1", "issue_iid": 2, "clear_assignees": false, "assignee_ids": ["3"]})).unwrap());
+    assert_eq!(b, json!({"assignee_ids": [3]}));
+    assert!(a.build_request("GITLAB_UPDATE_ISSUE", &json!({"project_id": "1", "issue_iid": 2})).is_err(), "nonempty_body on an all-omitted body");
+    // conditional constraint
+    assert!(a.build_request("GITLAB_LIST_PROJECTS", &json!({"membership": "false"})).is_err());
+    assert!(a.build_request("GITLAB_LIST_PROJECTS", &json!({"membership": "false", "owned": "false"})).is_err());
+    assert!(!path(a.build_request("GITLAB_LIST_PROJECTS", &json!({"membership": "false", "owned": "true"})).unwrap()).1.contains("membership"));
+    assert!(path(a.build_request("GITLAB_LIST_PROJECTS", &json!({})).unwrap()).1.contains("membership=true"));
+    // formats
+    assert!(a.build_request("GITLAB_LIST_COMMITS", &json!({"project_id": "1", "since": "2026-10-11T09:00:00Z"})).is_ok());
+    assert!(a.build_request("GITLAB_LIST_COMMITS", &json!({"project_id": "1", "since": "yesterday"})).is_err());
+    assert!(a.build_request("GITLAB_CREATE_LABEL", &json!({"project_id": "1", "name": "n", "color": "#abc"})).is_ok());
+    assert!(a.build_request("GITLAB_CREATE_LABEL", &json!({"project_id": "1", "name": "n", "color": "#ggg"})).is_err());
+    // root pointer list response
+    let resp = HttpResponse { status: 200, session_id: None, body: br#"[{"id":1},{"id":2}]"#.to_vec() };
+    assert_eq!(a.parse_response("GITLAB_LIST_LABELS", &resp).unwrap(), json!({"items": [{"id": 1}, {"id": 2}], "count": 2}));
 }

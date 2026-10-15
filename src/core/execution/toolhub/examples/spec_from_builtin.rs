@@ -24,6 +24,7 @@ pub fn sample(name: &str, prop: &Value, i: usize) -> Value {
             json!((lo + 3 + i as i64).min(hi).max(lo))
         }
         Some("boolean") => json!(true),
+        Some("array") if n.ends_with("_ids") && prop["items"]["type"] != "string" => json!([11 + i as i64, 12 + i as i64]),
         Some("array") => {
             let item = sample(name, &prop["items"], i);
             match item {
@@ -32,10 +33,11 @@ pub fn sample(name: &str, prop: &Value, i: usize) -> Value {
             }
         }
         Some("object") => json!({format!("k{i}"): format!("v{i}")}),
+        _ if n.contains("color") || n.contains("colour") => json!(format!("#A1B2C{}", i % 10)),
         _ if n.contains("email") => json!(format!("u{i}@example.com")),
         _ if n.contains("url") || n.contains("uri") => json!(format!("https://example.com/p{i}")),
         _ if n.ends_with("_on") || n.ends_with("date") || n.contains("_on_") => json!(format!("2026-10-{:02}", 10 + i % 18)),
-        _ if n.ends_with("_at") || n.contains("time") || n == "since" || n == "until" || n.contains("_at_") => {
+        _ if n.ends_with("_at") || n.contains("time") || n == "since" || n == "until" || n.contains("_at_") || n.ends_with("_after") || n.ends_with("_before") => {
             json!(format!("2026-10-{:02}T10:00:00Z", 10 + i % 18))
         }
         _ => json!(format!("s{i}x{}", n.len())),
@@ -146,32 +148,43 @@ fn infer_request(a: &dyn ToolkitAdapter, tool: &str, schema: &Value, api_base: &
     let props = &schema["properties"];
     let url = url::Url::parse(&r.url).unwrap();
     let base_path = url::Url::parse(api_base).map(|u| u.path().trim_end_matches('/').to_string()).unwrap_or_default();
-    let raw_path = url.path().strip_prefix(&base_path).unwrap_or(url.path()).to_string();
-    let mut path = String::new();
-    let mut enc = Map::new();
-    for seg in raw_path.split('/').skip(1) {
-        let dec = urlencoding_decode(seg);
-        path.push('/');
-        match arg_of(&json!(dec), &samples) {
-            Some(k) => {
-                path.push_str(&format!("{{{k}}}"));
-                let mut spaced = args_for(schema, false).0;
-                spaced.insert(k.into(), json!(format!("{} x", dec)));
-                if dec != seg || dec.contains(['@', ' ', ':']) || a.build_request(tool, &Value::Object(spaced)).is_ok() {
-                    enc.insert(k.into(), json!("component"));
-                }
-            }
-            None => path.push_str(seg),
+    let (path, enc) = path_template(a, tool, schema, &url, &base_path, &samples);
+    // required-only probe; when it fails, find the optional args that make it pass
+    let (req_only, _) = args_for(schema, true);
+    let sample_of = |k: &str| samples.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or(Value::Null);
+    let mut constraint = None;
+    let mut r_min = a.build_request(tool, &Value::Object(req_only.clone())).ok();
+    let mut nonempty = None;
+    if r_min.is_none() {
+        let err = a.build_request(tool, &Value::Object(req_only.clone())).err().map(|e| e.to_string()).unwrap_or_default();
+        let opts: Vec<String> = props.as_object().into_iter().flatten().map(|(k, _)| k.clone()).filter(|k| !req_only.contains_key(k)).collect();
+        let enablers: Vec<String> = opts.iter().filter(|k| {
+            let mut m = req_only.clone();
+            m.insert((*k).clone(), sample_of(k));
+            a.build_request(tool, &Value::Object(m)).is_ok()
+        }).cloned().collect();
+        if !enablers.is_empty() && enablers.len() < opts.len() {
+            let mut m = req_only.clone();
+            m.insert(enablers[0].clone(), sample_of(&enablers[0]));
+            r_min = a.build_request(tool, &Value::Object(m)).ok();
+            constraint = Some(json!({"kind": "at_least_one", "args": enablers, "message": err}));
+        } else {
+            nonempty = Some(err);
         }
     }
-    let (req_only, _) = args_for(schema, true);
-    let r_min = a.build_request(tool, &Value::Object(req_only)).ok();
+    // A path that changes when optional args are absent -> `paths` alternatives.
+    let min_path = r_min.as_ref().and_then(|rm| url::Url::parse(&rm.url).ok()).map(|u| path_template(a, tool, schema, &u, &base_path, &samples).0);
+    let paths = min_path.filter(|p| p != &path).map(|mp| {
+        let when = props.as_object().into_iter().flatten().map(|(k, _)| k.clone()).find(|k| path.contains(&format!("{{{k}}}")) && !mp.contains(&format!("{{{k}}}")));
+        json!([{"when": when, "path": path.clone()}, {"path": mp}])
+    });
     let min_q: Vec<(String, String)> = r_min.as_ref().and_then(|r| url::Url::parse(&r.url).ok()).map(|u| u.query_pairs().map(|(a, b)| (a.into(), b.into())).collect()).unwrap_or_default();
     let mut query = Map::new();
     for (k, v) in url.query_pairs() {
         let t = template(&json!(v), &samples, props);
         let t = match (t.get("arg").and_then(Value::as_str), min_q.iter().find(|(mk, _)| mk == &k)) {
             (Some(arg), Some((_, mv))) if mv != &v && arg_of(&json!(mv), &samples).is_none() => {
+                let _ = arg;
                 let d = mv.parse::<i64>().map(Value::from).unwrap_or(json!(mv));
                 let mut t = t.clone();
                 t["default"] = d;
@@ -179,15 +192,18 @@ fn infer_request(a: &dyn ToolkitAdapter, tool: &str, schema: &Value, api_base: &
             }
             _ => t,
         };
+        let t = probe_string_arg(a, tool, schema, t, &v);
         query.insert(k.into_owned(), t);
     }
-    let mut req = json!({"method": r.method, "path": path});
-    if r_min.is_none() {
-        // Fails with required args only: usually "supply at least one of …".
-        let (only, _) = args_for(schema, true);
-        if let Err(e) = a.build_request(tool, &Value::Object(only)) {
-            req["nonempty_body"] = json!(e.to_string());
-        }
+    let mut req = json!({"method": r.method});
+    match paths {
+        Some(p) => req["paths"] = p,
+        None => req["path"] = json!(path),
+    }
+    if let Some(c) = constraint {
+        req["constraints"] = json!([c]);
+    } else if let Some(e) = nonempty {
+        req["nonempty_body"] = json!(e);
     }
     if !enc.is_empty() {
         req["path_encoding"] = Value::Object(enc);
@@ -229,6 +245,58 @@ fn infer_request(a: &dyn ToolkitAdapter, tool: &str, schema: &Value, api_base: &
         }
     }
     req
+}
+
+/// For a query value fed by a string arg: detect a stripped `@` prefix and a date check.
+fn probe_string_arg(a: &dyn ToolkitAdapter, tool: &str, schema: &Value, mut t: Value, sent: &str) -> Value {
+    let Some(arg) = t.get("arg").and_then(Value::as_str).map(String::from) else { return t };
+    if schema["properties"][&arg]["type"] != "string" {
+        return t;
+    }
+    let with = |v: &str| {
+        let mut m = args_for(schema, false).0;
+        m.insert(arg.clone(), json!(v));
+        a.build_request(tool, &Value::Object(m)).ok().and_then(|r| url::Url::parse(&r.url).ok()).map(|u| u.query_pairs().map(|(x, y)| (x.into_owned(), y.into_owned())).collect::<Vec<_>>())
+    };
+    if with(&format!("@{sent}")).is_some_and(|q| q.iter().any(|(_, y)| y == sent)) {
+        t["strip_prefix"] = json!("@");
+    }
+    let (d, dt, bad) = (with("2026-10-11").is_some(), with("2026-10-11T09:00:00Z").is_some(), with("not-a-date").is_some());
+    if !bad && d && dt && t.get("format").is_none() {
+        t["format"] = json!("date-prefix");
+    }
+    t
+}
+
+fn path_template(a: &dyn ToolkitAdapter, tool: &str, schema: &Value, url: &url::Url, base_path: &str, samples: &[(String, Value)]) -> (String, Map<String, Value>) {
+    let raw_path = url.path().strip_prefix(base_path).unwrap_or(url.path()).to_string();
+    let mut path = String::new();
+    let mut enc = Map::new();
+    for seg in raw_path.split('/').skip(1) {
+        let dec = urlencoding_decode(seg);
+        path.push('/');
+        match arg_of(&json!(dec), &samples) {
+            Some(k) => {
+                path.push_str(&format!("{{{k}}}"));
+                let probe = |v: String| {
+                    let mut m = args_for(schema, false).0;
+                    m.insert(k.into(), json!(v));
+                    a.build_request(tool, &Value::Object(m)).ok().map(|r| r.url)
+                };
+                let mut spaced = args_for(schema, false).0;
+                spaced.insert(k.into(), json!(format!("{} x", dec)));
+                if probe(format!("@{dec}")).is_some_and(|u| u.contains(&format!("/{dec}"))) {
+                    enc.insert(k.into(), json!({"strip_prefix": "@"}));
+                } else if probe(format!("{dec}/{dec}")).is_some_and(|u| u.contains(&format!("{dec}%2F{dec}"))) && a.build_request(tool, &Value::Object(spaced.clone())).is_err() {
+                    enc.insert(k.into(), json!("namespaced"));
+                } else if dec != seg || dec.contains(['@', ' ', ':']) || a.build_request(tool, &Value::Object(spaced)).is_ok() {
+                    enc.insert(k.into(), json!("component"));
+                }
+            }
+            None => path.push_str(seg),
+        }
+    }
+    (path, enc)
 }
 
 fn urlencoding_decode(s: &str) -> String {

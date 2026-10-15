@@ -287,7 +287,8 @@
         "query": {
           "project_id": {
             "arg": "project_id",
-            "required": true
+            "required": true,
+            "segment": true
           },
           "cursor": {
             "arg": "cursor"
@@ -1584,7 +1585,8 @@
             },
             "project_id": {
               "arg": "project_id",
-              "required": true
+              "required": true,
+              "segment": true
             },
             "order": {
               "arg": "order"
@@ -1682,7 +1684,8 @@
           "json": {
             "task_id": {
               "arg": "task_id",
-              "required": true
+              "required": true,
+              "segment": true
             },
             "content": {
               "arg": "content",

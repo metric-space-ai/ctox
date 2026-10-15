@@ -50,14 +50,14 @@
           "type": "object", "additionalProperties": false, "required": ["arg"],
           "properties": {
             "arg": {"type": "string"},
-            "type": {"enum": ["string", "integer", "number", "boolean", "string_list", "array", "object", "raw"]},
+            "type": {"enum": ["string", "integer", "number", "boolean", "string_list", "array", "object", "raw", "tristate"]},
             "trim": {"type": "boolean"}, "required": {"type": "boolean"}, "default": {},
             "clamp": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
-            "format": {"enum": ["date", "date-time"]},
+            "format": {"enum": ["date", "date-time", "date-prefix", "color"]},
             "one_of": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"},
             "join": {"type": "string"}, "wrap_array": {"type": "boolean"},
             "uri_prefix": {"type": "string", "pattern": "^https://.*/$"},
-            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"},
+            "max_items": {"type": "integer", "minimum": 1}, "items_segment": {"type": "boolean"}, "items_integer": {"type": "boolean"}, "segment": {"type": "boolean"}, "strip_prefix": {"type": "string"},
             "wrap_object": {"type": "boolean"}, "blank_to_null": {"type": "boolean"}, "require_key": {"type": "string"}
           }
         },
@@ -73,7 +73,7 @@
         {
           "description": "Pick a value by the string value of an arg.",
           "type": "object", "additionalProperties": false, "required": ["switch", "cases"],
-          "properties": {"switch": {"type": "string"}, "cases": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}}, "default": {"type": "string"}}
+          "properties": {"switch": {"type": "string"}, "cases": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}}, "default": {"type": "string"}, "else": {"$ref": "#/$defs/value"}}
         }
       ]
     },
@@ -106,7 +106,8 @@
           "properties": {
             "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
             "path": {"type": "string", "pattern": "^/"},
-            "path_encoding": {"type": "object", "additionalProperties": {"enum": ["segment", "component", "uri_tail"]}},
+            "paths": {"type": "array", "description": "Path alternatives: first entry whose `when` arg is set wins; the last may omit `when`.", "items": {"type": "object", "required": ["path"], "properties": {"when": {"type": "string"}, "path": {"type": "string"}}}},
+            "path_encoding": {"type": "object", "additionalProperties": {"oneOf": [{"enum": ["segment", "component", "uri_tail", "namespaced", "name"]}, {"type": "object", "additionalProperties": false, "properties": {"strip_prefix": {"type": "string"}, "namespaced": {"type": "string"}}}]}},
             "query": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
             "headers": {"type": "object", "additionalProperties": {"type": "string"}},
             "body": {
@@ -117,7 +118,7 @@
                 "graphql": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "variables": {"$ref": "#/$defs/template"}}}
               }
             },
-            "constraints": {"type": "array", "items": {"type": "object", "required": ["kind", "args", "message"], "properties": {"kind": {"enum": ["at_most_one", "at_least_one"]}, "args": {"type": "array", "items": {"type": "string"}}, "message": {"type": "string"}}}},
+            "constraints": {"type": "array", "items": {"type": "object", "required": ["kind", "args", "message"], "properties": {"kind": {"enum": ["at_most_one", "at_least_one"]}, "args": {"type": "array", "items": {"oneOf": [{"type": "string"}, {"type": "object", "required": ["arg", "equals"], "properties": {"arg": {"type": "string"}, "equals": {}}}]}}, "when": {"type": "object", "required": ["arg", "equals"], "properties": {"arg": {"type": "string"}, "equals": {}}}, "message": {"type": "string"}}}},
             "nonempty_body": {"type": "string"},
             "read_only_post": {"type": "boolean"}
           }

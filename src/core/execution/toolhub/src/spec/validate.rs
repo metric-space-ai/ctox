@@ -25,12 +25,18 @@ pub enum Kind {
     StringList,
     Object,
     Raw,
+    /// `true`/`false` as a boolean or the strings "true"/"false"; sent as a boolean.
+    Tristate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Date,
     DateTime,
+    /// Starts with `YYYY-MM-DD` (a date or any date-time).
+    DatePrefix,
+    /// `#RGB`, `#RRGGBB` or a CSS colour name.
+    Color,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,7 +46,7 @@ pub enum Val {
     /// String built from a template: `{name}` = string arg, `{{`/`}}` = literal braces.
     Template { parts: Vec<TmplPart> },
     /// Pick one value by the string value of `arg` (`default` when absent).
-    Switch { arg: String, cases: Vec<(String, Val)>, default: Option<String> },
+    Switch { arg: String, cases: Vec<(String, Val)>, default: Option<String>, otherwise: Option<Box<Val>> },
 }
 
 /// Object-mode field post-processing.
@@ -119,6 +125,12 @@ pub struct ArgRef {
     pub wrap_object: bool,
     /// Object args: `""` values become `null` (clear a field).
     pub blank_to_null: bool,
+    /// Parse every string item as a positive integer and send numbers.
+    pub items_integer: bool,
+    /// Remove this prefix from a string value (e.g. `@` before a username).
+    pub strip_prefix: Option<String>,
+    /// Validate the value (or each list item) with the path-segment charset.
+    pub segment: bool,
     /// List args: keep only object items that have a string value at this key.
     pub require_key: Option<String>,
 }
@@ -140,6 +152,15 @@ pub enum Entry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathEnc {
+    /// A namespaced id such as `group/project`: `[A-Za-z0-9._/-]{1,200}`, no `.`/`..`
+    /// part, sent as one segment with `/` as `%2F` (GitLab project and group ids).
+    /// `{"namespaced": ": "}` additionally allows the listed characters (percent-encoded).
+    Namespaced(String),
+    /// A display name such as an Airtable table name: like `Component`, but
+    /// `/ \\ ? # %` are refused instead of encoded.
+    Name,
+    /// Leading prefix (e.g. `@`) removed, then checked like `Segment`.
+    StripPrefix(String),
     /// `[A-Za-z0-9._-]{1,200}`, the compiled adapters' `path_segment`.
     Segment,
     /// Trimmed and percent-encoded like `encodeURIComponent`.
@@ -160,6 +181,10 @@ pub enum Body {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constraint {
     pub args: Vec<String>,
+    /// Per-arg required value (`{"arg": .., "equals": ..}` entries); `None` = any non-empty value.
+    pub equals: Vec<Option<Value>>,
+    /// The constraint applies only while this arg loosely equals this value.
+    pub when: Option<(String, Value)>,
     /// true = at most one may be set, false = at least one must be set.
     pub exclusive: bool,
     pub message: String,
@@ -181,6 +206,9 @@ pub struct Action {
     pub risk: Risk,
     pub method: String,
     pub path: Vec<PathPart>,
+    /// `paths`: alternatives `(when-arg, path)`; the first whose `when` arg is set
+    /// (or that has no `when`) is used. Empty = use `path`.
+    pub alt_paths: Vec<(Option<String>, Vec<PathPart>)>,
     pub query: Vec<(String, Val)>,
     pub headers: Vec<(String, String)>,
     pub body: Body,
@@ -335,7 +363,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         return Ok(Val::Template { parts });
     }
     if let Some(arg) = v.get("switch") {
-        known_keys(v, &["switch", "cases", "default"], ctx)?;
+        known_keys(v, &["switch", "cases", "default", "else"], ctx)?;
         let arg = arg.as_str().ok_or_else(|| anyhow!("{ctx}: switch names a string arg"))?.to_string();
         if !props.contains_key(&arg) {
             bail!("{ctx}: switch arg `{arg}` is not declared in input_schema.properties");
@@ -349,9 +377,16 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         if default.as_ref().is_some_and(|d| !cases.iter().any(|(k, _)| k == d)) {
             bail!("{ctx}: switch default is not one of the cases");
         }
-        return Ok(Val::Switch { arg, cases, default });
+        let otherwise = match v.get("else") {
+            Some(x) => Some(Box::new(parse_val(x, props, &format!("{ctx} else"), used)?)),
+            None => None,
+        };
+        if default.is_some() && otherwise.is_some() {
+            bail!("{ctx}: switch takes `default` or `else`, not both");
+        }
+        return Ok(Val::Switch { arg, cases, default, otherwise });
     }
-    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key"], ctx)?;
+    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix", "max_items", "items_segment", "wrap_object", "blank_to_null", "require_key", "items_integer", "strip_prefix", "segment"], ctx)?;
     let name = s(v, "arg", ctx)?.to_string();
     let prop = props.get(&name).ok_or_else(|| anyhow!("{ctx}: arg `{name}` is not declared in input_schema.properties"))?;
     used.insert(name.clone());
@@ -362,6 +397,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         "string_list" | "array" => Kind::StringList,
         "object" => Kind::Object,
         "raw" => Kind::Raw,
+        "tristate" => Kind::Tristate,
         other => bail!("{ctx}: unknown type `{other}`"),
     };
     let clamp = match v.get("clamp") {
@@ -375,6 +411,8 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         None => None,
         Some("date") => Some(Format::Date),
         Some("date-time") => Some(Format::DateTime),
+        Some("date-prefix") => Some(Format::DatePrefix),
+        Some("color") => Some(Format::Color),
         Some(o) => bail!("{ctx}: unknown format `{o}`"),
     };
     let one_of = match v.get("one_of") {
@@ -405,6 +443,9 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         max_items: v.get("max_items").and_then(Value::as_u64).map(|n| n as usize),
         items_segment: v.get("items_segment").and_then(Value::as_bool).unwrap_or(false),
         wrap_object: v.get("wrap_object").and_then(Value::as_bool).unwrap_or(false),
+        segment: v.get("segment").and_then(Value::as_bool).unwrap_or(false),
+        strip_prefix: v.get("strip_prefix").and_then(Value::as_str).map(String::from),
+        items_integer: v.get("items_integer").and_then(Value::as_bool).unwrap_or(false),
         blank_to_null: v.get("blank_to_null").and_then(Value::as_bool).unwrap_or(false),
         require_key: v.get("require_key").and_then(Value::as_str).map(String::from),
     }))
@@ -460,11 +501,19 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
             bail!("{ctx}: path param `{name}` is not declared in input_schema.properties");
         }
         used.insert(name.to_string());
-        let e = match enc.get(name).and_then(Value::as_str) {
+        let e = match enc.get(name).and_then(|x| x.get("strip_prefix")).and_then(Value::as_str) {
+            Some(p) => PathEnc::StripPrefix(p.to_string()),
+            None if enc.get(name).is_some_and(|x| x.get("namespaced").is_some()) => {
+                PathEnc::Namespaced(enc[name]["namespaced"].as_str().ok_or_else(|| anyhow!("{ctx}: `namespaced` lists extra characters as a string"))?.to_string())
+            }
+            None => match enc.get(name).and_then(Value::as_str) {
             None | Some("segment") => PathEnc::Segment,
             Some("component") => PathEnc::Component,
             Some("uri_tail") => PathEnc::UriTail,
+            Some("namespaced") => PathEnc::Namespaced(String::new()),
+            Some("name") => PathEnc::Name,
             Some(o) => bail!("{ctx}: unknown path encoding `{o}`"),
+            },
         };
         out.push(PathPart::Param(name.to_string(), e));
         rest = &rest[j + 1..];
@@ -504,9 +553,10 @@ fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
             let f = v.get("fields").and_then(Value::as_object).ok_or_else(|| anyhow!("{ctx}: object mode needs `fields`"))?;
             let mut out = Vec::new();
             for (k, x) in f {
-                let p = s(x, "pointer", ctx)?.to_string();
-                if !p.starts_with('/') {
-                    bail!("{ctx}: pointer must start with `/`");
+                // `""` is the whole response document (e.g. a top-level array).
+                let p = x.get("pointer").and_then(Value::as_str).ok_or_else(|| anyhow!("{ctx}: `pointer` must be a string"))?.to_string();
+                if !p.is_empty() && !p.starts_with('/') {
+                    bail!("{ctx}: pointer must be empty or start with `/`");
                 }
                 known_keys(x, &["pointer", "default", "each", "count"], ctx)?;
                 let each = match x.get("each") {
@@ -551,7 +601,7 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
         o => bail!("{ctx}: risk must be read|write|destructive, got `{o}`"),
     };
     let req = a.get("request").ok_or_else(|| anyhow!("{ctx}: request is required"))?;
-    known_keys(req, &["method", "path", "path_encoding", "query", "headers", "body", "constraints", "nonempty_body", "read_only_post"], &ctx)?;
+    known_keys(req, &["method", "path", "paths", "path_encoding", "query", "headers", "body", "constraints", "nonempty_body", "read_only_post"], &ctx)?;
     let method = s(req, "method", &ctx)?.to_ascii_uppercase();
     if !["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&method.as_str()) {
         bail!("{ctx}: unsupported method `{method}`");
@@ -566,7 +616,29 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
     }
     let mut used = BTreeSet::new();
     let enc = req.get("path_encoding").and_then(Value::as_object).cloned().unwrap_or_default();
-    let path = parse_path(s(req, "path", &ctx)?, props, &enc, &ctx, &mut used)?;
+    let mut alt_paths = Vec::new();
+    let path = match req.get("paths") {
+        None => parse_path(s(req, "path", &ctx)?, props, &enc, &ctx, &mut used)?,
+        Some(list) => {
+            if req.get("path").is_some() {
+                bail!("{ctx}: use either `path` or `paths`");
+            }
+            let list = list.as_array().filter(|l| !l.is_empty()).ok_or_else(|| anyhow!("{ctx}: `paths` must be a non-empty list"))?;
+            for (i, p) in list.iter().enumerate() {
+                let when = p.get("when").and_then(Value::as_str).map(String::from);
+                if let Some(w) = &when {
+                    if !props.contains_key(w) {
+                        bail!("{ctx}: paths[{i}].when `{w}` is not declared");
+                    }
+                    used.insert(w.clone());
+                } else if i + 1 != list.len() {
+                    bail!("{ctx}: only the last `paths` entry may omit `when`");
+                }
+                alt_paths.push((when, parse_path(s(p, "path", &ctx)?, props, &enc, &ctx, &mut used)?));
+            }
+            alt_paths[0].1.clone()
+        }
+    };
     let mut query = Vec::new();
     for (k, v) in req.get("query").and_then(Value::as_object).into_iter().flatten() {
         query.push((k.clone(), parse_val(v, props, &format!("{ctx} query {k}"), &mut used)?));
@@ -620,7 +692,30 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
     let mut constraints = Vec::new();
     for c in req.get("constraints").and_then(Value::as_array).into_iter().flatten() {
         let kind = s(c, "kind", &ctx)?;
-        let args: Vec<String> = c.get("args").and_then(Value::as_array).context("constraint args")?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+        let mut args = Vec::new();
+        let mut equals = Vec::new();
+        for x in c.get("args").and_then(Value::as_array).context("constraint args")? {
+            match x {
+                Value::String(n) => {
+                    args.push(n.clone());
+                    equals.push(None);
+                }
+                _ => {
+                    args.push(s(x, "arg", &ctx)?.to_string());
+                    equals.push(Some(x.get("equals").cloned().context("constraint arg object needs `equals`")?));
+                }
+            }
+        }
+        let when = match c.get("when") {
+            None => None,
+            Some(w) => {
+                let n = s(w, "arg", &ctx)?.to_string();
+                if !props.contains_key(&n) {
+                    bail!("{ctx}: constraint `when` arg `{n}` is not declared");
+                }
+                Some((n, w.get("equals").cloned().context("constraint `when` needs `equals`")?))
+            }
+        };
         for a in &args {
             if !props.contains_key(a) {
                 bail!("{ctx}: constraint arg `{a}` is not declared");
@@ -628,6 +723,8 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
         }
         constraints.push(Constraint {
             args,
+            equals,
+            when,
             exclusive: match kind {
                 "at_most_one" => true,
                 "at_least_one" => false,
@@ -657,6 +754,7 @@ fn parse_action(a: &Value, toolkit: &str, prefix: &str, auth_headers: &[String])
             risk,
             method,
             path,
+            alt_paths,
             query,
             headers,
             body,

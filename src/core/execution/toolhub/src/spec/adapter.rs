@@ -59,6 +59,21 @@ fn has_value(args: &Value, key: &str) -> bool {
     }
 }
 
+/// The id charset of path segments (`[A-Za-z0-9._-]{1,200}`), for ids sent in a body or query.
+fn check_segment(v: &Value, name: &str) -> Result<()> {
+    let s = v.as_str().unwrap_or_default();
+    crate::toolkits::path_segment(&json!({ "v": s }), "v").map(|_| ()).map_err(|_| anyhow!("invalid argument `{name}`"))
+}
+
+/// `true` equals `"true"`, `3` equals `"3"`; otherwise plain JSON equality.
+fn loose_eq(x: &Value, v: &Value) -> bool {
+    let norm = |y: &Value| match y {
+        Value::String(s) => s.trim().to_string(),
+        o => o.to_string(),
+    };
+    x == v || (!x.is_null() && norm(x) == norm(v))
+}
+
 fn is_date(t: &str) -> bool {
     t.len() == 10
         && t.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() })
@@ -123,9 +138,19 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
             }
             return Ok(Some(Value::String(out)));
         }
-        Val::Switch { arg, cases, default } => {
-            let key = match args.get(arg).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
-                Some(k) => k.to_string(),
+        Val::Switch { arg, cases, default, otherwise } => {
+            let given = match args.get(arg) {
+                Some(Value::Bool(b)) => Some(b.to_string()),
+                x => x.and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+            };
+            if let Some(o) = otherwise {
+                return match given.and_then(|k| cases.iter().find(|(c, _)| *c == k)) {
+                    Some((_, v)) => eval(v, args),
+                    None => eval(o, args),
+                };
+            }
+            let key = match given {
+                Some(k) => k,
                 None => match default {
                     Some(d) => d.clone(),
                     None => return Ok(None),
@@ -142,6 +167,7 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
         (_, None) => None,
         (Kind::String, Some(Value::String(s))) => {
             let s = if a.trim { s.trim() } else { s.as_str() };
+            let s = a.strip_prefix.as_deref().and_then(|p| s.strip_prefix(p)).unwrap_or(s);
             (!s.is_empty()).then(|| Value::String(s.to_string()))
         }
         (Kind::String, Some(Value::Number(n))) => Some(Value::String(n.to_string())),
@@ -152,6 +178,9 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
         }
         (Kind::Boolean, Some(Value::Bool(b))) => Some(Value::Bool(*b)),
         (Kind::Boolean, Some(_)) => bail!("`{}` must be true or false", a.name),
+        (Kind::Tristate, Some(Value::Bool(b))) => Some(Value::Bool(*b)),
+        (Kind::Tristate, Some(Value::String(s))) if s == "true" || s == "false" => Some(Value::Bool(s == "true")),
+        (Kind::Tristate, Some(_)) => bail!("`{}` must be \"true\" or \"false\"", a.name),
         (Kind::StringList, Some(Value::String(s))) => (!s.is_empty()).then(|| json!([s])),
         (Kind::StringList, Some(Value::Array(x))) => {
             let v: Vec<Value> = x.iter().filter_map(|y| y.as_str().map(|s| json!(s))).collect();
@@ -169,11 +198,25 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
         let kept: Vec<Value> = items.iter().filter(|it| it.get(key).is_some_and(Value::is_string)).cloned().collect();
         out = (!kept.is_empty()).then_some(Value::Array(kept));
     }
-    if let Some(Value::Array(items)) = &out {
+    if let Some(Value::Array(items)) = out.clone() {
+        let items = &items;
         if let Some(max) = a.max_items {
             if items.len() > max {
                 bail!("`{}` takes at most {max} items; received {}. Split into batches of {max}.", a.name, items.len());
             }
+        }
+        if a.segment {
+            for it in items {
+                check_segment(it, &a.name)?;
+            }
+        }
+        if a.items_integer {
+            let mut nums = Vec::new();
+            for it in items {
+                let n = it.as_u64().or_else(|| it.as_str().and_then(|s| s.trim().parse().ok())).filter(|n| *n > 0);
+                nums.push(json!(n.ok_or_else(|| anyhow!("`{}` must be a list of positive user IDs", a.name))?));
+            }
+            out = Some(Value::Array(nums));
         }
         if a.items_segment {
             for it in items {
@@ -183,6 +226,9 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
                 }
             }
         }
+    }
+    if let (true, Some(v @ Value::String(_))) = (a.segment, &out) {
+        check_segment(v, &a.name)?;
     }
     if out.is_none() {
         if let Some(d) = &a.default {
@@ -195,9 +241,14 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
         let ok = match f {
             Format::Date => is_date(s),
             Format::DateTime => is_datetime_tz(s),
+            Format::DatePrefix => s.len() >= 10 && s.is_char_boundary(10) && s[..10].bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }),
+            Format::Color => {
+                let hex = (s.len() == 7 || s.len() == 4) && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit());
+                hex || ((3..=30).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphabetic()))
+            }
         };
         if !ok {
-            bail!("`{}` must be {}, got \"{s}\"", a.name, if f == Format::Date { "a date in YYYY-MM-DD format" } else { "an ISO 8601 date-time such as 2026-10-01T15:00:00Z (with Z or a +hh:mm offset)" });
+            bail!("`{}` must be {}, got \"{s}\"", a.name, match f { Format::Date => "a date in YYYY-MM-DD format", Format::DatePrefix => "an ISO 8601 date, e.g. 2026-10-11 or 2026-10-11T09:00:00Z", Format::Color => "a hex color such as #FF0000 or a CSS color name", Format::DateTime => "an ISO 8601 date-time such as 2026-10-01T15:00:00Z (with Z or a +hh:mm offset)" });
         }
     }
     if let (Some((allowed, strict)), Some(Value::String(s))) = (&a.one_of, &out) {
@@ -331,10 +382,34 @@ fn project_list(list: &[Value], each: &[EachField]) -> Value {
 
 fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
     match enc {
-        PathEnc::Segment => Ok(crate::toolkits::path_segment(args, name)?.to_string()),
+        PathEnc::Segment => match args.get(name) {
+            // Numeric ids (GitLab iids, GitHub numbers) are sent as their decimal form.
+            Some(Value::Number(n)) if n.is_u64() || n.is_i64() => Ok(n.to_string()),
+            _ => Ok(crate::toolkits::path_segment(args, name)?.to_string()),
+        },
         PathEnc::Component => {
             let v = args.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
             if v.len() > 200 || v == "." || v == ".." || v.chars().any(char::is_control) {
+                bail!("invalid argument `{name}`");
+            }
+            Ok(encode_component(v))
+        }
+        PathEnc::StripPrefix(p) => {
+            let v = args.get(name).and_then(Value::as_str).map(str::trim).unwrap_or_default();
+            let v = v.strip_prefix(p.as_str()).unwrap_or(v);
+            crate::toolkits::path_segment(&json!({ "v": v }), "v").map(str::to_string).map_err(|_| anyhow!("invalid argument `{name}`"))
+        }
+        PathEnc::Name => {
+            let v = args.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
+            if v.len() > 200 || v.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '%')) {
+                bail!("invalid argument `{name}`");
+            }
+            Ok(encode_component(v))
+        }
+        PathEnc::Namespaced(extra) => {
+            let v = args.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
+            let ok = v.len() <= 200 && !v.split('/').any(|p| p == "." || p == "..") && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/') || extra.contains(c));
+            if !ok {
                 bail!("invalid argument `{name}`");
             }
             Ok(encode_component(v))
@@ -369,13 +444,27 @@ impl ToolkitAdapter for SpecAdapter {
             bail!("arguments must be a JSON object");
         }
         for c in &a.constraints {
-            let n = c.args.iter().filter(|k| has_value(args, k)).count();
+            if let Some((w, v)) = &c.when {
+                if !args.get(w).is_some_and(|x| loose_eq(x, v)) {
+                    continue;
+                }
+            }
+            let n = c.args.iter().zip(&c.equals).filter(|(k, e)| match e {
+                None => has_value(args, k),
+                Some(v) => args.get(k.as_str()).is_some_and(|x| loose_eq(x, v)),
+            }).count();
             if (c.exclusive && n > 1) || (!c.exclusive && n == 0) {
                 bail!("{}", c.message);
             }
         }
         let mut path = String::new();
-        for p in &a.path {
+        let parts = a
+            .alt_paths
+            .iter()
+            .find(|(w, _)| w.as_ref().is_none_or(|w| has_value(args, w)))
+            .map(|(_, p)| p)
+            .unwrap_or(&a.path);
+        for p in parts {
             match p {
                 PathPart::Lit(l) => path.push_str(l),
                 PathPart::Param(n, e) => path.push_str(&path_value(args, n, e)?),
@@ -400,6 +489,9 @@ impl ToolkitAdapter for SpecAdapter {
             req = req.header(k, v.clone());
         }
         let nonempty = |v: &Value| -> Result<()> {
+            if let (Some(msg), true) = (&a.nonempty_body, v.is_null()) {
+                bail!("{msg}");
+            }
             if let (Some(msg), Some(m)) = (&a.nonempty_body, v.as_object()) {
                 let inner_empty = m.is_empty() || (m.len() == 1 && m.values().next().and_then(Value::as_object).is_some_and(|x| x.is_empty()));
                 if inner_empty {
