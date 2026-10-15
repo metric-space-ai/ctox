@@ -279,6 +279,25 @@ pub enum WritePermission {
     Reject(String),
 }
 pub trait WriteAuthority: Send + Sync {
+    /// Bind the sender app from authenticated native context, not app_id supplied
+    /// by the document. Enforce active commands_out/in and the actor's target right.
+    fn authorize_command_intent(
+        &self,
+        _tx: &Transaction<'_>,
+        _participant: &str,
+        _command: &Value,
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(WritePermission::Reject("forbidden".into()))
+    }
+    /// Native capability/route gate; never inferred from a document claim.
+    fn authorize_command_executor(
+        &self,
+        _tx: &Transaction<'_>,
+        _participant: &str,
+        _command: &Value,
+    ) -> rusqlite::Result<WritePermission> {
+        Ok(WritePermission::Reject("forbidden".into()))
+    }
     fn authorize(
         &self,
         tx: &Transaction<'_>,
@@ -353,6 +372,7 @@ fn rejected(request: &Write, reason: &str) -> WriteResult {
         rev: None,
         gen: request.gen,
         reason: Some(reason.into()),
+        code: Some(write_contract::rejection_code(reason).into()),
         archived_ref: None,
     }
 }
@@ -488,6 +508,7 @@ pub(crate) fn apply_write(
             base = m.base_rev.clone();
         }
         let table = identifier(&current.table)?;
+
         let row: Option<(String, Option<String>, bool)> = tx
             .query_row(
                 &format!("SELECT rev,data,deleted FROM {table} WHERE id=?1"),
@@ -495,6 +516,44 @@ pub(crate) fn apply_write(
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
+        if request.collection == "business_commands"
+            && request.op == WriteOp::Put
+            && base.is_none()
+            && row.is_some()
+            && write_contract::duplicate_command(
+                tx,
+                participant,
+                request,
+                row.as_ref().and_then(|r| r.1.as_deref()),
+            )?
+        {
+            let (rev, _, _) = row.as_ref().ok_or_else(|| invalid("command missing"))?;
+            let seq = tx.query_row(
+                "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
+                params![request.collection, integer(current.gen)?, request.id],
+                |r| r.get(0),
+            )?;
+            let result = WriteResult {
+                op_id: request.op_id.clone(),
+                status: WriteStatus::Accepted,
+                seq: Some(Seq(seq)),
+                rev: Some(rev.clone()),
+                gen: current.gen,
+                reason: None,
+                code: None,
+                archived_ref: None,
+            };
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
+        if request.collection == "business_commands"
+            && request.op == WriteOp::Delete
+            && !write_contract::command_can_remove(row.as_ref().and_then(|r| r.1.as_deref()))?
+        {
+            let result = rejected(request, "command_delete_forbidden");
+            remember(tx, participant, request, &result, now_ms)?;
+            return Ok(result);
+        }
         // A removed revision cannot resurrect content; an explicit create (no base) may start a new identity revision.
         let conflict = match &row {
             Some((rev, _, deleted)) => {
@@ -510,6 +569,24 @@ pub(crate) fn apply_write(
             let result = rejected(request, "conflict");
             remember(tx, participant, request, &result, now_ms)?;
             return Ok(result);
+        }
+        if request.collection == "business_commands" {
+            if let (Some((_, Some(json), false)), Some(_)) = (&row, &request.body) {
+                let previous: Value =
+                    serde_json::from_str(json).map_err(|e| invalid(e.to_string()))?;
+                if let Some(reason) = write_contract::check_command_input(
+                    tx,
+                    participant,
+                    request,
+                    &previous,
+                    now_ms,
+                    authority,
+                )? {
+                    let result = rejected(request, &reason);
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+            }
         }
         let merging = row
             .as_ref()
@@ -616,6 +693,48 @@ pub(crate) fn apply_write(
                 remember(tx, participant, request, &result, now_ms)?;
                 return Ok(result);
             }
+            if request.collection == "business_commands" {
+                let prior: Option<Value> = row
+                    .as_ref()
+                    .and_then(|r| r.1.as_deref())
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| invalid(e.to_string()))?;
+                if let Some(reason) = write_contract::check_command(
+                    tx,
+                    participant,
+                    request,
+                    prior.as_ref(),
+                    &document,
+                    now_ms,
+                    authority,
+                )? {
+                    let result = rejected(request, &reason);
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+                if prior.as_ref() == Some(&document) {
+                    let (prior_rev, _, _) =
+                        row.as_ref().ok_or_else(|| invalid("command missing"))?;
+                    let seq = tx.query_row(
+                        "SELECT seq FROM _changes WHERE collection=?1 AND gen=?2 AND id=?3",
+                        params![request.collection, integer(current.gen)?, request.id],
+                        |r| r.get(0),
+                    )?;
+                    let result = WriteResult {
+                        op_id: request.op_id.clone(),
+                        status: WriteStatus::Accepted,
+                        seq: Some(Seq(seq)),
+                        rev: Some(prior_rev.clone()),
+                        gen: current.gen,
+                        reason: None,
+                        code: None,
+                        archived_ref: None,
+                    };
+                    remember(tx, participant, request, &result, now_ms)?;
+                    return Ok(result);
+                }
+            }
             if let Some((_, target)) = &pending {
                 prepared_mirror = Some(
                     authority
@@ -645,6 +764,22 @@ pub(crate) fn apply_write(
             params![request.collection, integer(current.gen)?, request.id],
             |r| r.get(0),
         )?;
+        if request.collection == "business_commands" {
+            if request.op == WriteOp::Delete {
+                write_contract::retire_command(tx, &request.id, current.gen, &rev, seq)?;
+            } else {
+                write_contract::project_command(
+                    tx,
+                    &request.id,
+                    current.gen,
+                    &rev,
+                    seq,
+                    final_document
+                        .as_ref()
+                        .ok_or_else(|| invalid("command body missing"))?,
+                )?;
+            }
+        }
         if let Some((lock, _)) = pending {
             let output = if request.op == WriteOp::Delete {
                 crate::schema::MigrationOutput::Delete
@@ -687,6 +822,7 @@ pub(crate) fn apply_write(
             rev: Some(rev.clone()),
             gen: current.gen,
             reason: None,
+            code: None,
             archived_ref: migration.and_then(|m| m.archived_ref),
         };
         if request.op != WriteOp::Delete {

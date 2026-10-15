@@ -247,6 +247,8 @@ pub struct WriteResult {
     pub rev: Option<String>,
     pub gen: u64,
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub archived_ref: Option<String>,
 }
 /// Participant identity is supplied by the admitted native connection, never this payload.

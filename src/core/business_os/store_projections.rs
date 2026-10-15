@@ -15,10 +15,14 @@ use super::store::{
 };
 use crate::mission::channels;
 use anyhow::Context;
+use ctox_store::change_log::subscription::write_contract::read_command_projection;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+#[path = "command_projection_reads.rs"]
+mod command_projection_reads;
+use command_projection_reads::{projected_command_module, projected_command_status};
 use uuid::Uuid;
 
 pub(super) fn persist_terminal_business_chat_command_projection(
@@ -940,13 +944,7 @@ pub(super) fn write_queue_task_projection(
     // accepted native command, rather than replacing it with the queue UI module.
     if task.metadata.get("business_os_origin").is_none() {
         if let Some(command_id) = command_id {
-            let module: Option<String> = conn
-                .query_row(
-                    "SELECT module FROM business_commands WHERE command_id=?1",
-                    [command_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
+            let module = projected_command_module(conn, command_id)?;
             if let Some(module) = module {
                 payload["source_module"] = Value::String(module);
             }
@@ -1089,13 +1087,7 @@ pub(super) fn queue_projection_structured_status(
     task_id: &str,
 ) -> anyhow::Result<Option<String>> {
     if let Some(command_id) = command_id {
-        let command_status = conn
-            .query_row(
-                "SELECT status FROM business_commands WHERE command_id = ?1",
-                params![command_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
+        let command_status = projected_command_status(conn, command_id)?;
         if command_status.as_deref().is_some_and(|status| {
             queue_status_is_terminal_success(Some(status))
                 || queue_status_is_terminal_failure(Some(status))
@@ -1596,14 +1588,7 @@ pub fn repair_queue_projections(
             }
             None => {
                 let command_status = command_id.as_deref().and_then(|command_id| {
-                    conn.query_row(
-                        "SELECT status FROM business_commands WHERE command_id = ?1",
-                        params![command_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                    .ok()
-                    .flatten()
+                    projected_command_status(&conn, command_id).ok().flatten()
                 });
                 if let Some(route_status) = command_status
                     .as_deref()

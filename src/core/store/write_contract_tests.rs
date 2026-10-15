@@ -1,3 +1,6 @@
+// P9 contract tests use the real WAL Store writer, not a simulated executor ledger.
+#[path = "command_contract_tests.rs"]
+mod command_tests;
 use super::*;
 use crate::change_log::{
     self,
@@ -16,6 +19,26 @@ use std::{process::Command, sync::Arc, time::Duration};
 const NOW: u64 = 1_800_000_000_000;
 struct Policy;
 impl WriteAuthority for Policy {
+    fn authorize_command_intent(
+        &self,
+        _: &Transaction<'_>,
+        _: &str,
+        _: &Value,
+    ) -> rusqlite::Result<super::super::WritePermission> {
+        Ok(super::super::WritePermission::Permit)
+    }
+    fn authorize_command_executor(
+        &self,
+        _: &Transaction<'_>,
+        participant: &str,
+        _: &Value,
+    ) -> rusqlite::Result<super::super::WritePermission> {
+        Ok(if participant.starts_with("executor-") {
+            super::super::WritePermission::Permit
+        } else {
+            super::super::WritePermission::Reject("forbidden".into())
+        })
+    }
     fn authorize(
         &self,
         _: &Transaction<'_>,

@@ -10,6 +10,19 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::Value;
 use std::sync::Arc;
 
+#[path = "command_contract.rs"]
+mod command;
+pub(super) use command::check_command_input;
+pub use command::{
+    activate_command_projections, backfill_command_projections, project_command,
+    read_command_projection, CommandProjection,
+};
+pub(super) use command::{check_command, duplicate_command};
+pub use command::{
+    check_executor_fence, claim_command, command_lease, rejection_code, with_command_fence,
+    CommandError, CommandLease,
+};
+pub(super) use command::{command_can_remove, retire_command};
 pub const GAP_MS: u64 = 30_000;
 pub const MAX_WAITING: usize = 64;
 pub const MAX_WAITING_BYTES: usize = 4 * 1024 * 1024;
@@ -152,6 +165,8 @@ fn prior(
         if now > expires || op_expired {
             result.status = WriteStatus::Rejected;
             result.reason = Some("expired".into());
+            result.code = Some("expired".into());
+
             result.seq = None;
             result.rev = None;
         }
