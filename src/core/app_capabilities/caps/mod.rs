@@ -7,6 +7,8 @@ pub mod queue;
 pub mod schedule;
 pub mod task;
 pub mod turn;
+/// CAP-3 flat-argument envelope for agent.coding (§16.30 Nr. 5).
+pub(crate) use coding::flat_envelope as coding_flat_envelope;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NativeRoute {

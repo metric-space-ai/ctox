@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Entrypoint used only inside the canonical Linux build lane.
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -20,15 +20,25 @@ const here = dirname(fileURLToPath(import.meta.url));
 const snapshot = join(output, '.runner');
 fs.mkdirSync(join(snapshot, 'tests'), { recursive: true });
 fs.mkdirSync(join(snapshot, 'scripts'), { recursive: true });
-fs.cpSync(resolve(here,'../../tests/sync-v4-e2e'),join(snapshot,'tests/sync-v4-e2e'),{recursive:true});
-if (args.catalog === 'yes') fs.cpSync(resolve(here,'../../tests/sync-v4'),join(snapshot,'tests/sync-v4'),{recursive:true});
-fs.copyFileSync(join(here,'e2e-netns.mjs'),join(snapshot,'scripts/e2e-netns.mjs'));
-const manifestPath = resolve(here,'../../source-manifest.json');
-const sourceManifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath)) : null;
-if (sourceManifest) for (const row of sourceManifest.files) {
-  const file = resolve(here,'../..',row.path);
-  if (!file.startsWith(resolve(here,'../..')+'/') || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== row.sha256) throw Error('Harness source changed during staging');
+const repository = resolve(here,'../..');
+const manifestPath = join(repository,'source-manifest.json');
+const sourceManifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath)) : {
+  head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),scope:'owned harness files; per-file hashes',
+  files:[...new Set(execFileSync('git',['ls-files','-c','-o','--exclude-standard','-z','--','tests/sync-v4-e2e','tests/sync-v4','scripts/sync-v4'],{encoding:'utf8'}).split('\0').filter(Boolean))]
+    .filter(path=>/^(tests\/sync-v4-e2e\/|tests\/sync-v4\/k[^/]+\/|scripts\/sync-v4\/(e2e-[^/]+\.mjs|gate-regression\.sh)$)/.test(path))
+    .map(path=>({path,sha256:createHash('sha256').update(fs.readFileSync(join(repository,path))).digest('hex')}))
+};
+for (const row of sourceManifest.files) {
+  const file=resolve(repository,row.path);
+  if(!file.startsWith(repository+'/')||!fs.lstatSync(file).isFile())throw Error('Harness manifest path escape or non-file');
+  const bytes=fs.readFileSync(file);
+  if(createHash('sha256').update(bytes).digest('hex')!==row.sha256)throw Error('Harness source changed during staging');
+  if(row.path.startsWith('tests/sync-v4-e2e/') || (args.catalog==='yes'&&row.path.startsWith('tests/sync-v4/k'))){
+    const dest=join(snapshot,row.path);fs.mkdirSync(dirname(dest),{recursive:true});fs.writeFileSync(dest,bytes);
+  }
 }
+if(!sourceManifest.files.some(r=>r.path==='scripts/sync-v4/e2e-netns.mjs'))throw Error('Namespace helper absent from source custody');
+fs.copyFileSync(join(here,'e2e-netns.mjs'),join(snapshot,'scripts/e2e-netns.mjs'));
 const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
   seedAfterStart: args['seed-after-start'] === 'yes', leadProfile: args['lead-profile'] || 'eager',
   osBootstrap: args['os-bootstrap'] || null, catalogDuration: args['catalog-duration'] === 'full' ? 'full' : 'slice', prime: args.prime === 'yes', upgradeBuild: args['upgrade-build'] || null, schemaCli: args['schema-cli'] ? JSON.parse(fs.readFileSync(args['schema-cli'])) : null, catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,

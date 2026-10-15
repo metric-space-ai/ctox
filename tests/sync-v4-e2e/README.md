@@ -32,7 +32,7 @@ but cannot run this namespace helper without a specific authorized setup. Copy
 only this producer's binary + matching source assets and rewrite the manifest
 paths with `e2e-export.mjs`/`e2e-import.mjs`; retain original SHA and custody.
 Never borrow another daemon or bypass namespace isolation to get a green run.
-`--seconds 900` bounds the full scenario run, at most 1800. `--scenario K02`,
+`--seconds 900` bounds the full scenario run, at most 2100. `--scenario K02`,
 `K08` or `K04-ATTACH` selects one incident. `--clients 1..3` opens real independent
 browser storage contexts. The selected local ICE candidate MUST be `relay`.
 Optional `--warm-rtt 20` establishes the real locally-held-data precondition at
@@ -56,7 +56,8 @@ retires detached descendants if the coordinator crashes.
   consuming the real app DB; it is not Outbound UI acceptance.
 - **K08**: hold local rows, release the warm-up lease, first Shell `openModule`
   of a genuine runtime-installed test app. Measure its real `ctx.db` query and
-  paint. No empty first render, complete ≤1000ms. Does not claim the separate
+  paint and actual DOM actionability without an input click. A mounted list
+  behind the Shell loading cover is not visible acceptance. No empty first render, complete ≤1000ms. Does not claim the separate
   multi-tab K19 invariant; that needs its own scenario.
 - **K04-ATTACH**: after a confirmed local checkpoint, inject the exact old ATTACH
   writer's timestamp pattern into the owned fixture table. Observe native truth
@@ -157,7 +158,7 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
 actual demand-only collection. It is not the historical Outbound startup code
 from before `1773924d1`; a green result does not reproduce or close that incident.
 
-`e2e-cancellation.mjs` cancels a real daemon/browser run, verifies bounded
+`tests/sync-v4/k-support/cancellation.mjs` cancels a real daemon/browser run, verifies bounded
 namespace/group retirement and retains the receipt. Signal escalation is
 bounded to five seconds. Oracle mutation copies prove missing rows, zero
 scenarios and incomplete coverage each turn a guard red, then restored green.
