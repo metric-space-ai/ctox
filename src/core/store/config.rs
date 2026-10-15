@@ -7,6 +7,7 @@ use rusqlite::Connection;
 
 pub const READ_CONNECTIONS: usize = 4;
 pub const MAX_BLOCKING_READS: usize = 16;
+pub const MAX_ADMITTED_JOBS: usize = 1024;
 
 /// Admission waits are distinct from SQLite execution: SQLite never sleeps on a lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,7 +19,12 @@ pub struct AdmissionBudget {
 
 impl AdmissionBudget {
     pub fn new(capacity: NonZeroUsize, wait: Duration, execution: Duration) -> Option<Self> {
-        if wait.is_zero() || execution.is_zero() {
+        if wait.is_zero()
+            || execution.is_zero()
+            || capacity.get() > MAX_ADMITTED_JOBS
+            || std::time::Instant::now().checked_add(wait).is_none()
+            || std::time::Instant::now().checked_add(execution).is_none()
+        {
             return None;
         }
         Some(Self {

@@ -1,11 +1,15 @@
 //! Centralized runtime database paths.
 //!
-//! All core state lives in a single consolidated sqlite file, [`core_db`] =
-//! `runtime/ctox.sqlite3`. Mission-side tables (queue, tickets, governance,
-//! secrets, channels, schedule, plans, approval nag, knowledge) and LCM-side
+//! Core mission and LCM state share [`core_db`] = `ctox.sqlite3` below the
+//! effective state root. Mission-side tables (queue, tickets, governance,
+//! channels, schedule, plans, approval nag, knowledge) and LCM-side
 //! tables (messages, summaries, continuity, mission state, verification,
 //! claims) share that file. [`mission_db`] and [`lcm_db`] are thin aliases
 //! that exist for call-site clarity — both resolve to the same path.
+//!
+//! Business OS, sync, runtime configuration and secrets have separate files.
+//! Every helper here respects `CTOX_STATE_ROOT`; without it, state is below
+//! `root/runtime`. Helpers do not search or import data from another root.
 //!
 //! Historical `cto_agent.db` and `ctox_lcm.db` paths remain exposed only so
 //! compatibility migration code can detect and import them when present.
