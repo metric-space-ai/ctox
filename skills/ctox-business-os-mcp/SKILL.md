@@ -52,8 +52,10 @@ Supported shapes:
 For managed production gateways, prefer per-instance connect tokens. The local
 CTOX connector sends timestamp/nonce replay-protection headers automatically.
 
-If no CTOX Business OS MCP server is available, say that CTOX MCP is not
-connected. Do not pretend to have CTOX access.
+If this agent has no CTOX tool catalog, say that this agent is not connected;
+that alone does not establish that the native connector is offline. Check the
+client's configured server entries and reload state before diagnosing the host.
+Do not pretend to have CTOX access.
 
 ## MCP Configuration And Auth
 
@@ -73,20 +75,16 @@ CTOX secret-store value `business_os/mcp_inbound_auth_token`; it is valid for
 `http://127.0.0.1:8788/mcp` or an operator-managed tunnel to that local MCP
 server. Do not use that local token as a managed `mcp.ctox.dev` client token.
 
-For a managed remote agent, configure the agent client with:
-
-```json
-{
-  "mcpServers": {
-    "<instance>-business-os": {
-      "url": "https://mcp.ctox.dev/mcp/<instance-id>",
-      "headers": {
-        "Authorization": "Bearer <managed MCP client token>"
-      }
-    }
-  }
-}
-```
+For a managed remote agent, use the intended HTTPS MCP endpoint with its
+managed MCP client token supplied from a secret store, not a literal header in
+a configuration file. For Codex native HTTP setup, read
+[Secret-backed HTTP headers](references/secret-backed-http.md). The bundled
+`scripts/http-headers-helper.mjs` retrieves the bearer through a trusted local
+loader and emits JSON headers only into Codex's private helper-output pipe.
+Codex's native Streamable HTTP transport handles real MCP traffic. The helper
+does not create tools, mint tokens, or change policy. Keep secrets out of
+arguments, environment configuration, files, and logs; never run the helper
+with a real loader in a visible terminal or redirect its output to a file.
 
 The CTOX instance must also connect outbound to the managed gateway with the
 instance connect token issued by ctox.dev/Web Auth:
@@ -95,9 +93,21 @@ instance connect token issued by ctox.dev/Web Auth:
 ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id>
 ```
 
-If the managed endpoint returns `runtime_unavailable`, the agent is configured
-but the CTOX instance is not currently connected. Report that state instead of
-trying shell, SQL, browser-control, or raw HTTP fallbacks.
+If the managed endpoint returns `runtime_unavailable`, report the connector
+availability failure. With explicit host/setup authorization, SSH through the
+operator's configured target (for example ctox-dev) and supported CTOX health
+commands may diagnose or repair the connector. That is infrastructure setup,
+not permission to execute the failed business operation through another path.
+Never bypass denied business operations through shell, SQL, browser-control,
+or raw Business OS HTTP.
+
+Distinguish three boundaries: a missing client entry/tool catalog needs client
+configuration/reload; an offline connector needs authorized host diagnosis;
+an authentication or `business_os_policy` denial needs the correct identity or
+operator-approved grants. A native tool count is not the gateway's admitted
+catalog. Verify `initialize`, `tools/list`, relevant resources and an allowed
+read through the configured client after reload. Configuration alone is not
+readiness proof. See the HTTP helper reference for exact checks and limitations.
 
 ## Web-Login Bootstrap
 
@@ -109,6 +119,10 @@ credential itself.
 Rules:
 
 - Never repeat, log, store, or put the password in command arguments.
+- Bootstrap and token issuance/rotation are separate authorized setup actions,
+  never an automatic authentication retry. For the secret-backed HTTP route,
+  do not use bootstrap modes that print bearer headers to a terminal or
+  persist plaintext tokens; retain the issued token in the encrypted store.
 - Prefer the `/ctox` deploy skill bootstrap script when it is available:
   `ctox/scripts/connect-business-os-mcp.mjs --password-stdin`.
 - For ctox.dev managed tenants, authenticate to `https://ctox.dev`, read
