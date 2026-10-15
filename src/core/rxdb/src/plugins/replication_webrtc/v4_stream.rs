@@ -234,6 +234,7 @@ pub struct Write {
 #[serde(rename_all = "snake_case")]
 pub enum WriteStatus {
     Accepted,
+    Merged,
     Rejected,
     Migrated,
 }
@@ -248,17 +249,35 @@ pub struct WriteResult {
     pub reason: Option<String>,
     pub archived_ref: Option<String>,
 }
+/// Participant identity is supplied by the admitted native connection, never this payload.
+/// client_seq starts at 1 for an admitted participant/session identity and is a decimal string.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderedWrite {
+    pub client_seq: Seq,
+    #[serde(flatten)]
+    pub write: Write,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderedWriteResult {
+    pub client_seq: Seq,
+    /// Merged/migrated results carry no unmasked business payload. The consumer MUST
+    /// wait for the authoritative normal page (seq >= result.seq), rather than stamp
+    /// its own optimistic body with this revision/seq. Keep the outbox until then.
+    pub requires_page: bool,
+    #[serde(flatten)]
+    pub result: WriteResult,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Subscribe(Subscribe),
-    Write(Write),
+    Write(OrderedWrite),
     ClockSync(ClockProbe),
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CoreMessage {
-    WriteResult(WriteResult),
+    WriteResult(OrderedWriteResult),
     HelloOk(HelloOk),
 }
 /// Scope token values are issued/validated by P6, never minted by this codec.
