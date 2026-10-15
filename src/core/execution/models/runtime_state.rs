@@ -594,7 +594,8 @@ impl crate::inference::runtime_env::RuntimeStore {
             Ok(())
         }).await?;
         invalidate_runtime_state_cache(&self.root);
-        update_runtime_state_cache(&self.root, Some(state));
+        // Async completions may resume out of commit order. Reload the committed
+        // row on the next read instead of caching this caller's older snapshot.
         Ok(())
     }
 }

@@ -15,7 +15,6 @@ use crate::inference::runtime_state;
 use crate::secrets;
 
 const RUNTIME_ENV_TABLE: &str = "runtime_env_kv";
-const RUNTIME_ENV_STORE_FILE: &str = "ctox-runtime.sqlite3";
 
 fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
     static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -384,10 +383,10 @@ impl RuntimeStore {
         &self,
     ) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
         self.owner
-            .read(ctox_store::JobOptions::default(), |conn| {
-                load_runtime_env_map_from_db(conn)
-                    .map_err(|_| ctox_store::StoreError::Invalid("runtime env read failed".into()))
-            })
+            .read(
+                ctox_store::JobOptions::default(),
+                load_runtime_env_map_from_db,
+            )
             .await
     }
 
@@ -509,20 +508,18 @@ fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn load_runtime_env_map_from_db(conn: &Connection) -> Result<BTreeMap<String, String>> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
-        ))
-        .context("failed to prepare runtime env query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .context("failed to read runtime env rows")?;
+fn load_runtime_env_map_from_db(
+    conn: &Connection,
+) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut env_map = BTreeMap::new();
     for row in rows {
-        let (key, value) = row.context("failed to decode runtime env row")?;
+        let (key, value) = row?;
         env_map.insert(key, value);
     }
     Ok(env_map)
