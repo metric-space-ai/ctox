@@ -1,5 +1,13 @@
 # Native provider API-key ingress
 
+> Status (15.10.2026): the native WebRTC receiver for this request
+> (`src/core/business_os/rxdb_peer_provider_api_keys.rs` and its registration in
+> `rxdb_peer.rs`) is owned by the CTOX Sync v4 work and is not on `main` yet.
+> The gateway side it calls (`install_api_key_account_owned_authorized` in
+> `src/core/execution/cliproxyapi_integration/api_key_ingress.rs`), the account
+> controls, the live catalog and the routing are on `main`. Until the receiver
+> lands, the capability below is not advertised and no API key can be entered.
+
 API keys travel only through the guarded auxiliary WebRTC request
 `ctox.workjet.providers.api-key.v1`, advertised by
 `ctox-workjet-provider-api-key-v1`. They must never enter a durable
