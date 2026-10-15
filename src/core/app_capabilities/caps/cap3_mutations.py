@@ -8,7 +8,8 @@ OUT=pathlib.Path(os.environ["CARGO_TARGET_DIR"])/("cap3-proofs-"+datetime.dateti
 OUT.mkdir(parents=True,exist_ok=False)
 DEADLINE=datetime.datetime.fromisoformat(sys.argv[1]).timestamp() if len(sys.argv)>1 and sys.argv[1] else time.time()+5400
 STORE="../../business_os/store.rs"
-FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","directory.rs","files.rs","process.rs","cap3_tests.rs",STORE]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
+PEER="../../business_os/rxdb_peer_browser.rs"
+FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","directory.rs","files.rs","process.rs","cap3_tests.rs",STORE,PEER]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
 ORIGINAL={path:path.read_bytes() for path in FILES}
 def digest():
     return {str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in FILES}
@@ -44,7 +45,7 @@ PROOFS=[
  ("lock-single-holder","lock.rs",E("if live {"),"if false {","lock_fence_contract"),
  ("flow-platform","flow.rs",E("if !is_platform(ctx) {"),"if false {","flow_platform_contract"),
  ("browser-op-allowlist","browser.rs",E("if !ALLOWED_OPS.contains(&request.op.as_str()) {"),"if false {","browser_device_contract"),
- ("browser-blobref","browser.rs",E('"blob":{"ref":reference.sha256}'),'"blob":reference',"browser_device_contract"),
+ ("browser-blobref","browser.rs",E('"blob":{"ref":meta.reference}'),'"blob":meta.reference.clone() + "transfer"',"browser_device_contract"),
  ("ingest-fallback-3s","ingest.rs",E("match receiver.recv_timeout(wait) {"),"match receiver.recv() {","ingest_fallback_contract"),
  ("ingest-header-whitelist","ingest.rs",r"if !RESPONSE_HEADERS\.contains\(&name\.as_str\(\)\) \{\s*continue;\s*\}","","ingest_header_contract"),
  ("ingest-request-private","ingest.rs",E("if PRIVATE_HEADERS.contains(&name.as_str()) && !route.pass_headers.contains(&name) {"),"if false {","ingest_header_contract"),
@@ -64,6 +65,12 @@ PROOFS=[
  ("policy-actor","directory.rs",E("BusinessOsActor::new(Some(ctx.actor.id.clone()), &ctx.actor.role)"),'BusinessOsActor::new(Some(ctx.actor.id.clone()), "admin")',"directory_policy_contract"),
  ("command-scope","directory.rs",E("WHERE command_id=?1 AND module=?2"),"WHERE command_id=?1 AND ?2=?2","directory_policy_contract"),
  ("auth-assist-module","browser.rs",E(".is_some_and(|module| module != ctx.app_id)"),".is_some_and(|_| false)","auth_assist_contract"),
+ # ---- CAP-3c (§16.46)
+ ("core-app-binding",PEER,E("if bound_app != binding.app_id {"),"if false {","browser_core_entry_contract"),
+ ("core-user-binding",PEER,E("if bound_user != binding.user_id {"),"if false {","browser_core_entry_contract"),
+ ("core-policy",PEER,E("if !decision.allowed {"),"if false {","browser_core_entry_contract"),
+ ("core-audit",PEER,E('core_browser_audit(root, binding, command_type, session_id, "allowed", "")'),"Ok(())","browser_core_entry_contract"),
+ ("core-internal-only",PEER,E("if let Some(owner) = core_owner {"),'if let Some(owner) = core_owner.or_else(|| document.pointer("/client_context/actor/id").and_then(Value::as_str)) {',"browser_internal_only_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None

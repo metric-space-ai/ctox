@@ -1362,3 +1362,120 @@ fn app_capabilities_cap3_auth_assist_contract() {
         );
     }
 }
+
+// ------------------------------------------------------------------ CAP-3c (§16.46)
+
+#[test]
+fn app_capabilities_cap3_browser_core_entry_contract() {
+    let f = Fixture::new();
+    let root = f.root.path();
+    let binding = |app: &'static str, user: &'static str, role: &'static str| {
+        crate::business_os::CoreBrowserBinding {
+            app_id: app,
+            user_id: user,
+            role,
+            command_id: "cmd",
+            call_id: "call",
+        }
+    };
+    let gate = |b: &crate::business_os::CoreBrowserBinding<'_>, command: &str, session: &str| {
+        crate::business_os::core_browser_gate(root, b, command, session)
+            .map_err(|e| format!("{e:#}"))
+    };
+    gate(
+        &binding("outbound", "u1", "admin"),
+        "browser.navigate",
+        "s1",
+    )
+    .unwrap();
+    // Same session again for the same (app, user): still allowed.
+    gate(&binding("outbound", "u1", "admin"), "browser.reload", "s1").unwrap();
+    let foreign_app = gate(&binding("news", "u1", "admin"), "browser.navigate", "s1").unwrap_err();
+    assert!(foreign_app.contains("another app"), "{foreign_app}");
+    let foreign_user = gate(
+        &binding("outbound", "u2", "admin"),
+        "browser.navigate",
+        "s1",
+    )
+    .unwrap_err();
+    assert!(foreign_user.contains("another user"), "{foreign_user}");
+    let no_right = gate(&binding("outbound", "u1", "user"), "browser.navigate", "s2").unwrap_err();
+    assert!(no_right.contains("policy"), "{no_right}");
+    let token_gated = gate(
+        &binding("outbound", "u1", "admin"),
+        "browser.credential.fill",
+        "s1",
+    )
+    .unwrap_err();
+    assert!(token_gated.contains("command"), "{token_gated}");
+    // Every use is audited, without payload contents.
+    let conn = crate::business_os::store::open_store(root).unwrap();
+    let count = |kind: &str| -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM business_events WHERE command_type=?1",
+            [kind],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        count("browser.core_entry.allowed"),
+        2,
+        "allowed use not audited"
+    );
+    assert_eq!(count("browser.core_entry.denied"), 4, "refusal not audited");
+    let bodies: Vec<String> = conn
+        .prepare("SELECT payload_json FROM business_events WHERE command_type LIKE 'browser.core_entry.%'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(bodies
+        .iter()
+        .all(|b| b.contains("\"app_id\"") && !b.contains("url")));
+    // The production engine refuses a foreign session before any engine effect.
+    let engine = browser::PeerBrowserEngine { root };
+    use browser::BrowserEngine as _;
+    let news = Host::new("news", "admin");
+    assert_eq!(
+        engine.session_stop(&news.ctx, "s1").unwrap_err().code,
+        ErrorCode::Forbidden
+    );
+    assert_eq!(
+        engine
+            .op(
+                &news.ctx,
+                "s1",
+                None,
+                "credential_fill",
+                &json!({"credential_ref":"X"})
+            )
+            .unwrap_err()
+            .code,
+        ErrorCode::Forbidden
+    );
+}
+
+#[test]
+fn app_capabilities_cap3_browser_internal_only_contract() {
+    let root = tempfile::tempdir().unwrap();
+    // A replicated document claiming a Core binding or an actor never selects
+    // the internal entry: without the user's capability token it is refused.
+    let forged = json!({"type":"browser.navigate","payload":{"session_id":"s1"},
+        "client_context":{"core_entry":true,"actor":{"id":"u1"},"owner_user_id":"u1"}});
+    let refused = crate::business_os::resolve_browser_command_owner(root.path(), &forged, None)
+        .map_err(|e| format!("{e:#}"))
+        .unwrap_err();
+    assert!(
+        refused.contains("capability token is required"),
+        "{refused}"
+    );
+    let core = crate::business_os::resolve_browser_command_owner(root.path(), &forged, Some("u7"))
+        .unwrap();
+    assert_eq!(
+        core,
+        ("u7".to_owned(), String::new()),
+        "the Core binding, not the document, names the owner"
+    );
+}

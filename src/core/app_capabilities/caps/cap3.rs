@@ -425,7 +425,7 @@ impl CapabilityBackend for Cap3Backend<'_> {
             }
             "lock" | "fence" => lock::execute(self.root, ctx, function, payload, (self.now_ms)()),
             "agent.flow" => flow::execute(self.root, ctx, payload),
-            "browser" => browser::execute(self.browser, self.blobs, ctx, function, payload),
+            "browser" => browser::execute(self.browser, self.file_store(), ctx, function, payload),
             "net.ingest.webhook" | "net.ingest" => ingest::execute(
                 self.root,
                 self.ingest,

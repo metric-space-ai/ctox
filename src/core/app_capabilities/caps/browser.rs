@@ -152,7 +152,7 @@ fn validate_params(op: &str, params: &Value) -> Result<(), CtoxError> {
 
 pub(super) fn execute(
     engine: &dyn BrowserEngine,
-    blobs: &dyn cap2::blob::BlobAccess,
+    files: Result<&dyn files::FileStore, CtoxError>,
     ctx: &CapCallContext,
     function: &str,
     args: &Value,
@@ -218,10 +218,15 @@ pub(super) fn execute(
                 };
                 // Published as a files record owned by the calling app; the
                 // transfer id stays internal (§16.32).
-                let reference = cap2::blob::publish(blobs, ctx, &page.bytes, &mime)?;
+                let store = files.as_ref().map_err(Clone::clone)?;
+                let name = format!("capture-{}.html", captures.len() + 1);
+                let meta = store.put(&ctx.app_id, &ctx.actor.id, &name, &mime, &page.bytes)?;
+                if meta.reference != sha256_hex(&page.bytes) || meta.owner_app != ctx.app_id {
+                    return Err(CtoxError::uncertain());
+                }
                 captures.push(
                     json!({"url":url,"final_url":page.final_url,"status":page.status,
-                    "mime":mime,"size":reference.size,"blob":{"ref":reference.sha256}}),
+                    "mime":mime,"size":meta.size,"file_id":meta.id,"blob":{"ref":meta.reference}}),
                 );
             }
             Ok(json!({ "captures": captures }))
@@ -324,4 +329,123 @@ pub(super) fn auth_assist_request(
         "credential_ref": field("credential_ref"),
         "expires_at_ms": field("expires_at_ms"),
     })))
+}
+
+/// §16.46 production engine: the peer's Core-authorized internal entry for
+/// session ops (policy, (session → app, user) binding and audit happen there);
+/// capture runs in a fresh, stateless automation browser (no user session).
+pub struct PeerBrowserEngine<'a> {
+    pub root: &'a Path,
+}
+const OP_COMMANDS: &[(&str, &str)] = &[
+    ("navigate", "browser.navigate"),
+    ("reload", "browser.reload"),
+    ("back", "browser.back"),
+    ("forward", "browser.forward"),
+    ("tab_open", "browser.tab.open"),
+    ("tab_activate", "browser.tab.activate"),
+    ("tab_close", "browser.tab.close"),
+    ("dialog_respond", "browser.dialog.respond"),
+    ("permission_respond", "browser.permission.respond"),
+    ("clipboard_copy", "browser.clipboard.copy"),
+    ("clipboard_paste", "browser.clipboard.paste"),
+    ("clipboard_clear", "browser.clipboard.clear"),
+];
+impl PeerBrowserEngine<'_> {
+    fn run(&self, ctx: &CapCallContext, command: &str, payload: Value) -> Result<Value, CtoxError> {
+        let binding = crate::business_os::CoreBrowserBinding {
+            app_id: &ctx.app_id,
+            user_id: &ctx.actor.id,
+            role: &ctx.actor.role,
+            command_id: &ctx.command_id,
+            call_id: &ctx.call_id,
+        };
+        crate::business_os::apply_core_browser_command(self.root, &binding, command, payload)
+            .map_err(|error| {
+                if format!("{error:#}").contains("browser core entry refused") {
+                    forbidden("browser session or command not permitted")
+                } else {
+                    native_error(error)
+                }
+            })
+    }
+}
+impl BrowserEngine for PeerBrowserEngine<'_> {
+    fn op(
+        &self,
+        ctx: &CapCallContext,
+        session_id: &str,
+        tab_id: Option<&str>,
+        op: &str,
+        params: &Value,
+    ) -> Result<Value, CtoxError> {
+        // credential_fill needs the user's own secrets.manage capability;
+        // nav_state has no engine command of its own.
+        let command = OP_COMMANDS
+            .iter()
+            .find(|(name, _)| *name == op)
+            .map(|(_, command)| *command)
+            .ok_or_else(|| forbidden("browser op is not available to apps"))?;
+        let mut payload = params.as_object().cloned().unwrap_or_default();
+        payload.remove("tabId");
+        payload.remove("timeoutMs");
+        payload.insert("session_id".into(), json!(session_id));
+        if let Some(tab) = tab_id {
+            payload.insert("tab_id".into(), json!(tab));
+        }
+        self.run(ctx, command, Value::Object(payload))
+    }
+    fn session_stop(&self, ctx: &CapCallContext, session_id: &str) -> Result<Value, CtoxError> {
+        self.run(
+            ctx,
+            "browser.session.stop",
+            json!({ "session_id": session_id }),
+        )
+    }
+    fn auth_assist_complete(
+        &self,
+        ctx: &CapCallContext,
+        session_id: &str,
+    ) -> Result<Value, CtoxError> {
+        self.run(
+            ctx,
+            "web_stack.auth_assist.complete",
+            json!({ "session_id": session_id, "confirmed": true }),
+        )
+    }
+    fn capture(
+        &self,
+        _: &CapCallContext,
+        url: &str,
+        timeout_ms: u64,
+    ) -> Result<CapturedPage, CtoxError> {
+        let target = serde_json::to_string(url).map_err(native_error)?;
+        let source = format!(
+            "await page.goto({target}, {{ waitUntil: 'domcontentloaded' }}); return {{ final_url: page.url(), html: await page.content() }};"
+        );
+        let result = crate::web_stack::run_browser_automation(
+            self.root,
+            &crate::web_stack::BrowserAutomationRequest {
+                dir: None,
+                timeout_ms: Some(timeout_ms),
+                source,
+            },
+        )
+        .map_err(native_error)?;
+        let page = result.get("result").cloned().unwrap_or(Value::Null);
+        let html = page
+            .get("html")
+            .and_then(Value::as_str)
+            .ok_or_else(CtoxError::uncertain)?;
+        Ok(CapturedPage {
+            final_url: page
+                .get("final_url")
+                .and_then(Value::as_str)
+                .unwrap_or(url)
+                .to_owned(),
+            status: 200,
+            mime: "text/html".into(),
+            bytes: html.as_bytes().to_vec(),
+        })
+    }
 }

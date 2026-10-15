@@ -199,6 +199,11 @@ pub use rxdb_peer::sync_desktop_file_from_path;
 pub use rxdb_peer::sync_desktop_files_from_workspace_root;
 pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
+/// §16.46 Core-authorized internal browser entry (app capabilities only).
+pub(crate) use rxdb_peer_browser::{
+    apply_core_browser_command, core_browser_gate, resolve_browser_command_owner,
+    CoreBrowserBinding,
+};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
 #[cfg(unix)]
