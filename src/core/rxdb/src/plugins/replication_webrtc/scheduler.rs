@@ -409,6 +409,12 @@ impl NativeSendScheduler {
             }
         }
     }
+    /// Revoke all retained clones of this exact association on peer teardown.
+    /// This is cancellation, not a successful graceful drain.
+    pub fn close_now(&self) {
+        self.drain.send_replace(true);
+        self._task.0.abort();
+    }
     pub async fn send_realtime(&self, bytes: &[u8]) -> RxResult<()> {
         self.submit(None, WireSeq(0), bytes, None).await
     }
@@ -771,6 +777,7 @@ mod native_tests {
                 .await;
             v4_scheduler_native_revoked_publication_does_not_close_other_senders().await;
             v4_scheduler_native_cancellation_drops_only_its_pending_physical_io().await;
+            v4_scheduler_native_teardown_revokes_retained_clones().await;
         })
         .await
         .expect("independent send owners must not block each other");
@@ -1044,6 +1051,21 @@ mod native_tests {
             .unwrap()
             .unwrap();
         assert_eq!(channels[1].sent.lock().len(), 0);
+    }
+    async fn v4_scheduler_native_teardown_revokes_retained_clones() {
+        let channels: Vec<_> = (0..7).map(Channel::new).collect();
+        channels[5].block.store(true, std::sync::atomic::Ordering::SeqCst);
+        let scheduler = NativeSendScheduler::from_channels(channels.iter().map(|c| c.clone() as Arc<dyn DataChannel>).collect(), framer()).await.unwrap();
+        let retained = scheduler.clone();
+        let pending = {
+            let sender = retained.clone();
+            tokio::spawn(async move { sender.send(Lane::Transfer, WireSeq(1), b"retired-peer", None).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), channels[5].entered.notified()).await.unwrap();
+        scheduler.close_now();
+        assert!(retained.send(Lane::Control, WireSeq(2), b"stale-clone", None).await.is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(2), pending).await.unwrap().unwrap().is_err());
+        assert!(channels[5].sent.lock().is_empty());
     }
     struct DeniedAfterCallback;
     impl WebRTCPublicationGuard for DeniedAfterCallback {

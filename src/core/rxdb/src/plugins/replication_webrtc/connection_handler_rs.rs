@@ -2526,7 +2526,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         }
         self.accepted_offers.lock().clear();
         self.send_queues.lock().clear();
-        self.v4_senders.lock().clear();
+        {
+            let mut senders = self.v4_senders.lock();
+            for sender in senders.values().flatten() { sender.close_now(); }
+            senders.clear();
+        }
         self.backpressure.lock().clear();
         self.pending_frame_acks.lock().clear();
         self.incoming_frames.lock().clear();
@@ -3010,6 +3014,11 @@ impl WebRTCRsConnectionHandler {
                 }))));
             }
             let mut senders = self.v4_senders.lock();
+            senders.retain(|connection, sender| {
+                if connection.peer_id() != peer.peer_id() || connection == peer { return true; }
+                if let Some(sender) = sender { sender.close_now(); }
+                false
+            });
             if senders.contains_key(peer) { return Err(new_rx_error("RC_WEBRTC_PEER", Some(serde_json::json!({"message": "V4 send path already installed or starting"})))); }
             senders.insert(peer.clone(), None);
             Arc::clone(&entry.peer_connection)
@@ -4766,7 +4775,11 @@ fn remove_peer_inner(
         // Clear every per-peer registry before a replacement generation can
         // register. Otherwise delayed teardown from the old connection can
         // erase the new generation's capability token or send state.
-        handler.v4_senders.lock().retain(|connection, _| connection.peer_id() != peer);
+        handler.v4_senders.lock().retain(|connection, sender| {
+            if connection.peer_id() != peer { return true; }
+            if let Some(sender) = sender { sender.close_now(); }
+            false
+        });
         handler.active_collections.lock().remove(peer);
         if handler.remove_peer_presence(peer) {
             handler.presence_dirty.store(true, Ordering::SeqCst);
