@@ -35,6 +35,9 @@ Never borrow another daemon or bypass namespace isolation to get a green run.
 `--seconds 900` bounds the full scenario run, at most 1800. `--scenario K02`,
 `K08` or `K04-ATTACH` selects one incident. `--clients 1..3` opens real independent
 browser storage contexts. The selected local ICE candidate MUST be `relay`.
+Each run freezes its own runner files and records their hashes before starting;
+later source transfers cannot change a running scenario. Namespace cleanup also
+retires detached descendants if the coordinator crashes.
 
 ## What is measured
 
@@ -66,9 +69,14 @@ volume without triggering business automation. This is not full app semantics.
 
 Each scenario is an ES module with `id`, `steps`, `criterion`, `run(h)`. The
 harness supplies browser/reload, local truth, offline WebRTC packet loss and
-owned daemon restart. Release/schema evolution adapters must verify the new
-binary receipt and use the real registry migration API; the current V3 browser
-adapter does not pretend to implement the future v4 API.
+owned daemon restart. `changeRelease(receiptPath)` checks the new binary and
+switches only the owned source links/binary with the same state root.
+`schemaChange(cliArgs)` invokes the revision's actual migration CLI against that
+root; a scenario must then assert generation and row contents. This primitive
+is not proof of a schema migration. The V4 registry migration API still needs its
+scenario adapter once it is connected in integration; no fake supplies success.
+Scenario files are discovered automatically; the first three are the explicitly
+ordered controller slices, not a claim of complete K02/K08/K04 catalog coverage.
 
 `result.json`, screenshots, native logs, controller/group cleanup and `result.md`
 are host-private. Copy only results to the controller's private docs directory;

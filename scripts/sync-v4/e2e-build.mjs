@@ -5,17 +5,31 @@ import { mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync } from
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, all) => x.startsWith('--') ? [...a, [x.slice(2), all[i + 1]]] : a, []));
-if (process.platform !== 'linux' || !process.env.CARGO_TARGET_DIR || !process.env.TMPDIR) throw Error('Linux build lane required');
+if (process.platform !== 'linux' || !process.env.CARGO_TARGET_DIR || !process.env.TMPDIR || !process.env.BUILD_LANE_BIN) throw Error('Linux build lane required');
 function run(cmd, argv, cwd = process.cwd(), env = process.env) {
   const p = spawnSync(cmd, argv, { cwd, env, stdio: 'inherit', timeout: 65 * 60_000 });
   if (p.error || p.status !== 0) throw Error(`${cmd} failed: ${p.error?.message ?? p.status}`);
 }
-const revision = spawnSync('git', ['rev-parse', '--verify', `${args.revision || '4794af03d'}^{commit}`], { encoding: 'utf8' }).stdout.trim();
+const revision = spawnSync('git', ['rev-parse', '--verify', '--end-of-options', `${args.revision || '4794af03d'}^{commit}`], { encoding: 'utf8' }).stdout.trim();
 if (!/^[a-f0-9]{40}$/.test(revision)) throw Error('Revision must resolve to a commit');
-const output = resolve(args.output || join(process.env.TMPDIR, 'e2e-build'));
+const output = resolve(args.output || join(process.env.BUILD_LANE_BIN, '..', 'artifacts', `v4-e2e-build-${Date.now()}`));
+const artifactRoot = resolve(process.env.BUILD_LANE_BIN, '..', 'artifacts');
+if (!output.startsWith(artifactRoot + '/')) throw Error('Producer must stay in the private lane artifact root');
 mkdirSync(output, { recursive: true, mode: 0o700 });
+if (existsSync(join(output, 'build.json'))) {
+  const previous = JSON.parse(readFileSync(join(output, 'build.json')));
+  if (previous.revision !== revision) throw Error('Do not overwrite another revision producer');
+  if (previous.terminal && previous.pass && existsSync(previous.binary)
+      && createHash('sha256').update(readFileSync(previous.binary)).digest('hex') === previous.binarySha256) {
+    console.log(`Reused verified producer ${revision} ${previous.binarySha256}`);
+    process.exit(0);
+  }
+}
 const source = join(output, `source-${revision.slice(0, 12)}`);
 if (!existsSync(source)) run('git', ['worktree', 'add', '--detach', source, revision]);
+const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' });
+const sourceDiff = spawnSync('git', ['diff', '--exit-code', 'HEAD'], { cwd: source });
+if (sourceHead.status !== 0 || sourceHead.stdout.trim() !== revision || sourceDiff.status !== 0) throw Error('Producer source is not the immutable requested revision');
 const env = { ...process.env, CARGO_BUILD_JOBS: '2', CMAKE_BUILD_PARALLEL_LEVEL: '2', RUST_TEST_THREADS: '2',
   CARGO_PROFILE_DEV_DEBUG: '0', CARGO_INCREMENTAL: '0' };
 const receipt = { revision, source, startedAt: new Date().toISOString(), terminal: false, pass: false };

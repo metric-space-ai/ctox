@@ -21,8 +21,14 @@ run('tc',['qdisc','add','dev','lo','parent','1:3','handle','30:','netem','delay'
 for (const direction of ['dport','sport']) run('tc',['filter','add','dev','lo','parent','1:','protocol','ip','prio','1','u32','match','ip','protocol','17','0xff','match','ip',direction,String(c.turnPort),'0xffff','flowid','1:3']);
 c.netem = { isolated: true, hostQdiscChanged: false, namespace: fs.readlinkSync('/proc/self/ns/net'), rttMs: c.rttMs, lossPercent: c.lossPercent, shaped: 'browser/TURN UDP leg' };
 fs.writeFileSync(path, JSON.stringify(c,null,2)); fs.chownSync(path,c.uid,c.gid);
+const saveNetem = name => {
+  const file = c.output + '/' + name;
+  fs.writeFileSync(file, execFileSync('tc',['-s','qdisc','show','dev','lo']), { mode: 0o600 });
+  fs.chownSync(file,c.uid,c.gid);
+};
+saveNetem('netem-start.txt');
 const child = spawn('setpriv',[`--reuid=${c.uid}`,`--regid=${c.gid}`,'--init-groups','--reset-env',process.execPath,c.runner,path],{stdio:'inherit',detached:true});
 const kill = signal => { try { process.kill(-child.pid,signal); } catch (e) { if(e.code!=='ESRCH') throw e; } };
 const timer = setTimeout(() => { kill('SIGTERM'); setTimeout(()=>kill('SIGKILL'),5000).unref(); },(c.durationSeconds+20)*1000);
 process.once('SIGTERM',()=>kill('SIGTERM'));
-child.once('exit',(code,signal)=>{clearTimeout(timer);kill('SIGKILL');sweep();process.exitCode=code??(signal?143:1);});
+child.once('exit',(code,signal)=>{clearTimeout(timer);kill('SIGKILL');sweep();saveNetem('netem-final.txt');process.exitCode=code??(signal?143:1);});

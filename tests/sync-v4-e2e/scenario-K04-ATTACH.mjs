@@ -1,5 +1,6 @@
 export default {
   id: 'K04-ATTACH', title: 'An ATTACH write behind the checkpoint is not lost',
+  coverage: 'Controller-requested ATTACH/checkpoint mechanism, distinct from the complete K04 incident sequence.',
   steps: ['Complete initial sync and record the real replication checkpoint', 'ATTACH writer inserts with older lastWriteTime', 'Compare read-only native row with local browser row', 'Move the same row forward as a positive transport control'],
   criterion: { deliveryMs: 10000, missingRows: 0, positiveControlRequired: true },
   async run(h) {

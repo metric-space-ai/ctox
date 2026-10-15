@@ -15,8 +15,11 @@ scenarios.sort((a,b) => (order.indexOf(a.id) < 0 ? 999 : order.indexOf(a.id)) - 
 for (const s of scenarios) if (!s.id || !Array.isArray(s.steps) || !s.criterion || typeof s.run !== 'function') throw Error('Invalid scenario contract');
 if (config.scenario && !scenarios.some(s => s.id === config.scenario)) throw Error('Unknown scenario');
 const report = { owner, startedAt: new Date().toISOString(), revision: config.revision,
+  harnessSource: config.sourceManifest,
   binarySha256: config.binarySha256, profile: config.profile, netem: config.netem,
-  clientCount: config.clients, synthetic: true, scenarios: [], terminal: false, pass: false };
+  clientCount: config.clients, synthetic: true, fullCatalogAcceptance: false,
+  measurementScope: config.profile === 'small' ? 'wiring profile, not large-volume acceptance' : 'requested incident slices under measured synthetic volume',
+  scenarios: [], terminal: false, pass: false };
 const save = () => fs.writeFileSync(join(config.output, 'result.json'), JSON.stringify(report, null, 2));
 const native = new Native(config); let browser, shortTmp;
 const contexts = [];
@@ -55,8 +58,9 @@ try {
   browser = await chromium.launch({ executablePath: config.chrome, headless: true, timeout: 30000,
     env: { ...process.env, TMPDIR: shortTmp }, args: ['--disable-gpu'] });
   report.browser = browser.version();
-  const setupPage = async ctx => {
+  const setupPage = async (ctx, created = () => {}) => {
     const page = await ctx.newPage(); page.setDefaultTimeout(60000);
+    created(page);
     page.on('console', m => { if (['warning','error'].includes(m.type())) {
       report.browserDiagnostics ||= []; report.browserDiagnostics.push({ at: new Date().toISOString(), kind: m.type(),
         // Only synthetic origin and public status vocabulary, no auth/URLs/documents.
@@ -69,21 +73,25 @@ try {
   };
   for (const scenario of scenarios.filter(s => !config.scenario || s.id === config.scenario)) {
     if (interrupted) throw Error('Run interrupted');
+    const rowStarted = performance.now();
     const expected = native.seed('read', here).rows.filter(x => !x.deleted).map(x => x.id);
-    const row = { id: scenario.id, title: scenario.title, steps: scenario.steps, criterion: scenario.criterion, startedAt: new Date().toISOString(), status: 'setup', pass: false };
+    const row = { id: scenario.id, title: scenario.title, coverage: scenario.coverage, steps: scenario.steps, criterion: scenario.criterion, startedAt: new Date().toISOString(), status: 'setup', pass: false };
     report.scenarios.push(row); report.phase = scenario.id; save();
     const context = await browser.newContext(); contexts.push(context);
+    const scenarioContexts = [context];
     await context.addInitScript(installRelay, { turnPort: config.turnPort });
     const pages = [];
     const h = {
-      page: async () => { const p = await setupPage(context); pages.push(p); return p; },
+      page: async () => setupPage(context, page => pages.push(page)),
       warm: async page => {
+        row.phase = 'initial-replication'; save();
         row.warm = await bounded(page.evaluate(warm, { schema, expected }), 180000, "Initial fixture replication exceeded 180 seconds");
         row.relay = await page.evaluate(relayProof);
         if (!row.relay.forced) throw Error('Selected candidate pair did not prove forced TURN');
         // Extra genuine clients share the same instance but independent IDB identities.
         for (let i = 1; i < config.clients; i++) {
           const extra = await browser.newContext(); contexts.push(extra);
+          scenarioContexts.push(extra);
           await extra.addInitScript(installRelay, { turnPort: config.turnPort });
           const p = await setupPage(extra); await p.evaluate(warm, { schema, expected });
           const proof = await p.evaluate(relayProof); if (!proof.forced) throw Error('Additional client bypassed TURN');
@@ -92,6 +100,7 @@ try {
         row.status = 'running'; save();
       },
       reloadAndRead: async page => {
+        row.phase = 'reload-to-visible'; save();
         const before = performance.now();
         await page.reload({ waitUntil: 'domcontentloaded' });
         await page.waitForFunction(() => !!globalThis.CTOX_BUSINESS_OS_APP?.db, null, { timeout: 60000 });
@@ -101,6 +110,7 @@ try {
       },
       releaseWarmLease: page => page.evaluate(async () => { await globalThis.__e2eLease?.release(); await globalThis.CTOX_BUSINESS_OS_APP.sync.stopCollection("e2e_leads"); }),
       openApp: async page => {
+        row.phase = 'first-module-window'; save();
         const before = performance.now();
         await page.evaluate(async () => { globalThis.__e2eAppResult = null; await globalThis.CTOX_BUSINESS_OS_APP.openModule('e2e-probe'); });
         await page.waitForFunction(() => !!globalThis.__e2eAppResult, null, { timeout: 60000 });
@@ -114,7 +124,7 @@ try {
         if (!storage.replicationCheckpointStatus) throw Error('Replication checkpoint observation missing');
         return storage.replicationCheckpointStatus();
       }),
-      inject: async operation => native.seed(operation, here),
+      inject: async operation => { row.phase = 'ATTACH-' + operation; save(); return native.seed(operation, here); },
       truth: async () => native.seed('read', here),
       awaitLocal: async (page, id, timeout, revision) => {
         const start = performance.now(); let found = null;
@@ -167,10 +177,26 @@ try {
       const result = await scenario.run(h); Object.assign(row, result);
       row.status = 'measured';
       if (scenario.id === 'K04-ATTACH' && !row.measured.positiveControl.found) { row.pass = false; row.status = 'inconclusive'; row.reason = 'Forward-write positive control failed; cannot attribute missing row to checkpoint'; }
-    } catch (e) { row.error = e.message; row.status = row.status === 'running' ? 'failed' : 'not_run'; }
+    } catch (e) {
+      row.error = e.message; row.status = row.status === 'running' ? 'failed' : 'not_run';
+      row.failureSnapshot = { at: new Date().toISOString(), phase: row.phase || 'browser-connect', expected: expected.length };
+      try { row.failureSnapshot.native = native.seed('read', here); } catch (error) { row.failureSnapshot.nativeUnavailable = error.message; }
+      if (pages[0] && !pages[0].isClosed()) try {
+        row.failureSnapshot.browser = await bounded(pages[0].evaluate(async expected => {
+          const c = globalThis.CTOX_BUSINESS_OS_APP?.db?.collections?.e2e_leads;
+          if (!c) return { available: false, reason: 'collection-not-open' };
+          const data = await c.storageCollection.findDocumentsById(expected);
+          const rows = Array.isArray(data) ? data : Object.values(data);
+          const ids = new Set(rows.map(r => r.id));
+          return { available: true, found: rows.length, missing: expected.filter(id => !ids.has(id)),
+            rows: rows.map(r => ({ id:r.id, revision:r._rev, lwt:r._meta?.lwt })), wire: globalThis.__e2eWire };
+        }, expected), 3000, 'failure snapshot deadline');
+      } catch(error) { row.failureSnapshot.browserUnavailable = error.message; }
+    }
     finally { row.finishedAt = new Date().toISOString();
+      row.elapsedMs = performance.now() - rowStarted;
       for (let i = 0; i < pages.length; i++) await pages[i].screenshot({ path: join(config.output,`${row.id}-${i}.png`) }).catch(() => {});
-      await context.close(); save(); }
+      for (const ctx of scenarioContexts) await ctx.close(); save(); }
   }
   report.pass = report.scenarios.length > 0 && report.scenarios.every(s => s.status === 'measured' && s.pass);
 } catch (e) { report.error = e.message; process.exitCode = 1; }
