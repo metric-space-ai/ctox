@@ -178,6 +178,8 @@ pub async fn stage(
     now_ms: i64,
     mutate: impl FnOnce(&Transaction<'_>) -> Result<(), StoreError> + Send + 'static,
 ) -> Result<Stage, StoreError> {
+    // Preserve rejection before queue admission for malformed envelopes.
+    publication.validate()?;
     source
         .submit(WriteJob::new(options, move |tx| {
             stage_in_transaction(tx, publication, now_ms, mutate)

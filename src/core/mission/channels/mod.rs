@@ -2000,7 +2000,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
             let message_keys = positional_after_flags(&args[1..]);
             if message_keys.is_empty() {
                 anyhow::bail!(
-                    "usage: ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>..."
+                    "usage: ctox channel ack [--status <status>] [--reason <text>] <message-key>..."
                 );
             }
             anyhow::ensure!(
