@@ -6180,12 +6180,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,
@@ -6746,12 +6761,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf 'transient failure\\n' >&2\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf 'transient failure\\n' >&2\nexit 2\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,

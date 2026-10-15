@@ -569,7 +569,7 @@ fn figure_add_image_file_persists_row_and_copies_image() {
         s("--kind"),
         s("schematic"),
         s("--caption"),
-        s("Test schematic"),
+        s("Signal flow of the measurement pipeline"),
         s("--source"),
         s("eigene Darstellung"),
         s("--image-file"),
@@ -602,7 +602,7 @@ fn figure_add_image_file_persists_row_and_copies_image() {
         )
         .unwrap();
     assert_eq!(kind, "schematic");
-    assert_eq!(caption, "Test schematic");
+    assert_eq!(caption, "Signal flow of the measurement pipeline");
     assert_eq!(source, "eigene Darstellung");
     assert!(code_kind.is_none());
     assert_eq!(has_image, 1);
