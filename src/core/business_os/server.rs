@@ -3619,10 +3619,15 @@ fn business_os_shell_generation_token(value: &str) -> bool {
 }
 
 fn business_os_shell_generation_guarded_asset(rel: &str) -> bool {
-    matches!(
-        rel,
-        "app.js" | "app.css" | "mobile-host.js" | "mobile-host.css" | "system-apps.json"
-    ) || ["shared/", "modules/", "desktop-apps/", "themes/"]
+    matches!(rel, "app.css")
+        || [
+            "kernel/",
+            "v4/",
+            "shared/",
+            "modules/",
+            "desktop-apps/",
+            "themes/",
+        ]
         .iter()
         .any(|prefix| rel.starts_with(prefix))
 }
@@ -3674,12 +3679,8 @@ fn runtime_module_static_authorized(
     rel: &str,
     release: Option<&super::shell_assets::VerifiedRelease>,
 ) -> bool {
-    // The packaged registry is shell metadata, not a module directory. Treating
-    // its file name as a module id makes a fresh Shell-V2 boot fail at the
-    // mandatory catalog fetch even though the signed slot contains the file.
-    if rel == "modules/registry.json" {
-        return true;
-    }
+    // App catalog records arrive through the store/stream. Static module
+    // requests have no metadata-file exemption from module authorization.
     let mut parts = rel.split('/');
     let source = parts.next().unwrap_or_default();
     if source == "modules" {
@@ -4503,12 +4504,7 @@ mod tests {
             source_root.join("modules/rem-source/module.json"),
             br#"{"id":"rem-source","version":"1.0.0"}"#,
         )?;
-        assert!(runtime_module_static_authorized(
-            root.path(),
-            &source_root,
-            "modules/registry.json",
-            None
-        ));
+
         assert!(!runtime_module_static_authorized(
             root.path(),
             &source_root,
@@ -4925,7 +4921,10 @@ mod tests {
                 "shared/sync.js",
                 "/business-os/shared/sync.js?v=20261006-shell-v2-sync-invalidate-v454",
             ),
-            ("app.js", "/app.js?v=20261006-shell-v2-sync-invalidate-v454"),
+            (
+                "v4/boot/boot.js",
+                "/v4/boot/boot.js?v=20261006-shell-v2-sync-invalidate-v454",
+            ),
             (
                 "modules/ctox/index.js",
                 "/modules/ctox/index.js?v=20261006-shell-v2-sync-invalidate-v454_3",
@@ -5006,7 +5005,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         fs::write(
             root.path().join("index.html"),
-            "<script type='module' src='./app.js?v=20260831-shell-v2-atomic-v304'></script>\n",
+            "<script type='module' src='./kernel/index.mjs?v=20260831-shell-v2-atomic-v304'></script>\n",
         )?;
 
         assert_eq!(
@@ -5048,8 +5047,8 @@ mod tests {
         assert_eq!(
             business_os_shell_generation_mismatch(
                 root.path(),
-                "installed-modules/customer-app/app.js",
-                "/installed-modules/customer-app/app.js?v=20260830-shell-v2-consolidated-v302"
+                "installed-modules/customer-app/main.mjs",
+                "/installed-modules/customer-app/main.mjs?v=20260830-shell-v2-consolidated-v302"
             )?,
             None,
             "runtime-installed apps are instance state, not versioned shell-slot assets"
