@@ -44,6 +44,10 @@ test('one durable ordering survives reload and leader generation; cancelled unse
   try {
    await adapter.write({...nextTransport.sent.at(-1),client_seq:'9007199254740993'});
    assert.equal(wire[0].lane,'commands');assert.equal(wire[0].message.client_seq,'9007199254740993');
+   assert.equal(wire[0].message.base_seq,null,'a new local document has no native compare-and-swap sequence');
+   assert.equal(wire[0].message.body.id,'after-reload','send the actual durable outbox body');
+   await adapter.write({...nextTransport.sent.at(-1),client_seq:'9007199254740994',base_rev:'v4:prior',base_seq:'9007199254740993'});
+   assert.equal(wire[1].message.base_seq,'9007199254740993','existing document CAS must retain its exact decimal sequence');
    await assert.rejects(adapter.write({...nextTransport.sent.at(-1),client_seq:1}),e=>e.code==='invalid');
   } finally {adapter.close();}
   // Keep seq 4 pending: later independent documents may fill, never exceed,
