@@ -187,7 +187,8 @@ try {
         row.measured||={};row.measured.lastProgress=measured;save();
       },
       os: page => page.evaluate(async path=>{
-        if(!path)return {available:false,reason:'--os-bootstrap actual native transport adapter required'};
+        if(!path){const r=await fetch('/business-os/kernel/index.mjs',{cache:'no-store'}),type=r.headers.get('content-type')||'',text=await r.text();
+          return {available:false,reason:'native-backed OS bootstrap absent',kernelStaticAvailable:r.ok&&/javascript/.test(type),staticProbe:{at:new Date().toISOString(),path:'/business-os/kernel/index.mjs',status:r.status,contentType:type,bytes:new TextEncoder().encode(text).length},v3Shell:!!globalThis.CTOX_BUSINESS_OS_APP};}
         if(!path.startsWith('/')||path.startsWith('//')||path.includes('?'))throw Error('OS bootstrap must be an exact same-origin static module');
         const module=await import(path),os=await module.connectScenario();
         if(os.transportKind!=='native-webrtc'||!os.nativePeerId||!os.kernel?.shellApi||!os.openApp)throw Error('Native WebRTC OS adapter proof/contract missing');
@@ -234,12 +235,12 @@ try {
         return {local:docs.length,at:Date.now()};
       },docs),30000,'Browser local write deadline'),
       readCommand: async page => bounded(page.evaluate(async () => {
-        const at=performance.now(),wall=Date.now(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
+        const at=performance.now(),wall=Date.now(),commandId='cmd_e2e_'+crypto.randomUUID(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
         if (!bus?.dispatch) throw Error('Real Shell command bus unavailable');
-        try { const r=await bus.dispatch({command_type:'ctox.workjet.project.list',payload:{},client_context:{command_timing_probe:true}},{until:'accepted',timeoutMs:5000});
+        try { const r=await bus.dispatch({id:commandId,command_type:'ctox.workjet.project.list',payload:{},client_context:{command_timing_probe:true}},{until:'accepted',timeoutMs:5000});
           const timing=r?.result?.command_timing || r?.command_timing || r?.result?.result?.command_timing || null;
-          return {elapsedMs:performance.now()-at,startedAtMs:wall,nativeTiming:timing,coreDispatchMs:timing?timing.native_dispatch_entered-wall:null,status:r?.status,commandId:r?.command_id || r?.id,error:['failed','rejected'].includes(r?.status)?r.status:null};
-        } catch(e) {return {elapsedMs:performance.now()-at,error:e.code || e.message};}
+          return {elapsedMs:performance.now()-at,startedAtMs:wall,nativeTiming:timing,coreDispatchMs:timing?timing.native_dispatch_entered-wall:null,status:r?.status,commandId:r?.command_id || r?.id || commandId,error:['failed','rejected'].includes(r?.status)?r.status:null};
+        } catch(e) {return {commandId,startedAtMs:wall,elapsedMs:performance.now()-at,error:e.code || e.message};}
       }),12000,'Read command observation deadline'),
       maintenance: page => page.evaluate(() => {
         const s=globalThis.CTOX_BUSINESS_OS_APP;

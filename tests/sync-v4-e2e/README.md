@@ -157,7 +157,7 @@ coverage gaps are explicit: no scenario yet claims full catalog acceptance.
 actual demand-only collection. It is not the historical Outbound startup code
 from before `1773924d1`; a green result does not reproduce or close that incident.
 
-`e2e-cancellation.mjs` cancels a real daemon/browser run, verifies bounded
+`tests/sync-v4/k-support/cancellation.mjs` cancels a real daemon/browser run, verifies bounded
 namespace/group retirement and retains the receipt. Signal escalation is
 bounded to five seconds. Oracle mutation copies prove missing rows, zero
 scenarios and incomplete coverage each turn a guard red, then restored green.

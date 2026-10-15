@@ -8,8 +8,8 @@ export default {
  async run(h){
   const p=await h.page();await h.warm(p);const fixture=unknownApp('e2e-'+randomUUID());
   const availability=await h.os(p);
-  if(!availability.available)return {measured:{availability,appId:fixture.id,published:false},status:'not_run',pass:false,acceptanceComplete:false,
-   reason:'No native-backed V4 source bootstrap supplied; old V3 cannot run the required OS contract. No fake-core fallback.'};
+  if(!availability.available)return {measured:{availability,appId:fixture.id,published:false},status:availability.v3Shell&&availability.kernelStaticAvailable===false?'measured':'not_run',pass:false,acceptanceComplete:false,expectedLegacyFailure:availability.v3Shell&&availability.kernelStaticAvailable===false,
+   reason:'Actual served V3 lacks the V4 source API kernel, or its native bootstrap is unbound. Publication/handler lifecycle not executed; no fake-core fallback.'};
   const peers=[p,await h.newClient(),await h.newClient()];
   for(const peer of peers.slice(1)){const os=await h.os(peer);if(!os.available)throw Error('One client lacks real OS adapter');}
   const started=Date.now();
