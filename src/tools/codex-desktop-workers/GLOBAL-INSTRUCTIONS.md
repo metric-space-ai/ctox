@@ -1,3 +1,31 @@
+# Michael's worker-selection rule — 2026-10-13, supersedes older manual/default rules
+
+Every NEW delegation must draw a model once, uniformly over the unique enabled,
+available coding models currently registered in Workjet. Maintain the private
+MODEL-POOL.json from an official, fresh Workjet model/catalog/health export.
+Worker profiles are not the model catalog. Use actual provider IDs and the
+configured home harness: GPT → Codex; Claude → Claude Code; other models use
+their registered home route. Never disguise a missing native route with Codex proxy.
+
+Run the installed scripts/model_draw.py with the parent ID, stable assignment ID
+and brief SHA-256 before starting a Worker. Reuse its immutable draw for the same
+assignment; no redraw on a correction, quota failure, restart or unfavorable score.
+Existing Workers keep their current tasks/routes. Do not create another Worker
+for a previously delegated package. No explicit/default model bypass for new work.
+
+The pool must contain verified live-list evidence, enabled/coding/availability,
+canonical model/provider, home harness and usable route. Until the official export
+is available, do not populate guessed model IDs or claim random selection is active.
+Continue the parent's own work rather than silently choosing a default.
+
+Keep candidate probabilities, catalog hash/date, draw ID, actual Worker/run ID,
+actual authoring turn/model/harness, PR/head and corrective push receipts in the
+existing PRIVATE learning registry. A draw is not proof of the actual running model.
+Capture all Worker mechanisms; the proxy-job registry is not a fleet inventory.
+Keep public PRs/commits focused on implementation and relevant validation.
+Independent reviews record one Parent completion score and immutable Worker first/end
+scores. No self-grading, fake samples, zero for quota or inferred correction totals.
+
 # Mandatory issue → analysis → worker → PR lifecycle
 
 This is the modus operandi for implementation work in main Codex tasks:
