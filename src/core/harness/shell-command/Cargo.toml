@@ -21,3 +21,6 @@ tree-sitter-bash = { workspace = true }
 url = { workspace = true }
 which = { workspace = true }
 
+[dev-dependencies]
+anyhow = { workspace = true }
+pretty_assertions = { workspace = true }

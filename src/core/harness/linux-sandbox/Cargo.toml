@@ -30,3 +30,7 @@ url = { workspace = true }
 [build-dependencies]
 cc = "1"
 pkg-config = "0.3"
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
