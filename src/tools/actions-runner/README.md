@@ -87,54 +87,49 @@ The workspace lockfile must be updated with the member; validation then uses
 No service is installed or reconfigured by this slice. No live welsch runs are
 allowed before **12 October 2026, 13:00 Europe/Berlin**.
 
-## Sync v3 boundary for S3
+## Sync boundary (CTOX Sync v4 classes)
 
-Collection contracts follow [CTOX Sync v3](../../../docs/rfcs/ctox-sync-v3.md),
-RFC v2. Before S3, register the fifteen collections' profiles and field
-ownership with the RFC/gate owner (Claude, “Outbound app Funktionsproblem
-(fork)”). Native store is the sole authoritative writer; RxDB is a projection,
-with no browser write right. The native-to-RxDB outbox is one S4 projection
-writer per collection, with no intermediate projection chain.
+This slice registers **no** RxDB collection, wire fixture or native table and
+changes no Sync-core contract. The collections below are the planned S3
+surface; they are listed here only so S3 lands against the Sync v4 class model
+instead of the retired Sync v3 profiles (`control`/`demand`/`stream`/
+`replicated`, `demand-only`/`demand-chunks`).
 
-Ledger/leases use `control`; retained log chunks use `demand`, live progress
-uses `stream`. Large/cold collections must not be eager browser replication.
-Fixture changes under `src/core/rxdb/` require the owner's `sync-v3:S<n>`
-label and `sync-scope-guard` review. This S2 changes no Sync-core contracts.
+Rules for S3 (Sync v4 architecture §6, §8, §16.3):
 
-### Collection profile/ownership proposal for the S3 owner review
+- The native Actions store in the CTOX core is the only writer. Each collection
+  is written **once**, by the core, directly into the Sync store; there is no
+  RxDB mirror that is projected again (no projection chain) and no browser or
+  node write right. Nodes submit authenticated observations and commands to
+  the native owner as command documents.
+- Every collection carries exactly one class (`full`, `window`, `blob`) plus
+  `client_limit` and `byte_budget` in the platform manifest. Clients only read
+  what they hold locally; there is no query-demand or server read path.
+- Large retained log chunks and artifacts are `blob` (file channel), never a
+  chunk collection. Live log tail uses the live lane of the existing run, not a
+  second collection.
+- Wire contracts are generated from `src/core/rxdb/tests/fixtures/*.json`
+  (or the v4 platform manifest once it replaces them); both sides are
+  regenerated, never edited by hand. Core-sync paths need the owner's stage
+  label and `sync-scope-guard`.
 
-Each persisted collection has exactly one profile. All fields are native-owned;
-the browser has read permission only after server-side project/computer policy.
-The owning native tables and projection writer are declared in the generated
-fixture (Sync-v3 S2); the single native outbox → RxDB writer is registered as
-Sync-v3 S4 work. Node agents submit authenticated observations/commands to the
-native owner; they cannot edit projected documents.
-
-| Collection | Profile | Scoped consumption |
+| Collection | v4 class | Rights / window |
 |---|---|---|
-| workjet_actions_nodes | control | Node status/heartbeat revisions for admitted computers; no global browser eager pull |
-| workjet_actions_volumes | control | Budget/capacity status revisions for relevant nodes |
-| workjet_actions_requests | control | Native accepted intake and command status; never browser-owned intake documents |
-| workjet_actions_runs | control | Small run status revisions, subscribed by project/thread |
-| workjet_actions_jobs | control | Job allocation/attempt/status revisions |
-| workjet_actions_steps | demand | Retained step detail/results; current-step changes also ephemeral stream events |
-| workjet_actions_queue | control | Fairness/admission/position revisions for the caller's scope |
-| workjet_actions_leases | control | Sanitized lease/reservation status; no execution token in the projection |
-| workjet_actions_log_chunks | demand | Retained compressed chunks by run/job/cursor; live tail is a stream subscription |
-| workjet_actions_receipts | demand | Immutable result detail and hashes on request |
-| workjet_actions_ledger | control | Native inventory/lease/delete status through bounded, authorized command reads |
-| workjet_actions_quotas | control | Own-project usage/reservation/budget status |
-| workjet_actions_gc_runs | demand | GC receipts, candidate/error detail on request |
-| workjet_actions_decisions | demand | Candidate observations and placement reasons for explain |
-| workjet_actions_policy | replicated | Small authorized project/node policy snapshot, ≤8 KB per document |
-
-Control is command/status traffic with revisions, not an excuse to send all
-historical documents to every browser. Reads/subscriptions remain capability-
-and view-scoped; long detail belongs to demand. Stream progress/log events carry
-a persisted cursor/revision for resumption but create no browser history and no
-second projection writer. Readiness follows ctx.data and known/unknown/stale,
-never collection phase guessing. The RFC owner must validate this mapping
-before the S3 fixture PR and assign its sync-v3:S<n> label; no label is self-issued.
+| workjet_actions_nodes | full | admin/owner of admitted computers; one small doc per node |
+| workjet_actions_volumes | full | same scope as the bound node |
+| workjet_actions_policy | full | authorized project/node policy, ≤8 KB per document |
+| workjet_actions_quotas | full | own project usage/reservation/budget |
+| workjet_actions_requests | window | own requests, last 7 days (command-like intake status) |
+| workjet_actions_runs | window | project/thread scope, last 7 days |
+| workjet_actions_jobs | window | per run, last 7 days |
+| workjet_actions_steps | window | per run, last 500 |
+| workjet_actions_queue | window | caller's project scope, open entries |
+| workjet_actions_leases | window | sanitized status only, no execution token; open + last 24 h |
+| workjet_actions_receipts | window | immutable hashes/results, last 7 days |
+| workjet_actions_ledger | window | admin only, bounded inventory/delete status |
+| workjet_actions_gc_runs | window | admin only, last 7 days |
+| workjet_actions_decisions | window | placement reasons per run, last 7 days |
+| workjet_actions_log_chunks | blob | retained compressed logs via file channel, not a collection |
 
 ## Admitted host pilot (vorgabe-38)
 
