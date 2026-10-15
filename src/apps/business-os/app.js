@@ -14846,7 +14846,7 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
   if (action === 'project.configure') {
     assertWorkjetProjectPayloadKeys(request, new Set([
       'action', 'commandId', 'projectId', 'title',
-      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'supervisorLumaId', 'executionPolicy',
+      'description', 'repoUrl', 'publicUrl', 'info', 'jourFixe', 'feedSettings', 'supervisorLumaId', 'executionPolicy',
     ]));
     const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
     const projectId = boundedWorkjetProjectText(request.projectId, 'projectId', 128);
@@ -15277,6 +15277,7 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false, incl
     ...(includeConfiguration && Object.hasOwn(value, 'public_url') ? { publicUrl: value.public_url } : {}),
     ...(includeConfiguration && Object.hasOwn(value, 'info') ? { info: value.info } : {}),
     ...(includeConfiguration && Object.hasOwn(value, 'jour_fixe') ? { jourFixe: value.jour_fixe } : {}),
+    ...(includeConfiguration && Object.hasOwn(value, 'feed_settings') ? { feedSettings: workjetFeedSettingsWire(value.feed_settings) } : {}),
     ...(includeSupervisorLuma && Object.hasOwn(value, 'supervisor_luma_id') ? { supervisorLumaId: value.supervisor_luma_id } : {}),
   });
   for (const [nativeKey, key] of [
@@ -15286,7 +15287,70 @@ function boundedWorkjetProjectResult(value, { includeConfiguration = false, incl
   ]) {
     if (Object.hasOwn(metadata, nativeKey)) result[key] = metadata[nativeKey];
   }
+  if (Object.hasOwn(metadata, 'feed_settings') && metadata.feed_settings !== null) {
+    result.feedSettings = workjetFeedSettingsWire(metadata.feed_settings);
+  }
   return Object.freeze(result);
+}
+
+const WORKJET_FEED_SOURCE_KEYS = ['disruptions', 'results', 'sessions', 'prs', 'meeting', 'setup'];
+const WORKJET_FEED_CHOICES = { defaultTab: ['top', 'latest'], body: ['short', 'full'], replies: ['three', 'all'] };
+const WORKJET_FEED_NATIVE = {
+  title: 'title', windowDays: 'window_days', sources: 'sources', defaultTab: 'default_tab',
+  body: 'body', replies: 'replies', notifyDisruptions: 'notify_disruptions',
+};
+
+/** Validates Workjet feed settings (camelCase wire, also accepts native snake_case) into one shape. */
+function normalizeWorkjetFeedSettings(value, keyOf) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid Workjet project feedSettings.');
+  }
+  const fields = Object.keys(WORKJET_FEED_NATIVE);
+  assertWorkjetProjectPayloadKeys(value, new Set(fields.map(keyOf)));
+  const get = (field) => value[keyOf(field)];
+  const has = (field) => Object.hasOwn(value, keyOf(field));
+  const out = {};
+  if (has('title')) {
+    const title = get('title');
+    out.title = title === null || String(title).trim() === '' ? null
+      : boundedWorkjetProjectText(title, 'feedSettings.title', 120);
+  }
+  if (has('windowDays')) {
+    const days = get('windowDays');
+    if (days !== null && ![1, 7, 30].includes(days)) throw new Error('Invalid Workjet project feedSettings.windowDays.');
+    out.windowDays = days;
+  }
+  if (has('sources')) {
+    const sources = get('sources');
+    if (!sources || typeof sources !== 'object' || Array.isArray(sources)) {
+      throw new Error('Invalid Workjet project feedSettings.sources.');
+    }
+    assertWorkjetProjectPayloadKeys(sources, new Set(WORKJET_FEED_SOURCE_KEYS));
+    out.sources = {};
+    for (const key of WORKJET_FEED_SOURCE_KEYS) {
+      if (!Object.hasOwn(sources, key)) continue;
+      if (typeof sources[key] !== 'boolean') throw new Error(`Invalid Workjet project feedSettings.sources.${key}.`);
+      out.sources[key] = sources[key];
+    }
+  }
+  for (const [field, allowed] of Object.entries(WORKJET_FEED_CHOICES)) {
+    if (!has(field)) continue;
+    if (!allowed.includes(get(field))) throw new Error(`Invalid Workjet project feedSettings.${field}.`);
+    out[field] = get(field);
+  }
+  if (has('notifyDisruptions')) {
+    if (typeof get('notifyDisruptions') !== 'boolean') throw new Error('Invalid Workjet project feedSettings.notifyDisruptions.');
+    out.notifyDisruptions = get('notifyDisruptions');
+  }
+  return out;
+}
+function workjetFeedSettingsNative(value) {
+  const wire = normalizeWorkjetFeedSettings(value, (field) => field);
+  return Object.freeze(Object.fromEntries(Object.entries(wire).map(([key, v]) => [WORKJET_FEED_NATIVE[key], v])));
+}
+function workjetFeedSettingsWire(value) {
+  if (value === null) return null;
+  return Object.freeze(normalizeWorkjetFeedSettings(value, (field) => WORKJET_FEED_NATIVE[field]));
 }
 
 function boundedWorkjetProjectMetadata(request) {
@@ -15307,6 +15371,9 @@ function boundedWorkjetProjectMetadata(request) {
       throw new Error('Invalid Workjet project supervisorLumaId.');
     }
     result.supervisor_luma_id = value === null ? null : value.trim();
+  }
+  if (Object.hasOwn(request, 'feedSettings')) {
+    result.feed_settings = request.feedSettings === null ? null : workjetFeedSettingsNative(request.feedSettings);
   }
   for (const [key, nativeKey] of [
     ['description', 'description'], ['repoUrl', 'repo_url'], ['publicUrl', 'public_url'],
