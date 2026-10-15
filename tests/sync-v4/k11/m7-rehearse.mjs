@@ -38,8 +38,20 @@ try{
  report.installer=proof;
  report.steps.push({id:'upgrade-dev-branch-selection',status:'not_run',reason:'upgrade --dev is hardcoded to main (src/core/install/mod.rs:1387-1393), not the supplied V4 revision. Exact supported update apply --version exercised instead; controller must deliver/merge the pinned V4 release.'});
  const importer=join(next.source,'src/core/store/import/mod.rs');
- report.steps.push({id:'base-release-import-828',status:'not_run',sourcePresent:fs.existsSync(importer),reason:fs.existsSync(importer)?'Library present; no verified productive CLI/IPC import operation supplied. Do not replace it with test-only direct SQL.':'#828 importer is absent from the exact built integration revision; no import can be executed.'});
- report.steps.push({id:'signed-shell-activation',status:'not_run',reason:'No verified signed V4 slot artifact supplied. Existing Shell bind snapshot is not a signed native slot.'});save();
+ if(o['import-build']&&o['base-inputs']){
+  const receipt=JSON.parse(fs.readFileSync(o['import-build']));
+  if(!receipt.pass||!receipt.terminal||receipt.revision!==next.revision||!receipt.binary.startsWith(allowed)||createHash('sha256').update(fs.readFileSync(receipt.binary)).digest('hex')!==receipt.binarySha256)throw Error('Import composition does not match the exact integration');
+  const store=join(output,'import.sqlite3'),evidence=join(output,'import.json');
+  const row=run('base-release-import-library',receipt.binary,[join(prefix,'snapshot-before/databases'),o['base-inputs'],store,evidence],180000);
+  if(fs.existsSync(evidence))report.baseImport=JSON.parse(fs.readFileSync(evidence));
+  report.steps.push({id:'base-release-import-828',status:'not_run',componentStatus:row.exit===0&&report.baseImport?.pass?'green':'red',evidence,reason:'Actual #828 registry/import library exercised on the profile snapshot, but no product CLI/store export or daemon import attachment exists in this revision. Separate destination is not the daemon store.'});
+ }else report.steps.push({id:'base-release-import-828',status:'not_run',sourcePresent:fs.existsSync(importer),reason:'No verified product import operation supplied; the presence of library source is not a completed migration.'});
+ if(o['shell-version']){
+  const dir=join(output,'signed-shell');
+  const row=run('signed-shell-reference-mechanics',process.execPath,['tests/sync-v4/k11/m7-shell.mjs',join(prefix,'result.json'),dir,o['shell-version']],5*60*1000);
+  const evidence=join(dir,'shell.json');if(fs.existsSync(evidence))report.signedShell=JSON.parse(fs.readFileSync(evidence));
+  report.steps.push({id:'signed-shell-activation',status:'not_run',componentStatus:row.exit===0&&report.signedShell?.pass?'green':'red',evidence,reason:'Production signed release mechanics exercised with the main reference slot. This reference does not certify a signed V4 app/Shell artifact or post-restart V4 health.'});
+ }else report.steps.push({id:'signed-shell-activation',status:'not_run',reason:'No verified signed V4 slot artifact supplied. Existing Shell bind snapshot is not a signed native slot.'});save();
  const args=['tests/sync-v4/k-support/gate.mjs','--target','v4='+next.revision,'--kernel-revision',o['kernel-revision']??next.revision,'--build',o.after,'--gate-output',join(output,'catalog'),'--installed-profile',join(prefix,'result.json'),'--profile','small','--clients','1','--rtt','150','--loss','0','--k11-evidence',join(prefix,'result.json')];
  for(const key of ['modules-root','turn-bin','turn-lib','chrome','kernel-archive','kernel-archive-sha256'])if(o[key])args.push('--'+key,o[key]);
  const gate=run('upgraded-profile-regression',process.execPath,args,6*60*1000);
