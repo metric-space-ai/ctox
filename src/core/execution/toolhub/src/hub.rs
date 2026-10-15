@@ -323,6 +323,11 @@ impl<B: SecretBackend> ToolHub<B> {
         if credential.trim().is_empty() {
             bail!("empty credential");
         }
+        if cfg.scheme == AuthSchemeKind::OAuthHeader
+            && !credential.trim().split_once(':').is_some_and(|(k, t)| !k.is_empty() && !t.is_empty() && !k.contains('"') && !t.contains('"'))
+        {
+            bail!("this connection needs `key:token` (API key and token, colon-separated, no quotes)");
+        }
         let params = self.resolve_connection_params(&cfg.toolkit, Some(credential.trim()), &BTreeMap::new(), params)?;
         let mut account = self.new_account(&cfg, project, actor, ConnectionStatus::Active);
         account.status = ConnectionStatus::Active;
