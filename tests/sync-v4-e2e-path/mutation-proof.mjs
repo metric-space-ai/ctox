@@ -2,14 +2,18 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
-const out=resolve(process.env.CARGO_TARGET_DIR,'evidence/e2e-mutations');await mkdir(out,{recursive:true});const receipts=[];
+const out=resolve(process.env.CARGO_TARGET_DIR,process.env.E2E_MUTATIONS_NATIVE_ONLY==='1'?'evidence/e2e-native-mutations':'evidence/e2e-mutations');await mkdir(out,{recursive:true});const receipts=[];await writeFile(resolve(out,'mutation-proof.json'),'[]');
 const run=(cmd,args,name,env={})=>{const result=spawnSync(cmd,args,{encoding:'utf8',timeout:180000,maxBuffer:4*1024*1024,env:{...process.env,...env}});return {result,output:(result.stdout??'')+(result.stderr??'')};};
 const cases=[
+ {id:'client-seq-wire',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:'client_seq:decimalSeq(entry.client_seq),',after:'',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},
+ {id:'client-seq-window',file:'src/apps/business-os/kernel/kernel.mjs',before:'if (e.client_seq != null && BigInt(e.client_seq) >= BigInt(floor) + 64n) continue;',after:'/* gap window deliberately removed */',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},
+ {id:'client-seq-high-water',file:'src/apps/business-os/kernel/outbox.mjs',before:"await t.put('meta', { key: 'client_seq', value: String(seq) });",after:'void seq;',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},
+ {id:'client-seq-reuse',file:'src/apps/business-os/kernel/outbox.mjs',before:'entry.client_seq = String(++seq);',after:'entry.client_seq = String(seq);',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},
  {id:'stale-leader-send',file:'src/apps/business-os/kernel/kernel.mjs',before:"const sent = await db.tx(async t=>{await assertGen(t);const entry=",after:"const sent = await db.tx(async t=>{const entry=",test:'tests/sync-v4-e2e-path/leader.test.mjs'},
  {id:'session-replay',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:'replay(){return Promise.all(this.state.retained.flatMap',after:'replay(){return Promise.all([].flatMap',test:'tests/sync-v4-e2e-path/native-wire.test.mjs'},
  {id:'session-duplicate',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:'if(BigInt(id)<=this.state.delivered[lane])',after:'if(false)',test:'tests/sync-v4-e2e-path/native-wire.test.mjs'},
 ];
-for(const item of cases){const original=await readFile(item.file,'utf8');if(original.split(item.before).length!==2)throw Error('mutation anchor '+item.id);
+for(const item of (process.env.E2E_MUTATIONS_NATIVE_ONLY==='1'?[]:cases)){const original=await readFile(item.file,'utf8');if(original.split(item.before).length!==2)throw Error('mutation anchor '+item.id);
  const baseline=run(process.execPath,['--test','--test-timeout=10000',item.test],item.id+'-baseline');await writeFile(resolve(out,item.id+'-baseline.log'),baseline.output);if(baseline.result.status!==0)throw Error('red baseline '+item.id);
  try{await writeFile(item.file,original.replace(item.before,item.after));const mutant=run(process.execPath,['--test','--test-timeout=10000',item.test],item.id);await writeFile(resolve(out,item.id+'.log'),mutant.output);
  const receipt={...item,line:original.slice(0,original.indexOf(item.before)).split('\n').length,baseline_exit:0,exit:mutant.result.status,killed:mutant.result.status!==0&&/not ok/.test(mutant.output)&&!/SyntaxError|ERR_MODULE_NOT_FOUND/.test(mutant.output)};receipts.push(receipt);console.log('E2E_MUTATION '+JSON.stringify(receipt));if(!receipt.killed)process.exitCode=1;
