@@ -12,6 +12,11 @@
 mod frame_contract_generated;
 #[path = "handshake_status.rs"]
 mod handshake_status;
+#[path = "log_bridge.rs"]
+pub mod log_bridge;
+#[path = "send_result.rs"]
+pub mod send_result;
+use send_result::{send_text_checked, transport_diagnostics, MessageClass};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::UdpSocket;
@@ -2462,6 +2467,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                 .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
                 .and_then(|entry| entry.auxiliary_data_channels.get(label).cloned())
                 .ok_or_else(|| {
+                    transport_diagnostics().reject_not_ready(0);
                     new_rx_error(
                         "RC_WEBRTC_PEER",
                         Some(serde_json::json!({
@@ -3006,7 +3012,10 @@ impl WebRTCRsConnectionHandler {
                 .get(&peer.peer_id)
                 .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
                 .and_then(|entry| entry.data_channel.clone())
-                .ok_or_else(|| stale_connection_error(peer))?;
+                .ok_or_else(|| {
+                    transport_diagnostics().reject_not_ready(text.len());
+                    stale_connection_error(peer)
+                })?;
             // Capture the exact generation and token under their mutation
             // fence. The native guard enters first at each physical poll;
             // lifecycle/token validation then stays held through that poll.
@@ -3028,7 +3037,11 @@ impl WebRTCRsConnectionHandler {
             let queued = self.enqueue_with_publication(&peer.peer_id, class, publication)?;
             (data_channel, queued)
         };
-        self.finish_send(&peer.peer_id, data_channel, queued).await
+        let result = self.finish_send(&peer.peer_id, data_channel, queued).await;
+        if result.is_ok() {
+            transport_diagnostics().logical_sent(MessageClass::Reliable);
+        }
+        result
     }
 
     #[cfg(test)]
@@ -3198,8 +3211,7 @@ impl WebRTCRsConnectionHandler {
                     )
                     .await?;
                     send_under_publication(item.publication.as_ref(), async {
-                        data_channel
-                            .send_text(&item.text)
+                        send_text_checked(&data_channel, &item.text)
                             .await
                             .map_err(|e| webrtc_error("send data channel frame", e))
                     })
@@ -3533,9 +3545,11 @@ impl WebRTCRsConnectionHandler {
                 )
                 .await?;
                 send_under_publication(item.publication.as_ref(), async {
-                    data_channel.send_text(&item.text).await.map_err(|error| {
-                        webrtc_error("send interleaved high-priority frame", error)
-                    })
+                    send_text_checked(&data_channel, &item.text)
+                        .await
+                        .map_err(|error| {
+                            webrtc_error("send interleaved high-priority frame", error)
+                        })
                 })
                 .await
             })
@@ -4220,12 +4234,15 @@ fn install_auxiliary_data_channel(
             }
             match event {
                 DataChannelEvent::OnMessage(message) => {
+                    transport_diagnostics().received(MessageClass::Reliable);
                     let text = String::from_utf8_lossy(&message.data).to_string();
                     match serde_json::from_str::<WebRTCMessage>(&text) {
-                        Ok(message) => message_subject.next(PeerWithMessage {
-                            peer: WebRTCRsConnection::new(peer_task.clone(), generation),
-                            message,
-                        }),
+                        Ok(message) => {
+                            message_subject.next(PeerWithMessage {
+                                peer: WebRTCRsConnection::new(peer_task.clone(), generation),
+                                message,
+                            });
+                        }
                         Err(error) => {
                             error_subject.next(decode_error("auxiliary message", error, &text))
                         }
@@ -4386,6 +4403,7 @@ fn install_data_channel(
                         .next(WebRTCRsConnection::new(peer_for_task.clone(), generation));
                 }
                 DataChannelEvent::OnMessage(msg) => {
+                    transport_diagnostics().received(MessageClass::Reliable);
                     let text = String::from_utf8_lossy(&msg.data).to_string();
                     let value = match serde_json::from_str::<Value>(&text) {
                         Ok(value) => value,
@@ -4433,15 +4451,22 @@ fn install_data_channel(
                     }
                     if value.get("result").is_some() || value.get("error").is_some() {
                         match serde_json::from_value::<WebRTCResponse>(value) {
-                            Ok(response) => response_subject.next(PeerWithResponse {
-                                peer: WebRTCRsConnection::new(peer_for_task.clone(), generation),
-                                response,
-                            }),
+                            Ok(response) => {
+                                transport_diagnostics().logical_received(MessageClass::Reliable);
+                                response_subject.next(PeerWithResponse {
+                                    peer: WebRTCRsConnection::new(
+                                        peer_for_task.clone(),
+                                        generation,
+                                    ),
+                                    response,
+                                });
+                            }
                             Err(err) => error_subject.next(decode_error("response", err, &text)),
                         }
                     } else {
                         match serde_json::from_value::<WebRTCMessage>(value) {
                             Ok(message) => {
+                                transport_diagnostics().logical_received(MessageClass::Reliable);
                                 // Phase 2: `rxdb.activeCollections` is a
                                 // transport-control frame, not a replication
                                 // request. The browser sends it whenever its
@@ -4975,8 +5000,7 @@ async fn send_json_text(data_channel: &Arc<dyn DataChannel>, value: &Value) -> R
             })),
         ));
     }
-    data_channel
-        .send_text(&text)
+    send_text_checked(data_channel, &text)
         .await
         .map_err(|e| webrtc_error("send WebRTC transport frame", e))
 }
@@ -4994,8 +5018,7 @@ async fn send_auxiliary_wire_frame(
         )
     })?;
     if text.len() <= 12_000 {
-        return data_channel
-            .send_text(&text)
+        return send_text_checked(data_channel, &text)
             .await
             .map_err(|error| webrtc_error("send auxiliary WebRTC frame", error));
     }
@@ -6413,7 +6436,9 @@ mod tests {
         async fn ready_state(
             &self,
         ) -> webrtc::error::Result<webrtc::data_channel::RTCDataChannelState> {
-            self.inner.ready_state().await
+            // This fixture terminates sends itself and generates synthetic ACKs;
+            // its inner, unconnected handle only supplies the channel metadata.
+            Ok(webrtc::data_channel::RTCDataChannelState::Open)
         }
         async fn buffered_amount_high_threshold(&self) -> webrtc::error::Result<u32> {
             self.inner.buffered_amount_high_threshold().await

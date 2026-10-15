@@ -376,6 +376,9 @@ fn main() -> anyhow::Result<()> {
     limit_glibc_malloc_arenas();
     install_process_rustls_crypto_provider();
     install_sqlite_error_log();
+    if let Err(error) = rxdb::plugins::replication_webrtc::connection_handler_rs::log_bridge::install_daemon_log_bridge() {
+        eprintln!("CTOX log-to-tracing bridge initialization failed: {error}");
+    }
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The isolated guest endpoint owns no CTOX daemon database or CLI ledger.

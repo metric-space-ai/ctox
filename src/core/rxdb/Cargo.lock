@@ -463,6 +463,7 @@ dependencies = [
  "dashmap",
  "flate2",
  "futures",
+ "log",
  "notify",
  "parking_lot",
  "rand 0.8.5",
@@ -479,6 +480,8 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "tracing",
+ "tracing-log",
+ "tracing-subscriber",
  "url",
  "uuid",
  "webrtc",
@@ -1836,8 +1839,6 @@ dependencies = [
 [[package]]
 name = "rtc"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ac1b7092bf69781b30b983d0f2c689f4289a110990ad59c43e561f2ff8fd724"
 dependencies = [
  "bytes",
  "hex",
@@ -2348,6 +2349,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2525,6 +2535,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "time"
 version = "0.3.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2686,6 +2705,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+ "valuable",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "sharded-slab",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]
@@ -2781,6 +2823,12 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "valuable"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vcpkg"
@@ -2910,8 +2958,6 @@ dependencies = [
 [[package]]
 name = "webrtc"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c747ddba952c11f0847312a6c56fdcec9b89258937e5b5a35c20110d2670304"
 dependencies = [
  "async-trait",
  "bytes",
