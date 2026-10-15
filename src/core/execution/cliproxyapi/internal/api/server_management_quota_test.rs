@@ -1,5 +1,7 @@
 // ref: internal/api/handlers/management/plugin_quota_test.go @ 5fc580b1d72d87a7bcfe5cfb6f479c1aea5625b3
 // License: MIT (upstream); modifications AGPL-3.0-only
+#[path = "server_management_quota_binding_test.rs"]
+mod binding_tests;
 use super::*;
 use crate::internal::{
     api::handlers::management::*,
@@ -33,6 +35,7 @@ impl HostConfigSummarySource for Summary {
     }
 }
 struct Credentials {
+    generation: Mutex<u64>,
     calls: AtomicUsize,
     events: Arc<Mutex<Vec<&'static str>>>,
     mismatch: AtomicBool,
@@ -53,6 +56,7 @@ impl ManagementQuotaCredentialSource for Credentials {
             return Ok(None);
         }
         Ok(Some(ManagementQuotaCredential {
+            binding: self.generation.lock().unwrap().to_string(),
             request: QuotaFetchRequest {
                 auth_index: if self.mismatch.load(Ordering::SeqCst) {
                     "other".into()
@@ -78,8 +82,31 @@ impl ManagementQuotaCredentialSource for Credentials {
             }),
         }))
     }
+    fn with_current_binding(
+        &self,
+        index: &str,
+        binding: &str,
+        publish: &mut dyn FnMut(),
+    ) -> Result<bool, ManagementQuotaCredentialError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(ManagementQuotaCredentialError::Unavailable);
+        }
+        let generation = self.generation.lock().unwrap();
+        if index != "account-index"
+            || binding != generation.to_string()
+            || self.mismatch.load(Ordering::SeqCst)
+        {
+            return Ok(false);
+        }
+        publish();
+        Ok(true)
+    }
 }
 struct Client {
+    credentials: Arc<Credentials>,
+    retire_on_fetch: AtomicBool,
+    unavailable_on_fetch: AtomicBool,
+    retire_on_reset: AtomicBool,
     events: Arc<Mutex<Vec<&'static str>>>,
     resets: AtomicUsize,
     reset_ok: AtomicBool,
@@ -98,11 +125,20 @@ impl PluginClient for Client {
                     json!({"supported_providers":["quota-fixture"],"supports_reset":true})
                 }
                 METHOD_QUOTA_FETCH => {
+                    if self.unavailable_on_fetch.load(Ordering::SeqCst) {
+                        self.credentials.unavailable.store(true, Ordering::SeqCst);
+                    }
+                    if self.retire_on_fetch.load(Ordering::SeqCst) {
+                        *self.credentials.generation.lock().unwrap() += 1;
+                    }
                     let request: Value = serde_json::from_str(call.payload.get()).unwrap();
                     assert_eq!(request["auth_index"], "account-index");
                     json!({"groups":[{"buckets":[{"remainingFraction":0}]}]})
                 }
                 METHOD_QUOTA_RESET => {
+                    if self.retire_on_reset.load(Ordering::SeqCst) {
+                        *self.credentials.generation.lock().unwrap() += 1;
+                    }
                     self.resets.fetch_add(1, Ordering::SeqCst);
                     self.events.lock().unwrap().push("provider-reset");
                     if self.reset_timeout.load(Ordering::SeqCst) {
@@ -132,6 +168,8 @@ impl PluginLoader for Loader {
     }
 }
 struct Routing {
+    credentials: Arc<Credentials>,
+    require_fence: AtomicBool,
     events: Arc<Mutex<Vec<&'static str>>>,
     calls: AtomicUsize,
     fail: AtomicBool,
@@ -141,6 +179,12 @@ impl ManagementQuotaResetSource for Routing {
         &self,
         index: &str,
     ) -> Result<Option<ManagementQuotaResetResult>, ManagementQuotaResetError> {
+        if self.require_fence.load(Ordering::SeqCst) {
+            assert!(
+                self.credentials.generation.try_lock().is_err(),
+                "routing reset ran outside account authority fence"
+            );
+        }
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.events.lock().unwrap().push("routing-reset");
         if self.fail.load(Ordering::SeqCst) {
@@ -153,6 +197,8 @@ impl ManagementQuotaResetSource for Routing {
     }
 }
 struct Probe {
+    credentials: Arc<Credentials>,
+    retire_on_response: AtomicBool,
     status: AtomicUsize,
     calls: AtomicUsize,
 }
@@ -163,6 +209,9 @@ impl ManagementApiCallExecutor for Probe {
     ) -> Result<ManagementApiToolResponse, ManagementApiToolError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         assert_eq!(request.auth_index, "account-index");
+        if self.retire_on_response.load(Ordering::SeqCst) {
+            *self.credentials.generation.lock().unwrap() += 1;
+        }
         Ok(ManagementApiToolResponse {
             status_code: self.status.load(Ordering::SeqCst) as u16,
             headers: Default::default(),
@@ -185,6 +234,7 @@ struct Fixture {
 async fn fixture() -> Fixture {
     let events = Arc::new(Mutex::new(vec![]));
     let credentials = Arc::new(Credentials {
+        generation: Mutex::new(1),
         calls: AtomicUsize::new(0),
         events: events.clone(),
         mismatch: AtomicBool::new(false),
@@ -192,6 +242,10 @@ async fn fixture() -> Fixture {
         probe: AtomicBool::new(false),
     });
     let client = Arc::new(Client {
+        credentials: credentials.clone(),
+        retire_on_fetch: AtomicBool::new(false),
+        unavailable_on_fetch: AtomicBool::new(false),
+        retire_on_reset: AtomicBool::new(false),
         events: events.clone(),
         resets: AtomicUsize::new(0),
         reset_ok: AtomicBool::new(true),
@@ -223,11 +277,15 @@ async fn fixture() -> Fixture {
         .failures
         .is_empty());
     let routing = Arc::new(Routing {
+        credentials: credentials.clone(),
+        require_fence: AtomicBool::new(false),
         events: events.clone(),
         calls: AtomicUsize::new(0),
         fail: AtomicBool::new(false),
     });
     let probe = Arc::new(Probe {
+        credentials: credentials.clone(),
+        retire_on_response: AtomicBool::new(false),
         status: AtomicUsize::new(200),
         calls: AtomicUsize::new(0),
     });
@@ -327,6 +385,7 @@ async fn quota_routes_reject_invalid_bodies_methods_and_account_injection() {
     for value in [
         json!({}),
         json!({"auth_index":"account-index","storage_json":"forged"}),
+        json!({"auth_index":"account-index","binding":"forged"}),
         json!({"auth_index":"account-index","url":"https://foreign.invalid"}),
     ] {
         assert_eq!(

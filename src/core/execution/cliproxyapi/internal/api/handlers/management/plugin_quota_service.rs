@@ -14,6 +14,8 @@ use serde_json::{Map, Value};
 use std::{sync::Arc, time::SystemTime};
 #[derive(Clone)]
 pub struct ManagementQuotaCredential {
+    /// Opaque server-only policy/credential generation. Never sent to a plugin.
+    pub binding: String,
     pub request: QuotaFetchRequest,
     pub probe: Option<Map<String, Value>>,
 }
@@ -34,6 +36,16 @@ pub trait ManagementQuotaCredentialSource: Send + Sync {
         &self,
         auth_index: &str,
     ) -> Result<Option<ManagementQuotaCredential>, ManagementQuotaCredentialError>;
+    /// Under the same fence used by account/credential/policy mutations, verify
+    /// the captured binding and call `publish` exactly once while it is current.
+    /// A retired binding returns false without calling it; store failures return
+    /// an error without publishing. No asynchronous or external I/O belongs here.
+    fn with_current_binding(
+        &self,
+        auth_index: &str,
+        binding: &str,
+        publish: &mut dyn FnMut(),
+    ) -> Result<bool, ManagementQuotaCredentialError>;
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManagementPluginQuotaError {
@@ -80,6 +92,28 @@ impl ManagementPluginQuotaService {
     pub async fn providers(&self) -> Vec<RegisteredQuotaProviderInfo> {
         self.host.quota_providers().await
     }
+    fn with_current<T>(
+        &self,
+        index: &str,
+        binding: &str,
+        publish: impl FnOnce() -> T,
+    ) -> Result<T, ManagementPluginQuotaError> {
+        let mut publish = Some(publish);
+        let mut result = None;
+        let accepted = self
+            .credentials
+            .with_current_binding(index, binding, &mut || {
+                if let Some(publish) = publish.take() {
+                    result = Some(publish());
+                }
+            })
+            .map_err(|_| ManagementPluginQuotaError::CredentialSourceUnavailable)?;
+        if !accepted {
+            return Err(ManagementPluginQuotaError::AccountContextMismatch);
+        }
+        result.ok_or(ManagementPluginQuotaError::AccountContextMismatch)
+    }
+
     fn account(
         &self,
         index: &str,
@@ -89,9 +123,13 @@ impl ManagementPluginQuotaService {
             .resolve(index)
             .map_err(|_| ManagementPluginQuotaError::CredentialSourceUnavailable)?
             .ok_or(ManagementPluginQuotaError::AccountNotFound)?;
-        if account.request.auth_index != index {
+        if account.request.auth_index != index
+            || account.binding.is_empty()
+            || account.binding.len() > 256
+        {
             return Err(ManagementPluginQuotaError::AccountContextMismatch);
         }
+        self.with_current(index, &account.binding, || ())?;
         Ok(account)
     }
     pub async fn fetch(
@@ -102,6 +140,7 @@ impl ManagementPluginQuotaService {
         plugin_only: bool,
     ) -> Result<QuotaFetchResponse, ManagementPluginQuotaError> {
         let mut account = self.account(index)?;
+        let binding = account.binding.clone();
         if !provider.trim().is_empty() {
             account.request.provider = provider.trim().into();
         }
@@ -119,8 +158,9 @@ impl ManagementPluginQuotaService {
                     .fetch_quota(account.request, self.summary.clone())
                     .await
             }
-        }
-        .map_err(|error| {
+        };
+        let result = self.with_current(index, &binding, || result)?;
+        let result = result.map_err(|error| {
             if error.downcast_ref::<crate::internal::pluginhost::abi::PluginClientError>()
                 == Some(&crate::internal::pluginhost::abi::PluginClientError::DeadlineExceeded)
             {
@@ -136,8 +176,9 @@ impl ManagementPluginQuotaService {
             return Err(ManagementPluginQuotaError::PluginNotFound);
         }
         if let (Some(probe), Some(config)) = (&self.probe, account.probe) {
-            if let Some(result) = probe
-                .fetch(index, &config, SystemTime::now())
+            let result = probe.fetch(index, &config, SystemTime::now());
+            if let Some(result) = self
+                .with_current(index, &binding, || result)?
                 .map_err(ManagementPluginQuotaError::Probe)?
             {
                 return Ok(result);
@@ -151,7 +192,9 @@ impl ManagementPluginQuotaService {
         provider: &str,
         plugin: Option<&str>,
     ) -> Result<(), ManagementPluginQuotaError> {
-        let mut account = self.account(index)?.request;
+        let credential = self.account(index)?;
+        let binding = credential.binding;
+        let mut account = credential.request;
         if !provider.trim().is_empty() {
             account.provider = provider.trim().into();
         }
@@ -162,6 +205,7 @@ impl ManagementPluginQuotaService {
         } else if !self.host.has_quota_provider(&account.provider).await {
             return Err(ManagementPluginQuotaError::Unsupported);
         }
+        self.with_current(index, &binding, || ())?;
         let request = QuotaResetRequest {
             auth_index: account.auth_index,
             auth_id: account.auth_id,
@@ -179,24 +223,25 @@ impl ManagementPluginQuotaService {
                     .await
             }
             None => self.host.reset_quota(request, self.summary.clone()).await,
-        }
-        .map_err(|error| {
-            if error.downcast_ref::<crate::internal::pluginhost::abi::PluginClientError>()
-                == Some(&crate::internal::pluginhost::abi::PluginClientError::DeadlineExceeded)
-            {
-                ManagementPluginQuotaError::Timeout
-            } else {
-                ManagementPluginQuotaError::PluginCallFailed
-            }
-        })?
-        .ok_or(ManagementPluginQuotaError::Unsupported)?;
+        };
+        let result = self.with_current(index, &binding, || result)?;
+        let result = result
+            .map_err(|error| {
+                if error.downcast_ref::<crate::internal::pluginhost::abi::PluginClientError>()
+                    == Some(&crate::internal::pluginhost::abi::PluginClientError::DeadlineExceeded)
+                {
+                    ManagementPluginQuotaError::Timeout
+                } else {
+                    ManagementPluginQuotaError::PluginCallFailed
+                }
+            })?
+            .ok_or(ManagementPluginQuotaError::Unsupported)?;
         if !result.success {
             return Err(ManagementPluginQuotaError::ResetDeclined);
         }
         // The provider acknowledgement must precede any routing cooldown mutation.
         if let Some(reset) = &self.routing_reset {
-            reset
-                .reset_by_index(index)
+            self.with_current(index, &binding, || reset.reset_by_index(index))?
                 .map_err(|_| ManagementPluginQuotaError::RoutingResetFailed)?
                 .ok_or(ManagementPluginQuotaError::RoutingResetFailed)?;
         }
