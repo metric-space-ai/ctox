@@ -2,6 +2,7 @@
 // License: Apache-2.0
 
 use super::session::{session_role, session_user_id, BusinessOsSession, BusinessOsSessionUser};
+use super::sqlite_file_digest::MaintenanceOwner;
 use super::store::{
     hex_sha256, now_ms, open_store, outbound_load_record, resolve_business_os_installed_app_root,
     rxdb_collection_table_name, rxdb_store_path, short_hash, source_sanitize_slug,
@@ -2371,12 +2372,16 @@ fn sqlite_vacuum_into(source: &Path, target: &Path) -> anyhow::Result<bool> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
+    // Offline operation: never create a second live connection beside a v4
+    // owner. Target ownership is acquired before removing an earlier snapshot.
+    let _source_owner = MaintenanceOwner::acquire(source)?;
+    let _target_owner = MaintenanceOwner::acquire(target)?;
     if target.exists() {
         fs::remove_file(target)?;
     }
     let conn = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("failed to open sqlite snapshot source {}", source.display()))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    conn.busy_timeout(std::time::Duration::ZERO)?;
     let target_text = target.to_string_lossy().to_string();
     conn.execute("VACUUM INTO ?1", params![target_text])
         .with_context(|| format!("failed to snapshot sqlite database to {}", target.display()))?;
@@ -2392,6 +2397,7 @@ fn sqlite_integrity_summary(path: &Path, kind: &str, relative: &Path) -> anyhow:
             "result": "missing"
         }));
     }
+    let _owner = MaintenanceOwner::acquire(path)?;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("failed to open restored sqlite {}", path.display()))?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;

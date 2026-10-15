@@ -21,6 +21,7 @@ local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda", "ctox-voxtral-4b
 local-speech-openblas = ["ctox-voxtral-4b-tts-2603/openblas"]
 
 [dependencies]
+ctox-store = { path = "src/core/store" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -137,6 +138,7 @@ tempfile = "3"
 
 [workspace]
 members = [
+    "src/core/store",
     "src/core/execution/cliproxyapi",
     "src/tools/postgres-adapter",
 ]
@@ -169,6 +171,8 @@ ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.2
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 rtc-ice = { path = "src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "src/core/rxdb/patches/rtc" }
+webrtc = { path = "src/core/rxdb/patches/webrtc" }
 # Polars 0.53 pins object_store 0.13; this fork moves it to quick-xml 0.41.
 # See src/tools/object-store-patched/CTOX-PATCH.md.
 object_store = { path = "src/tools/object-store-patched" }

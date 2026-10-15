@@ -1,0 +1,62 @@
+{
+  "hello": {
+    "type": "hello",
+    "protocol_ver": 4,
+    "bootstrap_ver": 4,
+    "app_api_ver": {
+      "min": "4.0",
+      "max": "4.2"
+    },
+    "instance_id": "test-instance",
+    "capabilities": [
+      "worktree",
+      "terminal",
+      "audio"
+    ],
+    "device_proof": {
+      "device_id": "test-device",
+      "public_key": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "signature": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+    },
+    "scopes_wanted": [
+      "test-scope"
+    ],
+    "transport": {
+      "codecs": [
+        "gzip"
+      ],
+      "max_frame_bytes": 8192,
+      "fragmentation": true,
+      "reassembly": true
+    }
+  },
+  "hello_ok": {
+    "type": "hello_ok",
+    "protocol_ver": 4,
+    "bootstrap_ver": 4,
+    "app_api_ver": "4.1",
+    "instance_id": "test-instance",
+    "capabilities": [
+      "terminal",
+      "worktree"
+    ],
+    "transport": {
+      "codec": "gzip",
+      "frame_bytes": 8192,
+      "fragmentation": true,
+      "reassembly": true
+    },
+    "epoch": "test-epoch",
+    "head_seq": "18446744073709551615",
+    "scope_tokens": [
+      "test-issued-scope"
+    ],
+    "rights_ver": "9007199254740993"
+  },
+  "hello_reject": {
+    "type": "hello_reject",
+    "reason": "app_api_incompatible",
+    "required": "overlapping app API range"
+  }
+}

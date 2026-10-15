@@ -2469,6 +2469,7 @@ dependencies = [
  "ctox-qwen3-embedding-0-6b",
  "ctox-rxdb",
  "ctox-sqlserver-adapter",
+ "ctox-store",
  "ctox-sync",
  "ctox-transfers",
  "ctox-utils-absolute-path",
@@ -3280,6 +3281,7 @@ dependencies = [
  "dashmap",
  "flate2",
  "futures",
+ "log",
  "notify",
  "parking_lot",
  "rand 0.8.8",
@@ -3295,9 +3297,12 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite 0.28.0",
  "tracing",
+ "tracing-log",
+ "tracing-subscriber",
  "url",
  "uuid",
  "webrtc",
+ "zstd",
 ]
 
 [[package]]
@@ -3384,6 +3389,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "ctox-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "uuid",
 ]
 
@@ -10986,8 +11003,6 @@ dependencies = [
 [[package]]
 name = "rtc"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ac1b7092bf69781b30b983d0f2c689f4289a110990ad59c43e561f2ff8fd724"
 dependencies = [
  "bytes",
  "hex",
@@ -15047,8 +15062,6 @@ dependencies = [
 [[package]]
 name = "webrtc"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c747ddba952c11f0847312a6c56fdcec9b89258937e5b5a35c20110d2670304"
 dependencies = [
  "async-trait",
  "bytes",

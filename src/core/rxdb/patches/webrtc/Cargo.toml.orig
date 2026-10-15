@@ -1,0 +1,143 @@
+[package]
+name = "webrtc"
+version = "0.20.0-alpha.1"
+authors = ["Rain Liu <yliu@webrtc.rs>"]
+edition = "2024"
+license = "MIT/Apache-2.0"
+homepage = "https://webrtc.rs"
+documentation = "https://docs.rs/webrtc"
+repository = "https://github.com/webrtc-rs/webrtc"
+keywords = ["sansio", "networking", "protocols"]
+categories = ["network-programming"]
+description = "A pure Rust implementation of WebRTC API"
+
+[features]
+default = ["runtime-tokio"]
+runtime-tokio = ["dep:tokio"]
+runtime-smol = ["dep:smol", "dep:async-broadcast"]
+
+[dependencies]
+rtc = { version = "0.20.0-alpha.1", path = "rtc/rtc" }
+
+bytes = "1.11.1"
+async-trait = "0.1.89"
+log = "0.4.29"
+futures = "0.3.31"
+
+# Async runtimes (all optional)
+tokio = { version = "1.49.0", features = ["net", "time", "sync", "rt", "rt-multi-thread"], optional = true }
+smol = { version = "2.0.2", optional = true }
+async-broadcast = { version = "0.7", optional = true }
+
+[dev-dependencies]
+signal = { version = "0.20.0-alpha.1", path = "rtc/examples/examples/signal", package = "rtc-signal" }
+
+env_logger = "0.11.8"
+chrono = "0.4.43"
+clap = { version = "4.5.59", features = ["derive"] }
+anyhow = "1.0.102"
+ctrlc = "3.5.2"
+serde_json = "1.0.149"
+hyper = { version = "0.14.32", features = ["full"] }
+rand = "0.10.0"
+
+[[example]]
+name = "broadcast"
+path = "examples/broadcast/broadcast.rs"
+bench = false
+
+[[example]]
+name = "data-channels"
+path = "examples/data-channels/data-channels.rs"
+bench = false
+
+[[example]]
+name = "data-channels-close"
+path = "examples/data-channels-close/data-channels-close.rs"
+bench = false
+
+[[example]]
+name = "data-channels-create"
+path = "examples/data-channels-create/data-channels-create.rs"
+bench = false
+
+[[example]]
+name = "data-channels-flow-control"
+path = "examples/data-channels-flow-control/data-channels-flow-control.rs"
+bench = false
+
+[[example]]
+name = "data-channels-offer"
+path = "examples/data-channels-offer-answer/data-channels-offer.rs"
+bench = false
+
+[[example]]
+name = "data-channels-answer"
+path = "examples/data-channels-offer-answer/data-channels-answer.rs"
+bench = false
+
+[[example]]
+name = "data-channels-simple"
+path = "examples/data-channels-simple/data-channels-simple.rs"
+bench = false
+
+[[example]]
+name = "ice-restart"
+path = "examples/ice-restart/ice-restart.rs"
+bench = false
+
+[[example]]
+name = "insertable-streams"
+path = "examples/insertable-streams/insertable-streams.rs"
+bench = false
+
+[[example]]
+name = "play-from-disk-vpx"
+path = "examples/play-from-disk-vpx/play-from-disk-vpx.rs"
+bench = false
+
+[[example]]
+name = "play-from-disk-h26x"
+path = "examples/play-from-disk-h26x/play-from-disk-h26x.rs"
+bench = false
+
+[[example]]
+name = "play-from-disk-renegotiation"
+path = "examples/play-from-disk-renegotiation/play-from-disk-renegotiation.rs"
+bench = false
+
+[[example]]
+name = "reflect"
+path = "examples/reflect/reflect.rs"
+bench = false
+
+[[example]]
+name = "rtp-forwarder"
+path = "examples/rtp-forwarder/rtp-forwarder.rs"
+bench = false
+#
+[[example]]
+name = "rtp-to-webrtc"
+path = "examples/rtp-to-webrtc/rtp-to-webrtc.rs"
+bench = false
+#
+[[example]]
+name = "save-to-disk-vpx"
+path = "examples/save-to-disk-vpx/save-to-disk-vpx.rs"
+bench = false
+#
+[[example]]
+name = "save-to-disk-h26x"
+path = "examples/save-to-disk-h26x/save-to-disk-h26x.rs"
+bench = false
+#
+[[example]]
+name = "simulcast"
+path = "examples/simulcast/simulcast.rs"
+bench = false
+#
+[[example]]
+name = "swap-tracks"
+path = "examples/swap-tracks/swap-tracks.rs"
+bench = false
+#

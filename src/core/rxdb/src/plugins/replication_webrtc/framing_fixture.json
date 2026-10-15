@@ -1,0 +1,19 @@
+{
+  "protocol": 4,
+  "frame_bytes": 16384,
+  "codec": "zstd",
+  "cases": [
+    {
+      "lane": 0,
+      "seq": "0",
+      "text": "ack",
+      "frame_base64": "Q1RYNAAAATAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAA2Fjaw=="
+    },
+    {
+      "lane": 1,
+      "seq": "18446744073709551615",
+      "text": "hi 🌍\n",
+      "frame_base64": "Q1RYNAEAFDE4NDQ2NzQ0MDczNzA5NTUxNjE1AAAAAAAAAAEACGhpIPCfjI0K"
+    }
+  ]
+}
