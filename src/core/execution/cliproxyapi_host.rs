@@ -89,6 +89,8 @@ const INSTANCE_PROXY_CONFIG_TABLE: &str = "cliproxyapi_runtime_config";
 
 #[path = "cliproxyapi_account_controls.rs"]
 pub(crate) mod account_controls;
+#[path = "cliproxyapi_plugin_quota.rs"]
+pub(crate) mod plugin_quota;
 const INSTANCE_PROXY_CONFIG_SCHEMA: &str = "ctox.cliproxyapi.runtime-config.v1";
 const INSTANCE_ANTIGRAVITY_CAPABILITY_REFRESH_SECONDS: u64 = 10 * 60;
 const INSTANCE_SIGNATURE_CACHE_TABLE: &str = "cliproxyapi_signature_cache";
