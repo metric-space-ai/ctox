@@ -20,8 +20,11 @@ pub(super) fn initialized_lcm_paths() -> &'static Mutex<HashSet<PathBuf>> {
 }
 
 pub fn run_init(db_path: &Path) -> Result<()> {
-    let _ = LcmEngine::open(db_path, LcmConfig::default())?;
-    Ok(())
+    owned_lcm_read(db_path, |conn| {
+        conn.prepare("SELECT attempt_id FROM worker_attempt_finalizations LIMIT 0")?;
+        conn.prepare("SELECT message_id FROM messages LIMIT 0")?;
+        Ok(())
+    })
 }
 
 pub fn run_add_message(
@@ -30,8 +33,13 @@ pub fn run_add_message(
     role: &str,
     content: &str,
 ) -> Result<MessageRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.add_message(conversation_id, role, content)
+    let role = role.to_owned();
+    let content = content.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let role = role.as_str();
+        let content = content.as_str();
+        engine.add_message(conversation_id, role, content)
+    })
 }
 
 /// F3: convenience wrapper for the agent harness — record an assistant
@@ -42,8 +50,11 @@ pub fn run_add_assistant_turn(
     content: &str,
     outcome: AgentOutcome,
 ) -> Result<MessageRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.add_message_with_outcome(conversation_id, "assistant", content, Some(outcome))
+    let content = content.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let content = content.as_str();
+        engine.add_message_with_outcome(conversation_id, "assistant", content, Some(outcome))
+    })
 }
 
 pub fn run_begin_worker_attempt_finalization(
@@ -92,24 +103,63 @@ pub fn run_record_task_execution_plan(
     db_path: &Path,
     input: TaskExecutionPlanUpdate<'_>,
 ) -> Result<serde_json::Value> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.record_task_execution_plan(input)
+    let (work_key, task_id, command_id, attempt_id) = (
+        input.work_key.to_owned(),
+        input.task_id.to_owned(),
+        input.command_id.to_owned(),
+        input.attempt_id.to_owned(),
+    );
+    let explanation = input.explanation.map(str::to_owned);
+    let steps = input.steps.to_vec();
+    owned_lcm_write(db_path, move |engine| {
+        let input = TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id: &task_id,
+            command_id: &command_id,
+            attempt_id: &attempt_id,
+            explanation: explanation.as_deref(),
+            steps: &steps,
+        };
+        engine.record_task_execution_plan(input)
+    })
 }
 
 pub fn run_record_task_execution_activity(
     db_path: &Path,
     input: TaskExecutionActivityInput<'_>,
 ) -> Result<bool> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.record_task_execution_activity(input)
+    let (activity_id, work_key, task_id, command_id, attempt_id, kind) = (
+        input.activity_id.to_owned(),
+        input.work_key.to_owned(),
+        input.task_id.to_owned(),
+        input.command_id.to_owned(),
+        input.attempt_id.to_owned(),
+        input.kind.to_owned(),
+    );
+    let attribute_to_current_step = input.attribute_to_current_step;
+    owned_lcm_write(db_path, move |engine| {
+        let input = TaskExecutionActivityInput {
+            activity_id: &activity_id,
+            work_key: &work_key,
+            task_id: &task_id,
+            command_id: &command_id,
+            attempt_id: &attempt_id,
+            kind: &kind,
+            attribute_to_current_step,
+        };
+        engine.record_task_execution_activity(input)
+    })
 }
 
 pub fn run_prepare_task_execution_review(
     db_path: &Path,
     work_key: &str,
 ) -> Result<serde_json::Value> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.prepare_task_execution_review(work_key)
+    let work_key = work_key.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let work_key = work_key.as_str();
+        engine.prepare_task_execution_review(work_key)
+    })
 }
 
 pub fn run_set_task_execution_review_status(
@@ -117,8 +167,13 @@ pub fn run_set_task_execution_review_status(
     work_key: &str,
     review_status: &str,
 ) -> Result<serde_json::Value> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.set_task_execution_review_status(work_key, review_status)
+    let work_key = work_key.to_owned();
+    let review_status = review_status.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let work_key = work_key.as_str();
+        let review_status = review_status.as_str();
+        engine.set_task_execution_review_status(work_key, review_status)
+    })
 }
 
 pub fn run_task_execution_progress(
@@ -145,8 +200,11 @@ pub fn run_ensure_worker_attempt_assistant_message(
     db_path: &Path,
     attempt_id: &str,
 ) -> Result<MessageRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.ensure_worker_attempt_assistant_message(attempt_id)
+    let attempt_id = attempt_id.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let attempt_id = attempt_id.as_str();
+        engine.ensure_worker_attempt_assistant_message(attempt_id)
+    })
 }
 
 pub fn run_record_worker_attempt_artifact_check(
@@ -155,8 +213,13 @@ pub fn run_record_worker_attempt_artifact_check(
     accepted: bool,
     details: &str,
 ) -> Result<WorkerAttemptRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.record_worker_attempt_artifact_check(attempt_id, accepted, details)
+    let attempt_id = attempt_id.to_owned();
+    let details = details.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let attempt_id = attempt_id.as_str();
+        let details = details.as_str();
+        engine.record_worker_attempt_artifact_check(attempt_id, accepted, details)
+    })
 }
 
 pub fn run_terminalize_worker_attempt(
@@ -167,14 +230,20 @@ pub fn run_terminalize_worker_attempt(
     effects_completed: bool,
     finalization_error: Option<&str>,
 ) -> Result<WorkerAttemptRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    let result = engine.terminalize_worker_attempt(
-        attempt_id,
-        status,
-        resumable,
-        effects_completed,
-        finalization_error,
-    )?;
+    let attempt_id = attempt_id.to_owned();
+    let finalization_error = finalization_error.map(str::to_owned);
+    let result = owned_lcm_write(db_path, move |engine| {
+        let attempt_id = attempt_id.as_str();
+        let finalization_error = finalization_error.as_deref();
+        let result = engine.terminalize_worker_attempt(
+            attempt_id,
+            status,
+            resumable,
+            effects_completed,
+            finalization_error,
+        )?;
+        Ok(result)
+    })?;
     crate::business_os::harness_cockpit::refresh_after_finalization(db_path);
     Ok(result)
 }
@@ -183,8 +252,12 @@ pub fn run_mark_worker_attempt_effects_completed(
     db_path: &Path,
     attempt_id: &str,
 ) -> Result<WorkerAttemptRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    let result = engine.mark_worker_attempt_effects_completed(attempt_id)?;
+    let attempt_id = attempt_id.to_owned();
+    let result = owned_lcm_write(db_path, move |engine| {
+        let attempt_id = attempt_id.as_str();
+        let result = engine.mark_worker_attempt_effects_completed(attempt_id)?;
+        Ok(result)
+    })?;
     crate::business_os::harness_cockpit::refresh_after_finalization(db_path);
     Ok(result)
 }
@@ -193,8 +266,11 @@ pub fn run_mark_worker_attempt_recovery_effects_applied(
     db_path: &Path,
     attempt_id: &str,
 ) -> Result<bool> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.mark_worker_attempt_recovery_effects_applied(attempt_id)
+    let attempt_id = attempt_id.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let attempt_id = attempt_id.as_str();
+        engine.mark_worker_attempt_recovery_effects_applied(attempt_id)
+    })
 }
 
 pub fn run_compact(
@@ -203,8 +279,14 @@ pub fn run_compact(
     token_budget: i64,
     force: bool,
 ) -> Result<CompactionResult> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.compact(conversation_id, token_budget, &HeuristicSummarizer, force)
+    owned_lcm_compact(
+        db_path,
+        conversation_id,
+        token_budget,
+        LcmConfig::default(),
+        &HeuristicSummarizer,
+        force,
+    )
 }
 
 pub fn run_grep(
@@ -215,19 +297,29 @@ pub fn run_grep(
     query: &str,
     limit: usize,
 ) -> Result<GrepResult> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.grep(
-        conversation_id,
-        GrepScope::parse(scope)?,
-        GrepMode::parse(mode)?,
-        query,
-        limit,
-    )
+    let scope = scope.to_owned();
+    let mode = mode.to_owned();
+    let query = query.to_owned();
+    owned_lcm_session_read(db_path, move |engine| {
+        let scope = scope.as_str();
+        let mode = mode.as_str();
+        let query = query.as_str();
+        engine.grep(
+            conversation_id,
+            GrepScope::parse(scope)?,
+            GrepMode::parse(mode)?,
+            query,
+            limit,
+        )
+    })
 }
 
 pub fn run_describe(db_path: &Path, id: &str) -> Result<Option<DescribeResult>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.describe(id)
+    let id = id.to_owned();
+    owned_lcm_session_read(db_path, move |engine| {
+        let id = id.as_str();
+        engine.describe(id)
+    })
 }
 
 pub fn run_expand(
@@ -237,8 +329,11 @@ pub fn run_expand(
     include_messages: bool,
     token_cap: i64,
 ) -> Result<ExpandResult> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.expand(summary_id, depth, include_messages, token_cap)
+    let summary_id = summary_id.to_owned();
+    owned_lcm_session_read(db_path, move |engine| {
+        let summary_id = summary_id.as_str();
+        engine.expand(summary_id, depth, include_messages, token_cap)
+    })
 }
 
 pub fn run_dump(db_path: &Path, conversation_id: i64) -> Result<LcmSnapshot> {
@@ -253,32 +348,44 @@ pub fn run_secret_rewrite(
     match_text: &str,
     replacement_text: &str,
 ) -> Result<SecretRewriteResult> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.rewrite_secret_literal(
-        conversation_id,
-        secret_scope,
-        secret_name,
-        match_text,
-        replacement_text,
-    )
+    let secret_scope = secret_scope.to_owned();
+    let secret_name = secret_name.to_owned();
+    let match_text = match_text.to_owned();
+    let replacement_text = replacement_text.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let secret_scope = secret_scope.as_str();
+        let secret_name = secret_name.as_str();
+        let match_text = match_text.as_str();
+        let replacement_text = replacement_text.as_str();
+        engine.rewrite_secret_literal(
+            conversation_id,
+            secret_scope,
+            secret_name,
+            match_text,
+            replacement_text,
+        )
+    })
 }
 
 pub fn run_refresh_continuity(db_path: &Path, conversation_id: i64) -> Result<ContinuityRevision> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.refresh_continuity(conversation_id)
+    owned_lcm_write(db_path, move |engine| {
+        engine.refresh_continuity(conversation_id)
+    })
 }
 
 pub fn run_show_continuity(
     db_path: &Path,
     conversation_id: i64,
 ) -> Result<Option<ContinuityRevision>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.latest_continuity(conversation_id)
+    owned_lcm_write(db_path, move |engine| {
+        engine.latest_continuity(conversation_id)
+    })
 }
 
 pub fn run_continuity_init(db_path: &Path, conversation_id: i64) -> Result<ContinuityShowAll> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_init_documents(conversation_id)
+    owned_lcm_write(db_path, move |engine| {
+        engine.continuity_init_documents(conversation_id)
+    })
 }
 
 pub fn run_continuity_show(
@@ -286,17 +393,20 @@ pub fn run_continuity_show(
     conversation_id: i64,
     kind: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    if let Some(kind) = kind {
-        Ok(serde_json::to_value(engine.continuity_show(
-            conversation_id,
-            ContinuityKind::parse(kind)?,
-        )?)?)
-    } else {
-        Ok(serde_json::to_value(
-            engine.continuity_show_all(conversation_id)?,
-        )?)
-    }
+    let kind = kind.map(str::to_owned);
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_deref();
+        if let Some(kind) = kind {
+            Ok(serde_json::to_value(engine.continuity_show(
+                conversation_id,
+                ContinuityKind::parse(kind)?,
+            )?)?)
+        } else {
+            Ok(serde_json::to_value(
+                engine.continuity_show_all(conversation_id)?,
+            )?)
+        }
+    })
 }
 
 pub fn run_continuity_apply(
@@ -305,10 +415,14 @@ pub fn run_continuity_apply(
     kind: &str,
     diff_path: &Path,
 ) -> Result<ContinuityDocumentState> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
+    crate::persistence::require_sync_owner_context()?;
+    let kind = kind.to_owned();
     let diff_text = std::fs::read_to_string(diff_path)
         .with_context(|| format!("failed to read continuity diff {}", diff_path.display()))?;
-    engine.continuity_apply_diff(conversation_id, ContinuityKind::parse(kind)?, &diff_text)
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_str();
+        engine.continuity_apply_diff(conversation_id, ContinuityKind::parse(kind)?, &diff_text)
+    })
 }
 
 pub fn run_continuity_full_replace(
@@ -317,8 +431,17 @@ pub fn run_continuity_full_replace(
     kind: &str,
     content: &str,
 ) -> Result<ContinuityDocumentState> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_full_replace_document(conversation_id, ContinuityKind::parse(kind)?, content)
+    let kind = kind.to_owned();
+    let content = content.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_str();
+        let content = content.as_str();
+        engine.continuity_full_replace_document(
+            conversation_id,
+            ContinuityKind::parse(kind)?,
+            content,
+        )
+    })
 }
 
 pub fn run_continuity_string_replace(
@@ -328,13 +451,20 @@ pub fn run_continuity_string_replace(
     find: &str,
     replace: &str,
 ) -> Result<ContinuityDocumentState> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_string_replace_document(
-        conversation_id,
-        ContinuityKind::parse(kind)?,
-        find,
-        replace,
-    )
+    let kind = kind.to_owned();
+    let find = find.to_owned();
+    let replace = replace.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_str();
+        let find = find.as_str();
+        let replace = replace.as_str();
+        engine.continuity_string_replace_document(
+            conversation_id,
+            ContinuityKind::parse(kind)?,
+            find,
+            replace,
+        )
+    })
 }
 
 pub fn run_continuity_log(
@@ -342,11 +472,14 @@ pub fn run_continuity_log(
     conversation_id: i64,
     kind: Option<&str>,
 ) -> Result<Vec<ContinuityCommitRecord>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_log(
-        conversation_id,
-        kind.map(ContinuityKind::parse).transpose()?,
-    )
+    let kind = kind.map(str::to_owned);
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_deref();
+        engine.continuity_log(
+            conversation_id,
+            kind.map(ContinuityKind::parse).transpose()?,
+        )
+    })
 }
 
 pub fn run_continuity_rebuild(
@@ -354,8 +487,11 @@ pub fn run_continuity_rebuild(
     conversation_id: i64,
     kind: &str,
 ) -> Result<ContinuityDocumentState> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_rebuild(conversation_id, ContinuityKind::parse(kind)?)
+    let kind = kind.to_owned();
+    owned_lcm_session_read(db_path, move |engine| {
+        let kind = kind.as_str();
+        engine.continuity_rebuild(conversation_id, ContinuityKind::parse(kind)?)
+    })
 }
 
 pub fn run_continuity_forgotten(
@@ -364,12 +500,17 @@ pub fn run_continuity_forgotten(
     kind: Option<&str>,
     query: Option<&str>,
 ) -> Result<Vec<ContinuityForgottenEntry>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_forgotten(
-        conversation_id,
-        kind.map(ContinuityKind::parse).transpose()?,
-        query,
-    )
+    let kind = kind.map(str::to_owned);
+    let query = query.map(str::to_owned);
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_deref();
+        let query = query.as_deref();
+        engine.continuity_forgotten(
+            conversation_id,
+            kind.map(ContinuityKind::parse).transpose()?,
+            query,
+        )
+    })
 }
 
 pub fn run_continuity_build_prompt(
@@ -377,8 +518,11 @@ pub fn run_continuity_build_prompt(
     conversation_id: i64,
     kind: &str,
 ) -> Result<ContinuityPromptPayload> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.continuity_build_prompt(conversation_id, ContinuityKind::parse(kind)?)
+    let kind = kind.to_owned();
+    owned_lcm_write(db_path, move |engine| {
+        let kind = kind.as_str();
+        engine.continuity_build_prompt(conversation_id, ContinuityKind::parse(kind)?)
+    })
 }
 
 pub fn run_context_retrieve(
@@ -393,110 +537,130 @@ pub fn run_context_retrieve(
     include_messages: bool,
     token_cap: i64,
 ) -> Result<serde_json::Value> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    match mode {
-        "current" => {
-            let snapshot = engine.snapshot(conversation_id)?;
-            let continuity = engine.continuity_show_all(conversation_id)?;
-            Ok(serde_json::json!({
-                "mode": "current",
-                "conversation_id": conversation_id,
-                "continuity": continuity,
-                "context_items": snapshot.context_items,
-                "messages": snapshot.messages,
-                "summaries": snapshot.summaries,
-            }))
-        }
-        "continuity" => {
-            if let Some(kind) = continuity_kind {
-                Ok(serde_json::to_value(engine.continuity_show(
-                    conversation_id,
-                    ContinuityKind::parse(kind)?,
-                )?)?)
-            } else {
-                Ok(serde_json::to_value(
-                    engine.continuity_show_all(conversation_id)?,
-                )?)
+    let mode = mode.to_owned();
+    let query = query.map(str::to_owned);
+    let continuity_kind = continuity_kind.map(str::to_owned);
+    let summary_id = summary_id.map(str::to_owned);
+    owned_lcm_write(db_path, move |engine| {
+        let mode = mode.as_str();
+        let query = query.as_deref();
+        let continuity_kind = continuity_kind.as_deref();
+        let summary_id = summary_id.as_deref();
+        match mode {
+            "current" => {
+                let snapshot = engine.snapshot(conversation_id)?;
+                let continuity = engine.continuity_show_all(conversation_id)?;
+                Ok(serde_json::json!({
+                    "mode": "current",
+                    "conversation_id": conversation_id,
+                    "continuity": continuity,
+                    "context_items": snapshot.context_items,
+                    "messages": snapshot.messages,
+                    "summaries": snapshot.summaries,
+                }))
             }
-        }
-        "forgotten" => Ok(serde_json::to_value(engine.continuity_forgotten(
-            conversation_id,
-            continuity_kind.map(ContinuityKind::parse).transpose()?,
-            query,
-        )?)?),
-        "search" => {
-            let query = query.context("context_retrieve mode=search requires query")?;
-            Ok(serde_json::to_value(engine.grep(
-                Some(conversation_id),
-                GrepScope::Both,
-                GrepMode::FullText,
+            "continuity" => {
+                if let Some(kind) = continuity_kind {
+                    Ok(serde_json::to_value(engine.continuity_show(
+                        conversation_id,
+                        ContinuityKind::parse(kind)?,
+                    )?)?)
+                } else {
+                    Ok(serde_json::to_value(
+                        engine.continuity_show_all(conversation_id)?,
+                    )?)
+                }
+            }
+            "forgotten" => Ok(serde_json::to_value(engine.continuity_forgotten(
+                conversation_id,
+                continuity_kind.map(ContinuityKind::parse).transpose()?,
                 query,
-                limit,
-            )?)?)
+            )?)?),
+            "search" => {
+                let query = query.context("context_retrieve mode=search requires query")?;
+                Ok(serde_json::to_value(engine.grep(
+                    Some(conversation_id),
+                    GrepScope::Both,
+                    GrepMode::FullText,
+                    query,
+                    limit,
+                )?)?)
+            }
+            "describe" => {
+                let summary_id =
+                    summary_id.context("context_retrieve mode=describe requires summary_id")?;
+                Ok(serde_json::to_value(engine.describe(summary_id)?)?)
+            }
+            "expand" => {
+                let summary_id =
+                    summary_id.context("context_retrieve mode=expand requires summary_id")?;
+                Ok(serde_json::to_value(engine.expand(
+                    summary_id,
+                    depth,
+                    include_messages,
+                    token_cap,
+                )?)?)
+            }
+            other => anyhow::bail!(
+                "unsupported context_retrieve mode: {other}; expected one of current, continuity, forgotten, search, describe, expand"
+            ),
         }
-        "describe" => {
-            let summary_id =
-                summary_id.context("context_retrieve mode=describe requires summary_id")?;
-            Ok(serde_json::to_value(engine.describe(summary_id)?)?)
-        }
-        "expand" => {
-            let summary_id =
-                summary_id.context("context_retrieve mode=expand requires summary_id")?;
-            Ok(serde_json::to_value(engine.expand(
-                summary_id,
-                depth,
-                include_messages,
-                token_cap,
-            )?)?)
-        }
-        other => anyhow::bail!(
-            "unsupported context_retrieve mode: {other}; expected one of current, continuity, forgotten, search, describe, expand"
-        ),
-    }
+    })
 }
 
 pub fn run_fixture(db_path: &Path, fixture_path: &Path) -> Result<FixtureRunOutput> {
+    crate::persistence::require_sync_owner_context()?;
     let fixture_bytes = std::fs::read(fixture_path)
         .with_context(|| format!("failed to read fixture {}", fixture_path.display()))?;
     let fixture: LcmFixture = serde_json::from_slice(&fixture_bytes)
         .with_context(|| format!("failed to parse fixture {}", fixture_path.display()))?;
-    let config = merge_fixture_config(fixture.config.clone());
-    let engine = LcmEngine::open(db_path, config)?;
-    let _ = engine.continuity_init_documents(fixture.conversation_id)?;
-    for message in &fixture.messages {
-        engine.add_message(fixture.conversation_id, &message.role, &message.content)?;
+    let config = merge_fixture_config(fixture.config);
+    let conversation_id = fixture.conversation_id;
+    owned_lcm_write(db_path, move |engine| {
+        engine.continuity_init_documents(conversation_id)
+    })?;
+    for message in fixture.messages {
+        owned_lcm_write(db_path, move |engine| {
+            engine.add_message(conversation_id, &message.role, &message.content)
+        })?;
     }
-    let compaction = engine.compact(
-        fixture.conversation_id,
+    let compaction = owned_lcm_compact(
+        db_path,
+        conversation_id,
         fixture.token_budget,
+        config,
         &HeuristicSummarizer,
         fixture.force_compact.unwrap_or(false),
     )?;
-    let snapshot = engine.snapshot(fixture.conversation_id)?;
+    let snapshot = owned_lcm_snapshot(db_path, conversation_id)?;
     let grep_results = fixture
         .grep_queries
         .unwrap_or_default()
         .into_iter()
         .map(|query| {
-            engine.grep(
-                Some(fixture.conversation_id),
-                GrepScope::parse(&query.scope)?,
-                GrepMode::parse(&query.mode)?,
-                &query.query,
-                query.limit.unwrap_or(20),
-            )
+            owned_lcm_session_read(db_path, move |engine| {
+                engine.grep(
+                    Some(conversation_id),
+                    GrepScope::parse(&query.scope)?,
+                    GrepMode::parse(&query.mode)?,
+                    &query.query,
+                    query.limit.unwrap_or(20),
+                )
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     let fallback_summary_id = compaction.created_summary_ids.first().cloned();
     let mut expand_results = Vec::new();
     for query in fixture.expand_queries.unwrap_or_default() {
         if let Some(summary_id) = query.summary_id.or_else(|| fallback_summary_id.clone()) {
-            expand_results.push(engine.expand(
-                &summary_id,
-                query.depth.unwrap_or(1),
-                query.include_messages.unwrap_or(false),
-                query.token_cap.unwrap_or(8_000),
-            )?);
+            expand_results.push(owned_lcm_session_read(db_path, move |engine| {
+                engine.expand(
+                    &summary_id,
+                    query.depth.unwrap_or(1),
+                    query.include_messages.unwrap_or(false),
+                    query.token_cap.unwrap_or(8_000),
+                )
+            })?);
         }
     }
     Ok(FixtureRunOutput {
