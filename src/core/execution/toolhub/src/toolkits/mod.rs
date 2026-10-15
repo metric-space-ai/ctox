@@ -85,6 +85,12 @@ pub trait ToolkitAdapter: Send + Sync {
         let _ = (credential, token_extra);
         BTreeMap::new()
     }
+    /// Outbound restrictions; `Some` for runtime (spec) adapters. The hub then
+    /// checks every request URL and sends through the transport's restricted
+    /// path (no redirects, no private addresses).
+    fn egress_policy(&self) -> Option<&crate::spec::EgressPolicy> {
+        None
+    }
 }
 
 /// Built-in toolkits shipped with CTOX.

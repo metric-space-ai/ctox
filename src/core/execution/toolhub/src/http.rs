@@ -54,11 +54,36 @@ impl HttpResponse {
 
 pub trait HttpTransport: Send + Sync {
     fn send(&self, request: HttpRequest) -> anyhow::Result<HttpResponse>;
+    /// Send for runtime (spec) adapters: no redirects are followed and the host
+    /// must resolve to public addresses only (the connection is pinned to the
+    /// checked addresses). Test transports may keep the default.
+    fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+        self.send(request)
+    }
 }
 
 #[cfg(feature = "ureq-transport")]
 pub struct UreqTransport {
     agent: ureq::Agent,
+    restricted: ureq::Agent,
+}
+
+/// Resolver for spec adapters: drops every non-public address, fails if none remain.
+#[cfg(feature = "ureq-transport")]
+fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    use std::net::ToSocketAddrs;
+    let all: Vec<std::net::SocketAddr> = netloc.to_socket_addrs()?.collect();
+    let public: Vec<std::net::SocketAddr> = all
+        .into_iter()
+        .filter(|a| !crate::spec::egress::is_forbidden_ip(a.ip()))
+        .collect();
+    if public.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "host resolves only to private or reserved addresses",
+        ));
+    }
+    Ok(public)
 }
 
 #[cfg(feature = "ureq-transport")]
@@ -69,6 +94,12 @@ impl Default for UreqTransport {
                 .timeout(std::time::Duration::from_secs(30))
                 .user_agent(concat!("ctox-toolhub/", env!("CARGO_PKG_VERSION")))
                 .build(),
+            restricted: ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(30))
+                .redirects(0)
+                .resolver(public_only_resolve)
+                .user_agent(concat!("ctox-toolhub/", env!("CARGO_PKG_VERSION")))
+                .build(),
         }
     }
 }
@@ -76,7 +107,17 @@ impl Default for UreqTransport {
 #[cfg(feature = "ureq-transport")]
 impl HttpTransport for UreqTransport {
     fn send(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
-        let mut req = self.agent.request(&request.method, &request.url);
+        send_with(&self.agent, request)
+    }
+    fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+        send_with(&self.restricted, request)
+    }
+}
+
+#[cfg(feature = "ureq-transport")]
+fn send_with(agent: &ureq::Agent, request: HttpRequest) -> anyhow::Result<HttpResponse> {
+    {
+        let mut req = agent.request(&request.method, &request.url);
         for (k, v) in &request.headers {
             req = req.set(k, v);
         }
