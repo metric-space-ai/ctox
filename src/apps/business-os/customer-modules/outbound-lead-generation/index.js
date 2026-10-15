@@ -715,7 +715,6 @@ export async function mount(ctx) {
   globalThis.addEventListener('offline', handleOffline);
   globalThis.addEventListener('online', handleOnline);
   bindCollections();
-  holdLeadChannel(ctx);
   bindUi();
   // Zuerst zeichnen, dann laden. Am 03.09.2026 auf Kundeninstanz gemessen: vom
   // Seitenaufruf bis zur nutzbaren Oberflaeche vergingen 167 Sekunden, davon
@@ -753,7 +752,6 @@ export async function mount(ctx) {
   }, COMMAND_REFRESH_MS);
   return () => {
     state.uiMounted = false;
-    releaseLeadChannel();
     state.collectionReloader?.dispose();
     state.collectionReloader = null;
     state.collectionBindingGeneration = (state.collectionBindingGeneration || 0) + 1;
@@ -779,45 +777,6 @@ export async function mount(ctx) {
     ctx.host.classList.remove('outbound-lead-generation');
     ctx.host.replaceChildren();
   };
-}
-
-// Die Lead-Collection ist demand-only: jede Lese-Lease startete die Lead-
-// Replikation, und ihr Freigeben beendete sie wieder. Jeder Klick auf einen
-// Lead baute so den WebRTC-Kanal neu auf und wartete auf "query ready" - bis
-// zu 20 s fuer einen einzigen Datensatz (Kundeninstanz 15.10.2026), und ein Klick,
-// der den Kanal freigab, waehrend ein anderer Ladevorgang ihn noch brauchte,
-// endete in "WebRTC replication cancelled". Solange die App offen ist, haelt
-// sie deshalb selbst eine Lease; jedes Lesen nutzt den stehenden Kanal.
-const LEAD_CHANNEL_RETRY_MS = 10_000;
-function holdLeadChannel(ctx) {
-  releaseLeadChannel();
-  const holding = { lease: null, timer: null, released: false };
-  state.leadChannel = holding;
-  const acquire = () => {
-    if (holding.released || state.uiMounted === false) return;
-    Promise.resolve()
-      .then(() => ctx.sync?.leaseCollection?.('outbound_lead_generation_leads', 'outbound-module-open', { forceDirect: true }))
-      .then((lease) => {
-        if (!lease) return;
-        if (holding.released || state.uiMounted === false) { void lease.release?.().catch?.(() => {}); return; }
-        holding.lease = lease;
-      })
-      .catch(() => {
-        if (!holding.released) holding.timer = globalThis.setTimeout(acquire, LEAD_CHANNEL_RETRY_MS);
-      });
-  };
-  acquire();
-}
-
-function releaseLeadChannel() {
-  const holding = state.leadChannel;
-  if (!holding) return;
-  holding.released = true;
-  if (holding.timer) globalThis.clearTimeout(holding.timer);
-  const lease = holding.lease;
-  holding.lease = null;
-  state.leadChannel = null;
-  if (lease) void Promise.resolve(lease.release?.()).catch(() => {});
 }
 
 // P0-Selbstheilung (31.08.): Nach einem CTOX-Service-Neustart ist der
@@ -1763,6 +1722,7 @@ function sharedLeadListLoad(collection, previousLeads, bindingGeneration) {
   if (running && running.bindingGeneration === bindingGeneration) return running.promise;
   const promise = withLeadQueryAuthority(state.ctx.sync,
     signal => loadLeadList(collection, previousLeads, { signal }), {
+      collection,
       isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
       timeoutMs: LEAD_LIST_LOAD_TIMEOUT_MS,
     });
@@ -1794,6 +1754,7 @@ async function loadLeadDelta(collection, changes, bindingGeneration) {
   const fetched = fetchIds.length
     ? await withLeadQueryAuthority(state.ctx.sync,
       signal => loadFullLeadRows(collection, fetchIds, { signal }), {
+        collection,
         isCurrent: () => state.collectionBindingGeneration === bindingGeneration,
       })
     : [];
@@ -1830,7 +1791,7 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
     }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
     const docs = await withLeadQueryAuthority(state.ctx.sync,
-      signal => collection.find().exec({ signal }), { collectionName,
+      signal => collection.find().exec({ signal }), { collectionName, collection,
         isCurrent: () => state.collectionBindingGeneration === bindingGeneration });
     return [key, docs.map((doc) => doc.toJSON())];
   }));
@@ -2044,6 +2005,7 @@ async function ensureFullLeads(ids, { fresh = false } = {}) {
     const paket = missing.slice(offset, offset + FULL_LEAD_READ_PACKAGE);
     rows.push(...await withLeadQueryAuthority(state.ctx.sync,
       signal => loadFullLeadRows(state.collections.leads, paket, { signal }), {
+        collection: state.collections.leads,
         isCurrent: () => state.collectionBindingGeneration === generation && state.uiMounted !== false,
       }));
   }

@@ -459,15 +459,15 @@ try {
     state.uiMounted = false;
     try { hooks.__render.render(); } finally { state.ctx = previous; state.uiMounted = undefined; }
   });
-  await test('demand-only is wrapper metadata; persisted lead schema version stays zero', () => {
+  await test('the sync profile is wrapper metadata; persisted lead schema version stays zero', () => {
     const manifest = JSON.parse(readFileSync(join(source, 'collections.schema.json'), 'utf8'));
     const leads = manifest.collections.outbound_lead_generation_leads;
-    assert.equal(leads.syncProfile, 'demand-only');
+    assert.equal(leads.syncProfile, 'eager');
     assert.equal(leads.schema.version, 0);
     assert.equal(leads.schema.primaryKey, 'id');
     assert.equal(leads.schema.syncProfile, undefined);
     const original = JSON.parse(readFileSync(new URL('./fixtures/outbound-lead-schema-v0.json', import.meta.url), 'utf8'));
-    assert.deepEqual(leads.schema, original, 'demand-only must not migrate the installed lead schema');
+    assert.deepEqual(leads.schema, original, 'the sync profile must not migrate the installed lead schema');
     assert.equal(leads.schema.additionalProperties, true, 'field_status remains permitted as an additional property');
   });
   await test('actual required checkbox UI, click, denied save and reload retain persisted field semantics', async () => {
