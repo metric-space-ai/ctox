@@ -267,11 +267,18 @@ pub(super) fn handle_command(
             // transaction. No network call, auth refresh or credential mutation.
             let snapshot = store::provider_subscription_status_for_control_plane(root);
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
-            for account in accounts
-                .iter_mut()
-                .filter(|account| matches!(account.provider.as_str(), "claude" | "codex"))
-            {
-                account.private_binding = if account.provider == "codex" {
+            for account in accounts.iter_mut().filter(|account| {
+                matches!(account.provider.as_str(), "claude" | "codex")
+                    || (account.provider == "xai"
+                        && account.local_account_id
+                            == crate::execution::cliproxyapi_xai::ACCOUNT_ID)
+            }) {
+                account.private_binding = if account.provider == "xai" {
+                    crate::execution::cliproxyapi_xai::model_binding(
+                        root,
+                        &account.local_account_id,
+                    )?
+                } else if account.provider == "codex" {
                     crate::execution::cliproxyapi_host::account_controls::codex_model_metadata(
                         root,
                         &account.local_account_id,
@@ -284,7 +291,13 @@ pub(super) fn handle_command(
                         &account.local_account_id,
                     )?
                 };
-                account.credential_ready &= account.private_binding.is_some();
+                if account.provider == "xai" {
+                    // Native Grok calls a configured record "authenticated";
+                    // this proves readable configuration, never provider health.
+                    account.credential_ready = account.private_binding.is_some();
+                } else {
+                    account.credential_ready &= account.private_binding.is_some();
+                }
             }
             let inherited =
                 crate::coding_agents::pi_sidecar::inherited_coding_account_metadata(root);
@@ -353,6 +366,15 @@ pub(super) fn handle_command(
                 crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?
             } else if target.provider == "codex" {
                 crate::execution::cliproxyapi_host::account_controls::observe_codex_catalog(
+                    root,
+                    &target.local_account_id,
+                )?
+            } else if target.provider == "xai"
+                && expected_binding
+                    .as_deref()
+                    .is_some_and(|b| b.starts_with("xai-oauth:v1:"))
+            {
+                crate::execution::cliproxyapi_xai::observe_model_catalog(
                     root,
                     &target.local_account_id,
                 )?
@@ -690,7 +712,7 @@ fn native_catalog_target(
     conn.query_row(
         "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
          WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
-           AND (private_local_account_id=?4 OR provider='claude' OR (provider='codex' AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id)) OR (provider IN ('zai','minimax','xai','kimi') AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'api-key:v1:%')))
+           AND (private_local_account_id=?4 OR provider='claude' OR (provider='codex' AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id)) OR (provider='xai' AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'xai-oauth:v1:%')) OR (provider IN ('zai','minimax','xai','kimi') AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'api-key:v1:%')))
            AND revision=?5 AND enabled=1 AND credential_ready=1",
         params![
             request.account_id,

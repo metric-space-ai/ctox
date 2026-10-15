@@ -1,11 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //! Instance-owned Grok device login. Only public progress crosses this seam.
+#[path = "cliproxyapi_xai_catalog.rs"]
+mod model_catalog;
 #[cfg(test)]
 #[path = "cliproxyapi_xai_tests.rs"]
 mod tests;
 use ctox_cliproxyapi::internal::auth::xai::*;
 use ctox_cliproxyapi::sdk::auth::LoginCancellation;
+pub(crate) use model_catalog::{model_binding, observe_model_catalog};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -16,8 +19,8 @@ use std::{
 use zeroize::Zeroizing;
 
 static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-const SCOPE: &str = "provider-subscriptions";
-const NAME: &str = "xai-instance-oauth";
+pub(super) const SCOPE: &str = "provider-subscriptions";
+pub(super) const NAME: &str = "xai-instance-oauth";
 pub const ACCOUNT_ID: &str = "xai-instance-primary";
 pub fn subscription_installed(root: &Path) -> bool {
     crate::secrets::secret_exists(root, SCOPE, NAME).unwrap_or(false)
