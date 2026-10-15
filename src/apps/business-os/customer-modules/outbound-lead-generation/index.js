@@ -7691,9 +7691,19 @@ async function editSource(sourceId) {
 // Alle Adapter einer Quelle: auf THESEN lagen je Quelle zwei (adapter_thesen_* vom
 // 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
 // (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
+// Lesen und Schreiben direkt im lokalen Speicher (wie RxDocument.incrementalPatch);
+// find().exec() ging bis zur Shell-Freigabe an CTOX und hing (15.10.2026).
+async function patchStoredDoc(collection, doc, fields) {
+  const now = Number(fields?.updated_at_ms || Date.now());
+  await collection.storageCollection.upsert({
+    ...doc, ...fields, updated_at_ms: now, _meta: { ...(doc._meta || {}), lwt: now },
+  });
+}
+
 async function removeAllSourceAdapters(sourceId) {
-  const docs = await state.collections.adapters.find({ selector: { source_id: sourceId } }).exec();
-  for (const doc of docs) await doc.remove();
+  const adapters = state.collections.adapters;
+  const docs = (await adapters.storageCollection.allDocuments()).filter((doc) => doc.source_id === sourceId);
+  for (const doc of docs) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
   state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
 }
 
@@ -7715,13 +7725,15 @@ async function deleteSource(sourceId) {
     // Mitgelieferte Quellen legt seedSources bei jedem Start an; sie bleiben
     // deshalb als entfernt markiert statt geloescht.
     const now = Date.now();
-    const doc = await state.collections.sources.findOne(sourceId).exec();
-    const current = doc?.toJSON?.() || {};
-    await doc?.incrementalPatch({
-      enabled: false,
-      payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
-      updated_at_ms: now,
-    });
+    const sources = state.collections.sources;
+    const current = (await sources.storageCollection.findDocumentsById([sourceId]))[sourceId];
+    if (current) {
+      await patchStoredDoc(sources, current, {
+        enabled: false,
+        payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
+        updated_at_ms: now,
+      });
+    }
     state.sources = state.sources.filter((entry) => entry.id !== sourceId);
     renderSourcePanel();
     return;
