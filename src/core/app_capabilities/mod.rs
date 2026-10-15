@@ -3,6 +3,7 @@
 #[path = "caps/office.rs"]
 pub mod cap2;
 pub mod caps;
+pub use caps::task as cap4;
 pub mod native;
 pub mod policy;
 pub mod protocol;

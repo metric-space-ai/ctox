@@ -3,13 +3,10 @@ use super::schema::{FunctionSchema, PayloadShape};
 use super::CtoxError;
 use serde_json::Value;
 mod coding;
-mod crew;
-mod knowledge;
-mod queue;
-mod schedule;
-mod task;
-mod ticket;
-mod turn;
+pub mod queue;
+pub mod schedule;
+pub mod task;
+pub mod turn;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NativeRoute {
@@ -75,14 +72,11 @@ impl NativeCall {
 }
 pub fn all_routes() -> impl Iterator<Item = &'static NativeRoute> {
     [
-        ticket::ROUTES,
         queue::ROUTES,
         task::ROUTES,
-        crew::ROUTES,
         turn::ROUTES,
         coding::ROUTES,
         schedule::ROUTES,
-        knowledge::ROUTES,
     ]
     .into_iter()
     .flatten()
