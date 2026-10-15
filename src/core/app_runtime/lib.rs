@@ -12,19 +12,74 @@ use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+#[cfg(feature = "core-store")]
+pub mod core_host;
+#[cfg(all(test, feature = "core-store"))]
+mod core_tests;
+pub mod delivery;
 #[cfg(feature = "legacy-store")]
 pub mod legacy_store;
 #[path = "../execution/models/local_transport.rs"]
 pub mod local_transport;
+#[cfg(feature = "core-store")]
+pub mod service;
+#[cfg(feature = "core-store")]
+mod state;
 use local_transport::{LocalStream, LocalTransport};
 
 const WORKER: &str = include_str!("worker.mjs");
 const MANGO: &str = include_str!("handler-kit/mango.mjs");
+const CONTEXT: &str = include_str!("handler-kit/context.mjs");
+const TRANSACTION: &str = include_str!("handler-kit/transaction.mjs");
 const FRAME_LIMIT: usize = 8 * 1024 * 1024;
 const RESULT_LIMIT: usize = 1024 * 1024;
 const CALL_LIMIT: Duration = Duration::from_secs(30);
 const IDLE_LIMIT: Duration = Duration::from_secs(600);
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HandlerError {
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub uncertain: bool,
+}
+impl std::fmt::Display for HandlerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for HandlerError {}
+struct FinishBinding(Arc<dyn RuntimeHost>, Value);
+impl Drop for FinishBinding {
+    fn drop(&mut self) {
+        self.0.finish(&self.1);
+    }
+}
+fn reference_file(reference: &str) -> Result<&str> {
+    let mut parts = reference.split('#');
+    let file = parts.next().unwrap_or("");
+    ensure!(
+        safe_path(file) && !file.rsplit('/').next().unwrap_or("").starts_with('_'),
+        "invalid: handler/library reference"
+    );
+    if let Some(export) = parts.next() {
+        ensure!(
+            !export.is_empty()
+                && export
+                    .bytes()
+                    .enumerate()
+                    .all(|(i, c)| c.is_ascii_alphabetic()
+                        || c == b'_'
+                        || c == b'$'
+                        || i > 0 && c.is_ascii_digit()),
+            "invalid: handler export"
+        );
+    }
+    ensure!(parts.next().is_none(), "invalid: handler reference");
+    Ok(file)
+}
 /// Implemented by the Core. Never implemented by an app or supplied over IPC.
 /// All methods run outside the store writer. The write adapter must enqueue
 /// into the existing authoritative writer, not mutate a JS mirror.
@@ -33,6 +88,27 @@ pub trait RuntimeHost: Send + Sync + 'static {
     fn exported(&self, owner: &str, collection: &str, operation: &str) -> Result<bool>;
     fn capability_available(&self, name: &str) -> bool;
     fn invoke(&self, app: &str, actor: &Value, method: &str, args: &Value) -> Result<Value>;
+    fn admit(&self, manifest: &Value, binding: &Value) -> Result<()> {
+        self.authorize(string(manifest, "app_id")?, &binding["command"]["actor"], &json!({"operation":"invoke","command":binding["command"],"command_rights":manifest["command_rights"]}))
+    }
+    fn invoke_bound(&self, binding: &Value, method: &str, args: &Value) -> Result<Value> {
+        self.invoke(
+            string(&binding["command"], "app_id")?,
+            &binding["command"]["actor"],
+            method,
+            args,
+        )
+    }
+    fn finish(&self, _binding: &Value) {}
+    fn now_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+    fn start_bound(&self, _binding: &Value, effect: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        effect()
+    }
 }
 
 #[derive(Clone)]
@@ -95,7 +171,7 @@ impl AppBundle {
         );
         for path in manifest["handlers"].as_object().unwrap().values() {
             ensure!(
-                path.as_str().is_some_and(|p| sources.contains_key(p)),
+                path.as_str().is_some_and(|p| reference_file(p).is_ok_and(|file| sources.contains_key(file))),
                 "invalid: handler module missing"
             );
         }
@@ -106,7 +182,9 @@ impl AppBundle {
         {
             if let Some(path) = spec.get("migrate_fn") {
                 ensure!(
-                    path.as_str().is_some_and(|p| sources.contains_key(p)),
+                    path.as_str().is_some_and(
+                        |p| reference_file(p).is_ok_and(|file| sources.contains_key(file))
+                    ),
                     "invalid: migration module missing"
                 );
             }
@@ -135,7 +213,7 @@ impl AppBundle {
                 ensure!(
                     rule["ops"].as_array().is_some_and(|ops| ops
                         .iter()
-                        .all(|op| matches!(op.as_str(), Some("read" | "write")))),
+                        .all(|op| matches!(op.as_str(), Some("read" | "write" | "watch")))),
                     "invalid: foreign operations"
                 );
             }
@@ -287,7 +365,7 @@ impl Process {
         let stream = listener.accept()?;
         let stdout = inherited.try_clone()?.into_child_stdio()?;
         let stdin = inherited.into_child_stdio()?;
-        let worker = format!("{MANGO}\n{WORKER}");
+        let worker = format!("{MANGO}\n{CONTEXT}\n{TRANSACTION}\n{WORKER}");
         let mut command = Command::new(node);
         command
             .args([
@@ -384,6 +462,10 @@ pub struct RuntimePool {
     inner: Arc<Inner>,
 }
 impl RuntimePool {
+    pub fn production(root: PathBuf, host: Arc<dyn RuntimeHost>) -> Result<Self> {
+        let node = delivery::bundled_node(&root)?;
+        Self::new(node, root.join("ipc"), host)
+    }
     pub fn new(node: PathBuf, root: PathBuf, host: Arc<dyn RuntimeHost>) -> Result<Self> {
         Self::with_limits(node, root, host, CALL_LIMIT, IDLE_LIMIT)
     }
@@ -435,8 +517,8 @@ impl RuntimePool {
         // Never hold the registry lock while waiting for an app call. Core
         // callbacks may need registry reads while that call completes.
         if let Some(old) = old {
-            old.interrupt
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            // Publication drains the running call before changing generations.
+            // Unregister/revocation still interrupts immediately.
             let mut old = old
                 .lock()
                 .map_err(|_| anyhow::anyhow!("app lock poisoned"))?;
@@ -474,7 +556,53 @@ impl RuntimePool {
         Ok(())
     }
     pub fn invoke(&self, app: &str, actor: Value, command: &str, input: Value) -> Result<Value> {
-        self.call(app, actor, command, input, false)
+        self.call(app, actor, command, input, false, None)
+    }
+    /// Production entry point: Core supplies the authenticated command and lease.
+    pub fn dispatch(&self, command: Value, fence: Value) -> Result<Value> {
+        let app = string(&command, "app_id")?.to_owned();
+        let target = string(&command, "type")?.to_owned();
+        string(&command, "id")?;
+        string(&command, "app_ver")?;
+        ensure!(
+            command["actor"].is_object() && command.get("payload").is_some(),
+            "invalid: command envelope"
+        );
+        let binding = json!({"command":command,"fence":fence});
+        self.call(
+            &app,
+            binding["command"]["actor"].clone(),
+            &target,
+            binding["command"].clone(),
+            false,
+            Some(binding),
+        )
+    }
+    pub(crate) fn dispatch_entry(
+        &self,
+        command: Value,
+        fence: Value,
+        entry: &str,
+        kind: &str,
+        input: Value,
+    ) -> Result<Value> {
+        ensure!(
+            matches!(kind, "trigger" | "completion"),
+            "invalid: handler kind"
+        );
+        let app = string(&command, "app_id")?.to_owned();
+        let mut binding = json!({"command":command,"fence":fence,"entry":entry,"kind":kind});
+        if kind == "trigger" {
+            binding["trigger_id"] = binding["command"]["client_context"]["trigger_id"].clone();
+        }
+        self.call(
+            &app,
+            binding["command"]["actor"].clone(),
+            entry,
+            input,
+            false,
+            Some(binding),
+        )
     }
     pub fn migrate(
         &self,
@@ -491,7 +619,7 @@ impl RuntimePool {
             );
             string(doc, "rev")?;
         }
-        self.call(app, actor, collection, Value::Array(docs), true)
+        self.call(app, actor, collection, Value::Array(docs), true, None)
     }
     fn call(
         &self,
@@ -500,6 +628,7 @@ impl RuntimePool {
         target: &str,
         input: Value,
         migration: bool,
+        mut binding: Option<Value>,
     ) -> Result<Value> {
         let slot = self
             .inner
@@ -523,6 +652,18 @@ impl RuntimePool {
         );
         let bundle = slot.bundle.clone();
         let operation = if migration { "migration" } else { "invoke" };
+        if let Some(binding) = &mut binding {
+            ensure!(
+                binding["command"]["app_ver"] == bundle.manifest["app_ver"],
+                "conflict: app version changed"
+            );
+            binding["invocation_id"] = json!(Uuid::new_v4().to_string());
+            binding["manifest"] = bundle.manifest.clone();
+            self.inner.host.admit(&bundle.manifest, binding)?;
+        }
+        let _finish = binding
+            .as_ref()
+            .map(|value| FinishBinding(self.inner.host.clone(), value.clone()));
         self.inner.host.authorize(
             app,
             &actor,
@@ -534,6 +675,8 @@ impl RuntimePool {
                 "forbidden: migration collection is not owned"
             );
             string(&bundle.manifest["migrations"][target], "migrate_fn")?
+        } else if binding.as_ref().is_some_and(|b| b["entry"].is_string()) {
+            target
         } else {
             bundle.manifest["handlers"][target]
                 .as_str()
@@ -557,7 +700,15 @@ impl RuntimePool {
         );
         if !slot.process.as_ref().is_some_and(Process::alive) {
             slot.process = None;
-            slot.process = Some(Process::start(&self.inner.node, &self.inner.root)?);
+            let mut start = || {
+                slot.process = Some(Process::start(&self.inner.node, &self.inner.root)?);
+                Ok(())
+            };
+            if let Some(binding) = &binding {
+                self.inner.host.start_bound(binding, &mut start)?;
+            } else {
+                start()?;
+            }
         }
         let process = slot.process.as_mut().unwrap();
         let call_id = Uuid::new_v4().to_string();
@@ -570,7 +721,7 @@ impl RuntimePool {
             send(
                 process.stream.get_mut(),
                 &json!({"type":"call", "id":call_id, "kind":operation,
-                "path":path, "sources":bundle.sources, "input":input}),
+                "path":path, "sources":bundle.sources, "input":input,"core_now_ms":self.inner.host.now_ms()}),
             )?;
             let deadline = Instant::now() + Duration::from_secs(600);
             loop {
@@ -600,6 +751,11 @@ impl RuntimePool {
                             method,
                             &frame["args"],
                             migration,
+                            binding.as_ref().map(|b| {
+                                let mut b = b.clone();
+                                b["callback_id"] = frame["callback_id"].clone();
+                                b
+                            }),
                         );
                         let response = match response {
                             Ok(value) => {
@@ -607,7 +763,7 @@ impl RuntimePool {
                             }
                             Err(error) => {
                                 json!({"type":"ctx_result","call_id":call_id,"callback_id":frame["callback_id"],
-                                "error":{"code":error_code(&error.to_string()),"message":error.to_string()}})
+                                "error":error.downcast_ref::<HandlerError>().map(|e| serde_json::to_value(e).unwrap()).unwrap_or_else(|| json!({"code":error_code(&error.to_string()),"message":error.to_string()}))})
                             }
                         };
                         send(process.stream.get_mut(), &response)?;
@@ -622,11 +778,10 @@ impl RuntimePool {
                     }
                     Some("error") => {
                         ensure!(frame["id"] == call_id, "invalid: error correlation");
-                        bail!(
-                            "{}: {}",
-                            error_code(frame["error"]["code"].as_str().unwrap_or("invalid")),
-                            frame["error"]["message"]
-                        );
+                        return Err(serde_json::from_value::<HandlerError>(
+                            frame["error"].clone(),
+                        )?
+                        .into());
                     }
                     _ => bail!("invalid: unexpected runtime frame"),
                 }
@@ -687,8 +842,8 @@ fn maintenance(weak: Weak<Inner>) {
                     slot.process = None;
                 } else if slot.process.as_ref().is_some_and(|p| !p.alive()) {
                     slot.process = None;
-                    // One replacement attempt, not an unbounded restart loop.
-                    slot.process = Process::start(&inner.node, &inner.root).ok();
+                    // Restart only at the next admitted call: a background
+                    // respawn must not bypass current executor authority.
                 }
             }
         }
@@ -709,6 +864,7 @@ fn callback(
     method: &str,
     args: &Value,
     migration: bool,
+    binding: Option<Value>,
 ) -> Result<Value> {
     let args = args.as_array().context("invalid: callback arguments")?;
     ensure!(args.len() <= 3, "invalid: callback arguments");
@@ -738,6 +894,12 @@ fn callback(
                     "forbidden: collection owner withdrew export"
                 );
             }
+        }
+        "cursor" | "transaction.begin" | "transaction.commit" | "transaction.abort" => {
+            ensure!(
+                binding.is_some(),
+                "unavailable: Core-bound context required"
+            );
         }
         "command" => {
             let command = args
@@ -777,7 +939,10 @@ fn callback(
     }
     let operation = json!({"operation":method,"args":args});
     host.authorize(bundle.app_id(), actor, &operation)?;
-    host.invoke(bundle.app_id(), actor, method, &Value::Array(args.clone()))
+    match binding {
+        Some(binding) => host.invoke_bound(&binding, method, &Value::Array(args.clone())),
+        None => host.invoke(bundle.app_id(), actor, method, &Value::Array(args.clone())),
+    }
 }
 struct Deadline {
     exceeded: Arc<std::sync::atomic::AtomicBool>,
@@ -1056,10 +1221,9 @@ mod tests {
             child.wait().unwrap();
         }
         thread::sleep(Duration::from_millis(1200));
-        let replacement = h.pool.process_id("test-app").unwrap();
-        assert_ne!(replacement, pid);
+        assert!(h.pool.process_id("test-app").is_none());
         assert_eq!(h.invoke(json!(2)).unwrap(), json!(2));
-        assert_eq!(h.pool.process_id("test-app"), Some(replacement));
+        assert_ne!(h.pool.process_id("test-app"), Some(pid));
     }
     #[test]
     fn actor_policy_withdrawal_and_undeclared_capabilities_fail_closed() {

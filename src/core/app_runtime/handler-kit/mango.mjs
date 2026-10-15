@@ -7,6 +7,7 @@ export class CtoxError extends Error {
     code = spec.code; path = spec.path;
     this.name = 'CtoxError';
     this.code = code;
+    if (spec.uncertain === true) this.uncertain = true;
     if (path !== undefined) this.path = typeof path === 'string' ? path : path.path;
   }
 }

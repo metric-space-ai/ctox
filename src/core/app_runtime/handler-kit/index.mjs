@@ -57,7 +57,7 @@ export function validateManifest(manifest) {
   return manifest;
 }
 function commandRights(manifest, command, fixtures) {
-  const rules = Object.entries(manifest.command_rights ?? {}).filter(([p]) => p === command.type || p.endsWith('*') && command.type.startsWith(p.slice(0,-1))).sort(([a],[b]) => b.length-a.length);
+  const rules = Object.entries(manifest.command_rights ?? {}).filter(([p]) => p === command.type || p.endsWith('*') && command.type.startsWith(p.slice(0,-1))).sort(([a],[b]) => Number(b === command.type)-Number(a === command.type) || b.length-a.length);
   const rule = rules[0]?.[1];
   if (rule && !command.actor?.is_admin && !rule.roles.includes(command.actor?.role) && !(rule.assigned_users && fixtures.assigned_users?.includes(command.actor?.id))) fail('forbidden','Core command_rights rejected command');
 }

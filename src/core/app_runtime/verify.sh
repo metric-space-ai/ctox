@@ -23,6 +23,8 @@ if [ "${1:-}" = kit ]; then
   exit
 fi
 export CTOX_APP_RUNTIME_TEST_ROOT="$CARGO_TARGET_DIR/ipc-tests"
+mkdir -p "$CTOX_APP_RUNTIME_TEST_ROOT"
+if [ "${1:-}" = bundle ]; then export CTOX_APP_RUNTIME_NODE_BUNDLE="$runtime_node"; fi
 "$runtime_node" --version
 sha256sum src/core/app_runtime/{lib.rs,worker.mjs,Cargo.toml,Cargo.lock} \
   src/core/app_runtime/handler-kit/{index.mjs,mango.mjs,handler-kit.test.mjs} \
@@ -30,6 +32,7 @@ sha256sum src/core/app_runtime/{lib.rs,worker.mjs,Cargo.toml,Cargo.lock} \
 cargo fmt --manifest-path src/core/app_runtime/Cargo.toml --check
 feature_args=()
 if [ "${1:-}" = legacy-store ]; then feature_args=(--features legacy-store); fi
+if [ "${1:-}" = bundle ]; then feature_args=(--features bundled-node); fi
 cargo test --locked --manifest-path src/core/app_runtime/Cargo.toml "${feature_args[@]}" -- --test-threads=2
-"$runtime_node" --test --test-concurrency=2 src/core/app_runtime/handler-kit/handler-kit.test.mjs
+"$runtime_node" --test --test-concurrency=2 src/core/app_runtime/handler-kit/*.test.mjs
 git diff --check

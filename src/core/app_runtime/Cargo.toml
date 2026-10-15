@@ -11,10 +11,15 @@ path = "lib.rs"
 [workspace]
 
 [features]
-default = []
+default = ["core-store"]
+core-store = ["dep:ctox-store", "dep:ctox-app-capabilities-contract", "dep:rusqlite", "dep:tokio"]
+bundled-node = []
 legacy-store = ["dep:rxdb", "dep:tokio"]
 
 [dependencies]
+ctox-store = { path = "../store", optional = true }
+ctox-app-capabilities-contract = { path = "../app_capabilities/contract", optional = true }
+rusqlite = { version = "0.32", optional = true }
 rxdb = { package = "ctox-rxdb", path = "../rxdb", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"], optional = true }
 anyhow = "1"
