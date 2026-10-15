@@ -313,6 +313,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         respond_options(request)?;
         return Ok(());
     }
+    // net.ingest (§16.38): cookie-less generic ingress; it never reads a
+    // session, so it is answered before session/cross-origin handling.
+    if crate::app_capabilities::cap3::ingest::serves(root, path) {
+        return respond_ingest(root, request, &url);
+    }
     if rejects_cross_origin_browser_mutation(
         &method,
         path,
@@ -4018,6 +4023,58 @@ fn respond_status(request: Request, status: u16, body: &str) -> anyhow::Result<(
     let mut response = Response::from_string(body.to_string()).with_status_code(status);
     add_cors_headers(&mut response);
     add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
+}
+
+/// One net.ingest request: bounded body, headers as received (the capability
+/// strips private ones), the handler's admissible response or the registered
+/// default after 3 s. Bodies above 16 MiB are refused before dispatch.
+fn respond_ingest(root: &Path, mut request: Request, url: &str) -> anyhow::Result<()> {
+    use crate::app_capabilities::cap3::ingest;
+    use std::io::Read as _;
+    const MAX_INGEST_BYTES: u64 = 16 * 1024 * 1024;
+    let mut body = Vec::new();
+    request
+        .as_reader()
+        .take(MAX_INGEST_BYTES + 1)
+        .read_to_end(&mut body)?;
+    if body.len() as u64 > MAX_INGEST_BYTES {
+        return respond_status(request, 413, "");
+    }
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let incoming = ingest::IngressRequest {
+        method: request.method().to_string(),
+        path: path.to_owned(),
+        query: query.to_owned(),
+        headers: request
+            .headers()
+            .iter()
+            .map(|h| {
+                (
+                    h.field.as_str().as_str().to_owned(),
+                    h.value.as_str().to_owned(),
+                )
+            })
+            .collect(),
+        body,
+        received_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    };
+    let answer = ingest::handle_ingress(
+        root,
+        &ingest::CoreIngestRuntime { root },
+        &incoming,
+        ingest::RESPONSE_WAIT,
+    );
+    let mut response = Response::from_data(answer.body).with_status_code(answer.status);
+    for (name, value) in &answer.headers {
+        if let Ok(header) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            response.add_header(header);
+        }
+    }
     request.respond(response)?;
     Ok(())
 }

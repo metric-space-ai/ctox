@@ -7,7 +7,9 @@ SOURCE=ROOT/"src/core/app_capabilities/caps"
 OUT=pathlib.Path(os.environ["CARGO_TARGET_DIR"])/("cap3-proofs-"+datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
 OUT.mkdir(parents=True,exist_ok=False)
 DEADLINE=datetime.datetime.fromisoformat(sys.argv[1]).timestamp() if len(sys.argv)>1 and sys.argv[1] else time.time()+5400
-FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","cap3_tests.rs"]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
+STORE="../../business_os/store.rs"
+PEER="../../business_os/rxdb_peer_browser.rs"
+FILES=[SOURCE/name for name in ["cap3.rs","audit.rs","config.rs","secrets.rs","lock.rs","flow.rs","browser.rs","ingest.rs","coding.rs","mail.rs","directory.rs","files.rs","process.rs","cap3_tests.rs",STORE,PEER]]+[SOURCE.parent/"mod.rs",SOURCE/"mod.rs"]
 ORIGINAL={path:path.read_bytes() for path in FILES}
 def digest():
     return {str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in FILES}
@@ -43,7 +45,7 @@ PROOFS=[
  ("lock-single-holder","lock.rs",E("if live {"),"if false {","lock_fence_contract"),
  ("flow-platform","flow.rs",E("if !is_platform(ctx) {"),"if false {","flow_platform_contract"),
  ("browser-op-allowlist","browser.rs",E("if !ALLOWED_OPS.contains(&request.op.as_str()) {"),"if false {","browser_device_contract"),
- ("browser-blobref","browser.rs",E('"blob":{"ref":reference.sha256}'),'"blob":reference',"browser_device_contract"),
+ ("browser-blobref","browser.rs",E('"blob":{"ref":meta.reference}'),'"blob":meta.reference.clone() + "transfer"',"browser_device_contract"),
  ("ingest-fallback-3s","ingest.rs",E("match receiver.recv_timeout(wait) {"),"match receiver.recv() {","ingest_fallback_contract"),
  ("ingest-header-whitelist","ingest.rs",r"if !RESPONSE_HEADERS\.contains\(&name\.as_str\(\)\) \{\s*continue;\s*\}","","ingest_header_contract"),
  ("ingest-request-private","ingest.rs",E("if PRIVATE_HEADERS.contains(&name.as_str()) && !route.pass_headers.contains(&name) {"),"if false {","ingest_header_contract"),
@@ -52,6 +54,28 @@ PROOFS=[
  ("ingest-unknown-command","ingest.rs",E("if !runtime.has_handler(&ctx.app_id, &request.command)? {"),"if false {","ingest_register_contract"),
  ("coding-flat","coding.rs",E("if object.keys().any(|key| !allowed.contains(&key.as_str())) {"),"if false {","coding_flat_contract"),
  ("mail-intake-binding","mail.rs",E("if request.command_id != ctx.command_id {"),"if false {","mail_server_intake_contract"),
+ # ---- CAP-3b
+ ("intake-field-binding",STORE,E('["value", "password"].into_iter().find(|f| *f == field)?'),'["value", "password"].into_iter().find(|_| true)?',"secret_intake_live_contract"),
+ ("platform-origin","config.rs",E("if !is_platform(ctx) {"),"if false {","platform_origin_contract"),
+ ("ingest-serves-alias","ingest.rs",E(".is_ok_and(|route| route.is_some())"),".is_ok()","platform_origin_contract"),
+ ("files-owner","files.rs",E("if meta.owner_app != ctx.app_id || sha256_hex(&bytes) != meta.reference {"),"if sha256_hex(&bytes) != meta.reference {","files_owner_contract"),
+ ("files-list-owner","files.rs",E(".filter(|meta| meta.owner_app == ctx.app_id)"),".filter(|_| true)","files_owner_contract"),
+ ("process-env-clear","process.rs",E(".env_clear()"),"","process_env_contract"),
+ ("process-cwd","process.rs",E("Some(path) if relative(path) => {"),"Some(path) => {","process_env_contract"),
+ ("policy-actor","directory.rs",E("&ctx.actor.role,"),'"admin",',"directory_policy_contract"),
+ ("command-scope","directory.rs",E("WHERE command_id=?1 AND module=?2"),"WHERE command_id=?1 AND ?2=?2","directory_policy_contract"),
+ ("auth-assist-module","browser.rs",E(".is_some_and(|module| module != ctx.app_id)"),".is_some_and(|_| false)","auth_assist_contract"),
+ # ---- CAP-3c (§16.46)
+ ("core-app-binding",PEER,E("if bound_app != binding.app_id {"),"if false {","browser_core_entry_contract"),
+ ("core-user-binding",PEER,E("if bound_user != binding.user_id {"),"if false {","browser_core_entry_contract"),
+ ("core-policy",PEER,E("if !decision.as_ref().is_ok_and(|decision| decision.allowed) {"),"if false {","browser_core_entry_contract"),
+ ("core-assignment",PEER,E("Some(binding.app_id),"),'Some("__unassigned__"),',"policy_assignment_contract"),
+ ("core-audit",PEER,E('core_browser_audit(root, binding, command_type, session_id, "allowed", "")'),"Ok(())","browser_core_entry_contract"),
+ ("core-internal-only",PEER,E("if let Some(owner) = core_owner {"),'if let Some(owner) = core_owner.or_else(|| document.pointer("/client_context/actor/id").and_then(Value::as_str)) {',"browser_internal_only_contract"),
+ # ---- CAP-3d (§16.47)
+ ("process-base-env","process.rs",E(".envs(&base_env)"),"","process_base_env_contract"),
+ ("process-stdin-owner","process.rs",E("meta.owner_app == ctx.app_id && sha256_hex(bytes) == meta.reference"),"sha256_hex(bytes) == meta.reference","process_base_env_contract"),
+ ("automation-prevalidate","browser.rs",E('validate_step(step).map_err(|_| invalid("$.steps"))?;'),"","browser_automation_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None

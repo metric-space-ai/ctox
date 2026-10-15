@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { Native, until, pause, owner, verifiedBuild } from './native.mjs';
 import { schema, installRelay, warm, readAndRender, relayProof } from './browser.mjs';
@@ -269,6 +269,40 @@ try {
         report.schemaTransitions.push({ at: new Date().toISOString(), cli: cliArgs.slice(0,3), stateRootPreserved: true,
           responseBytes: Buffer.byteLength(result), scenarioMustVerifyGenerationAndRows: true }); save();
         return result;
+      },
+      migrationProof: () => {
+        const relative=config.schemaCli?.database;
+        if(typeof relative!=='string'||relative.startsWith('/')||relative.split('/').includes('..'))throw Error('Migration plan must name the real database relative to the isolated root');
+        const output=execFileSync('python3',[join(config.scenarioRoot,'k11/migration-proof.py'),config.root,join(config.root,relative),'e2e_leads'],{encoding:'utf8',timeout:10000});
+        return JSON.parse(output);
+      },
+      installRelease: async receiptPath => {
+        const build=verifiedBuild(receiptPath);
+        if(!config.buildReceipt)throw Error('Original binary producer receipt required');
+        await native.stop(native.daemon);
+        const directory=join(config.output,'real-upgrade');
+        const child=spawn(process.execPath,[join(config.scenarioRoot,'k11/upgrade-controller.mjs'),config.buildReceipt,receiptPath,config.root,directory],{stdio:'inherit',env:{...process.env,BUILD_LANE_BIN:join(config.lane,'bin'),TMPDIR:config.canonicalTmpdir}});
+        const code=await new Promise((r,j)=>{child.once('exit',r);child.once('error',j);});
+        if(code!==0)throw Error('Supported isolated installer failed; see '+directory);
+        const proof=JSON.parse(fs.readFileSync(join(directory,'installer.json')));
+        const controller=JSON.parse(fs.readFileSync(join(directory,'controller.json')));
+        if(!proof.installerExecuted||!controller.groupAbsent||proof.activeBinarySha256!==build.binarySha256)throw Error('Installer/cleanup/active binary verification failed');
+        const installed=join(config.root,'managed/current');
+        for(const part of ['src','contracts','Cargo.toml']){
+          const path=join(config.root,part);if(!fs.lstatSync(path).isSymbolicLink())throw Error('Owned source link required');
+          fs.unlinkSync(path);fs.symlinkSync(join(installed,part),path);
+        }
+        const bin=join(config.root,'bin/ctox');if(!fs.lstatSync(bin).isSymbolicLink())throw Error('Owned binary link required');
+        fs.unlinkSync(bin);fs.symlinkSync(join(installed,'bin/ctox'),bin);
+        native.config.binary=join(installed,'bin/ctox');native.config.source=installed;native.serve();
+        report.releaseTransitions ||= [];report.releaseTransitions.push({at:new Date().toISOString(),revision:build.revision,binarySha256:build.binarySha256,supportedInstaller:true,stateRootPreserved:true,evidence:join(directory,'installer.json')});save();
+        await until(async()=>{
+          const r=await fetch(origin+'/index.html?rxdbSmoke=1',{signal:AbortSignal.timeout(2000)});if(!r.ok)return false;
+          const html=await r.text(),marker='window.CTOX_BUSINESS_OS_CONFIG=',start=html.indexOf(marker),end=html.indexOf(';window.CTOX_BUSINESS_OS_DESIGN_TEMPLATES=',start);
+          if(start<0||end<0)return false;const bootstrap=JSON.parse(html.slice(start+marker.length,end));
+          return bootstrap.native_rxdb_peer_available===true&&!!bootstrap.native_rxdb_peer_status?.peer_session_id;
+        },60000,'installed daemon ready');
+        return proof;
       },
       changeRelease: async receiptPath => {
         const build = verifiedBuild(receiptPath);

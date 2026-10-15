@@ -60,10 +60,11 @@ export class Native {
     return JSON.parse(p.stdout);
   }
   start(kind, executable, args, env = this.env) {
+    const image = kind === 'daemon' ? fs.realpathSync(executable) : undefined;
     const log = fs.openSync(join(this.config.output, `${kind}.log`), 'a', 0o600);
     const child = spawn(executable, args, { cwd: this.config.root, env, detached: true, stdio: ['ignore', log, log] });
     fs.closeSync(log); this.children.add(child);
-    const row = { owner, pid: child.pid, pgid: child.pid, kind, stop: 'runner finally or absolute run deadline', startedAt: new Date().toISOString() };
+    const row = { owner, pid: child.pid, pgid: child.pid, kind, executable: image, stop: 'runner finally or absolute run deadline', startedAt: new Date().toISOString() };
     this.receipts.push(row); this.save(); child.once('error', e => { row.error = e.message; });
     child.once('exit', (code, signal) => { row.code = code; row.signal = signal; this.save(); }); return child;
   }
