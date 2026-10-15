@@ -111,8 +111,8 @@ fn bind_scrape_input_to_command(
         }
         _ => anyhow::bail!("scrape execute requires a bound Outbound research command"),
     }
-    let source_id = command["payload"]["source_policy"]["sources"]
-        .as_array()
+    let source_policy = command["payload"]["source_policy"]["sources"].as_array();
+    let explicit_source = source_policy
         .and_then(|sources| {
             sources
                 .iter()
@@ -121,12 +121,22 @@ fn bind_scrape_input_to_command(
         .and_then(|source| source.get("id"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .context("scrape target is not in the bound research command source policy")?;
+        .map(str::to_string);
+    let source_id = if let Some(source) = explicit_source {
+        source
+    } else if command["command_type"].as_str() == Some("web_stack.person_research")
+        && source_policy.is_none_or(|sources| sources.is_empty())
+    {
+        crate::business_os::planned_builtin_scrape_source(&command["payload"], target_key)?
+            .context("scrape target is not in the bound default research plan")?
+    } else {
+        anyhow::bail!("scrape target is not in the bound research command source policy")
+    };
     let object = input
         .as_object_mut()
         .context("scrape execute input must be a JSON object")?;
     for (field, expected) in [
-        ("source_id", source_id),
+        ("source_id", source_id.as_str()),
         ("task_id", command_id),
         ("owner_user_id", actor),
         (
@@ -177,6 +187,120 @@ fn bind_scrape_input_to_command(
 #[cfg(test)]
 mod command_binding_tests {
     use super::*;
+
+    #[test]
+    fn default_person_research_binds_planned_google_targets_to_the_command_owner() {
+        let mut current = command();
+        current["command"]["payload"] = json!({
+            "company": "X GmbH", "country": "DE", "mode": "update_firm",
+            "fields": ["firma_name", "firma_domain"], "include_private": []
+        });
+        for (target, source) in [
+            ("google-de", "google.de"),
+            ("maps-google-com", "maps.google.com"),
+        ] {
+            let mut input = json!({});
+            assert_eq!(
+                bind_scrape_input_to_command(&mut input, &session(), &current, target).unwrap(),
+                "user-1"
+            );
+            assert_eq!(input["source_id"], source);
+            assert_eq!(input["task_id"], "research-1");
+            assert_eq!(input["owner_user_id"], "user-1");
+        }
+    }
+
+    #[test]
+    fn default_source_binding_preserves_field_country_mode_and_private_source_scope() {
+        let mut current = command();
+        current["command"]["payload"] = json!({
+            "company": "X GmbH", "country": "DE", "mode": "update_firm",
+            "fields": ["person_email_validation"], "include_private": []
+        });
+        assert!(
+            bind_scrape_input_to_command(&mut json!({}), &session(), &current, "google-de")
+                .is_err()
+        );
+        current["command"]["payload"]["fields"] = json!(["firma_name"]);
+        current["command"]["payload"]["mode"] = json!("have_data");
+        assert!(
+            bind_scrape_input_to_command(&mut json!({}), &session(), &current, "google-de")
+                .is_err()
+        );
+        current["command"]["payload"]["mode"] = json!("update_person");
+        current["command"]["payload"]["fields"] = json!(["person_vorname"]);
+        assert!(
+            bind_scrape_input_to_command(&mut json!({}), &session(), &current, "linkedin-com")
+                .is_err()
+        );
+        current["command"]["payload"]["country"] = json!("not-a-country");
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &current,
+            "maps-google-com"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn explicit_source_policy_and_foreign_owner_still_deny_default_google() {
+        let mut current = command();
+        current["command"]["payload"]["mode"] = json!("update_firm");
+        current["command"]["payload"]["fields"] = json!(["firma_name"]);
+        assert!(
+            bind_scrape_input_to_command(&mut json!({}), &session(), &current, "google-de")
+                .is_err()
+        );
+        current["command"]["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_policy");
+        assert!(bind_scrape_input_to_command(
+            &mut json!({"owner_user_id":"foreign-owner"}),
+            &session(),
+            &current,
+            "google-de"
+        )
+        .is_err());
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &chat_command(),
+            "google-de"
+        )
+        .is_err());
+    }
+    #[test]
+    fn source_session_trace_is_bound_and_contains_no_auth_secrets() {
+        let input = json!({"source_id":"google.de","owner_user_id":"owner-1","task_id":"cmd-1"})
+            .to_string();
+        let good = json!({"source_session": {
+            "source_id":"google.de", "session_id":"browser-session-1",
+            "owner_user_id":"forged", "task_id":"forged",
+            "authenticated_login":{"status":"completed","password":"must-not-leak","token":"must-not-leak"}
+        }});
+        let trace = bound_source_session(&good, Some(&input), "run-1").unwrap();
+        assert_eq!(trace["owner_user_id"], "owner-1");
+        assert_eq!(trace["task_id"], "cmd-1");
+        assert_eq!(trace["run_id"], "run-1");
+        assert!(!trace.to_string().contains("must-not-leak"));
+        for (pointer, replacement) in [
+            ("/source_session/source_id", json!("maps.google.com")),
+            ("/source_session/session_id", json!("")),
+            ("/source_session/session_id", json!("x".repeat(257))),
+            (
+                "/source_session/authenticated_login/status",
+                json!("failed"),
+            ),
+        ] {
+            let mut invalid = good.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            assert!(bound_source_session(&invalid, Some(&input), "run-1").is_none());
+        }
+        assert!(bound_source_session(&good, Some("{}"), "run-1").is_none());
+        assert!(bound_source_session(&good, None, "run-1").is_none());
+    }
 
     fn session() -> Value {
         json!({
@@ -710,6 +834,7 @@ pub(crate) fn execute_scrape_with_probe_grant(
             records_found,
             fields_extracted,
             records_preview: records_preview(records.as_deref()),
+            source_session: None,
             latency_ms: execution_started
                 .elapsed()
                 .as_millis()
@@ -993,6 +1118,11 @@ pub(crate) fn execute_scrape_with_probe_grant(
             | ScrapeRunStatus::CompletedEmpty
             | ScrapeRunStatus::PartialOutput
     );
+    let source_session = if run_ok && session_owner_user_id.is_some() {
+        bound_source_session(&payload, input_json.as_deref(), &run_id)
+    } else {
+        None
+    };
     Ok(ScrapeExecutionOutcome {
         ok: run_ok,
         target_key: target.view.target_key,
@@ -1001,6 +1131,7 @@ pub(crate) fn execute_scrape_with_probe_grant(
         records_found,
         fields_extracted,
         records_preview: records_preview(records.as_deref()),
+        source_session,
         latency_ms: execution_started
             .elapsed()
             .as_millis()
@@ -1019,6 +1150,40 @@ pub(crate) fn execute_scrape_with_probe_grant(
         materialization: materialization.as_ref().map(|item| item.summary.clone()),
         run_manifest_path: run_dir.join("run.json"),
     })
+}
+
+/// Preserve only correlation fields from a successful, command-bound run.
+/// Adapter output cannot introduce an owner/task/source or expose its raw auth result.
+fn bound_source_session(payload: &Value, input_json: Option<&str>, run_id: &str) -> Option<Value> {
+    let input: Value = serde_json::from_str(input_json?).ok()?;
+    let session = payload.get("source_session")?;
+    let bounded_id = |value: &Value| -> Option<String> {
+        let id = value.as_str()?;
+        (!id.trim().is_empty()
+            && id.len() <= 256
+            && id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'_' | b'-' | b':' | b'@' | b'+')
+            }))
+        .then(|| id.to_string())
+    };
+    let source = bounded_id(&input["source_id"])?;
+    if session["source_id"].as_str() != Some(source.as_str())
+        || session
+            .pointer("/authenticated_login/status")
+            .and_then(Value::as_str)
+            != Some("completed")
+    {
+        return None;
+    }
+    Some(json!({
+        "source_id": source,
+        "session_id": bounded_id(&session["session_id"])?,
+        "owner_user_id": bounded_id(&input["owner_user_id"])?,
+        "task_id": bounded_id(&input["task_id"])?,
+        "run_id": run_id,
+        "authenticated_login": {"status": "completed"}
+    }))
 }
 
 const RECORDS_PREVIEW_MAX_RECORDS: usize = 40;
@@ -1161,6 +1326,7 @@ fn suppressed_account_outcome(
         records_found: 0,
         fields_extracted: Vec::new(),
         records_preview: None,
+        source_session: None,
         latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         reason: "provider_account_inactive_suppressed".to_string(),
         error: Some(format!(

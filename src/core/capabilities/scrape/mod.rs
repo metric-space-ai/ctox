@@ -420,6 +420,9 @@ pub(crate) struct ScrapeExecutionOutcome {
     /// 07.10.2026: agents read the shared latest_records.json instead).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) records_preview: Option<Value>,
+    /// Bounded public login correlation; never the credential or command token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source_session: Option<Value>,
     pub(crate) latency_ms: u64,
     pub(crate) reason: String,
     pub(crate) error: Option<String>,
