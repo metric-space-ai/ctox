@@ -92,6 +92,43 @@ pub(super) fn read_state(conn: &Connection, project: &str, owner: &str) -> anyho
     state["history"] = json!(history);
     Ok(state)
 }
+
+/// Admission history is immutable. While no reviewed outcome has replaced it,
+/// derive liveness from the linked durable Core command, never worker prose.
+pub(super) fn read_current_state(
+    root: &Path,
+    conn: &Connection,
+    project: &str,
+    owner: &str,
+) -> anyhow::Result<Value> {
+    let mut state = read_state(conn, project, owner)?;
+    if state["status"] != "researching" {
+        return Ok(state);
+    }
+    let research: Option<String> = conn.query_row(
+        "SELECT research_command_id FROM workjet_exit_model_runs WHERE run_id=?1 AND project_id=?2 AND owner_user_id=?3",
+        params![state["run_id"].as_str(), project, owner],
+        |row| row.get(0),
+    )?;
+    let Some(research) = research else {
+        return Ok(state);
+    };
+    let command = crate::mission::channels::business_command_projection(root, &research)?;
+    if command["execution_phase"] == "blocked" {
+        let reason: String = command["error_message"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("The durable research command is blocked; reviewed valuation inputs are not available.")
+            .chars()
+            .take(2048)
+            .collect();
+        state["status"] = json!("blocked");
+        state["findings"] = json!([{"code":"research_command_blocked", "message":reason}]);
+        state["research_execution"] = json!({"command_id":research,"phase":"blocked",
+            "attempt":command["attempt"],"updated_at_ms":command["updated_at_ms"]});
+    }
+    Ok(state)
+}
 fn operation_id(command: &BusinessCommand) -> anyhow::Result<&str> {
     let id = command
         .id
@@ -420,7 +457,7 @@ pub(crate) fn refresh_due(root: &Path) -> anyhow::Result<()> {
             .as_str()
             .context("project owner missing")?
             .to_owned();
-        let state = read_state(&conn, &id, &owner)?;
+        let state = read_current_state(root, &conn, &id, &owner)?;
         if due(&state, &today)? {
             let anchor = state["refresh_due"].as_str().unwrap_or("initial");
             pending.push((
@@ -498,7 +535,9 @@ pub(super) fn handle_command(
         let mut conn = reader(root)?;
         let tx = conn.transaction()?;
         let owner = super::workjet_project_kpis::require_project(&tx, actor, &request.project_id)?;
-        return Ok(json!({"ok":true,"assessment":read_state(&tx,&request.project_id,&owner)?}));
+        return Ok(
+            json!({"ok":true,"assessment":read_current_state(root,&tx,&request.project_id,&owner)?}),
+        );
     }
     ensure!(
         matches!(

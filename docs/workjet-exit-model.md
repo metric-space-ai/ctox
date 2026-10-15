@@ -14,6 +14,14 @@ Business data and command receipts travel through CTOX Sync/RxDB/WebRTC.
 
 ## Requests and response
 
+While an assessment is still an admission, `read` and the project-list Exit
+map derive its current liveness from the linked durable Core command. A review
+hold returns `status:"blocked"`, `research_command_blocked` with a bounded
+reason, and `research_execution` (command ID, phase, attempt, timestamp).
+Unreviewed worker text never becomes valuation inputs. The admission history
+remains immutable; releasing that same hold restores `researching` until the
+existing reviewed-completion path stores an outcome.
+
 `read`: `{project_id}`. `refresh`: `{project_id, as_of?, resources?}`.
 `submit`: `{project_id, as_of?, inputs}`. Routing `inbound_channel` is optional;
 all other unknown keys are rejected. The existing command ID is the immutable
