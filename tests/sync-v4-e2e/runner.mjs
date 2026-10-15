@@ -19,6 +19,7 @@ const report = { owner, startedAt: new Date().toISOString(), revision: config.re
   harnessSource: config.sourceManifest,
   binarySha256: config.binarySha256, profile: config.profile, netem: config.netem,
   clientCount: config.clients, synthetic: true, fullCatalogAcceptance: false,
+  fixtureLifecycle: config.seedAfterStart ? 'schema → daemon ready → native population → browsers' : 'native population → daemon → browsers',
   measurementScope: config.profile === 'small' ? 'wiring profile, not large-volume acceptance' : 'requested incident slices under measured synthetic volume',
   scenarios: [], terminal: false, pass: false };
 const save = () => fs.writeFileSync(join(config.output, 'result.json'), JSON.stringify(report, null, 2));
@@ -52,6 +53,7 @@ try {
     const config = JSON.parse(html.slice(start + marker.length, end));
     return config.native_rxdb_peer_available === true && !!config.native_rxdb_peer_status?.peer_session_id;
   }, 60000, 'isolated daemon boot');
+  if (config.seedAfterStart) { report.phase = 'populate-running-daemon'; save(); report.fixture = native.seed('seed',here); save(); }
   const require = createRequire(join(config.modulesRoot, 'playwright/package.json'));
   const { chromium } = require('playwright');
   const { tmpdir } = await import('node:os');

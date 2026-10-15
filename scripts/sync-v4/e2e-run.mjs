@@ -29,6 +29,7 @@ if (sourceManifest) for (const row of sourceManifest.files) {
   if (!file.startsWith(resolve(here,'../..')+'/') || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== row.sha256) throw Error('Harness source changed during staging');
 }
 const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
+  seedAfterStart: args['seed-after-start'] === 'yes',
   root: join(output,`tenant-${build.revision.slice(0,12)}`), port: 19865, signalingPort: 19866, turnPort: 34789,
   runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest,
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),

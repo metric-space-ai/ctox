@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic size envelopes in a NEW synthetic tenant, never customer tables."""
 import argparse, hashlib, json, pathlib, sqlite3, time
-p=argparse.ArgumentParser(); p.add_argument('--root',required=True); p.add_argument('--profile',choices=['small','thesen-like'],default='small'); p.add_argument('--operation',choices=['seed','read','behind','forward'],default='seed'); a=p.parse_args()
+p=argparse.ArgumentParser(); p.add_argument('--root',required=True); p.add_argument('--profile',choices=['small','thesen-like'],default='small'); p.add_argument('--operation',choices=['schema','seed','read','behind','forward'],default='seed'); a=p.parse_args()
 r=pathlib.Path(a.root).resolve(); marker=json.loads((r/'.sync-v4-e2e.json').read_text())
 assert marker['synthetic'] is True and marker['owner']=='01a087a0-169a-7e23-ba3d-71352256cbfb'
 assert r.name.startswith('tenant-') and not any(x in str(r).lower() for x in ['thesen','welsch'])
@@ -28,8 +28,11 @@ if a.operation in ['behind','forward']:
 c=sqlite3.connect(db); populations=[]; digest=hashlib.sha256()
 for short,count,size,tombstones in profiles[a.profile]:
  name='e2e_'+short; table='ctox_business_os__'+name+'__v0'
- c.execute('CREATE TABLE '+q(table)+' (id TEXT PRIMARY KEY, revision TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,lastWriteTime REAL NOT NULL,data TEXT NOT NULL)')
- c.execute('CREATE INDEX '+q(table+'_lwt')+' ON '+q(table)+'(lastWriteTime,id)')
+ c.execute('CREATE TABLE IF NOT EXISTS '+q(table)+' (id TEXT PRIMARY KEY, revision TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,lastWriteTime REAL NOT NULL,data TEXT NOT NULL)')
+ c.execute('CREATE INDEX IF NOT EXISTS '+q(table+'_lwt')+' ON '+q(table)+'(lastWriteTime,id)')
+ assert c.execute('SELECT COUNT(*) FROM '+q(table)).fetchone()[0]==0, 'Never overwrite populated fixture tables'
+ if a.operation=='schema':
+  populations.append({'collection':name,'count':0,'live':0,'documentBytes':0,'tombstones':0,'targetCount':count}); c.commit(); continue
  batch=[]; bytes_=0
  for i in range(count):
   id=f'e2e-{short}-{i:06d}'; lwt=base+i; deleted=i<tombstones; rev='1-e2e-fixed'

@@ -39,6 +39,11 @@ Optional `--warm-rtt 20` establishes the real locally-held-data precondition at
 20ms before restoring the requested `--rtt` for the measured scenario. This is
 not a cold-sync performance result at the measurement RTT. Both changes retain
 kernel qdisc evidence; an ICE consent RTT sampled during warm-up may be older.
+`--seed-after-start yes` prepares empty fixture tables/schemas first, starts the
+real daemon, then populates the same deterministic dataset before opening the
+browser. Default is population before daemon startup. The result records the
+chosen lifecycle so historical-store boot and population of a running instance
+cannot be confused.
 Each run freezes its own runner files and records their hashes before starting;
 later source transfers cannot change a running scenario. Namespace cleanup also
 retires detached descendants if the coordinator crashes.
@@ -55,7 +60,10 @@ retires detached descendants if the coordinator crashes.
   multi-tab K19 invariant; that needs its own scenario.
 - **K04-ATTACH**: after a confirmed local checkpoint, inject the exact old ATTACH
   writer's timestamp pattern into the owned fixture table. Observe native truth
-  read-only and the local browser without a demand query. A forward timestamp
+  read-only and the local browser without a demand query. After each injection,
+  invoke the ordinary production checkpointed replication pull and record its
+  actual native replies. This separates a cursor omission from a missing live
+  notification. A forward timestamp
   write to the SAME row is a mandatory positive control. Missing control yields
   **inconclusive**, not proof of the checkpoint bug. SQL reproduces the writer
   mechanism; it does not claim a call of the private Rust function.
