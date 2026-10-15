@@ -1176,6 +1176,7 @@ mod native_tests {
             v4_scheduler_native_large_command_preempts_bulk_and_receipt_waits_for_all_frames()
                 .await;
             v4_shared_credit_arms_below_existing_stream_occupancy().await;
+            v4_control_preempts_queued_bulk_after_a_busy_handoff().await;
             v4_scheduler_native_bulk_admission_cannot_take_control_permits().await;
             v4_scheduler_native_cancelled_bulk_does_not_cancel_another_sender().await;
             v4_scheduler_native_counts_actual_handoff_even_when_guard_returns_an_error_after_it()
@@ -1394,8 +1395,14 @@ mod native_tests {
             .expect("physical handoff did not run");
         }
         fn drain(&self) {
-            let old = self.buffered.swap(0, std::sync::atomic::Ordering::SeqCst);
-            if old > self.low.load(std::sync::atomic::Ordering::SeqCst) {
+            self.release(self.buffered.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        fn release(&self, bytes: usize) {
+            let old = self
+                .buffered
+                .fetch_sub(bytes, std::sync::atomic::Ordering::SeqCst);
+            let low = self.low.load(std::sync::atomic::Ordering::SeqCst);
+            if old > low && old - bytes <= low {
                 self.emit
                     .send(DataChannelEvent::OnBufferedAmountLow)
                     .unwrap();
@@ -1553,13 +1560,6 @@ mod native_tests {
     }
     async fn v4_shared_credit_arms_below_existing_stream_occupancy() {
         let channels: Vec<_> = (0..7).map(Channel::new).collect();
-        // Aggregate credit is exhausted, but none of these streams exceeds its
-        // original static LOW. Only the real scheduler can arm a crossing.
-        for (index, bytes) in [(3, 2 * FRAME_BYTES), (4, FRAME_BYTES), (5, FRAME_BYTES)] {
-            channels[index]
-                .buffered
-                .store(bytes, std::sync::atomic::Ordering::SeqCst);
-        }
         let scheduler = NativeSendScheduler::from_channels(
             channels
                 .iter()
@@ -1569,6 +1569,29 @@ mod native_tests {
         )
         .await
         .unwrap();
+        // Finish all bootstrap events before establishing the congested
+        // snapshot. Otherwise an unrelated late OnOpen/LOW wake can mask the
+        // lost partial-retirement edge (including under LOW=0).
+        for lane in Lane::ALL {
+            scheduler
+                .send(lane, WireSeq(0), b"ready", None)
+                .await
+                .unwrap();
+        }
+        scheduler.send_realtime(b"ready").await.unwrap();
+        for channel in &channels {
+            channel
+                .buffered
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+        for (index, bytes) in [(3, 2 * FRAME_BYTES), (4, FRAME_BYTES), (5, FRAME_BYTES)] {
+            channels[index]
+                .buffered
+                .store(bytes, std::sync::atomic::Ordering::SeqCst);
+        }
+        let armed = channels[3].notify.notified();
+        tokio::pin!(armed);
+        armed.as_mut().enable();
         let pending = {
             let sender = scheduler.clone();
             tokio::spawn(async move {
@@ -1577,27 +1600,93 @@ mod native_tests {
                     .await
             })
         };
-        tokio::time::timeout(Duration::from_millis(250), async {
-            loop {
-                let changed = channels[3].notify.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if channels[3].low.load(std::sync::atomic::Ordering::SeqCst) < 2 * FRAME_BYTES {
-                    break;
-                }
-                changed.await;
-            }
-        })
-        .await
-        .expect("aggregate credit needs a crossable native low edge");
-        channels[3].drain();
-        tokio::time::timeout(Duration::from_millis(250), pending)
+        // Observe the arming operation, not its numerical value. This also
+        // waits for a deliberately mutated LOW=0 to be installed, rather than
+        // releasing credit before the scheduler even observes congestion.
+        tokio::time::timeout(Duration::from_millis(250), armed)
             .await
+            .expect("aggregate credit needs a crossable native low edge");
+        assert!(
+            !pending.is_finished(),
+            "congested frame bypassed shared credit"
+        );
+        // Exactly one SCTP frame retires. Bytes remain outstanding: LOW=0 has
+        // no edge, whereas the production scheduler wakes and uses freed credit.
+        channels[3].release(FRAME_BYTES);
+        let delivered = tokio::time::timeout(Duration::from_millis(250), pending).await;
+        scheduler.close_now();
+        delivered
             .expect("aggregate credit release did not wake the sender")
             .unwrap()
             .unwrap();
-        assert_eq!(channels[5].sent.lock().len(), 1);
+        assert_eq!(channels[5].sent.lock().len(), 2);
+    }
+    async fn v4_control_preempts_queued_bulk_after_a_busy_handoff() {
+        let channels: Vec<_> = (0..7).map(Channel::new).collect();
+        let scheduler = NativeSendScheduler::from_channels(
+            channels
+                .iter()
+                .map(|c| c.clone() as Arc<dyn DataChannel>)
+                .collect(),
+            framer(),
+        )
+        .await
+        .unwrap();
+        for lane in [Lane::Control, Lane::Live, Lane::Transfer] {
+            scheduler
+                .send(lane, WireSeq(0), b"ready", None)
+                .await
+                .unwrap();
+            channels[lane.index()]
+                .buffered
+                .store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+        channels[3]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        channels[5]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        channels[0]
+            .block
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let submit = |lane| {
+            let sender = scheduler.clone();
+            tokio::spawn(async move { sender.send(lane, WireSeq(0), b"queued", None).await })
+        };
+        let busy = submit(Lane::Live);
+        channels[3].entered.notified().await;
+        let bulk = submit(Lane::Transfer);
+        let control = submit(Lane::Control);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while scheduler.queue_budget[0].available_permits() == ADMISSION[0]
+                || scheduler.queue_budget[5].available_permits() == ADMISSION[5]
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both competing producers must be admitted");
+        // Different bulk lanes preserve the real per-lane ordering mutex:
+        // the queued producer must not wait behind its own busy predecessor.
+        // The busy handoff is cancelled, not preempted mid-frame. At the next
+        // selection both lanes are ready. A second blocked bulk handoff must
+        // never win over already queued control, even if its FIFO arrived first.
+        busy.abort();
+        let _ = busy.await;
+        let clock = std::time::Instant::now();
+        let preempted =
+            tokio::time::timeout(Duration::from_millis(100), channels[0].entered.notified()).await;
+        eprintln!(
+            "SCHEDULER_PREEMPT elapsed_ms={}",
+            clock.elapsed().as_secs_f64() * 1000.0
+        );
+        control.abort();
+        bulk.abort();
+        let _ = control.await;
+        let _ = bulk.await;
         scheduler.close_now();
+        preempted.expect("control waited behind queued bulk after frame boundary");
     }
     async fn v4_scheduler_native_bulk_admission_cannot_take_control_permits() {
         let channels: Vec<_> = (0..7).map(Channel::new).collect();
