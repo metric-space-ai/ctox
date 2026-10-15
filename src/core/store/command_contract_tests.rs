@@ -1,6 +1,293 @@
 use super::*;
 #[path = "../business_os/command_projection_reads.rs"]
 mod native_projection_reads;
+
+#[tokio::test]
+async fn command_release_change_retires_a_live_fence_and_old_metadata_requires_cas() {
+    let (_dir, writer, readers, ingress) = commands().await;
+    let created = send(
+        &ingress,
+        "client",
+        command(1, 950, None, "queued", None, Value::Null),
+        NOW,
+    )
+    .await;
+    assert_eq!(created.status, WriteStatus::Accepted);
+    // Retained metadata from the previous native P9 source, not caller claims.
+    writer.submit(WriteJob::new(JobOptions::default(),|tx|{
+        tx.execute_batch("DROP TABLE _command_leases; CREATE TABLE _command_leases(command_id TEXT PRIMARY KEY,participant TEXT NOT NULL,fence INTEGER NOT NULL,expires_at_core INTEGER NOT NULL,last_now_ms INTEGER NOT NULL) WITHOUT ROWID; CREATE TABLE fenced_effect(value INTEGER); INSERT INTO fenced_effect VALUES(0)")?;
+        tx.execute("INSERT INTO _command_leases VALUES('command-1','executor-a',7,?1,?2)",params![NOW+30_000,NOW])?;Ok(())
+    })).unwrap().await.unwrap();
+    writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            assert_eq!(
+                check_executor_fence(tx, "executor-a", "command-1", Seq(7), NOW)?
+                    .unwrap_err()
+                    .reason,
+                "stale_fence"
+            );
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let renewed = ingress
+        .claim_command("executor-a".into(), "command-1".into(), Some(Seq(7)), NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renewed.fence, Seq(8));
+    // Native publication changes the authoritative release descriptor. A live
+    // old lease must not authorize work against that new executable contract.
+    writer.submit(WriteJob::new(JobOptions::default(),|tx|{
+        tx.execute("UPDATE _collections SET app_ver='2' WHERE name='business_commands' AND state='active'",[])?;
+        let rejected=with_command_fence(tx,"executor-a","command-1",Seq(8),NOW,&Policy,|tx|{
+            tx.execute("UPDATE fenced_effect SET value=99",[])?;Ok(())
+        })?.unwrap_err();
+        assert_eq!((rejected.code.as_str(),rejected.reason.as_str()),("conflict","stale_fence"));Ok(())
+    })).unwrap().await.unwrap();
+    let next = ingress
+        .claim_command("executor-b".into(), "command-1".into(), Some(Seq(8)), NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.fence, Seq(9));
+    readers
+        .read(|tx| {
+            assert_eq!(
+                tx.query_row("SELECT value FROM fenced_effect", [], |r| r
+                    .get::<_, i64>(0))?,
+                0
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
+    use crate::change_log::subscription::{protocol::ClientMessage, Subscription, SubscriptionKey};
+    use std::io::{BufRead, BufReader, Write as IoWrite};
+    use std::process::Stdio;
+    let (_dir, writer, readers) = runtime().await;
+    let schema = command_document_schema();
+    let schema_copy = schema.clone();
+    writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            let mut release: crate::schema::BaseReleaseInput =
+                serde_json::from_str(include_str!("../../../tests/sync-v4-m2/base-release.json"))
+                    .unwrap();
+            release.schemas.insert(
+                "ctox-platform".into(),
+                json!({"collections":{"business_commands":{"schema":schema_copy}}}),
+            );
+            crate::schema::import_base_release(
+                tx,
+                &release,
+                &crate::schema::BaseReleaseDefaults {
+                    app_ver: "platform-7".into(),
+                    client_limit: 1000,
+                    byte_budget: 16 * 1024 * 1024,
+                    rights_ver: 1,
+                },
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let epoch = readers
+        .read(|tx| Ok(change_log::head(tx)?.epoch))
+        .await
+        .unwrap();
+    let ingress = OrderedWriter::new(writer.clone(), Arc::new(Policy));
+    let signer = crate::change_log::subscription::tests::TestInstanceKey::new();
+    let key = SubscriptionKey {
+        participant: "alice".into(),
+        collection: "business_commands".into(),
+        scope_hash: "rights:1".into(),
+        gen: 1,
+    };
+    let mut live = Subscription::new(readers.clone(), &writer, key.clone(), None).unwrap();
+    live.next_page(100, Arc::new(Policy), &signer, || NOW)
+        .await
+        .unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let kernel = root
+        .join("src/apps/business-os/kernel")
+        .canonicalize()
+        .unwrap();
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = OwnedChild(
+        Command::new("node")
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("command_e2e.mjs"))
+            .env("KERNEL_URL", format!("file://{}", kernel.display()))
+            .env(
+                "COMMAND_CONFIG",
+                json!({"schema":schema,"epoch":epoch}).to_string(),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let mut input = child.0.stdin.take().unwrap();
+    let mut output = BufReader::new(child.0.stdout.take().unwrap());
+    let mut line = String::new();
+    let mut executor_seq = 0;
+    let mut first = None;
+    let mut measured = None;
+    let mut projection_us = Vec::new();
+    loop {
+        line.clear();
+        if output.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        let request: Value = serde_json::from_str(&line).expect("component stdout is JSON");
+        if request["type"] == "measured" {
+            measured = Some(request);
+            continue;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let value = match request["type"].as_str().unwrap() {
+            "write" => {
+                let ClientMessage::Write(write) =
+                    serde_json::from_value(request["message"].clone())
+                        .expect("real Kernel wire must parse strict native Write")
+                else {
+                    panic!("not write")
+                };
+                assert_eq!(write.write.schema_ver, 3);
+                assert_eq!(write.write.app_ver, "platform-7");
+                let mut doc = write.write.body.clone().unwrap();
+                let id = write.write.id.clone();
+                let result = ingress.submit("alice".into(), write, now).await.unwrap();
+                assert_eq!(result.results.len(), 1);
+                let receipt = result.results[0].clone();
+                if receipt.result.status == WriteStatus::Accepted {
+                    let lease = ingress
+                        .claim_command("executor-a".into(), id.clone(), None, now)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    executor_seq += 1;
+                    doc["status"] = json!("done");
+                    doc["executor_fence"] = json!(lease.fence);
+                    doc["result"] = json!({"value":doc["payload"]["value"]});
+                    let terminal = OrderedWrite {
+                        client_seq: Seq(executor_seq),
+                        write: Write {
+                            op_id: op_at(now, 5000 + executor_seq as u16),
+                            prev_op_id: None,
+                            collection: "business_commands".into(),
+                            id: id.clone(),
+                            base_rev: receipt.result.rev.clone(),
+                            base_seq: receipt.result.seq,
+                            gen: 1,
+                            schema_ver: 3,
+                            app_ver: "platform-7".into(),
+                            op: WriteOp::Put,
+                            body: Some(doc.clone()),
+                        },
+                    };
+                    let done = ingress
+                        .submit("executor-a".into(), terminal, now)
+                        .await
+                        .unwrap();
+                    assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
+                    if first.is_none() {
+                        writer
+                            .submit(WriteJob::new(JobOptions::default(), |tx| {
+                                activate_command_projections(tx, 1).map_err(Into::into)
+                            }))
+                            .unwrap()
+                            .await
+                            .unwrap();
+                        first = Some(doc);
+                    }
+                    let started = std::time::Instant::now();
+                    let status = readers
+                        .read(move |tx| native_projection_reads::projected_command_status(tx, &id))
+                        .await
+                        .unwrap();
+                    projection_us.push(started.elapsed().as_secs_f64() * 1e6);
+                    assert_eq!(status.as_deref(), Some("completed"));
+                } else {
+                    assert_eq!(
+                        receipt.result.status,
+                        WriteStatus::Merged,
+                        "native receipt: {:?}",
+                        receipt
+                    );
+                    assert!(receipt.requires_page);
+                }
+                let page = live
+                    .next_page(100, Arc::new(Policy), &signer, || now)
+                    .await
+                    .unwrap();
+                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page})
+            }
+            "subscribe" => {
+                let ClientMessage::Subscribe(sub) =
+                    serde_json::from_value(request["message"].clone())
+                        .expect("real Kernel wire must parse strict native Subscribe")
+                else {
+                    panic!("not subscribe")
+                };
+                assert_eq!(sub.collection, key.collection);
+                assert_eq!(sub.scope_hash, key.scope_hash);
+                assert_eq!(sub.gen, key.gen);
+                let mut replay =
+                    Subscription::new(readers.clone(), &writer, key.clone(), sub.checkpoint)
+                        .unwrap();
+                serde_json::to_value(
+                    replay
+                        .next_page(100, Arc::new(Policy), &signer, || now)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap()
+            }
+            "first_command" => first.clone().unwrap(),
+            _ => panic!("unknown component request"),
+        };
+        writeln!(
+            input,
+            "{}",
+            json!({"request":request["request"],"value":value})
+        )
+        .unwrap();
+        input.flush().unwrap();
+    }
+    drop(input);
+    assert!(
+        child.0.wait().unwrap().success(),
+        "real Kernel/native command harness failed"
+    );
+    let mut measured = measured.expect("missing actual runtime measurement");
+    projection_us.sort_by(|a, b| a.total_cmp(b));
+    measured["projection_read_p50_us"] = json!(projection_us[projection_us.len() / 2]);
+    measured["projection_read_p99_us"] =
+        json!(projection_us[(projection_us.len() * 99).div_ceil(100) - 1]);
+    println!("P9_M8_COMPONENT {}", measured);
+    assert!(measured["verified_pages"].as_u64().unwrap() > 0);
+    assert!(measured["canonical_replays"].as_u64().unwrap() > 0);
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
 #[tokio::test]
 async fn command_projection_feeds_native_readers_atomically_without_legacy_fallback() {
     let (_dir, writer, readers, ingress) = commands().await;
@@ -264,7 +551,7 @@ async fn command_backward_transition_is_rejected_in_the_ordered_writer() {
     let mut changed = command(
         3,
         903,
-        running.rev,
+        running.rev.clone(),
         "running",
         Some(lease.fence),
         Value::Null,
@@ -278,6 +565,17 @@ async fn command_backward_transition_is_rejected_in_the_ordered_writer() {
     poison.write.body.as_mut().unwrap()["execution_task_id"] = json!("foreign-task");
     let poison = send(&ingress, "attacker", poison, NOW).await;
     assert_eq!(poison.reason.as_deref(), Some("invalid_transition"));
+    let mut callback = command(
+        4,
+        905,
+        running.rev,
+        "running",
+        Some(lease.fence),
+        Value::Null,
+    );
+    callback.write.body.as_mut().unwrap()["on_complete"] = json!("redirect.callback");
+    let callback = send(&ingress, "executor-a", callback, NOW).await;
+    assert_eq!(callback.reason.as_deref(), Some("idempotency_conflict"));
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }

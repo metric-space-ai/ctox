@@ -786,14 +786,19 @@ export function createKernel(opts = {}) {
     } catch(err) {
       if(err instanceof StaleLeader)stepDown();
       else if(err?.code==='unavailable'){link={...link,state:'offline'};netChanged();}
-      else zoneReport(e.app_id,{level:'error',code:'transport.write',text:String(err.message)},'kernel');
+      else {
+        // An invalid receipt/scope needs a new admitted page or reconnect,
+        // not an immediate resend loop of the same durable input.
+        awaitingResult=true;
+        zoneReport(e.app_id,{level:'error',code:err?.code??'transport.write',text:String(err.message)},'kernel');
+      }
     } finally {
       if(!awaitingResult){if(inflight.get(k)===e.op_id)inflight.delete(k);inflightOps.delete(e.op_id);}
       await refreshOutboxStat(); if(!awaitingResult && link.state==='online')schedulePump();
     }
   }
   function canonicalReady(base,result) {
-    return !!base && !!result.seq && (base.gen===undefined || result.gen===undefined || base.gen===result.gen) && !seqGreater(result.seq,base.seq??'0');
+    return !!base && !!result.seq && (result.gen===undefined || base.gen===result.gen) && !seqGreater(result.seq,base.seq??'0');
   }
   async function settleWrite(t,e,base,res) {
     await t.del('outbox',e.op_id);
@@ -821,7 +826,7 @@ export function createKernel(opts = {}) {
       const canonical=res.requires_page || res.status==='merged' || res.status==='migrated';
       if(canonical && res.status!=='rejected') {
         if(BigInt(decimalSeq(res.seq))===0n)throw new CtoxError('invalid','Canonical receipt needs a positive sequence');
-        if(res.gen!==undefined && res.gen!==e.gen)throw new CtoxError('conflict','Write receipt generation changed');
+        if(res.gen!==undefined && res.gen!==e.gen && res.status!=='migrated')throw new CtoxError('conflict','Write receipt generation changed');
         if(!canonicalReady(base,res)) {
           await t.put('outbox',{...e,pending_result:res});
           return {replay:true,res};
@@ -840,7 +845,9 @@ export function createKernel(opts = {}) {
     if(out.replay) {
       // Explicit replay uses the SAME signed page path, without regressing any
       // durable checkpoint. A no-write command replay still needs its older row.
-      const scope=expectedScopes.get(e.collection)??await transport.scope?.(e.collection)??{collection:e.collection,epoch:opts.epoch??'1',scope_hash:opts.scopeHash??'local',gen:e.gen};
+      const known=expectedScopes.get(e.collection);
+      const scope=(!known || (out.res.gen!==undefined && known.gen!==out.res.gen)?await transport.scope?.(e.collection):known)??{collection:e.collection,epoch:opts.epoch??'1',scope_hash:opts.scopeHash??'local',gen:e.gen};
+      if(out.res.gen!==undefined && scope.gen!==out.res.gen)throw new CtoxError('migration_required','Canonical receipt requires a current native scope',{path:e.collection});
       expectedScopes.set(e.collection,scope);
       await transport.subscribe({...scope,checkpoint_seq:String(BigInt(out.res.seq)-1n),priority:'P1'});
       return false;

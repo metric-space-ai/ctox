@@ -59,7 +59,12 @@ export interface FieldOperators {
 }
 
 export type WriteResult = {
-  status: 'accepted' | 'rejected' | 'migrated';
+  status: 'accepted' | 'merged' | 'rejected' | 'migrated';
+  code?: CtoxErrorCode;
+  gen?: number;
+  client_seq?: string;
+  /** Receipt alone cannot clear the outbox; wait for the canonical page. */
+  requires_page?: boolean;
   rev?: string;
   reason?: string;
   archived_ref?: string;
@@ -79,7 +84,7 @@ export interface WriteHandle<Extra = {}> {
 }
 
 export type CommandState = {
-  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed';
+  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed' | 'cancelled' | 'rejected';
   progress?: number;
   result?: unknown;
   error?: string;
@@ -94,12 +99,14 @@ export interface CommandHandle {
   cancel(): boolean;
 }
 
-export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable';
+export type CtoxErrorCode = 'invalid' | 'forbidden' | 'not_found' | 'conflict' | 'revoked' | 'expired' | 'quota' | 'unavailable' | 'stale_base' | 'migration_required' | 'locally_modified' | 'token_expired' | 'token_used';
 export declare class CtoxError extends Error {
   readonly name: 'CtoxError';
   readonly code: CtoxErrorCode;
   readonly path?: string;
-  constructor(code: CtoxErrorCode, message?: string, extra?: { path?: string });
+  readonly reason?: string;
+  readonly detail?: string;
+  constructor(code: CtoxErrorCode, message?: string, extra?: { path?: string; reason?: string; detail?: string });
 }
 
 export type StatusItem = { level: 'info' | 'warn' | 'error'; code: string; text: string; ref?: string };
@@ -616,13 +623,13 @@ export interface Subscription {
 }
 export interface KernelPage {
   epoch: string; collection: string; scope_hash: string; gen: number;
-  cursor_to: string; head_seq?: string; complete: boolean; backlog?: number;
-  package_id?:string; seq_from?:string; seq_to?:string; sig?:string; core_sent_at_ms?:number;
-  docs: Array<{collection?:string; id:string; data?:unknown; doc?:unknown;
-    deleted?:boolean; op?:'put'|'delete'|'unproject'; seq:string; rev:string}>;
+  type?: 'page'|'live'; cursor_to?: string; head_seq?: string; complete: boolean; backlog?: number;
+  package_id?:string; seq_from?:string; seq_to?:string; sig?:string|number[]; core_sent_at_ms?:number;
+  docs: Array<{collection?:string; id:string; data?:unknown; doc?:unknown; body?:unknown;
+    deleted?:boolean; op?:'put'|'upsert'|'delete'|'unproject'; seq:string; rev:string}>;
 }
 export interface KernelWrite {
-  op_id:string; prev_op_id?:string|null; collection:string; id:string;
+  op_id:string; prev_op_id?:string|null; client_seq?:string; collection:string; id:string;
   base_rev:string|null; base_seq:string; gen:number; schema_ver:number; app_ver:string;
   app_id:string; op:'put'|'patch'|'delete'; body:unknown;
 }

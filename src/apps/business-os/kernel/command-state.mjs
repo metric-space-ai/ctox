@@ -21,7 +21,7 @@ export const COMMAND_TRANSITIONS = Object.freeze({
   rejected: Object.freeze(['rejected']),
 });
 /** v2 immutableIntentFields → Felder des V4-Befehlsdokuments (command_id/idempotency_key = id, command_type = type, module = app_id). */
-export const COMMAND_IMMUTABLE_FIELDS = Object.freeze(['id', 'type', 'app_id', 'payload', 'record_id', 'client_context', 'created_at']);
+export const COMMAND_IMMUTABLE_FIELDS = Object.freeze(['id', 'type', 'app_id', 'payload', 'record_id', 'client_context', 'actor_id', 'created_at', 'on_complete', 'on_failed']);
 export const V2_TO_V4_PHASE = Object.freeze({
   waiting_dependencies: 'queued', accepted: 'accepted', queued: 'queued', leased: 'queued', running: 'running',
   awaiting_review: 'running', validating: 'running', retry_wait: 'queued', blocked: 'queued',

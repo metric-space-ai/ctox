@@ -337,6 +337,11 @@ fn imports_real_199_collection_ownership_copy_and_platform_extensions_atomically
         "outbound-lead-generation".into(),
         json!({"collections":{"outbound_lead_generation_adapters":{"schema":corrected.clone(),"class":"full"}}}),
     );
+    let command_schema = crate::change_log::subscription::write_contract::command_document_schema();
+    input.schemas.insert(
+        "ctox-platform".into(),
+        json!({"collections":{"business_commands":{"schema":command_schema}}}),
+    );
     let report = import_base_release(&tx, &input, &release_defaults()).unwrap();
     assert_eq!(report.source_ownership_count, 199);
     assert_eq!(report.created, 208);
@@ -347,6 +352,13 @@ fn imports_real_199_collection_ownership_copy_and_platform_extensions_atomically
         .unwrap();
     assert_eq!(adapter.definition.app_id, "outbound-lead-generation");
     assert_eq!(adapter.definition.schema_json, corrected);
+    let commands = active_collection(&tx, "business_commands")
+        .unwrap()
+        .unwrap();
+    assert_eq!(commands.definition.schema_ver, 3);
+    assert_eq!(commands.definition.schema_json, command_schema);
+    assert_eq!(commands.definition.app_id, "ctox-platform");
+    assert_eq!(commands.definition.app_ver, "base-test");
     for name in [
         "business_commands",
         "ctox_queue_tasks",

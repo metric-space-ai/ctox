@@ -195,6 +195,8 @@ const INTENT: &[&str] = &[
     "client_context",
     "actor_id",
     "created_at",
+    "on_complete",
+    "on_failed",
     "command_id",
     "idempotency_key",
     "payload_hash",
@@ -253,10 +255,37 @@ fn failure(reason: &str) -> CommandError {
     }
 }
 fn initialize_commands(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    tx.execute_batch("CREATE TABLE IF NOT EXISTS _command_leases(command_id TEXT PRIMARY KEY NOT NULL, participant TEXT NOT NULL, fence INTEGER NOT NULL CHECK(fence>0), expires_at_core INTEGER NOT NULL, last_now_ms INTEGER NOT NULL) WITHOUT ROWID;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS _command_leases(command_id TEXT PRIMARY KEY NOT NULL, participant TEXT NOT NULL, fence INTEGER NOT NULL CHECK(fence>0), expires_at_core INTEGER NOT NULL, last_now_ms INTEGER NOT NULL,binding TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS _command_intents(command_id TEXT PRIMARY KEY NOT NULL, participant TEXT NOT NULL) WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS _command_projection_authority(singleton INTEGER PRIMARY KEY CHECK(singleton=1),gen INTEGER NOT NULL) WITHOUT ROWID;
-    CREATE TABLE IF NOT EXISTS _command_projections(command_id TEXT PRIMARY KEY NOT NULL,module TEXT NOT NULL,status TEXT NOT NULL,gen INTEGER NOT NULL,source_seq INTEGER NOT NULL,source_rev TEXT NOT NULL) WITHOUT ROWID;")
+    CREATE TABLE IF NOT EXISTS _command_projections(command_id TEXT PRIMARY KEY NOT NULL,module TEXT NOT NULL,status TEXT NOT NULL,gen INTEGER NOT NULL,source_seq INTEGER NOT NULL,source_rev TEXT NOT NULL) WITHOUT ROWID;")?;
+    // Upgrade retained P9 metadata in the same writer transaction. Old leases
+    // have no release binding and are retired, never silently re-authorized.
+    let bound: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('_command_leases') WHERE name='binding')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !bound {
+        tx.execute_batch(
+            "ALTER TABLE _command_leases ADD COLUMN binding TEXT NOT NULL DEFAULT ''",
+        )?;
+    }
+    Ok(())
+}
+fn command_binding(tx: &Transaction<'_>) -> rusqlite::Result<Option<String>> {
+    crate::schema::active_collection(tx, "business_commands")?
+        .map(|c| {
+            serde_json::to_string(&(
+                crate::change_log::head(tx)?.epoch,
+                c.definition.app_id,
+                c.gen,
+                c.definition.schema_ver,
+                c.definition.app_ver,
+            ))
+            .map_err(|e| invalid(e.to_string()))
+        })
+        .transpose()
 }
 fn state(doc: &Value) -> &str {
     doc["status"].as_str().unwrap_or("")
@@ -376,7 +405,7 @@ fn command_document(tx: &Transaction<'_>, id: &str) -> rusqlite::Result<Option<V
         .transpose()
 }
 /// CAS acquisition/renewal. The native policy must admit this authenticated executor.
-/// Only an expired lease may change owner; fence increments on every acquisition after expiry.
+/// An expired or generation/release-retired lease may change owner; every new acquisition increments the fence.
 pub fn claim_command(
     tx: &Transaction<'_>,
     participant: &str,
@@ -404,15 +433,16 @@ pub fn claim_command(
         if !executable_command(&doc, command_id) {
             return Ok(Err(failure("invalid_command")));
         }
-        let old: Option<(String,u64,u64,u64)> = tx.query_row("SELECT participant,fence,expires_at_core,last_now_ms FROM _command_leases WHERE command_id=?1",[command_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        let binding = command_binding(tx)?.ok_or_else(|| invalid("command generation missing"))?;
+        let old: Option<(String,u64,u64,u64,String)> = tx.query_row("SELECT participant,fence,expires_at_core,last_now_ms,binding FROM _command_leases WHERE command_id=?1",[command_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
         let now = old.as_ref().map_or(now_ms, |r| now_ms.max(r.3));
         let fence = match old {
             None if expected.is_none() => 1,
-            Some((owner, fence, expires, _)) if expected == Some(Seq(fence)) => {
-                if now < expires && owner != participant {
+            Some((owner, fence, expires, _, old_binding)) if expected == Some(Seq(fence)) => {
+                if now < expires && old_binding == binding && owner != participant {
                     return Ok(Err(failure("stale_fence")));
                 }
-                if now < expires {
+                if now < expires && old_binding == binding {
                     fence
                 } else {
                     fence
@@ -425,7 +455,7 @@ pub fn claim_command(
         let expires = now
             .checked_add(30_000)
             .ok_or_else(|| invalid("lease expiry overflow"))?;
-        tx.execute("INSERT INTO _command_leases VALUES(?1,?2,?3,?4,?5) ON CONFLICT(command_id) DO UPDATE SET participant=excluded.participant,fence=excluded.fence,expires_at_core=excluded.expires_at_core,last_now_ms=excluded.last_now_ms",params![command_id,participant,integer(fence)?,integer(expires)?,integer(now)?])?;
+        tx.execute("INSERT INTO _command_leases(command_id,participant,fence,expires_at_core,last_now_ms,binding) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(command_id) DO UPDATE SET participant=excluded.participant,fence=excluded.fence,expires_at_core=excluded.expires_at_core,last_now_ms=excluded.last_now_ms,binding=excluded.binding",params![command_id,participant,integer(fence)?,integer(expires)?,integer(now)?,binding])?;
         Ok(Ok(CommandLease {
             command_id: command_id.into(),
             participant: participant.into(),
@@ -454,7 +484,8 @@ pub fn check_executor_fence(
     {
         return Ok(Err(failure("stale_fence")));
     }
-    let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM _command_leases WHERE command_id=?1 AND participant=?2 AND fence=?3 AND expires_at_core>MAX(?4,last_now_ms))",params![command_id,participant,integer(fence.0)?,integer(now_ms)?],|r|r.get(0))?;
+    let binding = command_binding(tx)?.unwrap_or_default();
+    let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM _command_leases WHERE command_id=?1 AND participant=?2 AND fence=?3 AND expires_at_core>MAX(?4,last_now_ms) AND binding=?5)",params![command_id,participant,integer(fence.0)?,integer(now_ms)?,binding],|r|r.get(0))?;
     Ok(if valid {
         Ok(())
     } else {

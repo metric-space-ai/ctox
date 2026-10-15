@@ -253,11 +253,51 @@ pub struct WriteResult {
 }
 /// Participant identity is supplied by the admitted native connection, never this payload.
 /// client_seq starts at 1 for an admitted participant/session identity and is a decimal string.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OrderedWrite {
     pub client_seq: Seq,
     #[serde(flatten)]
     pub write: Write,
+}
+impl<'de> Deserialize<'de> for OrderedWrite {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // `deny_unknown_fields` on Write does not survive Serde flattening.
+        // Decode a strict flat wire value so caller metadata and duplicate
+        // fields cannot be silently admitted by the command ingress.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            client_seq: Seq,
+            op_id: String,
+            prev_op_id: Option<String>,
+            collection: String,
+            id: String,
+            base_rev: Option<String>,
+            base_seq: Option<Seq>,
+            gen: u64,
+            schema_ver: u32,
+            app_ver: String,
+            op: WriteOp,
+            body: Option<Value>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            client_seq: wire.client_seq,
+            write: Write {
+                op_id: wire.op_id,
+                prev_op_id: wire.prev_op_id,
+                collection: wire.collection,
+                id: wire.id,
+                base_rev: wire.base_rev,
+                base_seq: wire.base_seq,
+                gen: wire.gen,
+                schema_ver: wire.schema_ver,
+                app_ver: wire.app_ver,
+                op: wire.op,
+                body: wire.body,
+            },
+        })
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderedWriteResult {

@@ -14,8 +14,8 @@ async function gzip(bytes,decode=false){return new Uint8Array(await new Response
  * the client's framer, scheduler or ingress. Only P4's canonical hello is shared.
  */
 export class FakeNativePeer {
- constructor(channels,{instanceId='instance',head='9007199254740999',clockOffset=5000,onSubscribe}={}){
-  Object.assign(this,{channels,instanceId,head,clockOffset,onSubscribe});this.messages=[];this.errors=[];this.blobs=new Map();this.uploads=new Map();this.listeners=[];this.closed=false;
+ constructor(channels,{instanceId='instance',head='9007199254740999',clockOffset=5000,onSubscribe,epoch='1'}={}){
+  Object.assign(this,{channels,instanceId,head,clockOffset,onSubscribe,epoch});this.messages=[];this.errors=[];this.blobs=new Map();this.uploads=new Map();this.listeners=[];this.closed=false;
   this.sent=Array(6).fill(0);this.acked=Array(6).fill(0);this.received=Array(6).fill(0);this.packet=0;this.parts=new Map();this.waiters=new Set();this.ingress=Array(6).fill(Promise.resolve());this.egress=Array(6).fill(Promise.resolve());
   for(const channel of Object.values(channels)){
    channel.binaryType='arraybuffer';channel.bufferedAmountLowThreshold=16384;
@@ -34,7 +34,7 @@ export class FakeNativePeer {
    const m=JSON.parse(data);if(m.type==='ack'){const n=Number(m.upto);if(!Number.isSafeInteger(n)||n>this.sent[m.lane])throw Error('Invalid client ACK');this.acked[m.lane]=Math.max(n,this.acked[m.lane]);this.wake();return;}
    const hello=decodeHelloFrame(data);this.messages.push(hello);
    const selected=negotiateHello({instance_id:this.instanceId,bootstrap_min:1,bootstrap_max:1,app_api_ver:{min:'4.0',max:'4.0'},capabilities:[],required_capabilities:[],transport:hello.transport},hello);
-   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:'1',head_seq:this.head,scope_tokens:['test-scope-token'],rights_ver:'1',core_time_ms:Date.now()+this.clockOffset}));return;
+   this.channels[0].send(JSON.stringify({type:'hello_ok',protocol_ver:4,instance_id:this.instanceId,...selected,epoch:this.epoch,head_seq:this.head,scope_tokens:['test-scope-token'],rights_ver:'1',core_time_ms:Date.now()+this.clockOffset}));return;
   }
   const bytes=data instanceof ArrayBuffer?new Uint8Array(data):data,lane=bytes[4];if(lane>5)throw Error('Invalid native lane');
   const next=this.ingress[lane].then(()=>this.consume(bytes,lane));this.ingress[lane]=next.catch(()=>{});return next;
