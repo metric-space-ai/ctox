@@ -1375,7 +1375,7 @@ pub(super) fn canonical_collection_upsert_guard_sql(
 ) -> Option<String> {
     match collection {
         "business_commands" | "ctox_queue_tasks" => Some(format!(
-            "{} AND {}",
+            "COALESCE(json_extract({json_column}, '$._deleted'), 0) = 0 AND {} AND {}",
             canonical_version_not_downgraded_sql(json_column, "projection_version"),
             canonical_version_not_downgraded_sql(json_column, "queue_projection_version"),
         )),

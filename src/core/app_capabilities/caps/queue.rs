@@ -69,28 +69,28 @@ pub(super) const ROUTES: &[NativeRoute] = &[
         "task.claim",
         "cap.queue.claim",
         "channels::lease_queue_task_if",
-        "src/core/mission/channels/mod.rs:4152",
+        "src/core/mission/channels/mod.rs:4253",
     ),
     route(
         "agent.queue",
         "task.update",
         "cap.queue.update",
         "channels::update_queue_task",
-        "src/core/mission/channels/mod.rs:3773",
+        "src/core/mission/channels/mod.rs:3874",
     ),
     route(
         "agent.queue",
         "task.set_status",
         "cap.queue.set_status",
         "channels::update_queue_task",
-        "src/core/mission/channels/mod.rs:3773",
+        "src/core/mission/channels/mod.rs:3874",
     ),
     route(
         "agent.queue",
         "task.delete",
         "cap.queue.delete",
-        "queue::execute",
-        "src/core/app_capabilities/caps/queue.rs:155",
+        "channels::delete_queue_task",
+        "src/core/mission/channels/mod.rs:3776",
     ),
 ];
 #[derive(Clone)]
@@ -251,16 +251,25 @@ pub(super) fn execute(
         }
         "task.delete" => {
             let r: Delete = decode(args)?;
-            backend.queue_task(ctx, &r.task_id)?;
-            let _ = r.status_note;
-            // Native update_queue_task cancels atomically, but does NOT delete
-            // the queue/command projections. The legacy delete_ctox_task uses
-            // separate connections/commits. Never acknowledge a deletion until
-            // the Core exposes the required single-transaction primitive.
-            Err(CtoxError::new(
-                ErrorCode::Unavailable,
-                "atomic native queue deletion is not available",
-            ))
+            task::identifier(&r.task_id)?;
+            let authorized = match channels::load_deleted_queue_task(backend.root, &r.task_id)
+                .map_err(native)?
+            {
+                Some(task) => {
+                    backend.resources.authorize_queue_task(ctx, &task)?;
+                    task
+                }
+                None => backend.queue_task(ctx, &r.task_id)?,
+            };
+            let task = channels::delete_queue_task(
+                backend.root,
+                &r.task_id,
+                &authorized.metadata,
+                r.status_note.as_deref().unwrap_or("queue task deleted"),
+            )
+            .map_err(native)?;
+            backend.queue_callback(ctx, &task)?;
+            Ok(json!({"task_id":r.task_id,"deleted":true}))
         }
         _ => Err(CtoxError::new(
             ErrorCode::NotFound,

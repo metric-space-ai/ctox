@@ -51,21 +51,21 @@ pub(super) const ROUTES: &[NativeRoute] = &[
         "update",
         "cap.task.update",
         "channels::update_queue_task",
-        "src/core/mission/channels/mod.rs:3773",
+        "src/core/mission/channels/mod.rs:3874",
     ),
     route(
         "agent.task",
         "cancel",
         "cap.task.cancel",
         "channels::update_queue_task",
-        "src/core/mission/channels/mod.rs:3773",
+        "src/core/mission/channels/mod.rs:3874",
     ),
     route(
         "agent.task",
         "set_metadata",
         "cap.task.set_metadata",
         "channels::set_queue_task_metadata_value",
-        "src/core/mission/channels/mod.rs:4095",
+        "src/core/mission/channels/mod.rs:4196",
     ),
     route(
         "agent.task",
@@ -648,11 +648,12 @@ pub fn invoke(
     function: &str,
     args: Value,
 ) -> Result<Value, CtoxError> {
-    let registry = crate::app_capabilities::cap2::registry();
+    let registry = crate::app_capabilities::cap3::registry();
     let routes = || {
         super::all_routes()
             .chain(crate::app_capabilities::cap2::ROUTES)
             .chain(crate::app_capabilities::cap2::mail::ROUTES)
+            .chain(crate::app_capabilities::cap3::ROUTES)
     };
     let path = format!("{name}.{function}");
     let route = routes()
@@ -668,6 +669,8 @@ pub fn invoke(
         let mut payload = args.as_object().cloned().ok_or_else(invalid)?;
         let action = payload.remove("action").ok_or_else(invalid)?;
         json!({"action":action,"payload":payload})
+    } else if name == "agent.coding" {
+        super::coding_flat_envelope(function, args)
     } else {
         json!({"payload":args})
     };
@@ -1330,6 +1333,122 @@ mod cap4_tests {
             )
             .unwrap();
         assert_eq!(status, "cancelled");
+        // A failure after command cancellation must roll back the command,
+        // queue row AND both projection tombstones, including after restart.
+        let fresh = ctx("a", "delete-enqueue");
+        let delete_args = json!({"title":"delete work","instruction":"do it","idempotency_key":"delete-task","on_failed":"failed"});
+        let delete_id = call(&b, &fresh, "agent.task", "enqueue", delete_args.clone()).unwrap()
+            ["task_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        drop(crate::business_os::store::open_store(tmp.path()).unwrap());
+        conn.execute_batch("CREATE TRIGGER cap4_abort_delete BEFORE DELETE ON communication_messages BEGIN SELECT RAISE(ABORT,'delete rollback'); END").unwrap();
+        assert!(call(
+            &b,
+            &c,
+            "agent.queue",
+            "task.delete",
+            json!({"task_id":delete_id})
+        )
+        .is_err());
+        assert_eq!(
+            channels::load_queue_task(tmp.path(), &delete_id)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        let store = crate::business_os::store::open_store(tmp.path()).unwrap();
+        let tombstones: i64 = store
+            .query_row(
+                "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 0);
+        conn.execute_batch("DROP TRIGGER cap4_abort_delete")
+            .unwrap();
+        assert_eq!(
+            call(
+                &b,
+                &c,
+                "agent.queue",
+                "task.delete",
+                json!({"task_id":delete_id})
+            )
+            .unwrap()["deleted"],
+            true
+        );
+        assert!(channels::load_queue_task(tmp.path(), &delete_id)
+            .unwrap()
+            .is_none());
+        let tombstones: i64 = store
+            .query_row(
+                "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 2);
+        // A pending cancellation outbox event must not resurrect a deletion.
+        crate::business_os::store::deliver_business_command_outbox(tmp.path(), 100).unwrap();
+        let deleted_rows = store
+            .prepare("SELECT collection,record_id FROM business_records WHERE deleted=1")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for (collection, record) in deleted_rows {
+            crate::business_os::store::upsert_projection_record(
+                tmp.path(),
+                &collection,
+                &record,
+                i64::MAX,
+                json!({"id":record,"projection_version":99999,"resurrect":"old outbox payload"}),
+            )
+            .unwrap();
+        }
+        let tombstones: i64 = store
+            .query_row(
+                "SELECT COUNT(*) FROM business_records WHERE deleted=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tombstones, 2);
+        // Retrying after reopening the runtime preserves the deletion receipt
+        // and retries the same callback ID, never a second callback.
+        let reopened = Runtime::new(tmp.path());
+        let retry = Backend::new(tmp.path(), &reopened, &Fallback);
+        assert_eq!(
+            call(
+                &retry,
+                &c,
+                "agent.queue",
+                "task.delete",
+                json!({"task_id":delete_id})
+            )
+            .unwrap()["deleted"],
+            true
+        );
+        assert!(call(
+            &retry,
+            &ctx("b", "foreign-delete"),
+            "agent.queue",
+            "task.delete",
+            json!({"task_id":delete_id})
+        )
+        .is_err());
+        // The retained admission receipt prevents resurrection by replay.
+        let delivered_callbacks: i64 = reopened
+            .conn()
+            .query_row("SELECT COUNT(*) FROM cap4_test_commands", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(delivered_callbacks, 2);
+        assert!(call(&b, &fresh, "agent.task", "enqueue", delete_args).is_err());
     }
     #[test]
     fn cap4_schedule_native_cron_scope_and_command_contract() {

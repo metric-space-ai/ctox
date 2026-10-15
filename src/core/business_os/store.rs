@@ -1433,6 +1433,65 @@ fn stamp_attached_canonical_mirror_versions(
     Ok(())
 }
 
+/// Called only inside the native queue writer transaction. Tombstones carry
+/// no previous payload; neither queue refresh nor command replay can revive it.
+pub(crate) fn delete_attached_queue_projections(
+    conn: &Connection,
+    task_id: &str,
+    command_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    for (collection, id) in std::iter::once(("ctox_queue_tasks", task_id))
+        .chain(command_id.map(|id| ("business_commands", id)))
+    {
+        let rev = format!("rev_{}", Uuid::new_v4());
+        let payload = serde_json::json!({"id":id,"_rev":rev,"_deleted":true,"updated_at_ms":now});
+        conn.execute(
+            "INSERT INTO business_os_projection.business_records
+             (collection,record_id,rev,deleted,updated_at_ms,payload_json)
+             VALUES (?1,?2,?3,1,?4,?5)
+             ON CONFLICT(collection,record_id) DO UPDATE SET
+             rev=excluded.rev,deleted=1,updated_at_ms=excluded.updated_at_ms,payload_json=excluded.payload_json",
+            params![collection,id,rev,now,serde_json::to_string(&payload)?],
+        )?;
+        if let Some(table) = attached_rxdb_collection_table(conn, collection)? {
+            let qualified_table = format!(
+                "business_os_rxdb_projection.{}",
+                sqlite_quote_identifier(&table)
+            );
+            let previous: Option<String> = conn
+                .query_row(
+                    &format!("SELECT data FROM {qualified_table} WHERE id=?1"),
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let previous = previous.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let revision = next_direct_rxdb_revision(
+                previous
+                    .as_ref()
+                    .and_then(|v| v.get("_rev"))
+                    .and_then(Value::as_str),
+            );
+            let payload =
+                serde_json::json!({"id":id,"_rev":revision,"_deleted":true,"updated_at_ms":now});
+            business_store_adapter::write_legacy_projection(
+                conn,
+                business_store_adapter::LegacyProjection {
+                    qualified_table: &qualified_table,
+                    table_columns: &attached_rxdb_table_columns(conn, &table)?,
+                    id,
+                    payload: &payload,
+                    revision,
+                    write_time: now_ms() as f64,
+                    guard: None,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn refresh_attached_queue_projections(
     _root: &Path,
     conn: &Connection,
