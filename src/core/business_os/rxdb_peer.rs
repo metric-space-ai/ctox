@@ -691,6 +691,9 @@ enum NativePeerExit {
     HeartbeatStale,
     /// The persisted sync room/signaling config changed: respawn with fresh config.
     SyncConfigurationChanged,
+    /// Compatibility file-source change: the immutable v3 pool needs a new
+    /// inventory. V4 registry commits use online activation instead.
+    RuntimeSchemasChanged,
     /// A load-bearing command/projection task exited unexpectedly: respawn.
     CriticalTaskExited,
     /// Work is alive but its durable queues made no progress: respawn.
@@ -2196,6 +2199,9 @@ pub fn spawn_native_peer(
                              reconfiguring immediately"
                         );
                     }
+                    Ok(NativePeerExit::RuntimeSchemasChanged) => {
+                        eprintln!("[business-os] legacy runtime schema files changed; reconfiguring the v3 pool inventory");
+                    }
                     Ok(NativePeerExit::CriticalTaskExited) => {
                         eprintln!(
                             "[business-os] native rxdb peer critical task exited; \
@@ -2232,7 +2238,7 @@ pub fn spawn_native_peer(
                 }
                 let immediate_reconfigure = matches!(
                     result,
-                    Ok(NativePeerExit::SyncConfigurationChanged)
+                    Ok(NativePeerExit::SyncConfigurationChanged | NativePeerExit::RuntimeSchemasChanged)
                 );
                 if !immediate_reconfigure
                     && native_peer_circuit_snapshot()
@@ -3578,22 +3584,15 @@ async fn run_native_peer(
                 }
             }
             _ = runtime_schema_watch.tick() => {
-                // Compatibility discovery only. The v4 registry publishes its
-                // committed snapshot through schema_commits, without polling.
-                let previous = runtime_schema_state.clone();
+                // Compatibility files still feed the immutable v3 pool. Merely
+                // adding QueryFetchRegistry entries would leave new schemas out
+                // of its handshake/master/live inventories. Keep the proven v3
+                // reconfiguration until that transport is replaced. The v4
+                // registry commit branch above does not retire the peer.
                 match native_peer_runtime_installed_schemas_changed(&root, &mut runtime_schema_state) {
                     Ok(true) => {
-                        let registries = peer._pools.iter()
-                            .map(|session| session.pool().query_fetch_registry.clone())
-                            .collect::<Vec<_>>();
-                        match peer_schema_adapter::apply(&peer.database, &registries,
-                            runtime_installed_module_collection_creators(&root)).await {
-                            Ok(added) => eprintln!("[business-os] registered {} runtime collections without retiring the peer", added.len()),
-                            Err(error) => {
-                                runtime_schema_state = previous;
-                                eprintln!("[business-os] online runtime schema activation incomplete: {error:#}");
-                            }
-                        }
+                        exit = NativePeerExit::RuntimeSchemasChanged;
+                        break;
                     }
                     Ok(false) => {}
                     Err(error) => eprintln!("[business-os] runtime schema discovery failed: {error:#}"),
