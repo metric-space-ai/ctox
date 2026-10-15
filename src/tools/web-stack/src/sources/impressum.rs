@@ -77,5 +77,4 @@ pub fn module() -> &'static dyn SourceModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

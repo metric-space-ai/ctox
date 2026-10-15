@@ -545,5 +545,4 @@ mod tests {
         // Empty program.
         assert!(validate_program("   ").is_some());
     }
-
 }

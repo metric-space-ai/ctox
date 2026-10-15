@@ -5551,5 +5551,4 @@ mod tests {
         assert!(!text.contains("sk-stored-secret"), "{text}");
         assert!(!text.contains("sk-draft-secret"), "{text}");
     }
-
 }

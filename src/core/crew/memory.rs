@@ -747,5 +747,4 @@ mod tests {
         assert!(block.contains("[success] Import lief. — Schema zuerst prüfen."));
         assert_eq!(anchor_lines(&memory.anchors).len(), 80);
     }
-
 }

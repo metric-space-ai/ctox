@@ -886,5 +886,4 @@ pub fn last_error_str() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

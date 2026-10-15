@@ -377,5 +377,4 @@ mod tests {
         let html = "<html><body><noscript><meta content=\"0;url=/httpservice/retry/enablejs?sei=abc\" http-equiv=\"refresh\"><div>Please click <a href=\"/httpservice/retry/enablejs?sei=abc\">here</a> if you are not redirected within a few seconds.</div></noscript><a data-ved=\"123\" href=\"https://www.rust-lang.org/\">Rust</a></body></html>";
         assert!(detect_google_interstitial(&url, html).is_ok());
     }
-
 }

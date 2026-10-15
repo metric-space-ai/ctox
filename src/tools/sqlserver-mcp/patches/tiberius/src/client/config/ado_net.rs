@@ -82,5 +82,4 @@ mod tests {
         feature = "vendored-openssl"
     ))]
     use crate::EncryptionLevel;
-
 }

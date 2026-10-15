@@ -927,5 +927,4 @@ impl CredentialExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

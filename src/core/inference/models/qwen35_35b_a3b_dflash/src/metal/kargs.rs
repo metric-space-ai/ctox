@@ -1126,5 +1126,4 @@ mod tests {
         // to align the trailing bool, the C compiler emits 152.
         assert_eq!(size_of::<KargsRope>(), 152);
     }
-
 }

@@ -1003,5 +1003,4 @@ pub(crate) use cloud::*;
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
 }

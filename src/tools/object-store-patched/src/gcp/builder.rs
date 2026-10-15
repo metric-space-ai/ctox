@@ -647,5 +647,4 @@ mod tests {
 
     const FAKE_KEY: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true}"#;
     const FAKE_KEY_WITH_BASE_URL: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true, "gcs_base_url": "https://base-url-from-credentials:4443"}"#;
-
 }

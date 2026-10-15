@@ -132,5 +132,4 @@ pub(crate) fn fmt_duration(duration: &ConfigValue<Duration>) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
-
 }

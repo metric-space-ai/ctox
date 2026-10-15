@@ -118,5 +118,4 @@ pub const QWEN35_08B_LAYER_PATTERN: [LayerKind; 24] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

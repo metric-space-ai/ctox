@@ -261,5 +261,4 @@ mod tests {
         let y = linear_resample(&x, 48_000, 16_000);
         assert_eq!(y.len(), 16_000);
     }
-
 }

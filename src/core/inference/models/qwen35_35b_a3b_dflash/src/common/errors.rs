@@ -27,5 +27,4 @@ pub fn last_error() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

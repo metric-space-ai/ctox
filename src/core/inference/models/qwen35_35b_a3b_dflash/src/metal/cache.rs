@@ -195,5 +195,4 @@ impl RecurrentRollbackCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

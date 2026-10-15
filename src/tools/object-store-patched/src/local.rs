@@ -1299,5 +1299,4 @@ mod unix_test {
 
     use crate::local::LocalFileSystem;
     use crate::{ObjectStoreExt, Path};
-
 }

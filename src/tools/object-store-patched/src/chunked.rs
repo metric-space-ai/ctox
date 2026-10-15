@@ -184,5 +184,4 @@ mod tests {
     use crate::path::Path;
 
     use super::*;
-
 }

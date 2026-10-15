@@ -40,5 +40,4 @@ pub use shape_audit::{audit_shape_contract, ShapeAuditRow, ShapeAuditStatus};
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

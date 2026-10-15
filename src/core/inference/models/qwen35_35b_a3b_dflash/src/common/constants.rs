@@ -53,5 +53,4 @@ pub const DFLASH35B_DRAFT_TARGET_LAYER_IDS: [i32; 5] = [1, 10, 19, 28, 37];
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

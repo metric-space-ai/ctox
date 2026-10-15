@@ -534,5 +534,4 @@ Revision hat Erfolg.";
         assert_eq!(evaluation.separate_line_hits, 1);
         assert_eq!(evaluation.forbidden_violations, 0);
     }
-
 }

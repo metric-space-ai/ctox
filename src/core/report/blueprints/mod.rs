@@ -119,5 +119,4 @@ pub enum ValidatorSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

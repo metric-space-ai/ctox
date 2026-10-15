@@ -150,5 +150,4 @@ pub fn write_trajectory(trajectory: &Trajectory, out_path: &Path) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

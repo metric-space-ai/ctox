@@ -332,5 +332,4 @@ mod bigdecimal_ {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

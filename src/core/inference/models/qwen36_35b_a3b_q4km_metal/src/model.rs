@@ -243,5 +243,4 @@ pub const QWEN36_35B_A3B_TEXT_CONFIG: Qwen36MoeTextConfig = Qwen36MoeTextConfig 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

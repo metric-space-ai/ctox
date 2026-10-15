@@ -1074,5 +1074,4 @@ mod tests {
     use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
     use crate::{ObjectStoreExt, Path};
-
 }

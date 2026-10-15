@@ -187,5 +187,4 @@ mod tests {
     use futures_util::stream::{BoxStream, TryStreamExt};
 
     use super::*;
-
 }

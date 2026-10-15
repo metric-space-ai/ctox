@@ -141,5 +141,4 @@ pub fn shab() -> &'static dyn SourceModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

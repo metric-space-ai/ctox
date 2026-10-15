@@ -236,5 +236,4 @@ mod tests {
     use crate::{ObjectStoreExt, integration::*};
 
     use tempfile::TempDir;
-
 }

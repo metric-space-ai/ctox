@@ -310,5 +310,4 @@ mod test {
     use super::*;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
-
 }

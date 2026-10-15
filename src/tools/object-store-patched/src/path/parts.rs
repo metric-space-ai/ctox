@@ -168,5 +168,4 @@ impl<'a> DoubleEndedIterator for PathParts<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

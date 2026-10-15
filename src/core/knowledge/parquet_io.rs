@@ -366,5 +366,4 @@ pub(super) fn refresh_catalog_after_write(
 mod tests {
     use super::*;
     use serde_json::json;
-
 }

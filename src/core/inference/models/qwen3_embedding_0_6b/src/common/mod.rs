@@ -109,5 +109,4 @@ pub fn canonical_embedding_model_name(raw: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

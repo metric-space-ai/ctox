@@ -474,5 +474,4 @@ mod http_tests {
             Self::new(value)
         }
     }
-
 }

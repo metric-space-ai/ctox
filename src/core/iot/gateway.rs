@@ -120,5 +120,4 @@ mod tests {
             config,
         }
     }
-
 }

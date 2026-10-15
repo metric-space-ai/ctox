@@ -253,5 +253,4 @@ impl Decode<BytesMut> for PreloginMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

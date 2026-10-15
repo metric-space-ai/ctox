@@ -287,5 +287,4 @@ pub fn new_id(prefix: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
 }

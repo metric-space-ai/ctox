@@ -356,5 +356,4 @@ pub fn is_entry_tiled_fp16(entry: &crate::MetalPackEntry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

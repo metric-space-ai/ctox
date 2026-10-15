@@ -1469,5 +1469,4 @@ impl From<S3EncryptionHeaders> for HeaderMap {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
 }

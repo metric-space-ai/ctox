@@ -132,5 +132,4 @@ mod tests {
             fill_bytes_via_next_word(dst, || self.try_next_u64())
         }
     }
-
 }

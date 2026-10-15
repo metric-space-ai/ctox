@@ -644,5 +644,4 @@ mod tests {
             Some(23)
         );
     }
-
 }

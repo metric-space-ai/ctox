@@ -251,5 +251,4 @@ mod tests {
         histogram.record(Duration::from_micros(1));
         assert_eq!(histogram.total_us, u64::MAX);
     }
-
 }

@@ -197,5 +197,4 @@ impl<'a> Iterator for AttributesIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

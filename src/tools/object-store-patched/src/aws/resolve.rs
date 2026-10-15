@@ -77,5 +77,4 @@ pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

@@ -1058,5 +1058,4 @@ mod tests {
         );
         store::upsert_asset(conn, &asset).unwrap();
     }
-
 }

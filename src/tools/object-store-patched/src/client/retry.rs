@@ -524,5 +524,4 @@ mod tests {
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
-
 }

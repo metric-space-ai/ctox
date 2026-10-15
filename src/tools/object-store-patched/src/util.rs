@@ -364,5 +364,4 @@ mod tests {
         }
         fetches
     }
-
 }

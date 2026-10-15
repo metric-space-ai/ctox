@@ -1184,5 +1184,4 @@ mod tests {
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
-
 }

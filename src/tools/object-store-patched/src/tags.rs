@@ -46,5 +46,4 @@ impl TagSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

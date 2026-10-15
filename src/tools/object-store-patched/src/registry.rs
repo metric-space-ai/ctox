@@ -246,5 +246,4 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::prefix::PrefixStore;
-
 }

@@ -1009,5 +1009,4 @@ mod tests {
         let out = do_outbound_value_processing(&AttributeValue(json!("stop")), &link, 0).unwrap();
         assert!(out.is_none(), "@IGNORE on write -> no device send (§2A.28)");
     }
-
 }

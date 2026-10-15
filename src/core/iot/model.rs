@@ -570,5 +570,4 @@ mod tests {
         bad.value_str = Some("{not json".to_string());
         assert!(bad.hydrate(ValueBaseType::Object).is_err());
     }
-
 }

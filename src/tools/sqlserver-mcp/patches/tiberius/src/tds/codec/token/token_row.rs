@@ -190,5 +190,4 @@ mod tests {
     use super::*;
     use crate::{BaseMetaDataColumn, ColumnFlag, FixedLenType, MetaDataColumn, TypeInfo};
     use bytes::BytesMut;
-
 }

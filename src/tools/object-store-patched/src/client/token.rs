@@ -116,5 +116,4 @@ mod test {
             expiry: expiry_duration.map(|d| Instant::now() + d),
         }
     }
-
 }

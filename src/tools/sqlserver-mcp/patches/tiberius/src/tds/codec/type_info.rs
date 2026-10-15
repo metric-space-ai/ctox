@@ -360,5 +360,4 @@ impl TypeInfo {
 mod tests {
     use super::*;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
-
 }

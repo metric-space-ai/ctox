@@ -153,5 +153,4 @@ mod tests {
         recv.await.unwrap();
         thread.join().unwrap();
     }
-
 }

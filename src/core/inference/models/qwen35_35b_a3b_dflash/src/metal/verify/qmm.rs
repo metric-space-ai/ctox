@@ -264,5 +264,4 @@ pub fn dispatch_verify_mma2big(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

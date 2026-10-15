@@ -296,5 +296,4 @@ mod tests {
     use crate::tests::*;
 
     use super::*;
-
 }

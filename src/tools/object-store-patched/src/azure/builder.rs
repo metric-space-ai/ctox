@@ -1097,5 +1097,4 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
 }
