@@ -2,9 +2,10 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
-const out=resolve(process.env.CARGO_TARGET_DIR,process.env.E2E_MUTATIONS_NATIVE_ONLY==='1'?'evidence/e2e-native-mutations':'evidence/e2e-mutations');await mkdir(out,{recursive:true});const receipts=[];await writeFile(resolve(out,'mutation-proof.json'),'[]');
+const out=process.env.E2E_MUTATIONS_DIR?resolve(process.env.E2E_MUTATIONS_DIR):resolve(process.env.CARGO_TARGET_DIR,process.env.E2E_MUTATIONS_NATIVE_ONLY==='1'?'evidence/e2e-native-mutations':'evidence/e2e-mutations');await mkdir(out,{recursive:true});const receipts=[];await writeFile(resolve(out,'mutation-proof.json'),'[]');
 const run=(cmd,args,name,env={})=>{const result=spawnSync(cmd,args,{encoding:'utf8',timeout:180000,maxBuffer:4*1024*1024,env:{...process.env,...env}});return {result,output:(result.stdout??'')+(result.stderr??'')};};
 const cases=[
+ {id:'merged-wire',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:"['accepted','rejected','migrated','merged'].includes(message.status)",after:"['accepted','rejected','migrated'].includes(message.status)",test:'tests/sync-v4-e2e-path/requires-page.test.mjs'},
  {id:'canonical-page-before-retire',file:'src/apps/business-os/kernel/kernel.mjs',before:"const requiresPage=res.requires_page===true || res.status==='merged';",after:'const requiresPage=false;',test:'tests/sync-v4-e2e-path/requires-page.test.mjs'},
  {id:'client-seq-wire',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:'client_seq:decimalSeq(entry.client_seq),',after:'',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},
  {id:'client-seq-window',file:'src/apps/business-os/kernel/kernel.mjs',before:'if (e.client_seq != null && BigInt(e.client_seq) >= BigInt(floor) + 64n) continue;',after:'/* gap window deliberately removed */',test:'tests/sync-v4-e2e-path/client-seq.test.mjs'},

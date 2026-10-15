@@ -198,7 +198,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    }
    case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');await this.events.revoke?.(message);return;
    case 'write_result':
-    if(typeof message.op_id!=='string'||!['accepted','rejected','migrated'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
+    if(typeof message.op_id!=='string'||!['accepted','rejected','migrated','merged'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
     if(message.status!=='rejected')decimalSeq(message.seq);await this.events.write_result(message);return;
    case 'transfer_data':case 'transfer_result': {
     const pending=this.pending.get(message.request_id);if(!pending)return;
