@@ -2791,11 +2791,8 @@ async fn run_native_peer(
         peer_session_id.clone(),
         database_path.clone(),
     );
-    let repaired_revisions = repair_legacy_business_command_revisions(&database_path)
-        .context("repair legacy Business OS command revisions")?;
-    if repaired_revisions > 0 {
-        eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
-    }
+    // Revision/envelope normalization now commits with each bounded legacy
+    // import page on the registered writer, not through a second raw writer.
     for collection in ["business_commands", "business_chats"] {
         let repaired_envelopes = store::repair_missing_rxdb_envelopes(&root, collection)
             .with_context(|| format!("repair malformed Business OS {collection} envelopes"))?;
@@ -8517,6 +8514,7 @@ fn valid_rxdb_revision(revision: &str) -> bool {
     !hash.is_empty() && !hash.contains('-') && height.parse::<u64>().is_ok()
 }
 
+#[cfg(test)]
 fn repair_legacy_business_command_revisions(database_path: &Path) -> anyhow::Result<usize> {
     if !database_path.is_file() {
         return Ok(0);

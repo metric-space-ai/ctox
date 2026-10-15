@@ -33,6 +33,7 @@ struct Inspect {
     databases: Arc<Mutex<HashMap<String, Database>>>,
     runtime: Handle,
     closing: Arc<AtomicBool>,
+    queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
 }
 impl Dispatcher for Inspect {
     fn dispatch(
@@ -42,6 +43,15 @@ impl Dispatcher for Inspect {
     ) -> Result<JobHandle<Vec<u8>>, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
+        }
+        if request.method == "queue.ack" {
+            let queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?;
+            return queue.dispatch(request, options);
         }
         if request.kind != JobKind::Read || request.method != "store.inspect" {
             return Err(StoreError::Invalid("unknown store operation".into()));
@@ -84,6 +94,7 @@ pub(crate) struct DaemonStores {
     ipc: Option<DaemonIpc>,
     closing: Arc<AtomicBool>,
     native_stores: Vec<super::store_rxdb::NativeStoreRegistration>,
+    queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
     runtime: Handle,
 }
 impl DaemonStores {
@@ -91,12 +102,14 @@ impl DaemonStores {
     pub fn start(endpoint: StoreEndpoint, runtime: Handle) -> Result<Self, StoreError> {
         let databases = Arc::new(Mutex::new(HashMap::new()));
         let closing = Arc::new(AtomicBool::new(false));
+        let queue = Arc::new(Mutex::new(None));
         let ipc = DaemonIpc::start(
             endpoint,
             Arc::new(Inspect {
                 databases: databases.clone(),
                 runtime: runtime.clone(),
                 closing: closing.clone(),
+                queue: queue.clone(),
             }),
         )?;
         Ok(Self {
@@ -105,6 +118,7 @@ impl DaemonStores {
             ipc: Some(ipc),
             closing,
             native_stores: Vec::new(),
+            queue,
             runtime,
         })
     }
@@ -190,6 +204,32 @@ impl DaemonStores {
         Ok(())
     }
 
+    pub async fn install_queue(
+        &mut self,
+        root: std::path::PathBuf,
+        core: Database,
+        sync: Database,
+    ) -> Result<(), StoreError> {
+        if self
+            .queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+        {
+            return Err(StoreError::AlreadyOwned);
+        }
+        let owner = super::queue_store::QueueStore::install(
+            root,
+            core,
+            sync,
+            self.runtime.clone(),
+            self.closing.clone(),
+        )
+        .await?;
+        *self.queue.lock().unwrap_or_else(|p| p.into_inner()) = Some(owner);
+        Ok(())
+    }
+
     /// On a drain error the caller retains this owner and its daemon lease.
     /// Retry after the bounded outstanding job completes; never release the
     /// lifecycle lock and advertise offline maintenance while it is running.
@@ -206,6 +246,12 @@ impl DaemonStores {
         for database in databases.values() {
             database.writer.stop_admission();
         }
+        let queue = self.queue.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(queue) = queue {
+            queue.stop();
+            queue.drain().await?;
+        }
+        self.queue.lock().unwrap_or_else(|p| p.into_inner()).take();
         for database in databases.into_values() {
             database
                 .readers

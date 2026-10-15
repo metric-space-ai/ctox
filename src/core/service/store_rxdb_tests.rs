@@ -231,13 +231,13 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
     let database=stores.register("sync",DbId::new(dir.path().join("sync.sqlite3")).unwrap(),true,Arc::new(|tx| {
         ctox_store::schema::create_collection(tx,&ctox_store::schema::CollectionDefinition {
             name:"notes".into(),app_id:"notes".into(),schema_ver:0,
-            schema_json:json!({"primaryKey":"id","type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"}}}),
+            schema_json:json!({"primaryKey":"key","type":"object","properties":{"key":{"type":"string"},"title":{"type":"string"}}}),
             class:"replicated".into(),client_limit:1000,byte_budget:1048576,rights_ver:1,app_ver:"1".into()
         })?;
         tx.execute_batch("CREATE TABLE ctox_business_os__notes__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER,lastWriteTime REAL,data TEXT)")?;
         for n in 0..503 {
             let id=format!("legacy-{n:04}");
-            tx.execute("INSERT INTO ctox_business_os__notes__v0 VALUES(?1,'1-import',?2,999999999,?3)",rusqlite::params![id,i64::from(n==502),json!({"id":id,"title":"preserved","_rev":"stale-body","_meta":{"lwt":1}}).to_string()])?;
+            tx.execute("INSERT INTO ctox_business_os__notes__v0 VALUES(?1,'1-import',?2,999999999,?3)",rusqlite::params![id,i64::from(n==502),json!({"id":id,"key":id,"title":"preserved","_rev":"stale-body","_deleted":n==501,"_meta":{"lwt":1}}).to_string()])?;
         }
         Ok(())
     })).await.unwrap();
@@ -283,7 +283,7 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
     let parameters = || {
         RxStorageInstanceCreationParams {
         database_instance_token:"cutover".into(),database_name:"ctox-business-os".into(),collection_name:"notes".into(),
-        schema:serde_json::from_value(json!({"version":0,"type":"object","primaryKey":"id","properties":{"id":{"type":"string","maxLength":120},"title":{"type":"string"}},"required":["id","title"]})).unwrap(),
+        schema:serde_json::from_value(json!({"version":0,"type":"object","primaryKey":"key","properties":{"key":{"type":"string","maxLength":120},"title":{"type":"string"}},"required":["key","title"]})).unwrap(),
         options:HashMap::new(),multi_instance:false,dev_mode:false,password:None
     }
     };
@@ -291,12 +291,20 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
         .await
         .unwrap();
     let docs = first
-        .find_documents_by_id(&["legacy-0000".into(), "legacy-0502".into()], true)
+        .find_documents_by_id(
+            &[
+                "legacy-0000".into(),
+                "legacy-0501".into(),
+                "legacy-0502".into(),
+            ],
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(docs[0]["title"], "preserved");
     assert_eq!(docs[0]["_rev"], "1-import");
     assert_eq!(docs[1]["_deleted"], true);
+    assert_eq!(docs[2]["_deleted"], true);
     database.readers.read(|tx| {
         let receipt:(i64,i64,String)=tx.query_row("SELECT expected,copied,state FROM _rxdb_imports",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         assert_eq!(receipt,(503,503,"complete".into()));
@@ -305,6 +313,38 @@ async fn canonical_cutover_counts_restartable_import_and_refuses_double_activati
         assert!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='ctox_business_os__notes__v0')",[],|r|r.get::<_,bool>(0))?);
         Ok(())
     }).await.unwrap();
+    database
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            tx.execute(
+                "UPDATE _collections SET state='archived' WHERE name='notes'",
+                [],
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let retained = first
+        .find_documents_by_id(&["legacy-0502".into()], true)
+        .await
+        .unwrap();
+    assert_eq!(
+        retained[0]["key"], "legacy-0502",
+        "retained generation lost its primary-key schema"
+    );
+    database
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            tx.execute(
+                "UPDATE _collections SET state='active' WHERE name='notes'",
+                [],
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
     first.close().await.unwrap();
     let second = create_storage_instance(&storage, parameters())
         .await

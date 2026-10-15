@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::rx_error::{new_rx_error, RxResult};
 use crate::types::{BulkWriteRow, FilledMangoQuery, RxJsonSchema, RxQueryPlan};
@@ -95,6 +96,12 @@ pub fn migrate_legacy_page(
     target: &str,
     version: i32,
 ) -> RxResult<bool> {
+    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM _collections WHERE table_name=?1 AND schema_ver=?2 AND state='active')",params![target,version],|r|r.get(0)).map_err(sqlite_error)?;
+    if !active {
+        return Err(super::types::owner_job_error(
+            "legacy import generation no longer active",
+        ));
+    }
     conn.execute_batch("CREATE TABLE IF NOT EXISTS _rxdb_imports(source TEXT PRIMARY KEY,target TEXT NOT NULL UNIQUE,expected INTEGER NOT NULL,copied INTEGER NOT NULL DEFAULT 0,cursor TEXT,state TEXT NOT NULL CHECK(state IN ('copying','complete')))").map_err(sqlite_error)?;
     let receipt: Option<(String, i64, i64, Option<String>, String)> = conn
         .query_row(
@@ -171,11 +178,36 @@ pub fn migrate_legacy_page(
             break;
         };
         let id: String = row.get(0).map_err(sqlite_error)?;
-        let rev: String = row.get(1).map_err(sqlite_error)?;
+        let stored_rev: Option<String> = row.get(1).map_err(sqlite_error)?;
         let deleted: i64 = row.get(2).map_err(sqlite_error)?;
-        let data: String = row.get(3).map_err(sqlite_error)?;
-        bytes = bytes.saturating_add(data.len());
-        rows.push((id, rev, deleted, data));
+        let raw: String = row.get(3).map_err(sqlite_error)?;
+        bytes = bytes.saturating_add(raw.len());
+        let mut body: Value = serde_json::from_str(&raw)
+            .map_err(|_| super::types::owner_job_error("invalid legacy document JSON"))?;
+        let valid = |rev: &str| {
+            rev.split_once('-').is_some_and(|(height, hash)| {
+                height.parse::<u64>().is_ok() && !hash.is_empty() && !hash.contains('-')
+            })
+        };
+        let stored = stored_rev.as_deref().unwrap_or_default();
+        let body_rev = body.get("_rev").and_then(Value::as_str).unwrap_or_default();
+        let rev = if valid(stored) {
+            stored.to_owned()
+        } else if valid(body_rev) {
+            body_rev.to_owned()
+        } else {
+            let identity = serde_json::to_vec(&(source, &id, stored, &raw))
+                .map_err(|_| super::types::owner_job_error("legacy revision identity encoding"))?;
+            format!("1-{:x}", Sha256::digest(identity))
+        };
+        let deleted =
+            i64::from(deleted != 0 || body.get("_deleted").and_then(Value::as_bool) == Some(true));
+        let object = body
+            .as_object_mut()
+            .ok_or_else(|| super::types::owner_job_error("legacy document is not an object"))?;
+        object.insert("_rev".into(), Value::String(rev.clone()));
+        object.insert("_deleted".into(), Value::Bool(deleted != 0));
+        rows.push((id, rev, deleted, body.to_string()));
     }
     drop(cursor_rows);
     drop(stmt);
@@ -235,7 +267,7 @@ fn read_table(table: &str) -> String {
     }
     let name = quote_identifier(table);
     let literal = quote_sql_literal(table);
-    format!("(SELECT t.id,t.rev AS revision,t.deleted,COALESCE(json_extract(t.data,'$._meta.lwt'),0) AS lastWriteTime,json_set(COALESCE(t.data,'{{}}'),'$.'||json_quote(COALESCE((SELECT COALESCE(json_extract(schema_json,'$.primaryKey.key'),json_extract(schema_json,'$.primaryKey')) FROM _collections WHERE table_name={literal} AND state='active'),'id')),t.id,'$._rev',t.rev,'$._deleted',json(CASE t.deleted WHEN 1 THEN 'true' ELSE 'false' END),'$._attachments',json(COALESCE(json_extract(t.data,'$._attachments'),'{{}}')),'$._meta.lwt',COALESCE(json_extract(t.data,'$._meta.lwt'),0)) AS data FROM {name} t)")
+    format!("(SELECT t.id,t.rev AS revision,t.deleted,COALESCE(json_extract(t.data,'$._meta.lwt'),0) AS lastWriteTime,json_set(COALESCE(t.data,'{{}}'),'$.'||json_quote(COALESCE((SELECT COALESCE(json_extract(schema_json,'$.primaryKey.key'),json_extract(schema_json,'$.primaryKey')) FROM _collections WHERE table_name={literal}),'id')),t.id,'$._rev',t.rev,'$._deleted',json(CASE t.deleted WHEN 1 THEN 'true' ELSE 'false' END),'$._attachments',json(COALESCE(json_extract(t.data,'$._attachments'),'{{}}')),'$._meta.lwt',COALESCE(json_extract(t.data,'$._meta.lwt'),0)) AS data FROM {name} t)")
 }
 
 pub fn ensure_collection_table(conn: &Connection, table: &str) -> RxResult<()> {

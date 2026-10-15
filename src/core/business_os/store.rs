@@ -1433,6 +1433,47 @@ fn stamp_attached_canonical_mirror_versions(
     Ok(())
 }
 
+pub(crate) fn retain_owner_projection_extras(canonical: &mut Value, existing: &Value) {
+    retain_noncanonical_queue_projection_fields(canonical, existing);
+}
+
+/// Capture queue/command facts from the Core owner's existing transaction.
+/// No private BOS projection is read or attached to manufacture source truth.
+pub(crate) fn owner_queue_projection_effect(
+    conn: &Connection,
+    task: &channels::QueueTaskView,
+    updated_at_ms: i64,
+) -> anyhow::Result<Value> {
+    let command_id: Option<String> = conn
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id=?1",
+            [&task.message_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let snapshot = command_id
+        .as_deref()
+        .map(|id| {
+            channels::load_business_os_queue_mirror_snapshot_from_conn(conn, id, &task.message_key)
+        })
+        .transpose()?
+        .flatten();
+    let terminal = snapshot.as_ref().and_then(|s| s.terminal_status.as_deref());
+    let command = snapshot
+        .as_ref()
+        .and_then(|s| s.command_projection.as_ref());
+    let clock = channels::communication_projection_clock_version(conn)?;
+    let mut queue = queue_task_payload(command_id.as_deref(), task, terminal, updated_at_ms);
+    stamp_canonical_queue_mirror_versions(&mut queue, command, clock);
+    redact_document_client_context_secrets(&mut queue);
+    let mut command = command.cloned();
+    if let Some(body) = command.as_mut() {
+        stamp_canonical_queue_mirror_versions(body, None, clock);
+        redact_document_client_context_secrets(body);
+    }
+    Ok(json!({"queue":queue,"command":command}))
+}
+
 fn refresh_attached_queue_projections(
     _root: &Path,
     conn: &Connection,
