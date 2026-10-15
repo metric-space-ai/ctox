@@ -16,11 +16,13 @@ name = "ctox"
 path = "src/core/main.rs"
 
 [features]
+app-runtime-node = ["ctox-app-runtime/bundled-node"]
 # Build-time capability; runtime placement still uses the GPU admission plan.
 local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda", "ctox-voxtral-4b-tts-2603/cuda"]
 local-speech-openblas = ["ctox-voxtral-4b-tts-2603/openblas"]
 
 [dependencies]
+ctox-app-runtime = { path = "src/core/app_runtime" }
 ctox-store = { path = "src/core/store" }
 anyhow = "1"
 async-trait = "0.1"
@@ -143,6 +145,8 @@ members = [
     "src/tools/postgres-adapter",
 ]
 exclude = [
+    "src/core/app_runtime",
+    "src/core/app_capabilities/contract",
     "src/apps/desktop",
     "src/core/communication/whatsapp_rust",
     "src/core/harness",

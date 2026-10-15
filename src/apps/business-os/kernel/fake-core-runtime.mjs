@@ -2,14 +2,14 @@
 // Trigger-Lauf (§16.20, fremde Collections nur nach §16.34 Nr. 3), Katalog-Primitive audit/agent.task (§16.29/§16.30)
 // und die Plattformbefehle ctox.app.publish|update|rollback|release|remove (§16.29 B, §16.33).
 // Nur für MemoryCoreTransport (Tests, Shell-Entwicklung). Der echte Core macht das in Rust.
-import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7, sha256Hex } from './values.mjs';
+import { CtoxError, cloneValue, isPlainObject, mergePatch, uuidv7, sha256Hex, fnv1a } from './values.mjs';
 import { compileQuery, runCompiledQuery, validateSchema } from './app-api.mjs';
 import { bytesBase64 } from './artifact-url.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 
 /** Katalog-Primitive, die der Fake-Core als ctx.cap anbietet (Aktivierung prüft capabilities_required dagegen). */
-export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel']);
+export const FAKE_CORE_CAPABILITIES = Object.freeze(['audit.event', 'agent.task.enqueue', 'agent.task.get', 'agent.task.find', 'agent.task.cancel', 'model', 'model.run', 'files', 'files.put', 'files.get', 'files.list', 'files.delete']);
 // Zeilenrechte der Plattform-Collections (docs/v4-manifests/ctox-platform.manifest.json, Auszug).
 const PLATFORM_RIGHTS = Object.freeze({
   shell_preferences: { read: 'own', write: 'own' },
@@ -161,6 +161,62 @@ export function createCoreRuntime(core) {
     if (typeof mod.default !== 'function') fail('invalid', `${path}: kein default export handle(command, ctx)`);
     return mod.default;
   }
+  // ---- K-1g: model.run (#830 ctx.model → 'model.run', CATALOG §6) – deterministische simulierte Antwort ----
+  function modelRun(appId, req) {
+    if (!isPlainObject(req)) fail('invalid', 'model.run: Anfrage-Objekt nötig');
+    const input = req.input ?? req.prompt ?? req.messages;
+    const text = typeof input === 'string' ? input
+      : Array.isArray(input) ? input.map((m) => (typeof m === 'string' ? m : typeof m?.content === 'string' ? m.content : Array.isArray(m?.content) ? m.content.map((c) => c?.text ?? '').join(' ') : '')).join('\n')
+      : fail('invalid', 'model.run: input, prompt oder messages nötig');
+    const model = typeof req.model === 'string' && req.model ? req.model : 'fake-core';
+    const out = `Simulierte Modellantwort (${model}) für ${appId}: ${text.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+    return {
+      id: `resp_${fnv1a(JSON.stringify([appId, model, text]))}`, object: 'response', model, status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out }] }],
+      output_text: out, usage: { input_tokens: text.split(/\s+/).filter(Boolean).length, output_tokens: out.split(/\s+/).length },
+    };
+  }
+  // ---- K-1g: files.* (CAP-3b #844) im Handler – nur Dateien der eigenen App, Ergebnisse immer Objekte, nie Base64 ----
+  const FILE_TEXT_MAX = 512 * 1024;
+  function ownCoreFile(appId, sel) {
+    if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) fail('invalid', 'files: {id} oder {ref} nötig');
+    const docs = rowsOf('files').map((r) => r.data).filter((d) => (sel.id ? d.id === sel.id : d.ref === sel.ref));
+    const mine = docs.find((d) => d.owner_app === appId);
+    if (!mine && docs.length) fail('forbidden', 'Datei gehört einer anderen App');
+    return mine ?? null;
+  }
+  const coreFileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
+  function filesCap(appId, command, depth) {
+    return {
+      async put(a = {}) {
+        if (!isPlainObject(a)) fail('invalid', 'files.put: Objekt nötig');
+        const bytes = typeof a.text === 'string' ? new TextEncoder().encode(a.text) : a.bytes instanceof Uint8Array ? a.bytes : fail('invalid', 'files.put: text oder bytes nötig');
+        const mime = String(a.mime ?? (typeof a.text === 'string' ? 'text/plain; charset=utf-8' : 'application/octet-stream'));
+        const ref = await sha256Hex(bytes);
+        core.blobs.set(ref, new Blob([bytes], { type: mime }));
+        const id = typeof a.id === 'string' && a.id ? a.id : uuidv7();
+        await commit('files', [{ id, ref, name: String(a.name ?? 'datei'), mime, size: bytes.byteLength, owner_app: appId, owner_user: command?.actor?.id ?? null, created_at_ms: Date.now() }], depth);
+        return { id, ref };
+      },
+      async get(sel) {
+        const d = ownCoreFile(appId, sel);
+        if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        const blob = core.blobs.get(d.ref);
+        if (!blob) return { found: false, ...coreFileInfo(d) };
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let text;
+        if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
+        return { found: true, ...coreFileInfo(d), size: bytes.byteLength, ...(text !== undefined ? { text } : { bytes }) };
+      },
+      async list() { return { files: rowsOf('files').map((r) => r.data).filter((d) => d.owner_app === appId).map(coreFileInfo).sort((a, b) => (a.id < b.id ? -1 : 1)) }; },
+      async delete(sel) {
+        const d = ownCoreFile(appId, sel);
+        if (!d) return { deleted: false };
+        await commit('files', [{ id: d.id, _deleted: true }], depth);
+        return { deleted: true, id: d.id };
+      },
+    };
+  }
   function makeCtx(appId, manifest, command, depth) {
     const declared = new Set(manifest.capabilities_required ?? []);
     const ns = (c, op) => {
@@ -197,7 +253,7 @@ export function createCoreRuntime(core) {
       remove: (c, id) => writeOne(c, 'delete', id, null),
     };
     const cap = (name, fn) => async (args = {}) => {
-      if (!declared.has(name)) fail('forbidden', `cap.${name} nicht in capabilities_required von ${appId}`);
+      if (!declared.has(name) && !declared.has(name.split('.')[0])) fail('forbidden', `cap.${name} nicht in capabilities_required von ${appId}`);
       return fn(args);
     };
     return Object.freeze({
@@ -219,7 +275,11 @@ export function createCoreRuntime(core) {
         if (new TextEncoder().encode(text).byteLength > MAX_ASSET) fail('invalid', `ctx.asset: ${path} > 1 MiB`);
         return text;
       },
+      /** #830: ctx.model(req) = Katalogfunktion model.run (deklariert als `model`). */
+      model: (req) => cap('model.run', async (r) => modelRun(appId, r))(req),
       cap: Object.freeze({
+        files: Object.freeze(Object.fromEntries(Object.entries(filesCap(appId, command, depth)).map(([fn, f]) => [fn, cap(`files.${fn}`, f)]))),
+        model: Object.freeze({ run: cap('model.run', async (r) => modelRun(appId, r)) }),
         audit: Object.freeze({ event: cap('audit.event', async (a) => { const id = uuidv7(); await commit('_audit', [{ id, app_id: appId, ...cloneValue(a), at_ms: Date.now() }], depth); return { id }; }) }),
         agent: Object.freeze({ task: Object.freeze({
           enqueue: cap('agent.task.enqueue', (a) => enqueueTask(appId, manifest, a, command, depth)),
@@ -460,6 +520,25 @@ export function createCoreRuntime(core) {
     return { status: 'failed', error: 'invalid' };
   }
 
+  // Unified diff mit 3 Kontextzeilen je Hunk (ein Hunk um den geänderten Bereich; für git apply geeignet).
+  function unifiedDiff(path, before, after, context = 3) {
+    const split = (t) => (t === '' ? [] : t.replace(/\n$/, '').split('\n'));
+    const a = split(before), b = split(after);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const from = Math.max(0, pre - context);
+    const aEnd = Math.min(a.length, a.length - suf + context), bEnd = Math.min(b.length, b.length - suf + context);
+    const lines = [];
+    for (let i = from; i < pre; i++) lines.push(` ${a[i]}`);
+    for (let i = pre; i < a.length - suf; i++) lines.push(`-${a[i]}`);
+    for (let i = pre; i < b.length - suf; i++) lines.push(`+${b[i]}`);
+    for (let i = a.length - suf; i < aEnd; i++) lines.push(` ${a[i]}`);
+    const aLen = aEnd - from, bLen = bEnd - from;
+    const head = `@@ -${aLen ? from + 1 : from},${aLen} +${bLen ? from + 1 : from},${bLen} @@`;
+    return `--- a/${path}\n+++ b/${path}\n${head}\n${lines.join('\n')}\n`;
+  }
   // ---- K-1f: Coding Agent im Quelltext-Modus (§16.44, Vertrag befund-coding-panel.md / Core-PR #848), simuliert ----
   // Der simulierte Agent ändert deterministisch: er hängt an die erste im Prompt genannte Datei des Entwurfs (sonst die erste
   // Textdatei) eine Kommentarzeile an. Nachrichten und tool_events erscheinen wie beim echten Sidecar erst am Turn-Ende.
@@ -551,9 +630,11 @@ export function createCoreRuntime(core) {
     };
     if (turn.state !== 'queued') return finish(turn.state, {});
     turn = await setTurn(turn_id, { state: 'running' }) ?? turn;
-    // Arbeitsbaum = Entwurf auf der Basis-Revision (Snapshot beim Start)
+    // §16.44-Ergänzung (1): Arbeitsbaum = VOLLER Baum = Basisversion + Entwurfs-Überlagerung (null = gelöscht), Snapshot beim Start
     const startRow = draftRow(turn.draft_id);
-    const files = cloneValue(startRow?.data?.files ?? {});
+    const baseFiles = startRow?.data?.base_app_ver ? manifestOf(turn.app_id, startRow.data.base_app_ver)?.files ?? {} : {};
+    const files = { ...baseFiles };
+    for (const [path, h] of Object.entries(startRow?.data?.files ?? {})) { if (h === null) delete files[path]; else files[path] = h; }
     await new Promise((r) => setTimeout(r, core.codingDelayMs ?? 60));
     if (turnRow(turn_id).data.state === 'cancelled') return finish('cancelled', {});
     const textPaths = Object.keys(files).filter((p) => files[p] && typeof core.artifacts.get(files[p]) === 'string').sort();
@@ -577,8 +658,7 @@ export function createCoreRuntime(core) {
       return finish('done', { ...transcript, draft_rev_after: draftRow(turn.draft_id).rev, changed_files: [path] });
     }
     // Nutzer hat inzwischen editiert: nichts überschreiben, Patch als files-Datensatz
-    const n = old ? old.split('\n').length - (old.endsWith('\n') ? 1 : 0) : 0;
-    const patch = `--- a/${path}\n+++ b/${path}\n@@ -${n},0 +${n + 1},1 @@\n+${line}\n`;
+    const patch = unifiedDiff(path, old, next); // §16.44-Ergänzung (4): 3 Kontextzeilen, Basis = base_draft_rev
     const bytes = new TextEncoder().encode(patch);
     const ref = await sha256Hex(bytes);
     core.blobs.set(ref, new Blob([bytes], { type: 'text/x-diff' }));
@@ -609,7 +689,7 @@ export function createCoreRuntime(core) {
   }
 
   return {
-    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn,
+    canRead, checkWrite, execute, onCommit, refreshEvery, idle, log, tasks, acceptCodingTurn, modelRun,
     setAgentOutcome(fn) { agentOutcome = typeof fn === 'function' ? fn : null; },
     capabilities: FAKE_CORE_CAPABILITIES,
   };

@@ -1221,8 +1221,65 @@ export function createKernel(opts = {}) {
       }),
       openFile(ref) { simRecord.openedFiles.push({ app_id: appId, ref }); },
     });
+    // ---- K-1g: files nach CAP-3b (#844) – Ergebnisse immer Objekte, nie Base64, nur Dateien der eigenen App ----
+    const FILE_TEXT_MAX = 512 * 1024;
+    const fileDocs = () => [...(mirror.get('files')?.values() ?? [])].map((r) => visible(r)).filter(Boolean);
+    function ownFile(sel) {
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', { path: 'ref' });
+      const docs = fileDocs().filter((d) => (sel.id ? d.id === sel.id : d.ref === sel.ref));
+      const mine = docs.find((d) => d.owner_app === appId);
+      if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
+      return mine ?? null;
+    }
+    const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
+    async function fileBytes(content) {
+      if (isPlainObject(content) && typeof content.text === 'string') return { bytes: new TextEncoder().encode(content.text), text: true };
+      if (content instanceof ArrayBuffer) return { bytes: new Uint8Array(content.slice(0)), text: false };
+      if (ArrayBuffer.isView(content)) return { bytes: new Uint8Array(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength)), text: false };
+      throw new CtoxError('invalid', 'files.put: Inhalt muss Uint8Array/ArrayBuffer oder {text} sein', { path: 'content' });
+    }
     const files = Object.freeze({
-      async get(ref) {
+      /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit (Upload über Spur 4). Blob = Altform (Handle). */
+      put(content, meta = {}) {
+        if (isBlob(content)) return putBlob(content, meta);
+        return (async () => {
+          guardAlive();
+          const { bytes, text } = await fileBytes(content);
+          const mime = String(meta.mime ?? (text ? 'text/plain; charset=utf-8' : 'application/octet-stream'));
+          const id = typeof meta.id === 'string' && meta.id ? meta.id : uuidv7();
+          const h = putBlob(new Blob([bytes], { type: mime }), { ...meta, id, mime, name: meta.name ?? 'datei' });
+          const ref = await h.ref;
+          await h.local;
+          return { id, ref };
+        })();
+      },
+      /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
+      async get(sel) {
+        if (typeof sel === 'string') return getBlob(sel);
+        guardAlive();
+        const d = ownFile(sel);
+        if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        const bytes = new Uint8Array(await (await getBlob(d.ref)).arrayBuffer());
+        let text;
+        if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
+        return { found: true, ...fileInfo(d), size: bytes.byteLength, ...(text !== undefined ? { text } : { bytes }) };
+      },
+      /** CAP-3b: list() → {files:[{id, ref, name, mime, size}]} – nur die eigene App. */
+      async list() {
+        guardAlive();
+        return { files: fileDocs().filter((d) => d.owner_app === appId).map(fileInfo).sort((a, b) => (a.id < b.id ? -1 : 1)) };
+      },
+      /** CAP-3b: delete({id|ref}) → {deleted, id?} – nur die eigene App. */
+      async delete(sel) {
+        guardAlive();
+        const d = ownFile(sel);
+        if (!d) return { deleted: false };
+        const r = await localWrite(app, 'delete', 'files', d.id, null).local.then(() => true, () => false);
+        return { deleted: r, id: d.id };
+      },
+    });
+    async function getBlob(ref) {
+      {
         guardAlive();
         const local = await db.get('blobs', ref);
         if (local) {
@@ -1233,8 +1290,10 @@ export function createKernel(opts = {}) {
         const fetched=await db.get('blobs',ref);
         if(!fetched)throw new CtoxError('unavailable','File unavailable after leader fetch');
         return fetched.blob;
-      },
-      put(blob, meta = {}) {
+      }
+    }
+    function putBlob(blob, meta = {}) {
+      {
         let metaHandle = null, uploadOp = null, cancelledEarly = false, refValue = null, resolveResult;
         const result = new Promise((r) => { resolveResult = r; });
         const progressTag = () => `upload:${refValue}`;
@@ -1295,8 +1354,8 @@ export function createKernel(opts = {}) {
             return cancelled;
           },
         };
-      },
-    });
+      }
+    }
     const actorApi = Object.freeze({
       get id() { return actor.id; },
       get display_name() { return actor.display_name; },
@@ -1367,6 +1426,17 @@ export function createKernel(opts = {}) {
       shell,
       actor: actorApi,
       files,
+      /** #830/CATALOG §6: model.run(request) → Responses-förmige Antwort; nur mit `model` in capabilities_required.
+       *  Fake-Core: deterministische simulierte Antwort; sonst unavailable (der Modellweg gehört der App-Laufzeit, kein Ersatz). */
+      model: Object.freeze({
+        async run(req) {
+          guardAlive();
+          const declared = versionDoc(appId, app.ver)?.manifest?.capabilities_required ?? [];
+          if (!declared.includes('model') && !declared.includes('model.run')) throw new CtoxError('forbidden', 'model nicht in capabilities_required', { path: 'model' });
+          if (!fakeCore) throw new CtoxError('unavailable', 'model.run läuft über die App-Laufzeit (#830); kein Ersatzweg im Kernel');
+          return fakeCore.runtime.modelRun(appId, req);
+        },
+      }),
     });
   }
 
@@ -1414,7 +1484,7 @@ export function createKernel(opts = {}) {
     const files = {};
     for (const [p, c] of Object.entries(old.files ?? {})) files[p] = c === null ? null : await storeDraftContent(appId, p, c);
     const d = Object.prototype.hasOwnProperty.call(old, 'base_app_ver') ? { app_id: appId, base_app_ver: old.base_app_ver, files, manifest: old.manifest ?? {} } : { ...freshDraft(appId), files };
-    await writeDraft(appId, d);
+    await writeDraft(appId, d).local;
     await db.tx((t) => t.del('meta', `draft:${appId}`));
   }
   /** Eigener Entwurf (files = Hashes) oder null. */
@@ -1440,7 +1510,7 @@ export function createKernel(opts = {}) {
   }
   function writeDraft(appId, d) {
     const doc = { id: draftId(appId), app_id: appId, user_id: actor.id, base_app_ver: d.base_app_ver ?? null, files: d.files, manifest_fields: d.manifest ?? {}, updated_at_ms: Date.now() };
-    return localWrite(PLATFORM_APP, 'put', 'app_drafts', doc.id, doc).local;
+    return localWrite(PLATFORM_APP, 'put', 'app_drafts', doc.id, doc);
   }
   // Lese-Ändere-Schreib-Schritt auf dem eigenen Entwurf: Spiegel lesen, ändern und optimistisch schreiben geschieht
   // synchron (localWrite.prepare), damit parallele Aufrufe (auch anderer Tabs über den Spiegel) kein Update verlieren.
@@ -1450,7 +1520,29 @@ export function createKernel(opts = {}) {
     const doc = draftDoc(appId);
     const d = doc ? docToDraft(doc) : freshDraft(appId);
     mutate(d);
-    await writeDraft(appId, d);
+    const h = writeDraft(appId, d);
+    await h.local;
+    return h;
+  }
+  /** §16.44-Ergänzung (3): {local, result}; result = vom Core bestätigte Revision {status:'accepted', rev} bzw. rejected{code}. */
+  function draftHandle(work) {
+    const local = work.then(() => undefined);
+    const result = work.then(async (h) => {
+      const r = await h.result;
+      return r.status === 'rejected' ? { status: 'rejected', code: r.code ?? r.reason, reason: r.reason } : { status: 'accepted', rev: r.rev };
+    }, (e) => ({ status: 'rejected', code: e?.code ?? 'local_error', reason: String(e?.message ?? e) }));
+    // Ein echtes Promise (auf den lokalen Commit) mit den Feldern local und result: `await`, `.catch` und
+    // assert.rejects bleiben wie bisher (Shell-Quelltextmodus nutzt write(...).catch).
+    local.catch(() => {}); // wer nur result liest, erzeugt keinen unbehandelten Fehler; await/.catch sehen ihn weiterhin
+    local.local = local;
+    local.result = result;
+    return local;
+  }
+  // §16.44-Ergänzung (2): Revision nur für eine bestätigte, nicht gelöschte Zeile ohne ausstehende Änderungen (sonst null)
+  function confirmedDraftRev(appId) {
+    const r = mirrorGet('app_drafts', draftId(appId));
+    if (!r || r.pending || !r.base?.data || r.base.deleted) return null;
+    return r.base.rev ?? null;
   }
   async function baseSchemaOf(appId, base) {
     if (!base) return { collections: {}, migrations: {} };
@@ -1497,15 +1589,17 @@ export function createKernel(opts = {}) {
           const files = {};
           for (const [p, h] of Object.entries(d.files)) files[p] = h === null ? null : await draftContent(h);
           // rev = Revision der app_drafts-Zeile im Core (base_draft_rev für ctox.coding.turn, §16.44)
-          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at, rev: mirrorGet('app_drafts', draftId(appId))?.base?.rev ?? null };
+          return { base_app_ver: d.base_app_ver, files, manifest: d.manifest, updated_at: d.updated_at, rev: confirmedDraftRev(appId) };
         },
         // Text oder Bytes (Binärdateien wie PNG-Icons bleiben Bytes, Hash beim publish über die Bytes)
-        async write(path, content) {
-          requirePerm('apps.source.edit');
-          if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
-          noManifestFile(path);
-          const hash = await storeDraftContent(appId, path, await artifactContent(content));
-          await draftMutate(appId, (d) => { d.files[path] = hash; });
+        write(path, content) {
+          return draftHandle((async () => {
+            requirePerm('apps.source.edit');
+            if (typeof path !== 'string' || !path || content == null) throw new CtoxError('invalid', 'path und Inhalt nötig', { path: 'path' });
+            noManifestFile(path);
+            const hash = await storeDraftContent(appId, path, await artifactContent(content));
+            return draftMutate(appId, (d) => { d.files[path] = hash; });
+          })());
         },
         // A7
         async remove(path) {

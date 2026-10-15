@@ -11,7 +11,7 @@ use rxdb::plugins::replication_webrtc::WebRTCRsConnection;
 
 #[path = "transfers_pairing.rs"]
 mod pairing;
-pub(crate) use pairing::pair;
+pub(crate) use pairing::{pair, pair_invite, AfterReady};
 
 pub(crate) struct PeerDownload {
     pub id: String,

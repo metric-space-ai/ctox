@@ -172,10 +172,30 @@ export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   upload: { progress: LiveDoc<{ sent: number; total: number }> };
 }
 /** §10.2a Nr. 4 + §16.10. Metadaten = Dokumente der Collection `files`. */
+export type FileInfo = { id: string; ref: string; name: string | null; mime: string; size: number };
+/** CAP-3b (#844): Ergebnis von files.get – Text nur für UTF-8 ≤ 512 KiB, sonst Bytes; nie Base64. */
+export type FileGetResult = ({ found: true } & FileInfo & ({ text: string } | { bytes: Uint8Array })) | { found: false; ref: string | null; id?: string };
 export interface FilesApi {
-  /** Lokaler Blob-Cache, sonst Spur 4 (Prüfung beim Empfang). Fehler: not_found | unavailable | revoked. */
+  /** CAP-3b: nur Dateien der eigenen App; Datei einer anderen App → forbidden. */
+  get(sel: { ref: string } | { id: string }): Promise<FileGetResult>;
+  /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
+  /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
+  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string }>;
+  /** @deprecated Altform (K-1): Blob mit Upload-Handle. */
   put(blob: Blob, meta?: { id?: string; name?: string; mime?: string }): FileUploadHandle;
+  list(): Promise<{ files: FileInfo[] }>;
+  delete(sel: { ref: string } | { id: string }): Promise<{ deleted: boolean; id?: string }>;
+}
+/** #830 / CATALOG §6: Responses-förmige Antwort von model.run. */
+export type ModelResponse = {
+  id: string; object: 'response'; model: string; status: 'completed' | 'failed';
+  output: Array<{ type: 'message'; role: 'assistant'; content: Array<{ type: 'output_text'; text: string }> }>;
+  output_text: string; usage?: { input_tokens: number; output_tokens: number };
+};
+export interface ModelApi {
+  /** Nur mit `model` in capabilities_required; Fake-Core deterministisch, echter Weg über die App-Laufzeit (#830). */
+  run(req: { model?: string; input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>; prompt?: string; [k: string]: unknown }): Promise<ModelResponse>;
 }
 
 export interface CtoxAppApi {
@@ -206,6 +226,7 @@ export interface CtoxAppApi {
   shell: ShellApi;
   actor: Actor;
   files: FilesApi;
+  model: ModelApi;
 }
 
 /** §10.2a Nr. 1 – jede App exportiert mount(). */
@@ -310,7 +331,11 @@ export type CollectionDiff = {
   migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
 };
 /** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
-export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Revision der app_drafts-Zeile im Core = base_draft_rev für ctox.coding.turn (§16.44). */ rev: string | null };
+export interface DraftWriteHandle extends Promise<void> {
+  local: Promise<void>;
+  result: Promise<{ status: 'accepted'; rev: string } | { status: 'rejected'; code: string; reason?: string }>;
+}
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number ; /** Bestätigte Revision der app_drafts-Zeile (= base_draft_rev für ctox.coding.turn, §16.44); null, solange Änderungen ausstehen oder der Entwurf neu und noch unbestätigt ist. */ rev: string | null };
 /** §16.44: Plattform-Collection coding_turns/<turn_id> (schreibt nur der Core; messages/tool_events erst am Turn-Ende). */
 export type CodingTurn = {
   id: string; app_id: string; draft_id: string; user_id: string; command_id: string; origin_app: string; base_draft_rev: string;
@@ -335,7 +360,9 @@ export interface SourceApi {
     /** A4 – null, wenn kein eigener Entwurf. */
     info(): Promise<DraftInfo | null>;
     /** Recht apps.source.edit (gilt für alle schreibenden Entwurfsaufrufe). `manifest.json` → invalid (§16.26). */
-    write(path: string, content: ArtifactContent): Promise<void>;
+    /** §16.44-Ergänzung (3): {local, result}; result = vom Core bestätigte Revision {status:'accepted', rev} bzw. rejected{code};
+     *  awaitbar wie bisher (wartet auf den lokalen Commit). */
+    write(path: string, content: ArtifactContent): DraftWriteHandle;
     /** A7 – not_found, wenn die Datei nicht existiert. */
     remove(path: string): Promise<void>;
     /** A7 – not_found (Quelle fehlt), conflict (Ziel existiert). Verweise im Manifest (entry, handlers, styles) wandern mit (§16.26). */

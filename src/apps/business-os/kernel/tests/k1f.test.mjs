@@ -72,7 +72,7 @@ test('§16.44: CAS-Konflikt behält die Nutzeränderung; Patch als files-Datensa
   const file = (await u1.sim.coreRows('files')).find((f) => f.id === 'coding-patch:turn-c');
   assert.deepEqual([file.ref, file.owner_app, file.owner_user, file.mime], [turn.patch.ref, 'crm', 'u1', 'text/x-diff']);
   const patch = await (await u1.appApi('crm', '1').files.get(turn.patch.ref)).text();
-  assert.match(patch, /^--- a\/lib\/util\.js\n\+\+\+ b\/lib\/util\.js\n@@ -2,0 \+3,1 @@\n\+\/\/ coding-agent turn-c: /);
+  assert.match(patch, /^--- a\/lib\/util\.js\n\+\+\+ b\/lib\/util\.js\n@@ -1,2 \+1,3 @@\n export const a = 1;\n export const b = 2;\n\+\/\/ coding-agent turn-c: /); // 3 Kontextzeilen (hier 2 vorhanden)
 });
 
 test('§16.44: nur eigener Entwurf, Recht apps.source.edit, Payload und Basis geprüft – vor jeder Wirkung', async (t) => {

@@ -1590,6 +1590,11 @@ fn start_glibc_heap_trimmer() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn start_glibc_heap_trimmer() {}
 
+// This adapter consumes the native catalog and live Core/Transfer authority.
+// Registration remains in run_foreground when CUTOVER supplies its owner handles.
+#[path = "../app_runtime/native_adapter.rs"]
+pub(crate) mod app_runtime_native;
+
 pub fn run_foreground(root: &Path) -> Result<()> {
     let runtime_dir = root.join("runtime");
     std::fs::create_dir_all(&runtime_dir)

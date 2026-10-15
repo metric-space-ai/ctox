@@ -25,6 +25,23 @@ if (existsSync(join(output, 'build.json'))) {
     process.exit(0);
   }
 }
+// A previous producer for this exact immutable revision is stronger evidence
+// than recompiling it under a different absolute CMake source directory.
+const candidates = (await import('node:fs')).readdirSync(artifactRoot)
+  .filter(name => /^v4-e2e-/.test(name)).sort();
+for (const name of candidates) {
+  const receiptPath=join(artifactRoot,name,'build.json');
+  if(receiptPath===join(output,'build.json')||!existsSync(receiptPath))continue;
+  let prior;try{prior=JSON.parse(readFileSync(receiptPath));}catch{continue;}
+  if(prior.revision!==revision||!prior.pass||!prior.terminal||!prior.binary||!prior.source||!existsSync(prior.binary)||!existsSync(prior.source))continue;
+  if(createHash('sha256').update(readFileSync(prior.binary)).digest('hex')!==prior.binarySha256)continue;
+  const sourceHead=spawnSync('git',['rev-parse','HEAD'],{cwd:prior.source,encoding:'utf8'});
+  const clean=spawnSync('git',['diff','--exit-code','HEAD'],{cwd:prior.source});
+  if(sourceHead.status!==0||sourceHead.stdout.trim()!==revision||clean.status!==0)continue;
+  writeFileSync(join(output,'build.json'),JSON.stringify({...prior,reusedFrom:receiptPath,reusedAt:new Date().toISOString()},null,2));
+  console.log(`Reused verified producer ${revision} ${prior.binarySha256} from ${receiptPath}`);
+  process.exit(0);
+}
 const source = join(output, `source-${revision.slice(0, 12)}`);
 if (!existsSync(source)) run('git', ['worktree', 'add', '--detach', source, revision]);
 const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' });
@@ -34,7 +51,8 @@ if (sourceHead.status !== 0 || sourceHead.stdout.trim() !== revision || sourceDi
 // OUT_DIR across detached revisions makes an otherwise valid second build fail.
 // Keep prior artifacts/caches intact and give every immutable revision its own
 // cache BELOW the canonical admitted target (still on the lane's bulk SSD).
-const revisionTarget = join(process.env.CARGO_TARGET_DIR, 'e2e-revisions', revision.slice(0,12));
+const sourceKey=createHash('sha256').update(source).digest('hex').slice(0,12);
+const revisionTarget = join(process.env.CARGO_TARGET_DIR, 'e2e-revisions', revision.slice(0,12)+'-'+sourceKey);
 const env = { ...process.env, CARGO_TARGET_DIR: revisionTarget, CARGO_BUILD_JOBS: '2', CMAKE_BUILD_PARALLEL_LEVEL: '2', RUST_TEST_THREADS: '2',
   CARGO_PROFILE_DEV_DEBUG: '0', CARGO_INCREMENTAL: '0' };
 const receipt = { revision, source, target: revisionTarget, startedAt: new Date().toISOString(), terminal: false, pass: false };
