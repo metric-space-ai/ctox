@@ -140,9 +140,14 @@ try {
         await page.evaluate(async () => { globalThis.__e2eAppResult = null; await globalThis.CTOX_BUSINESS_OS_APP.openModule('e2e-probe'); });
         await page.waitForFunction(() => !!globalThis.__e2eAppResult, null, { timeout: 60000 });
         const result = await page.evaluate(() => globalThis.__e2eAppResult);
-        if (!result.visible) throw Error('Actual module did not paint');
-        return { visibleMs: performance.now() - before, rows: result.ids.length, emptyRender: result.emptyRender,
-          missing: expected.filter(id => !result.ids.includes(id)), source: 'real Shell openModule → module context query' };
+        const rows=page.locator('[data-e2e-app="first-open"] [data-id]');
+        let receivesEvents=false,occlusionError=null;
+        try {await rows.first().click({trial:true,timeout:5000});receivesEvents=true;}
+        catch(e){occlusionError='Fixture rows are hidden, covered or absent; actionability deadline';}
+        const ids=await rows.evaluateAll(nodes=>nodes.map(n=>n.dataset.id));
+        return { visibleMs: performance.now() - before, rows: ids.length, emptyRender: ids.length===0,
+          receivesEvents,occlusionError,internalMountRows:result.ids.length,
+          missing: expected.filter(id => !ids.includes(id)), source: 'real Shell openModule → DOM rows → Playwright trial actionability (no click)' };
       },
       checkpoint: page => page.evaluate(async () => {
         const storage = globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads.storageCollection;
@@ -187,7 +192,8 @@ try {
         row.measured||={};row.measured.lastProgress=measured;save();
       },
       os: page => page.evaluate(async path=>{
-        if(!path)return {available:false,reason:'--os-bootstrap actual native transport adapter required'};
+        if(!path){const r=await fetch('/business-os/kernel/index.mjs',{cache:'no-store'}),type=r.headers.get('content-type')||'',text=await r.text();
+          return {available:false,reason:'native-backed OS bootstrap absent',kernelStaticAvailable:r.ok&&/javascript/.test(type),staticProbe:{at:new Date().toISOString(),path:'/business-os/kernel/index.mjs',status:r.status,contentType:type,bytes:new TextEncoder().encode(text).length},v3Shell:!!globalThis.CTOX_BUSINESS_OS_APP};}
         if(!path.startsWith('/')||path.startsWith('//')||path.includes('?'))throw Error('OS bootstrap must be an exact same-origin static module');
         const module=await import(path),os=await module.connectScenario();
         if(os.transportKind!=='native-webrtc'||!os.nativePeerId||!os.kernel?.shellApi||!os.openApp)throw Error('Native WebRTC OS adapter proof/contract missing');
@@ -234,12 +240,12 @@ try {
         return {local:docs.length,at:Date.now()};
       },docs),30000,'Browser local write deadline'),
       readCommand: async page => bounded(page.evaluate(async () => {
-        const at=performance.now(),wall=Date.now(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
+        const at=performance.now(),wall=Date.now(),commandId='cmd_e2e_'+crypto.randomUUID(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
         if (!bus?.dispatch) throw Error('Real Shell command bus unavailable');
-        try { const r=await bus.dispatch({command_type:'ctox.workjet.project.list',payload:{},client_context:{command_timing_probe:true}},{until:'accepted',timeoutMs:5000});
+        try { const r=await bus.dispatch({id:commandId,command_type:'ctox.workjet.project.list',payload:{},client_context:{command_timing_probe:true}},{until:'accepted',timeoutMs:5000});
           const timing=r?.result?.command_timing || r?.command_timing || r?.result?.result?.command_timing || null;
-          return {elapsedMs:performance.now()-at,startedAtMs:wall,nativeTiming:timing,coreDispatchMs:timing?timing.native_dispatch_entered-wall:null,status:r?.status,commandId:r?.command_id || r?.id,error:['failed','rejected'].includes(r?.status)?r.status:null};
-        } catch(e) {return {elapsedMs:performance.now()-at,error:e.code || e.message};}
+          return {elapsedMs:performance.now()-at,startedAtMs:wall,nativeTiming:timing,coreDispatchMs:timing?timing.native_dispatch_entered-wall:null,status:r?.status,commandId:r?.command_id || r?.id || commandId,error:['failed','rejected'].includes(r?.status)?r.status:null};
+        } catch(e) {return {commandId,startedAtMs:wall,elapsedMs:performance.now()-at,error:e.code || e.message};}
       }),12000,'Read command observation deadline'),
       maintenance: page => page.evaluate(() => {
         const s=globalThis.CTOX_BUSINESS_OS_APP;
