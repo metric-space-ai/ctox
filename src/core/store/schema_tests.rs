@@ -1,4 +1,37 @@
 #[test]
+fn platform_window_collection_can_be_installed_and_published_without_a_new_layout() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let mut def = definition("_bench");
+    def.app_id = "ctox-platform".into();
+    def.class = "window".into();
+    let old = create_collection(&tx, &def).unwrap();
+    assert_eq!(old.table, "c__bench");
+    let reservation = PublishLock {
+        app_id: def.app_id.clone(),
+        base_app_ver: "1".into(),
+        target_app_ver: "2".into(),
+        operation_id: "platform-publish".into(),
+    };
+    reserve_publish(&tx, &reservation).unwrap();
+    def.app_ver = "2".into();
+    def.client_limit = 10;
+    update_compatible(&tx, &reservation, &def).unwrap();
+    assert_eq!(
+        active_collection(&tx, "_bench")
+            .unwrap()
+            .unwrap()
+            .definition
+            .client_limit,
+        1000
+    );
+    activate_publication(&tx, &reservation, 100).unwrap();
+    let active = active_collection(&tx, "_bench").unwrap().unwrap();
+    assert_eq!(active.gen, 1);
+    assert_eq!(active.definition.class, "window");
+    assert_eq!(active.definition.client_limit, 10);
+}
+#[test]
 fn removal_preparation_survives_reopen_and_abort_preserves_the_active_generation() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut db = Connection::open(file.path()).unwrap();

@@ -99,7 +99,7 @@ fn validate(def: &CollectionDefinition) -> Result<()> {
         || !def.schema_json.is_object()
         || !matches!(
             def.class.as_str(),
-            "replicated" | "demand" | "control" | "stream"
+            "replicated" | "demand" | "control" | "stream" | "window"
         )
     {
         return Err(invalid("invalid collection definition"));
