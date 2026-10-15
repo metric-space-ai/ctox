@@ -15487,7 +15487,7 @@ const WORKJET_SESSION_CONTROL_TIMEOUT_MS = 30_000;
 // local copy is redacted right after the command completes.
 const WORKJET_TOOLHUB_TIMEOUT_MS = 90_000;
 const WORKJET_TOOLHUB_ROUTES = new Set([
-  'connections', 'catalog', 'connect', 'disconnect', 'mcp/tools', 'mcp/call', 'call', 'ui/requests',
+  'connections', 'catalog', 'connect', 'disconnect', 'mcp/tools', 'mcp/call', 'call', 'ui/requests', 'ui/resolve',
 ]);
 
 async function workjetToolhubControl(request = {}) {
@@ -15506,6 +15506,7 @@ async function workjetToolhubControl(request = {}) {
   if (action === 'request') {
     const route = String(request.route || '');
     if (!WORKJET_TOOLHUB_ROUTES.has(route)) throw new Error(`toolhub route not allowed: ${route}`);
+    if (route === 'ui/resolve' && body.action === 'submit') throw new Error('use credential.submit for card values');
     commandType = 'ctox.toolhub.request';
     payload.route = route;
   } else if (action === 'credential.submit') {

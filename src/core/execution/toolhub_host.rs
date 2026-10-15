@@ -1063,8 +1063,9 @@ pub const SYNC_COMMAND_TYPES: [&str; 3] = [
 
 /// Routes allowed through `ctox.toolhub.request`. Secret-carrying routes have
 /// their own command type whose secret field is detached before persistence.
-const SYNC_REQUEST_ROUTES: [&str; 8] = [
+const SYNC_REQUEST_ROUTES: [&str; 9] = [
     "connections", "catalog", "connect", "disconnect", "mcp/tools", "mcp/call", "call", "ui/requests",
+    "ui/resolve",
 ];
 
 /// Execute one toolhub sync command on this instance. `secret` is the value the
@@ -1085,6 +1086,9 @@ pub fn handle_toolhub_sync_command(
             let route = payload.get("route").and_then(Value::as_str).unwrap_or_default();
             if !SYNC_REQUEST_ROUTES.contains(&route) {
                 return err(400, "route not allowed over ctox.toolhub.request");
+            }
+            if route == "ui/resolve" && body.get("action").and_then(Value::as_str) == Some("submit") {
+                return err(400, "use ctox.toolhub.credential.submit for card values");
             }
             handle_toolhub_request(root, route, admin, &body)
         }
@@ -1180,9 +1184,10 @@ mod tests {
     fn sync_commands_gate_secrets_and_roles() {
         let root = temp_root("sync-gate");
         // Secret routes are not reachable through the generic request command.
-        for route in ["credential", "ui/resolve", "oauth/complete"] {
+        for (route, body) in [("credential", json!({})), ("oauth/complete", json!({})),
+            ("ui/resolve", json!({"id": "x", "action": "submit", "values": {"credential": "s"}}))] {
             let (code, _) = handle_toolhub_sync_command(&root, "ctox.toolhub.request",
-                &json!({"route": route, "body": {}}), None, true);
+                &json!({"route": route, "body": body}), None, true);
             assert_eq!(code, 400, "{route}");
         }
         // Credential submit without the detached secret fails closed.
