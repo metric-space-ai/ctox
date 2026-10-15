@@ -5,6 +5,7 @@
 
 pub mod change_log;
 pub mod config;
+pub mod publication;
 pub mod read_pool;
 pub mod registry;
 pub mod schema;
