@@ -68,6 +68,24 @@ fn admitted(
     Ok((cmd, admission, hash))
 }
 #[test]
+fn native_controls_inherited_codex_model_binding_never_grants_mutation() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut account = super::super::tests::account("codex-instance-primary");
+    account.provider = "codex".into();
+    account.private_binding = Some("codex-inherited:v1:private-fixture-generation".into());
+    let state = f.adopt(&[account])?;
+    let row = &state["accounts"][0];
+    assert_eq!(
+        row["controls"],
+        json!({"canEnable":false,"canRemove":false})
+    );
+    for enabled in [Some(false), None] {
+        let (cmd, admission, _) = admitted(&f, row["id"].as_str().unwrap(), enabled, "owner")?;
+        assert!(handle(f.root.path(), &cmd, "owner", Some(&admission)).is_err());
+    }
+    Ok(())
+}
+#[test]
 fn native_controls_persist_disable_enable_and_remove_exact_account() -> Result<()> {
     let (f, id) = fixture()?;
     let (cmd, admission, _) = admitted(&f, &id, Some(false), "owner")?;
