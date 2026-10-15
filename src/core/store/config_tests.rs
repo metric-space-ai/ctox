@@ -58,4 +58,35 @@ fn v4_admission_rejects_unbounded_time_budgets() {
     assert!(AdmissionBudget::new(capacity, Duration::ZERO, Duration::from_secs(1)).is_none());
     assert!(AdmissionBudget::new(capacity, Duration::from_secs(1), Duration::ZERO).is_none());
     assert_eq!(AdmissionBudget::default().capacity.get(), 1024);
+    assert!(AdmissionBudget::new(
+        NonZeroUsize::new(1025).unwrap(),
+        Duration::from_secs(1),
+        Duration::from_secs(1)
+    )
+    .is_none());
+    assert!(AdmissionBudget::new(capacity, Duration::MAX, Duration::from_secs(1)).is_none());
+}
+
+#[test]
+fn v4_all_canonical_database_helpers_share_one_state_root() {
+    let root = std::path::Path::new("install");
+    let state = paths::runtime_dir(root);
+    for (path, name) in [
+        (paths::core_db(root), "ctox.sqlite3"),
+        (paths::mission_db(root), "ctox.sqlite3"),
+        (paths::lcm_db(root), "ctox.sqlite3"),
+        (paths::sync_db(root), "business-os-rxdb.sqlite3"),
+        (paths::business_os_db(root), "business-os.sqlite3"),
+        (paths::runtime_config_db(root), "ctox-runtime.sqlite3"),
+        (paths::secrets_db(root), "ctox-secrets.sqlite3"),
+        (paths::office_db(root), "ctox-office.sqlite3"),
+        (paths::maintenance_db(root), "ctox-maintenance.sqlite3"),
+        (paths::legacy_mission_db(root), "cto_agent.db"),
+        (paths::legacy_lcm_db(root), "ctox_lcm.db"),
+        (paths::scrape_db(root), "ctox_scraping.db"),
+        (paths::ticket_local_db(root), "ticket_local.db"),
+        (paths::backup_dir(root), "backup"),
+    ] {
+        assert_eq!(path, state.join(name));
+    }
 }
