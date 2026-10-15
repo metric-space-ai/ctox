@@ -161,7 +161,7 @@ pub(crate) fn owned_read<T: Send + 'static>(
     sync: bool,
     read: impl FnOnce(&rusqlite::Connection) -> anyhow::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    anyhow::ensure!(Handle::try_current().is_err(),"owned synchronous read requires a service OS thread; runtime callers must await the read pool");
+    anyhow::ensure!(Handle::try_current().is_err() || crate::persistence::require_sync_owner_context().is_ok(),"owned synchronous read requires an admitted Core compatibility worker or service OS thread; runtime callers must await the read pool");
     anyhow::ensure!(
         !std::thread::current()
             .name()
