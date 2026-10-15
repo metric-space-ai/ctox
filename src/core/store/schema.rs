@@ -128,6 +128,9 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<()> {
           publication_id TEXT NOT NULL,collection TEXT NOT NULL,gen INTEGER NOT NULL,
           definition_json TEXT NOT NULL CHECK(json_valid(definition_json)),
           PRIMARY KEY(publication_id,collection));
+         CREATE TABLE IF NOT EXISTS _schema_removals(
+          publication_id TEXT NOT NULL,collection TEXT NOT NULL,gen INTEGER NOT NULL,
+          PRIMARY KEY(publication_id,collection));
          CREATE TABLE IF NOT EXISTS publish_lock(
           app_id TEXT PRIMARY KEY,base_app_ver TEXT NOT NULL,target_app_ver TEXT NOT NULL,
           operation_id TEXT NOT NULL UNIQUE,created_at INTEGER NOT NULL DEFAULT(unixepoch()));
@@ -466,6 +469,7 @@ pub fn update_compatible(
         if migrating {
             return Err(invalid("collection already has a generation migration"));
         }
+        reject_removed(tx, lock, &def.name)?;
         // A native SQLite index on a populated table cannot be built incrementally
         // through &Transaction. The dedicated online-index runner must prepare it.
         ensure_index_build_safe(tx, &old.table, &def.schema_json)?;
@@ -687,6 +691,7 @@ pub fn prepare_migration(
             }
             return Ok(saved);
         }
+        reject_removed(tx, lock, &def.name)?;
         let staged:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM _schema_updates WHERE publication_id=?1 AND collection=?2)",
             params![lock.operation_id,def.name],|r|r.get(0))?;
         if staged {
@@ -975,6 +980,28 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
             }
         }
         activate_compatible(tx, lock)?;
+        let removals = {
+            let mut statement = tx.prepare(
+                "SELECT collection,gen FROM _schema_removals WHERE publication_id=?1 ORDER BY collection")?;
+            let rows = statement
+                .query_map([&lock.operation_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        for (name, gen) in removals {
+            let active = active_collection(tx, &name)?
+                .ok_or_else(|| invalid("removed collection no longer active"))?;
+            if active.gen != gen {
+                return Err(invalid("removal generation changed"));
+            }
+            commit_archive_collection(tx, lock, &name, now)?;
+        }
+        tx.execute(
+            "DELETE FROM _schema_removals WHERE publication_id=?1",
+            [&lock.operation_id],
+        )?;
         let watermark = change_log::head(tx)?.head_seq;
         let retire = now
             .checked_add(GENERATION_RESERVE_SECONDS)
@@ -1035,6 +1062,10 @@ pub fn activate_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) 
 pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> Result<()> {
     atomic(tx, || {
         held_publish(tx, lock)?;
+        tx.execute(
+            "DELETE FROM _schema_removals WHERE publication_id=?1",
+            [&lock.operation_id],
+        )?;
         let mut statement = tx.prepare(
             "SELECT collection,gen FROM _migrations WHERE publication_id=?1 AND state<>'committed'",
         )?;
@@ -1078,8 +1109,59 @@ pub fn abort_publication(tx: &Transaction<'_>, lock: &PublishLock, now: i64) -> 
     })
 }
 
-/// Removing a collection is archival, never DROP. Existing data remains exportable for 30 days.
+fn reject_removed(tx: &Transaction<'_>, lock: &PublishLock, name: &str) -> Result<()> {
+    let pending: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM _schema_removals
+        WHERE publication_id=?1 AND collection=?2)",
+        params![lock.operation_id, name],
+        |r| r.get(0),
+    )?;
+    if pending {
+        return Err(invalid("collection is prepared for removal"));
+    }
+    Ok(())
+}
+
+/// Stage collection removal; active data remains visible until final publication.
+/// The retention clock starts at activation, never at preparation.
 pub fn archive_collection(
+    tx: &Transaction<'_>,
+    lock: &PublishLock,
+    name: &str,
+    _now: i64,
+) -> Result<()> {
+    atomic(tx, || {
+        verify_publish(tx, lock)?;
+        let old =
+            active_collection(tx, name)?.ok_or_else(|| invalid("active collection missing"))?;
+        if old.definition.app_id != lock.app_id {
+            return Err(invalid("foreign collection"));
+        }
+        let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM _migrations WHERE collection=?1
+            AND state IN ('preparing','backfilling','ready')) OR EXISTS(SELECT 1 FROM _schema_updates
+            WHERE publication_id=?2 AND collection=?1)",params![name,lock.operation_id],|r|r.get(0))?;
+        if pending {
+            return Err(invalid("collection has pending schema preparation"));
+        }
+        tx.execute(
+            "INSERT INTO _schema_removals VALUES(?1,?2,?3)
+            ON CONFLICT(publication_id,collection) DO NOTHING",
+            params![lock.operation_id, name, integer(old.gen)?],
+        )?;
+        let saved: u64 = tx.query_row(
+            "SELECT gen FROM _schema_removals WHERE publication_id=?1 AND collection=?2",
+            params![lock.operation_id, name],
+            |r| r.get(0),
+        )?;
+        if saved != old.gen {
+            return Err(invalid("removal generation changed"));
+        }
+        Ok(())
+    })
+}
+
+/// Removing a collection is archival, never DROP. Existing data remains exportable for 30 days.
+fn commit_archive_collection(
     tx: &Transaction<'_>,
     lock: &PublishLock,
     name: &str,
