@@ -70,7 +70,7 @@ export async function participant(h, fixture, identity) {
     };
     globalThis.__p6Trace=trace;
   });
-  return {page,identity};
+  return {page,identity,actor:actual};
 }
 export async function rawStore(page, store) {
   return page.evaluate(async store => {

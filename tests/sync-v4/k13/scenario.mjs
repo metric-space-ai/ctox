@@ -14,11 +14,13 @@ export default {
     const session=await connect(h,'K13');if(session.result)return session.result;
     const {page:owner,fixture:f}=session;
     assert.equal(f.identities.length,3);
-    assert.deepEqual(f.identities.map(i=>i.role).sort(),['admin','chef','user']);
+    assert.deepEqual(f.identities.map(i=>i.name).sort(),['admin','chef','user']);
     assert.ok(f.app?.baseVersion && f.app?.next?.manifest?.foreign_collections,'Use a real copied app release, not an unknown empty app');
     assert.notDeepEqual(f.app.next.manifest.layout,f.app.previous.manifest.layout,'Icon/layout must change');
     const participants=await Promise.all(f.identities.map(i=>participant(h,f,i)));
-    const user=participants.find(p=>p.identity.role==='user');
+    const user=participants.find(p=>p.identity.name==='user');
+    assert.equal(user.actor.is_admin,false,'The user acceptance account must be Core-authenticated as non-admin');
+    assert.equal(participants.find(p=>p.identity.name==='admin').actor.is_admin,true);
     const published=await publish(owner,f.app.id,f.app.next,f.app.baseVersion);
     assert.ok(['accepted','migrated'].includes(published.status));
     const activationStart=published.committedAtMs, openings=[];
@@ -37,6 +39,7 @@ export default {
         return {role:api.actor.role,iconBytes:blob.size,hash,errors};
       },{appId:f.app.id,version:published.rev});
       assert.ok(opened.iconBytes>0);assert.deepEqual(opened.errors,[]);
+      assert.equal(opened.role,p.identity.role,'The actual app API must expose the Core-authenticated role');
       openings.push({...opened,elapsedMs:Date.now()-activationStart});
       assertExactScope(await rawStore(p.page,'docs'),f.collection,f.beforeIds[p.identity.id],f.maskedFields[p.identity.id]??[]);
     }
