@@ -40,6 +40,19 @@ impl CorePersistence {
             readers.generation() == writer.generation().0,
             "Core reader pool does not belong to this owner generation"
         );
+        let reader_file: String = readers
+            .read_job(ctox_store::ReadJob::new(Default::default(), |conn| {
+                Ok(conn.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            }))
+            .await?;
+        anyhow::ensure!(
+            std::path::Path::new(&reader_file) == writer.db_id().path(),
+            "Core reader pool belongs to another database"
+        );
         write_transaction::owner_write(&writer, "core.schema", Default::default(), |tx| {
             tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_payload_store (payload_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS ctox_kv_store (kv_key TEXT PRIMARY KEY, kv_value TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -166,6 +179,7 @@ impl CorePersistence {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<()> {
+        self.writer.stop_admission();
         self.readers.shutdown().await?;
         self.writer.shutdown().await?;
         Ok(())
@@ -504,27 +518,10 @@ mod sqlite_build_flags_tests {
 #[cfg(test)]
 mod owner_adapter_tests {
     use super::*;
-    use ctox_store::{registry::Registry, writer::WriterOptions, DbId, JobOptions, StoreError};
+    use ctox_store::{testkit::StoreFixture, DbId, JobOptions, StoreError};
 
     async fn adapter(path: &Path) -> Result<CorePersistence> {
-        let writer = Registry.open(
-            DbId::new(path)?,
-            WriterOptions {
-                configure: Some(std::sync::Arc::new(|conn| {
-                    ctox_store::config::ConnectionConfig::default().apply_writer(conn)?;
-                    Ok(())
-                })),
-                ..Default::default()
-            },
-        )?;
-        writer.ready().await?;
-        let readers = ctox_store::read_pool::ReadPool::for_database(
-            writer.db_id(),
-            writer.generation(),
-            Default::default(),
-            Default::default(),
-        )
-        .await?;
+        let (writer, readers) = StoreFixture::open(DbId::new(path)?).await?.into_parts();
         CorePersistence::attach(writer, readers).await
     }
 

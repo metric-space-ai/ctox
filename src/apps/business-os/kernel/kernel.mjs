@@ -1,3 +1,4 @@
+import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
 import { artifactUrl, utf8Base64 } from './artifact-url.mjs';
 import { takeoverV3Database } from './migrate-v3.mjs';
 import { snapshotBytes } from './snapshot.mjs';
@@ -15,7 +16,7 @@ export { compileQuery, runCompiledQuery } from './app-api.mjs';
 export { createShellKernel } from './shell-api.mjs';
 export const APP_API_VERSION = '4.0';
 const SNAPSHOT_MAX_BYTES = 1024 * 1024;
-const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions']);
+const SYSTEM_COLLECTIONS = new Set(PLATFORM_COLLECTIONS);
 export function createKernel(opts = {}) {
   const instanceId = opts.instanceId;
   const userId = opts.userId ?? opts.actor?.id;
@@ -27,13 +28,18 @@ export function createKernel(opts = {}) {
   const fakeCore = transport instanceof MemoryCoreTransport ? transport : null;
   const subscriptions = new Set();
   const scopeCursors = new Map();
+  const expectedScopes = new Map();
+  let timing = null;
   const scopeBacklog = new Map();
   const evicted = new Set();
   const lastUsed = new Map();
   let transportConnected = false;
-  const remountTimeoutMs = opts.remountTimeoutMs ?? 10000;
+  const remountTimeoutMs = opts.shellStartTimeoutMs ?? 9000;
+  const generationGraceMs = opts.generationGraceMs ?? 600000;
+  const getTabKey = () => opts.tabKey ?? (()=>{try{const key=`ctox-tab:${dbName}`;let id=sessionStorage.getItem(key);if(!id){id=uuidv7();sessionStorage.setItem(key,id);}return id;}catch{return tabId;}})();
   const capabilities = new Set(opts.capabilities ?? []);
   const tabId = uuidv7();
+  const tabKey = getTabKey();
   const channelName = `ctox-kernel:${dbName}`;
 
   let db = null;
@@ -54,8 +60,7 @@ export function createKernel(opts = {}) {
   const waiters = new Map(); // op_id -> resolve(WriteResult)
   const cmdRejected = new Map();
   const zone = [];
-  const mounts = new Set();
-  const moduleRegistry = new Map(), moduleCache = new Map();
+  const moduleCache = new Map();
   const routeListeners = new Map();
   const windowStates = new Map();
   let locale = opts.locale ?? 'de';
@@ -68,11 +73,13 @@ export function createKernel(opts = {}) {
   const skipBeforeCommit = new Set();
   const uploadProgress = new Map(), uploadsDone = new Set();
   const activationListeners = new Set();
-  const remountChains = new Map(), activationChains = new Map();
+  let activationReports=Promise.resolve();
+  const activationChains = new Map();
+  let corruptNextFetch=0;
   const publishing = new Set();
   const doubleWrite = new Map(); // ns_old -> {ns_new, migrate}
   const sim0 = { reject: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map() };
-  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0 };
+  const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches:0 };
   let readyResolve;
   const ready = new Promise((r) => { readyResolve = r; });
   const preReady = [];
@@ -238,7 +245,7 @@ export function createKernel(opts = {}) {
     return {
       backlog: net.backlog,
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
-      link: { ...net.link },
+      link: { ...net.link }, ...(timing?{timing:{...timing}}:{}),
     };
   });
   let knownGen = 0;
@@ -263,6 +270,7 @@ export function createKernel(opts = {}) {
     subscribe: zoneLive.subscribe,
     forApp: (appId) => makeLive(['status'], () => zone.filter((e) => e.app_id === appId)),
     clear: (appId, code) => zoneClear(appId, code),
+    report:(appId,item)=>zoneReport(appId,item,'shell'),
   };
 
   // ---- Laden, Leiterwahl ----
@@ -292,6 +300,7 @@ export function createKernel(opts = {}) {
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
       if(meta.key.startsWith('upload_done:')){uploadsDone.add(meta.ref);notify('uploads');}
+      if(meta.key.startsWith('retired:') && (meta.record?.lseq??0)>known)mirrorPut(meta.record);
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
       if(meta.key==='network' && !isLeader){followerNet=meta.value;notify('metrics');}
       if(meta.key.startsWith('activation:'))applyActivationLocal(meta,false);
@@ -310,17 +319,20 @@ export function createKernel(opts = {}) {
     post({ type: 'leader', gen: myGen });
     if (!transportConnected) {
       transportConnected = true;
-      await transport.connect({ instanceId, userId }, {
-        page: (page) => receivePage(page),
-        link: (next) => { link = { ...link, ...next }; netChanged(); if(link.state === 'online') schedulePump(); },
-        write_result: (message) => receiveResult(message),
-        actor: (next) => { if(next.id !== userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor'); },
-      });
+      track(Promise.resolve().then(()=>transport.connect({instanceId,userId},{
+        page:receivePage,write_result:receiveResult,
+        link:next=>{link={...link,...next,state:next.state==='online'?'online':'offline'};if(link.state==='offline'){inflight.clear();inflightOps.clear();}netChanged();if(link.state==='online'){for(const value of activations.values())sendActivationReport(value);for(const id of mirror.get('business_apps')?.keys()??[])scheduleActivation(id);if(transport.scope)for(const collection of subscriptions)track(subscribeCollection(collection));schedulePump();}},
+        actor:next=>{if(next.id!==userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor');},
+        timing:next=>{timing=next;notify('metrics');},
+        status:(appId,item)=>zoneReport(appId,item,'kernel'),
+        revoke:receiveRevoke,
+      })).then(async()=>{
+        if(closed||!isLeader)return;
+        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences',...mirror.keys()]))await subscribeCollection(collection);
+        await deliver();schedulePump();
+      }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}}));
     }
-    for (const collection of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', ...mirror.keys()])) await subscribeCollection(collection);
-    netChanged();scheduleCacheBudget();
-    track(deliver());
-    schedulePump();
+    netChanged();scheduleCacheBudget();schedulePump();
     for (const id of mirror.get('business_apps')?.keys() ?? []) scheduleActivation(id);
   }
   function stepDown() {
@@ -426,6 +438,7 @@ export function createKernel(opts = {}) {
     const prepare = () => {
       guardAlive();
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
+      if(collection==='shell_preferences' && id!==userId)throw new CtoxError('forbidden','Only own shell preferences are writable',{path:'id'});
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       const ns = resolveNs(app, collection);
       let clean = null;
@@ -559,15 +572,18 @@ export function createKernel(opts = {}) {
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
     evicted.delete(collection);
-    const scope = { epoch: opts.epoch ?? '1', collection, scope_hash: opts.scopeHash ?? 'local', gen: genOf(collection) };
+    const scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};
+    expectedScopes.set(collection,scope);
     const cp = await db.get('meta', checkpointKey(scope));
+    scopeCursors.set(collection,cp?.cursor_to??'0');
     await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority });
     subscriptions.add(collection);
   }
   async function receivePage(page) {
     if (!isLeader || closed) return;
     const scope = { ...page, epoch: page.epoch ?? opts.epoch ?? '1', scope_hash: page.scope_hash ?? opts.scopeHash ?? 'local', gen: page.gen ?? genOf(page.collection) };
-    if(scope.scope_hash !== (opts.scopeHash ?? 'local') || String(scope.epoch) !== String(opts.epoch ?? '1')) throw new CtoxError('revoked', 'Unexpected scope or epoch');
+    const expected=expectedScopes.get(page.collection)??{scope_hash:opts.scopeHash??'local',epoch:opts.epoch??'1'};
+    if(scope.scope_hash !== expected.scope_hash || String(scope.epoch) !== String(expected.epoch)) throw new CtoxError('revoked', 'Unexpected scope or epoch');
     if(!Number.isSafeInteger(scope.gen) || scope.gen!==genOf(page.collection))throw new CtoxError('invalid','Page generation does not match collection namespace');
     const cursor = decimalSeq(page.cursor_to ?? page.head_seq ?? '0');
     const out = await db.tx(async (t) => {
@@ -679,7 +695,12 @@ export function createKernel(opts = {}) {
     }
     return deepFreeze(result);
   }
-  function schemaFor(app, collection) { return versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
+  function normalizeLayout(layout){return Object.fromEntries(['icon_asset','icon_svg','category','frame_palette','default_width','default_height','min_width','min_height','presentation'].map(key=>[key,layout?.[key]??null]));}
+  async function receiveRevoke(message){
+    const collections=new Set(message.collections??[]),rows=await db.tx(async t=>{await assertGen(t);const changed=[];for(const row of await t.all('docs'))if(collections.has(row.collection)){const revoked={...row,data:null,base:emptyBase(),deleted:true,revoked:true};await putDoc(t,revoked);changed.push(revoked);}for(const hash of message.artifacts??[])await t.del('artifacts',hash);await t.put('meta',{key:'rights_ver',value:message.rights_ver});return changed;});
+    for(const row of rows)mirrorPut(row);post({type:'docs',keys:rows.map(r=>[r.collection,r.id])});
+  }
+  function schemaFor(app, collection) { const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;return versionDoc(owner,ver)?.manifest?.collections?.[collection]?.schema??null; }
 
   async function publishInternal(appId, ver, o = {}) {
     if (publishing.has(appId)) throw new CtoxError('conflict', `Veröffentlichung von ${appId} läuft bereits (busy)`);
@@ -687,6 +708,7 @@ export function createKernel(opts = {}) {
     try {
       const appDoc = visible(mirrorGet('business_apps', appId));
       if (o.baseAppVer !== undefined && (appDoc?.active_ver ?? null) !== o.baseAppVer) throw new CtoxError('conflict', 'stale_base');
+      if(o.module!==undefined)throw new CtoxError('invalid','App modules belong to the Shell/testkit host');
       if (versionDoc(appId, ver)) throw new CtoxError('conflict', `Version ${appId}@${ver} existiert bereits`);
       const prevManifest = appDoc ? versionDoc(appId, appDoc.active_ver)?.manifest : null;
       const files = o.files ?? {};
@@ -714,6 +736,7 @@ export function createKernel(opts = {}) {
       const head = fakeCore?.head ?? '0';
       const M = o.migratedAtSeq ?? head;
       const manifest = {
+        layout:normalizeLayout(o.layout??prevManifest?.layout),styles:[...(o.styles??prevManifest?.styles??[])],retires:{...(prevManifest?.retires??{})},
         app_id: appId, app_ver: ver, files: fileHashes, entry: o.entry ?? 'index.js',
         collections: o.collections ?? prevManifest?.collections ?? {}, generations,
         handlers: o.handlers ?? {}, min_app_api: o.minAppApi ?? '4.0',
@@ -751,15 +774,19 @@ export function createKernel(opts = {}) {
     const superseded = () => visible(mirrorGet('business_apps', appId))?.active_ver !== ver;
     await setActivation(appId, { target_ver: ver, state: 'received', error: null });
     // fetched: alle Dateien per Hash geprüft (aus „Spur 4“ = transport CAS)
-    for (const [path, hash] of Object.entries(manifest.files ?? {})) {
+    for(const [path,hash]of Object.entries(manifest.files??{})){
       const cached=await db.get('artifacts',hash);
       if(cached && await sha256Hex(cached.content)===hash)continue;
-      await waitUntil(() => link.state === 'online' || closed);
-      const content = await transport.artifact(hash).catch(()=>null);
-      const src = content == null ? null : {content};
-      if (!src) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `artifact_missing:${path}` }); return; }
-      if ((await sha256Hex(src.content)) !== hash) { await setActivation(appId, { target_ver: ver, state: 'failed', error: `hash_mismatch:${path}` }); return; }
-      await db.tx(async (t) => { await assertGen(t); await t.put('artifacts', { hash, content: src.content, app_id: appId, app_ver: ver, path, stored_at: Date.now() }); });
+      await waitUntil(()=>link.state==='online'||closed);if(closed)return;
+      let content=null,valid=false;
+      for(let attempt=0;attempt<2;attempt++){
+        content=await transport.artifact(hash).catch(error=>{if(error?.code==='unavailable')throw error;return null;});
+        if(corruptNextFetch>0 && content!==null){corruptNextFetch--;content+='\n/* corrupt */';}
+        if(content!==null && await sha256Hex(content)===hash){valid=true;break;}
+        if(attempt===0)simRecord.refetches++;
+      }
+      if(!valid){await setActivation(appId,{target_ver:ver,state:'failed',error:content===null?`artifact_missing:${path}`:`hash_mismatch:${path}`});return;}
+      await db.tx(async t=>{await assertGen(t);await t.put('artifacts',{hash,content,app_id:appId,app_ver:ver,path,stored_at:Date.now()});});
     }
     await setActivation(appId, { target_ver: ver, state: 'fetched' });
     const missing = (manifest.capabilities_required ?? []).filter((c) => !capabilities.has(c));
@@ -776,7 +803,8 @@ export function createKernel(opts = {}) {
     await waitUntil(() => dataReady() || superseded() || closed || !isLeader);
     if (superseded() || closed || !isLeader) return;
     await setActivation(appId, { target_ver: ver, state: 'data-ready' });
-    await setActivation(appId, { target_ver: ver, activated_ver: ver, previous_ver: activations.get(appId)?.activated_ver ?? null, state: 'activated', at_seq: checkpoint });
+    const previous=activations.get(appId);
+    await setActivation(appId,{target_ver:ver,activated_ver:ver,previous_ver:previous?.activated_ver??null,good_vers:[...(previous?.good_vers??[]).filter(v=>v!==ver),ver].slice(-10),state:'activated',at_seq:checkpoint});
   }
   function compareVer(a, b) {
     const pa = String(a).split('.').map(Number), pb = String(b).split('.').map(Number);
@@ -792,11 +820,16 @@ export function createKernel(opts = {}) {
       await bumpLocalSeq(t);
       return v;
     });
-    await transport.appActivation({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint });
     simRecord.activationReports.push({ app_id: appId, app_ver: value.target_ver, state: value.state, at_seq: checkpoint, error: value.error ?? undefined });
     applyActivationLocal(value, true);
     post({ type: 'activation', value });
+    sendActivationReport(value);
     return value;
+  }
+  function sendActivationReport(value){
+    const report={app_id:value.app_id,app_ver:value.target_ver,state:value.state,at_seq:checkpoint};
+    activationReports=activationReports.then(()=>{if(!closed&&isLeader)return transport.appActivation(report);}).catch(error=>{if(!closed)zoneReport('kernel',{level:'warn',code:'activation.report',text:error.message},'kernel');});
+    track(activationReports);
   }
   function applyActivationLocal(value, fromSelf) {
     const prev = activations.get(value.app_id);
@@ -811,9 +844,8 @@ export function createKernel(opts = {}) {
     } else if (value.state === 'failed' && value.error) {
       zoneReport(value.app_id, { level: 'error', code: 'app.activation_failed', text: `Aktivierung ${value.app_id}@${value.target_ver} fehlgeschlagen: ${value.error}`, ref: value.target_ver }, 'kernel');
     }
-    if (value.activated_ver) scheduleRemount(value.app_id, value.activated_ver);
     if(isLeader && value.state==='activated' && value.previous_ver && value.previous_ver!==value.activated_ver) {
-      later(()=>track(retireGenerations(value.app_id,value.activated_ver,value.previous_ver)),10*60*1000);
+      later(()=>track(retireGenerations(value.app_id,value.activated_ver,value.previous_ver)),generationGraceMs);
     }
     void fromSelf;
   }
@@ -831,19 +863,19 @@ export function createKernel(opts = {}) {
       for(const ns of namespaces){
         if(entries.some(e=>e.collection===ns))continue;
         for(const row of await t.all('docs'))if(row.collection===ns){
-          const empty={collection:row.collection,id:row.id,data:null,base:emptyBase(),rev:null,seq:'0',deleted:true,pending:false,retired:true};await putDoc(t,empty);out.push(empty);
+          const empty={collection:row.collection,id:row.id,data:null,base:emptyBase(),rev:null,seq:'0',deleted:true,pending:false,retired:true};await putDoc(t,empty);await t.del('docs',[ns,row.id]);await t.put('meta',{key:`retired:${ns}:${row.id}`,record:empty});out.push(empty);
         }
       }
       return out;
     });
-    for(const row of retired)mirrorPut(row);
+    for(const row of retired){mirrorPut(row);doubleWrite.delete(row.collection);}
     post({type:'docs',keys:retired.map(r=>[r.collection,r.id])});
   }
 
   // ---- Mount / Remount (§10.2a Nr. 1, §16.10) ----
   async function loadModule(appId, ver) {
-    const key = `${appId}@${ver}`;
-    if (moduleRegistry.has(key)) return moduleRegistry.get(key);
+    const shellVer=appId==='shell'?ver:activations.get('shell')?.activated_ver??'0';
+    const key = `${appId}@${ver}~shell@${shellVer}`;
     if (moduleCache.has(key)) return moduleCache.get(key);
     const manifest = versionDoc(appId, ver)?.manifest;
     if (!manifest) throw new CtoxError('not_found', `Manifest ${key} fehlt`);
@@ -852,7 +884,7 @@ export function createKernel(opts = {}) {
     if (!art) throw new CtoxError('not_found', `Einstiegsdatei ${manifest.entry} von ${key} nicht lokal`);
     let url, revoke = null;
     if (globalThis.navigator?.serviceWorker?.controller) {
-      url = artifactUrl(appId,ver,manifest.entry);
+      url = artifactUrl(appId,ver,manifest.entry,shellVer);
     } else if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function' && hasBlob) {
       url = URL.createObjectURL(new Blob([art.content], { type: 'text/javascript' }));
       revoke = url;
@@ -864,18 +896,6 @@ export function createKernel(opts = {}) {
       moduleCache.set(key, mod);
       return mod;
     } finally { if (revoke) URL.revokeObjectURL(revoke); }
-  }
-  function mountFnOf(mod) {
-    const fn = mod?.mount ?? mod?.default?.mount ?? (typeof mod?.default === 'function' ? mod.default : null);
-    if (typeof fn !== 'function') throw new CtoxError('invalid', 'App-Modul exportiert kein mount()');
-    return fn;
-  }
-  async function mountVersion(root, appId, ver, ctx) {
-    const mod = await loadModule(appId, ver);
-    const api = makeAppApi(appId, ver);
-    const handle = await mountFnOf(mod)(root, api, ctx);
-    if (!handle || typeof handle.unmount !== 'function') throw new CtoxError('invalid', 'mount() muss {unmount} liefern');
-    return { handle, api };
   }
   function withTimeout(p, ms, onLate) {
     return new Promise((resolve,reject)=>{
@@ -903,42 +923,6 @@ export function createKernel(opts = {}) {
       return undefined;
     }
   }
-  function scheduleRemount(appId, ver) {
-    const targets = [...mounts].filter((m) => m.appId === appId && m.ver !== ver && !m.closed);
-    if (!targets.length) return;
-    const prev = remountChains.get(appId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      for (const m of targets) if (mounts.has(m) && m.ver !== ver) await remountOne(m, ver);
-    });
-    remountChains.set(appId, next.catch(() => {}));
-    track(next);
-  }
-  async function remountOne(m, newVer) {
-    const oldVer = m.ver;
-    let snap;
-    try { snap = m.handle.snapshot ? await withTimeout(Promise.resolve().then(()=>m.handle.snapshot()),remountTimeoutMs) : undefined; } catch (e) {
-      zoneReport(m.appId, { level: 'warn', code: 'app.snapshot_failed', text: `snapshot() warf: ${e?.message ?? e}` }, 'kernel');
-    }
-    if(closed)return;
-    snap = checkSnapshot(m.appId, snap);
-    // §16.10: Snapshot vor dem Umschalten in window_state (IDB)
-    await db.tx((t) => t.put('window_state', { key: `${m.appId}:${m.id}`, app_id: m.appId, mount_id: m.id, ver: oldVer, next_ver: newVer, snapshot: snap ?? null, at: Date.now() }));
-    try { await withTimeout(Promise.resolve().then(()=>m.handle.unmount()),remountTimeoutMs); } catch (e) { console.error('[ctox-kernel] unmount', e); }
-    if(closed)return;
-    try {
-      const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { Promise.resolve(late.handle.unmount()).catch(()=>{}); } catch {} });
-      Object.assign(m, { ver: newVer, handle: r.handle, api: r.api });
-      zoneClear(m.appId, 'app.remount_failed');
-    } catch (err) {
-      if(closed)return;
-      zoneReport(m.appId, { level: 'error', code: 'app.remount_failed', text: `Version ${newVer} startet nicht (${err?.message ?? err}); vorherige Version ${oldVer} läuft`, ref: newVer }, 'kernel');
-      const r = await withTimeout(mountVersion(m.root, m.appId, oldVer, { restored: cloneValue(snap) }),remountTimeoutMs);
-      Object.assign(m, { ver: oldVer, handle: r.handle, api: r.api });
-      try { await callLeader('revertActivation', [m.appId, oldVer, newVer, String(err?.message ?? err)]); } catch (e) { console.error('[ctox-kernel] revert', e); }
-    }
-    notify('mounts');
-  }
-
   // ---- Datei-Blobs ----
   function setUploadProgress(ref, sent, total, broadcast) {
     uploadProgress.set(ref, { sent, total });
@@ -966,7 +950,7 @@ export function createKernel(opts = {}) {
     const winTag = `win:${appId}`;
     const shell = Object.freeze({
       setTitle(title) { win.title = String(title); notify(winTag); },
-      registerHeader(spec) { win.header = spec == null ? null : cloneValue(spec); notify(winTag); },
+      registerHeader(el){if(el!==null && (typeof HTMLElement==='function'?!(el instanceof HTMLElement):!el||typeof el!=='object'||typeof el.tagName!=='string'))throw new CtoxError('invalid','Header must be an HTMLElement or null');win.header=el;notify(winTag);},
       navigate(target, params = {}) {
         const known = target === 'shell' || !!visible(mirrorGet('business_apps', target));
         if (!known) {
@@ -1089,7 +1073,7 @@ export function createKernel(opts = {}) {
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
-          for (const r of m.values()) if (r.data != null && !r.deleted) docs.push(withDefaults(app,collection,r.data));
+          for (const r of m.values()) if (r.data != null && !r.deleted && (ns!=='shell_preferences'||r.id===userId)) docs.push(withDefaults(app,collection,r.data));
           return runCompiledQuery(docs, cq);
         });
       },
@@ -1097,16 +1081,16 @@ export function createKernel(opts = {}) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return makeLive([`c:${ns}`], () => withDefaults(app,collection,visible(mirrorGet(ns,id))));
+        return makeLive([`c:${ns}`], () => ns==='shell_preferences'&&id!==userId?null:withDefaults(app,collection,visible(mirrorGet(ns,id))));
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch) { return localWrite(app, 'patch', collection, id, patch); },
       remove(collection, id) { return localWrite(app, 'delete', collection, id, null); },
-      command(type, payload = {}) {
+      command(type, payload = {}, commandOptions={}) {
         if (typeof type !== 'string' || !type) throw new CtoxError('invalid', 'Befehlstyp fehlt', { path: 'type' });
         const id = uuidv7();
         const write = localWrite(app, 'put', 'business_commands', id, {
-          id, type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
+          id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}), type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
         });
         const status = makeLive(['c:business_commands', 'commands'], () => {
           const d = visible(mirrorGet('business_commands', id));
@@ -1206,19 +1190,28 @@ export function createKernel(opts = {}) {
       if (!d) continue;
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
-      out.push({ id: d.id, title: d.title ?? d.id, active_ver: d.active_ver, activated_ver: a?.activated_ver ?? null, state: a?.state ?? 'received', target_ver: a?.target_ver ?? null, error: a?.error ?? null });
+      const man=versionDoc(d.id,d.active_ver)?.manifest;
+      out.push({layout:normalizeLayout(man?.layout),styles:[...(man?.styles??[])], id: d.id, title: d.title ?? d.id, active_ver: d.active_ver, activated_ver: a?.activated_ver ?? null, state: a?.state ?? 'received', target_ver: a?.target_ver ?? null, error: a?.error ?? null });
     }
     return out.sort((x, y) => (x.id < y.id ? -1 : 1));
+  });
+  const windowStateApi=Object.freeze({
+    async get(key){guardAlive();const row=await db.get('window_state',`tab:${tabKey}:${key}`);return row?cloneValue(row.value):null;},
+    async put(key,value){guardAlive();if(typeof key!=='string'||!key)throw new CtoxError('invalid','Window key required',{path:'key'});let copy;try{copy=structuredClone(value);}catch{throw new CtoxError('invalid','Window value must be structured-cloneable',{path:'value'});}await db.tx(t=>t.put('window_state',{key:`tab:${tabKey}:${key}`,tab_key:tabKey,value:copy,at:Date.now()}));},
+    async delete(key){guardAlive();await db.tx(t=>t.del('window_state',`tab:${tabKey}:${key}`));}
   });
   const shellApi = Object.freeze({
     apps: appsLive,
     activation: Object.freeze({
       get: (appId) => makeLive(['activation'], () => (activations.has(appId) ? { ...activations.get(appId) } : null)),
       onChange(cb) { activationListeners.add(cb); return () => activationListeners.delete(cb); },
+      reportFailed:(appId,ver,reason)=>callLeader('reportFailed',[appId,String(ver),String(reason??'failed')]),
     }),
     metrics: metricsLive,
     leader: leaderLive,
+    status:statusZone,
     statusZone,
+    windowState:windowStateApi,
     artifacts: Object.freeze({
       async read(hash) {
         guardAlive();
@@ -1244,35 +1237,20 @@ export function createKernel(opts = {}) {
       if (!windowStates.has(appId)) windowStates.set(appId, { title: appId, header: null, size: { width: 0, height: 0 }, mode: 'normal', closed: false });
       const win = windowStates.get(appId);
       return Object.freeze({
-        state: makeLive([tag], () => cloneValue(win)),
+        state: makeLive([tag], () => ({...win,size:{...win.size}})),
         setSize(size) { win.size = { width: Number(size?.width ?? 0), height: Number(size?.height ?? 0) }; notify(tag); },
         setMode(mode) { win.mode = String(mode); notify(tag); },
         reopen() { win.closed = false; notify(tag); },
       });
     },
-    async mount(root, appId) {
-      guardAlive();
-      await ready;
-      const ver = activations.get(appId)?.activated_ver;
-      if (!ver) throw new CtoxError('not_found', `App ${appId} ist nicht aktiviert`);
-      const r = await mountVersion(root, appId, ver, { restored: undefined });
-      const m = { id: uuidv7(), appId, ver, root, handle: r.handle, api: r.api, closed: false };
-      mounts.add(m);
-      notify('mounts');
-      return Object.freeze({
-        app_id: appId,
-        get ver() { return m.ver; },
-        get api() { return m.api; },
-        snapshot: () => m.handle.snapshot?.(),
-        async unmount() { m.closed = true; mounts.delete(m); notify('mounts'); await m.handle.unmount(); },
-      });
-    },
+
   });
 
   // ---- Sim-Implementierung (läuft im Leiter) ----
   const simImpl = {
     push: (collection, docs) => corePush(collection, docs),
     setLink(partial) {
+      if(partial.state!==undefined && !['online','offline'].includes(partial.state))throw new CtoxError('invalid','Link state must be online or offline');
       link = { ...link, ...partial };
       if(fakeCore)fakeCore.online = link.state === 'online';
       netChanged();
@@ -1286,7 +1264,6 @@ export function createKernel(opts = {}) {
     async publishAppVersion(appId, ver, o) {
       await publishInternal(appId, ver, o);
       await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed);
-      await (remountChains.get(appId) ?? Promise.resolve());
       return activations.has(appId) ? { ...activations.get(appId) } : null;
     },
     async publishDraft(appId, baseAppVer, draftFiles, collections) {
@@ -1302,11 +1279,15 @@ export function createKernel(opts = {}) {
       await publishInternal(appId, ver, { files, collections: collections ?? undefined, entry: base?.entry, baseAppVer });
       return { status: 'accepted', rev: ver };
     },
-    async revertActivation(appId, oldVer, newVer, msg) {
-      await setActivation(appId, { activated_ver: oldVer, target_ver: newVer, state: 'failed', error: `mount_failed: ${msg}` });
+    async reportFailed(appId,ver,reason){
+      const cur=activations.get(appId)??{},good=(cur.good_vers??[]).filter(v=>v!==ver);
+      const lastGood=cur.activated_ver && cur.activated_ver!==ver?cur.activated_ver:good.at(-1)??null;
+      return setActivation(appId,{target_ver:ver,activated_ver:lastGood,good_vers:good,state:'failed',error:`reported: ${reason}`});
     },
+    corruptNextFetch(n){corruptNextFetch+=n;},
+
   };
-  const forward = (name) => (...args) => callLeader(name, args);
+  const forward = (name) => (...args) => Promise.resolve().then(()=>callLeader(name,args));
 
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
@@ -1317,23 +1298,21 @@ export function createKernel(opts = {}) {
     push: (collection, docs) => forward('push')(collection, docs),
     setLink: (partial) => forward('setLink')(partial),
     setBacklog: (n) => forward('setBacklog')(n),
-    publishAppVersion(appId, ver, o = {}) {
-      const { module, migrate, ...rest } = o;
-      if (module) moduleRegistry.set(`${appId}@${ver}`, module);
-      if (isLeader || !bc) return simImpl.publishAppVersion(appId, ver, { ...rest, migrate });
-      return (async () => {
-        await callLeader('publishAppVersion', [appId, ver, rest]); // migrate-Funktionen sind nicht übertragbar
-        await waitUntil(() => isTerminalFor(appId, ver) || closed);
-        await (remountChains.get(appId) ?? Promise.resolve());
-        return activations.has(appId) ? { ...activations.get(appId) } : null;
-      })();
+    publishAppVersion(appId,ver,o={}){
+      if(o.module!==undefined)return Promise.reject(new CtoxError('invalid','App modules belong to Shell/testkit'));
+      if(isLeader||!bc)return Promise.resolve().then(()=>simImpl.publishAppVersion(appId,ver,o));
+      return callLeader('publishAppVersion',[appId,ver,o]).then(()=>activations.get(appId)??null);
     },
-    registerModule(appId, ver, module) { moduleRegistry.set(`${appId}@${ver}`, module); },
+    corruptNextFetch:(n=1)=>callLeader('corruptNextFetch',[n]),
+    retireGenerationsNow:appId=>{const a=activations.get(appId);return retireGenerations(appId,a?.activated_ver,a?.previous_ver);},
     // Loader-Rolle (§16.15): Shell starten und live tauschen.
     async startShell(shellModule, o = {}) {
       if (typeof shellModule?.startShell !== 'function') throw new CtoxError('invalid', 'Shell-Modul exportiert kein startShell()');
       await ready;
-      await shellModule.startShell(kernel, { restored: o.restored });
+      await withTimeout(Promise.resolve().then(()=>shellModule.startShell(kernel,{restored:o.restored})),remountTimeoutMs,
+        ()=>{try{shellModule.stopShell?.();}catch{}});
+      guardAlive();
+
       currentShell = shellModule;
       return true;
     },
@@ -1347,7 +1326,7 @@ export function createKernel(opts = {}) {
         }
       }
       snap = checkSnapshot('shell', snap);
-      await db.tx((t) => t.put('window_state', { key: 'shell', app_id: 'shell', snapshot: snap ?? null, at: Date.now() }));
+      await windowStateApi.put('shell',snap??null);
       try {
         await withTimeout(Promise.resolve().then(() => nextShellModule.startShell(kernel, { restored: cloneValue(snap) })), remountTimeoutMs,
           () => { try { nextShellModule.stopShell?.(); } catch { /* egal */ } });
@@ -1378,6 +1357,8 @@ export function createKernel(opts = {}) {
     outbox: async () => (await db.all('outbox')).sort(byOpId),
     archiveLocal: async () => db.all('archive_local'),
     windowState: async () => db.all('window_state'),
+    windowStateRows:async()=>db.all('window_state'),
+    get refetches(){return simRecord.refetches;},
     coreHead: async () => Number(fakeCore?.head ?? '0'),
     get checkpoint() { return checkpoint; },
     get lastVisible() { return simRecord.lastVisible; },
@@ -1407,8 +1388,6 @@ export function createKernel(opts = {}) {
     for(const cancel of [...deadlineCancels])cancel();
     const cleanup=[];
     if(currentShell?.stopShell)cleanup.push(()=>currentShell.stopShell());
-    for(const m of mounts)cleanup.push(()=>m.handle.unmount());
-    mounts.clear();
     for (const t of timers) clearTimeout(t);
     timers.clear();
     clearInterval(ticker);
@@ -1428,7 +1407,7 @@ export function createKernel(opts = {}) {
     try { bc?.close(); } catch { /* egal */ }
     bc = null;
     try { transport.close(); } catch {}
-    db?.close();
+    await db?.close();
     // Release connection/locks/listeners before app code. A stuck app must not
     // keep an identity alive or prevent the next tab from becoming leader.
     await Promise.allSettled(cleanup.map(fn=>withTimeout(Promise.resolve().then(fn),remountTimeoutMs)));
@@ -1447,6 +1426,7 @@ export function createKernel(opts = {}) {
     get isLeader() { return isLeader; },
     get storageKind() { return db?.kind ?? null; },
     appApi: (appId, appVer) => makeAppApi(appId, appVer),
+    apps:shellApi.apps,activation:shellApi.activation,metrics:shellApi.metrics,leader:shellApi.leader,status:statusZone,windowState:windowStateApi,artifacts:shellApi.artifacts,source:shellApi.source,identity:shellApi.identity,
     statusZone,
     shell: shellApi,
     shellApi: () => shellApi,
