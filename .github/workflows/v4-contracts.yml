@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/v4-contracts-target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/runtime/build/v4-contracts-target
       CARGO_BUILD_JOBS: '2'
       RUST_TEST_THREADS: '2'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -39,10 +39,10 @@ jobs:
           key: v4-contracts
           cache-on-failure: true
           workspaces: |
-            . -> ${{ runner.temp }}/v4-contracts-target
-            src/core/rxdb -> ${{ runner.temp }}/v4-contracts-target
-            src/core/rxdb/patches/webrtc -> ${{ runner.temp }}/v4-contracts-target
-            src/core/app_capabilities/contract -> ${{ runner.temp }}/v4-contracts-target
+            . -> ${{ github.workspace }}/runtime/build/v4-contracts-target
+            src/core/rxdb -> ${{ github.workspace }}/runtime/build/v4-contracts-target
+            src/core/rxdb/patches/webrtc -> ${{ github.workspace }}/runtime/build/v4-contracts-target
+            src/core/app_capabilities/contract -> ${{ github.workspace }}/runtime/build/v4-contracts-target
       - name: Prepare evidence and reject empty test runs
         shell: bash
         run: |
