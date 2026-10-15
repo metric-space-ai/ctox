@@ -84,7 +84,13 @@ export class IdbBackend {
     this.db = db;
     this.name = name;
     this.kind = 'indexeddb';
+    this.transactions = new Map();
     db.onversionchange = () => { this.onVersionChange?.(); db.close(); };
+  }
+  trackTransaction(t) {
+    let done;const settled=new Promise(resolve=>{done=resolve;});this.transactions.set(t,settled);
+    const finish=()=>{this.transactions.delete(t);done();};
+    t.addEventListener('complete',finish,{once:true});t.addEventListener('abort',finish,{once:true});return t;
   }
   _wrap(t) {
     const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -117,7 +123,7 @@ export class IdbBackend {
   transaction(fn, mode) {
     return new Promise((resolve, reject) => {
       let t;
-      try { t = this.db.transaction(STORE_NAMES, mode); } catch (e) { reject(e); return; }
+      try { t = this.trackTransaction(this.db.transaction(STORE_NAMES, mode)); } catch (e) { reject(e); return; }
       let out, failed = null;
       t.oncomplete = () => (failed ? reject(failed) : resolve(out));
       t.onabort = () => reject(failed || t.error || new Error('IDB-Transaktion abgebrochen'));
@@ -129,7 +135,7 @@ export class IdbBackend {
   }
   _ro(s, op) {
     return new Promise((resolve, reject) => {
-      const t = this.db.transaction([s], 'readonly');
+      const t = this.trackTransaction(this.db.transaction([s], 'readonly'));
       const r = op(t.objectStore(s));
       r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
@@ -137,7 +143,7 @@ export class IdbBackend {
   }
   get(s, k) { return this._ro(s, (os) => os.get(k)); }
   all(s) { return this._ro(s, (os) => os.getAll()); }
-  close() { this.db.close(); }
+  async close() { this.db.close();await Promise.allSettled([...this.transactions.values()]); }
 }
 export async function openBackend(name, mode) {
   const useIdb = mode === 'indexeddb' || (mode !== 'memory' && typeof indexedDB !== 'undefined');

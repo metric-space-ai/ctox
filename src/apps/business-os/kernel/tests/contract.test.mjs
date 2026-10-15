@@ -1,15 +1,17 @@
-import { testLocks } from './web-locks.mjs';
+import {testLocks} from './web-locks.mjs';
 // node --test test/  (Node ≥ 22; ohne IndexedDB läuft der In-Memory-Speicher mit gleicher Schnittstelle)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
-  createStubKernel, createShellKernel, compileQuery, runCompiledQuery, CtoxError, sha256Js, uuidv7,
+  createStubKernel as createContractKernel, createShellKernel, compileQuery, runCompiledQuery, CtoxError, sha256Js, uuidv7,
 } from '../kernel.mjs';
+import { createAppHost } from '../testkit/app-host.mjs';
+const createStubKernel=options=>createContractKernel({locks:testLocks,...options});
 
 let n = 0;
 async function mk(o = {}) {
-  const k = createStubKernel({ locks:testLocks, instanceId: `t${process.pid}-${++n}`, userId: 'u1', latencyMs: 5, ...o });
+  const k = createStubKernel({locks:testLocks, instanceId: `t${process.pid}-${++n}`, userId: 'u1', latencyMs: 5, ...o });
   await k.ready;
   return k;
 }
@@ -128,7 +130,7 @@ test('rejected → Serverstand zurück, Eingabe in archive_local, Zustandszone',
   assert.equal(arch.length, 1);
   assert.deepEqual(arch[0].body, { title: 'Lokal' });
   assert.equal(arch[0].ref, r.archived_ref);
-  const z = k.statusZone.forApp('writer').get();
+  const z = k.status.forApp('writer').get();
   assert.equal(z.length, 1);
   assert.equal(z[0].level, 'error');
   assert.match(z[0].text, /Änderung abgelehnt: revoked/);
@@ -180,7 +182,6 @@ test('delete mit veralteter Basis → conflict (§16.6); Folge-Write nennt prev_
 test('lokale Schemaprüfung: invalid → local lehnt ab, nichts geschrieben; result lehnt nie ab', async () => {
   const k = await mk();
   await k.sim.publishAppVersion('todo', '1', {
-    module: moduleOf(() => ({ unmount() {} })),
     collections: { tasks: { schema: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, n: { type: 'integer' } } } } },
   });
   const api = k.appApi('todo', '1');
@@ -199,7 +200,7 @@ test('lokale Schemaprüfung: invalid → local lehnt ab, nichts geschrieben; res
 
 test('Outbox überlebt Neustart (gleiche Instanz+Nutzer), cancel nur vor dem Senden', async () => {
   const opts = { instanceId: `persist-${process.pid}`, userId: 'anna', latencyMs: 5 };
-  const k1 = createStubKernel({...opts,locks:testLocks});
+  const k1 = createStubKernel(opts);
   await k1.ready;
   assert.equal(k1.dbName, `ctox-persist-${process.pid}-anna`);
   await k1.sim.setLink({ state: 'offline' });
@@ -216,7 +217,7 @@ test('Outbox überlebt Neustart (gleiche Instanz+Nutzer), cancel nur vor dem Sen
   assert.equal(resolved, false, 'result bleibt offen, solange offline');
   await k1.close();
 
-  const k2 = createStubKernel({ locks:testLocks, ...opts });
+  const k2 = createStubKernel({locks:testLocks, ...opts });
   await k2.ready;
   const rec = await k2.sim.inspect('notes', 'a');
   assert.ok(rec, 'Dokument lokal vorhanden');
@@ -251,79 +252,170 @@ test('command: Dokument mit gepushtem Status queued → accepted → running →
   await k.close();
 });
 
-test('App-Aktivierung received → fetched → data-ready → activated, Remount mit snapshot/restored, Rückfall, needs_update', async () => {
-  const k = await mk({ remountTimeoutMs: 200 });
-  const sk = createShellKernel(k);
+test('App-Aktivierung received → fetched → data-ready → activated; Remount (testkit) mit snapshot/restored, 9-s-Rückfall, needs_update', async () => {
+  const k = await mk();
+  const host = createAppHost(k, { mountTimeoutMs: 200 });
   const events = [];
-  sk.activation.onChange((e) => events.push(`${e.ver}:${e.state}`));
-  await k.sim.publishAppVersion('notes', '1', {
-    module: moduleOf((root, api, ctx) => {
-      root.log.push(`v1 mount restored=${JSON.stringify(ctx.restored)}`);
-      return { unmount() { root.log.push('v1 unmount'); }, snapshot: () => ({ draft: 'halb getippt', ver: api.app.ver }) };
-    }),
-  });
+  k.activation.onChange((e) => events.push(`${e.ver}:${e.state}`));
+  host.registerModule('notes', '1', moduleOf((root, api, ctx) => {
+    root.log.push(`v1 mount restored=${JSON.stringify(ctx.restored)}`);
+    return { unmount() { root.log.push('v1 unmount'); }, snapshot: () => ({ draft: 'halb getippt', ver: api.app.ver }) };
+  }));
+  await k.sim.publishAppVersion('notes', '1', {});
   assert.deepEqual(events, ['1:received', '1:fetched', '1:data-ready', '1:activated']);
   const root = { log: [] };
-  const m = await sk.mount(root, 'notes');
+  const m = await host.mount(root, 'notes');
   assert.equal(m.ver, '1');
 
-  // v2: Code aus Artefakten (data:/blob:-Import), Wasserstand liegt 2 seq in der Zukunft → wartet auf data-ready
+  // v2: Code aus Artefakten (data:-Import), Wasserstand liegt in der Zukunft → wartet auf data-ready
   const head = await k.sim.coreHead();
   const v2src = `export function mount(root, api, ctx) {
     root.log.push('v2 mount'); root.restored = ctx.restored; root.api = api;
     return { unmount() { root.log.push('v2 unmount'); }, snapshot() { return { from: 'v2' }; } };
   }`;
   const p = k.sim.publishAppVersion('notes', '2', { files: { 'index.js': v2src, 'style.css': 'p{}' }, migratedAtSeq: head + 4 });
-  await until(() => sk.activation.get('notes').get()?.state === 'fetched' && sk.activation.get('notes').get()?.target_ver === '2');
+  await until(() => k.activation.get('notes').get()?.state === 'fetched' && k.activation.get('notes').get()?.target_ver === '2');
   await tick(20);
-  assert.equal(sk.activation.get('notes').get().state, 'fetched', 'wartet auf Checkpoint ≥ migrated_at_seq');
+  assert.equal(k.activation.get('notes').get().state, 'fetched', 'wartet auf Checkpoint ≥ migrated_at_seq');
   await k.sim.push('other', [{ id: 'o1' }, { id: 'o2' }]);
   const st = await p;
   assert.equal(st.state, 'activated');
   assert.equal(st.activated_ver, '2');
+  await host.idle();
   assert.deepEqual(root.restored, { draft: 'halb getippt', ver: '1' });
   assert.equal(m.ver, '2');
   assert.deepEqual(root.log, ['v1 mount restored=undefined', 'v1 unmount', 'v2 mount']);
-  const ws = await k.sim.windowState();
-  assert.deepEqual(ws[0].snapshot, { draft: 'halb getippt', ver: '1' });
+  const ws = await k.sim.windowStateRows();
+  assert.deepEqual(ws.find((r) => r.value?.next_ver === '2').value.snapshot, { draft: 'halb getippt', ver: '1' });
   assert.ok(k.sim.activationReports.some((r) => r.app_ver === '2' && r.state === 'activated'));
-  const man = await sk.artifacts.manifest('notes', '2');
-  const blob = await sk.artifacts.read(man.files['index.js']);
-  assert.equal(await blob.text(), v2src);
+  const man = await k.artifacts.manifest('notes', '2');
+  assert.equal(await (await k.artifacts.read(man.files['index.js'])).text(), v2src);
 
-  // v3: mount wirft → Shell startet v2 wieder (mit Snapshot) und meldet Fehler; Aktivierung → failed
-  await k.sim.publishAppVersion('notes', '3', { module: moduleOf(() => { throw new Error('boom'); }) });
-  await until(() => sk.activation.get('notes').get()?.state === 'failed');
-  await k.sim.settle();
+  // v3: mount wirft → testkit mountet v2 wieder (mit Snapshot), reportFailed setzt den Zeiger zurück
+  host.registerModule('notes', '3', moduleOf(() => { throw new Error('boom'); }));
+  await k.sim.publishAppVersion('notes', '3', {});
+  await until(() => k.activation.get('notes').get()?.state === 'failed');
+  await host.idle();
   assert.equal(m.ver, '2');
-  assert.equal(sk.activation.get('notes').get().activated_ver, '2');
-  assert.ok(k.statusZone.forApp('notes').get().some((e) => e.code === 'app.remount_failed'));
+  assert.equal(k.activation.get('notes').get().activated_ver, '2');
+  assert.match(k.activation.get('notes').get().error, /reported: mount_failed: boom/);
+  assert.ok(k.status.forApp('notes').get().some((e) => e.code === 'app.remount_failed' && e.source === 'shell'));
   assert.deepEqual(root.restored, { from: 'v2' });
+  assert.ok(k.sim.activationReports.some((r) => r.app_ver === '3' && r.state === 'failed'));
 
-  // v4: mountet nicht binnen remountTimeoutMs → Rückfall
-  await k.sim.publishAppVersion('notes', '4', { module: moduleOf(() => new Promise(() => {})) });
-  await until(() => sk.activation.get('notes').get()?.target_ver === '4' && sk.activation.get('notes').get()?.state === 'failed');
-  assert.match(sk.activation.get('notes').get().error, /mount_failed/);
-  await until(() => m.ver === '2');
+  // v4: mountet nicht binnen mountTimeoutMs → Rückfall
+  host.registerModule('notes', '4', moduleOf(() => new Promise(() => {})));
+  const t0 = Date.now();
+  await k.sim.publishAppVersion('notes', '4', {});
+  await until(() => k.activation.get('notes').get()?.target_ver === '4' && k.activation.get('notes').get()?.state === 'failed');
+  assert.ok(Date.now() - t0 < 1000, 'Rückfall binnen Frist');
+  await host.idle();
+  assert.equal(m.ver, '2');
 
-  // fehlende Fähigkeit → failed{needs_update}, Zustandszone
-  const r5 = await k.sim.publishAppVersion('notes', '5', { module: moduleOf(() => ({ unmount() {} })), capabilitiesRequired: ['cap.gpu'] });
+  // fehlende Fähigkeit → failed{needs_update}, Zustandsstrom
+  const r5 = await k.sim.publishAppVersion('notes', '5', { capabilitiesRequired: ['cap.gpu'] });
   assert.equal(r5.state, 'failed');
   assert.match(r5.error, /^needs_update/);
-  assert.ok(k.statusZone.forApp('notes').get().some((e) => e.code === 'app.needs_update'));
-  await m.unmount();
+  assert.ok(k.status.forApp('notes').get().some((e) => e.code === 'app.needs_update'));
+  await assert.rejects(k.sim.publishAppVersion('notes', '6', { module: {} }), (e) => e.code === 'invalid');
+  await host.dispose();
   await k.close();
 });
 
-test('Generationen (§16.4): inkompatible Collection → name@g2, alter Code liest g1, Doppelschreiben', async () => {
+test('activation.reportFailed: Zeiger zurück auf letzte funktionierende Version, app_activation failed', async () => {
   const k = await mk();
-  const noop = moduleOf(() => ({ unmount() {} }));
-  await k.sim.publishAppVersion('crm', '1', { module: noop });
+  await k.sim.publishAppVersion('a', '1', {});
+  await k.sim.publishAppVersion('a', '2', {});
+  assert.equal(k.activation.get('a').get().activated_ver, '2');
+  const r = await k.activation.reportFailed('a', '2', 'render crash');
+  assert.equal(r.state, 'failed');
+  assert.equal(r.activated_ver, '1');
+  assert.equal(r.target_ver, '2');
+  assert.equal(k.apps.get()[0].activated_ver, '1');
+  assert.deepEqual(k.sim.activationReports.at(-1), { app_id: 'a', app_ver: '2', state: 'failed', at_seq: k.sim.checkpoint, error: 'reported: render crash' });
+  await tick(20);
+  assert.equal(k.activation.get('a').get().activated_ver, '1', 'keine erneute Aktivierung der gemeldeten Version');
+  await k.close();
+});
+
+test('Artefakt mit falschem Hash: einmal neu holen, erst wiederholter Fehlschlag → failed (§16.15a)', async () => {
+  const k = await mk();
+  await k.sim.corruptNextFetch(1);
+  const ok = await k.sim.publishAppVersion('x', '1', { files: { 'index.js': 'export const a = 1;' } });
+  assert.equal(ok.state, 'activated');
+  assert.equal(k.sim.refetches, 1);
+  await k.sim.corruptNextFetch(2);
+  const bad = await k.sim.publishAppVersion('x', '2', { files: { 'index.js': 'export const a = 2;' } });
+  assert.equal(bad.state, 'failed');
+  assert.match(bad.error, /^hash_mismatch/);
+  await k.close();
+});
+
+test('kernel.apps liefert layout und styles aus dem Manifest (§16.19 Nr. 6)', async () => {
+  const k = await mk();
+  await k.sim.publishAppVersion('crm', '1', {
+    title: 'CRM', styles: ['styles/app.css'],
+    layout: { icon_svg: '<svg/>', category: 'Vertrieb', default_width: 900, default_height: 640, min_width: 480, presentation: 'window' },
+  });
+  const [app] = k.apps.get();
+  assert.deepEqual(app.layout, {
+    icon_asset: null, icon_svg: '<svg/>', category: 'Vertrieb', frame_palette: null, default_width: 900,
+    default_height: 640, min_width: 480, min_height: null, presentation: 'window',
+  });
+  assert.deepEqual(app.styles, ['styles/app.css']);
+  await k.sim.publishAppVersion('crm', '2', {}); // erbt layout/styles der Vorversion
+  await until(() => k.apps.get()[0].activated_ver === '2');
+  assert.equal(k.apps.get()[0].layout.category, 'Vertrieb');
+  await k.close();
+});
+
+test('windowState je Tab und Nutzer; shell_preferences nur eigene Zeile (§16.19 Nr. 3)', async () => {
+  const opts = { instanceId: `ws-${process.pid}`, userId: 'mia', latencyMs: 5, multiTab: false };
+  const t1 = createStubKernel({locks:testLocks, ...opts, tabKey: 'tab-A' });
+  await t1.ready;
+  await t1.windowState.put('layout', { open: ['crm'], z: [1] });
+  assert.deepEqual(await t1.windowState.get('layout'), { open: ['crm'], z: [1] });
+  await assert.rejects(t1.windowState.put('bad', () => 1), (e) => e.code === 'invalid');
+  await t1.close();
+  const t1b = createStubKernel({locks:testLocks, ...opts, tabKey: 'tab-A' }); // Neuladen desselben Tabs
+  await t1b.ready;
+  assert.deepEqual(await t1b.windowState.get('layout'), { open: ['crm'], z: [1] });
+  await t1b.close();
+  const t2 = createStubKernel({locks:testLocks, ...opts, tabKey: 'tab-B' });
+  await t2.ready;
+  assert.equal(await t2.windowState.get('layout'), null, 'anderer Tab sieht nichts');
+  const api = t2.appApi('shell', '1');
+  assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher: ['crm', 'mail'] }).result).status, 'accepted');
+  await assert.rejects(api.put('shell_preferences', { id: 'tom', pins: [] }).local, (e) => e.code === 'forbidden');
+  await t2.sim.push('shell_preferences', [{ id: 'tom', pins: ['x'] }]);
+  assert.deepEqual(api.query('shell_preferences', {}).get().map((d) => d.id), ['mia']);
+  assert.equal(api.get('shell_preferences', 'tom').get(), null);
+  await t2.close();
+});
+
+test('registerHeader nimmt ein Element; link.state nur online|offline (§16.19 Nr. 5, 7)', async () => {
+  const k = await mk();
+  const api = k.appApi('notes', '1');
+  const el = { tagName: 'DIV', id: 'kopf' }; // in Node gibt es kein HTMLElement; im Browser wird instanceof geprüft
+  api.shell.registerHeader(el);
+  assert.equal(k.shell.window('notes').state.get().header, el, 'Referenz, keine Kopie');
+  assert.throws(() => api.shell.registerHeader('<h1>'), (e) => e.code === 'invalid');
+  await assert.rejects(k.sim.setLink({ state: 'connecting' }), (e) => e.code === 'invalid');
+  assert.equal(api.metrics.get().link.state, 'online');
+  const c = api.command('crm.touch', { a: 1 }, { record_id: 'lead-7' });
+  await c.local;
+  assert.equal(api.get('business_commands', c.id).get().record_id, 'lead-7');
+  await k.sim.settle();
+  await k.close();
+});
+
+test('Generationen (§16.4/§16.16): name@g2, alter Code liest g1, Doppelschreiben, g1 nach Frist verworfen', async () => {
+  const k = await mk({ generationGraceMs: 150 });
+  await k.sim.publishAppVersion('crm', '1', {});
   const v1 = k.appApi('crm', '1');
   await v1.put('leads', { id: 'l1', name: 'Ada Lovelace' }).result;
   await v1.put('leads', { id: 'l2', name: 'Alan Turing' }).result;
   const st = await k.sim.publishAppVersion('crm', '2', {
-    module: noop,
     incompatible: ['leads'],
     migrate: { leads: (d) => { const [first, last] = d.name.split(' '); return { id: d.id, first, last }; } },
   });
@@ -338,6 +430,11 @@ test('Generationen (§16.4): inkompatible Collection → name@g2, alter Code lie
   v2.setVisible(['leads']);
   assert.deepEqual(k.sim.lastVisible.collections, ['leads@g2']);
   await k.sim.settle();
+  // §16.16: g1 bleibt, bis v2 die Frist ohne Rückfall lief; dann verwirft der Client sie
+  assert.equal(v1.query('leads', {}).get().length, 3);
+  await until(() => v1.query('leads', {}).get().length === 0, 2000);
+  assert.equal(await k.sim.inspect('leads', 'l1'), undefined);
+  assert.equal(v2.query('leads', {}).get().length, 3);
   await k.close();
 });
 
@@ -346,18 +443,18 @@ test('Zustandszone: report/clear je App, live, gleicher code ersetzt', async () 
   const a = k.appApi('a', '1');
   const b = k.appApi('b', '1');
   const lists = [];
-  k.statusZone.forApp('a').subscribe((l) => lists.push(l.map((e) => e.text)));
+  k.status.forApp('a').subscribe((l) => lists.push(l.map((e) => e.text)));
   a.status.report({ level: 'warn', code: 'sync', text: 'eins' });
   a.status.report({ level: 'warn', code: 'sync', text: 'zwei' });
   b.status.report({ level: 'info', code: 'x', text: 'b' });
   await tick();
   assert.deepEqual(lists.at(-1), ['zwei']);
-  assert.equal(k.statusZone.get().length, 2);
+  assert.equal(k.status.get().length, 2);
   assert.throws(() => a.status.report({ level: 'loud', code: 'c', text: '' }), (e) => e.code === 'invalid');
   a.status.clear('sync');
   await tick();
   assert.deepEqual(lists.at(-1), []);
-  assert.equal(k.statusZone.get().length, 1);
+  assert.equal(k.status.get().length, 1);
   await k.close();
 });
 
@@ -387,8 +484,7 @@ test('Dateien: put (Blob + Outbox + files-Dokument), get aus Cache, nach Räumun
 
 test('api.shell, api.actor, setVisible: navigate unbekannt → Zustandszone', async () => {
   const k = await mk();
-  const noop = moduleOf(() => ({ unmount() {} }));
-  await k.sim.publishAppVersion('mail', '1', { module: noop });
+  await k.sim.publishAppVersion('mail', '1', {});
   const a = k.appApi('notes', '1');
   const mail = k.appApi('mail', '1');
   const routes = [];
@@ -396,7 +492,7 @@ test('api.shell, api.actor, setVisible: navigate unbekannt → Zustandszone', as
   assert.equal(a.shell.navigate('mail', { thread: 't1' }), true);
   assert.deepEqual(routes[0].params, { thread: 't1' });
   assert.equal(a.shell.navigate('gibtsnicht', {}), false);
-  const z = k.statusZone.forApp('notes').get();
+  const z = k.status.forApp('notes').get();
   assert.equal(z[0].code, 'shell.navigate.unknown_target');
   assert.equal(z[0].level, 'error');
   k.sim.setTranslations('de', { hello: 'Hallo' });
@@ -420,7 +516,7 @@ test('api.shell, api.actor, setVisible: navigate unbekannt → Zustandszone', as
 test('Shell-Kernel: apps mit Aktivierungszustand, source.* rechtegeprüft, draft.publish', async () => {
   const k = await mk();
   const sk = createShellKernel(k);
-  const lead = await k.appApi('x', '1'); void lead;
+  assert.equal(sk.apps, k.apps);
   const src = 'export function mount(){ return { unmount(){} }; }';
   await k.sim.publishAppVersion('leads', '1', { files: { 'index.js': src, 'README.md': '# Leads' }, title: 'Leads' });
   const apps = sk.apps.get();
@@ -447,7 +543,7 @@ test('Shell-Kernel: apps mit Aktivierungszustand, source.* rechtegeprüft, draft
 });
 
 test('Shell-Tausch: stopShell → snapshot → startShell(kernel, {restored}); defekte Shell → Rückfall', async () => {
-  const k = await mk({ remountTimeoutMs: 100 });
+  const k = await mk({ shellStartTimeoutMs: 100 });
   const log = [];
   const shellA = {
     startShell(kernel, { restored }) { log.push(['A start', restored]); assert.ok(createShellKernel(kernel).apps); },
@@ -457,6 +553,7 @@ test('Shell-Tausch: stopShell → snapshot → startShell(kernel, {restored}); d
     startShell(kernel, { restored }) { log.push(['B start', restored]); },
     stopShell() { log.push(['B stop']); return { openWindows: ['mail'] }; },
   };
+  await assert.rejects(k.startShell({startShell:()=>new Promise(()=>{}),stopShell(){}}),e=>e.code==='unavailable'&&/100 ms/.test(e.message));
   const broken = { startShell() { throw new Error('Shell kaputt'); }, stopShell() {} };
   await k.sim.startShell(shellA);
   const r = await k.sim.swapShell(shellB);
@@ -465,15 +562,16 @@ test('Shell-Tausch: stopShell → snapshot → startShell(kernel, {restored}); d
   const r2 = await k.sim.swapShell(broken);
   assert.equal(r2.swapped, false);
   assert.deepEqual(log.slice(3), [['B stop'], ['B start', { openWindows: ['mail'] }]]);
-  assert.ok(k.statusZone.forApp('shell').get().some((e) => e.code === 'shell.swap_failed'));
+  assert.ok(k.status.forApp('shell').get().some((e) => e.code === 'shell.swap_failed'));
+  assert.deepEqual(await k.windowState.get('shell'), { openWindows: ['mail'] });
   await k.close();
 });
 
 test('Mehr-Tab: Leser schreibt in gemeinsame Outbox, Leiter sendet; Leiterwechsel; local_seq-Abgleich', async () => {
   const opts = { instanceId: `tabs-${process.pid}`, userId: 'u', latencyMs: 5 };
-  const t1 = createStubKernel({...opts,locks:testLocks});
+  const t1 = createStubKernel(opts);
   await t1.ready;
-  const t2 = createStubKernel({...opts,locks:testLocks});
+  const t2 = createStubKernel(opts);
   await t2.ready;
   assert.equal(t1.isLeader, true);
   assert.equal(t2.isLeader, false);
@@ -521,19 +619,19 @@ test('leader_gen: veraltete Leiteroperation wird verworfen, Neuwahl sendet erneu
 
 test('Abmelden schließt DB und sperrt Zugriff; Outbox wird bei erneuter Anmeldung derselben Identität gesendet', async () => {
   const opts = { instanceId: `logout-${process.pid}`, userId: 'bob', latencyMs: 5 };
-  const k1 = createStubKernel({...opts,locks:testLocks});
+  const k1 = createStubKernel(opts);
   await k1.ready;
   await k1.sim.setLink({ state: 'offline' });
   const api = k1.appApi('notes', '1');
   await api.put('notes', { id: 'o', v: 1 }).local;
   await createShellKernel(k1).identity.logout();
   await assert.rejects(api.put('notes', { id: 'p' }).local, (e) => e.code === 'unavailable');
-  assert.throws(() => api.query('notes', {}).get(), e => e.code === 'unavailable');
-  const other = createStubKernel({ locks:testLocks, ...opts, userId: 'eve' });
+  assert.throws(()=>api.query('notes',{}).get(),e=>e.code==='unavailable');
+  const other = createStubKernel({locks:testLocks, ...opts, userId: 'eve' });
   await other.ready;
   assert.equal((await other.sim.outbox()).length, 0, 'nie unter anderer Identität');
   await other.close();
-  const k2 = createStubKernel({...opts,locks:testLocks});
+  const k2 = createStubKernel(opts);
   await k2.ready;
   await k2.sim.settle();
   assert.equal((await k2.sim.inspect('notes', 'o')).pending, false);
@@ -541,4 +639,12 @@ test('Abmelden schließt DB und sperrt Zugriff; Outbox wird bei erneuter Anmeldu
   await k3.ready;
   assert.equal(k3.dbName, `ctox-logout2-${process.pid}-bob`);
   await k3.logout({ deleteData: true });
+});
+
+test('Kompatibilität zu 66edb98: veraltete Aliase zeigen auf die neuen Objekte', async () => {
+  const k = await mk();
+  assert.equal(k.statusZone, k.status);
+  assert.equal(k.shell.statusZone, k.status);
+  assert.deepEqual(await k.sim.windowState(), await k.sim.windowStateRows());
+  await k.close();
 });
