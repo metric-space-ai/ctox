@@ -90,10 +90,13 @@ export function assertExactScope(records, collection, expectedIds, forbiddenFiel
   const rows=collectionRecords(records,collection).filter(r=>!r.deleted);
   assert.deepEqual(rows.map(r=>r.id).sort(),[...expectedIds].sort(),'IDB contains a foreign/missing row or stale generation');
   for (const row of rows) for (const field of forbiddenFields) {
-    const has=(value,path)=>path.split('.').every((key,index,keys)=>{
-      for (const p of keys.slice(0,index)) value=value?.[p];
-      return value != null && Object.hasOwn(value,key);
-    });
+    const has=(value,path)=>{
+      for (const key of path.split('.')) {
+        if (value == null || !Object.hasOwn(value,key)) return false;
+        value=value[key];
+      }
+      return true;
+    };
     for (const body of [row.data,row.base?.data]) assert.equal(has(body,field),false,'Masked field persisted in raw IDB: '+field);
   }
 }
@@ -136,11 +139,23 @@ export async function pendingResult(page, opId) {
   return page.evaluate(opId=>globalThis.__p6Pending.get(opId),opId);
 }
 export async function trace(page) { return page.evaluate(()=>structuredClone(globalThis.__p6Trace)); }
-export function assertRevocation(before,after,rights,collection) {
+export function assertRevocation(before,after,rights,collection,sendTrace) {
   assert.match(String(rights.seq),/^[0-9]+$/);
-  const revoke=after.revokes.find(r=>r.rights_ver===rights.rights_ver && r.collections.includes(collection));
+  const revoke=after.revokes.find(r=>String(r.rights_ver)===String(rights.rights_ver) && r.collections.includes(collection));
   assert.ok(revoke,'No authenticated scope_revoke received');
-  assert.ok(revoke.frame-before.frame<=1,'Rights change took more than one physical receive frame');
+  // Receive callbacks on independent lanes can overlap. Their callback order
+  // cannot prove a server-side one-frame fence: require the final native send
+  // log anchored at the actual Store commit instead of inferring it from RTT.
+  assert.equal(sendTrace?.source,'native-final-send');
+  assert.equal(sendTrace.rights_seq,String(rights.seq));
+  assert.match(sendTrace.commit_frame,/^[0-9]+$/);
+  const limit=BigInt(sendTrace.commit_frame)+1n;
+  const notice=sendTrace.frames.find(f=>f.type==='scope_revoke' &&
+    String(f.rights_ver)===String(rights.rights_ver) && f.collections.includes(collection));
+  assert.ok(notice && BigInt(notice.frame)<=limit,'Rights change took more than one native send frame');
+  const stale=sendTrace.frames.filter(f=>BigInt(f.frame)>limit && f.collection===collection &&
+    String(f.rights_ver)!==String(rights.rights_ver) && f.type==='page');
+  assert.deepEqual(stale,[],'Old rights remained active beyond the next native frame');
   const leaked=after.pages.filter(p=>p.frame>revoke.frame && p.collection===collection)
     .flatMap(p=>p.docs).filter(d=>d.op!=='unproject' && d.op!=='delete' && BigInt(d.seq)>BigInt(rights.seq));
   assert.deepEqual(leaked,[],'Post-revocation changes reached the old subscription');

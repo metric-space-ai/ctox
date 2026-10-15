@@ -67,7 +67,9 @@ export default {
       const artifacts=await rawStore(user.page,'artifacts');
       assert.ok(f.revokedArtifacts.length>0);
       assert.ok(f.revokedArtifacts.every(hash=>!artifacts.some(a=>a.hash===hash)),'Revoked artifact remains locally accessible');
-      const after=await trace(user.page);assertRevocation(before,after,revoked,f.collection);
+      const after=await trace(user.page);
+      const sendTrace=await control(owner,'sendTrace',{deviceId:user.identity.deviceId,rightsSeq:revoked.seq});
+      assertRevocation(before,after,revoked,f.collection,sendTrace);
       return {status:'measured',pass:true,acceptanceComplete:true,
         measured:{openings,expansionMs,removalMs,rights:revoked,rejection,wire:after,nonAdmin:true}};
     } finally { if(pressure)await control(owner,'stopWrites',{owner:pressure.owner}); }

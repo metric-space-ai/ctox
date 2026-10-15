@@ -67,7 +67,9 @@ export default {
       const target=peers.find(p=>p.identity.id===f.revokedUser),before=await trace(target.page);
       revocation=await control(owner,'setRights',f.revoke);revoked=true;
       await until(h,async()=>!(await rawStore(target.page,'docs')).some(r=>r.collection===f.collection),5000,'Revoked raw IDB cleanup');
-      wire=await trace(target.page);assertRevocation(before,wire,revocation,f.collection);
+      wire=await trace(target.page);
+      const sendTrace=await control(owner,'sendTrace',{deviceId:target.identity.deviceId,rightsSeq:revocation.seq});
+      assertRevocation(before,wire,revocation,f.collection,sendTrace);
       const destination=await rawStore(second.page,'docs');
       invalid=[];
       for(const variant of ['old_rights_ver','forged_signature']) {
