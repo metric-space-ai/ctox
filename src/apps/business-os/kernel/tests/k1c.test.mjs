@@ -70,3 +70,91 @@ test('K-1c 4 §16.39 Nr. 5: zweiter Nutzer ohne Admin – eigene DB, Rolle vom C
   await tick(30);
   assert.equal((await u2.sim.inspect('shell_preferences', 'admin'))?.data ?? null, null);
 });
+
+const caps = ['audit.event', 'agent.task.enqueue'];
+test('K-1c 5: Fake-Core reicht ctx.cap durch (audit.event, agent.task.enqueue) – App mit capabilities_required aktiviert', async (t) => {
+  const k = await mk(t);
+  await k.sim.publishAppVersion('probe', '1', {
+    files: { 'index.js': MOUNT, 'handlers/p.audit.js': "export default async function handle(c, ctx) { return ctx.cap.audit.event({ event_type: 'p', record_id: c.payload.id }); }",
+      'handlers/p.other.js': 'export default async function handle(c, ctx) { return ctx.cap.agent.task.get({ task_id: "x" }); }' },
+    handlers: { 'p.audit': 'handlers/p.audit.js', 'p.other': 'handlers/p.other.js' }, capabilitiesRequired: caps,
+  });
+  const a = appVersion(k, 'probe');
+  assert.deepEqual([a.state, a.error], ['activated', null], 'kein needs_update');
+  const api = k.appApi('probe', '1');
+  const r = await cmdDone(api.command('p.audit', { id: 'r1' }));
+  assert.equal(r.status, 'done');
+  const audit = await k.sim.coreRows('_audit');
+  assert.deepEqual(audit.map((x) => [x.id, x.app_id, x.event_type, x.record_id]), [[r.result.id, 'probe', 'p', 'r1']]);
+  const undeclared = await cmdDone(api.command('p.other', {}));
+  assert.match(undeclared.error, /^forbidden: cap\.agent\.task\.get nicht in capabilities_required/);
+});
+
+test('K-1c 6: Handler-Laufzeit (Routing app_id+type, relative Importe, ctx.put/read/asset) und Trigger (on, every, fremd nur mit watch-Export)', async (t) => {
+  const k = await mk(t, { everyMs: 40, agentDelayMs: 5 });
+  const leads = { schema: { primaryKey: 'id', type: 'object', additionalProperties: false, properties: { id: { type: 'string' }, name: { type: 'string' }, n: { type: 'number' } }, required: ['id', 'name'] } };
+  const log = { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' }, src: { type: 'string' } }, required: ['id'] } };
+  await k.sim.publishAppVersion('crm', '1', {
+    files: {
+      'index.js': MOUNT, 'prompts/hi.md': 'Hallo {{name}}',
+      'handlers/_lib.js': "export const norm = (s) => String(s).trim().toUpperCase();",
+      'handlers/crm.add.js': "import { norm } from './_lib.js';\nexport default async function handle(c, ctx) { const name = norm(c.payload.name) + ' ' + (await ctx.asset('prompts/hi.md')).slice(0, 5); await ctx.put('leads', { id: c.payload.id, name }); const all = await ctx.read('leads', { selector: {} }); return { id: c.payload.id, count: all.length }; }",
+      'handlers/crm.bad.js': "export default async function handle(c, ctx) { await ctx.put('leads', { id: 'x' }); }",
+      'handlers/crm.foreign.js': "export default async function handle(c, ctx) { await ctx.put('hr_people', { id: 'p' }); }",
+      'handlers/on-lead.js': "export default async function handle(c, ctx) { await ctx.put('crm_log', { id: `lead:${c.payload.id}`, src: c.payload.op }); }",
+      'handlers/tick.js': "export default async function handle(c, ctx) { await ctx.put('crm_log', { id: 'tick', src: 'every' }); }",
+    },
+    handlers: { 'crm.add': 'handlers/crm.add.js', 'crm.bad': 'handlers/crm.bad.js', 'crm.foreign': 'handlers/crm.foreign.js' },
+    collections: { leads, crm_log: log },
+    manifestExtra: { triggers: [{ handler: 'handlers/on-lead.js', on: { collection: 'leads', op: 'insert' } }, { handler: 'handlers/tick.js', every: 'PT1M' }], exports: { leads: ['watch'] } },
+  });
+  // zweite App beobachtet leads der ersten (fremd, §16.34 Nr. 3) – eine dritte ohne foreign-Deklaration nicht
+  const watcher = (id, foreign) => k.sim.publishAppVersion(id, '1', {
+    files: { 'index.js': MOUNT, 'handlers/w.js': `export default async function handle(c, ctx) { await ctx.put('${id}_seen', { id: c.payload.id }); }` },
+    collections: { [`${id}_seen`]: { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' } } } } },
+    manifestExtra: { triggers: [{ handler: 'handlers/w.js', on: { collection: 'leads', op: 'insert' } }], ...(foreign ? { foreign_collections: { leads: { app: 'crm', ops: ['watch'] } } } : {}) },
+  });
+  await watcher('sales', true);
+  await watcher('spy', false);
+  const api = k.appApi('crm', '1');
+  const r = await cmdDone(api.command('crm.add', { id: 'l1', name: ' ada ' }));
+  assert.deepEqual([r.status, r.result], ['done', { id: 'l1', count: 1 }], JSON.stringify(r));
+  await until(() => api.get('leads', 'l1').get()?.name === 'ADA Hallo', 4000, 'Handler-Write live im Client');
+  // Schemafehler und fremde, nicht deklarierte Collection → failed; ohne Handler → no_handler (nie mehr {ok:true})
+  assert.match((await cmdDone(api.command('crm.bad', {}))).error, /^invalid/);
+  assert.match((await cmdDone(api.command('crm.foreign', {}))).error, /^forbidden/);
+  assert.match((await cmdDone(api.command('crm.unknown', {}))).error, /^no_handler/);
+  // on-Trigger der eigenen App und der fremd beobachtenden App; die nicht deklarierte bleibt still
+  await until(async () => (await k.sim.coreRows('crm_log')).some((x) => x.id === 'lead:l1'), 4000, 'on-Trigger');
+  await until(async () => (await k.sim.coreRows('sales_seen')).length === 1, 4000, 'fremder Trigger');
+  await tick(50);
+  assert.deepEqual(await k.sim.coreRows('spy_seen'), []);
+  // every-Trigger (Takt im Test 40 ms statt PT1M)
+  await until(async () => (await k.sim.coreRows('crm_log')).some((x) => x.id === 'tick'), 4000, 'every-Trigger');
+});
+
+test('K-1c 6b §16.30: agent.task.enqueue mit App-Skill → Fake-Harness → Rückruf genau einmal an die eigene App', async (t) => {
+  // Der Fake-Harness braucht wie ein echter Lauf etwas Zeit; der Start-Handler schreibt seinen Lauf erst nach enqueue.
+  const k = await mk(t, { agentDelayMs: 60 });
+  const runs = { schema: { primaryKey: 'id', type: 'object', properties: { id: { type: 'string' }, task_id: { type: 'string' }, status: { type: 'string' }, n: { type: 'number' } }, required: ['id'] } };
+  await k.sim.publishAppVersion('rep', '1', {
+    files: {
+      'index.js': MOUNT, 'skills/sum/SKILL.md': '# sum',
+      'handlers/rep.start.js': "export default async function handle(c, ctx) { const { task_id } = await ctx.cap.agent.task.enqueue({ title: 't', instruction: 'i', skill: 'rep/sum', idempotency_key: c.payload.key, on_complete: 'rep.done', on_failed: 'rep.failed' }); await ctx.put('runs', { id: c.payload.key, task_id, status: 'queued', n: 0 }); return { task_id }; }",
+      'handlers/rep.done.js': "export default async function handle(c, ctx) { const [r] = await ctx.read('runs', { selector: { task_id: c.payload.task_id } }); await ctx.put('runs', { ...r, status: 'done', n: r.n + 1 }); }",
+      'handlers/rep.failed.js': "export default async function handle(c, ctx) { const [r] = await ctx.read('runs', { selector: { task_id: c.payload.task_id } }); await ctx.put('runs', { ...r, status: 'failed', n: r.n + 1 }); }",
+    },
+    handlers: { 'rep.start': 'handlers/rep.start.js', 'rep.done': 'handlers/rep.done.js', 'rep.failed': 'handlers/rep.failed.js' },
+    collections: { runs }, capabilitiesRequired: caps, manifestExtra: { skills: [{ name: 'sum', path: 'skills/sum/SKILL.md' }] },
+  });
+  const api = k.appApi('rep', '1');
+  const a = await cmdDone(api.command('rep.start', { key: 'k1' }));
+  const b = await cmdDone(api.command('rep.start', { key: 'k1' })); // gleicher idempotency_key → gleicher Lauf
+  assert.equal(a.result.task_id, b.result.task_id);
+  await until(() => api.get('runs', 'k1').get()?.status === 'done', 4000, 'Rückruf');
+  await tick(60);
+  assert.equal(api.get('runs', 'k1').get().n, 1, 'genau ein Rückruf je task_id');
+  k.sim.agentOutcome(() => ({ status: 'failed', result: 'kaputt' }));
+  await cmdDone(api.command('rep.start', { key: 'k2' }));
+  await until(() => api.get('runs', 'k2').get()?.status === 'failed', 4000, 'on_failed');
+});

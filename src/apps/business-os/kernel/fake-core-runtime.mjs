@@ -254,7 +254,7 @@ export function createCoreRuntime(core) {
     tasks.set(task_id, task);
     if (task.idempotency_key) taskByKey.set(`${appId}:${task.idempotency_key}`, task_id);
     await commit('ctox_queue_tasks', [{ id: task_id, app_id: appId, title: task.title, skill: task.skill, status: 'queued', created_at_ms: task.created_at_ms }], depth);
-    setTimeout(() => { void runFakeAgent(task_id); }, core.agentDelayMs ?? 30).unref?.();
+    setTimeout(() => { void runFakeAgent(task_id); }, core.agentDelayMs ?? 100).unref?.();
     return { task_id };
   }
   async function runFakeAgent(task_id) {

@@ -327,6 +327,15 @@ export function createKernel(opts = {}) {
     if (i >= 0) zone[i] = entry; else zone.push(entry);
     notify('status');
   }
+  const VERSION_CODES = new Set(['app.needs_update', 'app.activation_failed', 'app.remount_failed']);
+  function clearStaleVersionEntries(appId, ver) {
+    const before = zone.length;
+    for (let i = zone.length - 1; i >= 0; i--) {
+      const e = zone[i];
+      if (e.app_id === appId && e.source === 'kernel' && VERSION_CODES.has(e.code) && e.ref !== ver) zone.splice(i, 1);
+    }
+    if (zone.length !== before) notify('status');
+  }
   function zoneClear(appId, code) {
     const i = zone.findIndex((e) => e.app_id === appId && e.code === code);
     if (i >= 0) { zone.splice(i, 1); notify('status'); }
@@ -778,8 +787,25 @@ export function createKernel(opts = {}) {
     return id === userId; // Identität des Kernels (actor.id kann nicht abweichen, §16.7)
   }
 
-  async function publishInternal(appId, ver, o = {}) {
-    if (publishing.has(appId)) throw new CtoxError('conflict', `Veröffentlichung von ${appId} läuft bereits (busy)`);
+  // K-1c Punkt 9: kein busy. Veröffentlichungen einer App laufen nacheinander; die nächste wartet, bis die laufende
+  // samt Aktivierung fertig ist, und endet dann selbst mit ihrem Ergebnis (pending → done/rejected).
+  const publishChains = new Map();
+  function withPublishLock(appId, fn) {
+    const prev = publishChains.get(appId) ?? Promise.resolve();
+    const run = prev.then(() => fn());
+    const tail = run.catch(() => {});
+    publishChains.set(appId, tail);
+    tail.then(() => { if (publishChains.get(appId) === tail) publishChains.delete(appId); });
+    return run;
+  }
+  async function settleActivation(appId, ver) {
+    if (isLib(appId)) return;
+    await waitUntil(() => isTerminalFor(appId, ver) || visible(mirrorGet('business_apps', appId))?.active_ver !== ver || closed || !isLeader);
+  }
+  function publishInternal(appId, ver, o = {}) {
+    return withPublishLock(appId, async () => { const r = await publishCore(appId, ver, o); await settleActivation(appId, ver); return r; });
+  }
+  async function publishCore(appId, ver, o = {}) {
     publishing.add(appId);
     try {
       const appDoc = visible(mirrorGet('business_apps', appId));
@@ -920,6 +946,8 @@ export function createKernel(opts = {}) {
     notify('activation');
     const ev = Object.freeze({ app_id: value.app_id, ver: value.target_ver, state: value.state, activated_ver: value.activated_ver, error: value.error ?? null });
     for (const cb of [...activationListeners]) { try { cb(ev); } catch (e) { console.error('[ctox-kernel] activation listener', e); } }
+    // K-1c Punkt 8: eine aktivierte Version erledigt Kernel-Meldungen zu anderen (älteren) Versionen in JEDEM Tab
+    if (value.state === 'activated') clearStaleVersionEntries(value.app_id, value.activated_ver);
     if (value.state === 'failed' && value.error?.startsWith('needs_update')) {
       zoneReport(value.app_id, { level: 'error', code: 'app.needs_update', text: `App ${value.app_id}@${value.target_ver} benötigt ein Update dieses Teilnehmers (${value.error.slice(13)})`, ref: value.target_ver }, 'kernel');
     } else if (value.state === 'failed' && value.error) {
@@ -1693,13 +1721,13 @@ export function createKernel(opts = {}) {
       return activations.has(appId) ? { ...activations.get(appId) } : null;
     },
     // §16.22 A2/A3/A6/A9 + §16.26 + Befund B4. Im Leiter, weil der Test-Core hier die Veröffentlichung simuliert.
-    async publishDraft(appId, base, draftFiles, draftManifest) {
+    publishDraft(appId, base, draftFiles, draftManifest) { return withPublishLock(appId, () => simImpl.publishDraftLocked(appId, base, draftFiles, draftManifest)); },
+    async publishDraftLocked(appId, base, draftFiles, draftManifest) {
       const reject = (reason, detail) => ({ status: 'rejected', reason, ...(detail ? { detail } : {}) });
       const active = activeVerOf(appId);
       if ((active ?? null) !== (base ?? null)) {
         return reject('stale_base', base == null ? `App ${appId} existiert bereits (aktiv: ${active})` : `Basis ${base} ist nicht mehr aktiv (aktiv: ${active ?? '–'})`);
       }
-      if (publishing.has(appId)) return reject('busy', `Veröffentlichung von ${appId} läuft`);
       const baseManifest = base ? versionDoc(appId, base)?.manifest : null;
       const files = {};
       for (const [p, h] of Object.entries(baseManifest?.files ?? {})) files[p] = await readArtifactContent(h);
@@ -1740,7 +1768,7 @@ export function createKernel(opts = {}) {
       for (const [k, v] of Object.entries(mf)) if (!MANIFEST_FIELDS_COMPUTED.has(k)) manifestExtra[k] = cloneValue(v);
       const ver = `s${BigInt(fakeCore?.head ?? '0') + 1n}`;
       try {
-        await publishInternal(appId, ver, {
+        await publishCore(appId, ver, {
           files, entry, title: mf.title,
           collections: parsedToManifestCollections(parsedNext), incompatible: diff.filter((x) => x.kind === 'generation').map((x) => x.name),
           migrate, handlers, styles, capabilitiesRequired: mf.capabilities_required ?? baseManifest?.capabilities_required,
@@ -1751,6 +1779,7 @@ export function createKernel(opts = {}) {
         const msg = String(e?.message ?? e);
         return reject(msg.includes('stale_base') ? 'stale_base' : msg.includes('busy') ? 'busy' : (e?.code ?? 'unavailable'), msg);
       }
+      await settleActivation(appId, ver); // Ergebnis erst nach der Aktivierung: die nächste Veröffentlichung sieht den neuen Stand
       return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
     libFetch(lib, major, path, ver) { return libFetchLeader(lib, major, path, ver); },
@@ -1835,6 +1864,11 @@ export function createKernel(opts = {}) {
     archiveLocal: async () => db.all('archive_local'),
     windowStateRows: async () => db.all('window_state'),
     artifactRows: async () => db.all('artifacts'),
+    /** Fake-Core: Zeilen einer Collection, wie der Core sie hält (auch nicht abonnierte wie _audit). */
+    coreRows: async (collection) => (fakeCore ? [...fakeCore.core.docs.values()].filter((r) => r.collection === collection && !r.deleted && r.data).map((r) => cloneValue(r.data)) : []),
+    /** Fake-Harness: Ergebnis der nächsten Agentenläufe ({status:'done'|'failed', result}). */
+    agentOutcome: (fn) => fakeCore?.runtime.setAgentOutcome(fn),
+    coreLog: () => [...(fakeCore?.runtime.log ?? [])],
     inspectMeta: async (key) => db.get('meta', key),
     /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
     windowState: async () => db.all('window_state'),
