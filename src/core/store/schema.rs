@@ -329,8 +329,10 @@ fn create_generation(
     tx.execute_batch(&format!(
         "CREATE TABLE {}(
         id TEXT PRIMARY KEY NOT NULL,rev TEXT NOT NULL,schema_ver INTEGER NOT NULL,
-        data TEXT NOT NULL CHECK(json_valid(data) AND json_type(data)='object'),
-        deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)))",
+        data TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
+        CHECK((deleted=1 AND data IS NULL) OR
+              (deleted=0 AND data IS NOT NULL AND json_valid(data) AND json_type(data)='object')))",
         identifier(&table)?
     ))?;
     create_indexes(tx, &table, &def.schema_json)?;
@@ -799,8 +801,8 @@ fn write_output(
             tx.execute(
                 &format!(
                     "INSERT INTO {table}(id,rev,schema_ver,data,deleted)
-                VALUES(?1,?2,?3,'{{}}',1) ON CONFLICT(id) DO UPDATE SET
-                rev=excluded.rev,schema_ver=excluded.schema_ver,data='{{}}',deleted=1"
+                VALUES(?1,?2,?3,NULL,1) ON CONFLICT(id) DO UPDATE SET
+                rev=excluded.rev,schema_ver=excluded.schema_ver,data=NULL,deleted=1"
                 ),
                 params![source.id, source.rev, target.definition.schema_ver],
             )?;
@@ -1300,6 +1302,69 @@ pub fn purge_generation_page(
             return Ok(true);
         }
         Ok(false)
+    })
+}
+
+/// Remove with revision CAS; scrub all retained generations and revision/archive payloads atomically.
+/// The Store/app adapter supplies authorization and the new server revision.
+pub fn remove_document(
+    tx: &Transaction<'_>,
+    name: &str,
+    gen: u64,
+    id: &str,
+    base_rev: &str,
+    new_rev: &str,
+) -> Result<u64> {
+    if new_rev.is_empty() || new_rev == base_rev {
+        return Err(invalid("new delete revision required"));
+    }
+    atomic(tx, || {
+        let current =
+            active_collection(tx, name)?.ok_or_else(|| invalid("active collection missing"))?;
+        if current.gen != gen {
+            return Err(invalid("conflict: inactive generation"));
+        }
+        let table = identifier(&current.table)?;
+        let changed = tx.execute(
+            &format!(
+                "UPDATE {table} SET rev=?3,deleted=1,data=NULL
+            WHERE id=?1 AND rev=?2 AND deleted=0"
+            ),
+            params![id, base_rev, new_rev],
+        )?;
+        if changed != 1 {
+            return Err(invalid("conflict: removed or changed revision"));
+        }
+        let mut statement =
+            tx.prepare("SELECT table_name FROM _collections WHERE name=?1 AND gen<>?2")?;
+        let tables = statement
+            .query_map(params![name, integer(gen)?], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>>>()?;
+        for old in tables {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+                [&old],
+                |r| r.get(0),
+            )?;
+            if exists {
+                tx.execute(
+                    &format!(
+                        "UPDATE {} SET data=NULL,deleted=1 WHERE id=?1",
+                        identifier(&old)?
+                    ),
+                    [id],
+                )?;
+            }
+        }
+        tx.execute(
+            "UPDATE _revs SET body=NULL WHERE collection=?1 AND id=?2",
+            params![name, id],
+        )?;
+        tx.execute(
+            "DELETE FROM _archive WHERE collection=?1 AND id=?2",
+            params![name, id],
+        )?;
+        Ok(change_log::head(tx)?.head_seq)
     })
 }
 

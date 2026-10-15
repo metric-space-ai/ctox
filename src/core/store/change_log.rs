@@ -183,7 +183,7 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<Head> {
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS _seq (
            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-           v INTEGER NOT NULL CHECK(typeof(v)='integer' AND v>=0));
+           v INTEGER NOT NULL CHECK(typeof(v)='integer' AND v>=0)) WITHOUT ROWID;
          INSERT OR IGNORE INTO _seq VALUES(1,0);
          CREATE TABLE IF NOT EXISTS _meta (
            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -200,7 +200,19 @@ pub fn initialize(tx: &Transaction<'_>) -> Result<Head> {
            collection TEXT NOT NULL, gen INTEGER NOT NULL, table_name TEXT NOT NULL UNIQUE,
            id_col TEXT NOT NULL, rev_col TEXT NOT NULL, data_col TEXT NOT NULL,
            deleted_col TEXT NOT NULL, schema_col TEXT, schema_ver INTEGER NOT NULL,
-           app_ver TEXT NOT NULL, PRIMARY KEY(collection,gen));",
+           app_ver TEXT NOT NULL, PRIMARY KEY(collection,gen));
+         CREATE TABLE IF NOT EXISTS _revs (
+           collection TEXT NOT NULL,id TEXT NOT NULL,rev TEXT NOT NULL,seq INTEGER NOT NULL,
+           gen INTEGER NOT NULL,body TEXT,created_at INTEGER NOT NULL DEFAULT(unixepoch()),
+           PRIMARY KEY(collection,gen,id,rev));
+         CREATE INDEX IF NOT EXISTS _revs_document ON _revs(collection,id);
+         CREATE TABLE IF NOT EXISTS _archive(
+           archive_id INTEGER PRIMARY KEY,app_id TEXT NOT NULL,collection TEXT NOT NULL,
+           gen INTEGER NOT NULL,id TEXT NOT NULL,rev TEXT NOT NULL,app_ver TEXT NOT NULL,
+           data TEXT NOT NULL CHECK(json_valid(data)),reason TEXT NOT NULL,
+           archived_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS _archive_expiry ON _archive(expires_at);
+         CREATE INDEX IF NOT EXISTS _archive_document ON _archive(collection,id);",
     )?;
     tx.execute(
         "INSERT OR IGNORE INTO _meta(singleton,epoch) VALUES(1,?1)",
@@ -303,9 +315,19 @@ pub fn install_triggers(tx: &Transaction<'_>, binding: &TableBinding) -> Result<
             } else {
                 String::new()
             };
+            let scrub = if event == "DELETE" {
+                format!(
+                    "UPDATE _revs SET body=NULL WHERE collection={collection} AND id=OLD.{id};
+                    DELETE FROM _archive WHERE collection={collection} AND id=OLD.{id};"
+                )
+            } else {
+                format!("UPDATE _revs SET body=NULL WHERE collection={collection} AND id=NEW.{id}
+                    AND NEW.{deleted}<>0;
+                    DELETE FROM _archive WHERE collection={collection} AND id=NEW.{id} AND NEW.{deleted}<>0;")
+            };
             tx.execute_batch(&format!(
                 "DROP TRIGGER IF EXISTS {trigger};
-                CREATE TRIGGER {trigger} AFTER {event} ON {table} BEGIN {rename}{write} END;"
+                CREATE TRIGGER {trigger} AFTER {event} ON {table} BEGIN {rename}{write}{scrub} END;"
             ))?;
         }
         Ok(())

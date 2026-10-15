@@ -1,4 +1,70 @@
 #[test]
+fn remove_is_cas_guarded_payload_free_and_scrubs_revisions_and_archives_atomically() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    tx.execute(
+        "INSERT INTO _revs(collection,id,rev,seq,gen,body) VALUES('items','one','1',1,1,?1)",
+        [json!({"secret":"old"}).to_string()],
+    )
+    .unwrap();
+    tx.execute("INSERT INTO _archive(app_id,collection,gen,id,rev,app_ver,data,reason,archived_at,expires_at)
+        VALUES('app','items',1,'one','1','1',?1,'migration',1,999)",[json!({"secret":"old"}).to_string()]).unwrap();
+    assert!(remove_document(&tx, "items", 1, "one", "stale", "2").is_err());
+    assert_eq!(count(&tx, "_archive"), 1);
+    tx.execute_batch("SAVEPOINT rollback_remove").unwrap();
+    remove_document(&tx, "items", 1, "one", "1", "2").unwrap();
+    tx.execute_batch("ROLLBACK TO rollback_remove; RELEASE rollback_remove")
+        .unwrap();
+    assert_eq!(count(&tx, "_archive"), 1);
+    let seq = remove_document(&tx, "items", 1, "one", "1", "2").unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert_eq!(count(&tx, "_revs"), 1);
+    let body: Option<String> = tx
+        .query_row("SELECT body FROM _revs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(body, None);
+    let deleted: (bool, Option<String>) = tx
+        .query_row("SELECT deleted,data FROM c_items WHERE id='one'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(deleted, (true, None));
+    let page = change_log::read_page(&tx, "items", 1, 0, 10).unwrap();
+    assert_eq!(page.docs[0].seq, seq);
+    assert_eq!(page.docs[0].body, None);
+    assert_eq!(page.docs[0].op, Operation::Delete);
+    assert!(remove_document(&tx, "items", 1, "one", "2", "3").is_err());
+    assert!(tx
+        .execute("UPDATE c_items SET data='{}' WHERE id='one'", [])
+        .is_err());
+}
+
+#[test]
+fn foreign_hard_delete_also_scrubs_revision_bodies_and_archives() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    create_collection(&tx, &definition("items")).unwrap();
+    put(&tx, "c_items", "one", "1");
+    tx.execute(
+        "INSERT INTO _revs(collection,id,rev,seq,gen,body) VALUES('items','one','1',1,1,'{}')",
+        [],
+    )
+    .unwrap();
+    tx.execute("INSERT INTO _archive(app_id,collection,gen,id,rev,app_ver,data,reason,archived_at,expires_at)
+        VALUES('app','items',1,'one','1','1','{}','migration',1,999)",[]).unwrap();
+    tx.execute("DELETE FROM c_items WHERE id='one'", [])
+        .unwrap();
+    assert_eq!(count(&tx, "_archive"), 0);
+    assert_eq!(
+        tx.query_row("SELECT body IS NULL FROM _revs", [], |r| r
+            .get::<_, bool>(0))
+            .unwrap(),
+        true
+    );
+}
+#[test]
 fn platform_window_collection_can_be_installed_and_published_without_a_new_layout() {
     let mut db = Connection::open_in_memory().unwrap();
     let tx = db.transaction().unwrap();
