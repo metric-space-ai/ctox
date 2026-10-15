@@ -17,6 +17,9 @@ mod api_key_catalog;
 mod api_key_config;
 mod api_key_ingress;
 pub(crate) use api_key_catalog::observe as observe_api_key_catalog;
+// The only consumer is the native WebRTC API-key receiver, which lands with
+// CTOX Sync v4 (see docs/native-provider-api-key-ingress.md).
+#[allow(unused_imports)]
 pub(crate) use api_key_ingress::{
     install_api_key_account_owned_authorized, ApiKeyProvider, DiscoveryError,
 };
