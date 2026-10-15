@@ -10,6 +10,7 @@ name = "rxdb"
 path = "src/lib.rs"
 
 [dependencies]
+ctox-store = { path = "../store" }
 # Async runtime (pinned to match CTOX root)
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

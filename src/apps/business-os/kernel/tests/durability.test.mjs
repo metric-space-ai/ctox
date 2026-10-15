@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createKernel,createStubKernel,CtoxError} from '../kernel.mjs';
+import {createKernel,createStubKernel,CtoxError} from './legacy-kernel.mjs';
 import {MemoryBackend,STORES} from '../store-idb-v5.mjs';
 import {assertLeader,acquireGeneration} from '../leader.mjs';
 import {decimalSeq} from '../transport.mjs';

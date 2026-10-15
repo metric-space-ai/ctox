@@ -5246,6 +5246,146 @@ mod tests {
     // through this glob.
     use super::*;
 
+    /// Invoke the public handler send API, not send_text_checked in isolation.
+    #[test]
+    fn p4_handler_send_failure_has_one_event_counter_and_log() {
+        // The production counters are process-global. A child test process
+        // isolates this measurement from unrelated parallel handler tests.
+        const CHILD: &str = "CTOX_P4_SEND_WIRING_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let module = module_path!().split_once("::").unwrap().1;
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    &format!("{module}::p4_handler_send_failure_has_one_event_counter_and_log"),
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated handler wiring failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "the isolated wiring test must actually run"
+            );
+            return;
+        }
+
+        #[derive(Clone)]
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let sink = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || LogWriter(sink.clone()))
+            .finish();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+                use futures::FutureExt;
+                use send_result::SendFailureKind;
+                let handler = WebRTCRsConnectionHandler::new();
+                let peer = install_test_connection(&handler, "p4-send-wiring", 1).await;
+                let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
+                let channel = pc
+                    .create_data_channel("p4-not-connected", None)
+                    .await
+                    .unwrap();
+                // A real, unconnected channel: handler admission succeeds but the
+                // transport must reject the send before SCTP handoff.
+                assert_eq!(
+                    channel.ready_state().await.unwrap(),
+                    webrtc::data_channel::RTCDataChannelState::Connecting
+                );
+                let channel_id = channel.id();
+                handler
+                    .peers
+                    .lock()
+                    .get_mut(peer.peer_id())
+                    .unwrap()
+                    .data_channel = Some(channel);
+                let frame = WebRTCWireFrame::Response(WebRTCResponse {
+                    id: "p4-send-wiring".into(),
+                    result: serde_json::json!({"private": "never-log-this-body"}),
+                    error: None,
+                    collection: None,
+                });
+                let bytes = serde_json::to_string(&frame).unwrap().len();
+                let diagnostics = transport_diagnostics();
+                let before = diagnostics.counters(MessageClass::Reliable);
+                let realtime_before = diagnostics.counters(MessageClass::Realtime);
+                let mut events = diagnostics.errors();
+                let result =
+                    tokio::time::timeout(Duration::from_secs(2), handler.send(&peer, frame))
+                        .await
+                        .expect("the caller must receive the transport error");
+                assert!(
+                    result.is_err(),
+                    "a rejected transport send must reach the caller"
+                );
+                let after = diagnostics.counters(MessageClass::Reliable);
+                assert_eq!(
+                    after.attempted,
+                    before.attempted + 1,
+                    "the actual queue drainer must account for exactly one attempt"
+                );
+                assert_eq!(after.not_ready, before.not_ready + 1);
+                assert_eq!(after.failed(), before.failed() + 1);
+                assert_eq!(after.handed_to_sctp, before.handed_to_sctp);
+                assert_eq!(
+                    diagnostics.counters(MessageClass::Realtime),
+                    realtime_before
+                );
+                let event = events
+                    .next()
+                    .now_or_never()
+                    .flatten()
+                    .expect("the actual queue drainer must publish its send failure");
+                assert_eq!(event.class, MessageClass::Reliable);
+                assert_eq!(event.kind, SendFailureKind::NotReady);
+                assert_eq!(event.channel_id, channel_id);
+                assert_eq!(event.bytes, bytes);
+                assert!(
+                    events.next().now_or_never().is_none(),
+                    "no duplicate error event"
+                );
+                let log = String::from_utf8(logs.lock().clone()).unwrap();
+                assert_eq!(
+                    log.matches("DataChannel send rejected before SCTP handoff")
+                        .count(),
+                    1,
+                    "exactly one transport failure log is required"
+                );
+                assert!(log.contains("ctox_webrtc_send"));
+                assert!(
+                    !log.contains("never-log-this-body"),
+                    "logs must not expose payloads"
+                );
+                handler.close().await.unwrap();
+            })
+        });
+    }
+
     struct TestPublicationGuard {
         allowed: Mutex<bool>,
         checks: AtomicU64,

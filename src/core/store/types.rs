@@ -133,6 +133,12 @@ impl<T> Future for JobHandle<T> {
     }
 }
 impl<T> JobHandle<T> {
+    /// Bridge an authenticated host dispatcher to an existing admitted job.
+    /// This creates a completion handle, never another executor or SQL channel.
+    pub fn from_receiver(receiver: oneshot::Receiver<Result<T, StoreError>>) -> Self {
+        Self(receiver)
+    }
+
     /// Only for synchronous callers outside an async runtime.
     pub fn blocking_wait(self) -> Result<T, StoreError> {
         self.0.blocking_recv().unwrap_or(Err(StoreError::Closed))

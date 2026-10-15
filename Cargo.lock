@@ -3278,6 +3278,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "ctox-store",
  "dashmap",
  "flate2",
  "futures",
@@ -3397,8 +3398,12 @@ name = "ctox-store"
 version = "0.1.0"
 dependencies = [
  "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

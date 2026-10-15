@@ -41,6 +41,7 @@ mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
+mod runtime;
 mod secrets;
 mod service;
 mod skill_store;
@@ -653,7 +654,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
                 } else { None };
                 let gateway = execution::speech::SpeechGateway::from_root(&root)?;
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 let speech = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.synthesis == execution::speech::SpeechBackend::Computer {
@@ -712,7 +713,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 anyhow::ensure!(args.len() == 2, "usage: ctox runtime speech-route-check");
                 let _speech_host = sync_host::start_if_configured(&root)?
                     .context("configure the native Sync host before speech route diagnostics")?;
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 use ctox_sync::authority::auth::speech_wire::SpeechWorkload;
                 let (transcription, synthesis) = runtime.block_on(async {
                     tokio::join!(
@@ -735,7 +736,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let _speech_host = if config.transcription == execution::speech::SpeechBackend::Computer {
                     Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
                 } else { None };
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 let result = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.transcription == execution::speech::SpeechBackend::Computer {
