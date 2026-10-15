@@ -6,6 +6,7 @@ import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { owner, verifiedBuild } from '../../tests/sync-v4-e2e/native.mjs';
+import {installedProfile} from '../../tests/sync-v4/k11/installed-profile.mjs';
 const args = {};
 for (let i=2;i<process.argv.length;i+=2) { if(!process.argv[i]?.startsWith('--') || !process.argv[i+1]) throw Error('Expected --key value'); args[process.argv[i].slice(2)] = process.argv[i+1]; }
 if(process.platform!=='linux'||!process.env.CARGO_TARGET_DIR||!process.env.TMPDIR||!process.env.BUILD_LANE_BIN) throw Error('Canonical Linux lane required');
@@ -61,15 +62,7 @@ const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lo
   turnBin: args['turn-bin'] || '/usr/bin/turnserver', turnLib: args['turn-lib'] || '', scenario: args.scenario || null };
 if(args['installed-profile']){
  if(args.v4!=='yes')throw Error('Installed profile binding is V4-only');
- const file=resolve(args['installed-profile']);
- if(!file.startsWith(join(lane,'artifacts')+'/'))throw Error('Private installation evidence required');
- const proof=JSON.parse(fs.readFileSync(file));
- if(proof.id!=='K11'||proof.terminal!==true||proof.installerExecuted!==true||proof.dataPreserved!==true||proof.controller?.groupAbsent!==true||proof.afterRevision!==build.revision||proof.installer?.activeBinarySha256!==build.binarySha256||!proof.beforeSnapshot?.quiesced||!proof.afterSnapshot?.quiesced)throw Error('Incomplete or mismatched installed profile');
- const root=resolve(proof.root),current=fs.realpathSync(join(root,'managed/current'));
- if(!root.startsWith(join(lane,'artifacts')+'/')||current!==proof.currentRelease||!current.startsWith(root+'/managed/releases/'))throw Error('Installed profile path mismatch');
- const marker=JSON.parse(fs.readFileSync(join(root,'.sync-v4-e2e.json')));
- if(marker.owner!==owner||marker.synthetic!==true||createHash('sha256').update(fs.readFileSync(join(current,'bin/ctox'))).digest('hex')!==build.binarySha256)throw Error('Installed profile owner/binary mismatch');
- config.root=current;config.preparedProfile={evidence:file,root,fixture:proof.afterFixture};
+ Object.assign(config,installedProfile(args['installed-profile'],build,lane,owner));
 }
 if (!['eager','demand-only'].includes(config.leadProfile)) throw Error('Unsupported fixture profile');
 if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>2100) throw Error('Run duration bound 30..2100 seconds');
