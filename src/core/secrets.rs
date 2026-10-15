@@ -171,8 +171,11 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "rewrite": result}))
         }
+        "request" | "requests" | "request-status" | "fulfill" | "decline" | "exec" => {
+            crate::secret_requests::handle(root, command, &args[1..])
+        }
         _ => anyhow::bail!(
-            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name> --reveal\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
+            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name> --reveal\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]\n  ctox secret request --scope <scope> --name <name> --label <text> [--reason <text>] [--thread <key>]\n  ctox secret requests [--status pending|stored|declined] [--thread <key>]\n  ctox secret request-status --request-id <id>\n  ctox secret fulfill --request-id <id> --value-stdin\n  ctox secret decline --request-id <id>\n  ctox secret exec --env <VAR>=<scope>/<name> [--env ...] -- <command> [args...]"
         ),
     }
 }
@@ -1249,7 +1252,7 @@ pub fn secret_exists(root: &Path, scope: &str, name: &str) -> Result<bool> {
     Ok(exists != 0)
 }
 
-fn put_secret(
+pub(crate) fn put_secret(
     root: &Path,
     scope: &str,
     name: &str,
@@ -1324,7 +1327,7 @@ fn load_secret_record(root: &Path, scope: &str, name: &str) -> Result<Option<Sec
     Ok(record)
 }
 
-fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
+pub(crate) fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
     read_secret_value_optional(root, scope, name)?.context("secret not found")
 }
 
@@ -1407,7 +1410,7 @@ fn initialized_secret_paths() -> &'static Mutex<HashSet<PathBuf>> {
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn open_secret_db(root: &Path) -> Result<Connection> {
+pub(crate) fn open_secret_db(root: &Path) -> Result<Connection> {
     let db_path = resolve_db_path(root);
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1481,7 +1484,7 @@ fn decode_master_key(raw: &str, context: &'static str) -> Result<SecretMaterial>
     Ok(Zeroizing::new(bytes))
 }
 
-fn ensure_secret_schema(conn: &Connection) -> Result<()> {
+pub(crate) fn ensure_secret_schema(conn: &Connection) -> Result<()> {
     // Schema verification is idempotent on the file but still requires a
     // writer lock per call. Skip on subsequent calls for the same DB path
     // in this process — the daemon and TUI each pay the cost exactly once.
@@ -1806,7 +1809,7 @@ fn required_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     find_flag_value(args, flag)
 }
 
-fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+pub(crate) fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2).find_map(|window| {
         if window[0] == flag {
             Some(window[1].as_str())
@@ -1816,11 +1819,11 @@ fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     })
 }
 
-fn has_flag(args: &[String], flag: &str) -> bool {
+pub(crate) fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
 }
 
-fn resolve_secret_value_arg(args: &[String], usage: &str) -> Result<Zeroizing<String>> {
+pub(crate) fn resolve_secret_value_arg(args: &[String], usage: &str) -> Result<Zeroizing<String>> {
     let arg_value = find_flag_value(args, "--value");
     let stdin_value = has_flag(args, "--value-stdin");
     anyhow::ensure!(
@@ -1878,7 +1881,7 @@ fn now_iso_string() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String {
+pub(crate) fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String {
     let handle = format!("{scope}/{name}");
     match label.map(str::trim).filter(|value| !value.is_empty()) {
         Some(label) => format!("[secret-ref:{handle} label={label}]"),
@@ -1886,7 +1889,7 @@ fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String
     }
 }
 
-fn print_json(value: &Value) -> Result<()> {
+pub(crate) fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }

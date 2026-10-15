@@ -40,6 +40,7 @@ mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
+mod secret_requests;
 mod secrets;
 mod service;
 mod skill_store;

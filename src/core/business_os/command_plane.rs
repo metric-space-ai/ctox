@@ -350,6 +350,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 146] = [
     "ctox.secret.delete",
     "ctox.secret.list",
     "ctox.secret.put",
+    "ctox.secret.request.decline",
+    "ctox.secret.request.fulfill",
+    "ctox.secret.request.list",
     "ctox.source.commit",
     "ctox.source.diff",
     "ctox.source.list_snapshots",
@@ -2123,6 +2126,12 @@ fn dispatch_business_command(
                     error,
                 )),
             }
+        }
+        "ctox.secret.request.list"
+        | "ctox.secret.request.fulfill"
+        | "ctox.secret.request.decline" => {
+            super::store_secret_request_commands::handle_secret_request_command(root, command)
+                .map(BusinessCommandDispatchOutcome::Returned)
         }
         "ctox.secret.list"
         | "ctox.secret.put"

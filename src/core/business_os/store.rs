@@ -15269,7 +15269,7 @@ const SECRET_INTAKE_VALUE_TTL: Duration = Duration::from_secs(10 * 60);
 /// Payload fields that carry a secret, per command type.
 fn secret_payload_field(command_type: &str) -> Option<&'static str> {
     match command_type {
-        "ctox.secret.put" => Some("value"),
+        "ctox.secret.put" | "ctox.secret.request.fulfill" => Some("value"),
         "ctox.mailserver.save_user" => Some("password"),
         _ => None,
     }
@@ -15352,7 +15352,7 @@ pub(crate) fn install_replicated_secret_sanitizer() {
 
 /// The secret a handler needs: the value detached at intake, or — for callers
 /// that bypass RxDB intake (CLI, tests) — the value still in the payload.
-fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
+pub(super) fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
     let field = secret_payload_field(&command.command_type)?;
     let detached = command.id.as_deref().and_then(|command_id| {
         SECRET_INTAKE_VALUES
@@ -15399,7 +15399,7 @@ fn delete_credential_command(
 /// Build a redacted copy of a secret command for the persisted command record.
 /// `safe_payload` must contain no secret value; client_context is rebuilt to
 /// the acting actor only.
-fn secret_command_safe_command(
+pub(super) fn secret_command_safe_command(
     command: &BusinessCommand,
     session: &BusinessOsSession,
     safe_payload: Value,
