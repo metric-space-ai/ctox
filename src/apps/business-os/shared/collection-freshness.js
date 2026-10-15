@@ -4,9 +4,18 @@ import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } f
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de', compact = false, contextKey, sessionKey, nowMs = Date.now() } = {}) {
   if (!warning) return;
   if (compact) return renderCompactFreshness(warning, { collections, diagnostics, language, contextKey, sessionKey, nowMs });
-  // No state text, ever: cached data stays visible while sync retries.
-  warning.hidden = true;
-  warning.textContent = '';
+  const pending = collections.map((collection) => collectionFreshnessFromDiagnostics(
+    collection, diagnostics?.collections?.[collection], { syncMode: diagnostics?.mode },
+  )).filter((entry) => entry.requiresPullConfirmation && !entry.ready);
+  warning.hidden = pending.length === 0;
+  if (!pending.length) {
+    warning.textContent = '';
+    return;
+  }
+  const offline = pending.some((entry) => entry.state === 'offline-pending');
+  warning.textContent = language === 'de'
+    ? (offline ? 'Offline: angezeigte Daten können veraltet sein' : 'Daten werden abgeglichen: angezeigter Stand noch nicht bestätigt')
+    : (offline ? 'Offline: displayed data may be out of date' : 'Syncing data: displayed state is not yet confirmed');
 }
 
 const compactStates = new WeakMap();

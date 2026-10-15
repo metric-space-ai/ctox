@@ -56,7 +56,6 @@
     "modules/conversations/index.js",
     "modules/credentials/index.js",
     "modules/customers/index.js",
-    "modules/desktop/index.js",
     "modules/file-viewer/index.js",
     "modules/mail/index.js",
     "modules/outbound/active-outreach.js",

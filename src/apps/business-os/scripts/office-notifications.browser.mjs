@@ -70,7 +70,8 @@ try {
         } else {
           assert.equal(observed.shown.length, 1, 'one visible Shell notification must be emitted');
           assert.equal(observed.shown[0].type, 'error');
-          assert.match(observed.shown[0].message, /CTOX product sync push timed out/);
+          assert.match(observed.shown[0].message, /Speichern hat nicht geklappt/);
+          assert.doesNotMatch(observed.shown[0].message, /CTOX product sync push timed out/, 'raw errors stay out of the notification');
           assert.equal(observed.shown[0].time, 0, 'save failure must remain visible until dismissed');
           assert.equal(observed.dirty, true);
           assert.equal(observed.saving, false);

@@ -162,7 +162,8 @@ test('crew labels describe work without exposing implementation terminology', ()
   assert.doesNotMatch(alerts, /notifications\.show/);
   assert.doesNotMatch(alerts, /harnessCriticalMessage|Offene Aufgaben/);
   assert.doesNotMatch(healthUi, /harness\.title\s*=/);
-  assert.doesNotMatch(healthUi, /setAttribute\('aria-label'/);
+  assert.match(healthUi, /setAttribute\('aria-label', harnessAccessibleName\(/, 'the crew status keeps only a short accessible name');
+  assert.doesNotMatch(healthUi, /\{count\}|\{age\}|Offene Aufgaben|Wartezeit/);
   assert.doesNotMatch(indexSource, /syncDisconnected|COLLECTION_READ_FORBIDDEN:/);
 });
 

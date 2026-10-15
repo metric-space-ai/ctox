@@ -1333,13 +1333,22 @@ function syncHarnessHealthUiState(state) {
   if (!harness) return;
   const health = state.harnessHealth || deriveHarnessHealth(state);
   harness.dataset.harnessHealth = health.severity;
+  // Accessible name only: no visible tooltip, no queue counters.
   harness.removeAttribute('title');
+  harness.setAttribute('aria-label', harnessAccessibleName(state, health));
   harness.classList.toggle('has-critical-harness', health.severity === 'critical');
   harness.classList.toggle('has-warning-harness', health.severity === 'warning');
   harness.querySelectorAll('[data-harness-health-tooltip]').forEach((element) => {
     element.removeAttribute('title');
     element.removeAttribute('aria-label');
   });
+}
+
+function harnessAccessibleName(state, health) {
+  const de = state.lang !== 'en';
+  if (health?.reason === 'paused') return de ? 'Die Crew ist pausiert' : 'The crew is paused';
+  if (health?.severity === 'critical') return de ? 'Die Crew ist gerade nicht aktiv' : 'The crew is not active right now';
+  return de ? 'Die Crew bearbeitet die Aufgabenliste' : 'The crew is working through the task list';
 }
 
 function updateHarnessHealthAlerts(state) {

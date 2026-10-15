@@ -178,7 +178,7 @@ try {
         };
         window.runtimeFixtureCommands = [];
         await openReactSettings({
-          mount, modules: [], session: { user: { id: 'owner', role: 'admin', is_admin: true } },
+          mount, modules: [], initialTab: 'runtime', session: { user: { id: 'owner', role: 'admin', is_admin: true } },
           sync: { startCollection: async () => {} },
           db: { collection: name => name === 'business_commands' ? {} : name === 'ctox_runtime_settings' ? {
             findOne: () => ({ exec: async () => ({ toJSON: () => projection }) }),
@@ -282,7 +282,7 @@ async function assertDelayedHarnessStatus(page) {
   const assertHarnessStatus = async paused => {
     const accessibleStatus = await harness.getAttribute('aria-label');
     assert.match(accessibleStatus, paused ? /^Die Crew ist pausiert$/ : /^Die Crew bearbeitet die Aufgabenliste$/);
-    assert.equal(await harness.getAttribute('title'), accessibleStatus);
+    assert.equal(await harness.getAttribute('title'), null, 'no visible status tooltip');
   };
   for (const paused of [true, false]) {
     await menu.click();

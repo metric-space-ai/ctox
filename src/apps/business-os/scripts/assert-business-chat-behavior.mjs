@@ -664,7 +664,7 @@ try {
     expect(navigation.hash.includes('drawer=0'), `task link must show the flow without a drawer, got ${navigation.hash}`);
     expect(navigation.expandedChats === 0, 'task navigation must minimize overlaying chats');
     expect(navigation.stageHeight === 0, 'minimized chat stage must not cover the flow');
-    expect(navigation.title.includes('task_research_0'), `task link hover must expose its stable id, got ${navigation.title}`);
+    expect(!navigation.title.includes('task_research_0'), `task link hover must not expose internal ids, got ${navigation.title}`);
   });
 
   await scenario(page, 'overflowing-crew-folds-into-3d-gallery', { count: 7, activeIndex: 3 }, async (m) => {
@@ -1007,14 +1007,13 @@ try {
       input.value = 'Bitte als CTOX Task verarbeiten';
       input.dispatchEvent(new InputEvent('input', { bubbles: true }));
       document.querySelector('.ctox-chat-window.is-active [data-chat-send]').click();
-      await window.chatHarness.waitFor(() => /Die Crew hat die Annahme noch nicht bestätigt/.test(document.body.innerText || ''));
+      await window.chatHarness.waitFor(() => /Aufgabe wird an die Crew gesendet/.test(document.body.innerText || ''));
       return window.chatHarness.collect();
     });
     results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
     expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
     expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
-    expect(after.activeInspectionText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'inspection must explain an unconfirmed submission');
-    expect(!after.activeMessageText.includes('Die Crew hat die Annahme noch nicht bestätigt'), 'a transport receipt must not impersonate a crew reply');
+    expect(!/Die Crew hat die Annahme noch nicht bestätigt|Verbindung unterbrochen/.test(after.activeInspectionText + after.activeMessageText), 'an unconfirmed submission shows no state prose');
     expect(!after.activeMessageText.includes('Task an CTOX übergeben'), 'an unconfirmed timeout must not claim native acceptance');
     expect(!after.activeMessageText.includes('pending_sync'), 'pending receipt enum must not leak as visible text');
     expect(!after.activeMessageText.includes('queued'), `transient status must not leak as chrome text, got ${after.activeMessageText}`);
@@ -1172,7 +1171,7 @@ try {
     expect(afterTask.composerValue === 'Bitte nicht verlieren', `draft must survive delayed task evidence, got ${afterTask.composerValue}`);
     expect(afterTask.inspectionOpen === true, 'inspector fold must survive delayed task evidence');
     expect(afterTask.maximized === true, 'maximized state must survive delayed task evidence');
-    expect((afterTask.activeMessageText + afterTask.activeInspectionText).includes('Usage limit exceeded'), 'delayed failed task note must appear');
+    expect(!(afterTask.activeMessageText + afterTask.activeInspectionText).includes('Usage limit exceeded'), 'a raw failed task note stays out of the chat');
 
     const restored = await page.evaluate(async () => {
       const restore = document.querySelector('.ctox-chat-window.is-active [data-chat-maximize]');

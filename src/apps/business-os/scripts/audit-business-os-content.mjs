@@ -181,6 +181,11 @@ export const TECHNICAL_DIAGNOSTIC_CONTEXTS = Object.freeze([
 /** Internal execution prompts are not rendered product copy and stay exact-path scoped. */
 export const INTERNAL_COPY_CONTEXTS = Object.freeze([
   {
+    path: 'src/apps/business-os/shared/collection-freshness.js',
+    context: /warning\.textContent = language === 'de'/u,
+    reason: 'the non-compact freshness warning is not mounted in any customer surface; it is the contract of the sync-v3 smoke rxdb/tests/current-pull-freshness-browser-smoke.mjs',
+  },
+  {
     path: 'src/apps/business-os/modules/cv-print-builder/index.js',
     context: /Ausfuehrung nur ueber CTOX desktop_files\/desktop_file_chunks/iu,
     reason: 'the parser task prompt is an internal execution instruction, not product copy',
@@ -497,7 +502,8 @@ export function auditSourceText(source, relativePath, { metadata = false, forbid
     }
     // Thrown errors are not rendered; raw error interpolation is caught where it is rendered.
     const lineBefore = literal.before.slice(literal.before.lastIndexOf('\n') + 1);
-    if (proseHits.length > 0 && !ERROR_COPY_PATTERN.test(lineBefore)) {
+    const proseContext = `${literal.before.slice(-220)}${literal.value}${literal.after.slice(0, 100)}`;
+    if (proseHits.length > 0 && !ERROR_COPY_PATTERN.test(lineBefore) && !matchingScopedCopyException(normalizedPath, proseContext)) {
       addStateProse(literal.start, literal.value, 'state-prose');
     }
   }

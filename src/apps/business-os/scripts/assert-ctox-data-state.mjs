@@ -69,16 +69,25 @@ try {
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(`${base}/?state=${state}&theme=${theme}`);
       await page.waitForFunction(() => window.fixtureReady);
-      const expected = state === "missing" ? "offline" : state;
+      // Loading and offline render no state text (owner rule 14.10.2026); a
+      // failed read offers only the retry action; idle keeps its label.
       try {
         if (state === "working")
           await page
             .locator(".ctox-flow-creature-slot")
             .first()
             .waitFor({ state: "visible" });
+        else if (state === "error")
+          await page
+            .locator("[data-ctox-retry-load]")
+            .waitFor({ state: "visible" });
+        else if (state === "idle")
+          await page
+            .locator('[data-ctox-data-state="idle"]')
+            .waitFor({ state: "visible" });
         else
           await page
-            .locator(`[data-ctox-data-state="${expected}"]`)
+            .locator(".ctox-data-placeholder")
             .waitFor({ state: "visible" });
       } catch (error) {
         await page.screenshot({
@@ -88,10 +97,13 @@ try {
           `${error.message}\n${await page.locator("body").innerText()}\n${errors.join("\n")}`,
         );
       }
+      if (["loading", "missing", "offline"].includes(state))
+        assert.equal(await page.locator("[data-ctox-data-state]").count(), 0, `${state}: no state text`);
       if (state === "error")
-        assert.match(
-          await page.locator("[data-ctox-data-state]").innerText(),
+        assert.doesNotMatch(
+          await page.locator("body").innerText(),
           /IndexedDB read failed/,
+          "raw read errors stay out of the UI",
         );
       if (state !== "working")
         await page
@@ -138,10 +150,10 @@ try {
         path: path.join(output, `${state}-${theme}.png`),
       });
       if (state === "working") {
-        // Failed refresh retains the last successful rows and shows the reason.
+        // Failed refresh retains the last successful rows and offers a retry.
         await page.evaluate(() => window.fixtureSetState("error"));
         await page
-          .locator('[data-ctox-data-state="error"]')
+          .locator("[data-ctox-retry-load]")
           .waitFor({ state: "visible" });
         assert.ok(await page.locator(".ctox-flow-creature-slot").count());
         assert.match(
@@ -153,10 +165,10 @@ try {
         });
         await page.evaluate(() => window.fixtureSetState("working"));
         await page.waitForFunction(
-          () => !document.querySelector("[data-ctox-data-state]"),
+          () => !document.querySelector("[data-ctox-data-state], [data-ctox-retry-load]"),
         );
         await page.evaluate(() => window.fixtureSetState("offline"));
-        await page.locator('[data-ctox-data-state="offline"]').waitFor({ state: "visible" });
+        assert.equal(await page.locator("[data-ctox-data-state]").count(), 0, "offline: no state text");
         await page.locator('.ctox-flow-creature-slot .ctox-crew-creature.is-sleeping').waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(output, `cached-offline-${theme}.png`) });
         await page.evaluate(() => window.fixtureSetState("working"));

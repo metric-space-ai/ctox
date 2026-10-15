@@ -15847,7 +15847,7 @@ function isStartupRetryImpossible(error) {
   ) return true;
   if (isManagedCollectionAuthorizationError(error)) return true;
   if (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token')) {
-    return typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch !== 'function';
+    return typeof window.ctoxBusinessOsDesktop?.refreshManagedLaunch !== 'function';
   }
   return false;
 }
@@ -15862,9 +15862,9 @@ function scheduleStartupBootRetry(error) {
     const message = String(error?.message || '');
     if (
       (error?.code === 'CTOX_MANAGED_CAPABILITY_MISSING' || message.includes('nativen Capability-Token'))
-      && typeof globalThis.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
+      && typeof window.ctoxBusinessOsDesktop?.refreshManagedLaunch === 'function'
     ) {
-      globalThis.ctoxBusinessOsDesktop.refreshManagedLaunch();
+      window.ctoxBusinessOsDesktop.refreshManagedLaunch();
       return;
     }
     window.location.reload();
