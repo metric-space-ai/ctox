@@ -32,6 +32,8 @@ pub(crate) fn handles(kind: &str) -> bool {
             | "ctox.app.rollback"
             | "ctox.app.release"
             | "ctox.app.remove"
+            | "instance.providers.account.create"
+            | "speech.tts.key.delete"
     )
 }
 
@@ -241,6 +243,363 @@ pub(crate) fn can_write_draft(actor: &BusinessOsActor, draft: &Value) -> bool {
     })
 }
 
+/// §16.42: preserve the machine-readable envelope, never throw it away in
+/// an anyhow/string wrapper. Details are native constants, never payloads/keys.
+pub(crate) fn failure(status: &str, code: &str, reason: &str, path: &str, detail: &str) -> Value {
+    json!({"status":status,"code":code,"reason":reason,"path":path,"detail":detail})
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateAccount {
+    provider: String,
+    label: String,
+    auth_kind: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeleteTtsKey {
+    provider: String,
+}
+
+fn provider_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_'))
+}
+fn provider_permission(actor: &BusinessOsActor, right: BusinessOsPermission) -> bool {
+    actor.id.as_deref().is_some_and(|id| !id.is_empty())
+        && policy::evaluate(actor, right, &BusinessOsScope::workspace()).allowed
+}
+fn provider_projection(tx: &Transaction<'_>) -> Result<Value, StoreError> {
+    Ok(get(tx,"ctox_runtime_settings","instance.providers")?.unwrap_or_else(||
+        json!({"id":"instance.providers","runtime":{"provider_accounts":[]},"auth":{"speech":{}},"diagnostics":{}})))
+}
+fn write_provider_projection(
+    tx: &Transaction<'_>,
+    mut value: Value,
+    now: u64,
+) -> Result<(), StoreError> {
+    value["updated_at_ms"] = json!(now);
+    put(tx, "ctox_runtime_settings", "instance.providers", &value)
+}
+fn provider_command(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    secret_owner_available: bool,
+) -> Result<Value, StoreError> {
+    let reject = |code, reason, path, detail| {
+        record(
+            tx,
+            actor,
+            command,
+            failure("rejected", code, reason, path, detail),
+            now,
+        )
+    };
+    let right = if command.command_type == "speech.tts.key.delete" {
+        BusinessOsPermission::SecretsManage
+    } else {
+        BusinessOsPermission::IntegrationsManage
+    };
+    if !provider_permission(actor, right) {
+        return reject(
+            "forbidden",
+            "permission_denied",
+            "command_type",
+            "Native provider management permission is required.",
+        );
+    }
+    if command.command_type == "instance.providers.account.create" {
+        let request: CreateAccount = match serde_json::from_value(command.payload.clone()) {
+            Ok(request) => request,
+            Err(_) => {
+                return reject(
+                    "invalid",
+                    "payload_invalid:account",
+                    "payload",
+                    "Expected provider, label and auth_kind only.",
+                )
+            }
+        };
+        if !provider_id(&request.provider) {
+            return reject(
+                "invalid",
+                "payload_invalid:provider",
+                "payload.provider",
+                "Expected a canonical provider identifier.",
+            );
+        }
+        if request.label.trim().is_empty()
+            || request.label.chars().count() > 128
+            || request.label.chars().any(char::is_control)
+        {
+            return reject(
+                "invalid",
+                "payload_invalid:label",
+                "payload.label",
+                "Expected a nonempty label of at most 128 characters.",
+            );
+        }
+        if !matches!(
+            request.auth_kind.as_str(),
+            "api_key" | "oauth" | "subscription"
+        ) {
+            return reject(
+                "invalid",
+                "payload_invalid:auth_kind",
+                "payload.auth_kind",
+                "Expected api_key, oauth or subscription.",
+            );
+        }
+        let mut projection = provider_projection(tx)?;
+        let accounts = projection
+            .pointer_mut("/runtime/provider_accounts")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| invalid("provider registry schema differs"))?;
+        if accounts.len() >= 256 {
+            return reject(
+                "quota",
+                "provider_account_limit",
+                "payload.provider",
+                "The provider account limit has been reached.",
+            );
+        }
+        let id = format!(
+            "provider-account:{:x}",
+            Sha256::digest(command.id.as_bytes())
+        );
+        let account = json!({"id":id,"provider":request.provider,"label":request.label.trim(),"auth_kind":request.auth_kind,
+            "credential_ready":false,"key_hint":null,"state":"authentication_required","created_at_ms":now});
+        accounts.push(account.clone()); // effect: provider account creation
+        write_provider_projection(tx, projection, now)?;
+        return record(
+            tx,
+            actor,
+            command,
+            json!({"status":"accepted","account":account}),
+            now,
+        );
+    }
+    let request: DeleteTtsKey = match serde_json::from_value(command.payload.clone()) {
+        Ok(request) => request,
+        Err(_) => {
+            return reject(
+                "invalid",
+                "payload_invalid:provider",
+                "payload",
+                "Expected provider only; credentials never enter command documents.",
+            )
+        }
+    };
+    // The current native SpeechGateway supports exactly Mistral. Never accept
+    // an arbitrary secret selector supplied by an app.
+    if request.provider != "mistral" {
+        return reject(
+            "not_found",
+            "speech_provider_not_found",
+            "payload.provider",
+            "No native TTS provider is registered for this identifier.",
+        );
+    }
+    if !secret_owner_available {
+        return record(
+            tx,
+            actor,
+            command,
+            failure(
+                "failed",
+                "unavailable",
+                "secret_owner_missing",
+                "payload.provider",
+                "The daemon secret-store writer is not attached.",
+            ),
+            now,
+        );
+    }
+    record(
+        tx,
+        actor,
+        command,
+        json!({"status":"preparing","reason":"secret_delete_pending",
+            "key_hint_base":provider_projection(tx)?.pointer("/auth/speech/mistral/at_seq").cloned().unwrap_or(Value::Null)}),
+        now,
+    )
+}
+
+/// Only the already registered secret-database writer calls this operation.
+/// It never opens a database, decrypts a key, logs a value or touches keychains.
+pub(super) fn delete_tts_key(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+) -> Result<Value, StoreError> {
+    // Validate again at the effect boundary, even when intake is replaying a
+    // pending command. A stored status/result never selects another secret.
+    if command.command_type != "speech.tts.key.delete" {
+        return Ok(failure(
+            "rejected",
+            "invalid",
+            "command_type_invalid",
+            "command_type",
+            "Expected the native TTS key deletion command.",
+        ));
+    }
+    let request: DeleteTtsKey = match serde_json::from_value(command.payload.clone()) {
+        Ok(request) => request,
+        Err(_) => {
+            return Ok(failure(
+                "rejected",
+                "invalid",
+                "payload_invalid:provider",
+                "payload",
+                "Expected provider only.",
+            ))
+        }
+    };
+    if request.provider != "mistral" {
+        return Ok(failure(
+            "rejected",
+            "not_found",
+            "speech_provider_not_found",
+            "payload.provider",
+            "No native TTS provider is registered for this identifier.",
+        ));
+    }
+    let binding = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&json!([
+                command.id,
+                command.app_id,
+                command.module,
+                command.command_type,
+                command.payload,
+                actor.id
+            ]))
+            .map_err(|_| invalid("invalid secret command identity"))?
+        )
+    );
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='ctox_platform_secret_effects')",[],|r|r.get(0))?;
+    if exists {
+        let saved: Option<(String, String)> = tx
+            .query_row(
+                "SELECT binding,result FROM ctox_platform_secret_effects WHERE command_id=?1",
+                [&command.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((saved_binding, result)) = saved {
+            if saved_binding != binding {
+                return Ok(failure(
+                    "rejected",
+                    "conflict",
+                    "command_identity_differs",
+                    "id",
+                    "The operation ID belongs to a different native request.",
+                ));
+            }
+            return serde_json::from_str(&result)
+                .map_err(|_| invalid("invalid native secret receipt"));
+        }
+    }
+    if !provider_permission(actor, BusinessOsPermission::SecretsManage) {
+        return Ok(failure(
+            "rejected",
+            "forbidden",
+            "permission_revoked",
+            "command_type",
+            "Secret management authority is no longer current.",
+        ));
+    }
+    let deleted = tx.execute("DELETE FROM ctox_secret_records WHERE scope='credentials' AND secret_name IN ('CTOX_MISTRAL_API_KEY','MISTRAL_API_KEY')",[])?;
+    let outcome = json!({"status":"accepted","provider":"mistral","deleted":deleted});
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_platform_secret_effects(command_id TEXT PRIMARY KEY,binding TEXT NOT NULL,result TEXT NOT NULL)")?;
+    tx.execute(
+        "INSERT INTO ctox_platform_secret_effects(command_id,binding,result) VALUES(?1,?2,?3)",
+        params![
+            command.id,
+            binding,
+            serde_json::to_string(&outcome).map_err(|_| invalid("invalid secret receipt"))?
+        ],
+    )?;
+    Ok(outcome)
+}
+
+/// Native key-owner projection. Only the suffix crosses into the sync writer.
+pub(crate) fn key_hint(key: &str) -> Option<String> {
+    if key.chars().count() <= 4 {
+        return None;
+    }
+    let suffix: String = key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    Some(format!("··{suffix}"))
+}
+pub(super) fn project_key_hint(
+    tx: &Transaction<'_>,
+    provider: &str,
+    hint: Option<&str>,
+    now: u64,
+) -> Result<(), StoreError> {
+    if provider != "mistral" {
+        return Err(invalid("unknown native speech provider"));
+    }
+    let mut projection = provider_projection(tx)?;
+    let speech = projection
+        .pointer_mut("/auth/speech")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("speech projection schema differs"))?;
+    speech.insert(
+        provider.into(),
+        json!({"key_hint":hint,"credential_ready":hint.is_some(),"updated_at_ms":now,
+            "at_seq":change_log::head(tx)?.head_seq.to_string()}),
+    );
+    write_provider_projection(tx, projection, now)
+}
+pub(super) fn finish_key_delete(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    outcome: Value,
+    now: u64,
+) -> Result<Value, StoreError> {
+    let saved = get(tx, "business_commands", &command.id)?
+        .ok_or_else(|| invalid("missing admitted secret deletion"))?;
+    if saved["payload"] != command.payload
+        || saved["app_id"].as_str() != Some(command.app_id.as_str())
+        || saved["command_type"] != command.command_type
+        || saved.pointer("/client_context/actor/id") != Some(&json!(actor.id))
+    {
+        return Err(invalid("secret deletion identity differs"));
+    }
+    if saved["result"]["status"] != "preparing" {
+        return Ok(saved["result"].clone());
+    }
+    if outcome["status"] == "accepted" {
+        let projection = provider_projection(tx)?;
+        // Compare the canonical writer sequence, never wall-clock timestamps.
+        // A replacement committed in the same millisecond is still newer.
+        let current_hint_seq = projection
+            .pointer("/auth/speech/mistral/at_seq")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if current_hint_seq == saved["result"]["key_hint_base"] {
+            project_key_hint(tx, "mistral", None, now)?;
+        }
+    }
+    record(tx, actor, command, outcome, now)
+}
+
 fn result(code: &str) -> Value {
     json!({"status":"rejected", "code":code})
 }
@@ -251,14 +610,44 @@ fn record(
     outcome: Value,
     now: u64,
 ) -> Result<Value, StoreError> {
+    // Invalid provider input must never copy a credential field into a receipt.
+    // Valid public requests retain their exact payload for deduplication.
+    let public_payload = if matches!(
+        command.command_type.as_str(),
+        "instance.providers.account.create" | "speech.tts.key.delete"
+    ) {
+        let allowed: &[&str] = if command.command_type == "speech.tts.key.delete" {
+            &["provider"]
+        } else {
+            &["provider", "label", "auth_kind"]
+        };
+        Value::Object(
+            command
+                .payload
+                .as_object()
+                .map(|payload| {
+                    payload
+                        .iter()
+                        .filter(|(key, value)| {
+                            allowed.contains(&key.as_str())
+                                && value.as_str().is_some_and(|s| s.len() <= 512)
+                        })
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )
+    } else {
+        command.payload.clone()
+    };
     put(
         tx,
         "business_commands",
         &command.id,
         &json!({
             "id":command.id,"command_id":command.id,"app_id":command.app_id,"module":command.module,"command_type":command.command_type,
-            "payload":command.payload,"client_context":{"actor":{"id":actor.id}},
-            "status":if outcome["status"] == "preparing" {"running"} else if outcome["status"] == "rejected" {"failed"} else {"completed"},
+            "payload":public_payload,"client_context":{"actor":{"id":actor.id}},
+            "status":if outcome["status"] == "preparing" {"running"} else if matches!(outcome["status"].as_str(),Some("rejected"|"failed")) {"failed"} else {"completed"},
             "result":outcome,"updated_at_ms":now
         }),
     )?;
@@ -285,16 +674,13 @@ pub(super) fn execute(
     actor: &BusinessOsActor,
     command: &CommandDocument,
     now: u64,
+    secret_owner_available: bool,
     signer: &dyn InstanceSigner,
     migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
-    if !handles(&command.command_type)
-        || command.id.is_empty()
-        || command.app_id.is_empty()
-        || command.module.is_empty()
-    {
+    if !handles(&command.command_type) || command.id.is_empty() || command.app_id.is_empty() {
         return Err(invalid("invalid platform command document"));
     }
     if let Some(saved) = get(tx, "business_commands", &command.id)? {
@@ -316,8 +702,14 @@ pub(super) fn execute(
             return Ok(saved["result"].clone());
         }
     }
-    let request: Request =
-        serde_json::from_value(command.payload.clone()).map_err(|e| invalid(e.to_string()))?;
+    if matches!(
+        command.command_type.as_str(),
+        "instance.providers.account.create" | "speech.tts.key.delete"
+    ) {
+        return provider_command(tx, actor, command, now, secret_owner_available);
+    }
+    let request: Request = serde_json::from_value(command.payload.clone())
+        .map_err(|_| invalid("invalid app platform payload"))?;
     if request.app_id.is_empty()
         || !(request.base_app_ver.is_null()
             || request.base_app_ver.as_str().is_some_and(|s| !s.is_empty()))

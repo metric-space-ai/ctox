@@ -905,7 +905,7 @@ fn accept_rxdb_business_command_with_runtimes(
             )?
             .blocking_wait()?;
         return Ok(serde_json::json!({"id":command_id,"command_id":command_id,
-            "status":if result["status"] == "preparing" {"running"} else if result["status"] == "rejected" {"failed"} else {"completed"},
+            "status":if result["status"] == "preparing" {"running"} else if matches!(result["status"].as_str(),Some("rejected"|"failed")) {"failed"} else {"completed"},
             "result":result}));
     }
     let legacy_replay = (matches!(command.origin, CommandOrigin::ReplicatedPeer)

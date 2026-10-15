@@ -37,11 +37,35 @@ pub(crate) type MigrationResolver = Arc<
         + Sync,
 >;
 
+fn store_failure(error: StoreError) -> Value {
+    // Store errors contain validation/SQLite/I/O diagnostics, never secret
+    // values: credential deletion binds only native constant selectors.
+    let raw_detail = match &error {
+        StoreError::Invalid(message) | StoreError::Sqlite(message) | StoreError::Io(message) => {
+            message.clone()
+        }
+        _ => error.to_string(),
+    };
+    let (code, reason) = match error {
+        StoreError::Invalid(_) => ("invalid", "native_validation_failed"),
+        StoreError::Busy => ("unavailable", "store_busy"),
+        StoreError::Cancelled => ("unavailable", "store_cancelled"),
+        StoreError::DeadlineExceeded => ("unavailable", "store_deadline"),
+        StoreError::Closed => ("unavailable", "store_closed"),
+        StoreError::AlreadyOwned => ("conflict", "store_already_owned"),
+        StoreError::Sqlite(_) => ("unavailable", "store_sqlite_failed"),
+        StoreError::Io(_) => ("unavailable", "store_io_failed"),
+        StoreError::Panicked => ("unavailable", "store_panicked"),
+    };
+    commands::failure("failed", code, reason, "", &raw_detail)
+}
+
 #[derive(Clone)]
 pub(crate) struct Platform {
     writer: WriterHandle,
     signer: Signer,
     migrations: MigrationResolver,
+    secret_writer: Option<WriterHandle>,
 }
 
 impl Platform {
@@ -70,7 +94,92 @@ impl Platform {
             writer,
             signer,
             migrations: Arc::new(|_, _, _| false),
+            secret_writer: None,
         }
+    }
+
+    /// CUTOVER composition supplies an already registered secrets DB owner.
+    /// This is a second *handle*, never a second writer for that database.
+    pub(crate) fn with_secret_database(
+        mut self,
+        database: &crate::service::store_runtime::Database,
+    ) -> Result<Self, StoreError> {
+        if database.readers.generation() != database.writer.generation().0 {
+            return Err(StoreError::Invalid(
+                "secret owner generation differs".into(),
+            ));
+        }
+        self.secret_writer = Some(database.writer.clone());
+        Ok(self)
+    }
+
+    /// Async dispatcher interface: retains typed failures all the way to the
+    /// command result. Separate owned databases are never synchronously nested.
+    /// A durable pending command survives a crash between secret deletion and
+    /// its public projection; retry repeats only the idempotent delete.
+    pub(crate) async fn dispatch(
+        &self,
+        actor: BusinessOsActor,
+        command: CommandDocument,
+        now_ms: u64,
+    ) -> Value {
+        let prepared = match self.execute(actor.clone(), command.clone(), now_ms) {
+            Ok(job) => match job.await {
+                Ok(value) => value,
+                Err(error) => return store_failure(error),
+            },
+            Err(error) => return store_failure(error),
+        };
+        if command.command_type != "speech.tts.key.delete" || prepared["status"] != "preparing" {
+            return prepared;
+        }
+        let Some(secrets) = &self.secret_writer else {
+            return commands::failure(
+                "failed",
+                "unavailable",
+                "secret_owner_missing",
+                "payload.provider",
+                "The daemon secret-store writer is not attached.",
+            );
+        };
+        let current_actor = actor.clone();
+        let secret_command = command.clone();
+        let deleted = match secrets.submit(WriteJob::new(JobOptions::default(), move |tx| {
+            commands::delete_tts_key(tx, &current_actor, &secret_command)
+        })) {
+            Ok(job) => match job.await {
+                Ok(value) => value,
+                Err(error) => store_failure(error),
+            },
+            Err(error) => store_failure(error),
+        };
+        match self
+            .writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::finish_key_delete(tx, &actor, &command, deleted, now_ms)
+            })) {
+            Ok(job) => match job.await {
+                Ok(value) => value,
+                Err(error) => store_failure(error),
+            },
+            Err(error) => store_failure(error),
+        }
+    }
+
+    /// Called by the native credential owner after an authorized key update.
+    /// The closure captures only the hint; the full key stays in the caller.
+    pub(crate) fn project_speech_key(
+        &self,
+        provider: &str,
+        key: &str,
+        now_ms: u64,
+    ) -> Result<ctox_store::types::JobHandle<()>, StoreError> {
+        let hint = commands::key_hint(key);
+        let provider = provider.to_owned();
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::project_key_hint(tx, &provider, hint.as_deref(), now_ms)
+            }))
     }
 
     pub(crate) fn with_migrations(mut self, migrations: MigrationResolver) -> Self {
@@ -86,6 +195,7 @@ impl Platform {
     ) -> Result<ctox_store::types::JobHandle<Value>, StoreError> {
         let signer = self.signer.clone();
         let migrations = self.migrations.clone();
+        let secret_owner_available = self.secret_writer.is_some();
         self.writer
             .submit(WriteJob::new(JobOptions::default(), move |tx| {
                 commands::execute(
@@ -93,6 +203,7 @@ impl Platform {
                     &actor,
                     &command,
                     now_ms,
+                    secret_owner_available,
                     signer.as_ref(),
                     migrations.as_ref(),
                 )

@@ -120,7 +120,7 @@ impl Fixture {
         )
         .unwrap();
         let database = stores.register("sync", DbId::new(&path).unwrap(), true, Arc::new(|tx| {
-            for name in ["business_commands","business_apps","business_app_versions","app_catalog","app_drafts","app_activations"] {
+            for name in ["business_commands","business_apps","business_app_versions","app_catalog","app_drafts","app_activations","ctox_runtime_settings"] {
                 schema::create_collection(tx, &CollectionDefinition {name:name.into(),app_id:"ctox-platform".into(),schema_ver:1,
                     schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"}},"required":["id"]}),
                     class:"full".into(),client_limit:0,byte_budget:1_048_576,rights_ver:1,app_ver:"platform-1".into()})?;
@@ -289,6 +289,325 @@ impl Fixture {
             .await
             .unwrap()
     }
+}
+
+#[tokio::test]
+async fn provider_commands_use_owned_writers_and_preserve_typed_failures() {
+    let mut f = Fixture::new().await;
+    let secret_path = f._directory.path().join("secrets.sqlite");
+    let secret_db = f.stores.register("secrets",DbId::new(secret_path).unwrap(),false,Arc::new(|tx| {
+        // Same credential tuple columns and selector as the official secret
+        // provider. Deletion never needs to decrypt opaque stored ciphertext.
+        tx.execute_batch("CREATE TABLE ctox_secret_records(secret_id TEXT PRIMARY KEY, scope TEXT NOT NULL,secret_name TEXT NOT NULL,description TEXT,metadata_json TEXT NOT NULL,nonce_b64 TEXT NOT NULL,ciphertext_b64 TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(scope,secret_name));")?;
+        for (id,scope,name) in [("a","credentials","CTOX_MISTRAL_API_KEY"),("b","credentials","MISTRAL_API_KEY"),("c","credentials","OTHER_API_KEY"),("d","other","MISTRAL_API_KEY")] {
+            tx.execute("INSERT INTO ctox_secret_records VALUES(?1,?2,?3,NULL,'{}','opaque-nonce','opaque-ciphertext','0','0')",rusqlite::params![id,scope,name])?;
+        }
+        Ok(())
+    })).await.unwrap();
+    f.platform = f.platform.clone().with_secret_database(&secret_db).unwrap();
+    // A forged/stale pending result is not authority to select a native key.
+    f.seed("business_commands","forged-pending-provider",json!({"id":"forged-pending-provider","app_id":"settings","module":"ctox-platform","command_type":"speech.tts.key.delete","payload":{"provider":"unknown"},"client_context":{"actor":{"id":"owner"}},"status":"running","result":{"status":"preparing"},"updated_at_ms":998})).await;
+    let forged_pending = f
+        .platform
+        .dispatch(
+            admin(),
+            CommandDocument {
+                id: "forged-pending-provider".into(),
+                app_id: "settings".into(),
+                module: "ctox-platform".into(),
+                command_type: "speech.tts.key.delete".into(),
+                payload: json!({"provider":"unknown"}),
+            },
+            999,
+        )
+        .await;
+    assert_eq!(forged_pending["code"], "not_found");
+
+    let command = |id: &str, kind: &str, payload: Value| CommandDocument {
+        id: id.into(),
+        app_id: "settings".into(),
+        module: String::new(),
+        command_type: kind.into(),
+        payload,
+    };
+    let create = command(
+        "new-account",
+        "instance.providers.account.create",
+        json!({"provider":"mistral","label":"Mistral API","auth_kind":"api_key"}),
+    );
+    let denied_create = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("ordinary".into()), "user"),
+            command(
+                "denied-account",
+                "instance.providers.account.create",
+                create.payload.clone(),
+            ),
+            999,
+        )
+        .await;
+    assert_eq!(denied_create["code"], "forbidden");
+
+    let created = f.platform.dispatch(admin(), create.clone(), 1000).await;
+    assert_eq!(created["status"], "accepted", "{created}");
+    assert_eq!(created["account"]["state"], "authentication_required");
+    assert_eq!(created["account"]["credential_ready"], false);
+    assert_eq!(f.platform.dispatch(admin(), create, 1001).await, created);
+    let projection = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    assert_eq!(
+        projection["runtime"]["provider_accounts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    f.platform
+        .project_speech_key("mistral", "ephemeral-test-key-abcd", 1002)
+        .unwrap()
+        .await
+        .unwrap();
+    let projected = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    assert_eq!(projected["auth"]["speech"]["mistral"]["key_hint"], "··abcd");
+    assert!(!projected.to_string().contains("ephemeral-test-key"));
+    let delete = command(
+        "delete-key",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let denied = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("ordinary".into()), "user"),
+            delete.clone(),
+            1003,
+        )
+        .await;
+    assert_eq!(denied["status"], "rejected");
+    assert_eq!(denied["code"], "forbidden");
+    for name in ["reason", "path", "detail"] {
+        assert!(denied[name].is_string(), "{denied}");
+    }
+    // A new authorized request: denied command IDs remain bound to their actor.
+    let delete = command(
+        "delete-key-admin",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let deleted = f.platform.dispatch(admin(), delete.clone(), 1004).await;
+    assert_eq!(deleted["status"], "accepted", "{deleted}");
+    assert_eq!(deleted["deleted"], 2);
+    assert_eq!(f.platform.dispatch(admin(), delete, 1005).await, deleted);
+    let remaining = secret_db
+        .readers
+        .read(|tx| {
+            tx.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, 2); // Neither another provider nor another scope is deleted.
+    assert_eq!(
+        f.read("ctox_runtime_settings", "instance.providers")
+            .await
+            .unwrap()["auth"]["speech"]["mistral"]["key_hint"],
+        Value::Null
+    );
+    // Crash after the secret transaction, before the sync receipt: a retry
+    // must not delete a replacement key or erase its newer public hint.
+    secret_db.writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        tx.execute("INSERT INTO ctox_secret_records VALUES('e','credentials','CTOX_MISTRAL_API_KEY',NULL,'{}','opaque','opaque','0','0')",[])?; Ok(())
+    })).unwrap().await.unwrap();
+    let recover = command(
+        "recover-delete",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let preparing = f
+        .platform
+        .execute(admin(), recover.clone(), 1010)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(preparing["status"], "preparing");
+    let effect_command = recover.clone();
+    let committed = secret_db
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            commands::delete_tts_key(tx, &admin(), &effect_command)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(committed["deleted"], 1);
+    let mut forged = recover.clone();
+    forged.app_id = "different-calling-app".into();
+    let conflict = secret_db
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            commands::delete_tts_key(tx, &admin(), &forged)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(conflict["code"], "conflict");
+
+    secret_db.writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        tx.execute("INSERT INTO ctox_secret_records VALUES('f','credentials','CTOX_MISTRAL_API_KEY',NULL,'{}','opaque','new-opaque','0','0')",[])?; Ok(())
+    })).unwrap().await.unwrap();
+    f.platform
+        .project_speech_key("mistral", "replacement-key-wxyz", 1010)
+        .unwrap()
+        .await
+        .unwrap();
+    // Authority can be revoked after an already committed effect. Replaying
+    // its bound receipt completes it without authorizing a new deletion.
+    let recovered = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("owner".into()), "user"),
+            recover,
+            1013,
+        )
+        .await;
+    assert_eq!(recovered, committed);
+    let remaining = secret_db
+        .readers
+        .read(|tx| {
+            tx.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, 3);
+    assert_eq!(
+        f.read("ctox_runtime_settings", "instance.providers")
+            .await
+            .unwrap()["auth"]["speech"]["mistral"]["key_hint"],
+        "··wxyz"
+    );
+    let revoke = command(
+        "revoke-before-delete",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    f.platform
+        .execute(admin(), revoke.clone(), 1014)
+        .unwrap()
+        .await
+        .unwrap();
+    let revoked = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("owner".into()), "user"),
+            revoke,
+            1015,
+        )
+        .await;
+    assert_eq!(revoked["code"], "forbidden");
+    assert_eq!(revoked["reason"], "permission_revoked");
+    let invalid = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "invalid-account",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"unsupported"}),
+            ),
+            1006,
+        )
+        .await;
+    assert_eq!(invalid["code"], "invalid");
+    assert_eq!(invalid["reason"], "payload_invalid:auth_kind");
+    assert_eq!(invalid["path"], "payload.auth_kind");
+    let invalid_secret = f.platform.dispatch(admin(),command("no-key-in-command","instance.providers.account.create",json!({"provider":"mistral","label":"X","auth_kind":"api_key","api_key":"private-marker-must-not-copy"})),1006).await;
+    assert_eq!(invalid_secret["code"], "invalid");
+    assert!(!f
+        .read("business_commands", "no-key-in-command")
+        .await
+        .unwrap()
+        .to_string()
+        .contains("private-marker"));
+    assert_eq!(commands::key_hint("abcd"), None);
+    let unknown = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "unknown-speech",
+                "speech.tts.key.delete",
+                json!({"provider":"unknown"}),
+            ),
+            1007,
+        )
+        .await;
+    assert_eq!(unknown["code"], "not_found");
+    let mut full = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    full["runtime"]["provider_accounts"] = Value::Array(vec![json!({"id":"existing"}); 256]);
+    f.seed("ctox_runtime_settings", "instance.providers", full)
+        .await;
+    let quota = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "full-account-registry",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"api_key"}),
+            ),
+            1016,
+        )
+        .await;
+    assert_eq!(quota["code"], "quota");
+    assert_eq!(quota["reason"], "provider_account_limit");
+    let unattached = Platform::new(f.writer.clone(), f.stream_key.clone());
+    let missing = unattached
+        .dispatch(
+            admin(),
+            command(
+                "missing-secret-owner",
+                "speech.tts.key.delete",
+                json!({"provider":"mistral"}),
+            ),
+            1008,
+        )
+        .await;
+    assert_eq!(missing["status"], "failed");
+    assert_eq!(missing["code"], "unavailable");
+    assert_eq!(missing["reason"], "secret_owner_missing");
+    assert_eq!(
+        f.read("business_commands", "missing-secret-owner")
+            .await
+            .unwrap()["result"],
+        missing
+    );
+    f.stores.shutdown().await.unwrap();
+    let closed = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "closed-owner",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"api_key"}),
+            ),
+            1009,
+        )
+        .await;
+    assert_eq!(closed["code"], "unavailable");
+    assert_eq!(closed["reason"], "store_closed");
 }
 
 #[tokio::test]
@@ -573,7 +892,8 @@ async fn release_enters_catalog_and_stale_release_has_no_effect() {
             "app_catalog",
             &format!("unknown-at-boot:{installed}:stable")
         )
-        .await.is_some());
+        .await
+        .is_some());
     assert_eq!(
         f.run(
             "stale-release",
@@ -586,7 +906,8 @@ async fn release_enters_catalog_and_stale_release_has_no_effect() {
     );
     assert!(f
         .read("app_catalog", &format!("unknown-at-boot:{installed}:bad"))
-        .await.is_none());
+        .await
+        .is_none());
 }
 
 #[tokio::test]
