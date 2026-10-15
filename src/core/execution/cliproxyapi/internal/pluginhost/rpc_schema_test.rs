@@ -25,6 +25,7 @@ fn registration() -> RpcRegistration {
                 field_type: ConfigFieldType(ConfigFieldType::ENUM.into()),
                 enum_values: vec!["safe".into()],
                 description: "execution mode".into(),
+                default_value: None,
             }],
         },
         capabilities: RpcCapabilities {

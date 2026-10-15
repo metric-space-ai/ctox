@@ -155,8 +155,9 @@ pub use plugin_store::{
     ManagementPluginStoreService, ManagementPluginStoreSource,
 };
 pub use plugins::{
-    validate_plugin_id, ManagementPluginConfig, ManagementPluginConfigPatch,
-    ManagementPluginConfigStore, ManagementPluginConfigStoreError, ManagementPluginError,
+    validate_plugin_id, ManagementPluginConfig, ManagementPluginConfigField,
+    ManagementPluginConfigPatch, ManagementPluginConfigStore, ManagementPluginConfigStoreError,
+    ManagementPluginError, ManagementPluginList, ManagementPluginMetadata,
     ManagementPluginRuntimeRecord, ManagementPluginRuntimeSource, ManagementPluginService,
     ManagementPluginSnapshot, ManagementPluginView,
 };

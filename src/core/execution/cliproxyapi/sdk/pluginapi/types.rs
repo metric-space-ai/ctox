@@ -53,6 +53,10 @@ pub struct ConfigField {
     pub name: String,
     #[serde(rename = "Type")]
     pub field_type: ConfigFieldType,
+    // ref: sdk/pluginapi/types.go:65-66 @ 5fc580b1d72d87a7bcfe5cfb6f479c1aea5625b3
+    // Go emits Default:null for a nil interface; false/zero/empty values remain values.
+    #[serde(rename = "Default", default)]
+    pub default_value: Option<Value>,
     #[serde(rename = "EnumValues", default)]
     pub enum_values: Vec<String>,
     #[serde(rename = "Description")]

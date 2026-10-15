@@ -1,0 +1,201 @@
+[
+  {
+    "name": "empty metadata",
+    "input": {},
+    "expected": {
+      "name": "",
+      "version": "",
+      "author": "",
+      "github_repository": "",
+      "logo": "",
+      "config_fields": []
+    }
+  },
+  {
+    "name": "null and zero-like defaults remain values",
+    "input": {
+      "ConfigFields": [
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": null,
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": false,
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": true,
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": 0,
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": 1.25,
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": "",
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": [],
+          "EnumValues": [],
+          "Description": ""
+        },
+        {
+          "Name": "option",
+          "Type": "value",
+          "Default": {},
+          "EnumValues": [],
+          "Description": ""
+        }
+      ]
+    },
+    "expected": {
+      "name": "",
+      "version": "",
+      "author": "",
+      "github_repository": "",
+      "logo": "",
+      "config_fields": [
+        {
+          "default": null,
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": false,
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": true,
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": 0,
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": 1.25,
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": "",
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": [],
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        },
+        {
+          "default": {},
+          "name": "option",
+          "type": "value",
+          "enum_values": [],
+          "description": ""
+        }
+      ]
+    }
+  },
+  {
+    "name": "HTML is escaped once in all strings and nested defaults",
+    "input": {
+      "Name": "<plugin>",
+      "Version": "1&2",
+      "Author": "\"author\"",
+      "GitHubRepository": "https://example.test/?a=1&b='two'",
+      "Logo": "<svg>",
+      "ConfigFields": [
+        {
+          "Name": "<mode>",
+          "Type": "enum&",
+          "Default": {
+            "<key>": [
+              "<script>",
+              {
+                "label": "'quoted' & \"double\""
+              }
+            ],
+            "enabled": false,
+            "count": 0
+          },
+          "EnumValues": [
+            "<a>",
+            "\"b\""
+          ],
+          "Description": "a'b"
+        }
+      ]
+    },
+    "expected": {
+      "name": "&lt;plugin&gt;",
+      "version": "1&amp;2",
+      "author": "&#34;author&#34;",
+      "github_repository": "https://example.test/?a=1&amp;b=&#39;two&#39;",
+      "logo": "&lt;svg&gt;",
+      "config_fields": [
+        {
+          "default": {
+            "<key>": [
+              "&lt;script&gt;",
+              {
+                "label": "&#39;quoted&#39; &amp; &#34;double&#34;"
+              }
+            ],
+            "enabled": false,
+            "count": 0
+          },
+          "name": "&lt;mode&gt;",
+          "type": "enum&amp;",
+          "enum_values": [
+            "&lt;a&gt;",
+            "&#34;b&#34;"
+          ],
+          "description": "a&#39;b"
+        }
+      ]
+    }
+  }
+]

@@ -35,6 +35,7 @@ fn list_merges_configured_and_registered_plugins_deterministically() {
             oauth_provider: Some("plugin-auth".to_owned()),
             capabilities: vec!["executor".to_owned()],
             install_ref: Some("plugin:registered@1".to_owned()),
+            ..Default::default()
         });
     let views = service.list().unwrap();
     assert_eq!(
@@ -124,4 +125,81 @@ fn invalid_ids_never_reach_the_store() {
         Err(ManagementPluginError::InvalidPluginId)
     );
     assert_eq!(store.0.lock().unwrap().revision, 0);
+}
+
+#[test]
+fn management_metadata_matches_upstream_projection_cases() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/differential/plugin_management_metadata_fixtures.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        let metadata = serde_json::from_value(case["input"].clone()).unwrap();
+        let actual = serde_json::to_value(super::plugins::plugin_metadata(&metadata)).unwrap();
+        assert_eq!(actual, case["expected"], "{}", case["name"]);
+    }
+}
+
+#[test]
+fn management_metadata_is_registered_public_schema_not_account_configuration() {
+    let (store, runtime, service) = service();
+    let metadata = serde_json::from_value(json!({
+        "Name":"<plugin>", "Logo":"<logo>",
+        "ConfigFields":[{"Name":"mode","Default":{"label":"<safe>"}}]
+    }))
+    .unwrap();
+    runtime
+        .0
+        .lock()
+        .unwrap()
+        .push(ManagementPluginRuntimeRecord {
+            id: "schema".to_owned(),
+            registered: true,
+            metadata: Some(metadata),
+            ..Default::default()
+        });
+    service
+        .put_config(
+            "schema",
+            ManagementPluginConfig {
+                enabled: false,
+                values: BTreeMap::from([("mode".to_owned(), json!("private-config-value"))]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let before = store.0.lock().unwrap().clone();
+    let row = serde_json::to_value(&service.list().unwrap()[0]).unwrap();
+    assert_eq!(row["metadata"]["name"], "&lt;plugin&gt;");
+    assert_eq!(row["logo"], "&lt;logo&gt;");
+    assert_eq!(row["config_fields"], row["metadata"]["config_fields"]);
+    assert_eq!(
+        row["config_fields"][0]["default"],
+        json!({"label":"&lt;safe&gt;"})
+    );
+    assert!(!row.to_string().contains("private-config-value"));
+    assert_eq!(*store.0.lock().unwrap(), before);
+    runtime.0.lock().unwrap()[0].registered = false;
+    let row = serde_json::to_value(&service.list().unwrap()[0]).unwrap();
+    assert_eq!(row["metadata"], serde_json::Value::Null);
+    assert_eq!(row["config_fields"], json!([]));
+    assert_eq!(row["logo"], "");
+}
+
+#[test]
+fn management_metadata_absent_and_raw_runtime_serialize_without_schema_values() {
+    let (_, _, service) = service();
+    service.set_enabled("configured", true).unwrap();
+    let row = serde_json::to_value(&service.list().unwrap()[0]).unwrap();
+    assert_eq!(row["metadata"], serde_json::Value::Null);
+    assert_eq!(row["config_fields"], json!([]));
+    let record = ManagementPluginRuntimeRecord {
+        metadata: Some(serde_json::from_value(json!({"Name":"not-a-public-projection"})).unwrap()),
+        ..Default::default()
+    };
+    assert!(!serde_json::to_value(record)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .contains_key("metadata"));
 }
