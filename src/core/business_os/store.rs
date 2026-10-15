@@ -1472,7 +1472,9 @@ pub(crate) fn owner_queue_projection_effect(
         redact_document_client_context_secrets(body);
     }
     let queue = crate::service::queue_projection::capture(conn, queue)?;
-    let command = command.map(|body| crate::service::queue_projection::capture(conn, body)).transpose()?;
+    let command = command
+        .map(|body| crate::service::queue_projection::capture(conn, body))
+        .transpose()?;
     Ok(serde_json::json!({"queue":queue,"command":command}))
 }
 
