@@ -2055,3 +2055,20 @@ test('native KPI refresh maps per-KPI status and rejects malformed reports', asy
   });
   await assert.rejects(broken.invoke({ action: 'project.kpis.refresh', commandId: 'r2', projectId: 'project-1' }));
 });
+
+test('feed settings map between Workjet wire and native fields and reject unknown values', () => {
+  const context = vm.createContext({});
+  vm.runInContext(controlSource + '\nglobalThis.meta = boundedWorkjetProjectMetadata; globalThis.result = boundedWorkjetProjectResult;', context);
+  const wire = { title: ' Release-Feed ', windowDays: 7, sources: { setup: false }, defaultTab: 'latest',
+    body: 'full', replies: 'all', notifyDisruptions: true };
+  const native = JSON.parse(JSON.stringify(context.meta({ feedSettings: wire })));
+  assert.deepEqual(native.feed_settings, { title: 'Release-Feed', window_days: 7, sources: { setup: false },
+    default_tab: 'latest', body: 'full', replies: 'all', notify_disruptions: true });
+  assert.equal(context.meta({ feedSettings: null }).feed_settings, null);
+  for (const bad of [{ windowDays: 3 }, { defaultTab: 'oldest' }, { sources: { other: true } }, { extra: 1 }, []]) {
+    assert.throws(() => context.meta({ feedSettings: bad }), /feedSettings|Unsupported Workjet project payload field/);
+  }
+  const project = JSON.parse(JSON.stringify(context.result({ id: 'p1', name: 'P', status: 'active', feed_settings: native.feed_settings },
+    { includeConfiguration: true })));
+  assert.deepEqual(project.feedSettings, { ...wire, title: 'Release-Feed' });
+});
