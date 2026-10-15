@@ -47,6 +47,44 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
     let root = fixture.path();
     bind_engine(Arc::new(FixtureFactory))?;
     let mut foreground = Foreground::start(root.to_owned(), Handle::current()).await?;
+    // The normal composition root, not the fixture, installs these weak routes.
+    // Removing NativeOwners::attach must fail here before any fake executor runs.
+    crate::persistence::store_text_value_owned(root, "foreground-owner-probe", Some("retained"))
+        .await?;
+    assert_eq!(
+        crate::persistence::load_text_value_owned(root, "foreground-owner-probe")
+            .await?
+            .as_deref(),
+        Some("retained")
+    );
+    let native_root = root.to_owned();
+    crate::persistence::run_core_sync(move || {
+        crate::runtime_env::set_runtime_env_value(
+            &native_root,
+            "CTOX_FIXTURE_NON_SECRET",
+            "owned",
+        )?;
+        assert_eq!(
+            crate::runtime_env::get_runtime_env_value(&native_root, "CTOX_FIXTURE_NON_SECRET")
+                .as_deref(),
+            Some("owned")
+        );
+        assert!(crate::secrets::list_secret_records(&native_root, None)?.is_empty());
+        Ok(())
+    })
+    .await?;
+    for name in ["runtime", "secrets"] {
+        let db = foreground
+            .inputs
+            .databases
+            .get(name)
+            .expect("native file missing");
+        assert_eq!(db.readers.generation(), db.writer.generation().0);
+        assert!(matches!(
+            ctox_store::registry::Registry.open(db.writer.db_id().clone(), Default::default()),
+            Err(StoreError::AlreadyOwned)
+        ));
+    }
     let core = foreground.inputs.core.clone();
     let sync = foreground.inputs.sync.clone();
     assert!(matches!(

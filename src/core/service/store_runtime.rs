@@ -289,6 +289,7 @@ impl DaemonStores {
             sync,
             self.runtime.clone(),
             self.closing.clone(),
+            databases.clone(),
         )?);
         Ok(())
     }

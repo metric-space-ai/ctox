@@ -22,6 +22,7 @@ pub(crate) struct StoreInputs {
     pub core: Database,
     pub sync: Database,
     pub runtime: Handle,
+    pub databases: HashMap<String, Database>,
     closing: Arc<AtomicBool>,
     retired: AtomicBool,
     sync_reads: Arc<tokio::sync::Semaphore>,
@@ -38,6 +39,7 @@ impl InputRegistration {
         sync: Database,
         runtime: Handle,
         closing: Arc<AtomicBool>,
+        databases: HashMap<String, Database>,
     ) -> Result<Self, StoreError> {
         let key = crate::paths::runtime_dir(root);
         if core.writer.db_id() == sync.writer.db_id() {
@@ -50,6 +52,7 @@ impl InputRegistration {
             core,
             sync,
             runtime,
+            databases,
             closing,
             retired: AtomicBool::new(false),
             sync_reads: Arc::new(tokio::sync::Semaphore::new(64)),

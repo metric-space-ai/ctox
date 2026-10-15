@@ -51,7 +51,59 @@ pub(crate) struct Foreground {
     stores: DaemonStores,
     pub inputs: Arc<StoreInputs>,
     engines: Vec<Box<dyn RunningEngine>>,
+    native_owners: Option<NativeOwners>,
 }
+/// Lifetimes for the real weak-routed legacy adapters. They reuse only the
+/// registered file's writer/readers, never an additional connection or pool.
+struct NativeOwners {
+    _core: Arc<crate::persistence::CorePersistence>,
+    _lcm: crate::lcm::owner_adapter::OwnerAdapter,
+    _runtime: crate::runtime_env::RuntimeStore,
+    _secrets: crate::secrets::SecretStore,
+}
+impl NativeOwners {
+    async fn attach(inputs: &StoreInputs) -> Result<Self, StoreError> {
+        let failure = |_| StoreError::Invalid("native owner attachment failed".into());
+        let core = crate::persistence::install_core_owner(
+            &inputs.root,
+            inputs.core.writer.clone(),
+            inputs.core.readers.clone(),
+        )
+        .await
+        .map_err(failure)?;
+        let lcm = crate::lcm::attach_lcm_store(
+            &inputs.root,
+            inputs.core.writer.clone(),
+            inputs.core.readers.clone(),
+        )
+        .await?;
+        let runtime = inputs.databases.get("runtime").ok_or(StoreError::Closed)?;
+        let runtime = crate::runtime_env::RuntimeStore::attach(
+            &inputs.root,
+            runtime.writer.clone(),
+            runtime.readers.clone(),
+        )
+        .await?;
+        let secrets = inputs.databases.get("secrets").ok_or(StoreError::Closed)?;
+        let secrets = crate::secrets::SecretStore::attach(
+            &inputs.root,
+            secrets.writer.clone(),
+            secrets.readers.clone(),
+        )
+        .await?;
+        // Each importer first releases its Core read snapshot, then submits a
+        // destination job. No cross-file transaction or mutual queue wait.
+        secrets.migrate_legacy_from_core().await.map_err(failure)?;
+        runtime.migrate_legacy_from_core().await.map_err(failure)?;
+        Ok(Self {
+            _core: core,
+            _lcm: lcm,
+            _runtime: runtime,
+            _secrets: secrets,
+        })
+    }
+}
+
 impl Foreground {
     /// Real boot operation used by run_foreground and the isolated daemon probe.
     /// All file identity/I/O work happens on the bounded blocking executor.
@@ -63,6 +115,8 @@ impl Foreground {
                 Ok::<_, StoreError>((
                     DbId::new(crate::paths::core_db(&root))?,
                     DbId::new(crate::paths::sync_db(&root))?,
+                    DbId::new(crate::paths::runtime_config_db(&root))?,
+                    DbId::new(crate::paths::secrets_db(&root))?,
                 ))
             }
         })
@@ -90,6 +144,14 @@ impl Foreground {
             let sync = stores
                 .register("sync", paths.1, true, Arc::new(|_| Ok(())))
                 .await?;
+            stores.register("runtime", paths.2, false, Arc::new(|tx| {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS runtime_env_kv(env_key TEXT PRIMARY KEY, env_value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);")?;
+                Ok(())
+            })).await?;
+            stores.register("secrets", paths.3, false, Arc::new(|tx| {
+                crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|StoreError::Invalid("Secrets schema initialization failed".into()))?;
+                Ok(())
+            })).await?;
             stores.install_native_rxdb(sync.clone()).await?;
             stores.install_queue(root.clone(), core, sync).await?;
             stores.publish_inputs(&root).await?;
@@ -107,7 +169,15 @@ impl Foreground {
             stores,
             inputs,
             engines: Vec::new(),
+            native_owners: None,
         };
+        match NativeOwners::attach(&owner.inputs).await {
+            Ok(native) => owner.native_owners = Some(native),
+            Err(error) => {
+                owner.shutdown().await?;
+                return Err(error);
+            }
+        }
         let factories = {
             let mut state = FACTORIES
                 .get_or_init(Mutex::default)
@@ -135,6 +205,7 @@ impl Foreground {
             engine.shutdown().await?;
             self.engines.pop();
         }
+        self.native_owners.take();
         self.stores.shutdown().await?;
         FACTORIES
             .get_or_init(Mutex::default)
