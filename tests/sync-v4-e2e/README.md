@@ -56,7 +56,8 @@ retires detached descendants if the coordinator crashes.
   consuming the real app DB; it is not Outbound UI acceptance.
 - **K08**: hold local rows, release the warm-up lease, first Shell `openModule`
   of a genuine runtime-installed test app. Measure its real `ctx.db` query and
-  paint. No empty first render, complete ≤1000ms. Does not claim the separate
+  paint and actual DOM actionability without an input click. A mounted list
+  behind the Shell loading cover is not visible acceptance. No empty first render, complete ≤1000ms. Does not claim the separate
   multi-tab K19 invariant; that needs its own scenario.
 - **K04-ATTACH**: after a confirmed local checkpoint, inject the exact old ATTACH
   writer's timestamp pattern into the owned fixture table. Observe native truth

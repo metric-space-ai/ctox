@@ -140,9 +140,14 @@ try {
         await page.evaluate(async () => { globalThis.__e2eAppResult = null; await globalThis.CTOX_BUSINESS_OS_APP.openModule('e2e-probe'); });
         await page.waitForFunction(() => !!globalThis.__e2eAppResult, null, { timeout: 60000 });
         const result = await page.evaluate(() => globalThis.__e2eAppResult);
-        if (!result.visible) throw Error('Actual module did not paint');
-        return { visibleMs: performance.now() - before, rows: result.ids.length, emptyRender: result.emptyRender,
-          missing: expected.filter(id => !result.ids.includes(id)), source: 'real Shell openModule → module context query' };
+        const rows=page.locator('[data-e2e-app="first-open"] [data-id]');
+        let receivesEvents=false,occlusionError=null;
+        try {await rows.first().click({trial:true,timeout:5000});receivesEvents=true;}
+        catch(e){occlusionError='Fixture rows are hidden, covered or absent; actionability deadline';}
+        const ids=await rows.evaluateAll(nodes=>nodes.map(n=>n.dataset.id));
+        return { visibleMs: performance.now() - before, rows: ids.length, emptyRender: ids.length===0,
+          receivesEvents,occlusionError,internalMountRows:result.ids.length,
+          missing: expected.filter(id => !ids.includes(id)), source: 'real Shell openModule → DOM rows → Playwright trial actionability (no click)' };
       },
       checkpoint: page => page.evaluate(async () => {
         const storage = globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads.storageCollection;
