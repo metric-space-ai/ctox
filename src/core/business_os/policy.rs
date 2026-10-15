@@ -310,8 +310,15 @@ impl PolicyDecision {
     }
 }
 
+/// Actor-less V3 grants cannot bypass the Store decision. Import explicit grants
+/// into _rights with the base release and use evaluate with the actual actor.
 pub fn allow_decision(permission: BusinessOsPermission, scope: &BusinessOsScope) -> PolicyDecision {
-    PolicyDecision::allow(permission, scope)
+    PolicyDecision::deny(
+        permission,
+        scope,
+        "legacy_grant_requires_store_import",
+        "Legacy grant must be imported into current Store rights.",
+    )
 }
 
 pub fn normalize_role(role: &str) -> String {
@@ -329,17 +336,26 @@ pub fn parse_role(role: &str) -> BusinessOsRole {
 }
 
 pub fn role_can_manage(role: &str) -> bool {
-    matches!(
-        parse_role(role),
-        BusinessOsRole::Chef | BusinessOsRole::Admin
+    evaluate(
+        &BusinessOsActor::new(None, role),
+        BusinessOsPermission::WorkspaceBrandingManage,
+        &BusinessOsScope::workspace(),
     )
+    .allowed
 }
 
 pub(crate) fn role_sees_private_crew_fields(role: &str) -> bool {
-    matches!(
-        parse_role(role),
-        BusinessOsRole::Chef | BusinessOsRole::Admin | BusinessOsRole::Founder
-    )
+    with_policy_rights(|rights| {
+        Ok(rights
+            .resolve_collection(
+                parse_role(role).as_str(),
+                "__role_summary__",
+                "ctox_crew_members",
+            )?
+            .projection("ctox_crew_members")
+            .is_some_and(|p| p.field_mask == sync_rights::scope::FieldMask::All))
+    })
+    .unwrap_or(false)
 }
 
 pub(crate) fn crew_fields_for_role(role: &str) -> Option<Vec<String>> {
@@ -355,11 +371,8 @@ pub(crate) fn crew_fields_for_role(role: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Collections that hold administrative / sensitive control data and must not
-/// replicate to non-admin peers. This is a CONSERVATIVE deny-set: every
-/// collection NOT listed here is workspace app data and stays readable by all
-/// roles, so enabling enforcement does not change access to ordinary data.
-/// Refine this matrix as the per-collection sensitivity model is finalized.
+/// Legacy sensitivity classifications used only by the base-release import.
+/// Runtime access is decided from its committed _rights rows, never this list.
 pub const ADMIN_ONLY_COLLECTIONS: &[&str] = &[
     "business_users",
     "business_module_acl",
@@ -389,124 +402,286 @@ pub fn user_readable_cockpit_projection(collection: &str) -> bool {
     matches!(collection, "ctox_crew_members" | "ctox_harness_status")
 }
 
-/// Role-only summary for CLI policy audits. Runtime authorization additionally
-/// checks the actor, permission and scope through `evaluate`.
-pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
-    match role {
-        BusinessOsRole::Chef | BusinessOsRole::Admin => true,
-        BusinessOsRole::Founder => !ADMIN_ONLY_COLLECTIONS.contains(&collection),
-        BusinessOsRole::User => {
-            !ADMIN_ONLY_COLLECTIONS.contains(&collection)
-                && (!is_cockpit_projection(collection)
-                    || user_readable_cockpit_projection(collection))
+/// Base-release import is the only producer of the former default matrix.
+/// Persist its result through StoreRightsAuthority::replace; never call it as
+/// a runtime fallback. Registry supplies every real collection explicitly.
+pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
+    use sync_rights::{
+        scope::{FieldMask, FilterValue, RowFilter},
+        Operation, Right,
+    };
+    fn eq(path: &str, value: Value) -> RowFilter {
+        RowFilter::Eq {
+            path: path.into(),
+            value: FilterValue::Literal { value },
+        }
+    }
+    fn or(filters: Vec<RowFilter>) -> RowFilter {
+        RowFilter::Or { filters }
+    }
+    fn and(filters: Vec<RowFilter>) -> RowFilter {
+        RowFilter::And { filters }
+    }
+    let mut rows = Vec::new();
+    for role in [
+        BusinessOsRole::Chef,
+        BusinessOsRole::Admin,
+        BusinessOsRole::Founder,
+        BusinessOsRole::User,
+    ] {
+        let admin = matches!(role, BusinessOsRole::Chef | BusinessOsRole::Admin);
+        for permission in BusinessOsPermission::all() {
+            let assigned = eq("/assigned", Value::Bool(true));
+            let owned = eq("/owned", Value::Bool(true));
+            let record = eq("/scope_type", Value::String("record".into()));
+            let yes = if admin {
+                RowFilter::All
+            } else {
+                RowFilter::None
+            };
+            let filter = match permission {
+                BusinessOsPermission::WorkspaceManage => {
+                    if role == BusinessOsRole::Chef {
+                        RowFilter::All
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::WorkspaceBrandingManage
+                | BusinessOsPermission::UsersManage
+                | BusinessOsPermission::RolesManage
+                | BusinessOsPermission::RuntimeManage
+                | BusinessOsPermission::IntegrationsManage
+                | BusinessOsPermission::SecretsManage
+                | BusinessOsPermission::McpManage
+                | BusinessOsPermission::AppsInstall
+                | BusinessOsPermission::AppsUninstall
+                | BusinessOsPermission::AppsAssignOwner
+                | BusinessOsPermission::SupportManageInboxes
+                | BusinessOsPermission::SupportManageMacros
+                | BusinessOsPermission::SupportManageSla => yes,
+                BusinessOsPermission::AppsView
+                | BusinessOsPermission::AppsModify
+                | BusinessOsPermission::AppsRelease
+                | BusinessOsPermission::AppsRollback
+                | BusinessOsPermission::AppsSourceView => {
+                    if admin {
+                        RowFilter::All
+                    } else if role == BusinessOsRole::Founder {
+                        and(vec![
+                            eq("/scope_type", Value::String("module".into())),
+                            assigned,
+                        ])
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::DataRead => or(vec![yes, assigned]),
+                BusinessOsPermission::DataWrite => {
+                    or(vec![yes, assigned, and(vec![record, owned])])
+                }
+                BusinessOsPermission::CtoxTaskCreate => RowFilter::All,
+                BusinessOsPermission::CtoxTaskManage => or(vec![yes, owned, assigned]),
+                BusinessOsPermission::CrewManage => {
+                    if admin {
+                        RowFilter::All
+                    } else if role == BusinessOsRole::Founder {
+                        and(vec![
+                            record,
+                            or(vec![
+                                eq(
+                                    "/scope_id",
+                                    Value::String("ctox.crew.learning.confirm".into()),
+                                ),
+                                eq(
+                                    "/scope_id",
+                                    Value::String("ctox.crew.learning.update".into()),
+                                ),
+                            ]),
+                        ])
+                    } else {
+                        RowFilter::None
+                    }
+                }
+                BusinessOsPermission::ExternalApprove
+                | BusinessOsPermission::SupportRead
+                | BusinessOsPermission::SupportTriage
+                | BusinessOsPermission::SupportAssign
+                | BusinessOsPermission::SupportReply
+                | BusinessOsPermission::SupportResolve
+                | BusinessOsPermission::SupportAgentRequest
+                | BusinessOsPermission::SupportAgentApply => or(vec![yes, assigned]),
+                BusinessOsPermission::SessionHandoffDisclose
+                | BusinessOsPermission::SessionHandoffReceive
+                | BusinessOsPermission::SessionHandoffExecute => RowFilter::None,
+            };
+            rows.push(Right {
+                role: role.as_str().into(),
+                collection: format!("policy:{}", permission.as_str()),
+                row_filter: filter,
+                field_mask: FieldMask::All,
+                ops: [Operation::Command].into(),
+            });
+        }
+        for collection in collections {
+            let visible = admin
+                || (!ADMIN_ONLY_COLLECTIONS.contains(&collection.as_str())
+                    && (role != BusinessOsRole::User
+                        || !is_cockpit_projection(collection)
+                        || user_readable_cockpit_projection(collection)));
+            if !visible {
+                continue;
+            }
+            let field_mask = if collection == "ctox_crew_members" && role == BusinessOsRole::User {
+                FieldMask::Fields {
+                    paths: crate::crew::PUBLIC_MEMBER_FIELDS
+                        .iter()
+                        .map(|f| format!("/{}", f.replace('~', "~0").replace('/', "~1")))
+                        .collect(),
+                }
+            } else {
+                FieldMask::All
+            };
+            let mut ops = [Operation::Read]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            if admin && !is_cockpit_projection(collection) {
+                ops.extend([Operation::Write, Operation::Delete]);
+            }
+            rows.push(Right {
+                role: role.as_str().into(),
+                collection: collection.clone(),
+                row_filter: RowFilter::All,
+                field_mask,
+                ops,
+            });
+        }
+    }
+    rows
+}
+
+static POLICY_AUTHORITY: std::sync::RwLock<
+    Option<std::sync::Weak<sync_rights::StoreRightsAuthority>>,
+> = std::sync::RwLock::new(None);
+/// Retain for the daemon lifetime. Drop removes only this exact registration.
+/// No credential, Store connection or duplicate rights snapshot is retained.
+pub struct PolicyAuthorityRegistration(std::sync::Arc<sync_rights::StoreRightsAuthority>);
+pub fn bind_policy_authority(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+) -> sync_rights::scope::Result<PolicyAuthorityRegistration> {
+    let mut current = POLICY_AUTHORITY
+        .write()
+        .map_err(|_| "policy authority poisoned")?;
+    if current
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .is_some()
+    {
+        return Err("policy authority already bound".into());
+    }
+    *current = Some(std::sync::Arc::downgrade(&authority));
+    Ok(PolicyAuthorityRegistration(authority))
+}
+impl Drop for PolicyAuthorityRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut current) = POLICY_AUTHORITY.write() {
+            if current
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|a| std::sync::Arc::ptr_eq(&a, &self.0))
+            {
+                *current = None;
+            }
         }
     }
 }
+fn with_policy_rights<T>(
+    f: impl FnOnce(&sync_rights::RightsSnapshot) -> sync_rights::scope::Result<T>,
+) -> sync_rights::scope::Result<T> {
+    let authority = POLICY_AUTHORITY
+        .read()
+        .map_err(|_| "policy authority poisoned")?
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+        .ok_or("policy authority unavailable")?;
+    authority.router.with_current_rights(f)
+}
+pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
+    with_policy_rights(|rights| {
+        Ok(rights
+            .resolve_collection(role.as_str(), "__role_summary__", collection)?
+            .projection(collection)
+            .is_some_and(|p| p.row_filter != sync_rights::scope::RowFilter::None))
+    })
+    .unwrap_or(false)
+}
 
+/// All former role defaults are now seq-bearing Store rows. Unknown authority,
+/// missing grants and stopped/pending writers deny without seeding on demand.
 pub fn evaluate(
     actor: &BusinessOsActor,
     permission: BusinessOsPermission,
     scope: &BusinessOsScope,
 ) -> PolicyDecision {
-    if scope.scope_id.as_deref().is_some_and(is_cockpit_projection)
+    with_policy_rights(|rights| Ok(evaluate_with_rights(rights, actor, permission, scope)))
+        .unwrap_or_else(|_| {
+            PolicyDecision::deny(
+                permission,
+                scope,
+                "rights_unavailable",
+                "Current Store rights are unavailable.",
+            )
+        })
+}
+pub fn evaluate_with_rights(
+    rights: &sync_rights::RightsSnapshot,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> PolicyDecision {
+    use sync_rights::Operation;
+    let context = serde_json::json!({"scope_type":scope.scope_type.as_str(), "scope_id":scope.scope_id,
+        "assigned":scope.assigned_to_actor, "owned":scope.owned_by_actor, "actor_id":actor.id});
+    if scope.scope_type == BusinessOsScopeType::Collection
         && matches!(
             permission,
             BusinessOsPermission::DataRead | BusinessOsPermission::DataWrite
         )
     {
-        return if permission == BusinessOsPermission::DataRead
-            && (actor.role != BusinessOsRole::User
-                || scope
-                    .scope_id
-                    .as_deref()
-                    .is_some_and(user_readable_cockpit_projection))
-        {
+        let op = if permission == BusinessOsPermission::DataRead {
+            Operation::Read
+        } else {
+            Operation::Write
+        };
+        let allowed = scope.scope_id.as_ref().is_some_and(|name| {
+            rights.allows_unrestricted_collection(
+                actor.role.as_str(),
+                actor.id.as_deref().unwrap_or(""),
+                name,
+                op,
+            )
+        });
+        return if allowed {
             PolicyDecision::allow(permission, scope)
         } else {
             PolicyDecision::deny(
                 permission,
                 scope,
-                "cockpit_projection_policy",
-                "cockpit projections are server-authored and readable by Admin/Founder only",
+                "role_or_scope_denied",
+                "Current Store rights deny this collection.",
             )
         };
     }
-    let allowed = match permission {
-        BusinessOsPermission::WorkspaceManage => actor.role == BusinessOsRole::Chef,
-        BusinessOsPermission::WorkspaceBrandingManage
-        | BusinessOsPermission::UsersManage
-        | BusinessOsPermission::RolesManage
-        | BusinessOsPermission::RuntimeManage
-        | BusinessOsPermission::IntegrationsManage
-        | BusinessOsPermission::SecretsManage
-        | BusinessOsPermission::McpManage
-        | BusinessOsPermission::MachinesManage
-        | BusinessOsPermission::AppsInstall
-        | BusinessOsPermission::AppsUninstall
-        | BusinessOsPermission::AppsAssignOwner => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-        }
-        BusinessOsPermission::AppsView
-        | BusinessOsPermission::AppsModify
-        | BusinessOsPermission::AppsRelease
-        | BusinessOsPermission::AppsRollback
-        | BusinessOsPermission::AppsSourceView
-        | BusinessOsPermission::AppsSourceEdit => match actor.role {
-            BusinessOsRole::Chef | BusinessOsRole::Admin => true,
-            BusinessOsRole::Founder => {
-                scope.scope_type == BusinessOsScopeType::Module && scope.assigned_to_actor
-            }
-            BusinessOsRole::User => false,
-        },
-        BusinessOsPermission::DataRead => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::DataWrite => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-                || (scope.scope_type == BusinessOsScopeType::Record && scope.owned_by_actor)
-        }
-        BusinessOsPermission::CtoxTaskCreate => true,
-        BusinessOsPermission::CrewManage => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || (actor.role == BusinessOsRole::Founder
-                    && scope.scope_type == BusinessOsScopeType::Record
-                    && matches!(
-                        scope.scope_id.as_deref(),
-                        Some("ctox.crew.learning.confirm" | "ctox.crew.learning.update")
-                    ))
-        }
-        BusinessOsPermission::CtoxTaskManage => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.owned_by_actor
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::ExternalApprove => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        BusinessOsPermission::SupportManageInboxes
-        | BusinessOsPermission::SupportManageMacros
-        | BusinessOsPermission::SupportManageSla => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-        }
-        BusinessOsPermission::SupportRead
-        | BusinessOsPermission::SupportTriage
-        | BusinessOsPermission::SupportAssign
-        | BusinessOsPermission::SupportReply
-        | BusinessOsPermission::SupportResolve
-        | BusinessOsPermission::SupportAgentRequest
-        | BusinessOsPermission::SupportAgentApply => {
-            matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
-                || scope.assigned_to_actor
-        }
-        // Session handoff is never role-authorized: only an exact, active
-        // binding-scoped grant allows it (enforced by the explicit-grant layer).
-        BusinessOsPermission::SessionHandoffDisclose
-        | BusinessOsPermission::SessionHandoffReceive
-        | BusinessOsPermission::SessionHandoffExecute => false,
-    };
+    let allowed = rights
+        .rules
+        .iter()
+        .find(|r| {
+            r.role == actor.role.as_str()
+                && r.collection == format!("policy:{}", permission.as_str())
+                && r.ops.contains(&Operation::Command)
+        })
+        .and_then(|r| r.row_filter.resolve(actor.id.as_deref().unwrap_or("")).ok())
+        .is_some_and(|filter| filter.matches(&context));
 
     if allowed {
         PolicyDecision::allow(permission, scope)
@@ -515,324 +690,19 @@ pub fn evaluate(
             permission,
             scope,
             "role_or_scope_denied",
-            "This role is not allowed to perform this action for the selected scope.",
+            "Current Store rights deny this action.",
         )
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn record_owned_data_write_allows_owner_only_on_record_scope() {
-        let actor = BusinessOsActor::new(Some("owner-1".to_owned()), "user");
-        let owned_record = BusinessOsScope {
-            scope_type: BusinessOsScopeType::Record,
-            scope_id: Some("workjet_sessions/session-1".to_owned()),
-            assigned_to_actor: false,
-            owned_by_actor: true,
-        };
-        assert!(evaluate(&actor, BusinessOsPermission::DataWrite, &owned_record).allowed);
-
-        for scope_type in [
-            BusinessOsScopeType::Workspace,
-            BusinessOsScopeType::Module,
-            BusinessOsScopeType::Collection,
-        ] {
-            let non_record = BusinessOsScope {
-                scope_type,
-                scope_id: Some("scope-1".to_owned()),
-                assigned_to_actor: false,
-                owned_by_actor: true,
-            };
-            assert!(
-                !evaluate(&actor, BusinessOsPermission::DataWrite, &non_record).allowed,
-                "owned_by_actor must not expand DataWrite on {} scope",
-                scope_type.as_str()
-            );
-        }
-    }
-
-    #[test]
-    fn record_owned_data_write_denies_foreign_user_and_allows_chef_admin() {
-        let foreign_record = BusinessOsScope {
-            scope_type: BusinessOsScopeType::Record,
-            scope_id: Some("workjet_sessions/session-foreign".to_owned()),
-            assigned_to_actor: false,
-            owned_by_actor: false,
-        };
-        assert!(
-            !evaluate(
-                &BusinessOsActor::new(Some("user-2".to_owned()), "user"),
-                BusinessOsPermission::DataWrite,
-                &foreign_record,
-            )
-            .allowed
-        );
-        for role in ["chef", "admin"] {
-            assert!(
-                evaluate(
-                    &BusinessOsActor::new(Some(role.to_owned()), role),
-                    BusinessOsPermission::DataWrite,
-                    &foreign_record,
-                )
-                .allowed
-            );
-        }
-    }
-
-    #[test]
-    fn per_collection_read_authz_denies_admin_only_to_non_admins() {
-        // Admins/chefs read everything, including the admin-only set.
-        for collection in ADMIN_ONLY_COLLECTIONS {
-            assert!(role_may_read_collection(BusinessOsRole::Chef, collection));
-            assert!(role_may_read_collection(BusinessOsRole::Admin, collection));
-            assert!(!role_may_read_collection(
-                BusinessOsRole::Founder,
-                collection
-            ));
-            assert!(!role_may_read_collection(BusinessOsRole::User, collection));
-        }
-        // Ordinary business data is readable by every role (deny-by-exception).
-        for collection in ["customer_accounts", "calendar_events", "business_chats"] {
-            for role in [
-                BusinessOsRole::Chef,
-                BusinessOsRole::Admin,
-                BusinessOsRole::Founder,
-                BusinessOsRole::User,
-            ] {
-                assert!(role_may_read_collection(role, collection));
-            }
-        }
-    }
-
-    #[test]
-    fn business_os_policy_normalizes_current_role_aliases() {
-        assert_eq!(normalize_role("chef"), "chef");
-        assert_eq!(normalize_role("owner"), "chef");
-        assert_eq!(normalize_role("business_os_admin"), "admin");
-        assert_eq!(normalize_role("founder"), "founder");
-        assert_eq!(normalize_role("user"), "user");
-        assert_eq!(normalize_role("business_os_user"), "user");
-        assert_eq!(normalize_role("team"), "user");
-        assert_eq!(normalize_role("business_os_team"), "user");
-        assert_eq!(normalize_role("unknown"), "user");
-    }
-
-    #[test]
-    fn business_os_policy_default_role_matrix_covers_major_permissions() {
-        let owner = BusinessOsActor::new(Some("owner".to_owned()), "chef");
-        let admin = BusinessOsActor::new(Some("admin".to_owned()), "admin");
-        let founder = BusinessOsActor::new(Some("founder".to_owned()), "founder");
-        let team = BusinessOsActor::new(Some("team".to_owned()), "team");
-        let workspace = BusinessOsScope::workspace();
-        let assigned_module = BusinessOsScope::module("crm", true);
-        let unassigned_module = BusinessOsScope::module("crm", false);
-
-        let cases = [
-            (
-                &owner,
-                BusinessOsPermission::WorkspaceManage,
-                &workspace,
-                true,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::WorkspaceManage,
-                &workspace,
-                false,
-            ),
-            (&owner, BusinessOsPermission::UsersManage, &workspace, true),
-            (&admin, BusinessOsPermission::UsersManage, &workspace, true),
-            (
-                &founder,
-                BusinessOsPermission::UsersManage,
-                &workspace,
-                false,
-            ),
-            (&team, BusinessOsPermission::UsersManage, &workspace, false),
-            (&owner, BusinessOsPermission::AppsInstall, &workspace, true),
-            (&admin, BusinessOsPermission::AppsInstall, &workspace, true),
-            (
-                &founder,
-                BusinessOsPermission::AppsInstall,
-                &workspace,
-                false,
-            ),
-            (&team, BusinessOsPermission::AppsInstall, &workspace, false),
-            (
-                &founder,
-                BusinessOsPermission::AppsView,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsView,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::AppsView,
-                &assigned_module,
-                false,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsModify,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::AppsModify,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::AppsModify,
-                &assigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::CtoxTaskCreate,
-                &workspace,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::ExternalApprove,
-                &workspace,
-                false,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SupportReply,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SupportManageSla,
-                &assigned_module,
-                false,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::SupportManageInboxes,
-                &workspace,
-                true,
-            ),
-            (
-                &team,
-                BusinessOsPermission::SupportAgentRequest,
-                &assigned_module,
-                true,
-            ),
-            (
-                &team,
-                BusinessOsPermission::ExternalApprove,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::ExternalApprove,
-                &assigned_module,
-                true,
-            ),
-            // data.write gate: the exact boundary the browser canSelfExecuteBusinessData
-            // mirrors -- only chef/admin or an actor assigned to the module may write;
-            // an unassigned team member is denied and must delegate the change via approval.
-            (&owner, BusinessOsPermission::DataWrite, &workspace, true),
-            (&admin, BusinessOsPermission::DataWrite, &workspace, true),
-            (
-                &team,
-                BusinessOsPermission::DataWrite,
-                &unassigned_module,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::DataWrite,
-                &assigned_module,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::DataWrite,
-                &assigned_module,
-                true,
-            ),
-            (
-                &owner,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                true,
-            ),
-            (
-                &admin,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                true,
-            ),
-            (
-                &founder,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                false,
-            ),
-            (
-                &team,
-                BusinessOsPermission::SecretsManage,
-                &workspace,
-                false,
-            ),
-        ];
-
-        for (actor, permission, scope, expected) in cases {
-            assert_eq!(
-                evaluate(actor, permission, scope).allowed,
-                expected,
-                "role={} permission={} scope={} assigned={} owned={}",
-                actor.role.as_str(),
-                permission.as_str(),
-                scope.scope_type.as_str(),
-                scope.assigned_to_actor,
-                scope.owned_by_actor
-            );
-        }
-    }
-
-    #[test]
-    fn business_os_policy_denials_include_stable_decision_shape() {
-        let actor = BusinessOsActor::new(Some("team".to_owned()), "user");
-        let scope = BusinessOsScope::module("crm", false);
-        let decision = evaluate(&actor, BusinessOsPermission::AppsModify, &scope);
-
-        assert!(!decision.allowed);
-        assert_eq!(decision.permission, "apps.modify");
-        assert_eq!(decision.scope_type, "module");
-        assert_eq!(decision.scope_id.as_deref(), Some("crm"));
-        assert_eq!(decision.reason_code, "role_or_scope_denied");
-        assert!(!decision.display_reason.is_empty());
-        assert!(decision.requires_approval);
-        assert_eq!(decision.audit_level, "decision");
-
-        let read_denial = evaluate(&actor, BusinessOsPermission::DataRead, &scope);
-        assert!(!read_denial.requires_approval);
-    }
-}
+#[path = "../store/rights_matrix_tests.rs"]
+mod rights_matrix_tests;
 
 // ---------------------------------------------------------------------------
-// Policy overlays lifted out of store.rs (S-CUT5). Pure evaluation: they
-// decide from a session and its role and never reach for the store. This move
-// only became possible once BusinessOsSession moved below both modules —
-// before that it would have created policy -> store.
+// Session mapping stays below Store orchestration. Permission decisions use
+// the registered StoreRightsAuthority; these helpers never open SQLite or
+// manufacture a default grant when the authority is absent.
 //
 // The overlays that stayed in store.rs are thin wrappers over store-bound
 // lookups (scoped_policy_decision and friends); moving those would relocate
@@ -868,4 +738,517 @@ pub(super) fn owner_transfer_policy_decision(session: &BusinessOsSession) -> Pol
         BusinessOsPermission::WorkspaceManage,
         &BusinessOsScope::workspace(),
     )
+}
+
+// V4 mapping only: current Store rows are authoritative; static V3 permission
+// defaults never widen a resolved collection projection.
+#[path = "../store/rights.rs"]
+pub mod sync_rights;
+
+pub fn resolve_sync_scope(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+) -> sync_rights::scope::Result<sync_rights::scope::ResolvedScope> {
+    let actor_id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("actor identity required")?;
+    rights.resolve(actor.role.as_str(), actor_id)
+}
+
+/// Actual Store document read: the app boundary, row predicate and field mask
+/// are enforced together; an unrestricted legacy boolean is never reused.
+pub fn read_sync_document(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    app: &str,
+    collection: &str,
+    doc: &Value,
+) -> sync_rights::scope::Result<Value> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    rights.authorize_app_read(app, actor.role.as_str(), id, collection, doc)
+}
+pub fn write_sync_document(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    app: &str,
+    collection: &str,
+    before: Option<&Value>,
+    after: Option<&Value>,
+    permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+) -> sync_rights::scope::Result<()> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    rights.authorize_app_write(
+        app,
+        actor.role.as_str(),
+        id,
+        collection,
+        before,
+        after,
+        permit,
+    )
+}
+pub fn authorize_sync_write(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    collection: &str,
+    before: Option<&serde_json::Value>,
+    after: Option<&serde_json::Value>,
+) -> sync_rights::scope::Result<()> {
+    let actor_id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("revoked")?;
+    rights.authorize_write(actor.role.as_str(), actor_id, collection, before, after)
+}
+
+/// Official Core credential-provider bridge. The existing secret is canonical
+/// base64url PKCS#8 under scope "instance"; provisioning/rotation is a separate
+/// owner action. This path never initializes, replaces or writes any secret.
+pub struct SyncInstanceSigningKeyStore {
+    pub root: std::path::PathBuf,
+}
+impl sync_rights::scope::InstanceSigningKeyStore for SyncInstanceSigningKeyStore {
+    fn with_instance_signing_key<T>(
+        &self,
+        use_key: impl FnOnce(&[u8]) -> sync_rights::scope::Result<T>,
+    ) -> sync_rights::scope::Result<T> {
+        use base64::Engine as _;
+        crate::secrets::with_current_secret_value(
+            &self.root,
+            "instance",
+            sync_rights::scope::INSTANCE_SIGNING_KEY,
+            |encoded| {
+                let key = zeroize::Zeroizing::new(
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(encoded)
+                        .map_err(|_| anyhow::anyhow!("invalid instance signing key encoding"))?,
+                );
+                use_key(&key).map_err(anyhow::Error::msg)
+            },
+        )
+        .map_err(|_| "instance signing authority unavailable".into())
+    }
+}
+
+/// P4 AuthenticatePeer extension: this callback is supplied by the trusted
+/// pairing/identity owner after checking nonce + signature + current device.
+pub struct VerifiedSyncPeer {
+    pub actor: BusinessOsActor,
+    pub instance_id: String,
+    pub device_id: String,
+}
+pub type VerifySyncPeer = std::sync::Arc<
+    dyn Fn(
+            String,
+            rxdb::plugins::replication_webrtc::index_mod::hello::Hello,
+        )
+            -> futures_util::future::BoxFuture<'static, sync_rights::scope::Result<VerifiedSyncPeer>>
+        + Send
+        + Sync,
+>;
+
+pub fn sync_peer_authenticator<
+    S: sync_rights::scope::InstanceSigningKeyStore + Send + Sync + 'static,
+>(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    keys: std::sync::Arc<S>,
+    verify: VerifySyncPeer,
+    clock: sync_rights::scope::scope_filter::CoreClock,
+) -> rxdb::plugins::replication_webrtc::index_mod::connection_lifecycle::AuthenticatePeer {
+    use rxdb::plugins::replication_webrtc::index_mod::{
+        connection_lifecycle::AuthorizedSession,
+        hello::{HelloReject, RejectReason, WireSeq},
+    };
+    std::sync::Arc::new(move |peer, hello| {
+        let (authority, keys, verify, clock) = (
+            authority.clone(),
+            keys.clone(),
+            verify.clone(),
+            clock.clone(),
+        );
+        Box::pin(async move {
+            let failure = || {
+                HelloReject::new(
+                    RejectReason::AuthenticationFailed,
+                    "current device and scope authority",
+                )
+            };
+            let (device, instance, wanted) = (
+                hello.device_proof.device_id.clone(),
+                hello.instance_id.clone(),
+                hello.scopes_wanted.clone(),
+            );
+            if wanted.len() > 128 {
+                return Err(failure());
+            }
+            let verified = verify(peer, hello).await.map_err(|_| failure())?;
+            if verified.device_id != device || verified.instance_id != instance {
+                return Err(failure());
+            }
+            let actor = verified
+                .actor
+                .id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(failure)?;
+            let role = verified.actor.role.as_str();
+            let (head, rights) = authority.hello_snapshot().await.map_err(|_| failure())?;
+            let now = clock();
+            let mut scopes = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for collection in wanted {
+                if !seen.insert(collection.clone()) {
+                    return Err(failure());
+                }
+                let scope = rights
+                    .resolve_collection(role, actor, &collection)
+                    .map_err(|_| failure())?;
+                if scope.projections.is_empty() {
+                    return Err(failure());
+                }
+                scopes.push(
+                    sync_rights::scope::SignedScope::issue(&*keys, &instance, &device, &scope, now)
+                        .and_then(|s| s.to_wire())
+                        .map_err(|_| failure())?,
+                );
+            }
+            // Signing occurs outside the router/issuer lock order. A concurrent
+            // revocation invalidates this result before it can complete hello.
+            authority
+                .router
+                .with_snapshot(rights.rights_ver, &head.epoch, |current, _| {
+                    if current != instance {
+                        return Err("instance mismatch".into());
+                    }
+                    Ok(AuthorizedSession {
+                        instance_id: instance,
+                        device_id: device,
+                        epoch: head.epoch.clone(),
+                        head_seq: WireSeq(head.head_seq),
+                        scope_tokens: scopes,
+                        rights_ver: WireSeq(rights.rights_ver),
+                    })
+                })
+                .map_err(|_| failure())
+        })
+    })
+}
+/// Before-handler mapping; callers pass an assignment result from Core policy,
+/// never a flag copied from the command payload.
+pub fn dispatch_sync_command<T>(
+    router: &sync_rights::RightsRouter,
+    actor: &BusinessOsActor,
+    app_id: &str,
+    command: &str,
+    assigned_by_core: bool,
+    start: impl FnOnce(sync_rights::manifest_rules::CommandPermit) -> sync_rights::scope::Result<T>,
+) -> sync_rights::scope::Result<T> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    router.with_command_dispatch(
+        app_id,
+        id,
+        actor.role.as_str(),
+        command,
+        assigned_by_core,
+        start,
+    )
+}
+
+/// Concrete, owned official provider for the long-lived P4 callback. The
+/// factory itself performs no credential access; signing stays in the provider.
+pub fn sync_peer_authenticator_from_secret_store(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    root: std::path::PathBuf,
+    verify: VerifySyncPeer,
+    clock: sync_rights::scope::scope_filter::CoreClock,
+) -> rxdb::plugins::replication_webrtc::index_mod::connection_lifecycle::AuthenticatePeer {
+    sync_peer_authenticator(
+        authority,
+        std::sync::Arc::new(SyncInstanceSigningKeyStore { root }),
+        verify,
+        clock,
+    )
+}
+
+/// Distinguish a committed rule denial from an unavailable Store or uncertain
+/// authority. Only a rule denial may become a terminal outbox rejection.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NativeWriteAdmission<T> {
+    Accepted(T),
+    /// A committed policy denial. P8 persists rejected{revoked} with the
+    /// original op_id in its existing writer transaction; it is not an SQL error.
+    Rejected,
+}
+
+/// Adapter for P8's single cursor reader and owning write transaction. Identity
+/// comes from Core authentication. ReadAuthority delegates to authorize_snapshot
+/// and project_change; WriteAuthority uses admit_write on the final document.
+#[derive(Clone)]
+pub struct NativeStorePolicy {
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    actor: BusinessOsActor,
+    device_id: String,
+    app_id: String,
+}
+impl NativeStorePolicy {
+    pub fn from_verified_peer(
+        authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+        peer: VerifiedSyncPeer,
+        app_id: String,
+    ) -> sync_rights::scope::Result<Self> {
+        if peer.actor.id.as_deref().is_none_or(str::is_empty)
+            || peer.device_id.is_empty()
+            || app_id.is_empty()
+        {
+            return Err("authenticated identity required".into());
+        }
+        authority.router.with_identity(|instance, _| {
+            if instance != peer.instance_id {
+                return Err("instance mismatch".into());
+            }
+            Ok(())
+        })?;
+        Ok(Self {
+            authority,
+            actor: peer.actor,
+            device_id: peer.device_id,
+            app_id,
+        })
+    }
+    fn snapshot(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+    ) -> rusqlite::Result<sync_rights::RightsSnapshot> {
+        fn invalid(s: impl Into<String>) -> rusqlite::Error {
+            rusqlite::Error::InvalidParameterName(s.into())
+        }
+        // A valid role from another peer or another Store cannot be substituted.
+        if participant != self.device_id {
+            return Err(invalid("participant mismatch"));
+        }
+        let file: String = tx.query_row(
+            "SELECT file FROM pragma_database_list WHERE name='main'",
+            [],
+            |r| r.get(0),
+        )?;
+        let actual =
+            std::fs::canonicalize(file).map_err(|_| invalid("store identity unavailable"))?;
+        if actual != self.authority.writer().db_id().path() {
+            return Err(invalid("foreign store transaction"));
+        }
+        // Rights and document come from this same WAL snapshot. A current router
+        // rejects an older reader snapshot and all suspended/stopped authorities.
+        let rights = sync_rights::read(tx)?;
+        self.authority
+            .router
+            .with_current_rights(|current| {
+                if current.rights_ver != rights.rights_ver {
+                    return Err("revoked".into());
+                }
+                Ok(())
+            })
+            .map_err(invalid)?;
+        Ok(rights)
+    }
+    pub fn authorize_snapshot(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        generation: u64,
+        scope_hash: &str,
+    ) -> rusqlite::Result<sync_rights::scope::ResolvedScope> {
+        let invalid = |s: String| rusqlite::Error::InvalidParameterName(s);
+        let rights = self.snapshot(tx, participant)?;
+        let active = ctox_store::schema::active_collection(tx, collection)?
+            .ok_or_else(|| invalid("collection unavailable".into()))?;
+        if active.gen != generation {
+            return Err(invalid("generation changed".into()));
+        }
+        let scope = rights
+            .resolve_app_collection(
+                &self.app_id,
+                self.actor.role.as_str(),
+                self.actor
+                    .id
+                    .as_deref()
+                    .ok_or_else(|| invalid("actor missing".into()))?,
+                collection,
+            )
+            .map_err(invalid)?;
+        if scope.projection(collection).is_none() || scope.hash().map_err(invalid)? != scope_hash {
+            return Err(invalid("scope changed: resnapshot required".into()));
+        }
+        Ok(scope)
+    }
+    /// Same transaction and authority as authorize_snapshot. None is P8's
+    /// op=unproject, including leaving a row filter; masks never leave Core.
+    pub fn project_change(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        scope_hash: &str,
+        change: &ctox_store::change_log::ChangeDocument,
+    ) -> rusqlite::Result<Option<Value>> {
+        let scope = self.authorize_snapshot(tx, participant, collection, change.gen, scope_hash)?;
+        let projection = scope.projection(collection);
+        match sync_rights::scope::scope_filter::project(
+            projection,
+            collection,
+            &change.id,
+            change.seq,
+            change.body.as_ref(),
+        )
+        .map_err(rusqlite::Error::InvalidParameterName)?
+        {
+            sync_rights::scope::scope_filter::ProjectedChange::Put { doc, .. } => Ok(Some(doc)),
+            sync_rights::scope::scope_filter::ProjectedChange::Unproject { .. } => Ok(None),
+        }
+    }
+    /// Final publication fence for the snapshot above: no prepared page may
+    /// bypass a concurrent rights commit while waiting for the transport.
+    pub fn with_page_frame<T>(
+        &self,
+        rights_ver: u64,
+        epoch: &str,
+        send_one_frame: impl FnOnce() -> sync_rights::scope::Result<T>,
+    ) -> sync_rights::scope::Result<T> {
+        self.authority
+            .router
+            .with_snapshot(rights_ver, epoch, |_, _| send_one_frame())
+    }
+    /// Final current-schema document supplied by P8, never a client-side base.
+    /// Before is fetched here from the active generation in the same writer tx.
+    /// The trusted mutation callback is synchronous and must not enqueue/await.
+    pub fn admit_write<T>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        id: &str,
+        after: Option<&Value>,
+        permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+        commit: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<NativeWriteAdmission<T>> {
+        use rusqlite::OptionalExtension;
+        let invalid = |s: String| rusqlite::Error::InvalidParameterName(s);
+        let rights = self.snapshot(tx, participant)?;
+        let active = ctox_store::schema::active_collection(tx, collection)?
+            .ok_or_else(|| invalid("collection unavailable".into()))?;
+        // Table identifiers are generated by the Store registry, not by input.
+        if !active
+            .table
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(invalid("invalid physical binding".into()));
+        }
+        let raw: Option<String> = tx
+            .query_row(
+                &format!(
+                    "SELECT data FROM \"{}\" WHERE id=?1 AND deleted=0",
+                    active.table
+                ),
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let before: Option<Value> = raw
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|_| invalid("invalid stored document".into()))?;
+        self.authority
+            .router
+            .with_current_rights(|current| {
+                if current.rights_ver != rights.rights_ver {
+                    return Err("revoked".into());
+                }
+                if write_sync_document(
+                    &self.actor,
+                    &rights,
+                    &self.app_id,
+                    collection,
+                    before.as_ref(),
+                    after,
+                    permit,
+                )
+                .is_err()
+                {
+                    return Ok(Ok(NativeWriteAdmission::Rejected));
+                }
+                // Preserve the original SQLite failure; it rolls back the owning job.
+                Ok(commit(tx).map(NativeWriteAdmission::Accepted))
+            })
+            .map_err(invalid)?
+    }
+    /// Direct writers roll back a denied mutation. The outbox bridge instead
+    /// consumes admit_write's typed rejection to persist its rejection receipt.
+    pub fn with_write<T>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        id: &str,
+        after: Option<&Value>,
+        permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+        commit: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
+        match self.admit_write(tx, participant, collection, id, after, permit, commit)? {
+            NativeWriteAdmission::Accepted(value) => Ok(value),
+            NativeWriteAdmission::Rejected => {
+                Err(rusqlite::Error::InvalidParameterName("revoked".into()))
+            }
+        }
+    }
+    /// Core issues/renews peer authority from committed _rights and the same
+    /// authenticated app/actor/device binding. No permission/availability fallback.
+    pub async fn issue_peer_lease(
+        &self,
+        keys: &impl sync_rights::scope::InstanceSigningKeyStore,
+        collection: &str,
+        now: u64,
+    ) -> sync_rights::scope::Result<sync_rights::scope::PeerLease> {
+        let (head, rights) = self.authority.hello_snapshot().await?;
+        let scope = rights.resolve_app_collection(
+            &self.app_id,
+            self.actor.role.as_str(),
+            self.actor.id.as_deref().ok_or("actor missing")?,
+            collection,
+        )?;
+        if scope.projection(collection).is_none() {
+            return Err("revoked".into());
+        }
+        let instance = self
+            .authority
+            .router
+            .with_identity(|id, _| Ok(id.to_string()))?;
+        let lease =
+            sync_rights::scope::PeerLease::issue(keys, &instance, &self.device_id, &scope, now)?;
+        self.authority
+            .router
+            .with_snapshot(rights.rights_ver, &head.epoch, |id, _| {
+                if id != instance {
+                    return Err("instance changed".into());
+                }
+                Ok(lease)
+            })
+    }
 }
