@@ -1,3 +1,4 @@
+import { checkpointDelivered } from './criteria.mjs';
 export default {
   id: 'K04-ATTACH', title: 'An ATTACH write behind the checkpoint is not lost',
   coverage: 'Controller-requested ATTACH/checkpoint mechanism, distinct from the complete K04 incident sequence.',
@@ -15,6 +16,6 @@ export default {
     const control = await h.awaitLocal(page, forward.id, 10000, forward.revision);
     return { measured: { checkpoint, injected: write, observation, nativeRow: native.rows.find(x => x.id === write.id), positiveControl: control,
       injectionScope: 'SQL ATTACH equivalent to old private writer; not a public CLI invocation' },
-      pass: observation.found && control.found && native.rows.some(x => x.id === write.id && x.lwt === write.lwt) };
+      pass: checkpointDelivered(observation, control, native.rows.find(x => x.id === write.id), write) };
   },
 };

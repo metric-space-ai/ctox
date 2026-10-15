@@ -64,8 +64,8 @@ revision must be used before claiming a fixed regression.
 synthetic envelopes shaped after the measured volume groups (including 231k
 history tombstones). No customer records or executable command rows are copied.
 Manifest contains content SHA and per-collection alive/deleted/byte totals. The
-fixture only registers/replicates leads; other synthetic tables provide store
-volume without triggering business automation. This is not full app semantics.
+fixture replicates leads. Other synthetic tables are registered demand-only in a
+separate unopened volume module, providing store volume without business automation. This is not full app semantics.
 
 Each scenario is an ES module with `id`, `steps`, `criterion`, `run(h)`. The
 harness supplies browser/reload, local truth, offline WebRTC packet loss and

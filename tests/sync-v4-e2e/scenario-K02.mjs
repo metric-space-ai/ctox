@@ -1,3 +1,4 @@
+import { completeReload } from './criteria.mjs';
 export default {
   id: 'K02', title: 'Second load of a complete lead list',
   coverage: 'Controller slice: one complete-list reload. Not the full K02 background-write/quota matrix.',
@@ -7,6 +8,6 @@ export default {
     const page = await h.page();
     await h.warm(page);
     const measured = await h.reloadAndRead(page);
-    return { measured, pass: measured.visibleMs <= 1000 && measured.preQueryLocalCount === measured.rows && measured.missing.length === 0 && measured.duplicates === 0 };
+    return { measured, pass: completeReload(measured) };
   },
 };

@@ -38,7 +38,19 @@ export class Native {
     fs.copyFileSync(join(here, 'fixture-app.mjs'), join(module, 'index.js'));
     fs.writeFileSync(join(module, 'schema.js'), 'export const collections = {};\n');
     fs.writeFileSync(join(module, 'collections.schema.json'), JSON.stringify({ schema_format: 'ctox-business-os-module-collections-v1', collections: { e2e_leads: { schema, syncProfile: 'eager' } } }));
-    return this.seed('seed', here);
+    const fixture = this.seed('seed', here);
+    // Register the background volume too, without making it eager or executing
+    // any real command semantics. Unknown tables must not distort readiness.
+    const volumeNames = fixture.populations.map(p => p.collection).filter(n => n !== 'e2e_leads');
+    const volume = join(this.config.root, 'runtime/business-os/local-modules/e2e-volume');
+    fs.mkdirSync(volume, { recursive: true });
+    fs.writeFileSync(join(volume, 'module.json'), JSON.stringify({ id: 'e2e-volume', title: 'Synthetic background volume',
+      version: '1.0.0', entry: 'local-modules/e2e-volume/index.js', collections: volumeNames }));
+    fs.writeFileSync(join(volume, 'index.js'), 'export function mount() { return () => {}; }\n');
+    fs.writeFileSync(join(volume, 'schema.js'), 'export const collections = {};\n');
+    fs.writeFileSync(join(volume, 'collections.schema.json'), JSON.stringify({ schema_format: 'ctox-business-os-module-collections-v1',
+      collections: Object.fromEntries(volumeNames.map(name => [name, { schema, syncProfile: 'demand-only' }])) }));
+    return fixture;
   }
   seed(operation, here) {
     const p = spawnSync('python3', [join(here,'seed.py'),'--root',this.config.root,'--profile',this.config.profile,'--operation',operation], { encoding:'utf8', timeout:180000, maxBuffer:16*1024*1024 });
