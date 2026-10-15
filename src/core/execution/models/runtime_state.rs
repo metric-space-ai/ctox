@@ -581,6 +581,31 @@ fn load_runtime_state_uncached(root: &Path) -> Result<Option<InferenceRuntimeSta
 }
 
 impl crate::inference::runtime_env::RuntimeStore {
+    /// Load persisted state in one reader snapshot. Migration/resolution is
+    /// deliberately separate and must not open Core from this Runtime job.
+    pub(crate) async fn load_state(
+        &self,
+    ) -> std::result::Result<Option<InferenceRuntimeState>, ctox_store::StoreError> {
+        let raw: Option<String> = self
+            .owner
+            .read(ctox_store::JobOptions::default(), |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT state_json FROM runtime_state_store WHERE state_id = 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            })
+            .await?;
+        raw.map(|raw| {
+            serde_json::from_str(&raw).map_err(|_| {
+                ctox_store::StoreError::Invalid("runtime state decoding failed".into())
+            })
+        })
+        .transpose()
+    }
+
     /// Uses the same owner as env writes; no independent runtime-state opener.
     /// Resolution/migration stays outside the writer job.
     pub(crate) async fn persist_state(

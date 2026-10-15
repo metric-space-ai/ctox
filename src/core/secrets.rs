@@ -1386,6 +1386,13 @@ pub(crate) struct SecretStore {
     owner: crate::lcm::owner_adapter::OwnerAdapter,
 }
 
+/// Opaque encrypted snapshot, never a publication authorization token.
+/// No Debug implementation: row material must not enter diagnostics.
+pub(crate) struct EncryptedIssuerRow {
+    pub(crate) nonce: Zeroizing<String>,
+    pub(crate) ciphertext: Zeroizing<String>,
+}
+
 impl SecretStore {
     pub(crate) async fn attach(
         root: &Path,
@@ -1399,6 +1406,24 @@ impl SecretStore {
         )
         .await?;
         Ok(Self { owner })
+    }
+
+    /// A preparatory snapshot only. Recheck inside the writer transaction;
+    /// protected-key authorization remains with with_secret_values_authority.
+    pub(crate) async fn encrypted_row(
+        &self,
+        scope: String,
+        name: String,
+    ) -> std::result::Result<Option<EncryptedIssuerRow>, ctox_store::StoreError> {
+        self.owner.read(ctox_store::JobOptions::default(), move |conn| {
+            Ok(conn.query_row(
+                "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
+                params![scope, name], |row| Ok(EncryptedIssuerRow {
+                    nonce: Zeroizing::new(row.get(0)?),
+                    ciphertext: Zeroizing::new(row.get(1)?),
+                }),
+            ).optional()?)
+        }).await
     }
 
     /// Compare and operate in ONE owner transaction. Never authorize a later
@@ -1446,7 +1471,7 @@ mod owner_seam_tests {
             configure: Some(Arc::new(|conn| {
                 ConnectionConfig::default().apply_writer(conn)?;
                 // Real encrypted-row schema; all material below is synthetic.
-                conn.execute_batch("CREATE TABLE ctox_secret_records (secret_id TEXT PRIMARY KEY, scope TEXT NOT NULL, secret_name TEXT NOT NULL, description TEXT, metadata_json TEXT NOT NULL, nonce_b64 TEXT NOT NULL, ciphertext_b64 TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope, secret_name)); CREATE TABLE publication (value INTEGER); INSERT INTO ctox_secret_records VALUES ('fixture', 'test', 'issuer', NULL, '{}', 'new-nonce', 'synthetic-ciphertext', '0', '0');")?;
+                conn.execute_batch("CREATE TABLE ctox_secret_records (secret_id TEXT PRIMARY KEY, scope TEXT NOT NULL, secret_name TEXT NOT NULL, description TEXT, metadata_json TEXT NOT NULL, nonce_b64 TEXT NOT NULL, ciphertext_b64 TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope, secret_name)); CREATE TABLE publication (value INTEGER); INSERT INTO ctox_secret_records VALUES ('fixture', 'test', 'issuer', NULL, '{}', 'old-nonce', 'synthetic-ciphertext', '0', '0');")?;
                 Ok(())
             })), ..WriterOptions::default()
         }).unwrap();
@@ -1462,12 +1487,22 @@ mod owner_seam_tests {
         let store = SecretStore::attach(dir.path(), writer.clone(), readers.clone())
             .await
             .unwrap();
+        let stale = store
+            .encrypted_row("test".into(), "issuer".into())
+            .await
+            .unwrap()
+            .unwrap();
+        // A real writer commit rotates the issuer after the reader snapshot.
+        writer.submit(WriteJob::new(JobOptions::default(), |tx| {
+            tx.execute("UPDATE ctox_secret_records SET nonce_b64 = 'new-nonce' WHERE scope = 'test' AND secret_name = 'issuer'", [])?;
+            Ok(())
+        })).unwrap().await.unwrap();
         let rejected = store
             .with_matching_encrypted_row(
                 "test".into(),
                 "issuer".into(),
-                Zeroizing::new("old-nonce".into()),
-                Zeroizing::new("synthetic-ciphertext".into()),
+                stale.nonce,
+                stale.ciphertext,
                 |tx| {
                     tx.execute("INSERT INTO publication VALUES (99)", [])?;
                     Ok(())
@@ -1476,12 +1511,17 @@ mod owner_seam_tests {
             .await;
         assert!(matches!(rejected, Err(ctox_store::StoreError::Invalid(_))));
         // Matching row and publication operate in the same writer transaction.
+        let current = store
+            .encrypted_row("test".into(), "issuer".into())
+            .await
+            .unwrap()
+            .unwrap();
         store
             .with_matching_encrypted_row(
                 "test".into(),
                 "issuer".into(),
-                Zeroizing::new("new-nonce".into()),
-                Zeroizing::new("synthetic-ciphertext".into()),
+                current.nonce,
+                current.ciphertext,
                 |tx| {
                     tx.execute("INSERT INTO publication VALUES (73)", [])?;
                     Ok(())
