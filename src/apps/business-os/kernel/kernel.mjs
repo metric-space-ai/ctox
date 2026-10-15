@@ -62,7 +62,7 @@ export function createKernel(opts = {}) {
   const translations = {};
   let theme = { ...(opts.theme ?? { '--ctox-bg': '#ffffff', '--ctox-fg': '#1d1d1f', '--ctox-accent': '#2f6fed' }) };
   let actor = { id: userId, display_name: 'Lokaler Nutzer', role: '', permissions: [], ...(opts.actor ?? {}) };
-  const timers = new Set(), tasks = new Set();
+  const timers = new Set(), tasks = new Set(), deadlineCancels = new Set();
   const inflight = new Map(); // docKey -> op_id
   const inflightOps = new Set();
   const skipBeforeCommit = new Set();
@@ -878,11 +878,17 @@ export function createKernel(opts = {}) {
     return { handle, api };
   }
   function withTimeout(p, ms, onLate) {
-    return new Promise((resolve, reject) => {
-      let timedOut = false;
-      const t = later(() => { timedOut = true; reject(new CtoxError('unavailable', `mount nicht binnen ${ms} ms`)); }, ms);
-      p.then((v) => { if (timedOut) onLate?.(v); else { clearTimeout(t); timers.delete(t); resolve(v); } },
-        (e) => { if (!timedOut) { clearTimeout(t); timers.delete(t); reject(e); } });
+    return new Promise((resolve,reject)=>{
+      let ended=false;
+      const clear=()=>{clearTimeout(timer);deadlineCancels.delete(cancel);};
+      const cancel=()=>{if(!ended){ended=true;clear();reject(new CtoxError('unavailable',`Operation did not finish within ${ms} ms or kernel closed`));}};
+      // Deadline timers also run during terminal cleanup; lifecycle `later()`
+      // intentionally suppresses callbacks after close and cannot be used here.
+      const timer=setTimeout(cancel,ms);deadlineCancels.add(cancel);
+      Promise.resolve(p).then(value=>{
+        if(ended){try{onLate?.(value);}catch{}return;}
+        ended=true;clear();resolve(value);
+      },error=>{if(!ended){ended=true;clear();reject(error);}});
     });
   }
   function checkSnapshot(appId, snap) {
@@ -913,10 +919,12 @@ export function createKernel(opts = {}) {
     try { snap = m.handle.snapshot ? await withTimeout(Promise.resolve().then(()=>m.handle.snapshot()),remountTimeoutMs) : undefined; } catch (e) {
       zoneReport(m.appId, { level: 'warn', code: 'app.snapshot_failed', text: `snapshot() warf: ${e?.message ?? e}` }, 'kernel');
     }
+    if(closed)return;
     snap = checkSnapshot(m.appId, snap);
     // §16.10: Snapshot vor dem Umschalten in window_state (IDB)
     await db.tx((t) => t.put('window_state', { key: `${m.appId}:${m.id}`, app_id: m.appId, mount_id: m.id, ver: oldVer, next_ver: newVer, snapshot: snap ?? null, at: Date.now() }));
     try { await withTimeout(Promise.resolve().then(()=>m.handle.unmount()),remountTimeoutMs); } catch (e) { console.error('[ctox-kernel] unmount', e); }
+    if(closed)return;
     try {
       const r = await withTimeout(mountVersion(m.root, m.appId, newVer, { restored: cloneValue(snap) }), remountTimeoutMs, (late) => { try { late.handle.unmount(); } catch { /* egal */ } });
       Object.assign(m, { ver: newVer, handle: r.handle, api: r.api });
@@ -1395,8 +1403,10 @@ export function createKernel(opts = {}) {
   async function close() {
     if (closed) return;
     closed = true;
-    try { await currentShell?.stopShell?.(); } catch {}
-    for (const m of [...mounts]) { try { await m.handle.unmount(); } catch {} }
+    for(const cancel of [...deadlineCancels])cancel();
+    const cleanup=[];
+    if(currentShell?.stopShell)cleanup.push(()=>currentShell.stopShell());
+    for(const m of mounts)cleanup.push(()=>m.handle.unmount());
     mounts.clear();
     for (const t of timers) clearTimeout(t);
     timers.clear();
@@ -1416,13 +1426,14 @@ export function createKernel(opts = {}) {
     rpcWaiters.clear();
     try { bc?.close(); } catch { /* egal */ }
     bc = null;
-    transport.close();
+    try { transport.close(); } catch {}
     db?.close();
+    // Release connection/locks/listeners before app code. A stuck app must not
+    // keep an identity alive or prevent the next tab from becoming leader.
+    await Promise.allSettled(cleanup.map(fn=>withTimeout(Promise.resolve().then(fn),remountTimeoutMs)));
   }
   async function logout({ deleteData = false } = {}) {
     loggedOut = true;
-    for (const m of [...mounts]) { try { await m.handle.unmount(); } catch { /* egal */ } }
-    mounts.clear();
     await close();
     mirror.clear();
     zone.length = 0;
@@ -1480,6 +1491,7 @@ export function createKernel(opts = {}) {
       bc.onmessage = (ev) => { onMessage(ev.data).catch((e) => { if (!closed) console.error('[ctox-kernel] message', e); }); };
     }
     await elect();
+    guardAlive();
     if (!isLeader) post({ type: 'hello' });
     loaded = true;
     for (const r of preReady.splice(0)) r();

@@ -72,3 +72,21 @@ test('page generation mismatch is rejected before changing local data',async()=>
   assert.equal(k.appApi('notes','1').get('notes','a').get(),null);assert.equal(k.sim.checkpoint,'0');
  } finally {await k.close();}
 });
+
+test('logout releases Web Lock and callbacks even if app cleanup never returns',async()=>{
+ const {testLocks}=await import('./web-locks.mjs');
+ const opts={instanceId:`logout-hung-${process.pid}`,userId:'alice',storage:'memory',locks:testLocks,remountTimeoutMs:25,latencyMs:5};
+ const leader=createStubKernel(opts);await leader.ready;
+ const reader=createStubKernel(opts);await reader.ready;
+ try {
+  await leader.sim.publishAppVersion('notes','1',{module:{mount(){return {unmount:()=>new Promise(()=>{})}}}});
+  await leader.shell.mount({},'notes');
+  await leader.logout();assert.throws(()=>leader.appApi('notes','1').query('notes',{}).get(),e=>e.code==='unavailable');
+  for(let i=0;i<20 && !reader.isLeader;i++)await new Promise(r=>setTimeout(r,5));
+  assert.equal(reader.isLeader,true);
+ } finally {await leader.close();await reader.close();}
+});
+test('closing before storage startup rejects readiness instead of starting timers',async()=>{
+ const k=createKernel(options());const ready=assert.rejects(k.ready,e=>e.code==='unavailable');await k.close();await ready;
+ assert.equal(k.isLeader,false);
+});
