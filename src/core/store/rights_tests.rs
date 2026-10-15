@@ -434,10 +434,13 @@ fn router_rights_change_under_load_stops_old_handoffs_before_commit() {
         Arc, Barrier,
     };
     let (keys, public) = router_keys();
-    let snapshot = RightsSnapshot {
-        rights_ver: 2,
-        rules: vec![rule()],
-    };
+    let mut db = Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    change_log::initialize(&tx).unwrap();
+    initialize(&tx).unwrap();
+    replace(&tx, 1, &[rule()]).unwrap();
+    let snapshot = read(&tx).unwrap();
+    tx.commit().unwrap();
     let resolved = snapshot.resolve("user", "alice").unwrap();
     let router = Arc::new(RightsRouter::new("instance".into(), "epoch".into(), snapshot).unwrap());
     let warm = Arc::new(Barrier::new(5));
@@ -503,14 +506,13 @@ fn router_rights_change_under_load_stops_old_handoffs_before_commit() {
     let pending = router.begin_rights_update().unwrap();
     let count_at_suspension = count.load(Ordering::SeqCst);
     assert!(count_at_suspension >= 4);
+    let tx = db.transaction().unwrap();
+    replace(&tx, pending.expected_version(), &[]).unwrap();
+    let committed_snapshot = read(&tx).unwrap();
+    assert_eq!(change_log::head(&tx).unwrap().head_seq, 4);
+    tx.commit().unwrap();
     router
-        .finish_rights_update(
-            pending,
-            Ok(RightsSnapshot {
-                rights_ver: 3,
-                rules: vec![],
-            }),
-        )
+        .finish_rights_update(pending, Ok(committed_snapshot))
         .unwrap();
     committed.wait();
     for worker in workers {
