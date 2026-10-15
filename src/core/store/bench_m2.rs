@@ -135,6 +135,34 @@ fn profile(bytes: usize, triggers: bool) -> serde_json::Value {
             });
         }
     });
+    writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            if triggers {
+                let logged: u64 =
+                    tx.query_row("SELECT COUNT(*) FROM _changes", [], |r| r.get(0))?;
+                let head: u64 =
+                    tx.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))?;
+                assert_eq!(
+                    (logged, head),
+                    (1024, 1024),
+                    "trigger-enabled profile must actually log every mutation"
+                );
+            } else {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='_changes')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                assert!(
+                    !exists,
+                    "trigger-disabled profile must actually omit the log"
+                );
+            }
+            Ok(())
+        }))
+        .unwrap()
+        .blocking_wait()
+        .unwrap();
     // Keep the owner alive to measure the WAL before shutdown's final checkpoint.
     let wal_bytes = std::fs::metadata(path.with_extension("sqlite-wal"))
         .unwrap()
