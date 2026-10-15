@@ -51,3 +51,34 @@ test('backlogs sum across scopes and readers reconcile missed network state dura
   assert.equal(reader.shell.metrics.get().link.state,'offline');assert.equal(reader.shell.metrics.get().link.relay,true);
  } finally {await reader.close();await leader.close();}
 });
+
+test('reader upload completion survives missed broadcasts and file fetch uses the leader',async()=>{
+ const {MemoryCoreTransport}=await import('../fake-core.mjs');
+ const namespace=`files-tabs-${process.pid}`,opts={instanceId:namespace,userId:'alice',storage:'memory',locks:testLocks,latencyMs:5};
+ const leaderTransport=new MemoryCoreTransport({namespace,latencyMs:5}),readerTransport=new MemoryCoreTransport({namespace,latencyMs:5});
+ readerTransport.blob=()=>{throw Error('reader must not use a connection')};
+ const leader=createKernel({...opts,transport:leaderTransport});await leader.ready;
+ const reader=createKernel({...opts,transport:readerTransport});await reader.ready;
+ try {
+  reader.sim.dropBroadcasts(true);
+  const file=reader.appApi('notes','1').files.put(new Blob(['reader durable input']),{name:'draft.txt'});await file.local;
+  await leader.sim.settle();await reader.sim.reconcile();
+  assert.equal((await file.result).status,'accepted');
+  const ref=await file.ref;assert.equal((await reader.appApi('notes','1').files.get(ref)).size,20);
+  reader.sim.dropBroadcasts(false);await leader.sim.evictBlobs();
+  assert.equal(await (await reader.appApi('notes','1').files.get(ref)).text(),'reader durable input');
+ } finally {await reader.close();await leader.close();}
+});
+test('reader reopening an evicted collection requests normal P1 catch-up from the leader',async()=>{
+ const {MemoryCoreTransport}=await import('../fake-core.mjs');
+ const namespace=`evicted-tabs-${process.pid}`,opts={instanceId:namespace,userId:'alice',storage:'memory',locks:testLocks,latencyMs:5};
+ const leader=createKernel({...opts,transport:new MemoryCoreTransport({namespace,latencyMs:5})});await leader.ready;
+ const reader=createKernel({...opts,transport:new MemoryCoreTransport({namespace,latencyMs:5})});await reader.ready;
+ try {
+  await leader.sim.push('notes',{id:'a',title:'normal stream'});await reader.sim.reconcile();
+  await leader.evict('notes');await reader.sim.reconcile();
+  const q=reader.appApi('notes','1').query('notes',{});
+  for(let i=0;i<20 && !q.get().length;i++){await tick();await reader.sim.reconcile();}
+  assert.equal(q.get()[0].title,'normal stream');
+ } finally {await reader.close();await leader.close();}
+});

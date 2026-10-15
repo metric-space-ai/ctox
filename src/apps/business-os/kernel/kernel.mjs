@@ -162,6 +162,7 @@ export function createKernel(opts = {}) {
   function visible(rec) { return rec && rec.data != null && !rec.deleted ? rec.data : null; }
   function mirrorPut(rec) {
     if (!rec) return false;
+    if(rec.cache_evicted)evicted.add(rec.collection);
     let m = mirror.get(rec.collection);
     if (!m) { m = new Map(); mirror.set(rec.collection, m); }
     const prev = m.get(rec.id);
@@ -251,6 +252,7 @@ export function createKernel(opts = {}) {
     for (const r of docs) mirrorPut(r);
     const metas = await db.all('meta');
     for (const m of metas) {
+      if(m.key.startsWith('upload_done:'))uploadsDone.add(m.ref);
       if (m.key === 'checkpoint') setCheckpoint(m.value);
       if (m.key.startsWith('cursor:'))scopeCursors.set(m.collection,m.cursor_to);
       else if (m.key === 'local_seq') localSeqKnown = Math.max(localSeqKnown, m.value);
@@ -270,6 +272,7 @@ export function createKernel(opts = {}) {
     const known=localSeqKnown;let n=0;
     for(const record of snapshot.docs) if((record.lseq??0)>known && mirrorPut(record))n++;
     for(const meta of snapshot.metas){
+      if(meta.key.startsWith('upload_done:')){uploadsDone.add(meta.ref);notify('uploads');}
       if(meta.key==='checkpoint')setCheckpoint(meta.value);
       if(meta.key==='network' && !isLeader){followerNet=meta.value;notify('metrics');}
       if(meta.key.startsWith('activation:'))applyActivationLocal(meta,false);
@@ -352,6 +355,9 @@ export function createKernel(opts = {}) {
         break;
       }
       case 'outbox': await refreshOutboxStat(); if (isLeader) schedulePump(); break;
+      case 'priority': if(isLeader)transport.priority?.({app_id:msg.app_id,collections:msg.collections});break;
+      case 'subscribe': if(isLeader && typeof msg.collection==='string')await subscribeCollection(msg.collection,'P1');break;
+      case 'upload_done': uploadsDone.add(msg.ref);notify('uploads');break;
       case 'write_result': handleWriteResult(msg.info, msg.result); await refreshOutboxStat(); break;
       case 'net': followerNet = { link: msg.link, backlog: msg.backlog }; notify('metrics'); break;
       case 'hello': if (isLeader) netChanged(); break;
@@ -362,7 +368,7 @@ export function createKernel(opts = {}) {
       case 'rpc': {
         if (!isLeader) break;
         try {
-          const value = await simImpl[msg.name](...msg.args);
+          const value = msg.name==='fetchBlob' ? await fetchBlob(...msg.args) : await simImpl[msg.name](...msg.args);
           post({ type: 'rpc_done', reqId: msg.reqId, value: value === undefined ? null : value });
         } catch (e) {
           post({ type: 'rpc_done', reqId: msg.reqId, error: { code: e?.code, message: String(e?.message ?? e) } });
@@ -531,18 +537,19 @@ export function createKernel(opts = {}) {
       } while (pumpAgain);
     } finally { pumping = false; }
   }
-  async function subscribeCollection(collection) {
+  async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
     evicted.delete(collection);
     const scope = { epoch: opts.epoch ?? '1', collection, scope_hash: opts.scopeHash ?? 'local', gen: genOf(collection) };
     const cp = await db.get('meta', checkpointKey(scope));
-    await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority: 'P2' });
+    await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority });
     subscriptions.add(collection);
   }
   async function receivePage(page) {
     if (!isLeader || closed) return;
     const scope = { ...page, epoch: page.epoch ?? opts.epoch ?? '1', scope_hash: page.scope_hash ?? opts.scopeHash ?? 'local', gen: page.gen ?? genOf(page.collection) };
     if(scope.scope_hash !== (opts.scopeHash ?? 'local') || String(scope.epoch) !== String(opts.epoch ?? '1')) throw new CtoxError('revoked', 'Unexpected scope or epoch');
+    if(!Number.isSafeInteger(scope.gen) || scope.gen!==genOf(page.collection))throw new CtoxError('invalid','Page generation does not match collection namespace');
     const cursor = decimalSeq(page.cursor_to ?? page.head_seq ?? '0');
     const out = await db.tx(async (t) => {
       await assertGen(t);
@@ -585,8 +592,8 @@ export function createKernel(opts = {}) {
       if(!sent || closed || !isLeader)return;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
-        await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await bumpLocalSeq(t);});
-        setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');
+        await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
+        setUploadProgress(e.id,blob.size,blob.size,true); uploadsDone.add(e.id);notify('uploads');post({type:'upload_done',ref:e.id});
       } else {
         if(!subscriptions.has(e.collection))await subscribeCollection(e.collection);
         const result=await transport.write(cloneValue(e));
@@ -805,7 +812,7 @@ export function createKernel(opts = {}) {
       for(const ns of namespaces){
         if(entries.some(e=>e.collection===ns))continue;
         for(const row of await t.all('docs'))if(row.collection===ns){
-          const empty={...row,data:null,deleted:true,retired:true};await putDoc(t,empty);out.push(empty);
+          const empty={collection:row.collection,id:row.id,data:null,base:emptyBase(),rev:null,seq:'0',deleted:true,pending:false,retired:true};await putDoc(t,empty);out.push(empty);
         }
       }
       return out;
@@ -911,6 +918,16 @@ export function createKernel(opts = {}) {
     if (broadcast) post({ type: 'upload', ref, sent, total });
   }
 
+  async function fetchBlob(ref) {
+    guardAlive();
+    if(!isLeader || link.state!=='online')throw new CtoxError('unavailable','File not cached and leader offline');
+    const blob=await transport.blob(ref);
+    if(!blob)throw new CtoxError('not_found',`File ${ref} missing`);
+    if(await sha256Hex(blob)!==ref)throw new CtoxError('invalid','File content hash mismatch');
+    await db.tx(async t=>{await assertGen(t);await t.put('blobs',{ref,blob,size:blob.size,type:blob.type,pinned:false,last_used:Date.now()});});
+    return ref; // readers consume the shared IDB cache, not a Blob over BroadcastChannel
+  }
+
   // ---- App-API (§10.2 + §10.2a + §16.10) ----
   function makeAppApi(appId, appVer) {
     if (typeof appId !== 'string' || !appId) throw new CtoxError('invalid', 'appId fehlt');
@@ -957,15 +974,10 @@ export function createKernel(opts = {}) {
           await db.tx((t) => t.put('blobs', { ...local, last_used: Date.now() }));
           return local.blob;
         }
-        const net = isLeader ? link : followerNet?.link ?? link;
-        if (net.state !== 'online') throw new CtoxError('unavailable', 'Datei nicht lokal und offline');
-        const blob = await transport.blob(ref);
-        const core = {blob, size:blob.size,type:blob.type};
-        if (!core) throw new CtoxError('not_found', `Datei ${ref} unbekannt`);
-        await sleep(latencyMs);
-        if ((await sha256Hex(core.blob)) !== ref) throw new CtoxError('invalid', 'Prüfsumme stimmt nicht (Empfang verworfen)');
-        await db.tx((t) => t.put('blobs', { ref, blob: core.blob, size: core.size, type: core.type, pinned: false, last_used: Date.now() }));
-        return core.blob;
+        if(isLeader)await fetchBlob(ref);else await callLeader('fetchBlob',[ref]);
+        const fetched=await db.get('blobs',ref);
+        if(!fetched)throw new CtoxError('unavailable','File unavailable after leader fetch');
+        return fetched.blob;
       },
       put(blob, meta = {}) {
         let metaHandle = null, uploadOp = null, cancelledEarly = false, refValue = null, resolveResult;
@@ -996,6 +1008,7 @@ export function createKernel(opts = {}) {
           const op_id = uuidv7();uploadOp = op_id;
           setUploadProgress(ref, 0, blob.size, false);
           await db.tx(async (t) => {
+            if(isLeader)await assertGen(t);
             const existing = await t.get('blobs', ref);
             await t.put('blobs', { ref, blob, size: blob.size, type: blob.type, pinned: true, last_used: Date.now(), ...(existing ? {} : {}) });
             await t.put('outbox', { op_id, collection: '__blobs', id: ref, op: 'upload', body: null, app_id: appId, app_ver: app.ver, created_at: Date.now(), origin_tab: tabId });
@@ -1042,7 +1055,7 @@ export function createKernel(opts = {}) {
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
-        if(evicted.has(ns))track(subscribeCollection(ns));
+        if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
         return makeLive([`c:${ns}`], () => {
           const m = mirror.get(ns);
           if (!m) return [];
@@ -1054,7 +1067,7 @@ export function createKernel(opts = {}) {
       get(collection, id) {
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
-        if(evicted.has(ns))track(subscribeCollection(ns));
+        if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
         return makeLive([`c:${ns}`], () => withDefaults(app,collection,visible(mirrorGet(ns,id))));
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
@@ -1082,8 +1095,10 @@ export function createKernel(opts = {}) {
         return Object.freeze({ id, status, local: write.local, result: write.result, cancel: write.cancel });
       },
       setVisible(collections) {
-        transport.priority?.({app_id:appId,collections});
-        simRecord.lastVisible = Object.freeze({ app_id: appId, collections: [...(collections ?? [])].map((c) => resolveNs(app, c)), at: Date.now() });
+        const resolved=[...(collections??[])].map(c=>resolveNs(app,c));
+        if(isLeader)transport.priority?.({app_id:appId,collections:resolved});
+        else post({type:'priority',app_id:appId,collections:resolved});
+        simRecord.lastVisible = Object.freeze({ app_id: appId, collections:resolved, at: Date.now() });
       },
       status: Object.freeze({
         report(item) { zoneReport(appId, item, 'app'); },

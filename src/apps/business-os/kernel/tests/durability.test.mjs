@@ -64,3 +64,11 @@ test('external V3 takeover refuses an unverified or live source before opening i
  await assert.rejects(takeoverV3Database({}, {name:'foreign',instanceId:'i',userId:'eve',quiesced:true},{instanceId:'i',userId:'alice'}),e=>e.code==='forbidden');
  await assert.rejects(takeoverV3Database({}, {name:'busy',instanceId:'i',userId:'alice'},{instanceId:'i',userId:'alice'}),e=>e.code==='forbidden');
 });
+
+test('page generation mismatch is rejected before changing local data',async()=>{
+ const k=createKernel(options());await k.ready;
+ try {
+  await assert.rejects(k.receivePage({collection:'notes',gen:2,epoch:'1',scope_hash:'local',cursor_to:'1',complete:true,docs:[{id:'a',data:{id:'a'},seq:'1',rev:'r'}]}),e=>e.code==='invalid');
+  assert.equal(k.appApi('notes','1').get('notes','a').get(),null);assert.equal(k.sim.checkpoint,'0');
+ } finally {await k.close();}
+});

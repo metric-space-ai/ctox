@@ -148,5 +148,5 @@ export async function openBackend(name, mode) {
 }
 export async function deleteBackend(name, kind) {
   if (kind === 'memory') { MEMORY_DBS.delete(name); return; }
-  await new Promise((res) => { const r = indexedDB.deleteDatabase(name); r.onsuccess = r.onerror = r.onblocked = () => res(); });
+  await new Promise((res,rej) => { const r = indexedDB.deleteDatabase(name); r.onsuccess=()=>res();r.onerror=()=>rej(storageError(r.error));r.onblocked=()=>rej(new CtoxError('unavailable','Close other identity tabs before deleting local data')); });
 }
