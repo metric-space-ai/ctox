@@ -55,16 +55,20 @@ pub fn run_begin_worker_attempt_finalization(
 }
 
 pub fn run_worker_attempt(db_path: &Path, attempt_id: &str) -> Result<Option<WorkerAttemptRecord>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.worker_attempt(attempt_id)
+    let attempt_id = attempt_id.to_owned();
+    owned_lcm_read(db_path, move |conn| {
+        snapshot_worker_attempt(conn, &attempt_id)
+    })
 }
 
 pub fn run_recoverable_worker_attempt(
     db_path: &Path,
     work_key: &str,
 ) -> Result<Option<WorkerAttemptRecord>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.recoverable_worker_attempt(work_key)
+    let work_key = work_key.to_owned();
+    owned_lcm_read(db_path, move |conn| {
+        snapshot_recoverable_worker_attempt(conn, &work_key)
+    })
 }
 
 pub fn run_record_task_execution_plan(
@@ -104,16 +108,20 @@ pub fn run_task_execution_progress(
     db_path: &Path,
     work_key: &str,
 ) -> Result<Option<serde_json::Value>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.task_execution_progress(work_key)
+    let work_key = work_key.to_owned();
+    owned_lcm_read(db_path, move |conn| {
+        snapshot_task_execution_progress(conn, &work_key)
+    })
 }
 
 pub fn run_task_execution_progress_for_task(
     db_path: &Path,
     task_id: &str,
 ) -> Result<Option<serde_json::Value>> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.task_execution_progress_for_task(task_id)
+    let task_id = task_id.to_owned();
+    owned_lcm_read(db_path, move |conn| {
+        snapshot_task_execution_progress_for_task(conn, &task_id)
+    })
 }
 
 pub fn run_ensure_worker_attempt_assistant_message(
@@ -217,8 +225,7 @@ pub fn run_expand(
 }
 
 pub fn run_dump(db_path: &Path, conversation_id: i64) -> Result<LcmSnapshot> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.snapshot(conversation_id)
+    owned_lcm_snapshot(db_path, conversation_id)
 }
 
 pub fn run_secret_rewrite(
