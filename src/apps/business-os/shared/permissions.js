@@ -9,6 +9,7 @@ export const BusinessOsPermissions = Object.freeze({
   IntegrationsManage: 'integrations.manage',
   SecretsManage: 'secrets.manage',
   McpManage: 'mcp.manage',
+  MachinesManage: 'machines.manage',
   AppsInstall: 'apps.install',
   AppsUninstall: 'apps.uninstall',
   AppsAssignOwner: 'apps.assign_owner',

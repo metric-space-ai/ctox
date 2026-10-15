@@ -14,8 +14,8 @@ use std::sync::Arc;
 mod command;
 pub(super) use command::check_command_input;
 pub use command::{
-    activate_command_projections, backfill_command_projections, project_command,
-    read_command_projection, CommandProjection,
+    activate_command_projections, backfill_command_projections, command_document_schema,
+    project_command, read_command_projection, validate_migrated_command, CommandProjection,
 };
 pub(super) use command::{check_command, duplicate_command};
 pub use command::{

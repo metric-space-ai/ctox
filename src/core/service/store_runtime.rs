@@ -33,6 +33,7 @@ struct Inspect {
     databases: Arc<Mutex<HashMap<String, Database>>>,
     runtime: Handle,
     closing: Arc<AtomicBool>,
+    queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
 }
 impl Dispatcher for Inspect {
     fn dispatch(
@@ -42,6 +43,15 @@ impl Dispatcher for Inspect {
     ) -> Result<JobHandle<Vec<u8>>, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
+        }
+        if request.method == "queue.ack" {
+            let queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?;
+            return queue.dispatch(request, options);
         }
         if request.kind != JobKind::Read || request.method != "store.inspect" {
             return Err(StoreError::Invalid("unknown store operation".into()));
@@ -83,18 +93,24 @@ pub(crate) struct DaemonStores {
     databases: Arc<Mutex<HashMap<String, Database>>>,
     ipc: Option<DaemonIpc>,
     closing: Arc<AtomicBool>,
+    native_stores: Vec<super::store_rxdb::NativeStoreRegistration>,
+    queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
+    runtime: Handle,
+    inputs: Option<super::store_inputs::InputRegistration>,
 }
 impl DaemonStores {
     /// Acquire process/lifecycle ownership BEFORE opening a database file.
     pub fn start(endpoint: StoreEndpoint, runtime: Handle) -> Result<Self, StoreError> {
         let databases = Arc::new(Mutex::new(HashMap::new()));
         let closing = Arc::new(AtomicBool::new(false));
+        let queue = Arc::new(Mutex::new(None));
         let ipc = DaemonIpc::start(
             endpoint,
             Arc::new(Inspect {
                 databases: databases.clone(),
-                runtime,
+                runtime: runtime.clone(),
                 closing: closing.clone(),
+                queue: queue.clone(),
             }),
         )?;
         Ok(Self {
@@ -102,6 +118,10 @@ impl DaemonStores {
             databases,
             ipc: Some(ipc),
             closing,
+            native_stores: Vec::new(),
+            queue,
+            runtime,
+            inputs: None,
         })
     }
 
@@ -113,6 +133,42 @@ impl DaemonStores {
         id: DbId,
         sync: bool,
         initialize: Initializer,
+    ) -> Result<Database, StoreError> {
+        self.register_with_budget(name, id, sync, initialize, AdmissionBudget::default())
+            .await
+    }
+
+    /// Deliberately-held WAL snapshots test ordering, not production latency.
+    /// The production register() entry always retains its 20ms execution budget.
+    #[cfg(test)]
+    pub(super) async fn register_snapshot_fixture(
+        &mut self,
+        name: &str,
+        id: DbId,
+        sync: bool,
+        initialize: Initializer,
+    ) -> Result<Database, StoreError> {
+        self.register_with_budget(
+            name,
+            id,
+            sync,
+            initialize,
+            AdmissionBudget {
+                wait: std::time::Duration::from_secs(3),
+                execution: std::time::Duration::from_secs(3),
+                ..AdmissionBudget::default()
+            },
+        )
+        .await
+    }
+
+    async fn register_with_budget(
+        &mut self,
+        name: &str,
+        id: DbId,
+        sync: bool,
+        initialize: Initializer,
+        read_budget: AdmissionBudget,
     ) -> Result<Database, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
@@ -157,26 +213,98 @@ impl DaemonStores {
             let _ = writer.shutdown().await;
             return Err(error);
         }
-        let readers = match ReadPool::for_database(
-            writer.db_id(),
-            writer.generation(),
-            config,
-            AdmissionBudget::default(),
-        )
-        .await
-        {
-            Ok(readers) => readers,
-            Err(error) => {
-                let _ = writer.shutdown().await;
-                return Err(error);
-            }
-        };
+        let readers =
+            match ReadPool::for_database(writer.db_id(), writer.generation(), config, read_budget)
+                .await
+            {
+                Ok(readers) => readers,
+                Err(error) => {
+                    let _ = writer.shutdown().await;
+                    return Err(error);
+                }
+            };
         let database = Database { writer, readers };
         self.databases
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(name.to_owned(), database.clone());
         Ok(database)
+    }
+
+    /// Publish the existing canonical handles once, only after both owners are ready.
+    /// The daemon retains the registration until before admission closes on drain.
+    pub async fn publish_inputs(&mut self, root: &std::path::Path) -> Result<(), StoreError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
+        if self.inputs.is_some() {
+            return Err(StoreError::AlreadyOwned);
+        }
+        let checked_root = root.to_owned();
+        let (core_id, sync_id) = tokio::task::spawn_blocking(move || {
+            Ok::<_, StoreError>((
+                DbId::new(crate::paths::core_db(&checked_root))?,
+                DbId::new(crate::paths::sync_db(&checked_root))?,
+            ))
+        })
+        .await
+        .map_err(|_| StoreError::Panicked)??;
+        if self.closing.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
+        let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
+        let core = databases.get("core").cloned().ok_or(StoreError::Closed)?;
+        let sync = databases.get("sync").cloned().ok_or(StoreError::Closed)?;
+        if core.writer.db_id() != &core_id || sync.writer.db_id() != &sync_id {
+            return Err(StoreError::Invalid(
+                "composition root/file identity mismatch".into(),
+            ));
+        }
+        self.inputs = Some(super::store_inputs::InputRegistration::new(
+            root,
+            core,
+            sync,
+            self.runtime.clone(),
+            self.closing.clone(),
+        )?);
+        Ok(())
+    }
+
+    pub fn retire_inputs(&mut self) {
+        self.inputs.take();
+    }
+
+    pub async fn install_native_rxdb(&mut self, database: Database) -> Result<(), StoreError> {
+        let native =
+            super::store_rxdb::RxdbJobs::install_native(database, self.runtime.clone()).await?;
+        self.native_stores.push(native);
+        Ok(())
+    }
+
+    pub async fn install_queue(
+        &mut self,
+        root: std::path::PathBuf,
+        core: Database,
+        sync: Database,
+    ) -> Result<(), StoreError> {
+        if self
+            .queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+        {
+            return Err(StoreError::AlreadyOwned);
+        }
+        let owner = super::queue_store::QueueStore::install(
+            root,
+            core,
+            sync,
+            self.runtime.clone(),
+            self.closing.clone(),
+        )
+        .await?;
+        *self.queue.lock().unwrap_or_else(|p| p.into_inner()) = Some(owner);
+        Ok(())
     }
 
     /// On a drain error the caller retains this owner and its daemon lease.
@@ -186,6 +314,8 @@ impl DaemonStores {
         // Retire lookup/admission first. Existing jobs are then drained by the
         // pools/writers; retain the daemon lock until all file owners stop.
         self.closing.store(true, Ordering::Release);
+        self.inputs.take();
+        self.native_stores.clear();
         let databases = self
             .databases
             .lock()
@@ -194,6 +324,12 @@ impl DaemonStores {
         for database in databases.values() {
             database.writer.stop_admission();
         }
+        let queue = self.queue.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(queue) = queue {
+            queue.stop();
+            queue.drain().await?;
+        }
+        self.queue.lock().unwrap_or_else(|p| p.into_inner()).take();
         for database in databases.into_values() {
             database
                 .readers

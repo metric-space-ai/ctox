@@ -790,6 +790,11 @@ fn write_output(
             if rev.is_empty() || !body.is_object() {
                 return Err(invalid("invalid migrated document"));
             }
+            if target.definition.name == "business_commands" && target.definition.schema_ver == 3 {
+                crate::change_log::subscription::write_contract::validate_migrated_command(
+                    body, &source.id,
+                )?;
+            }
             archive(tx, target, source, "generation migration", now)?;
             tx.execute(
                 &format!(
@@ -1770,6 +1775,57 @@ pub struct BaseReleaseReport {
     pub legacy_catalog_replaced: bool,
     pub missing_addenda_definitions: Vec<String>,
 }
+/// The Core owns the platform command wire contract. Bind it before artifact
+/// signing and registry publication so both describe the exact same schema.
+/// Only release input changes; incompatible stores still need normal migration.
+pub fn bind_platform_command_schema(input: &mut BaseReleaseInput) -> Result<()> {
+    let platform = input
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .ok_or_else(|| invalid("platform manifest missing"))?;
+    let metadata = platform
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .and_then(|c| c.get_mut("business_commands"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform command metadata missing"))?;
+    let schema = crate::change_log::subscription::write_contract::command_document_schema();
+    // Never downgrade an unknown future contract or reuse a published version
+    // for different bytes. Legacy v2 is the explicit incompatible base.
+    let corrected_schema = input
+        .schemas
+        .get("ctox-platform")
+        .and_then(|s| s["collections"].get("business_commands"))
+        .map(|entry| entry.get("schema").unwrap_or(entry));
+    for supplied in [corrected_schema, metadata.get("schema")]
+        .into_iter()
+        .flatten()
+    {
+        if supplied["version"].as_u64().unwrap_or(0) >= 3 && supplied != &schema {
+            return Err(invalid("platform command schema version collision"));
+        }
+    }
+    metadata.insert("schema".into(), schema.clone());
+    let corrected = input
+        .schemas
+        .entry("ctox-platform".into())
+        .or_insert_with(|| serde_json::json!({"_base_release":"main@4794af03d","collections":{}}));
+    let collections = corrected
+        .get_mut("collections")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("platform schema collections missing"))?;
+    let entry = collections
+        .entry("business_commands")
+        .or_insert_with(|| serde_json::json!({}));
+    if entry.get("schema").is_some() {
+        entry["schema"] = schema;
+    } else {
+        *entry = serde_json::json!({"schema":schema});
+    }
+    Ok(())
+}
+
 /// Read immutable release inputs outside the Store writer. No ambient paths/config.
 pub fn load_base_release(
     v4_root: &std::path::Path,
@@ -1814,11 +1870,13 @@ pub fn load_base_release(
             schemas.insert(app.to_owned(), json(&path)?);
         }
     }
-    Ok(BaseReleaseInput {
+    let mut input = BaseReleaseInput {
         ownership,
         manifests,
         schemas,
-    })
+    };
+    bind_platform_command_schema(&mut input)?;
+    Ok(input)
 }
 const OLG_COLLECTIONS: [&str; 5] = [
     "outbound_lead_generation_adapters",
@@ -1927,8 +1985,10 @@ pub fn import_base_release(
                 .and_then(|v| v.get(&name));
             let schema = corrected
                 .or_else(|| metadata.get("schema"))
-                .ok_or_else(|| invalid(format!("schema missing: {name}")))?
-                .clone();
+                .ok_or_else(|| invalid(format!("schema missing: {name}")))?;
+            // Corrected Shell schema files carry collection metadata around
+            // `schema`; older release fixtures contain the schema directly.
+            let schema = schema.get("schema").unwrap_or(schema).clone();
             let version = schema.get("version").and_then(Value::as_u64).unwrap_or(0);
             let def = CollectionDefinition {
                 name: name.clone(),

@@ -1,0 +1,6 @@
+[data-app="k24-probe"] .k24 { display: flex; flex-direction: column; gap: 12px; padding: 16px; height: 100%; box-sizing: border-box; }
+[data-app="k24-probe"] .k24-form { display: flex; gap: 8px; flex-wrap: wrap; }
+[data-app="k24-probe"] .k24-input { flex: 1 1 200px; min-width: 0; padding: 6px 8px; font: inherit; }
+[data-app="k24-probe"] .k24-btn { padding: 6px 12px; font: inherit; cursor: pointer; }
+[data-app="k24-probe"] .k24-list { margin: 0; padding: 0; list-style: none; overflow: auto; }
+[data-app="k24-probe"] .k24-list li { padding: 6px 0; border-bottom: 1px solid var(--line, #ddd); }

@@ -17,6 +17,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::PeerConnection;
+#[path = "v4_scheduler/lane_artifacts.rs"]
+pub mod lane_artifacts;
 #[path = "session_resume.rs"]
 pub mod session_resume;
 use session_resume::{ReliableSession, SessionControl, SessionHello};

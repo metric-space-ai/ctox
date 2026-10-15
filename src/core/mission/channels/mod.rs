@@ -123,7 +123,9 @@ pub(crate) use outbound_review::{
     send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
     terminal_founder_outbound_artifact_count, PolicyReportEmail,
 };
-pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
+pub(crate) use outbound_review::{
+    ensure_open_routing_rows_once, ensure_owned_schema, ensure_schema_once,
+};
 pub use outbound_review::{
     inbound_message_has_terminal_no_send, inbound_message_is_auto_submitted,
     record_terminal_no_send_verdict, send_reviewed_founder_reply,
@@ -1998,22 +2000,25 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
             let message_keys = positional_after_flags(&args[1..]);
             if message_keys.is_empty() {
                 anyhow::bail!(
-                    "usage: ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>..."
+                    "usage: ctox channel ack [--status <status>] [--reason <text>] <message-key>..."
                 );
             }
-            let mut conn = open_channel_db(&db_path)?;
+            anyhow::ensure!(
+                find_flag_value(args, "--db").is_none(),
+                "queue ACK uses the daemon-owned Core store; --db cannot bypass daemon ownership"
+            );
             let (failure_note, ack_reason) = if status == QueueRouteStatus::Failed {
                 (failure_reason, None)
             } else {
                 (None, failure_reason)
             };
-            let updated = ack_messages(
-                find_flag_value(args, "--db").is_none().then_some(root),
-                &mut conn,
+            let updated = crate::service::queue_store::ack(
+                root,
                 &message_keys,
                 status.as_str(),
                 failure_note,
                 ack_reason,
+                None,
                 None,
             )?;
             print_json(&json!({
@@ -2597,19 +2602,7 @@ pub fn has_runnable_inbound_message(root: &Path) -> Result<bool> {
 }
 
 pub fn ack_leased_messages(root: &Path, message_keys: &[String], status: &str) -> Result<usize> {
-    let status = canonical_queue_route_status(status)?;
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
-    ack_messages(
-        Some(root),
-        &mut conn,
-        message_keys,
-        status.as_str(),
-        None,
-        None,
-        None,
-    )
+    crate::service::queue_store::ack(root, message_keys, status, None, None, None, None)
 }
 
 /// Ack with an explicit routing reason. The reason is audit data only and does
@@ -2625,58 +2618,15 @@ pub fn ack_leased_messages_for_attempt(
     status: &str,
     failure_reason: Option<&str>,
 ) -> Result<usize> {
-    let status = canonical_queue_route_status(status)?;
-    if status == QueueRouteStatus::Failed {
-        anyhow::ensure!(
-            failure_reason
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty()),
-            "failed queue acknowledgement requires a failure reason"
-        );
-    }
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
-    attach_queue_projection_store(root, &conn)?;
-    // Immediate: this reads the attempt marker, then writes routing state and
-    // the attached queue projection store the RxDB peer writes constantly. A
-    // deferred read cannot be promoted once another writer committed (SQLite
-    // 517, "database is locked" at once, without the busy timeout). On thesen
-    // (07.10.2026) every reviewed lead-research ack failed so: the attempt
-    // stayed `finalizing`, the lease expired, and each re-lease re-ran the
-    // review of the same reply (one task 28 times) without ever terminalizing.
-    let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "queue.ack_attempt")?;
-    let already_applied: Option<Option<String>> = tx
-        .query_row(
-            "SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id = ?1",
-            [attempt_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let already_applied = already_applied
-        .with_context(|| format!("worker attempt {attempt_id} does not exist for queue ack"))?;
-    if already_applied.is_some() {
-        tx.commit()?;
-        return Ok(0);
-    }
-    let updated = ack_messages_in_transaction(
-        &tx,
+    crate::service::queue_store::ack(
+        root,
         message_keys,
-        status.as_str(),
+        status,
         failure_reason,
         None,
+        Some(attempt_id),
         None,
-    )?;
-    tx.execute(
-        "UPDATE worker_attempt_finalizations
-         SET queue_effects_applied_at = ?2, updated_at = ?2
-         WHERE attempt_id = ?1 AND queue_effects_applied_at IS NULL",
-        params![attempt_id, now_iso_string()],
-    )?;
-    let tasks = load_queue_projection_tasks(&tx, message_keys)?;
-    refresh_queue_projection_tasks(root, &tx, &tasks)?;
-    tx.commit()?;
-    Ok(updated)
+    )
 }
 
 /// Stop a deterministic plan-finalization failure even when this same attempt
@@ -2854,19 +2804,7 @@ pub fn ack_leased_messages_with_reason(
     status: &str,
     reason: &str,
 ) -> Result<usize> {
-    let status = canonical_queue_route_status(status)?;
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
-    ack_messages(
-        Some(root),
-        &mut conn,
-        message_keys,
-        status.as_str(),
-        None,
-        Some(reason),
-        None,
-    )
+    crate::service::queue_store::ack(root, message_keys, status, None, Some(reason), None, None)
 }
 
 pub(crate) fn ack_leased_messages_with_reason_and_grant(
@@ -2876,17 +2814,13 @@ pub(crate) fn ack_leased_messages_with_reason_and_grant(
     reason: &str,
     terminal_policy_grant: TerminalPolicyGrant,
 ) -> Result<usize> {
-    let status = canonical_queue_route_status(status)?;
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
-    ack_messages(
-        Some(root),
-        &mut conn,
+    crate::service::queue_store::ack(
+        root,
         message_keys,
-        status.as_str(),
+        status,
         None,
         Some(reason),
+        None,
         Some(terminal_policy_grant),
     )
 }
@@ -2897,20 +2831,16 @@ pub fn ack_leased_messages_with_failure_reason(
     status: &str,
     failure_reason: &str,
 ) -> Result<usize> {
-    let status = canonical_queue_route_status(status)?;
     anyhow::ensure!(
-        status == QueueRouteStatus::Failed,
-        "ack_leased_messages_with_failure_reason only accepts status='failed'"
+        canonical_queue_route_status(status)? == QueueRouteStatus::Failed,
+        "failure acknowledgement requires failed status"
     );
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    guard_founder_handled_ack(root, &conn, message_keys, status.as_str())?;
-    ack_messages(
-        Some(root),
-        &mut conn,
+    crate::service::queue_store::ack(
+        root,
         message_keys,
-        status.as_str(),
+        status,
         Some(failure_reason),
+        None,
         None,
         None,
     )
@@ -6355,35 +6285,79 @@ pub fn defer_messages_until(
     Ok(updated)
 }
 
-fn ack_messages(
-    projection_root: Option<&Path>,
-    conn: &mut Connection,
-    message_keys: &[String],
-    status: &str,
-    failure_note: Option<&str>,
-    ack_reason: Option<&str>,
-    terminal_policy_grant: Option<TerminalPolicyGrant>,
+/// Source mutation, attempt receipt and publication intents are one Core job.
+/// There is no ATTACH, destination wait, or separately committed projection.
+pub(crate) fn ack_owned_in_transaction(
+    root: &Path,
+    tx: &Transaction<'_>,
+    request: &crate::service::queue_store::AckRequest,
+    grant: Option<TerminalPolicyGrant>,
 ) -> Result<usize> {
-    if let Some(root) = projection_root {
-        attach_queue_projection_store(root, conn)?;
+    let request_json = serde_json::to_string(request)?;
+    let receipt: Option<(String, usize)> = tx
+        .query_row(
+            "SELECT request_json,result FROM _queue_ack_ops WHERE op_id=?1",
+            [&request.operation_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((prior, result)) = receipt {
+        anyhow::ensure!(
+            prior == request_json,
+            "queue acknowledgement operation identity conflict"
+        );
+        return Ok(if request.attempt.is_some() { 0 } else { result });
     }
-    // Acknowledgement reads before updating Core and its attached projection
-    // store. Reserve both writers first so a concurrent WAL commit cannot
-    // invalidate the read snapshot during promotion (SQLITE_BUSY_SNAPSHOT).
-    let tx = crate::persistence::SqliteWriteTransaction::begin(conn, "queue.ack_messages")?;
+    let status = canonical_queue_route_status(&request.status)?;
+    if status == QueueRouteStatus::Failed {
+        anyhow::ensure!(
+            request
+                .failure
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            "failed queue acknowledgement requires a failure reason"
+        );
+    }
+    guard_founder_handled_ack(root, tx, &request.keys, status.as_str())?;
+    if let Some(attempt) = request.attempt.as_deref() {
+        let applied: Option<Option<String>>=tx.query_row("SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id=?1",[attempt],|r|r.get(0)).optional()?;
+        let applied = applied
+            .with_context(|| format!("worker attempt {attempt} does not exist for queue ack"))?;
+        if applied.is_some() {
+            return Ok(0);
+        }
+    }
     let updated = ack_messages_in_transaction(
-        &tx,
-        message_keys,
-        status,
-        failure_note,
-        ack_reason,
-        terminal_policy_grant,
+        tx,
+        &request.keys,
+        status.as_str(),
+        request.failure.as_deref(),
+        request.reason.as_deref(),
+        grant,
     )?;
-    if let Some(root) = projection_root {
-        let tasks = load_queue_projection_tasks(&tx, message_keys)?;
-        refresh_queue_projection_tasks(root, &tx, &tasks)?;
+    if let Some(attempt) = request.attempt.as_deref() {
+        tx.execute("UPDATE worker_attempt_finalizations SET queue_effects_applied_at=?2,updated_at=?2 WHERE attempt_id=?1 AND queue_effects_applied_at IS NULL",params![attempt,now_iso_string()])?;
     }
-    tx.commit()?;
+    let now = chrono::Utc::now().timestamp_millis();
+    for task in load_queue_projection_tasks(tx, &request.keys)? {
+        let body = crate::business_os::store::owner_queue_projection_effect(tx, &task, now)?;
+        ctox_store::publication::stage_in_transaction(
+            tx,
+            ctox_store::publication::Publication {
+                op_id: format!("{}:{}", request.operation_id, task.message_key),
+                target: "sync.queue".into(),
+                kind: "queue.projection.v4".into(),
+                subject: "ctox.daemon.queue".into(),
+                payload: serde_json::to_vec(&body)?,
+            },
+            now,
+            |_| Ok(()),
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO _queue_ack_ops VALUES(?1,?2,?3)",
+        params![request.operation_id, request_json, updated],
+    )?;
     Ok(updated)
 }
 

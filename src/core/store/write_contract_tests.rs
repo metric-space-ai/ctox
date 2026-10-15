@@ -199,6 +199,15 @@ async fn participant_order_precedes_command_effect_and_duplicate_seq_is_a_receip
         serde_json::from_str::<ClientMessage>(&wire).unwrap(),
         ClientMessage::Write(command.clone())
     );
+    let mut caller_metadata = serde_json::from_str::<Value>(&wire).unwrap();
+    caller_metadata["app_id"] = json!("forged-native-context");
+    assert!(serde_json::from_value::<ClientMessage>(caller_metadata).is_err());
+    let ambiguous = wire.replacen(
+        "\"client_seq\":\"2\"",
+        "\"client_seq\":\"2\",\"client_seq\":\"9\"",
+        1,
+    );
+    assert!(serde_json::from_str::<ClientMessage>(&ambiguous).is_err());
     let waiting = ingress
         .submit("alice".into(), command.clone(), NOW)
         .await

@@ -614,6 +614,14 @@ pub(crate) fn apply_write(
                         |r| r.get(0),
                     )
                     .optional()?;
+                // The Kernel represents a never-seen document with base_seq=0.
+                // Only an explicit create of an absent row has that sentinel;
+                // a missing change-log row for an existing document is not 0.
+                let actual = if row.is_none() && request.op == WriteOp::Put && base.is_none() {
+                    Some(0)
+                } else {
+                    actual
+                };
                 if actual != Some(seq.0) {
                     let result = rejected(request, "conflict");
                     remember(tx, participant, request, &result, now_ms)?;

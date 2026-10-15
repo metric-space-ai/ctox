@@ -3,8 +3,10 @@
 //! Connections never leave their owning blocking thread. Legacy callers are
 //! migrated by later adapter packages; declaring this crate does not retire them.
 
+pub mod cas;
 pub mod change_log;
 pub mod config;
+pub mod import;
 pub mod ipc;
 pub mod publication;
 pub mod read_pool;

@@ -72,13 +72,13 @@ fn decode_hex(s: &str) -> Vec<u8> {
         .collect()
 }
 /// Public RFC8032 TEST vector only. Production code has no OpenSSL process/key-file route.
-struct TestInstanceKey {
+pub(super) struct TestInstanceKey {
     _dir: tempfile::TempDir,
     private: PathBuf,
     public: PathBuf,
 }
 impl TestInstanceKey {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let private = dir.path().join("test-ed25519.der");
         let public = dir.path().join("test-ed25519.pub.der");
