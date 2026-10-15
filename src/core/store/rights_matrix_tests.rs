@@ -295,7 +295,12 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
         authority.writer().db_id(),
         authority.writer().generation(),
         Default::default(),
-        Default::default(),
+        // This contract deliberately holds a WAL snapshot over a writer commit.
+        // Production readers keep the normal 20-ms execution budget unchanged.
+        ctox_store::config::AdmissionBudget {
+            execution: std::time::Duration::from_secs(2),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();
@@ -673,13 +678,56 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
                 c.name
             );
         }
+        if c.name == "own" {
+            // A real change of an already-visible row must become unproject,
+            // using exactly the same canonical query as initial catch-up.
+            let hidden = json!({"id":"lead-1","owner":"bob","name":"A"});
+            authority
+                .writer()
+                .submit(ctox_store::WriteJob::new(Default::default(), move |tx| {
+                    tx.execute(
+                        "UPDATE c_leads SET data=?1,rev='left-filter' WHERE id='lead-1'",
+                        [hidden.to_string()],
+                    )?;
+                    Ok(())
+                }))
+                .unwrap()
+                .await
+                .unwrap();
+            let scoped = adapter.clone();
+            let expected_hash = hash.clone();
+            let left = readers
+                .read(move |tx| {
+                    let page = ctox_store::change_log::read_page(tx, "leads", 1, 0, 100)?;
+                    scoped.project_change(tx, "device-a", "leads", &expected_hash, &page.docs[0])
+                })
+                .await
+                .unwrap();
+            assert!(
+                left.is_none(),
+                "leaving the actual Store row filter must unproject"
+            );
+            let original = before.clone();
+            authority
+                .writer()
+                .submit(ctox_store::WriteJob::new(Default::default(), move |tx| {
+                    tx.execute(
+                        "UPDATE c_leads SET data=?1,rev='fixture' WHERE id='lead-1'",
+                        [original.to_string()],
+                    )?;
+                    Ok(())
+                }))
+                .unwrap()
+                .await
+                .unwrap();
+        }
         let scoped = adapter.clone();
         let proposed = after.clone();
         let written = authority
             .writer()
             .submit(ctox_store::WriteJob::new(Default::default(), move |tx| {
                 scoped
-                    .with_write(
+                    .admit_write(
                         tx,
                         "device-a",
                         "leads",
@@ -698,8 +746,13 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
             }))
             .unwrap()
             .await;
-        assert_eq!(
+        assert!(
             written.is_ok(),
+            "{}: committed rule denial must be typed, not a transient Store failure",
+            c.name
+        );
+        assert_eq!(
+            matches!(written, Ok(NativeWriteAdmission::Accepted(()))),
             c.expected.1,
             "{}: actual Store write admission",
             c.name
@@ -741,13 +794,31 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
         }
         // Exact device binding and a substituted scope are rejected inside the snapshot.
         let scoped = adapter.clone();
+        let participant_hash = hash.clone();
         assert!(
             readers
-                .read(move |tx| scoped.authorize_snapshot(tx, "other-device", "leads", 1, &hash))
+                .read(move |tx| scoped.authorize_snapshot(
+                    tx,
+                    "other-device",
+                    "leads",
+                    1,
+                    &participant_hash
+                ))
                 .await
                 .is_err(),
             "participant substitution must not borrow an authenticated actor"
         );
+        for (generation, bad_hash) in [(2, hash.clone()), (1, "forged-scope".into())] {
+            let scoped = adapter.clone();
+            assert!(
+                readers
+                    .read(move |tx| scoped
+                        .authorize_snapshot(tx, "device-a", "leads", generation, &bad_hash))
+                    .await
+                    .is_err(),
+                "generation or scope substitution must be rejected"
+            );
+        }
         let read = read_sync_document(&actor, &rights, c.app, "leads", &before);
         assert_eq!(read.is_ok(), c.expected.0, "{}: read boundary", c.name);
         let projection = rights
@@ -820,6 +891,91 @@ async fn rights_matrix_read_write_replication_share_committed_authority() {
         assert_eq!(written.is_ok(), c.expected.3, "{}: command write", c.name);
         previous_seq = authority.hello_snapshot().await.unwrap().0.head_seq;
     }
+    // Hold an actual old WAL snapshot across a policy commit. An old reader
+    // cannot authorize from it even though its SQLite transaction is still valid.
+    let (_, committed) = authority.hello_snapshot().await.unwrap();
+    let owner_scope = committed
+        .resolve_app_collection("owner", "user", "alice", "leads")
+        .unwrap();
+    let hash = owner_scope.hash().unwrap();
+    let scoped = NativeStorePolicy::from_verified_peer(
+        authority.clone(),
+        VerifiedSyncPeer {
+            actor: BusinessOsActor::new(Some("alice".into()), "user"),
+            instance_id: "matrix-instance".into(),
+            device_id: "device-a".into(),
+        },
+        "owner".into(),
+    )
+    .unwrap();
+    let old_lease = scoped.issue_peer_lease(&keys, "leads", 1000).await.unwrap();
+    let held_readers = readers.clone();
+    let (established, wait_snapshot) = tokio::sync::oneshot::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    let held = tokio::spawn(async move {
+        held_readers
+            .read(move |tx| {
+                sync_rights::read(tx)?;
+                let _ = established.send(());
+                wait_release
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .map_err(|_| {
+                        rusqlite::Error::InvalidParameterName("snapshot barrier timeout".into())
+                    })?;
+                let read_denied = scoped
+                    .authorize_snapshot(tx, "device-a", "leads", 1, &hash)
+                    .is_err();
+                let write_transient = scoped
+                    .admit_write(
+                        tx,
+                        "device-a",
+                        "leads",
+                        "lead-1",
+                        Some(&json!({"id":"lead-1","owner":"alice","name":"B"})),
+                        None,
+                        |_| Ok(()),
+                    )
+                    .is_err();
+                Ok((read_denied, write_transient))
+            })
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), wait_snapshot)
+        .await
+        .unwrap()
+        .unwrap();
+    authority
+        .replace(committed.rules, committed.manifests)
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    let (read_denied, write_transient) = held.await.unwrap().unwrap();
+    assert!(
+        read_denied,
+        "a WAL snapshot preceding a rights commit must be rejected"
+    );
+    assert!(
+        write_transient,
+        "uncertain write authority must retain the outbox, never emit a terminal rejection"
+    );
+    let (_, renewed) = authority.hello_snapshot().await.unwrap();
+    let next_scope = renewed
+        .resolve_app_collection("owner", "user", "alice", "leads")
+        .unwrap();
+    use ring::signature::KeyPair;
+    let public = ring::signature::Ed25519KeyPair::from_pkcs8(&keys.0).unwrap();
+    assert!(
+        old_lease
+            .verify(
+                public.public_key().as_ref(),
+                "matrix-instance",
+                "device-a",
+                &next_scope,
+                1001
+            )
+            .is_err(),
+        "a peer lease from an old rights version must be rejected"
+    );
     authority.replace(vec![], vec![]).await.unwrap();
     assert!(
         !evaluate(

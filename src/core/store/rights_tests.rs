@@ -1,7 +1,7 @@
 use super::*;
+use ctox_store::change_log;
 use rusqlite::Connection;
 use serde_json::json;
-use ctox_store::change_log;
 
 fn rule() -> Right {
     Right {

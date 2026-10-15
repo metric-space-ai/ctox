@@ -975,10 +975,19 @@ pub fn sync_peer_authenticator_from_secret_store(
     )
 }
 
-/// Adapter for the single P8 cursor reader and owning write transaction. The
-/// constructor receives identity from Core authentication, never a wire role.
-/// P8's ReadAuthority bridge calls authorize_snapshot/project_change; its write
-/// bridge calls with_write inside apply_write's owning transaction.
+/// Distinguish a committed rule denial from an unavailable Store or uncertain
+/// authority. Only a rule denial may become a terminal outbox rejection.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NativeWriteAdmission<T> {
+    Accepted(T),
+    /// A committed policy denial. P8 persists rejected{revoked} with the
+    /// original op_id in its existing writer transaction; it is not an SQL error.
+    Rejected,
+}
+
+/// Adapter for P8's single cursor reader and owning write transaction. Identity
+/// comes from Core authentication. ReadAuthority delegates to authorize_snapshot
+/// and project_change; WriteAuthority uses admit_write on the final document.
 #[derive(Clone)]
 pub struct NativeStorePolicy {
     authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
@@ -1118,7 +1127,7 @@ impl NativeStorePolicy {
     /// Final current-schema document supplied by P8, never a client-side base.
     /// Before is fetched here from the active generation in the same writer tx.
     /// The trusted mutation callback is synchronous and must not enqueue/await.
-    pub fn with_write<T>(
+    pub fn admit_write<T>(
         &self,
         tx: &rusqlite::Transaction<'_>,
         participant: &str,
@@ -1127,7 +1136,7 @@ impl NativeStorePolicy {
         after: Option<&Value>,
         permit: Option<&sync_rights::manifest_rules::CommandPermit>,
         commit: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
-    ) -> rusqlite::Result<T> {
+    ) -> rusqlite::Result<NativeWriteAdmission<T>> {
         use rusqlite::OptionalExtension;
         let invalid = |s: String| rusqlite::Error::InvalidParameterName(s);
         let rights = self.snapshot(tx, participant)?;
@@ -1162,7 +1171,7 @@ impl NativeStorePolicy {
                 if current.rights_ver != rights.rights_ver {
                     return Err("revoked".into());
                 }
-                write_sync_document(
+                if write_sync_document(
                     &self.actor,
                     &rights,
                     &self.app_id,
@@ -1170,11 +1179,34 @@ impl NativeStorePolicy {
                     before.as_ref(),
                     after,
                     permit,
-                )?;
+                )
+                .is_err()
+                {
+                    return Ok(Ok(NativeWriteAdmission::Rejected));
+                }
                 // Preserve the original SQLite failure; it rolls back the owning job.
-                Ok(commit(tx))
+                Ok(commit(tx).map(NativeWriteAdmission::Accepted))
             })
             .map_err(invalid)?
+    }
+    /// Direct writers roll back a denied mutation. The outbox bridge instead
+    /// consumes admit_write's typed rejection to persist its rejection receipt.
+    pub fn with_write<T>(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        participant: &str,
+        collection: &str,
+        id: &str,
+        after: Option<&Value>,
+        permit: Option<&sync_rights::manifest_rules::CommandPermit>,
+        commit: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
+        match self.admit_write(tx, participant, collection, id, after, permit, commit)? {
+            NativeWriteAdmission::Accepted(value) => Ok(value),
+            NativeWriteAdmission::Rejected => {
+                Err(rusqlite::Error::InvalidParameterName("revoked".into()))
+            }
+        }
     }
     /// Core issues/renews peer authority from committed _rights and the same
     /// authenticated app/actor/device binding. No permission/availability fallback.
