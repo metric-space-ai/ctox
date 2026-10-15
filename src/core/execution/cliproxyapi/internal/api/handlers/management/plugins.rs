@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::internal::htmlsanitize;
+use crate::sdk::pluginapi::{ConfigField, Metadata};
+
 const MAX_PLUGIN_ID_LENGTH: usize = 96;
 const MAX_CONFIG_FIELDS: usize = 128;
 
@@ -71,6 +74,53 @@ pub enum ManagementPluginConfigStoreError {
     Conflict,
 }
 
+// ref: internal/api/handlers/management/plugins.go:44-61,465-500
+// @ 5fc580b1d72d87a7bcfe5cfb6f479c1aea5625b3
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ManagementPluginConfigField {
+    #[serde(rename = "default")]
+    pub default_value: Option<Value>,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub enum_values: Vec<String>,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ManagementPluginMetadata {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub github_repository: String,
+    pub logo: String,
+    pub config_fields: Vec<ManagementPluginConfigField>,
+}
+
+fn plugin_config_fields(fields: &[ConfigField]) -> Vec<ManagementPluginConfigField> {
+    fields
+        .iter()
+        .map(|field| ManagementPluginConfigField {
+            default_value: field.default_value.as_ref().map(htmlsanitize::json_value),
+            name: htmlsanitize::string(&field.name),
+            field_type: htmlsanitize::string(&field.field_type.0),
+            enum_values: htmlsanitize::strings(&field.enum_values),
+            description: htmlsanitize::string(&field.description),
+        })
+        .collect()
+}
+
+pub(super) fn plugin_metadata(metadata: &Metadata) -> ManagementPluginMetadata {
+    ManagementPluginMetadata {
+        name: htmlsanitize::string(&metadata.name),
+        version: htmlsanitize::string(&metadata.version),
+        author: htmlsanitize::string(&metadata.author),
+        github_repository: htmlsanitize::string(&metadata.github_repository),
+        logo: htmlsanitize::string(&metadata.logo),
+        config_fields: plugin_config_fields(&metadata.config_fields),
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct ManagementPluginRuntimeRecord {
     pub id: String,
@@ -82,6 +132,10 @@ pub struct ManagementPluginRuntimeRecord {
     pub oauth_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    // Only the sanitized projection reaches management responses; this is
+    // declared registration schema, never configured account values.
+    #[serde(skip_serializing)]
+    pub metadata: Option<Metadata>,
 }
 
 pub trait ManagementPluginRuntimeSource: Send + Sync {
@@ -102,6 +156,9 @@ pub struct ManagementPluginView {
     pub oauth_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
+    pub logo: String,
+    pub config_fields: Vec<ManagementPluginConfigField>,
+    pub metadata: Option<ManagementPluginMetadata>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -182,6 +239,10 @@ impl ManagementPluginService {
                 let runtime = by_id.get(&id);
                 let registered = runtime.is_some_and(|record| record.registered);
                 let enabled = config.is_some_and(|config| config.enabled);
+                let metadata = runtime
+                    .filter(|record| record.registered)
+                    .and_then(|record| record.metadata.as_ref())
+                    .map(plugin_metadata);
                 ManagementPluginView {
                     id,
                     install_ref: runtime.and_then(|record| record.install_ref.clone()),
@@ -193,6 +254,13 @@ impl ManagementPluginService {
                     oauth_provider: runtime.and_then(|record| record.oauth_provider.clone()),
                     capabilities: runtime
                         .map_or_else(Vec::new, |record| record.capabilities.clone()),
+                    logo: metadata
+                        .as_ref()
+                        .map_or_else(String::new, |meta| meta.logo.clone()),
+                    config_fields: metadata
+                        .as_ref()
+                        .map_or_else(Vec::new, |meta| meta.config_fields.clone()),
+                    metadata,
                 }
             })
             .collect())

@@ -16,6 +16,22 @@ Go overlay over the existing dependency checkout; the overlaid source is
 byte-compared against the immutable upstream Git object before compilation.
 This tests the changed wire contract, not a reimplementation of it in Go.
 
-This slice changes SDK metadata only. It adds no model IDs, runtime fetches,
-environment settings or renderer code. It does not promote the accepted
-upstream pin or establish complete v8.0.29 compatibility.
+Management list responses also project registered plugin metadata, including
+`config_fields` at the entry and metadata levels, a logo, and lower-case
+`default` values. The projection recursively HTML-escapes strings once,
+matching `pluginMetadata` / `pluginConfigFields` in upstream's management
+handler. Empty schema is `[]`; missing metadata and defaults are explicit
+JSON null. Only the injected registered plugin's declared schema is used:
+stored account/configuration values are never substituted. Unregistered
+records cannot keep stale schema in the response.
+
+Shared metadata fixtures compare these fields with reference Go structs and
+projection functions extracted from the same immutable upstream source. This
+reference is deliberately limited to metadata projection, not the full Go
+management handler or plugin startup. The existing durable authority and
+management authentication remain unchanged. Production host composition is
+still a separate integration gap.
+
+This slice adds no model IDs, runtime fetches, environment settings or renderer
+code. It does not promote the accepted upstream pin or establish complete
+v8.0.29 compatibility.
