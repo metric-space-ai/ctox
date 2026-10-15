@@ -828,11 +828,17 @@ fn validate_and_bind_mobile_device_proof(
     {
         return Reject;
     }
-    if !super::mobile_invites::authorize_or_bind_device_proof(
+    // §16.43: optional self-declared device type, validated against the
+    // fixed list; an invalid declaration rejects the handshake.
+    let Ok(descriptor) = super::mobile_invites::device_descriptor(proof) else {
+        return Reject;
+    };
+    if !super::mobile_invites::authorize_or_bind_device_proof_with(
         root,
         user_id,
         &thumbprint,
         chrono::Utc::now().timestamp_millis(),
+        descriptor.as_ref(),
     ) {
         return Reject;
     }
@@ -1396,6 +1402,8 @@ pub(super) struct NativePeer {
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
     _iot_agent_supervisors: Vec<Arc<AtomicBool>>,
     _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
+    /// §16.43 device presence from admitted peers (not load-bearing).
+    _device_presence: tokio::task::JoinHandle<()>,
     /// Work backlog, not lifecycle state. Keeping it on the active peer lets
     /// heartbeat diagnostics read it without opening SQLite and without adding
     /// another global lifecycle truth.
@@ -1536,6 +1544,7 @@ impl NativePeer {
             stop.store(true, Ordering::SeqCst);
         }
         self._browser_runtime_maintenance.abort();
+        self._device_presence.abort();
         // FIX 2: stop the dedicated heartbeat OS thread.
         if let Ok(mut heartbeat) = self._status_heartbeat.lock() {
             if let Some(handle) = heartbeat.as_mut() {
@@ -3383,6 +3392,13 @@ async fn run_native_peer(
             eprintln!("[business-os] browser session recovery failed: {err:#}");
         }
     }
+    let device_presence = tokio::spawn(super::devices::presence_loop(
+        root.clone(),
+        pools
+            .iter()
+            .map(|session| std::sync::Arc::downgrade(&session.pool_clone()))
+            .collect(),
+    ));
     let browser_runtime_maintenance = tokio::spawn(browser_runtime_maintenance_loop(
         root.clone(),
         Arc::clone(&database),
@@ -3415,6 +3431,7 @@ async fn run_native_peer(
         _business_record_projection_sync: business_record_projection_sync,
         _iot_agent_supervisors: iot_agent_supervisors,
         _browser_runtime_maintenance: browser_runtime_maintenance,
+        _device_presence: device_presence,
         pending_outbox: AtomicU64::new(0),
         _status_heartbeat: Mutex::new(Some(status_heartbeat)),
     });

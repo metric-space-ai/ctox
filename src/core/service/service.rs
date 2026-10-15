@@ -1592,6 +1592,11 @@ fn start_glibc_heap_trimmer() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn start_glibc_heap_trimmer() {}
 
+// This adapter consumes the native catalog and live Core/Transfer authority.
+// Registration remains in run_foreground when CUTOVER supplies its owner handles.
+#[path = "../app_runtime/native_adapter.rs"]
+pub(crate) mod app_runtime_native;
+
 pub fn run_foreground(root: &Path) -> Result<()> {
     anyhow::ensure!(
         tokio::runtime::Handle::try_current().is_err(),

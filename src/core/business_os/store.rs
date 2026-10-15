@@ -15341,6 +15341,18 @@ pub(crate) fn install_replicated_secret_sanitizer() {
     ));
 }
 
+/// CAP-3b: the detached intake value of exactly this command and field, for
+/// the Core capability host (`cap3::secrets::CoreSecretIntake`). Consumes it.
+pub(crate) fn take_detached_secret_intake(command_id: &str, field: &str) -> Option<String> {
+    let field: &'static str = ["value", "password"].into_iter().find(|f| *f == field)?;
+    SECRET_INTAKE_VALUES
+        .get()?
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&(command_id.to_string(), field))
+        .map(|(value, _)| value)
+}
+
 /// The secret a handler needs: the value detached at intake, or — for callers
 /// that bypass RxDB intake (CLI, tests) — the value still in the payload.
 fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {

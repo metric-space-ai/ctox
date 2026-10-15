@@ -385,7 +385,7 @@ test('windowState je Tab und Nutzer; shell_preferences nur eigene Zeile (§16.19
   await t2.ready;
   assert.equal(await t2.windowState.get('layout'), null, 'anderer Tab sieht nichts');
   const api = t2.appApi('shell', '1');
-  assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher: ['crm', 'mail'] }).result).status, 'accepted');
+  assert.equal((await api.put('shell_preferences', { id: 'mia', pins: ['crm'], launcher_order: ['crm', 'mail'] }).result).status, 'accepted');
   await assert.rejects(api.put('shell_preferences', { id: 'tom', pins: [] }).local, (e) => e.code === 'forbidden');
   await t2.sim.push('shell_preferences', [{ id: 'tom', pins: ['x'] }]);
   assert.deepEqual(api.query('shell_preferences', {}).get().map((d) => d.id), ['mia']);
@@ -527,10 +527,9 @@ test('Shell-Kernel: apps mit Aktivierungszustand, source.* rechtegeprüft, draft
   assert.deepEqual(await s.list(), ['README.md', 'index.js']);
   assert.equal(await s.read('README.md'), '# Leads');
   await s.draft.write('README.md', '# Leads v2');
-  await s.draft.setCollections({ leads: { add: ['score'] } });
   assert.equal(await s.read('README.md'), '# Leads v2', 'Entwurf überlagert');
   const stale = await s.draft.publish({ base_app_ver: '0' }).result;
-  assert.deepEqual(stale, { status: 'rejected', reason: 'stale_base' });
+  assert.deepEqual([stale.status, stale.reason], ['rejected', 'stale_base']);
   const pub = await s.draft.publish({ base_app_ver: '1' }).result;
   assert.equal(pub.status, 'accepted');
   await until(() => sk.apps.get()[0].activated_ver === pub.rev);

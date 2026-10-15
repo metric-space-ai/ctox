@@ -31,6 +31,8 @@ pub enum BusinessOsPermission {
     IntegrationsManage,
     SecretsManage,
     McpManage,
+    /// §16.41: add/cancel machines (one-click join). Admin/Chef only.
+    MachinesManage,
     AppsInstall,
     AppsUninstall,
     AppsAssignOwner,
@@ -62,7 +64,7 @@ pub enum BusinessOsPermission {
     SessionHandoffExecute,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 35] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 36] = [
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
@@ -71,6 +73,7 @@ pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 35] = [
     BusinessOsPermission::IntegrationsManage,
     BusinessOsPermission::SecretsManage,
     BusinessOsPermission::McpManage,
+    BusinessOsPermission::MachinesManage,
     BusinessOsPermission::AppsInstall,
     BusinessOsPermission::AppsUninstall,
     BusinessOsPermission::AppsAssignOwner,
@@ -115,6 +118,7 @@ impl BusinessOsPermission {
             Self::IntegrationsManage => "integrations.manage",
             Self::SecretsManage => "secrets.manage",
             Self::McpManage => "mcp.manage",
+            Self::MachinesManage => "machines.manage",
             Self::AppsInstall => "apps.install",
             Self::AppsUninstall => "apps.uninstall",
             Self::AppsAssignOwner => "apps.assign_owner",
@@ -431,6 +435,7 @@ pub fn evaluate(
         | BusinessOsPermission::IntegrationsManage
         | BusinessOsPermission::SecretsManage
         | BusinessOsPermission::McpManage
+        | BusinessOsPermission::MachinesManage
         | BusinessOsPermission::AppsInstall
         | BusinessOsPermission::AppsUninstall
         | BusinessOsPermission::AppsAssignOwner => {
