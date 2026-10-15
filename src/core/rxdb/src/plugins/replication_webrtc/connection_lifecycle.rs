@@ -131,6 +131,7 @@ struct Slot {
 struct RegistryInner {
     peers: Mutex<HashMap<String, Slot>>,
     next_generation: std::sync::atomic::AtomicU64,
+    closed: std::sync::atomic::AtomicBool,
 }
 impl Drop for RegistryInner {
     fn drop(&mut self) {
@@ -146,6 +147,7 @@ impl Default for PeerLifecycleRegistry {
         Self(Arc::new(RegistryInner {
             peers: Mutex::new(HashMap::new()),
             next_generation: std::sync::atomic::AtomicU64::new(1),
+            closed: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 }
@@ -175,6 +177,9 @@ impl PeerLifecycleRegistry {
             return Err(LifecycleError::InvalidConfiguration);
         }
         let mut peers = self.0.peers.lock();
+        if self.0.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(LifecycleError::Closed);
+        }
         if peers.contains_key(&peer_id) {
             return Err(LifecycleError::PeerAlreadyOwned);
         }
@@ -234,14 +239,15 @@ impl PeerLifecycleRegistry {
         });
         Ok(handle)
     }
+    /// Terminal owner shutdown: no new peer may race the drain snapshot.
     pub async fn drain_all(&self) {
-        let handles: Vec<_> = self
-            .0
-            .peers
-            .lock()
-            .values()
-            .map(|s| s.handle.clone())
-            .collect();
+        let handles: Vec<_> = {
+            let peers = self.0.peers.lock();
+            self.0
+                .closed
+                .store(true, std::sync::atomic::Ordering::Release);
+            peers.values().map(|s| s.handle.clone()).collect()
+        };
         // Signal every peer before awaiting any (also cancels authority I/O).
         for handle in &handles {
             handle.close.send_replace(true);
@@ -367,7 +373,10 @@ async fn run_peer(
                     result = timeout_at(deadline, result) => result.unwrap_or_else(|_|
                         Err(HelloReject::new(RejectReason::HandshakeTimeout, "hello before deadline"))),
                 };
-                match outcome {
+                match outcome.and_then(|ok| {
+                    HelloFrame::HelloOk(ok.clone()).encode()?;
+                    Ok(ok)
+                }) {
                     Ok(ok) => {
                         state(&states, ConnectionState::Negotiated);
                         if reply.send(Ok(HelloFrame::HelloOk(ok))).is_err() {

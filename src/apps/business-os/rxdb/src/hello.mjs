@@ -1,13 +1,15 @@
 // V4 control-lane contract; no transport, UI, credential store or V3 fallback.
 export const PROTOCOL_VERSION = 4;
-export const MAX_HELLO_BYTES = 65536;
+// hello precedes codec/fragment negotiation and must fit one plain frame.
+export const MAX_HELLO_BYTES = 16384;
 export const MAX_FRAME_BYTES = 16384;
 const MAX_U64 = 18446744073709551615n;
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value) => typeof value === 'string' && value.trim().length > 0;
+const byteLength = (value) => new TextEncoder().encode(value).byteLength;
 const names = (value) => Array.isArray(value) && value.length <= 128
-  && value.every((name) => text(name) && name.length <= 256);
+  && value.every((name) => text(name) && byteLength(name) <= 256);
 const b64 = (value, length) => typeof value === 'string'
   && value.length === length && /^[A-Za-z0-9_-]+$/.test(value);
 const integer = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
@@ -63,13 +65,13 @@ function offer(value) {
 }
 function proof(value) {
   return fields(value, ['device_id', 'public_key', 'nonce', 'signature'])
-    && text(value.device_id) && value.device_id.length <= 256
+    && text(value.device_id) && byteLength(value.device_id) <= 256
     && b64(value.public_key, 43) && b64(value.nonce, 43) && b64(value.signature, 86);
 }
 export function decodeHelloFrame(input) {
   const encoded = typeof input === 'string' ? input : null;
   if (encoded === null || new TextEncoder().encode(encoded).byteLength > MAX_HELLO_BYTES) {
-    reject('invalid_hello', 'hello <= 65536 bytes');
+    reject('invalid_hello', 'hello <= 16384 bytes');
   }
   let frame;
   try { frame = JSON.parse(encoded); } catch { reject('invalid_hello', 'valid V4 control frame'); }
@@ -97,7 +99,7 @@ export function decodeHelloFrame(input) {
     catch { reject('invalid_hello', 'canonical decimal u64 sequences'); }
   } else if (frame.type === 'hello_reject') {
     if (!fields(frame, ['type', 'reason', 'required']) || !REASONS.has(frame.reason)
-        || !text(frame.required) || frame.required.length > 256) {
+        || !text(frame.required) || byteLength(frame.required) > 256) {
       reject('invalid_hello', 'valid hello_reject fields');
     }
   } else reject('invalid_hello', 'hello, hello_ok or hello_reject');
@@ -148,12 +150,17 @@ export class HelloConnection {
   #rejection = null;
   #timer = null;
   #timeout;
-  constructor(hello, report, { handshakeTimeoutMs = 10000 } = {}) {
+  #requiredCapabilities;
+  constructor(hello, report, { handshakeTimeoutMs = 10000, requiredCapabilities = [] } = {}) {
     this.#hello = decodeHelloFrame(JSON.stringify(hello));
     if (this.#hello.type !== 'hello') reject('unexpected_message', 'hello first');
     if (typeof report !== 'function') throw new TypeError('state reporter is required');
     if (!Number.isInteger(handshakeTimeoutMs) || handshakeTimeoutMs <= 0 || handshakeTimeoutMs > 60000)
       throw new TypeError('bounded handshake deadline is required');
+    if (!names(requiredCapabilities)
+        || requiredCapabilities.some((name) => !this.#hello.capabilities.includes(name)))
+      throw new TypeError('required capabilities must be offered');
+    this.#requiredCapabilities = [...requiredCapabilities];
     this.#report = report;
     this.#timeout = handshakeTimeoutMs;
     // A real deadline, never a polling/retry timer. It includes connection setup.
@@ -184,7 +191,8 @@ export class HelloConnection {
       if (frame.instance_id !== hello.instance_id) reject('instance_mismatch', 'paired instance');
       const range = bounds(hello.app_api_ver), selected = version(frame.app_api_ver);
       if (selected < range[0] || selected > range[1]) reject('app_api_incompatible', 'offered API range');
-      if (frame.capabilities.some((name) => !hello.capabilities.includes(name)))
+      if (frame.capabilities.some((name) => !hello.capabilities.includes(name))
+          || this.#requiredCapabilities.some((name) => !frame.capabilities.includes(name)))
         reject('capability_missing', 'offered capabilities');
       if (!hello.transport.codecs.includes(frame.transport.codec)
           || frame.transport.frame_bytes > hello.transport.max_frame_bytes

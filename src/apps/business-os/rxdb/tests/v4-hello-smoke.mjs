@@ -113,3 +113,11 @@ test('V4 browser handshake deadline covers connecting, authenticating and negoti
   assert.equal(live.snapshot.state, 'live');
   live.close();
 });
+test('V4 rejects missing required browser capabilities and matches native UTF-8 bounds', () => {
+  const peer = new HelloConnection(fixture.hello, () => {}, { requiredCapabilities: ['terminal'] });
+  peer.connected();
+  const response = clone(fixture.hello_ok); response.capabilities = ['worktree'];
+  rejects(() => peer.receive(JSON.stringify(response)), 'capability_missing');
+  const invalid = clone(fixture.hello); invalid.capabilities.push('界'.repeat(100));
+  rejects(() => decodeHelloFrame(JSON.stringify(invalid)), 'invalid_hello');
+});

@@ -4,7 +4,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 pub const PROTOCOL_VERSION: u16 = 4;
-pub const MAX_HELLO_BYTES: usize = 64 * 1024;
+// Bootstrap control messages precede fragmentation negotiation, so they must
+// fit one uncompressed frame. They cannot assume the selected codec yet.
+pub const MAX_HELLO_BYTES: usize = 16 * 1024;
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024;
 pub const MIN_FRAME_BYTES: u32 = 1024;
 
@@ -128,6 +130,80 @@ pub struct HelloOk {
     pub scope_tokens: Vec<String>,
     pub rights_ver: WireSeq,
 }
+impl Hello {
+    /// Native initiator counterpart of the browser's hello_ok validation. The
+    /// transport must already be bound to the paired Core's trusted identity.
+    pub fn validate_response(
+        &self,
+        response: &HelloOk,
+        required_capabilities: &[String],
+    ) -> Result<(), HelloReject> {
+        let reject = HelloReject::new;
+        if self.protocol_ver != PROTOCOL_VERSION || response.protocol_ver != self.protocol_ver {
+            return Err(reject(
+                RejectReason::ProtocolIncompatible,
+                "offered protocol",
+            ));
+        }
+        if response.bootstrap_ver != self.bootstrap_ver {
+            return Err(reject(
+                RejectReason::BootstrapIncompatible,
+                "offered bootstrap",
+            ));
+        }
+        if response.instance_id != self.instance_id {
+            return Err(reject(RejectReason::InstanceMismatch, "paired instance"));
+        }
+        let (Some((min, max)), Some(selected)) = (
+            self.app_api_ver.bounds(),
+            api_version(&response.app_api_ver),
+        ) else {
+            return Err(reject(
+                RejectReason::AppApiIncompatible,
+                "offered API range",
+            ));
+        };
+        if selected < min || selected > max {
+            return Err(reject(
+                RejectReason::AppApiIncompatible,
+                "offered API range",
+            ));
+        }
+        if response
+            .capabilities
+            .iter()
+            .any(|cap| !self.capabilities.contains(cap))
+            || required_capabilities
+                .iter()
+                .any(|cap| !self.capabilities.contains(cap) || !response.capabilities.contains(cap))
+        {
+            return Err(reject(
+                RejectReason::CapabilityMissing,
+                "offered and required capabilities",
+            ));
+        }
+        let transport = &response.transport;
+        if !self.transport.codecs.contains(&transport.codec)
+            || !(MIN_FRAME_BYTES..=MAX_FRAME_BYTES.min(self.transport.max_frame_bytes))
+                .contains(&transport.frame_bytes)
+            || !self.transport.fragmentation
+            || !self.transport.reassembly
+            || !transport.fragmentation
+            || !transport.reassembly
+        {
+            return Err(reject(
+                RejectReason::TransportIncompatible,
+                "offered transport limits",
+            ));
+        }
+        if response.epoch.trim().is_empty()
+            || response.scope_tokens.iter().any(|s| s.trim().is_empty())
+        {
+            return Err(reject(RejectReason::InvalidHello, "valid hello_ok fields"));
+        }
+        Ok(())
+    }
+}
 impl fmt::Debug for HelloOk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HelloOk")
@@ -187,11 +263,17 @@ pub enum HelloFrame {
     HelloReject(HelloReject),
 }
 impl HelloFrame {
+    pub fn encode(&self) -> Result<Vec<u8>, HelloReject> {
+        let bytes = serde_json::to_vec(self)
+            .map_err(|_| HelloReject::new(RejectReason::InvalidHello, "valid V4 control frame"))?;
+        Self::decode(&bytes)?;
+        Ok(bytes)
+    }
     pub fn decode(bytes: &[u8]) -> Result<Self, HelloReject> {
         if bytes.len() > MAX_HELLO_BYTES {
             return Err(HelloReject::new(
                 RejectReason::InvalidHello,
-                "hello <= 65536 bytes",
+                "hello <= 16384 bytes",
             ));
         }
         let frame: Self = serde_json::from_slice(bytes)

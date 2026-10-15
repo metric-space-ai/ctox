@@ -192,7 +192,15 @@ async fn v4_connection_times_out_at_connect_authenticate_and_negotiated_boundari
 #[tokio::test]
 async fn v4_connection_drain_cancels_stalled_authority_and_registry_drop_closes_peers() {
     let registry = PeerLifecycleRegistry::default();
-    let verify: AuthenticatePeer = Arc::new(|_, _| Box::pin(std::future::pending()));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered_by_verifier = entered.clone();
+    let verify: AuthenticatePeer = Arc::new(move |_, _| {
+        let entered = entered_by_verifier.clone();
+        Box::pin(async move {
+            entered.notify_one();
+            std::future::pending().await
+        })
+    });
     let peer = registry
         .start(
             "peer".into(),
@@ -205,7 +213,10 @@ async fn v4_connection_drain_cancels_stalled_authority_and_registry_drop_closes_
     peer.transport_connected().await.unwrap();
     let request_peer = peer.clone();
     let request = tokio::spawn(async move { request_peer.receive_hello(hello()).await });
-    peer.drain().await;
+    entered.notified().await;
+    tokio::time::timeout(Duration::from_secs(1), peer.drain())
+        .await
+        .unwrap();
     assert!(matches!(
         request.await.unwrap(),
         Err(LifecycleError::Closed)
@@ -220,6 +231,84 @@ async fn v4_connection_drain_cancels_stalled_authority_and_registry_drop_closes_
     .await
     .unwrap()
     .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn v4_connection_stalled_authority_hits_the_original_deadline() {
+    let registry = PeerLifecycleRegistry::default();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let entered_by_verifier = entered.clone();
+    let verify: AuthenticatePeer = Arc::new(move |_, _| {
+        let entered = entered_by_verifier.clone();
+        Box::pin(async move {
+            entered.notify_one();
+            std::future::pending().await
+        })
+    });
+    let peer = registry
+        .start(
+            "peer".into(),
+            "A".repeat(43),
+            policy(),
+            verify,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    peer.transport_connected().await.unwrap();
+    let request_peer = peer.clone();
+    let request = tokio::spawn(async move { request_peer.receive_hello(hello()).await });
+    entered.notified().await;
+    tokio::time::advance(Duration::from_secs(6)).await;
+    assert!(matches!(
+        request.await.unwrap().unwrap(),
+        HelloFrame::HelloReject(HelloReject {
+            reason: RejectReason::HandshakeTimeout,
+            ..
+        })
+    ));
+    peer.drain().await;
+    assert_eq!(registry.peer_count(), 0);
+}
+
+#[tokio::test]
+async fn v4_connection_authority_errors_are_redacted_and_oversized_tokens_reject() {
+    for oversized in [false, true] {
+        let registry = PeerLifecycleRegistry::default();
+        let verify: AuthenticatePeer = Arc::new(move |_, peer| {
+            Box::pin(async move {
+                if !oversized {
+                    return Err(HelloReject::new(
+                        RejectReason::AuthenticationFailed,
+                        "test-provider-private-detail",
+                    ));
+                }
+                Ok(AuthorizedSession {
+                    instance_id: peer.instance_id,
+                    device_id: peer.device_proof.device_id,
+                    epoch: "test-epoch".into(),
+                    head_seq: WireSeq(1),
+                    rights_ver: WireSeq(1),
+                    scope_tokens: vec!["test-token-too-large".repeat(2000)],
+                })
+            })
+        });
+        let peer = registry
+            .start(
+                "peer".into(),
+                "A".repeat(43),
+                policy(),
+                verify,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        peer.transport_connected().await.unwrap();
+        let frame = peer.receive_hello(hello()).await.unwrap();
+        let wire = String::from_utf8(frame.encode().unwrap()).unwrap();
+        assert!(matches!(frame, HelloFrame::HelloReject(_)));
+        assert!(!wire.contains("test-provider-private-detail"));
+        assert!(!wire.contains("test-token-too-large"));
+        peer.drain().await;
+    }
 }
 #[tokio::test]
 async fn v4_connection_malformed_wire_is_a_visible_rejection_and_panic_retires_owner() {
@@ -260,4 +349,22 @@ async fn v4_connection_malformed_wire_is_a_visible_rejection_and_panic_retires_o
         peer.snapshot().rejection.unwrap().reason,
         RejectReason::AuthenticationFailed
     );
+}
+
+#[tokio::test]
+async fn v4_connection_terminal_owner_shutdown_rejects_new_peers() {
+    let registry = PeerLifecycleRegistry::default();
+    let peer = start(&registry, "peer");
+    registry.drain_all().await;
+    assert_eq!(peer.snapshot().state, ConnectionState::Closed);
+    assert!(matches!(
+        registry.start(
+            "late-peer".into(),
+            "A".repeat(43),
+            policy(),
+            authority(Arc::new(AtomicUsize::new(0))),
+            Duration::from_secs(5)
+        ),
+        Err(LifecycleError::Closed)
+    ));
 }
