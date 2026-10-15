@@ -21,6 +21,7 @@ local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda", "ctox-voxtral-4b
 local-speech-openblas = ["ctox-voxtral-4b-tts-2603/openblas"]
 
 [dependencies]
+ctox-store = { path = "src/core/store" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -137,6 +138,7 @@ tempfile = "3"
 
 [workspace]
 members = [
+    "src/core/store",
     "src/core/execution/cliproxyapi",
     "src/tools/postgres-adapter",
 ]
