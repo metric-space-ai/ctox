@@ -3114,6 +3114,16 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         .as_ref()
         .map(|address| address.relative.as_str())
         .unwrap_or(rel);
+    // Installed/local modules and design templates are instance state in the
+    // installed app root, never part of a signed shell slot. A document whose
+    // base is `_shell/<version>/` still requests them relative to that base,
+    // so under a release address they resolve, authorize and cache exactly as
+    // without one (welsch 15.10.2026: invoices/support 404 under beta.102).
+    let release = if business_os_instance_state_asset(rel) {
+        None
+    } else {
+        release
+    };
     let mut selected_app_root = app_root.to_path_buf();
     if let Some(release) = release.as_ref() {
         selected_app_root = release.root.clone();
@@ -3465,11 +3475,14 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
     }
 }
 
-fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
-    if rel.starts_with("installed-modules/")
+fn business_os_instance_state_asset(rel: &str) -> bool {
+    rel.starts_with("installed-modules/")
         || rel.starts_with("local-modules/")
         || rel.starts_with("design-templates/")
-    {
+}
+
+fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
+    if business_os_instance_state_asset(rel) {
         return resolve_business_os_installed_app_root(root).join(rel);
     }
 
@@ -4234,6 +4247,90 @@ mod tests {
             "modules/rem-source/index.js",
             None
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn installed_modules_resolve_from_instance_state_under_a_shell_release_url(
+    ) -> anyhow::Result<()> {
+        use std::io::Read;
+
+        let root = tempfile::tempdir()?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        fs::write(
+            root.path().join("runtime/business-os-instance-id"),
+            "biz_local\n",
+        )?;
+        let installed = root.path().join("runtime/business-os/installed-modules");
+        for (id, schema) in [("invoices", "installed-schema"), ("rem-private", "private")] {
+            fs::create_dir_all(installed.join(id))?;
+            fs::write(
+                installed.join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(installed.join(id).join("schema.js"), schema)?;
+        }
+        let version = "0.1.46-beta.102";
+        let slot = root
+            .path()
+            .join("runtime/business-os-shell/slots")
+            .join(version);
+        fs::create_dir_all(&slot)?;
+        fs::write(slot.join("app.js"), "slot-app")?;
+        super::super::shell_update::admit_release_for_test(root.path(), version, &["app.js"])?;
+
+        let get = |path: &str| -> anyhow::Result<String> {
+            let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+            let addr = server.server_addr().to_ip().expect("TCP address");
+            let (root_path, app_root, path_owned) =
+                (root.path().to_path_buf(), slot.clone(), path.to_owned());
+            let handler = thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                serve_static(&root_path, &app_root, request, &path_owned).expect("static response");
+            });
+            let mut stream = std::net::TcpStream::connect(addr)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            handler.join().expect("static handler terminal");
+            Ok(response)
+        };
+
+        let release_url =
+            format!("/business-os/_shell/{version}/installed-modules/invoices/schema.js");
+        let response = get(&release_url)?;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("installed-schema"), "{response}");
+        assert!(
+            response.contains("no-cache, must-revalidate"),
+            "instance state must revalidate, never be immutable: {response}"
+        );
+        assert!(!response.contains("immutable"), "{response}");
+
+        // Parity: identical bytes without the release address.
+        let plain = get("/business-os/installed-modules/invoices/schema.js")?;
+        assert!(plain.starts_with("HTTP/1.1 200") && plain.ends_with("installed-schema"));
+
+        // No widening: an unauthorized customer module stays hidden under the release URL.
+        let private = get(&format!(
+            "/business-os/_shell/{version}/installed-modules/rem-private/schema.js"
+        ))?;
+        assert!(private.starts_with("HTTP/1.1 404"), "{private}");
+        let private_plain = get("/business-os/installed-modules/rem-private/schema.js")?;
+        assert!(private_plain.starts_with("HTTP/1.1 404"), "{private_plain}");
+
+        // Slot assets keep coming from the verified slot, immutable.
+        let slot_asset = get(&format!("/business-os/_shell/{version}/app.js"))?;
+        assert!(slot_asset.starts_with("HTTP/1.1 200"), "{slot_asset}");
+        assert!(slot_asset.ends_with("slot-app"), "{slot_asset}");
+        assert!(slot_asset.contains("immutable"), "{slot_asset}");
         Ok(())
     }
 
