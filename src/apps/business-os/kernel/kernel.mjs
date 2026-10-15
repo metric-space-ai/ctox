@@ -1148,8 +1148,65 @@ export function createKernel(opts = {}) {
       }),
       openFile(ref) { simRecord.openedFiles.push({ app_id: appId, ref }); },
     });
+    // ---- K-1g: files nach CAP-3b (#844) – Ergebnisse immer Objekte, nie Base64, nur Dateien der eigenen App ----
+    const FILE_TEXT_MAX = 512 * 1024;
+    const fileDocs = () => [...(mirror.get('files')?.values() ?? [])].map((r) => visible(r)).filter(Boolean);
+    function ownFile(sel) {
+      if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', { path: 'ref' });
+      const docs = fileDocs().filter((d) => (sel.id ? d.id === sel.id : d.ref === sel.ref));
+      const mine = docs.find((d) => d.owner_app === appId);
+      if (!mine && docs.length) throw new CtoxError('forbidden', 'Datei gehört einer anderen App', { path: sel.id ? 'id' : 'ref' });
+      return mine ?? null;
+    }
+    const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
+    async function fileBytes(content) {
+      if (isPlainObject(content) && typeof content.text === 'string') return { bytes: new TextEncoder().encode(content.text), text: true };
+      if (content instanceof ArrayBuffer) return { bytes: new Uint8Array(content.slice(0)), text: false };
+      if (ArrayBuffer.isView(content)) return { bytes: new Uint8Array(content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength)), text: false };
+      throw new CtoxError('invalid', 'files.put: Inhalt muss Uint8Array/ArrayBuffer oder {text} sein', { path: 'content' });
+    }
     const files = Object.freeze({
-      async get(ref) {
+      /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit (Upload über Spur 4). Blob = Altform (Handle). */
+      put(content, meta = {}) {
+        if (isBlob(content)) return putBlob(content, meta);
+        return (async () => {
+          guardAlive();
+          const { bytes, text } = await fileBytes(content);
+          const mime = String(meta.mime ?? (text ? 'text/plain; charset=utf-8' : 'application/octet-stream'));
+          const id = typeof meta.id === 'string' && meta.id ? meta.id : uuidv7();
+          const h = putBlob(new Blob([bytes], { type: mime }), { ...meta, id, mime, name: meta.name ?? 'datei' });
+          const ref = await h.ref;
+          await h.local;
+          return { id, ref };
+        })();
+      },
+      /** CAP-3b: get({id|ref}) → {found, id, ref, name, size, mime, text? | bytes?}; Text nur für UTF-8 ≤ 512 KiB. String = Altform (Blob). */
+      async get(sel) {
+        if (typeof sel === 'string') return getBlob(sel);
+        guardAlive();
+        const d = ownFile(sel);
+        if (!d) return { found: false, ref: sel.ref ?? null, ...(sel.id ? { id: sel.id } : {}) };
+        const bytes = new Uint8Array(await (await getBlob(d.ref)).arrayBuffer());
+        let text;
+        if (bytes.byteLength <= FILE_TEXT_MAX) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { text = undefined; } }
+        return { found: true, ...fileInfo(d), size: bytes.byteLength, ...(text !== undefined ? { text } : { bytes }) };
+      },
+      /** CAP-3b: list() → {files:[{id, ref, name, mime, size}]} – nur die eigene App. */
+      async list() {
+        guardAlive();
+        return { files: fileDocs().filter((d) => d.owner_app === appId).map(fileInfo).sort((a, b) => (a.id < b.id ? -1 : 1)) };
+      },
+      /** CAP-3b: delete({id|ref}) → {deleted, id?} – nur die eigene App. */
+      async delete(sel) {
+        guardAlive();
+        const d = ownFile(sel);
+        if (!d) return { deleted: false };
+        const r = await localWrite(app, 'delete', 'files', d.id, null).local.then(() => true, () => false);
+        return { deleted: r, id: d.id };
+      },
+    });
+    async function getBlob(ref) {
+      {
         guardAlive();
         const local = await db.get('blobs', ref);
         if (local) {
@@ -1160,8 +1217,10 @@ export function createKernel(opts = {}) {
         const fetched=await db.get('blobs',ref);
         if(!fetched)throw new CtoxError('unavailable','File unavailable after leader fetch');
         return fetched.blob;
-      },
-      put(blob, meta = {}) {
+      }
+    }
+    function putBlob(blob, meta = {}) {
+      {
         let metaHandle = null, uploadOp = null, cancelledEarly = false, refValue = null, resolveResult;
         const result = new Promise((r) => { resolveResult = r; });
         const progressTag = () => `upload:${refValue}`;
@@ -1222,8 +1281,8 @@ export function createKernel(opts = {}) {
             return cancelled;
           },
         };
-      },
-    });
+      }
+    }
     const actorApi = Object.freeze({
       get id() { return actor.id; },
       get display_name() { return actor.display_name; },
@@ -1294,6 +1353,17 @@ export function createKernel(opts = {}) {
       shell,
       actor: actorApi,
       files,
+      /** #830/CATALOG §6: model.run(request) → Responses-förmige Antwort; nur mit `model` in capabilities_required.
+       *  Fake-Core: deterministische simulierte Antwort; sonst unavailable (der Modellweg gehört der App-Laufzeit, kein Ersatz). */
+      model: Object.freeze({
+        async run(req) {
+          guardAlive();
+          const declared = versionDoc(appId, app.ver)?.manifest?.capabilities_required ?? [];
+          if (!declared.includes('model') && !declared.includes('model.run')) throw new CtoxError('forbidden', 'model nicht in capabilities_required', { path: 'model' });
+          if (!fakeCore) throw new CtoxError('unavailable', 'model.run läuft über die App-Laufzeit (#830); kein Ersatzweg im Kernel');
+          return fakeCore.runtime.modelRun(appId, req);
+        },
+      }),
     });
   }
 

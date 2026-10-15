@@ -165,10 +165,30 @@ export interface FileUploadHandle extends WriteHandle<{ ref: string }> {
   upload: { progress: LiveDoc<{ sent: number; total: number }> };
 }
 /** §10.2a Nr. 4 + §16.10. Metadaten = Dokumente der Collection `files`. */
+export type FileInfo = { id: string; ref: string; name: string | null; mime: string; size: number };
+/** CAP-3b (#844): Ergebnis von files.get – Text nur für UTF-8 ≤ 512 KiB, sonst Bytes; nie Base64. */
+export type FileGetResult = ({ found: true } & FileInfo & ({ text: string } | { bytes: Uint8Array })) | { found: false; ref: string | null; id?: string };
 export interface FilesApi {
-  /** Lokaler Blob-Cache, sonst Spur 4 (Prüfung beim Empfang). Fehler: not_found | unavailable | revoked. */
+  /** CAP-3b: nur Dateien der eigenen App; Datei einer anderen App → forbidden. */
+  get(sel: { ref: string } | { id: string }): Promise<FileGetResult>;
+  /** @deprecated Altform (K-1): Blob aus dem Cache bzw. über Spur 4. */
   get(ref: string): Promise<Blob>;
+  /** CAP-3b: put(bytes | {text}, {name, mime}) → {id, ref} nach lokalem Commit; Upload über Spur 4. */
+  put(content: Uint8Array | ArrayBuffer | { text: string }, meta?: { id?: string; name?: string; mime?: string }): Promise<{ id: string; ref: string }>;
+  /** @deprecated Altform (K-1): Blob mit Upload-Handle. */
   put(blob: Blob, meta?: { id?: string; name?: string; mime?: string }): FileUploadHandle;
+  list(): Promise<{ files: FileInfo[] }>;
+  delete(sel: { ref: string } | { id: string }): Promise<{ deleted: boolean; id?: string }>;
+}
+/** #830 / CATALOG §6: Responses-förmige Antwort von model.run. */
+export type ModelResponse = {
+  id: string; object: 'response'; model: string; status: 'completed' | 'failed';
+  output: Array<{ type: 'message'; role: 'assistant'; content: Array<{ type: 'output_text'; text: string }> }>;
+  output_text: string; usage?: { input_tokens: number; output_tokens: number };
+};
+export interface ModelApi {
+  /** Nur mit `model` in capabilities_required; Fake-Core deterministisch, echter Weg über die App-Laufzeit (#830). */
+  run(req: { model?: string; input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>; prompt?: string; [k: string]: unknown }): Promise<ModelResponse>;
 }
 
 export interface CtoxAppApi {
@@ -199,6 +219,7 @@ export interface CtoxAppApi {
   shell: ShellApi;
   actor: Actor;
   files: FilesApi;
+  model: ModelApi;
 }
 
 /** §10.2a Nr. 1 – jede App exportiert mount(). */
