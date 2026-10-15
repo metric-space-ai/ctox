@@ -3,7 +3,10 @@
 //! path); the app never names a binary path. The child starts with an EMPTY
 //! environment plus exactly the variables passed in `env` (never inherited),
 //! inside the app's own workspace directory, with a hard timeout. Runs under
-//! the registry's held executor fence.
+//! the registry's held executor fence and always inside the E20 OS sandbox
+//! (`sandbox.rs`): no network, only the workspace writable, CTOX state and
+//! secrets invisible, resource limits. Without a working sandbox the call is
+//! `unavailable`; there is no unconfined path.
 use super::*;
 use serde::Deserialize;
 use std::io::{Read, Write};
@@ -37,6 +40,9 @@ struct Run {
     #[serde(default)]
     env: std::collections::BTreeMap<String, String>,
     timeout_ms: Option<u64>,
+    /// Target domains for egress (§16.48); only when the entry permits them.
+    #[serde(default)]
+    net_domains: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,21 +68,52 @@ pub struct ProgramSpec {
     pub script: Option<String>,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// §16.48: interpreter + host script that runs generated code (stdin).
+    #[serde(default)]
+    pub untrusted_code: bool,
+    /// Extra read-only paths the program needs inside the sandbox.
+    #[serde(default)]
+    pub read_paths: Vec<String>,
+    #[serde(default)]
+    pub limits: super::sandbox::Limits,
+    /// Egress domains approved by the platform for this entry.
+    #[serde(default)]
+    pub net_domains: Vec<String>,
+    /// Whether a call may name its own target domains.
+    #[serde(default)]
+    pub net_from_call: bool,
 }
-/// (executable, leading args, base environment) of an entry; absolute paths only.
-fn resolve_entry(
-    entry: &AllowEntry,
-) -> Option<(
-    String,
-    Vec<String>,
-    std::collections::BTreeMap<String, String>,
-)> {
+/// A resolved allowlist entry; absolute paths only.
+struct Resolved {
+    program: String,
+    prefix: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    read_paths: Vec<String>,
+    limits: super::sandbox::Limits,
+    net_domains: Vec<String>,
+    net_from_call: bool,
+}
+fn resolve_entry(entry: &AllowEntry) -> Option<Resolved> {
     let absolute = |path: &String| Path::new(path).is_absolute();
     match entry {
-        AllowEntry::Path(path) => {
-            absolute(path).then(|| (path.clone(), Vec::new(), Default::default()))
-        }
+        AllowEntry::Path(path) => absolute(path).then(|| Resolved {
+            program: path.clone(),
+            prefix: Vec::new(),
+            env: Default::default(),
+            read_paths: vec![path.clone()],
+            limits: Default::default(),
+            net_domains: Vec::new(),
+            net_from_call: false,
+        }),
         AllowEntry::Spec(spec) => {
+            if spec.untrusted_code
+                && !super::sandbox::untrusted_entry_ok(
+                    spec.interpreter.as_deref(),
+                    spec.script.as_deref(),
+                )
+            {
+                return None;
+            }
             let (program, prefix) = match (&spec.program, &spec.interpreter, &spec.script) {
                 (Some(program), None, None) => (program.clone(), Vec::new()),
                 (None, Some(interpreter), Some(script)) if absolute(script) => {
@@ -84,9 +121,36 @@ fn resolve_entry(
                 }
                 _ => return None,
             };
-            absolute(&program).then(|| (program, prefix, spec.env.clone()))
+            let read_paths = [program.clone()]
+                .into_iter()
+                .chain(prefix.iter().cloned())
+                .chain(spec.read_paths.iter().cloned())
+                .collect();
+            absolute(&program).then(|| Resolved {
+                program,
+                prefix,
+                env: spec.env.clone(),
+                read_paths,
+                limits: spec.limits.clone(),
+                net_domains: spec.net_domains.clone(),
+                net_from_call: spec.net_from_call,
+            })
         }
     }
+}
+/// A bare DNS host name (no scheme, port, path or wildcard).
+fn domain(name: &str) -> bool {
+    name.len() <= 253
+        && name.contains('.')
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
 }
 /// Platform allowlist from the runtime config store (JSON object).
 pub fn allowlist(root: &Path) -> std::collections::BTreeMap<String, AllowEntry> {
@@ -128,11 +192,17 @@ pub(super) fn execute(
 ) -> Result<Value, CtoxError> {
     let request: Run = decode(args)?;
     let programs = allowlist(root);
-    let (program, prefix_args, base_env) =
-        programs
-            .get(&request.program)
-            .and_then(resolve_entry)
-            .ok_or_else(|| forbidden("program is not allowlisted"))?;
+    let entry = programs
+        .get(&request.program)
+        .and_then(resolve_entry)
+        .ok_or_else(|| forbidden("program is not allowlisted"))?;
+    let base_env = &entry.env;
+    if request.net_domains.len() > 16 || !request.net_domains.iter().all(|d| domain(d)) {
+        return Err(invalid("$.net_domains"));
+    }
+    if !request.net_domains.is_empty() && !entry.net_from_call {
+        return Err(forbidden("this program may not name network targets"));
+    }
     if request.args.len() > 128
         || request
             .args
@@ -190,13 +260,26 @@ pub(super) fn execute(
         }
         Some(_) => return Err(invalid("$.cwd_ref")),
     };
-    let mut command = std::process::Command::new(&program);
+    let limits = entry.limits.effective(timeout)?;
+    let mut net_domains = entry.net_domains.clone();
+    net_domains.extend(request.net_domains.iter().cloned());
+    let plan = super::sandbox::Plan {
+        root,
+        workspace: &base,
+        cwd: &cwd,
+        program: &entry.program,
+        args: entry.prefix.iter().chain(&request.args).cloned().collect(),
+        read_paths: entry.read_paths.clone(),
+        limits,
+        net_domains,
+    };
+    let mut command = super::sandbox::command(&plan)?;
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     command
-        .args(&prefix_args)
-        .args(&request.args)
         .current_dir(&cwd)
         .env_clear()
-        .envs(&base_env)
+        .envs(base_env)
         .envs(&request.env)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -235,7 +318,7 @@ pub(super) fn execute(
         match child.try_wait().map_err(native_error)? {
             Some(status) => break (Some(status), false),
             None if started.elapsed() >= deadline => {
-                let _ = child.kill();
+                kill_tree(&mut child);
                 let _ = child.wait();
                 break (None, true);
             }
@@ -257,4 +340,17 @@ pub(super) fn execute(
         "stdout": stdout, "stdout_truncated": stdout_truncated,
         "stderr": stderr, "stderr_truncated": stderr_truncated,
     }))
+}
+
+/// Kill the confined process group before it is reaped (the sandbox launcher
+/// leads it; on Linux the pid namespace takes every descendant with it).
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: plain kill(2) on the group this module created for the child.
+        unsafe {
+            libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
 }

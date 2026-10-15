@@ -1672,3 +1672,8 @@ fn app_capabilities_cap3_policy_assignment_contract() {
         true
     );
 }
+
+// ------------------------------------------------------------------ E20 sandbox
+#[cfg(target_os = "linux")]
+#[path = "sandbox_tests.rs"]
+mod sandbox_tests;
