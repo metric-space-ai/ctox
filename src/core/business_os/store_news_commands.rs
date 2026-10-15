@@ -547,27 +547,45 @@ fn issue_window(
     exclude_issue_id: &str,
     now: i64,
 ) -> anyhow::Result<IssueWindow> {
-    let issues: Vec<Value> =
-        find_rxdb_collection_records_by_string_field(root, "news_issues", "topic_id", topic_id, 500)?
-            .into_iter()
-            .map(|(_, record)| record)
-            .filter(|issue| {
-                issue.get("id").and_then(Value::as_str) != Some(exclude_issue_id)
-                    && issue.get("status").and_then(Value::as_str) == Some("ready")
-                    && !is_digest_issue(issue)
-            })
-            .collect();
-    let posts: Vec<Value> =
-        find_rxdb_collection_records_by_string_field(root, "news_posts", "topic_id", topic_id, 2_000)?
-            .into_iter()
-            .map(|(_, record)| record)
-            .collect();
+    let issues: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_issues",
+        "topic_id",
+        topic_id,
+        500,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .filter(|issue| {
+        issue.get("id").and_then(Value::as_str) != Some(exclude_issue_id)
+            && issue.get("status").and_then(Value::as_str) == Some("ready")
+            && !is_digest_issue(issue)
+    })
+    .collect();
+    let posts: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_posts",
+        "topic_id",
+        topic_id,
+        2_000,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .collect();
     Ok(window_from_history(&issues, &posts, cadence, now))
 }
 
 fn window_from_history(issues: &[Value], posts: &[Value], cadence: &str, now: i64) -> IssueWindow {
-    let generated = |issue: &Value| issue.get("generated_at_ms").and_then(Value::as_i64).unwrap_or(0);
-    let previous = issues.iter().filter(|issue| generated(issue) > 0).max_by_key(|issue| generated(issue));
+    let generated = |issue: &Value| {
+        issue
+            .get("generated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    let previous = issues
+        .iter()
+        .filter(|issue| generated(issue) > 0)
+        .max_by_key(|issue| generated(issue));
     let fallback_start = now - fallback_window_ms(cadence);
     // A long pause never reaches further back than a week.
     let start_ms = match previous {
@@ -613,7 +631,10 @@ fn rfc3339(ms: i64) -> String {
 
 /// Why a post leaves the issue, or `None` when it stays.
 fn freshness_rejection(post: &Value, window: &IssueWindow, now: i64) -> Option<&'static str> {
-    let published = post.get("published_at_ms").and_then(Value::as_i64).unwrap_or(0);
+    let published = post
+        .get("published_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     if published <= 0 {
         return Some("missing_published_at");
     }
@@ -810,7 +831,8 @@ fn apply_issue_reply(
     );
     let mut parsed = parse_issue_reply(reply_text)?;
     let now = now_ms() as i64;
-    let digest_mode = first_string_field(&command.payload, &["mode"]).as_deref() == Some("weekly_digest");
+    let digest_mode =
+        first_string_field(&command.payload, &["mode"]).as_deref() == Some("weekly_digest");
     let mut rejected: Vec<Value> = Vec::new();
     if !digest_mode {
         let cadence = command
@@ -1009,7 +1031,10 @@ fn concise_trend_title(title: &str) -> String {
 
 fn is_hacker_news(quote: &Value) -> bool {
     let url = quote.get("url").and_then(Value::as_str).unwrap_or_default();
-    let source = quote.get("source").and_then(Value::as_str).unwrap_or_default();
+    let source = quote
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     url.contains("news.ycombinator.com")
         || url.contains("hn.algolia.com")
         || source.to_ascii_lowercase().contains("hacker news")
@@ -1297,17 +1322,20 @@ fn normalize_post(raw: &Value) -> Option<Value> {
         link_card.unwrap_or_else(|| json!({})),
     );
     // Comments from the Hacker News thread are discussion noise, not substance.
-    let quote = raw.get("quote").filter(|quote| !is_hacker_news(quote)).and_then(|quote| {
-        let text = clip(quote.get("text"), 600);
-        (!text.is_empty()).then(|| {
-            json!({
-                "text": text,
-                "source": clip(quote.get("source"), 120),
-                "meta": clip(quote.get("meta"), 120),
-                "url": http_url(quote.get("url")).unwrap_or_default(),
+    let quote = raw
+        .get("quote")
+        .filter(|quote| !is_hacker_news(quote))
+        .and_then(|quote| {
+            let text = clip(quote.get("text"), 600);
+            (!text.is_empty()).then(|| {
+                json!({
+                    "text": text,
+                    "source": clip(quote.get("source"), 120),
+                    "meta": clip(quote.get("meta"), 120),
+                    "url": http_url(quote.get("url")).unwrap_or_default(),
+                })
             })
-        })
-    });
+        });
     post.insert("quote".to_string(), quote.unwrap_or_else(|| json!({})));
     Some(Value::Object(post))
 }
@@ -1448,7 +1476,9 @@ mod tests {
 
     #[test]
     fn window_drops_stale_covered_and_undated_posts_and_repoints_trends() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T07:00:00Z").unwrap().timestamp_millis();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T07:00:00Z")
+            .unwrap()
+            .timestamp_millis();
         let reply = json!({
             "schema": NEWS_ISSUE_CONTRACT,
             "posts": [
@@ -1472,10 +1502,18 @@ mod tests {
             covered_urls: vec!["deepmind.google/models/model-cards/gemini-4-argon".into()],
         };
         let rejected = enforce_window(&mut parsed, &window, now);
-        let reasons: Vec<&str> = rejected.iter().map(|r| r["reason"].as_str().unwrap()).collect();
+        let reasons: Vec<&str> = rejected
+            .iter()
+            .map(|r| r["reason"].as_str().unwrap())
+            .collect();
         assert_eq!(
             reasons,
-            vec!["published_before_window", "already_covered", "missing_published_at", "duplicate_in_issue"]
+            vec![
+                "published_before_window",
+                "already_covered",
+                "missing_published_at",
+                "duplicate_in_issue"
+            ]
         );
         assert_eq!(parsed.posts.len(), 1);
         assert_eq!(parsed.trends.len(), 1);
@@ -1494,7 +1532,10 @@ mod tests {
             post("https://cohere.com/blog/new", "2026-10-14T16:48:00Z")
                 .as_object()
                 .cloned()
-                .map(|mut p| { p.insert("issue_id".into(), json!("i1")); Value::Object(p) })
+                .map(|mut p| {
+                    p.insert("issue_id".into(), json!("i1"));
+                    Value::Object(p)
+                })
                 .unwrap(),
             json!({"issue_id": "i0", "link_card": {"url": "https://old.example/a"}, "sources": []}),
         ];
@@ -1504,7 +1545,10 @@ mod tests {
         assert_eq!(window.covered_urls, vec!["cohere.com/blog/new".to_string()]);
         let empty = window_from_history(&[], &[], "weekly", now);
         assert_eq!(empty.start_ms, now - 7 * DAY_MS);
-        assert_eq!(window_from_history(&[], &[], "daily", now).start_ms, now - DAY_MS);
+        assert_eq!(
+            window_from_history(&[], &[], "daily", now).start_ms,
+            now - DAY_MS
+        );
     }
 
     #[test]
@@ -1520,6 +1564,9 @@ mod tests {
             "On-Device-Inferenz aus ungewöhnlichen Bausteinen"
         );
         assert!(concise_trend_title(&"Wort ".repeat(30)).chars().count() <= MAX_TREND_TITLE);
-        assert_eq!(normalize_story_url("https://WWW.Cohere.com/blog/new/#x"), "cohere.com/blog/new");
+        assert_eq!(
+            normalize_story_url("https://WWW.Cohere.com/blog/new/#x"),
+            "cohere.com/blog/new"
+        );
     }
 }
