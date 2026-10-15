@@ -130,6 +130,22 @@ async fn owner_composition_fences_aliases_and_keeps_changes_and_documents_in_one
     // A bounded drain timeout retains the daemon lease and the file owner.
     // No second daemon may start while the old snapshot is still executing.
     assert!(stores.shutdown().await.is_err());
+    assert!(
+        matches!(
+            database
+                .writer
+                .submit(WriteJob::new(JobOptions::default(), |_| Ok(()))),
+            Err(StoreError::Closed)
+        ),
+        "a failed drain must not reopen write admission"
+    );
+    assert!(
+        matches!(
+            Registry.open(database.writer.db_id().clone(), Default::default()),
+            Err(StoreError::AlreadyOwned)
+        ),
+        "a failed drain must retain the file owner"
+    );
     assert!(DaemonStores::start(endpoint, Handle::current()).is_err());
     release.send(()).unwrap();
     let _ = pending.await.unwrap();

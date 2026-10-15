@@ -179,6 +179,7 @@ impl CorePersistence {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<()> {
+        self.writer.stop_admission();
         self.readers.shutdown().await?;
         self.writer.shutdown().await?;
         Ok(())
@@ -517,27 +518,10 @@ mod sqlite_build_flags_tests {
 #[cfg(test)]
 mod owner_adapter_tests {
     use super::*;
-    use ctox_store::{registry::Registry, writer::WriterOptions, DbId, JobOptions, StoreError};
+    use ctox_store::{testkit::StoreFixture, DbId, JobOptions, StoreError};
 
     async fn adapter(path: &Path) -> Result<CorePersistence> {
-        let writer = Registry.open(
-            DbId::new(path)?,
-            WriterOptions {
-                configure: Some(std::sync::Arc::new(|conn| {
-                    ctox_store::config::ConnectionConfig::default().apply_writer(conn)?;
-                    Ok(())
-                })),
-                ..Default::default()
-            },
-        )?;
-        writer.ready().await?;
-        let readers = ctox_store::read_pool::ReadPool::for_database(
-            writer.db_id(),
-            writer.generation(),
-            Default::default(),
-            Default::default(),
-        )
-        .await?;
+        let (writer, readers) = StoreFixture::open(DbId::new(path)?).await?.into_parts();
         CorePersistence::attach(writer, readers).await
     }
 

@@ -130,7 +130,6 @@ impl DaemonStores {
             id,
             WriterOptions {
                 configure: Some(Arc::new(move |conn| {
-                    config.apply_writer(conn)?;
                     let tx = rusqlite::Transaction::new_unchecked(
                         conn,
                         rusqlite::TransactionBehavior::Immediate,
@@ -192,6 +191,9 @@ impl DaemonStores {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
+        for database in databases.values() {
+            database.writer.stop_admission();
+        }
         for database in databases.into_values() {
             database
                 .readers
