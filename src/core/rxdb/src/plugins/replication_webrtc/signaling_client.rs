@@ -31,11 +31,13 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{client_async_tls, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
+use super::signaling_ice::{now_ms, SignalingIceSnapshot};
 use crate::plugins::replication_webrtc::signaling_protocol::{
     ClientToServer, PeerId, RoomId, ServerToClient,
 };
 use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::{RxBehaviorSubject, RxStream, RxSubject};
+use webrtc::peer_connection::RTCIceServer;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -100,6 +102,7 @@ pub struct SignalingClient {
     /// bundle always initiates toward `ctox_instance`, so we must never
     /// initiate toward a `browser` peer.
     peer_roles: PlMutex<HashMap<PeerId, String>>,
+    ice_configuration: PlMutex<Option<SignalingIceSnapshot>>,
     /// Our server-issued peer id, once the `init` frame arrives.
     own_peer_id: RxBehaviorSubject<Option<PeerId>>,
     joined_room: PlMutex<Option<RoomId>>,
@@ -188,6 +191,7 @@ impl SignalingClient {
             server_messages: RxSubject::new(),
             peer_list: RxBehaviorSubject::new(Vec::new()),
             peer_roles: PlMutex::new(HashMap::new()),
+            ice_configuration: PlMutex::new(None),
             own_peer_id: RxBehaviorSubject::new(None),
             joined_room: PlMutex::new(None),
             writer: TokioMutex::new(Some(write_half)),
@@ -386,6 +390,65 @@ impl SignalingClient {
         // as `Joined` installs roles before publishing its populated list.
         self.peer_roles.lock().clear();
         self.peer_list.next(Vec::new());
+    }
+
+    /// Latest admitted ICE configuration; no unencrypted credential persistence.
+    pub fn ice_servers(&self, fallback: &[RTCIceServer]) -> Vec<RTCIceServer> {
+        self.ice_configuration
+            .lock()
+            .as_ref()
+            .map(|s| s.usable_servers(now_ms()))
+            .unwrap_or_else(|| fallback.to_vec())
+    }
+
+    pub fn ice_configuration_status(&self) -> serde_json::Value {
+        self.ice_configuration
+            .lock()
+            .as_ref()
+            .map(|s| s.status(now_ms()))
+            .unwrap_or_else(
+                || serde_json::json!({"source":"configured", "receivedAtMs":0, "revision":0}),
+            )
+    }
+
+    fn accept_ice_servers(&self, servers: Vec<RTCIceServer>) {
+        let mut snapshot = self.ice_configuration.lock();
+        let revision = snapshot
+            .as_ref()
+            .map_or(1, |s| s.revision.saturating_add(1));
+        *snapshot = Some(SignalingIceSnapshot::new(servers, now_ms(), revision));
+    }
+
+    /// Rejoining on the existing authenticated socket requests fresh control-plane
+    /// configuration. It does not replace the signaling identity or close peers.
+    async fn refresh_ice_if_expiring(self: &Arc<Self>) {
+        let now = now_ms();
+        let due = {
+            let mut snapshot = self.ice_configuration.lock();
+            snapshot.as_mut().is_some_and(|s| {
+                if s.expires_at_ms == 0
+                    || now.saturating_add(300_000) < s.expires_at_ms
+                    || (s.refresh_attempt_at_ms > 0
+                        && now.saturating_sub(s.refresh_attempt_at_ms) < 60_000)
+                {
+                    return false;
+                }
+                s.refresh_attempt_at_ms = now;
+                true
+            })
+        };
+        if due {
+            let room = self.joined_room.lock().clone();
+            if let Some(room) = room {
+                if self
+                    .send_frame(&ClientToServer::Join { room })
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(target: "ctox_rxdb::signaling_client", "ICE credential refresh request failed");
+                }
+            }
+        }
     }
 
     pub fn server_messages_stream(&self) -> RxStream<ServerToClient> {
@@ -618,6 +681,7 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
                     );
                     break;
                 }
+                client.refresh_ice_if_expiring().await;
                 continue;
             }
         };
@@ -628,6 +692,9 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
             Ok(Message::Text(text)) => match serde_json::from_str::<ServerToClient>(&text) {
                 Ok(frame) => {
                     match &frame {
+                        ServerToClient::CtoxIceServers { ice_servers } => {
+                            client.accept_ice_servers(ice_servers.0.clone());
+                        }
                         ServerToClient::Init { your_peer_id } => {
                             client.own_peer_id.next(Some(your_peer_id.clone()));
                         }
@@ -682,11 +749,9 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) -> bo
                     }
                     client.server_messages.next(frame);
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        target: "ctox_rxdb::signaling_client",
-                        "received unparseable frame: {e} ({text:?})",
-                    );
+                Err(_) => {
+                    // Malformed control-plane frames can contain TURN secrets.
+                    tracing::warn!(target: "ctox_rxdb::signaling_client", "received invalid signaling frame; contents redacted");
                 }
             },
             Ok(Message::Binary(_)) => {
