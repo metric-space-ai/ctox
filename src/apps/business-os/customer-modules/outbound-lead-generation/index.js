@@ -31,6 +31,7 @@ import { captureResearchExport, openResearchSnapshot } from './current-state-exp
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
+import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -4349,6 +4350,8 @@ function selectLeadAndRefreshEligibility(id) {
   state.selectedDetailError = '';
   renderCenter();
   renderDetail();
+  const host = state.ctx?.host;
+  revealDetailIfStacked({ leads: host?.querySelector('.leadgen-leads'), detail: host?.querySelector('.leadgen-detail') });
   void loadSelectedLeadDetails();
 }
 
