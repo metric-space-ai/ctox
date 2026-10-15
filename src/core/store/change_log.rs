@@ -223,12 +223,20 @@ pub fn install_triggers(tx: &Transaction<'_>, binding: &TableBinding) -> Result<
         let gen = integer(binding.gen)?;
         let columns = {
             let mut statement = tx.prepare("SELECT name FROM pragma_table_xinfo(?1)")?;
-            let rows = statement.query_map([&binding.table], |row| row.get::<_, String>(0))?
+            let rows = statement
+                .query_map([&binding.table], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>>>()?;
             rows
         };
-        for required in [&binding.id_column, &binding.rev_column, &binding.data_column,
-                         &binding.deleted_column].into_iter().chain(binding.schema_column.iter()) {
+        for required in [
+            &binding.id_column,
+            &binding.rev_column,
+            &binding.data_column,
+            &binding.deleted_column,
+        ]
+        .into_iter()
+        .chain(binding.schema_column.iter())
+        {
             if !columns.contains(required) {
                 return Err(invalid(format!("change source column missing: {required}")));
             }
@@ -448,7 +456,11 @@ pub fn backfill_page(
         };
         // Keep the continuation predicate sargable: a nullable OR would scan
         // every preceding id again on later pages.
-        let predicate = if after.is_some() { format!("{id}>?1") } else { "?1 IS NULL".into() };
+        let predicate = if after.is_some() {
+            format!("{id}>?1")
+        } else {
+            "?1 IS NULL".into()
+        };
         let mut stmt = tx.prepare(&format!(
             "SELECT {id},{rev},{deleted},{schema} FROM {table}
             WHERE {predicate} ORDER BY {id} LIMIT ?2"
