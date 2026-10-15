@@ -28,6 +28,8 @@ Calendly (`calendly.json`) is the first spec-only build (no compiled code change
 
 `zippopotam.json` is a brand-new service (no compiled adapter) with auth `none`: it is loaded only through the store and hot reload (`spec_adapters` test, live test `live_hotplug_public`).
 
+`stripe.json` is a hot-plug only port of the Activepieces Stripe piece (form bodies with bracketed nested keys, `starting_after`/`has_more` cursor pagination via a `-` pointer segment). Live test `live_stripe` refuses any key that is not `sk_test_`.
+
 Known limits of v1 (use a compiled adapter for these): multipart uploads, request signing
 (HMAC/AWS SigV4), binary downloads, multi-step calls (e.g. upload session then commit),
 per-tool response logic beyond pick/list/object/merge/const.

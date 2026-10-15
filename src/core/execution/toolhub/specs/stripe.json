@@ -1,0 +1,1573 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "stripe",
+  "version": "1.0.0",
+  "docs": [
+    "https://docs.stripe.com/api"
+  ],
+  "notes": "Hot-plug spec modelled on the Activepieces Stripe piece; replaces the compiled src/toolkits/stripe.rs at runtime. Form bodies with bracketed nested keys (metadata[k], line_items[0][price]); cursor pagination via starting_after (last id) + has_more.",
+  "api_base": "https://api.stripe.com/v1",
+  "allowed_hosts": [
+    "api.stripe.com"
+  ],
+  "replaces_builtin": true,
+  "name": "Stripe",
+  "description": {
+    "de": "Kunden, Produkte, Preise, Zahlungslinks, Rechnungen, Zahlungen, Erstattungen und Abos in Stripe.",
+    "en": "Customers, products, prices, payment links, invoices, payments, refunds and subscriptions in Stripe."
+  },
+  "auth_schemes": [
+    {
+      "type": "bearer"
+    }
+  ],
+  "error_check": [],
+  "actions": [
+    {
+      "slug": "STRIPE_CREATE_CUSTOMER",
+      "title": {
+        "de": "Kunden anlegen",
+        "en": "Create customer"
+      },
+      "description": {
+        "de": "Legt einen Kunden an.",
+        "en": "Creates a customer."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "E-Mail-Adresse."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Interne Beschreibung."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Telefonnummer."
+          },
+          "address": {
+            "type": "object",
+            "description": "Adresse: line1, line2, city, postal_code, state, country (ISO-Code).",
+            "additionalProperties": false,
+            "properties": {
+              "line1": {
+                "type": "string"
+              },
+              "line2": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              },
+              "postal_code": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "POST",
+        "path": "/customers",
+        "body": {
+          "form": {
+            "email": {
+              "arg": "email",
+              "trim": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "phone": {
+              "arg": "phone",
+              "trim": true
+            },
+            "address": {
+              "arg": "address",
+              "type": "object"
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_GET_CUSTOMER",
+      "title": {
+        "de": "Kunden lesen",
+        "en": "Get customer"
+      },
+      "description": {
+        "de": "Liest einen Kunden.",
+        "en": "Reads one customer."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Kunden-ID (cus_…)."
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/customers/{customer}"
+      }
+    },
+    {
+      "slug": "STRIPE_UPDATE_CUSTOMER",
+      "title": {
+        "de": "Kunden ändern",
+        "en": "Update customer"
+      },
+      "description": {
+        "de": "Ändert Felder eines Kunden; nur angegebene Felder werden geändert.",
+        "en": "Updates a customer; only the given fields change."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Kunden-ID (cus_…)."
+          },
+          "email": {
+            "type": "string",
+            "description": "E-Mail-Adresse."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Interne Beschreibung."
+          },
+          "phone": {
+            "type": "string",
+            "description": "Telefonnummer."
+          },
+          "address": {
+            "type": "object",
+            "description": "Adresse: line1, line2, city, postal_code, state, country (ISO-Code).",
+            "additionalProperties": false,
+            "properties": {
+              "line1": {
+                "type": "string"
+              },
+              "line2": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              },
+              "postal_code": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/customers/{customer}",
+        "body": {
+          "form": {
+            "email": {
+              "arg": "email",
+              "trim": true
+            },
+            "name": {
+              "arg": "name",
+              "trim": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "phone": {
+              "arg": "phone",
+              "trim": true
+            },
+            "address": {
+              "arg": "address",
+              "type": "object"
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        },
+        "nonempty_body": "Bitte mindestens ein Feld zum Ändern angeben."
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_CUSTOMERS",
+      "title": {
+        "de": "Kunden auflisten",
+        "en": "List customers"
+      },
+      "description": {
+        "de": "Listet Kunden, neueste zuerst, optional nach E-Mail gefiltert.",
+        "en": "Lists customers, newest first, optionally filtered by email."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Nur Kunden mit genau dieser E-Mail."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/customers",
+        "query": {
+          "email": {
+            "arg": "email",
+            "trim": true
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_SEARCH_CUSTOMERS",
+      "title": {
+        "de": "Kunden suchen",
+        "en": "Search customers"
+      },
+      "description": {
+        "de": "Sucht Kunden mit der Stripe-Suchsprache, z. B. email:'a@b.de' oder name~'Muster'.",
+        "en": "Searches customers with Stripe's search language, e.g. email:'a@b.de' or name~'Smith'."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Suchausdruck, z. B. email:'kunde@example.com' oder metadata['order']:'42'."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "page": {
+            "type": "string",
+            "description": "`next_page` des vorherigen Aufrufs."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/customers/search",
+        "query": {
+          "query": {
+            "arg": "query",
+            "trim": true,
+            "required": true
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "page": {
+            "arg": "page",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_page": {
+            "pointer": "/next_page"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_DELETE_CUSTOMER",
+      "title": {
+        "de": "Kunden löschen",
+        "en": "Delete customer"
+      },
+      "description": {
+        "de": "Löscht einen Kunden endgültig; laufende Abos werden beendet.",
+        "en": "Permanently deletes a customer; active subscriptions are canceled."
+      },
+      "risk": "destructive",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Kunden-ID (cus_…)."
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/customers/{customer}"
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_PRODUCT",
+      "title": {
+        "de": "Produkt anlegen",
+        "en": "Create product"
+      },
+      "description": {
+        "de": "Legt ein Produkt an.",
+        "en": "Creates a product."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Produktname."
+          },
+          "description": {
+            "type": "string",
+            "description": "Beschreibung."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Verkaufbar (Standard true)."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/products",
+        "body": {
+          "form": {
+            "name": {
+              "arg": "name",
+              "trim": true,
+              "required": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "active": {
+              "arg": "active"
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_UPDATE_PRODUCT",
+      "title": {
+        "de": "Produkt ändern oder archivieren",
+        "en": "Update or archive product"
+      },
+      "description": {
+        "de": "Ändert ein Produkt; active=false archiviert es.",
+        "en": "Updates a product; active=false archives it."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Produkt-ID (prod_…)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Neuer Name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Beschreibung."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "false = archivieren."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "product"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/products/{product}",
+        "nonempty_body": "Bitte mindestens ein Feld zum Ändern angeben.",
+        "body": {
+          "form": {
+            "name": {
+              "arg": "name",
+              "trim": true
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "active": {
+              "arg": "active"
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_PRODUCTS",
+      "title": {
+        "de": "Produkte auflisten",
+        "en": "List products"
+      },
+      "description": {
+        "de": "Listet Produkte.",
+        "en": "Lists products."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Nur aktive (true) oder archivierte (false)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/products",
+        "query": {
+          "active": {
+            "arg": "active"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_PRICE",
+      "title": {
+        "de": "Preis anlegen",
+        "en": "Create price"
+      },
+      "description": {
+        "de": "Legt einen Preis für ein Produkt an (einmalig oder wiederkehrend).",
+        "en": "Creates a price for a product (one-time or recurring)."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Produkt-ID (prod_…)."
+          },
+          "unit_amount": {
+            "type": "integer",
+            "description": "Betrag in der kleinsten Einheit, z. B. 1999 = 19,99 €.",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "description": "Währung, z. B. eur oder usd."
+          },
+          "recurring": {
+            "type": "object",
+            "description": "Für Abos: {\"interval\": \"month\"} (day, week, month, year), optional interval_count.",
+            "properties": {
+              "interval": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "week",
+                  "month",
+                  "year"
+                ]
+              },
+              "interval_count": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "nickname": {
+            "type": "string",
+            "description": "Interner Name."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "product",
+          "unit_amount",
+          "currency"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/prices",
+        "body": {
+          "form": {
+            "product": {
+              "arg": "product",
+              "trim": true,
+              "required": true
+            },
+            "unit_amount": {
+              "arg": "unit_amount",
+              "required": true
+            },
+            "currency": {
+              "arg": "currency",
+              "trim": true,
+              "required": true
+            },
+            "recurring": {
+              "arg": "recurring",
+              "type": "object"
+            },
+            "nickname": {
+              "arg": "nickname",
+              "trim": true
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_UPDATE_PRICE",
+      "title": {
+        "de": "Preis ändern oder deaktivieren",
+        "en": "Update or deactivate price"
+      },
+      "description": {
+        "de": "Ändert Name/Metadaten eines Preises; active=false deaktiviert ihn (Beträge sind unveränderlich).",
+        "en": "Updates a price's nickname/metadata; active=false deactivates it (amounts are immutable)."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "price": {
+            "type": "string",
+            "description": "Preis-ID (price_…)."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "false = deaktivieren."
+          },
+          "nickname": {
+            "type": "string",
+            "description": "Interner Name."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "price"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/prices/{price}",
+        "nonempty_body": "Bitte mindestens ein Feld zum Ändern angeben.",
+        "body": {
+          "form": {
+            "active": {
+              "arg": "active"
+            },
+            "nickname": {
+              "arg": "nickname",
+              "trim": true
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_PRICES",
+      "title": {
+        "de": "Preise auflisten",
+        "en": "List prices"
+      },
+      "description": {
+        "de": "Listet Preise, optional für ein Produkt.",
+        "en": "Lists prices, optionally of one product."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "product": {
+            "type": "string",
+            "description": "Nur Preise dieses Produkts."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Nur aktive (true) oder inaktive (false)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/prices",
+        "query": {
+          "product": {
+            "arg": "product",
+            "trim": true
+          },
+          "active": {
+            "arg": "active"
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_PAYMENT_LINK",
+      "title": {
+        "de": "Zahlungslink erstellen",
+        "en": "Create payment link"
+      },
+      "description": {
+        "de": "Erstellt einen teilbaren Zahlungslink für einen oder mehrere Preise.",
+        "en": "Creates a shareable payment link for one or more prices."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "line_items": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Positionen, z. B. [{\"price\":\"price_…\",\"quantity\":1}].",
+            "items": {
+              "type": "object",
+              "properties": {
+                "price": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "price",
+                "quantity"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "line_items"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/payment_links",
+        "body": {
+          "form": {
+            "line_items": {
+              "arg": "line_items",
+              "type": "raw",
+              "required": true
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_DEACTIVATE_PAYMENT_LINK",
+      "title": {
+        "de": "Zahlungslink deaktivieren",
+        "en": "Deactivate payment link"
+      },
+      "description": {
+        "de": "Schaltet einen Zahlungslink ab; er nimmt keine Zahlungen mehr an.",
+        "en": "Turns off a payment link; it accepts no more payments."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "payment_link": {
+            "type": "string",
+            "description": "Zahlungslink-ID (plink_…)."
+          }
+        },
+        "required": [
+          "payment_link"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/payment_links/{payment_link}",
+        "body": {
+          "form": {
+            "active": {
+              "const": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_INVOICE",
+      "title": {
+        "de": "Rechnungsentwurf anlegen",
+        "en": "Create draft invoice"
+      },
+      "description": {
+        "de": "Legt einen Rechnungsentwurf für einen Kunden an; er wird nicht automatisch versendet.",
+        "en": "Creates a draft invoice for a customer; it is not sent automatically."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Kunden-ID (cus_…)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Beschreibung auf der Rechnung."
+          },
+          "collection_method": {
+            "type": "string",
+            "enum": [
+              "charge_automatically",
+              "send_invoice"
+            ],
+            "description": "charge_automatically oder send_invoice."
+          },
+          "days_until_due": {
+            "type": "integer",
+            "description": "Zahlungsziel in Tagen (nur bei send_invoice).",
+            "minimum": 0
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/invoices",
+        "body": {
+          "form": {
+            "customer": {
+              "arg": "customer",
+              "trim": true,
+              "required": true
+            },
+            "auto_advance": {
+              "const": false
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "collection_method": {
+              "arg": "collection_method",
+              "one_of": [
+                "charge_automatically",
+                "send_invoice"
+              ]
+            },
+            "days_until_due": {
+              "arg": "days_until_due"
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_DELETE_DRAFT_INVOICE",
+      "title": {
+        "de": "Rechnungsentwurf löschen",
+        "en": "Delete draft invoice"
+      },
+      "description": {
+        "de": "Löscht einen Rechnungsentwurf (nur Entwürfe).",
+        "en": "Deletes a draft invoice (drafts only)."
+      },
+      "risk": "destructive",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "invoice": {
+            "type": "string",
+            "description": "Rechnungs-ID (in_…)."
+          }
+        },
+        "required": [
+          "invoice"
+        ]
+      },
+      "request": {
+        "method": "DELETE",
+        "path": "/invoices/{invoice}"
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_INVOICES",
+      "title": {
+        "de": "Rechnungen auflisten",
+        "en": "List invoices"
+      },
+      "description": {
+        "de": "Listet Rechnungen, optional nach Kunde oder Status.",
+        "en": "Lists invoices, optionally by customer or status."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Nur Rechnungen dieses Kunden."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "open",
+              "paid",
+              "uncollectible",
+              "void"
+            ],
+            "description": "draft, open, paid, uncollectible oder void."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/invoices",
+        "query": {
+          "customer": {
+            "arg": "customer",
+            "trim": true
+          },
+          "status": {
+            "arg": "status",
+            "one_of": [
+              "draft",
+              "open",
+              "paid",
+              "uncollectible",
+              "void"
+            ]
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_PAYMENT_INTENT",
+      "title": {
+        "de": "Zahlung anlegen",
+        "en": "Create payment intent"
+      },
+      "description": {
+        "de": "Legt eine Zahlung an; mit confirm=true und payment_method wird sie sofort ausgeführt (Karte). Zahlungsarten kommen aus den Dashboard-Einstellungen; Weiterleitungs-Zahlarten sind ausgeschlossen, weil kein Browser im Spiel ist.",
+        "en": "Creates a payment; with confirm=true and a payment_method it is charged right away (card). Payment methods come from the dashboard settings; redirect-based methods are excluded since no browser is involved."
+      },
+      "risk": "write",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "description": "Betrag in der kleinsten Einheit, z. B. 500 = 5,00 €.",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "description": "Währung, z. B. eur."
+          },
+          "customer": {
+            "type": "string",
+            "description": "Optional: Kunden-ID."
+          },
+          "payment_method": {
+            "type": "string",
+            "description": "Zahlungsmittel-ID; im Testmodus z. B. pm_card_visa."
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "Sofort ausführen."
+          },
+          "description": {
+            "type": "string",
+            "description": "Beschreibung."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "path": "/payment_intents",
+        "body": {
+          "form": {
+            "amount": {
+              "arg": "amount",
+              "required": true
+            },
+            "currency": {
+              "arg": "currency",
+              "trim": true,
+              "required": true
+            },
+            "customer": {
+              "arg": "customer",
+              "trim": true
+            },
+            "payment_method": {
+              "arg": "payment_method",
+              "trim": true
+            },
+            "confirm": {
+              "arg": "confirm"
+            },
+            "description": {
+              "arg": "description",
+              "trim": true
+            },
+            "automatic_payment_methods": {
+              "const": {
+                "enabled": true,
+                "allow_redirects": "never"
+              }
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_PAYMENT_INTENTS",
+      "title": {
+        "de": "Zahlungen auflisten",
+        "en": "List payment intents"
+      },
+      "description": {
+        "de": "Listet Zahlungen, optional eines Kunden.",
+        "en": "Lists payments, optionally of one customer."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Nur Zahlungen dieses Kunden."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/payment_intents",
+        "query": {
+          "customer": {
+            "arg": "customer",
+            "trim": true
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_CREATE_REFUND",
+      "title": {
+        "de": "Erstattung anlegen",
+        "en": "Create refund"
+      },
+      "description": {
+        "de": "Erstattet eine Zahlung ganz oder teilweise. Geld fließt zurück und ist nicht rückholbar.",
+        "en": "Refunds a payment fully or partly. Money goes back and cannot be reclaimed."
+      },
+      "risk": "destructive",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "payment_intent": {
+            "type": "string",
+            "description": "Zahlungs-ID (pi_…)."
+          },
+          "charge": {
+            "type": "string",
+            "description": "Alternativ: Charge-ID (ch_…)."
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Teilbetrag in der kleinsten Einheit; leer = voller Betrag.",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "duplicate",
+              "fraudulent",
+              "requested_by_customer"
+            ],
+            "description": "duplicate, fraudulent oder requested_by_customer."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Eigene Schlüssel/Werte (metadata[key]=value), z. B. {\"order\":\"42\"}."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "POST",
+        "path": "/refunds",
+        "constraints": [
+          {
+            "kind": "at_least_one",
+            "args": [
+              "payment_intent",
+              "charge"
+            ],
+            "message": "Bitte payment_intent oder charge angeben."
+          },
+          {
+            "kind": "at_most_one",
+            "args": [
+              "payment_intent",
+              "charge"
+            ],
+            "message": "Bitte nur payment_intent oder charge angeben."
+          }
+        ],
+        "body": {
+          "form": {
+            "payment_intent": {
+              "arg": "payment_intent",
+              "trim": true
+            },
+            "charge": {
+              "arg": "charge",
+              "trim": true
+            },
+            "amount": {
+              "arg": "amount"
+            },
+            "reason": {
+              "arg": "reason",
+              "one_of": [
+                "duplicate",
+                "fraudulent",
+                "requested_by_customer"
+              ]
+            },
+            "metadata": {
+              "arg": "metadata",
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "STRIPE_LIST_SUBSCRIPTIONS",
+      "title": {
+        "de": "Abos auflisten",
+        "en": "List subscriptions"
+      },
+      "description": {
+        "de": "Listet Abonnements, optional nach Kunde, Preis oder Status.",
+        "en": "Lists subscriptions, optionally by customer, price or status."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {
+            "type": "string",
+            "description": "Nur Abos dieses Kunden."
+          },
+          "price": {
+            "type": "string",
+            "description": "Nur Abos mit diesem Preis."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "past_due",
+              "unpaid",
+              "canceled",
+              "incomplete",
+              "incomplete_expired",
+              "trialing",
+              "paused",
+              "all",
+              "ended"
+            ],
+            "description": "Status, Standard: alle außer canceled."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Einträge pro Seite, 1 bis 100 (Standard 10).",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "starting_after": {
+            "type": "string",
+            "description": "`next_starting_after` des vorherigen Aufrufs (nur wenn has_more true war)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/subscriptions",
+        "query": {
+          "customer": {
+            "arg": "customer",
+            "trim": true
+          },
+          "price": {
+            "arg": "price",
+            "trim": true
+          },
+          "status": {
+            "arg": "status",
+            "trim": true
+          },
+          "limit": {
+            "arg": "limit",
+            "default": 10,
+            "clamp": [
+              1,
+              100
+            ]
+          },
+          "starting_after": {
+            "arg": "starting_after",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "object",
+        "fields": {
+          "data": {
+            "pointer": "/data",
+            "default": []
+          },
+          "has_more": {
+            "pointer": "/has_more",
+            "default": false
+          },
+          "next_starting_after": {
+            "pointer": "/data/-/id"
+          }
+        }
+      }
+    }
+  ]
+}

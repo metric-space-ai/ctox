@@ -200,6 +200,49 @@ fn query_string(v: &Value) -> String {
     }
 }
 
+/// Bracketed form encoding (Stripe, Rails, PHP): objects become `k[sub]=v`,
+/// arrays `k[0]=v` / `k[0][sub]=v`; nulls are dropped. Depth is capped.
+fn flatten_form(key: &str, v: &Value, out: &mut Vec<(String, String)>, depth: usize) -> Result<()> {
+    if depth > 5 {
+        bail!("form value `{key}` is nested too deeply");
+    }
+    match v {
+        Value::Null => {}
+        Value::Object(m) => {
+            for (k, x) in m {
+                if k.is_empty() || k.contains(['[', ']']) || k.chars().any(char::is_control) {
+                    bail!("invalid key `{k}` in `{key}`");
+                }
+                flatten_form(&format!("{key}[{k}]"), x, out, depth + 1)?;
+            }
+        }
+        Value::Array(a) => {
+            for (i, x) in a.iter().enumerate() {
+                flatten_form(&format!("{key}[{i}]"), x, out, depth + 1)?;
+            }
+        }
+        other => out.push((key.to_string(), query_string(other))),
+    }
+    Ok(())
+}
+
+/// JSON pointer where a `-` segment selects the LAST array element (RFC 6901
+/// reserves `-` for "past the end", which never resolves on reads). Used for
+/// cursor pagination that continues after the last item (Stripe `starting_after`).
+fn pointer_last<'a>(v: &'a Value, p: &str) -> Option<&'a Value> {
+    if !p.split('/').any(|s| s == "-") {
+        return v.pointer(p);
+    }
+    let mut cur = v;
+    for seg in p.split('/').skip(1) {
+        cur = match (cur, seg) {
+            (Value::Array(a), "-") => a.last()?,
+            (c, s) => c.pointer(&format!("/{s}"))?,
+        };
+    }
+    Some(cur)
+}
+
 fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
     match enc {
         PathEnc::Segment => Ok(crate::toolkits::path_segment(args, name)?.to_string()),
@@ -285,7 +328,7 @@ impl ToolkitAdapter for SpecAdapter {
                 let mut out = Vec::new();
                 for (k, v) in pairs {
                     if let Some(v) = eval(v, args)? {
-                        out.push((k.clone(), query_string(&v)));
+                        flatten_form(k, &v, &mut out, 0)?;
                     }
                 }
                 let refs: Vec<(&str, &str)> = out.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -341,7 +384,7 @@ impl ToolkitAdapter for SpecAdapter {
             Response::Object(fields) => {
                 let mut m = Map::new();
                 for (k, p, d) in fields {
-                    let v = body.pointer(p).filter(|v| !v.is_null() && v.as_str() != Some("")).cloned();
+                    let v = pointer_last(&body, p).filter(|v| !v.is_null() && v.as_str() != Some("")).cloned();
                     let v = match (v, d) {
                         (Some(v), Some(d)) if std::mem::discriminant(&v) != std::mem::discriminant(d) => d.clone(),
                         (Some(v), _) => v,

@@ -89,6 +89,9 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   `reload_specs_if_changed` on a running hub (offline test + live test
   `live_hotplug_public` against `specs/zippopotam.json`). Auth scheme `none` exists
   for public APIs.
+- **Stripe (2026-10-15):** hot-plug only (`specs/stripe.json`, 21 actions). All
+  live-passed on a `sk_test_` key; leftovers cleaned up. Needed two format
+  extensions: nested form flattening and a `-` pointer segment for cursor pages.
 - **Not wired yet:** the toolhub is not part of the `ctox` binary on main, so there
   is no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,
@@ -143,3 +146,28 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   the default `segment` rejects them. Path traversal (`../x`) is refused either way.
 - **Live tests without a token** need an explicit opt-in (`CTOX_TOOLHUB_LIVE_PUBLIC=1`),
   so offline CI never reaches the network.
+- **Form bodies with nested keys (Stripe):** objects and arrays are flattened to
+  bracketed keys (`metadata[order]=42`, `line_items[0][price]=price_x`,
+  `address[city]=Berlin`); nulls are dropped; depth is capped at 5; keys with
+  `[`/`]` or control characters are refused. Spec authors just put an object/array
+  arg into `body.form` (type `object` or `raw`); the executor does the rest. No
+  new JSON Schema field was needed.
+- **Cursor pagination (Stripe `starting_after` / `has_more`):** response mode
+  `object` with a pointer that ends in `/-/` selects the LAST array element
+  (RFC 6901's `-` is write-only and never resolves on reads, so we reuse it).
+  Map e.g. `"next_starting_after": {"pointer": "/data/-/id"}` together with
+  `has_more` and `data`. Empty pages leave the field null.
+- **Stripe live-test guard:** refuse to run unless the key starts with
+  `sk_test_`, and re-check before every single call. Never point a live harness
+  at a live (sk_live_) key. Clean up: refund the payment, delete draft invoices
+  and the customer, deactivate payment links and archive prices/products
+  (products with prices cannot be deleted).
+- **Stripe payment methods:** `payment_method_types` was removed by Stripe; send
+  `automatic_payment_methods[enabled]=true&automatic_payment_methods[allow_redirects]=never`
+  instead, so a confirmed PaymentIntent with `pm_card_visa` works without a browser.
+- **Search endpoints can lag:** Stripe Search is eventually consistent; assert only
+  that the call succeeds, not that the just-created object is already findable.
+- **Build time (Stripe):** about 35 minutes from token to a green live run,
+  including the two format extensions and the leftover cleanup of a failed first
+  attempt. The nested-form generator (one recursive flatten) was the bulk of the
+  new code; the spec itself was generated with Python helpers again.

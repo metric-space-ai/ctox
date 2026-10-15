@@ -462,3 +462,63 @@ fn auth_none_must_be_the_only_scheme_and_builtins_still_need_credentials() {
     let out = hub.execute("p", "TODOIST_GET_CURRENT_USER", &json!({}), None).unwrap();
     assert!(!matches!(out, ToolOutcome::Success { .. }));
 }
+
+// ------------------------------------------------------------------ Stripe form encoding + cursor pagination
+
+const STRIPE: &str = include_str!("../specs/stripe.json");
+
+#[test]
+fn form_bodies_flatten_nested_objects_and_arrays_with_brackets() {
+    let a = SpecAdapter::from_json(STRIPE).expect("stripe spec");
+    let r = a.build_request("STRIPE_CREATE_CUSTOMER", &json!({
+        "email": "a@b.de", "name": "Ada",
+        "address": {"city": "Berlin", "country": "DE", "postal_code": "10115"},
+        "metadata": {"order": "42", "unused": null},
+    })).unwrap();
+    assert_eq!(r.headers["content-type"], "application/x-www-form-urlencoded");
+    let body = String::from_utf8(r.body.unwrap()).unwrap();
+    for p in ["email=a%40b.de", "name=Ada", "address%5Bcity%5D=Berlin", "address%5Bcountry%5D=DE",
+              "address%5Bpostal_code%5D=10115", "metadata%5Border%5D=42"] {
+        assert!(body.contains(p), "missing `{p}` in `{body}`");
+    }
+    assert!(!body.contains("metadata%5Bunused%5D") && !body.contains("null"), "nulls are dropped: {body}");
+    let r = a.build_request("STRIPE_CREATE_PAYMENT_LINK", &json!({
+        "line_items": [{"price": "price_x", "quantity": 2}, {"price": "price_y", "quantity": 1}]
+    })).unwrap();
+    let body = String::from_utf8(r.body.unwrap()).unwrap();
+    for p in ["line_items%5B0%5D%5Bprice%5D=price_x", "line_items%5B0%5D%5Bquantity%5D=2",
+              "line_items%5B1%5D%5Bprice%5D=price_y"] {
+        assert!(body.contains(p), "missing `{p}` in `{body}`");
+    }
+    // Nested too deep / bad key.
+    let bad = SpecAdapter::from_json(&{
+        let mut v = minimal();
+        v["actions"][0]["request"] = json!({"method":"POST","path":"/x","body":{"form":{"m":{"arg":"id","type":"raw"}}}});
+        v["actions"][0]["slug"] = json!("ACME_SEND");
+        v["actions"][0]["risk"] = json!("write");
+        v.to_string()
+    }).unwrap();
+    assert!(bad.build_request("ACME_SEND", &json!({"id": {"a":{"b":{"c":{"d":{"e":{"f":1}}}}}}})).is_err());
+    assert!(bad.build_request("ACME_SEND", &json!({"id": {"bad[key]": "x"}})).is_err());
+}
+
+#[test]
+fn response_pointer_dash_selects_last_array_element_for_cursor_pagination() {
+    let a = SpecAdapter::from_json(STRIPE).unwrap();
+    let resp = HttpResponse {
+        status: 200,
+        body: br#"{"object":"list","has_more":true,"data":[{"id":"cus_a"},{"id":"cus_b"},{"id":"cus_c"}]}"#.to_vec(),
+        session_id: None,
+    };
+    let out = a.parse_response("STRIPE_LIST_CUSTOMERS", &resp).unwrap();
+    assert_eq!(out, json!({"data": [{"id":"cus_a"},{"id":"cus_b"},{"id":"cus_c"}], "has_more": true, "next_starting_after": "cus_c"}));
+    let empty = HttpResponse { status: 200, body: br#"{"object":"list","has_more":false,"data":[]}"#.to_vec(), session_id: None };
+    let out = a.parse_response("STRIPE_LIST_CUSTOMERS", &empty).unwrap();
+    assert_eq!(out["has_more"], json!(false));
+    assert!(out["next_starting_after"].is_null());
+    // Refund requires exactly one of payment_intent / charge.
+    assert!(a.build_request("STRIPE_CREATE_REFUND", &json!({})).is_err());
+    assert!(a.build_request("STRIPE_CREATE_REFUND", &json!({"payment_intent":"pi_1","charge":"ch_1"})).is_err());
+    let r = a.build_request("STRIPE_CREATE_REFUND", &json!({"payment_intent":"pi_1","reason":"requested_by_customer"})).unwrap();
+    assert!(String::from_utf8(r.body.unwrap()).unwrap().contains("payment_intent=pi_1"));
+}
