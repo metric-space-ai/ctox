@@ -40,6 +40,15 @@ The default transport is offline; it NEVER manufactures acceptance. `createStubK
   A write may return its result or deliver `write_result`; duplicate results are harmless. The adapter receives
   op_id/prev_op_id/base_rev/base_seq/gen/app_ver. Pages carry decimal-string seq/cursor_to, epoch, scope_hash,
   gen, docs, complete and per-subscription backlog. Signature verification is the adapter's responsibility.
+- `schema-diff.mjs`: `collections.schema.json` parsing and schema diff (§16.22 A6/A9), byte-identical rules to the stub;
+  compatible change vs. new generation, a generation needs a migration (`from_ver` = draft base, `migrate_fn` or `steps`).
+- Shell API additions (K-1b, §16.19): `kernel.activation.reportFailed(appId, ver, reason)` (failed for this client,
+  pointer back to the last good version, `app_activation{state:'failed'}`), `kernel.windowState.get/put/del(key)` per
+  tab (`tabKey`, sessionStorage) and user in IDB `window_state`, `kernel.apps` entries carry `layout` (9 fields, missing =
+  null) and `styles`. `shell_preferences` is a ctox-platform collection: one row per user (`id = actor.id`), only the
+  own row is readable/writable. Draft publish (§16.22/§16.26): `manifest.json` is never a draft file, references to
+  missing files are `invalid`, and every non-computed base manifest field (triggers, command_rights, …) is inherited (B4).
+  Artifacts are bytes: `string` stays UTF-8, `Blob`/`ArrayBuffer`/`Uint8Array` are hashed and stored as bytes.
 - `fake-core.mjs`: explicit in-memory core from the executable stub contract; isolated from client IDB.
 - `shell-api.mjs`/`loader.mjs`: Shell-only API and live Shell bootstrap/replacement. `/sw.js` belongs to Shell v4;
   artifact route `/~a/<app>@<version>/<path>`, Blob/data module fallback when no controlling SW exists.
@@ -52,6 +61,7 @@ Both initial catch-up and changes use `page`; data and the scoped checkpoint com
 
 On the admitted GPU lane: `node --test --test-concurrency=2 src/apps/business-os/kernel/tests/*.test.mjs`.
 Browser: `PLAYWRIGHT_MODULE=<existing package> CHROME_BIN=<existing chromium> node src/apps/business-os/kernel/tests/browser.mjs`.
+PNG icon round trip (K-1b): same variables, `node src/apps/business-os/kernel/tests/browser-png.mjs` (runs on macOS with Google Chrome).
 The latter starts only its own bounded loopback static fixture and isolated headless context; no tenant or credentials.
 The explicit Node lock adapter is test-only; browsers use actual navigator.locks and IndexedDB.
 
