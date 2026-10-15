@@ -36,7 +36,7 @@ try{
  const port=server.address().port,room='e2e-'+crypto.randomBytes(8).toString('hex'),signalingUrl=`ws://127.0.0.1:${port}/signal`,turnUrl=`turn:127.0.0.1:${turnPort}?transport=udp`;
  native=spawn(process.env.E2E_NATIVE,[],{stdio:['pipe','pipe',fs.openSync(path.join(out,'native.stderr'),'w')]});owned.push(native);
  readline.createInterface({input:native.stdout}).on('line',line=>{try{emit(JSON.parse(line));}catch{report.errors.push('invalid native stdout');}});
- const ready=event(row=>row.kind==='ready');native.stdin.write(JSON.stringify({db:path.join(out,'sync.sqlite'),signalingUrl:signalingUrl+'?peerId=native000001&role=ctox_instance',turnUrl,room})+'\n');await ready;
+ const ready=event(row=>row.kind==='ready');native.stdin.write(JSON.stringify({db:path.join(out,'sync-'+crypto.randomBytes(6).toString('hex')+'.sqlite'),signalingUrl:signalingUrl+'?peerId=native000001&role=ctox_instance',turnUrl,room})+'\n');await ready;
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN??'/usr/bin/google-chrome',args:['--disable-gpu']});const context=await browser.newContext();page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));
  await page.goto(`http://127.0.0.1:${port}`);report.first=await page.evaluate(async config=>(await import('/browser.mjs')).start(config),{signalingUrl,turnUrl,room});await page.screenshot({path:path.join(out,'01-native-page.png')});
  await command('push','pushed');report.push=await page.evaluate(()=>e2e.pushed());

@@ -155,6 +155,7 @@ export class WebRTCKernelTransport extends KernelTransport {
   if(typeof data==='string'){
    let message;try{message=JSON.parse(data)}catch{throw new CtoxError('invalid','Invalid control JSON')}
    if(message.type==='ack'){
+    if(this.options.wireFormat!=='k2-fixture')throw new CtoxError('invalid','Native ACK must be framed');
     if(!this.session || !Number.isInteger(message.lane)||message.lane<0||message.lane>5)throw new CtoxError('invalid','Unexpected ACK');
     decimalSeq(message.upto);this.scheduler.ack(message.lane,message.upto);return;
    }
