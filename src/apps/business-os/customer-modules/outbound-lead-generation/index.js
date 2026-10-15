@@ -1795,6 +1795,12 @@ async function reloadAusfuehren(lauf, keys, bindingGeneration, changesByKey = nu
       if (!leadChanges) leadChanges = await sharedLeadListLoad(collection, previousLeads, bindingGeneration);
       return [key, leadChanges.rows];
     }
+    // Client first: kleine Sammlungen (Quellen, Adapter, Kampagnen, Einstellungen)
+    // kommen direkt aus dem lokalen Speicher; ueber find().exec() warteten sie nach
+    // jedem Neuladen auf CTOX ("Aktueller Stand wird aus CTOX geladen …").
+    if (hasLocalStore(collection)) {
+      return [key, (await collection.storageCollection.allDocuments()).filter((doc) => doc && !doc._deleted)];
+    }
     const collectionName = `outbound_lead_generation_${key === 'researchPolicies' ? 'research_policies' : key}`;
     const docs = await withLeadQueryAuthority(state.ctx.sync,
       signal => collection.find().exec({ signal }), { collectionName, collection,
