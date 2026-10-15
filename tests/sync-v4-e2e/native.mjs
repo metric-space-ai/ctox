@@ -39,7 +39,7 @@ export class Native {
     fs.writeFileSync(join(module, 'module.json'), JSON.stringify({ id: 'e2e-probe', title: 'Synthetic E2E regression app', version: '1.0.0', entry: 'local-modules/e2e-probe/index.js', collections: ['e2e_leads'] }));
     fs.copyFileSync(join(here, 'fixture-app.mjs'), join(module, 'index.js'));
     fs.writeFileSync(join(module, 'schema.js'), 'export const collections = {};\n');
-    fs.writeFileSync(join(module, 'collections.schema.json'), JSON.stringify({ schema_format: 'ctox-business-os-module-collections-v1', collections: { e2e_leads: { schema, syncProfile: 'eager' } } }));
+    fs.writeFileSync(join(module, 'collections.schema.json'), JSON.stringify({ schema_format: 'ctox-business-os-module-collections-v1', collections: { e2e_leads: { schema, syncProfile: this.config.leadProfile || 'eager' } } }));
     const fixture = this.seed(this.config.seedAfterStart ? 'schema' : 'seed', here);
     // Register the background volume too, without making it eager or executing
     // any real command semantics. Unknown tables must not distort readiness.

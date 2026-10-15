@@ -11,7 +11,10 @@ const config = JSON.parse(fs.readFileSync(process.argv[2]));
 const here = dirname(fileURLToPath(import.meta.url));
 const scenarios = await Promise.all(fs.readdirSync(here).filter(name => /^scenario-.+\.mjs$/.test(name))
   .map(async name => (await import(pathToFileURL(join(here, name)))).default));
-const order = ['K02', 'K08', 'K04-ATTACH'];
+if (config.catalog) { scenarios.length = 0;
+ for (const name of fs.readdirSync(config.scenarioRoot).filter(n => /^k[0-9]+$/.test(n))) scenarios.push((await import(pathToFileURL(join(config.scenarioRoot,name,'scenario.mjs')))).default);
+}
+const order = config.catalog ? ['K01','K07','K11','K15','K02','K24'] : ['K08', 'K02', 'K04-ATTACH'];
 scenarios.sort((a,b) => (order.indexOf(a.id) < 0 ? 999 : order.indexOf(a.id)) - (order.indexOf(b.id) < 0 ? 999 : order.indexOf(b.id)));
 for (const s of scenarios) if (!s.id || !Array.isArray(s.steps) || !s.criterion || typeof s.run !== 'function') throw Error('Invalid scenario contract');
 if (config.scenario && !scenarios.some(s => s.id === config.scenario)) throw Error('Unknown scenario');
@@ -97,7 +100,7 @@ try {
             qdisc:execFileSync('/usr/sbin/tc',['-s','qdisc','show','dev','lo'],{encoding:'utf8'})}); save();
         };
         if (config.warmRttMs !== config.rttMs) shape(config.warmRttMs, 'precondition-only');
-        row.warm = await bounded(page.evaluate(warm, { schema, expected }), 180000, "Initial fixture replication exceeded 180 seconds");
+        row.warm = await bounded(page.evaluate(warm, { schema, expected, leadProfile: config.leadProfile }), 180000, "Initial fixture replication exceeded 180 seconds");
         row.warmRttMs = config.warmRttMs;
         if (config.warmRttMs !== config.rttMs) shape(config.rttMs, 'measurement');
         row.relay = await page.evaluate(relayProof);
@@ -107,7 +110,7 @@ try {
           const extra = await browser.newContext(); contexts.push(extra);
           scenarioContexts.push(extra);
           await extra.addInitScript(installRelay, { turnPort: config.turnPort });
-          const p = await setupPage(extra); await p.evaluate(warm, { schema, expected });
+          const p = await setupPage(extra); await p.evaluate(warm, { schema, expected, leadProfile: config.leadProfile });
           const proof = await p.evaluate(relayProof); if (!proof.forced) throw Error('Additional client bypassed TURN');
           row.additionalClients ||= []; row.additionalClients.push(proof);
         }
@@ -169,6 +172,37 @@ try {
         return { found: !!found && (!phase || found.probe_phase === phase), elapsedMs: performance.now() - start,
           revision: found?._rev ?? found?.revision ?? null, lwt: found?._meta?.lwt ?? null, phase: found?.probe_phase ?? null };
       },
+      config, origin, pause,
+      nativeCli: args => native.cli(args),
+      nativeLog: () => fs.readFileSync(join(config.output,'daemon.log'),'utf8'),
+      bodies: () => native.seed('bodies', here).rows,
+      serverNewer: () => native.seed('server-newer', here),
+      newClient: async () => {
+        const ctx = await browser.newContext(); contexts.push(ctx); scenarioContexts.push(ctx);
+        await ctx.addInitScript(installRelay,{turnPort:config.turnPort});
+        return setupPage(ctx,p => pages.push(p));
+      },
+      browserRows: page => page.evaluate(async () => {
+        const rows = await globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads.find({selector:{},limit:100000}).exec();
+        return rows.map(d=>d.toJSON?.() || d);
+      }),
+      browserPut: (page,docs) => bounded(page.evaluate(async docs => {
+        const c=globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads;
+        for(const d of docs) await c.upsert(d);
+        return {local:docs.length,at:Date.now()};
+      },docs),30000,'Browser local write deadline'),
+      readCommand: async page => bounded(page.evaluate(async () => {
+        const at=performance.now(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
+        if (!bus?.dispatch) throw Error('Real Shell command bus unavailable');
+        try { const r=await bus.dispatch({command_type:'ctox.workjet.project.list',payload:{}},{until:'accepted',timeoutMs:5000});
+          return {elapsedMs:performance.now()-at,status:r?.status,commandId:r?.command_id || r?.id,error:null};
+        } catch(e) {return {elapsedMs:performance.now()-at,error:e.code || e.message};}
+      }),12000,'Read command observation deadline'),
+      maintenance: page => page.evaluate(() => {
+        const s=globalThis.CTOX_BUSINESS_OS_APP;
+        return {active:s.maintenance?.active ?? null,phase:s.maintenance?.phase ?? null};
+      }),
+      freeze: (page,value) => context.newCDPSession(page).then(async c=>{try{await c.send('Page.setWebLifecycleState',{state:value?'frozen':'active'});}finally{await c.detach();}}),
       offline: async (page, value) => {
         const cdp = await context.newCDPSession(page);
         await context.setOffline(value);
@@ -206,7 +240,7 @@ try {
     };
     try {
       const result = await scenario.run(h); Object.assign(row, result);
-      row.status = 'measured';
+      row.status = result.status || 'measured';
       if (scenario.id === 'K04-ATTACH' && (!row.measured.positiveControl.found || !row.measured.positiveControl.nativeConfirmed)) { row.pass = false; row.status = 'inconclusive'; row.reason = 'Forward-write positive control failed; cannot attribute missing row to checkpoint'; }
     } catch (e) {
       row.error = e.message; row.status = row.status === 'running' ? 'failed' : 'not_run';

@@ -33,10 +33,10 @@ export function installRelay({ turnPort }) {
   }
   globalThis.RTCPeerConnection = ForcedRelay;
 }
-export async function warm({ schema, expected }) {
+export async function warm({ schema, expected, leadProfile = 'eager' }) {
   const s = globalThis.CTOX_BUSINESS_OS_APP;
   if (!s?.db || !s.sync) throw Error('Real Shell DB/sync unavailable');
-  await s.db.addCollections({ e2e_leads: { schema, syncProfile: 'eager' } });
+  await s.db.addCollections({ e2e_leads: { schema, syncProfile: leadProfile } });
   const lease = await s.sync.leaseCollection('e2e_leads', 'e2e-warm', { forceDirect: true });
   globalThis.__e2eLease = lease;
   let bridge = await s.sync.startCollection('e2e_leads', { pin: false, forceDirect: true, requireOwner: true });
@@ -44,6 +44,7 @@ export async function warm({ schema, expected }) {
   globalThis.__e2eBridge = bridge;
   if (typeof bridge?.state?.awaitInitialReplication !== 'function') throw Error('Real initial-replication contract absent: ' + JSON.stringify({mode:bridge?.mode,reason:bridge?.reason,hasState:!!bridge?.state}));
   await bridge.state.awaitInitialReplication();
+  if (leadProfile === 'demand-only') await s.db.collections.e2e_leads.find({selector:{},limit:expected.length+1}).exec();
   // Precondition is actual local storage, not a successful app query. Otherwise
   // a query row-cap would become a setup failure instead of a measured red list.
   const local = await s.db.collections.e2e_leads.storageCollection.findDocumentsById(expected);
