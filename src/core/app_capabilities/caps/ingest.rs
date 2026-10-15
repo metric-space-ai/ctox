@@ -554,3 +554,78 @@ pub fn handle_ingress(
         Err(_) => route.default_response,
     }
 }
+
+/// The app-side half of the ingress runtime, owned by the v4 app runtime
+/// (#830 AppRuntimeIngress over the sync-store writer): active-manifest
+/// handler lookup, command submission to (app_id, type) with its result, and
+/// files records. Bound exactly once by the composition root; there is no
+/// second Core write path into the sync store here.
+pub trait AppIngress: Send + Sync {
+    fn has_handler(&self, app_id: &str, command_type: &str) -> Result<bool, CtoxError>;
+    fn dispatch(
+        &self,
+        app_id: &str,
+        command_type: &str,
+        payload: Value,
+    ) -> Result<std::sync::mpsc::Receiver<Value>, CtoxError>;
+    fn store_body(&self, app_id: &str, bytes: &[u8], mime: &str) -> Result<String, CtoxError>;
+    fn load_body(&self, app_id: &str, reference: &str) -> Result<Vec<u8>, CtoxError>;
+}
+static APP_INGRESS: std::sync::OnceLock<std::sync::Arc<dyn AppIngress>> =
+    std::sync::OnceLock::new();
+/// Composition root only. A second binding is refused.
+pub fn bind_app_ingress(ingress: std::sync::Arc<dyn AppIngress>) -> Result<(), CtoxError> {
+    APP_INGRESS
+        .set(ingress)
+        .map_err(|_| CtoxError::new(ErrorCode::Conflict, "app ingress already bound"))
+}
+/// Production runtime: public origin from the typed runtime config key
+/// `business_os.public_origin`; everything app-side via the bound AppIngress.
+/// Unbound means unavailable (register refused, HTTP 503), never a fallback.
+pub struct CoreIngestRuntime<'a> {
+    pub root: &'a Path,
+}
+impl CoreIngestRuntime<'_> {
+    fn app(&self) -> Result<&dyn AppIngress, CtoxError> {
+        APP_INGRESS
+            .get()
+            .map(|ingress| ingress.as_ref())
+            .ok_or_else(|| CtoxError::new(ErrorCode::Unavailable, "app runtime ingress not bound"))
+    }
+}
+impl IngestRuntime for CoreIngestRuntime<'_> {
+    fn public_origin(&self) -> Option<String> {
+        config::public_origin(self.root)
+    }
+    fn has_handler(&self, app_id: &str, command_type: &str) -> Result<bool, CtoxError> {
+        self.app()?.has_handler(app_id, command_type)
+    }
+    fn dispatch(
+        &self,
+        app_id: &str,
+        command_type: &str,
+        payload: Value,
+    ) -> Result<std::sync::mpsc::Receiver<Value>, CtoxError> {
+        self.app()?.dispatch(app_id, command_type, payload)
+    }
+    fn store_body(&self, app_id: &str, bytes: &[u8], mime: &str) -> Result<String, CtoxError> {
+        self.app()?.store_body(app_id, bytes, mime)
+    }
+    fn load_body(&self, app_id: &str, reference: &str) -> Result<Vec<u8>, CtoxError> {
+        self.app()?.load_body(app_id, reference)
+    }
+}
+/// HTTP side for business_os/server.rs: is this path served by net.ingest?
+/// `/ingest/…` always; a legacy alias only once its owner registered it, so
+/// existing native tracking keeps answering until then (no sender reconfig).
+pub fn serves(root: &Path, path: &str) -> bool {
+    if path.starts_with(ROUTE_PREFIX) {
+        return true;
+    }
+    LEGACY_ALIASES
+        .iter()
+        .any(|(prefix, _)| path.starts_with(prefix))
+        && open(root)
+            .and_then(|conn| find_route(&conn, path))
+            .is_ok_and(|route| route.is_some())
+}

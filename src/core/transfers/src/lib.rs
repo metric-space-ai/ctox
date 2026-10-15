@@ -20,6 +20,9 @@ use std::{
 };
 use tokio::sync::watch;
 
+#[path = "../../store/harness_adapter.rs"]
+mod owner_adapter;
+
 mod peer;
 pub use peer::{PeerAccountBinding, PeerRangeSource, PeerReadFailure, PeerSource};
 pub mod ssh_exec;
@@ -29,6 +32,16 @@ pub mod storage_ssh;
 pub use storage::{
     validate_relative_path, StorageConnection, StorageDirection, StorageResolver, StorageTransfer,
 };
+
+pub const TRANSFER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
+                id TEXT PRIMARY KEY, request TEXT NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('queued','running','paused','cancelled','failed','completed')),
+                desired TEXT NOT NULL CHECK(desired IN ('run','pause','cancel')),
+                completed_bytes INTEGER NOT NULL DEFAULT 0,
+                error_code TEXT, receipt TEXT,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );";
 
 pub const ENGINE_REVISION: &str = "8364bcd7902dbd853a0f746c3dc937bbaadec561";
 
@@ -143,26 +156,12 @@ impl Store {
         private_directory(&artifacts.join("staging"))?;
         private_directory(&artifacts.join("objects"))?;
         let store = Self { db, artifacts };
-        store.connection()?.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
-                id TEXT PRIMARY KEY, request TEXT NOT NULL,
-                state TEXT NOT NULL CHECK(state IN ('queued','running','paused','cancelled','failed','completed')),
-                desired TEXT NOT NULL CHECK(desired IN ('run','pause','cancel')),
-                completed_bytes INTEGER NOT NULL DEFAULT 0,
-                error_code TEXT, receipt TEXT,
-                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-             );"
-        )?;
+        store.connection()?.execute_batch(TRANSFER_SCHEMA)?;
         Ok(store)
     }
 
-    fn connection(&self) -> Result<Connection> {
-        let c = Connection::open(&self.db)?;
-        c.busy_timeout(Duration::from_secs(5))?;
-        // FULL also covers a receipt committed after the object and directory were flushed.
-        c.pragma_update(None, "synchronous", "FULL")?;
-        Ok(c)
+    fn connection(&self) -> Result<TransferConnection> {
+        open_transfer_connection(&self.db, false)
     }
 
     pub fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
@@ -349,6 +348,205 @@ impl Store {
     }
 }
 
+// Connection drops before its compatibility lease (field declaration order).
+// The shared lease permits existing legacy peers but excludes a live file owner.
+struct TransferConnection {
+    connection: Connection,
+    _legacy_lease: Option<owner_adapter::FileOwner>,
+}
+impl std::ops::Deref for TransferConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.connection
+    }
+}
+impl std::ops::DerefMut for TransferConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+
+// The owned path calls this only inside its exclusive actor. Compatibility
+// connections participate in the same lock protocol, before opening SQLite.
+fn open_transfer_connection(path: &Path, owned: bool) -> Result<TransferConnection> {
+    let legacy_lease = if owned {
+        None
+    } else {
+        Some(owner_adapter::FileOwner::acquire_legacy_shared(path)?)
+    };
+    let connection = Connection::open(path)?;
+    connection.busy_timeout(if owned {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(5)
+    })?;
+    if owned {
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=67108864;")?;
+    }
+    // Never inherit the Core writer's NORMAL setting for durable receipts.
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    Ok(TransferConnection {
+        connection,
+        _legacy_lease: legacy_lease,
+    })
+}
+
+/// Typed transfer operation for the existing Core file owner. `apply` runs
+/// inside its transaction; submitters must reply only after that FULL commit.
+pub enum TransferOwnerJob {
+    Enqueue(DownloadRequest),
+    Get(String),
+    Control { id: String, action: String },
+}
+
+impl TransferOwnerJob {
+    /// No connection is opened here. The Core owner must configure FULL before
+    /// BEGIN, initialize TRANSFER_SCHEMA, and commit/rollback after this returns.
+    pub fn apply(self, tx: &rusqlite::Transaction<'_>) -> Result<Transfer> {
+        let synchronous: i64 = tx.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+        ensure!(synchronous == 2, "transfer owner requires FULL durability");
+        match self {
+            Self::Enqueue(request) => {
+                request.validate()?;
+                tx.execute("INSERT INTO ctox_transfer_jobs(id,request,state,desired) VALUES (?1,?2,'queued','run') ON CONFLICT(id) DO NOTHING", params![request.id, serde_json::to_string(&request)?])?;
+                let saved = read_owned_transfer(tx, &request.id)?;
+                ensure!(
+                    saved.request == request,
+                    "transfer id conflicts with immutable request"
+                );
+                Ok(saved)
+            }
+            Self::Get(id) => read_owned_transfer(tx, &id),
+            Self::Control { id, action } => {
+                match action.as_str() {
+                    "cancel" | "pause" => {
+                        let state = if action == "cancel" {
+                            "cancelled"
+                        } else {
+                            "paused"
+                        };
+                        tx.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
+                    }
+                    "resume" => {
+                        tx.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state IN ('paused','failed','running')", [&id])?;
+                    }
+                    _ => bail!("expected pause, resume or cancel"),
+                }
+                read_owned_transfer(tx, &id)
+            }
+        }
+    }
+}
+
+pub type TransferOwnerReply =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Transfer>> + Send>>;
+
+/// Core composition implements this with its existing bounded writer. It must
+/// execute `job.apply(tx)` and acknowledge only the FULL commit, never open a
+/// second Core connection or wait synchronously on a Tokio worker.
+pub trait TransferOwner: Send + Sync {
+    fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply;
+}
+
+#[derive(Clone)]
+enum TransferBackend {
+    Dedicated(owner_adapter::BoundedOwner<TransferConnection>),
+    Shared(Arc<dyn TransferOwner>),
+}
+
+/// Async metadata adapter. Use `from_owner` for a Core file already owned by
+/// the daemon; `open` is only for a file with no other live owner.
+#[derive(Clone)]
+pub struct OwnedTransferStore {
+    backend: TransferBackend,
+}
+
+impl Store {
+    /// Consume the compatibility facade after its schema setup. Never retain
+    /// a legacy worker alongside this owner on the same Core file.
+    pub fn into_owner(self) -> Result<OwnedTransferStore> {
+        OwnedTransferStore::open(self.db)
+    }
+}
+
+impl OwnedTransferStore {
+    /// Share the actual Core writer. This entry point never touches a file.
+    pub fn from_owner(owner: Arc<dyn TransferOwner>) -> Self {
+        Self {
+            backend: TransferBackend::Shared(owner),
+        }
+    }
+
+    /// Metadata-only standalone owner; no SQLite is opened on the caller.
+    pub fn open(db: impl Into<PathBuf>) -> Result<Self> {
+        let db = db.into();
+        if let Some(parent) = db.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let owner = owner_adapter::BoundedOwner::start(db, |path| {
+            let connection = open_transfer_connection(path, true).map_err(std::io::Error::other)?;
+            connection
+                .execute_batch(TRANSFER_SCHEMA)
+                .map_err(std::io::Error::other)?;
+            Ok(connection)
+        })?;
+        Ok(Self {
+            backend: TransferBackend::Dedicated(owner),
+        })
+    }
+
+    async fn execute(&self, job: TransferOwnerJob) -> Result<Transfer> {
+        match &self.backend {
+            TransferBackend::Shared(owner) => owner.submit(job).await,
+            TransferBackend::Dedicated(owner) => Ok(owner
+                .call(move |connection| {
+                    let tx = connection
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                        .map_err(std::io::Error::other)?;
+                    let saved = job.apply(&tx).map_err(std::io::Error::other)?;
+                    tx.commit().map_err(std::io::Error::other)?;
+                    Ok(saved)
+                })
+                .await?),
+        }
+    }
+
+    pub async fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
+        self.execute(TransferOwnerJob::Enqueue(request)).await
+    }
+
+    pub async fn get(&self, id: String) -> Result<Transfer> {
+        self.execute(TransferOwnerJob::Get(id)).await
+    }
+
+    pub async fn control(&self, id: String, action: String) -> Result<Transfer> {
+        self.execute(TransferOwnerJob::Control { id, action }).await
+    }
+}
+
+impl TransferOwner for OwnedTransferStore {
+    fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply {
+        let store = self.clone();
+        Box::pin(async move { store.execute(job).await })
+    }
+}
+
+fn read_owned_transfer(connection: &Connection, id: &str) -> Result<Transfer> {
+    let (request, state, bytes, error, receipt): (String, String, u64, Option<String>, Option<String>) = connection.query_row(
+        "SELECT request,state,completed_bytes,error_code,receipt FROM ctox_transfer_jobs WHERE id=?1", [id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    )?;
+    Ok(Transfer {
+        request: serde_json::from_str(&request)?,
+        state,
+        completed_bytes: bytes,
+        error_code: error,
+        receipt: receipt
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?,
+    })
+}
+
 pub struct Worker {
     store: Store,
     _lease: File,
@@ -356,7 +554,7 @@ pub struct Worker {
     // Idle polling reads through one kept connection: the worker polls every
     // 250 ms, and opening Core each time parsed its whole schema and took the
     // write lock even with an empty queue (thesen 08.10.2026: ~20 % of a core).
-    poll: std::sync::Mutex<Option<Connection>>,
+    poll: std::sync::Mutex<Option<TransferConnection>>,
     peer: Option<Arc<dyn PeerRangeSource>>,
     storage: Option<Arc<dyn StorageResolver>>,
 }
@@ -854,5 +1052,106 @@ impl Drop for DaemonWorker {
         if self.stop_and_join().is_err() {
             eprintln!("ctox transfer worker storage or cleanup failure; restart required");
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_contract_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transfer_owner_full_committed_and_immutable() {
+        let directory = tempfile::tempdir().unwrap();
+        let native = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        let owner = match &native.backend {
+            TransferBackend::Dedicated(owner) => owner.clone(),
+            _ => unreachable!(),
+        };
+        // The injected facade must use this already-owned file, not reopen it.
+        let store = OwnedTransferStore::from_owner(Arc::new(native));
+        let request = DownloadRequest {
+            id: "fixture".into(),
+            sources: vec!["http://127.0.0.1/fixture".into()],
+            peer_source: None,
+            storage: None,
+            sha256: "0".repeat(64),
+            size: 0,
+        };
+        let saved = store.enqueue(request.clone()).await.unwrap();
+        assert_eq!(saved.request, request);
+        assert!(
+            Store::open(
+                directory.path().join("core.sqlite"),
+                directory.path().join("artifacts")
+            )
+            .is_err(),
+            "legacy connection must not open an exclusively owned file"
+        );
+        owner
+            .call(|connection| {
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))
+                        .map_err(std::io::Error::other)?,
+                    2
+                );
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "wal_autocheckpoint", |row| row.get::<_, i64>(0))
+                        .map_err(std::io::Error::other)?,
+                    1000
+                );
+                assert!(connection.is_autocommit());
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let mut changed = request.clone();
+        changed.sha256 = "1".repeat(64);
+        assert!(store.enqueue(changed).await.is_err());
+        assert_eq!(
+            store.get(request.id.clone()).await.unwrap().request,
+            request
+        );
+        assert_eq!(
+            store
+                .control(request.id.clone(), "cancel".into())
+                .await
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        assert_eq!(
+            store
+                .control(request.id, "resume".into())
+                .await
+                .unwrap()
+                .state,
+            "cancelled"
+        );
+        let mut closed = owner.closed_signal();
+        drop(store);
+        drop(owner);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !*closed.borrow_and_update() {
+                closed.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let legacy = Store::open(
+            directory.path().join("core.sqlite"),
+            directory.path().join("artifacts"),
+        )
+        .unwrap();
+        let connection = legacy.connection().unwrap();
+        let duplicate = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        assert!(
+            duplicate.get("fixture".into()).await.is_err(),
+            "exclusive owner must wait for all legacy connections to close"
+        );
+        drop(duplicate);
+        drop(connection);
+        assert!(owner_adapter::FileOwner::acquire(&directory.path().join("core.sqlite")).is_ok());
     }
 }
