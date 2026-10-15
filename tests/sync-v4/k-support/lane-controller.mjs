@@ -1,4 +1,4 @@
-// One admission attempt, bounded to the order's 20 minutes. Never cancel an
+// One admission attempt, bounded to the order's 40 minutes. Never cancel an
 // admitted job or a foreign process. No retry/successor admission is created.
 import {spawn,execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
@@ -29,7 +29,7 @@ const stopQueued=()=>{
  }
  try{process.kill(-child.pid,'SIGTERM');}catch(e){if(e.code!=='ESRCH')throw e;}
 };
-const timer=setTimeout(stopQueued,20*60*1000);
+const timer=setTimeout(stopQueued,40*60*1000);
 process.once('SIGTERM',stopQueued);
 child.once('error',e=>{clearTimeout(timer);throw e;});
 child.once('exit',(code,signal)=>{clearTimeout(timer);process.exitCode=expired?75:code??(signal?143:1);});
