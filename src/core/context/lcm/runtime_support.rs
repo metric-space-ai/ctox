@@ -50,8 +50,25 @@ pub fn run_begin_worker_attempt_finalization(
     db_path: &Path,
     input: WorkerAttemptFinalizationInput<'_>,
 ) -> Result<WorkerAttemptRecord> {
-    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
-    engine.begin_worker_attempt_finalization(input)
+    let (attempt_id, work_key, source_label, reply_text, error_text) = (
+        input.attempt_id.to_owned(),
+        input.work_key.to_owned(),
+        input.source_label.to_owned(),
+        input.reply_text.to_owned(),
+        input.error_text.map(str::to_owned),
+    );
+    let (conversation_id, agent_outcome) = (input.conversation_id, input.agent_outcome);
+    owned_lcm_write(db_path, move |engine| {
+        engine.begin_worker_attempt_finalization(WorkerAttemptFinalizationInput {
+            attempt_id: &attempt_id,
+            work_key: &work_key,
+            conversation_id,
+            source_label: &source_label,
+            agent_outcome,
+            reply_text: &reply_text,
+            error_text: error_text.as_deref(),
+        })
+    })
 }
 
 pub fn run_worker_attempt(db_path: &Path, attempt_id: &str) -> Result<Option<WorkerAttemptRecord>> {
@@ -728,13 +745,10 @@ pub(super) fn migrate_empty_mission_split_brain_with(conn: &Connection) -> Resul
     Ok(())
 }
 
-impl LcmEngine {
+impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     pub(super) fn persist_mission_state(&self, record: &MissionStateRecord) -> Result<()> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin structured mission-state write")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin structured mission-state write")?;
         let mut continuity = load_or_init_continuity_show_all(&tx, record.conversation_id)?;
         persist_mission_state_with(&tx, record)?;
         let effective = load_mission_state_with(&tx, record.conversation_id)?

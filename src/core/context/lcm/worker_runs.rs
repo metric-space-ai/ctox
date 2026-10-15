@@ -11,7 +11,7 @@ pub struct WorkerRunInput<'a> {
     pub task_ids: &'a [String],
 }
 
-impl LcmEngine {
+impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     pub(super) fn ensure_worker_run_identity_schema(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS worker_run_identities (
@@ -50,10 +50,7 @@ impl LcmEngine {
             "invalid native worker run task binding"
         );
         let task_ids_json = serde_json::to_string(&task_ids)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = LcmTransaction::begin(&self.conn)?;
         let existing: Option<(String, String, i64, String, String)> = tx
             .query_row(
                 "SELECT run_id,work_key,conversation_id,source_label,task_ids_json

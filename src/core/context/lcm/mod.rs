@@ -923,8 +923,16 @@ impl Summarizer for HeuristicSummarizer {
 #[path = "../../store/harness_adapter.rs"]
 mod legacy_file_owner;
 
-pub struct LcmEngine {
-    conn: Connection,
+pub struct OwnedLcmConnection(Connection);
+impl std::ops::Deref for OwnedLcmConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.0
+    }
+}
+
+pub struct LcmEngine<C = OwnedLcmConnection> {
+    conn: C,
     config: LcmConfig,
     // Connection drops before the cooperative legacy lease. This fallback
     // must never overlap the injected Core owner, even in another process.
@@ -943,7 +951,7 @@ impl LcmEngine {
         conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
             .context("failed to configure SQLite busy_timeout for LCM")?;
         let engine = Self {
-            conn,
+            conn: OwnedLcmConnection(conn),
             config: config.clone(),
             _owner_lease: owner_lease,
         };
@@ -965,7 +973,19 @@ impl LcmEngine {
             .insert(canonical);
         Ok(engine)
     }
+}
 
+impl<'a> LcmEngine<&'a Connection> {
+    fn borrowed(conn: &'a Connection, config: LcmConfig) -> Self {
+        Self {
+            conn,
+            config,
+            _owner_lease: None,
+        }
+    }
+}
+
+impl<C: std::ops::Deref<Target = Connection>> LcmEngine<C> {
     /// Override the connection-level busy timeout. Read-mostly UI consumers
     /// use a short timeout so a daemon-held write lock degrades into stale
     /// data on screen instead of stalling their render loop for the full
@@ -1262,11 +1282,8 @@ impl LcmEngine {
     /// key while retaining terminal attempt history.
     fn ensure_worker_attempt_finalization_schema(&self) -> Result<()> {
         const MIGRATION_ID: &str = "i-071-worker-attempt-finalization-v1";
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt schema migration")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt schema migration")?;
         let already_applied: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM lcm_data_migrations WHERE migration_id = ?1)",
             [MIGRATION_ID],
@@ -1332,11 +1349,8 @@ impl LcmEngine {
     /// ledger remains a best-effort forensic projection.
     fn ensure_task_execution_progress_schema(&self) -> Result<()> {
         const MIGRATION_ID: &str = "task-execution-progress-v1";
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task execution progress schema migration")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task execution progress schema migration")?;
         let already_applied: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM lcm_data_migrations WHERE migration_id = ?1)",
             [MIGRATION_ID],
@@ -1467,11 +1481,8 @@ impl LcmEngine {
         // A mid-sequence failure (e.g. SQLITE_BUSY, or a failing ordinal read) must not
         // commit an orphan messages row: render/compaction JOIN through context_items and
         // would never see it, while the persist-retry helper would insert a duplicate.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin add-message transaction")?;
+        let tx =
+            LcmTransaction::begin(&self.conn).context("failed to begin add-message transaction")?;
         let seq = self
             .conn
             .query_row(
@@ -1529,11 +1540,8 @@ impl LcmEngine {
         // remains the database invariant, while the immediate transaction makes
         // a cross-process race return the authoritative row instead of leaking a
         // uniqueness error to the worker.
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt finalization transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt finalization transaction")?;
         if let Some(existing) = tx
             .query_row(
                 &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
@@ -1625,11 +1633,8 @@ impl LcmEngine {
         let signature = task_execution_plan_signature(&steps);
         let now_ms = epoch_millis_i64();
         let steps_json = serde_json::to_string(&steps)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task execution plan transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task execution plan transaction")?;
         authorize(&tx)?;
         let latest = tx
             .query_row(
@@ -1721,11 +1726,8 @@ impl LcmEngine {
             !input.activity_id.trim().is_empty(),
             "task activity id is required"
         );
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin task activity transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin task activity transaction")?;
         let current = tx
             .query_row(
                 "SELECT revision, steps_json
@@ -1866,11 +1868,8 @@ impl LcmEngine {
         &self,
         attempt_id: &str,
     ) -> Result<MessageRecord> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin worker-attempt reply transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin worker-attempt reply transaction")?;
         let attempt = tx
             .query_row(
                 &format!("{WORKER_ATTEMPT_SELECT} WHERE attempt_id = ?1"),
@@ -2426,11 +2425,8 @@ impl LcmEngine {
     }
 
     pub fn continuity_init_documents(&self, conversation_id: i64) -> Result<ContinuityShowAll> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity init transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity init transaction")?;
         let mut show_all = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let (record, imported) = load_or_import_mission_state_with(&tx, &show_all)?;
         let reason = if imported {
@@ -2494,11 +2490,8 @@ impl LcmEngine {
         kind: ContinuityKind,
         diff_text: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity apply transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity apply transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let normalized_diff = normalize_continuity_diff(kind, diff_text)?;
         let rendered = apply_continuity_diff(kind, &document.content, &normalized_diff)?;
@@ -2581,11 +2574,8 @@ impl LcmEngine {
         kind: ContinuityKind,
         new_content: &str,
     ) -> Result<ContinuityDocumentState> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity full-replace transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity full-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let rendered = new_content.trim().to_string();
         if rendered.is_empty() {
@@ -2647,11 +2637,8 @@ impl LcmEngine {
         if find.is_empty() {
             anyhow::bail!("continuity_string_replace_document: find is empty");
         }
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin continuity string-replace transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin continuity string-replace transaction")?;
         let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
         let before = document.content.clone();
         let matches: usize = before.matches(find).count();
@@ -2728,11 +2715,8 @@ impl LcmEngine {
             !match_text.trim().is_empty(),
             "match_text must not be empty for secret rewrite"
         );
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin secret rewrite transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin secret rewrite transaction")?;
         let message_rows_updated =
             rewrite_message_rows_with(&tx, conversation_id, match_text, replacement_text)?;
         let summary_rows_updated =
@@ -2835,11 +2819,8 @@ impl LcmEngine {
         &self,
         conversation_id: i64,
     ) -> Result<MissionStateRepairOutcome> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin mission render transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin mission render transaction")?;
         let mut continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
         let previous_focus_head_commit_id = continuity.focus.head_commit_id.clone();
         let (record, imported) = load_or_import_mission_state_with(&tx, &continuity)?;
@@ -3026,11 +3007,8 @@ impl LcmEngine {
         record: &MissionStateRecord,
         reason: &str,
     ) -> Result<bool> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )
-        .context("failed to begin focus continuity rewrite transaction")?;
+        let tx = LcmTransaction::begin(&self.conn)
+            .context("failed to begin focus continuity rewrite transaction")?;
         anyhow::ensure!(
             record.conversation_id == conversation_id,
             "mission-state conversation id does not match focus render target"
@@ -6068,6 +6046,89 @@ fn snapshot_task_execution_progress_for_task(
 mod legacy_owner_contract {
     use super::*;
     #[tokio::test]
+    async fn finalization_jobs_share_core_transaction_and_preserve_identity() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("core.sqlite");
+        drop(LcmEngine::open(&path, LcmConfig::default())?);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone()).await?;
+        writer.submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+            tx.execute_batch("CREATE TEMP TABLE owner_audit(attempt TEXT);
+                CREATE TEMP TRIGGER audit_finalization AFTER INSERT ON main.worker_attempt_finalizations
+                BEGIN INSERT INTO owner_audit VALUES(new.attempt_id); END;")?;
+            Ok(())
+        }))?.await?;
+        let job_path = path.clone();
+        crate::persistence::run_core_sync(move || {
+            let input = WorkerAttemptFinalizationInput {
+                attempt_id: "owned-attempt",
+                work_key: "owned-work",
+                conversation_id: 71,
+                source_label: "fixture",
+                agent_outcome: AgentOutcome::Success,
+                reply_text: "persisted completion",
+                error_text: None,
+            };
+            let first = run_begin_worker_attempt_finalization(&job_path, input.clone())?;
+            let replay = run_begin_worker_attempt_finalization(&job_path, input.clone())?;
+            anyhow::ensure!(
+                first.attempt_id == replay.attempt_id && replay.reply_text == input.reply_text
+            );
+            let mut conflict = input.clone();
+            conflict.reply_text = "changed immutable reply";
+            anyhow::ensure!(run_begin_worker_attempt_finalization(&job_path, conflict).is_err());
+            let mut recovery = input;
+            recovery.attempt_id = "replacement-attempt";
+            anyhow::ensure!(
+                run_begin_worker_attempt_finalization(&job_path, recovery)?.attempt_id
+                    == first.attempt_id
+            );
+            Ok(())
+        })
+        .await?;
+        writer
+            .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+                let audited: i64 =
+                    tx.query_row("SELECT COUNT(*) FROM temp.owner_audit", [], |r| r.get(0))?;
+                assert_eq!(
+                    audited, 1,
+                    "finalization escaped the existing writer connection"
+                );
+                let count: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM worker_attempt_finalizations",
+                    [],
+                    |r| r.get(0),
+                )?;
+                assert_eq!(
+                    count, 1,
+                    "identity conflict or recovery created a duplicate marker"
+                );
+                // A failed inner phase rolls back only its savepoint. It cannot
+                // accidentally commit or abort this enclosing owner transaction.
+                {
+                    let inner = LcmTransaction::begin(tx)?;
+                    inner.execute("INSERT INTO owner_audit VALUES('rolled-back')", [])?;
+                }
+                assert_eq!(
+                    tx.query_row("SELECT COUNT(*) FROM temp.owner_audit", [], |r| r
+                        .get::<_, i64>(0))?,
+                    1
+                );
+                tx.execute("INSERT INTO owner_audit VALUES('outer-survives')", [])?;
+                Ok(())
+            }))?
+            .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn legacy_lcm_must_not_open_an_owned_core_file() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("core.sqlite");
@@ -6129,4 +6190,82 @@ mod legacy_owner_contract {
         );
         Ok(())
     }
+}
+
+// The Core writer owns the outer IMMEDIATE transaction. Existing atomic LCM
+// phases use a savepoint when borrowing it; offline engines retain IMMEDIATE.
+// Never commit the owner transaction from a borrowed session.
+enum LcmTransaction<'a> {
+    Root(rusqlite::Transaction<'a>),
+    Nested(LcmSavepoint<'a>),
+}
+struct LcmSavepoint<'a> {
+    conn: &'a Connection,
+    name: String,
+    released: bool,
+}
+impl Drop for LcmSavepoint<'_> {
+    fn drop(&mut self) {
+        if !self.released {
+            let _ = self
+                .conn
+                .execute_batch(&format!("ROLLBACK TO {}; RELEASE {}", self.name, self.name));
+        }
+    }
+}
+impl<'a> LcmTransaction<'a> {
+    fn begin(conn: &'a Connection) -> rusqlite::Result<Self> {
+        if conn.is_autocommit() {
+            return rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map(Self::Root);
+        }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let name = format!(
+            "lcm_phase_{}",
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+        Ok(Self::Nested(LcmSavepoint {
+            conn,
+            name,
+            released: false,
+        }))
+    }
+    fn commit(self) -> rusqlite::Result<()> {
+        match self {
+            Self::Root(tx) => tx.commit(),
+            Self::Nested(mut savepoint) => {
+                savepoint
+                    .conn
+                    .execute_batch(&format!("RELEASE {}", savepoint.name))?;
+                savepoint.released = true;
+                Ok(())
+            }
+        }
+    }
+}
+impl std::ops::Deref for LcmTransaction<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        match self {
+            Self::Root(tx) => tx,
+            Self::Nested(savepoint) => savepoint.conn,
+        }
+    }
+}
+
+fn owned_lcm_write<T: Send + 'static>(
+    path: &Path,
+    operation: impl FnOnce(&LcmEngine<&Connection>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let owner = owner_adapter::OwnerAdapter::for_path(path)?;
+    // The bridge validates admission before waiting; schema setup remains with
+    // the registry/composition, not with a caller's opportunistic opener.
+    Ok(owner.write_blocking(move |tx| {
+        operation(&LcmEngine::borrowed(tx, LcmConfig::default()))
+            .map_err(|error| ctox_store::StoreError::Invalid(error.to_string()))
+    })?)
 }
