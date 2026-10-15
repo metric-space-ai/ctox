@@ -7688,7 +7688,7 @@ async function editSource(sourceId) {
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
 
-// Alle Adapter einer Quelle: auf THESEN lagen je Quelle zwei (adapter_thesen_* vom
+// Alle Adapter einer Quelle: auf der Kundeninstanz lagen je Quelle zwei (adapter_thesen_* vom
 // 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
 // (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
 // Lesen und Schreiben direkt im lokalen Speicher (wie RxDocument.incrementalPatch);

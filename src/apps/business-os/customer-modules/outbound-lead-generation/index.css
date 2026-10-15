@@ -459,7 +459,7 @@
 .leadgen-table tbody tr:hover, .leadgen-table tbody tr[aria-selected="true"] { background: var(--accent-soft); }
 .leadgen-table tbody tr[data-checked="true"] { box-shadow: inset 3px 0 0 var(--accent); }
 /* Die Namenszelle bleibt eine Tabellenzelle: mit display:grid sass ihre Unterkante
-   auf eigener Hoehe statt auf der Zeile, die Trennstriche verrutschten (THESEN 15.10.2026). */
+   auf eigener Hoehe statt auf der Zeile, die Trennstriche verrutschten (Kundeninstanz 15.10.2026). */
 .leadgen-table td:nth-child(2) > strong, .leadgen-table td:nth-child(2) > span { display: block; }
 .leadgen-table td:nth-child(2) > span { margin-top: 2px; }
 .leadgen-table td:nth-child(2) span { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
