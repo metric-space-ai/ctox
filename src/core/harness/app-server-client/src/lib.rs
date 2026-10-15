@@ -1029,29 +1029,17 @@ pub(crate) fn request_method_name(request: &ClientRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ctox_app_server_protocol::AccountUpdatedNotification;
     use ctox_app_server_protocol::ConfigRequirementsReadResponse;
-    use ctox_app_server_protocol::GetAccountResponse;
-    use ctox_app_server_protocol::JSONRPCMessage;
-    use ctox_app_server_protocol::JSONRPCRequest;
-    use ctox_app_server_protocol::JSONRPCResponse;
     use ctox_app_server_protocol::ServerNotification;
     use ctox_app_server_protocol::SessionSource as ApiSessionSource;
     use ctox_app_server_protocol::ThreadStartParams;
     use ctox_app_server_protocol::ThreadStartResponse;
-    use ctox_app_server_protocol::ToolRequestUserInputParams;
-    use ctox_app_server_protocol::ToolRequestUserInputQuestion;
     use ctox_core::AuthManager;
     use ctox_core::ThreadManager;
     use ctox_core::config::ConfigBuilder;
-    use futures::SinkExt;
-    use futures::StreamExt;
     use pretty_assertions::assert_eq;
-    use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
-    use tokio_tungstenite::accept_async;
-    use tokio_tungstenite::tungstenite::Message;
 
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
@@ -1091,96 +1079,10 @@ mod tests {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
-    async fn start_test_remote_server<F, Fut>(handler: F) -> String
-    where
-        F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
-            + Send
-            + 'static,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
-    {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("listener should bind");
-        let addr = listener.local_addr().expect("listener address");
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept should succeed");
-            let websocket = accept_async(stream)
-                .await
-                .expect("websocket upgrade should succeed");
-            handler(websocket).await;
-        });
-        format!("ws://{addr}")
-    }
 
-    async fn expect_remote_initialize(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) {
-        let JSONRPCMessage::Request(request) = read_websocket_message(websocket).await else {
-            panic!("expected initialize request");
-        };
-        assert_eq!(request.method, "initialize");
-        write_websocket_message(
-            websocket,
-            JSONRPCMessage::Response(JSONRPCResponse {
-                id: request.id,
-                result: serde_json::json!({}),
-            }),
-        )
-        .await;
 
-        let JSONRPCMessage::Notification(notification) = read_websocket_message(websocket).await
-        else {
-            panic!("expected initialized notification");
-        };
-        assert_eq!(notification.method, "initialized");
-    }
 
-    async fn read_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    ) -> JSONRPCMessage {
-        loop {
-            let frame = websocket
-                .next()
-                .await
-                .expect("frame should be available")
-                .expect("frame should decode");
-            match frame {
-                Message::Text(text) => {
-                    return serde_json::from_str::<JSONRPCMessage>(&text)
-                        .expect("text frame should be valid JSON-RPC");
-                }
-                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
-                    continue;
-                }
-                Message::Close(_) => panic!("unexpected close frame"),
-            }
-        }
-    }
 
-    async fn write_websocket_message(
-        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        message: JSONRPCMessage,
-    ) {
-        websocket
-            .send(Message::Text(
-                serde_json::to_string(&message)
-                    .expect("message should serialize")
-                    .into(),
-            ))
-            .await
-            .expect("message should send");
-    }
-
-    fn test_remote_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
-        RemoteAppServerConnectArgs {
-            websocket_url,
-            client_name: "ctox-app-server-client-test".to_string(),
-            client_version: "0.0.0-test".to_string(),
-            experimental_api: true,
-            opt_out_notification_methods: Vec::new(),
-            channel_capacity: 8,
-        }
-    }
 
     #[tokio::test]
     async fn typed_request_roundtrip_works() {
