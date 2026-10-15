@@ -32,12 +32,17 @@ impl DraftContent for MemoryContent {
     }
 }
 
-/// Sidecar stand-in: returns the agent's snapshot; `during` runs while the turn
-/// is in flight (e.g. the user saving the draft). Counts invocations.
+/// Content marker in a scripted snapshot: the agent deleted this file.
+const DELETE: &str = "\u{0}delete";
+
+/// Sidecar stand-in: echoes the working tree it received with the scripted
+/// edits applied (like the real sidecar's full snapshot); `during` runs while
+/// the turn is in flight (e.g. the user saving the draft). Records what it saw.
 struct ScriptedRunner {
     snapshot: Vec<(String, String)>,
     during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     calls: Mutex<usize>,
+    seen: Mutex<BTreeMap<String, String>>,
 }
 impl ScriptedRunner {
     fn new(snapshot: &[(&str, &str)]) -> Arc<Self> {
@@ -48,17 +53,27 @@ impl ScriptedRunner {
                 .collect(),
             during: Mutex::new(None),
             calls: Mutex::new(0),
+            seen: Mutex::new(BTreeMap::new()),
         })
     }
 }
 impl SidecarRunner for ScriptedRunner {
     fn run(
         &self,
-        _input: &SidecarTurnInput,
+        input: &SidecarTurnInput,
         _control: &TurnControl,
         progress: &dyn Fn(),
     ) -> Result<Value, TurnFailure> {
         *self.calls.lock().unwrap() += 1;
+        *self.seen.lock().unwrap() = input.files.clone();
+        let mut tree = input.files.clone();
+        for (path, content) in &self.snapshot {
+            if content == DELETE {
+                tree.remove(path);
+            } else {
+                tree.insert(path.clone(), content.clone());
+            }
+        }
         progress();
         if let Some(during) = self.during.lock().unwrap().take() {
             during();
@@ -68,7 +83,7 @@ impl SidecarRunner for ScriptedRunner {
             "messages": [{"role":"assistant","content":[
                 {"type":"text","text":"edited"},
                 {"type":"toolCall","name":"write","arguments":{"path":"/workspace/a.js"}}]}],
-            "snapshot": self.snapshot.iter().map(|(p, c)| json!({
+            "snapshot": tree.iter().map(|(p, c)| json!({
                 "kind":"file","path":format!("/workspace/{p}"),"content":c})).collect::<Vec<_>>(),
         }))
     }
@@ -147,6 +162,8 @@ fn env() -> Env {
     let content = MemoryContent::new();
     let original = content.put(b"original\n").unwrap();
     let keep = content.put(b"keep\n").unwrap();
+    let index = content.put(INDEX_JS.as_bytes()).unwrap();
+    let long = content.put(long_js().as_bytes()).unwrap();
     rt.block_on(fixture.write(JobOptions::default(), move |tx| {
         for name in [
             COLLECTION_DRAFTS,
@@ -182,7 +199,15 @@ fn env() -> Env {
             "notes@1.0.0",
             &json!({
             "id":"notes@1.0.0","app_id":"notes","app_ver":"1.0.0",
-            "manifest":{"files":{"a.js":original}}}),
+            "manifest":{"files":{"a.js":original,"index.js":index,"long.js":long}}}),
+        )?;
+        // Fresh draft: no own files yet, everything comes from the base version.
+        put(
+            tx,
+            COLLECTION_DRAFTS,
+            "carol/notes",
+            &json!({"id":"carol/notes","app_id":"notes","user_id":"carol",
+                "base_app_ver":"1.0.0","files":{},"updated_at_ms": 1}),
         )?;
         Ok(())
     }))
@@ -226,6 +251,11 @@ impl Env {
     }
 }
 
+const INDEX_JS: &str = "export const answer = 41;\n";
+fn long_js() -> String {
+    (1..=20).map(|n| format!("line{n}\n")).collect()
+}
+
 fn actor(id: &str, role: &str) -> BusinessOsActor {
     BusinessOsActor::new(Some(id.into()), role)
 }
@@ -259,7 +289,7 @@ fn cancel(id: &str, turn_id: &str) -> CommandDocument {
 #[test]
 fn cas_conflict_keeps_user_edit_and_returns_patch() {
     let env = env();
-    let runner = ScriptedRunner::new(&[("a.js", "agent\n"), ("b.js", "keep\n")]);
+    let runner = ScriptedRunner::new(&[("a.js", "agent\n")]);
     let user_sha = env.content.put(b"user edit\n").unwrap();
     let writer = env.fixture.writer();
     let user_sha_in_edit = user_sha.clone();
@@ -318,6 +348,7 @@ fn done_creates_new_draft_revision_and_leaves_active_version_unchanged() {
     let panel = env.panel(ScriptedRunner::new(&[
         ("a.js", "agent\n"),
         ("new.js", "n\n"),
+        ("b.js", DELETE),
     ]));
     let admitted = panel
         .execute(
@@ -474,10 +505,7 @@ fn second_turn_is_refused_and_cancel_kills_the_sidecar() {
 #[test]
 fn terminal_state_and_callback_happen_exactly_once() {
     let env = env();
-    let panel = env.panel(ScriptedRunner::new(&[
-        ("a.js", "agent\n"),
-        ("b.js", "keep\n"),
-    ]));
+    let panel = env.panel(ScriptedRunner::new(&[("a.js", "agent\n")]));
     let admitted = panel
         .execute(
             actor("alice", "admin"),
@@ -512,4 +540,119 @@ fn terminal_state_and_callback_happen_exactly_once() {
     assert!(replay.worker.is_none());
     assert_eq!(replay.result["state"], "done");
     assert_eq!(env.count(COLLECTION_TURNS), 1);
+}
+
+/// §16.44 addition (1): a fresh draft without own files still gives the agent
+/// the full base tree. Mutation: drop the base-version overlay in `admit_turn`
+/// (tree = draft files only) → the agent never sees index.js → red.
+#[test]
+fn fresh_draft_gives_the_agent_the_full_base_tree() {
+    let env = env();
+    let runner = ScriptedRunner::new(&[("index.js", "export const answer = 42;\n")]);
+    let panel = env.panel(runner.clone());
+    let payload = json!({"app_id":"notes","draft_id":"carol/notes",
+        "base_draft_rev":env.draft_rev("carol"),"prompt":"set answer to 42 in index.js"});
+    let admitted = panel
+        .execute(actor("carol", "admin"), turn("c1", payload), 10)
+        .unwrap();
+    let final_turn = admitted.worker.unwrap().join().unwrap();
+    assert_eq!(final_turn["state"], "done", "{final_turn}");
+    let seen = runner.seen.lock().unwrap().clone();
+    assert_eq!(seen.get("index.js").map(String::as_str), Some(INDEX_JS));
+    assert_eq!(seen.get("a.js").map(String::as_str), Some("original\n"));
+    assert_eq!(seen.len(), 3, "full base tree: {seen:?}");
+    let (_, draft) = env.row(COLLECTION_DRAFTS, "carol/notes").unwrap();
+    let files = draft["files"].as_object().unwrap();
+    assert_eq!(
+        files.len(),
+        1,
+        "only the changed file enters the draft: {files:?}"
+    );
+    assert_eq!(
+        env.content.text(files["index.js"].as_str().unwrap()),
+        "export const answer = 42;\n"
+    );
+    assert_eq!(final_turn["changed_files"], json!(["index.js"]));
+}
+
+/// §16.44 addition (4): the conflict patch is a unified diff with 3 context
+/// lines per hunk against base_draft_rev; after the user inserted lines above
+/// the change it still applies cleanly with GNU patch (no fuzz). Mutation:
+/// `PATCH_CONTEXT_LINES` 3 → 0 → red.
+#[cfg(unix)]
+#[test]
+fn conflict_patch_has_three_context_lines_and_applies_after_user_edit() {
+    use std::io::Write as _;
+    let env = env();
+    let agent: String = long_js().replace("line15\n", "agent15\n");
+    let runner = ScriptedRunner::new(&[("long.js", agent.as_str())]);
+    let user_version = format!("user1\nuser2\nuser3\n{}", long_js());
+    let user_sha = env.content.put(user_version.as_bytes()).unwrap();
+    let writer = env.fixture.writer();
+    *runner.during.lock().unwrap() = Some(Box::new(move || {
+        writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                let (_, mut draft) = get_with_rev(tx, COLLECTION_DRAFTS, "carol/notes")?.unwrap();
+                draft["files"]["long.js"] = json!(user_sha);
+                put(tx, COLLECTION_DRAFTS, "carol/notes", &draft)
+            }))
+            .unwrap()
+            .blocking_wait()
+            .unwrap();
+    }));
+    let panel = env.panel(runner);
+    let payload = json!({"app_id":"notes","draft_id":"carol/notes",
+        "base_draft_rev":env.draft_rev("carol"),"prompt":"change line 15"});
+    let admitted = panel
+        .execute(actor("carol", "admin"), turn("c1", payload), 10)
+        .unwrap();
+    let final_turn = admitted.worker.unwrap().join().unwrap();
+    assert_eq!(final_turn["state"], "conflict", "{final_turn}");
+    let patch = env
+        .content
+        .text(final_turn["patch"]["ref"].as_str().unwrap());
+    assert!(patch.contains("--- a/long.js\n+++ b/long.js\n"), "{patch}");
+    let hunk: Vec<&str> = patch
+        .lines()
+        .skip_while(|l| !l.starts_with("@@"))
+        .skip(1)
+        .collect();
+    let leading = hunk.iter().take_while(|l| l.starts_with(' ')).count();
+    let trailing = hunk.iter().rev().take_while(|l| l.starts_with(' ')).count();
+    assert_eq!((leading, trailing), (3, 3), "{patch}");
+    // Apply to the user's current version with GNU patch, no fuzz allowed.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("long.js"), &user_version).unwrap();
+    let mut child = std::process::Command::new("patch")
+        .args(["-p1", "--fuzz=0", "--batch", "--no-backup-if-mismatch"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("GNU patch available");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("long.js")).unwrap(),
+        user_version.replace("line15\n", "agent15\n")
+    );
+    // The user's edit in the draft itself is untouched.
+    let (_, draft) = env.row(COLLECTION_DRAFTS, "carol/notes").unwrap();
+    assert_eq!(
+        env.content
+            .text(draft["files"]["long.js"].as_str().unwrap()),
+        user_version
+    );
 }

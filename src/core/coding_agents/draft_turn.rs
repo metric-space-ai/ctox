@@ -634,11 +634,38 @@ fn admit_turn(
     if current_rev != request.base_draft_rev {
         return done(rejected("conflict", "stale_draft_rev"));
     }
-    let files = draft
+    // §16.44 addition (1): the agent works on the FULL tree = files of the base
+    // app version (business_app_versions/<app>@<base_app_ver>.manifest.files)
+    // overlaid with the draft (null = deleted in the draft, absent from the tree).
+    let mut files = Map::new();
+    if let Some(base_ver) = draft.get("base_app_ver").and_then(Value::as_str) {
+        let version_id = format!("{}@{base_ver}", request.app_id);
+        let Some(version) = get(tx, "business_app_versions", &version_id)? else {
+            return done(rejected("not_found", "base_version_not_found"));
+        };
+        for (path, sha) in version
+            .pointer("/manifest/files")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            if sha.is_string() {
+                files.insert(path.clone(), sha.clone());
+            }
+        }
+    }
+    for (path, sha) in draft
         .get("files")
         .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+    {
+        if sha.is_string() {
+            files.insert(path.clone(), sha.clone());
+        } else {
+            files.remove(path);
+        }
+    }
     let callback = (command.on_complete.is_some() || command.on_failed.is_some())
         .then(|| json!({"on_complete":command.on_complete,"on_failed":command.on_failed}));
     let turn = json!({
@@ -758,62 +785,34 @@ fn project_messages(response: &Value, now: u64) -> (Vec<Value>, Vec<Value>) {
     (messages, tools)
 }
 
-/// Unified diff with one zero-context hunk per file (apply with
-/// `git apply --unidiff-zero`). Old/new are full file texts or None.
+/// Conflict patch (§16.44 addition (4)): unified diff with 3 context lines per
+/// hunk against the turn's base tree (= `base_draft_rev`), `a/`/`b/` paths, so
+/// `patch -p1` / `git apply` still apply it after the user edited elsewhere.
+pub(crate) const PATCH_CONTEXT_LINES: usize = 3;
 pub(crate) fn unified_patch(changes: &[(String, Option<String>, Option<String>)]) -> String {
     let mut out = String::new();
     for (path, before, after) in changes {
-        let old: Vec<&str> = before
-            .as_deref()
-            .map(|t| t.lines().collect())
-            .unwrap_or_default();
-        let new: Vec<&str> = after
-            .as_deref()
-            .map(|t| t.lines().collect())
-            .unwrap_or_default();
-        let mut prefix = 0;
-        while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
-            prefix += 1;
-        }
-        let mut suffix = 0;
-        while suffix < old.len() - prefix
-            && suffix < new.len() - prefix
-            && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
-        {
-            suffix += 1;
-        }
-        let removed = &old[prefix..old.len() - suffix];
-        let added = &new[prefix..new.len() - suffix];
-        out.push_str(&format!(
-            "--- {}\n+++ {}\n",
-            if before.is_some() {
-                format!("a/{path}")
-            } else {
-                "/dev/null".into()
-            },
-            if after.is_some() {
-                format!("b/{path}")
-            } else {
-                "/dev/null".into()
-            },
-        ));
-        let range = |start: usize, len: usize| {
-            if len == 0 {
-                format!("{start},0")
-            } else {
-                format!("{},{len}", start + 1)
-            }
+        let old = before.as_deref().unwrap_or("");
+        let new = after.as_deref().unwrap_or("");
+        let a = if before.is_some() {
+            format!("a/{path}")
+        } else {
+            "/dev/null".to_owned()
         };
-        out.push_str(&format!(
-            "@@ -{} +{} @@\n",
-            range(prefix, removed.len()),
-            range(prefix, added.len())
-        ));
-        for line in removed {
-            out.push_str(&format!("-{line}\n"));
-        }
-        for line in added {
-            out.push_str(&format!("+{line}\n"));
+        let b = if after.is_some() {
+            format!("b/{path}")
+        } else {
+            "/dev/null".to_owned()
+        };
+        let diff = similar::TextDiff::from_lines(old, new);
+        let text = diff
+            .unified_diff()
+            .context_radius(PATCH_CONTEXT_LINES)
+            .header(&a, &b)
+            .to_string();
+        out.push_str(&text);
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
         }
     }
     out
