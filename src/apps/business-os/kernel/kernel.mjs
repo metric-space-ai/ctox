@@ -106,6 +106,9 @@ export function createKernel(opts = {}) {
   // §16.37/§16.39 Nr. 2: Byte-Budget der bei Bedarf geholten Bibliotheksdateien (LRU über IDB artifacts)
   const libByteBudget = opts.libByteBudget ?? 512 * 1024 * 1024;
   const capabilities = new Set(opts.capabilities ?? []);
+  // §16.43: die device_pairing_id kommt aus der bestehenden Gerätebindung (Bootstrap, dieselbe id wie im hello device_proof);
+  // der Fake-Core liefert sie deterministisch je (Instanz, Nutzer, Gerät).
+  const deviceId = () => opts.deviceId ?? transport.deviceId?.(instanceId, userId) ?? null;
   const tabId = uuidv7();
   const tabKey = getTabKey();
   const channelName = `ctox-kernel:${dbName}`;
@@ -274,7 +277,7 @@ export function createKernel(opts = {}) {
   let cacheBudgetTimer=null;
   function applyReclaim(result){
     for(const row of result.records)mirrorPut(row);
-    for(const collection of result.collections){evicted.add(collection);scopeCursors.delete(collection);subscriptions.delete(collection);}
+    for(const collection of result.collections){evicted.add(collection);scopeCursors.delete(collection);subscriptions.delete(collection);untrackCollection(collection);}
     if(result.records.length)post({type:'docs',keys:result.records.map(row=>[row.collection,row.id])});
   }
   function scheduleCacheBudget(){
@@ -298,7 +301,8 @@ export function createKernel(opts = {}) {
   function netChanged() {
     notify('metrics');
     if (isLeader) {
-      const state={link:{...link},backlog:(fakeCore?.backlog ?? 0)+extraBacklog};
+      refreshCollections();
+      const state={link:{...link},backlog:(fakeCore?.backlog ?? 0)+extraBacklog,collections:collectionsView};
       post({type:'net',...state});
       if(db && !closed)track(db.tx(async t=>{
         await assertGen(t);const old=await t.get('meta','network');
@@ -307,11 +311,40 @@ export function createKernel(opts = {}) {
       }).catch(err=>{if(err instanceof StaleLeader)stepDown();else throw err;}));
     }
   }
+  // ---- §16.45 Collection-Liveness (K-1e): je abonnierter Collection {state, backlog, gen, since_ms, error?} ----
+  // live = Verbindung oben UND Backlog 0 nach vollständiger Seite für den abonnierten Bereich (collection, scope, gen);
+  // catching_up = noch keine vollständige Seite oder Backlog > 0; offline = Verbindung weg; error = typisierter Fehler (§16.42).
+  const collScopes = new Map(); // collection → {key, gen, backlog, complete, error, state, since_ms}
+  let collectionsView = {};
+  function collState(e) {
+    if (e.error) return 'error';
+    if (link.state !== 'online') return 'offline';
+    return e.complete && e.backlog === 0 ? 'live' : 'catching_up';
+  }
+  function refreshCollections() {
+    const now = Date.now(), view = {};
+    for (const [name, e] of collScopes) {
+      const st = collState(e);
+      if (st !== e.state) { e.state = st; e.since_ms = now; }
+      view[name] = { state: e.state, backlog: e.backlog, gen: e.gen, since_ms: e.since_ms, ...(e.error ? { error: { ...e.error } } : {}) };
+    }
+    if (!jsonEq(view, collectionsView)) { collectionsView = view; return true; }
+    return false;
+  }
+  function trackScope(collection, scope, patch) {
+    const key = checkpointKey(scope);
+    let e = collScopes.get(collection);
+    if (!e || e.key !== key) { e = { key, gen: scope.gen ?? genOf(collection), backlog: 0, complete: false, error: null, state: null, since_ms: Date.now() }; collScopes.set(collection, e); }
+    Object.assign(e, patch);
+    if (refreshCollections()) netChanged();
+  }
+  function untrackCollection(collection) { if (collScopes.delete(collection) && refreshCollections()) netChanged(); }
   let followerNet = null;
   const metricsLive = makeLive(['metrics'], () => {
-    const net = isLeader || !followerNet ? { link, backlog: (fakeCore?.backlog ?? 0) + extraBacklog } : followerNet;
+    const net = isLeader || !followerNet ? { link, backlog: (fakeCore?.backlog ?? 0) + extraBacklog, collections: collectionsView } : followerNet;
     return {
       backlog: net.backlog,
+      collections: cloneValue(net.collections ?? {}),
       outbox: { count: outboxStat.count, oldest_ms: outboxStat.oldest_at ? Math.max(0, Date.now() - outboxStat.oldest_at) : 0 },
       link: { ...net.link }, ...(timing?{timing:{...timing}}:{}),
     };
@@ -387,6 +420,21 @@ export function createKernel(opts = {}) {
     }
     localSeqKnown=ls;await refreshOutboxStat();if(isLeader)schedulePump();return n;
   }
+  // Verbindungsaufbau (Leiter): connect, dann alle Bereiche abonnieren. Auch der Weg von kernel.reconnect().
+  function connectTransport() {
+    return Promise.resolve().then(()=>transport.connect({instanceId,userId},{
+        page:receivePage,write_result:receiveResult,
+        link:next=>{link={...link,...next,state:next.state==='online'?'online':'offline'};if(link.state==='offline'){inflight.clear();inflightOps.clear();}netChanged();if(link.state==='online'){for(const value of activations.values())sendActivationReport(value);for(const id of mirror.get('business_apps')?.keys()??[])scheduleActivation(id);if(transport.scope)for(const collection of subscriptions)track(subscribeCollection(collection));schedulePump();}},
+        actor:next=>{if(next.id!==userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor');},
+        timing:next=>{timing=next;notify('metrics');},
+        status:(appId,item)=>zoneReport(appId,item,'kernel'),
+        revoke:receiveRevoke,
+      })).then(async()=>{
+        if(closed||!isLeader)return;
+        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
+        await deliver();schedulePump();
+      }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}});
+  }
   async function becomeLeader() {
     if (closed) return;
     myGen = await acquireGeneration(db);
@@ -398,18 +446,7 @@ export function createKernel(opts = {}) {
     post({ type: 'leader', gen: myGen });
     if (!transportConnected) {
       transportConnected = true;
-      track(Promise.resolve().then(()=>transport.connect({instanceId,userId},{
-        page:receivePage,write_result:receiveResult,
-        link:next=>{link={...link,...next,state:next.state==='online'?'online':'offline'};if(link.state==='offline'){inflight.clear();inflightOps.clear();}netChanged();if(link.state==='online'){for(const value of activations.values())sendActivationReport(value);for(const id of mirror.get('business_apps')?.keys()??[])scheduleActivation(id);if(transport.scope)for(const collection of subscriptions)track(subscribeCollection(collection));schedulePump();}},
-        actor:next=>{if(next.id!==userId)throw new CtoxError('forbidden','Actor identity mismatch');actor={...actor,...next};notify('actor');},
-        timing:next=>{timing=next;notify('metrics');},
-        status:(appId,item)=>zoneReport(appId,item,'kernel'),
-        revoke:receiveRevoke,
-      })).then(async()=>{
-        if(closed||!isLeader)return;
-        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
-        await deliver();schedulePump();
-      }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}}));
+      track(connectTransport());
     }
     netChanged();scheduleCacheBudget();schedulePump();
     for (const id of mirror.get('business_apps')?.keys() ?? []) scheduleActivation(id);
@@ -469,7 +506,7 @@ export function createKernel(opts = {}) {
       case 'subscribe': if(isLeader && typeof msg.collection==='string')await subscribeCollection(msg.collection,'P1');break;
       case 'upload_done': uploadsDone.add(msg.ref);notify('uploads');break;
       case 'write_result': handleWriteResult(msg.info, msg.result); await refreshOutboxStat(); break;
-      case 'net': followerNet = { link: msg.link, backlog: msg.backlog }; notify('metrics'); break;
+      case 'net': followerNet = { link: msg.link, backlog: msg.backlog, collections: msg.collections ?? {} }; notify('metrics'); break;
       case 'hello': if (isLeader) netChanged(); break;
       case 'leader': knownGen = Math.max(knownGen, msg.gen ?? 0); notify('leader'); break;
       case 'activation': applyActivationLocal(msg.value, false); break;
@@ -657,7 +694,9 @@ export function createKernel(opts = {}) {
     expectedScopes.set(collection,scope);
     const cp = await db.get('meta', checkpointKey(scope));
     scopeCursors.set(collection,cp?.cursor_to??'0');
-    await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority });
+    trackScope(collection, scope, { complete: false, error: null });
+    try { await transport.subscribe({ ...scope, checkpoint_seq: cp?.cursor_to ?? '0', priority }); }
+    catch (err) { trackScope(collection, scope, { error: { code: err?.code ?? 'unavailable', message: String(err?.message ?? err) } }); throw err; }
     subscriptions.add(collection);
   }
   async function receivePage(page) {
@@ -699,6 +738,7 @@ export function createKernel(opts = {}) {
     for(const rec of out.recs)mirrorPut(rec);
     scopeCursors.set(page.collection,maxSeq(scopeCursors.get(page.collection)??'0',cursor));notify('checkpoint');
     scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
+    trackScope(page.collection, scope, { backlog: Math.max(0, Number(page.backlog ?? 0)), complete: !!page.complete, error: null });
     setCheckpoint(out.cp); extraBacklog=[...scopeBacklog.values()].reduce((a,b)=>a+b,0); netChanged();
     post({type:'docs',keys:out.recs.map(r=>[r.collection,r.id]),checkpoint:out.cp});
   }
@@ -783,6 +823,8 @@ export function createKernel(opts = {}) {
     return deepFreeze(result);
   }
   async function receiveRevoke(message){
+    for (const c of message.collections ?? []) if (collScopes.has(c)) { collScopes.get(c).error = { code: 'revoked', message: `Recht für ${c} entzogen` }; }
+    if (refreshCollections()) netChanged();
     const collections=new Set(message.collections??[]),rows=await db.tx(async t=>{await assertGen(t);const changed=[];for(const row of await t.all('docs'))if(collections.has(row.collection)){const revoked={...row,data:null,base:emptyBase(),deleted:true,revoked:true};await putDoc(t,revoked);changed.push(revoked);}for(const hash of message.artifacts??[])await t.del('artifacts',hash);await t.put('meta',{key:'rights_ver',value:message.rights_ver});return changed;});
     for(const row of rows)mirrorPut(row);post({type:'docs',keys:rows.map(r=>[r.collection,r.id])});
   }
@@ -1713,6 +1755,8 @@ export function createKernel(opts = {}) {
     identity: Object.freeze({
       get instance_id() { return instanceId; },
       get user_id() { return userId; },
+      /** §16.43: eigene device_pairing_id („Dieses Gerät“) aus der Gerätebindung des Bootstraps; Fake-Core deterministisch. */
+      get device_id() { return deviceId(); },
       logout: (o) => logout(o),
       // Instanzwechsel: diesen Kernel schließen (Daten bleiben), neuen Kernel für (Instanz, Nutzer) liefern.
       async switchInstance(next = {}) {
@@ -1822,6 +1866,23 @@ export function createKernel(opts = {}) {
       return { status: 'accepted', rev: ver, diff: diff.map(({ name, kind }) => ({ name, kind })) };
     },
     libFetch(lib, major, path, ver) { return libFetchLeader(lib, major, path, ver); },
+    // §16.45 „Neu verbinden“: voller Neuaufbau des Transports im Leiter (nie Seiten-Reload); alle Bereiche neu abonniert
+    async reconnect() {
+      guardAlive();
+      for (const e of collScopes.values()) { e.complete = false; e.error = null; }
+      link = { ...link, state: 'offline' }; inflight.clear(); inflightOps.clear(); netChanged();
+      if (typeof transport.reconnect === 'function') {
+        await transport.reconnect();
+        for (const c of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(c);
+        await deliver(); schedulePump();
+      } else {
+        try { transport.close(); } catch { /* egal */ }
+        transportConnected = true;
+        await connectTransport();
+      }
+      refreshCollections();
+      return { link: { ...link }, collections: cloneValue(collectionsView) };
+    },
     async reportFailed(appId, ver, reason) {
       const cur = activations.get(appId) ?? {};
       const good = (cur.good_vers ?? []).filter((v) => v !== ver);
@@ -1910,6 +1971,8 @@ export function createKernel(opts = {}) {
     /** Fake-Core: Write eines anderen Clients direkt an den Core (z. B. doppelte Befehls-id). */
     coreWrite: (entry) => fakeCore?.write(entry),
     coreLog: () => [...(fakeCore?.runtime.log ?? [])],
+    /** Fake-Core: wie oft sich der Transport verbunden hat (kernel.reconnect = voller Neuaufbau). */
+    get transportConnects() { return fakeCore?.connects ?? 0; },
     inspectMeta: async (key) => db.get('meta', key),
     /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
     windowState: async () => db.all('window_state'),
@@ -2001,6 +2064,8 @@ export function createKernel(opts = {}) {
     libs: shellApi.libs,
     source: shellApi.source,
     identity: shellApi.identity,
+    /** §16.45: voller Neuaufbau des Transports (nie Seiten-Reload); im Leser über den Leiter. */
+    reconnect: () => { guardAlive(); return callLeader('reconnect', []); },
     shellApi: () => shellApi,
     sim,
     receivePage,
@@ -2009,7 +2074,7 @@ export function createKernel(opts = {}) {
       guardAlive();
       const records = await evictCollection(db,collection,assertGen);
       for(const row of records)mirrorPut(row);
-      evicted.add(collection);scopeCursors.delete(collection);subscriptions.delete(collection);
+      evicted.add(collection);scopeCursors.delete(collection);subscriptions.delete(collection);untrackCollection(collection);
       post({type:'docs',keys:records.map(r=>[r.collection,r.id])});
       return records.length;
     },
@@ -2066,6 +2131,6 @@ export function createStubKernel(opts = {}) {
   // K-1c Punkt 4: coreNamespace = ein Core je Instanz für mehrere Nutzer (eigene DB je Nutzer, §16.7); der Core kennt
   // dann den Nutzer (Rolle, Rechte) und setzt Zeilen-, Collection- und Befehlsrechte durch.
   const shared = typeof opts.coreNamespace === 'string' && opts.coreNamespace;
-  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs});
+  const transport = new MemoryCoreTransport({namespace:shared?opts.coreNamespace:namespace,latencyMs:opts.latencyMs,user:shared?{...actor,...(opts.coreUser??{}),id:actor.id}:null,everyMs:opts.everyMs,agentDelayMs:opts.agentDelayMs,deviceLabel:opts.deviceLabel});
   return createKernel({instanceId:'stub',userId:'local',...opts,actor,transport});
 }
