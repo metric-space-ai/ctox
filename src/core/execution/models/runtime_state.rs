@@ -1177,7 +1177,7 @@ mod tests {
     use crate::inference::runtime_plan::ChatRuntimePlan;
     use crate::inference::runtime_plan::PlannedGpuAllocation;
     use crate::inference::runtime_plan::TheoreticalResourceBreakdown;
-    use std::time::SystemTime;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_temp_root() -> std::path::PathBuf {
         let unique = SystemTime::now()
