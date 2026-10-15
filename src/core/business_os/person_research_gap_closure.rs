@@ -1045,10 +1045,18 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
             // gespeicherte Werte nicht wieder eingetragen") und loeschte bei
             // einem anderen Lead belegtes Geschlecht und Titel; der Review
             // verwarf die Laeufe danach als Datenverlust, bis das Budget leer
-            // war. Der Einwand bleibt als `challenge` am Feld sichtbar. Nur ein
-            // im Feld-Review widerlegter Wert darf zurueckgestuft werden.
+            // war. Der Einwand bleibt als `challenge` am Feld sichtbar.
+            // Zurueckgestuft wird ein belegter Wert nur, wenn er im Feld-Review
+            // widerlegt ist oder der Einwand selbst eine Quelle mit URL und
+            // Zitat traegt (begruendeter Widerspruch). Stresstest 15./16.10.:
+            // ohne diese Ausnahme lehnte der Speicher jede belegte Korrektur
+            // ab, der Review verlangte sie weiter, sechs Laeufe erschoepften ihr
+            // Budget.
             if let Some(previous) = merged.get_mut(field) {
-                if is_unrefuted_verified(previous) && !is_verified_status(status) {
+                if is_unrefuted_verified(previous)
+                    && !is_verified_status(status)
+                    && !status_carries_contradicting_source(status)
+                {
                     if let Some(previous) = previous.as_object_mut() {
                         previous.insert("challenge".to_string(), status.clone());
                     }
@@ -1066,6 +1074,23 @@ fn is_verified_status(status: &Value) -> bool {
         .get("status")
         .and_then(Value::as_str)
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
+}
+
+fn status_carries_contradicting_source(status: &Value) -> bool {
+    status
+        .get("sources")
+        .and_then(Value::as_array)
+        .is_some_and(|sources| {
+            sources.iter().any(|source| {
+                let text = |key: &str| {
+                    source
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.trim().is_empty())
+                };
+                (text("url") || text("source_url")) && text("quote")
+            })
+        })
 }
 
 fn is_unrefuted_verified(status: &Value) -> bool {
@@ -5845,6 +5870,14 @@ mod tests {
         assert_eq!(merged["person_geschlecht"]["status"], "verified");
         // A value refuted in the field review may be reopened.
         assert_eq!(merged["wz_code"]["status"], "action_required");
+        // A contradiction backed by a quoted source reopens the value.
+        let contradicted = serde_json::json!({
+            "umsatz": {"status": "action_required", "value": null, "reason": "Quellen widersprechen sich",
+                "sources": [{"source_id": "bundesanzeiger.de", "url": "https://www.bundesanzeiger.de/x", "quote": "Umsatzerlöse 2024: 187.000.000 EUR"}]}
+        });
+        let reopened = merge_field_status(Some(&merged), contradicted);
+        assert_eq!(reopened["umsatz"]["status"], "action_required");
+        assert!(reopened["umsatz"].get("challenge").is_none());
         // A newly verified value still replaces the old one.
         let corrected = serde_json::json!({
             "umsatz": {"status": "verified", "value": "201.000.000 EUR (2024)", "sources": [{"source_id": "bundesanzeiger.de"}, {"source_id": "dnbhoovers.com"}]}
