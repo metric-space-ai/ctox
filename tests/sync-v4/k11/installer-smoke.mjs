@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {Native,verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
 import {schema} from '../../sync-v4-e2e/browser.mjs';
+import {completedTransition} from './installer-outcome.mjs';
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
 const [oldReceipt,newReceipt,outArg,roundtrip]=process.argv.slice(2),before=verifiedBuild(oldReceipt),after=verifiedBuild(newReceipt);
 const output=resolve(outArg),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts')+'/';
@@ -36,7 +37,8 @@ try{
  for(const [name,file]of [['installer','installer.json'],['failure','failure.json'],['controller','controller.json']]){
   const p=join(output,'upgrade',file);if(fs.existsSync(p))record[name]=JSON.parse(fs.readFileSync(p));
  }
- record.installerExecuted=record.installer?.installerExecuted===true&&record.controller?.groupAbsent===true&&run.status===0;
+ record.installerExecuted=completedTransition(record,roundtrip==='yes');
+ record.roundtripExecuted=record.installer?.roundtripExecuted===true;
  if(record.installerExecuted){
   record.currentRelease=fs.realpathSync(join(root,'managed/current'));
   const current=native.seed('read',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));

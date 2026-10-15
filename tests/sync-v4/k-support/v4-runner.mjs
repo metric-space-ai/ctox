@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import {join,resolve,extname} from 'node:path';
 import {createRequire} from 'node:module';
+import {createHash} from 'node:crypto';
 import {Native,until,owner} from '../../sync-v4-e2e/native.mjs';
 import {schema,installRelay} from '../../sync-v4-e2e/browser.mjs';
 import {probeNativeV4} from './v4-binding.mjs';
@@ -25,6 +26,25 @@ try{
  native.serve();result.phase='daemon-ready';save();
  const origin=`http://127.0.0.1:${c.port}`;
  await until(async()=>{const r=await fetch(origin+'/api/business-os/sync/config',{signal:AbortSignal.timeout(2000)});if(!r.ok)return false;const b=await r.json();return b.native_rxdb_peer_available===true;},60000,'real isolated native bootstrap');
+ result.runningImage={path:fs.readlinkSync('/proc/'+native.daemon.pid+'/exe'),sha256:createHash('sha256').update(fs.readFileSync('/proc/'+native.daemon.pid+'/exe')).digest('hex')};
+ if(result.runningImage.sha256!==c.binarySha256)throw Error('Running daemon differs from the verified installed image');
+ // Read-only static requests exercise the selected signed slot. No app code is
+ // executed here, and these timings are not app mount/interactive acceptance.
+ if(c.preparedProfile){
+  result.shellStatic=[];
+  for(const path of ['/','/app.js?v=m7-'+c.revision.slice(0,12)]){
+   const at=Date.now();
+   try{
+    const response=await fetch(origin+path,{redirect:'manual',signal:AbortSignal.timeout(10000)}),body=Buffer.from(await response.arrayBuffer());
+    const row={path,status:response.status,durationMs:Date.now()-at,bytes:body.length,sha256:createHash('sha256').update(body).digest('hex')};
+    if(response.headers.has('location')){const next=new URL(response.headers.get('location'),origin);row.redirect={origin:next.origin,path:next.pathname};}
+    if(path.startsWith('/app.js'))row.appBuild=body.toString('utf8').match(/\bAPP_BUILD\s*=\s*['"]([^'"]+)['"]/)?.[1]??null;
+    result.shellStatic.push(row);
+   }catch(error){result.shellStatic.push({path,status:null,durationMs:Date.now()-at,error:error.name,message:error.message,budgetMs:10000});}
+  }
+  result.shellStaticReady=result.shellStatic.every(r=>r.status===200);
+  save();
+ }
  const require=createRequire(join(c.modulesRoot,'playwright/package.json')),{chromium}=require('playwright');
  browser=await chromium.launch({executablePath:c.chrome,headless:true,args:['--disable-gpu'],env:{...process.env,HOME:join(c.root,'runtime/home'),TMPDIR:c.canonicalTmpdir}});
  const context=await browser.newContext();await context.addInitScript(installRelay,{turnPort:c.turnPort});
