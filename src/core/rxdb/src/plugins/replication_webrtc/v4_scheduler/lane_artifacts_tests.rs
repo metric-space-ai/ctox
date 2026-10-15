@@ -3,7 +3,7 @@ use super::super::super::{
     lanes::{ASSOCIATION_BUDGET, FRAME_BYTES, REALTIME_LABEL},
 };
 use super::super::{
-    AssociationBudget, Framer, Incoming, ReliableSession, SessionBinding, ADMISSION,
+    ADMISSION, AssociationBudget, Framer, Incoming, ReliableSession, SessionBinding,
 };
 use super::*;
 use async_trait::async_trait;
@@ -221,7 +221,7 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
         // Counterfactual: the same control path with no blob and no CAS IO.
         // Keep the loaded assertion below; idle data only locates the delay.
         let mut idle_ms = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..64 {
             let start = Instant::now();
             sender.send(Lane::Control, WireSeq(1), b"idle-request", Some(Arc::new(Authorized))).await.unwrap();
             let Some(Incoming::Reliable { bytes, delivery: Some(delivery), .. }) = controls.recv().await else { panic!("idle request missing"); };
@@ -230,16 +230,25 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
             let Some(Incoming::Reliable { bytes, delivery: Some(delivery), .. }) = replies.recv().await else { panic!("idle reply missing"); };
             assert_eq!(bytes, b"idle-reply"); idle_ms.push(start.elapsed().as_secs_f64() * 1000.0); delivery.acknowledge().unwrap();
         }
-        eprintln!("LANE4_IDLE_CONTROL {}", serde_json::json!({"roundtrip_ms":idle_ms,"blob_active":false,"cas_io_active":false}));
+        idle_ms.sort_by(f64::total_cmp);
+        let idle_p99 = idle_ms[(idle_ms.len()*99/100).min(idle_ms.len()-1)];
+        eprintln!("LANE4_IDLE_CONTROL {}", serde_json::json!({"roundtrip_ms":idle_ms,"roundtrip_p99_ms":idle_p99,"blob_active":false,"cas_io_active":false}));
         let transfer_clock = Instant::now();
         let receive = async move {
             let mut verified = None;
+            let mut io_seconds = 0.0;
+            let mut wait_seconds = 0.0;
             while verified.is_none() {
+                let wait_start = Instant::now();
                 let Some(Incoming::Reliable { bytes, delivery: Some(delivery), .. }) = bulks.recv().await else { panic!("missing artifact delivery"); };
+                wait_seconds += wait_start.elapsed().as_secs_f64();
+                let io_start = Instant::now();
                 let (next, blob) = sink.deliver(bytes, delivery).await.unwrap(); sink = next; verified = blob;
+                io_seconds += io_start.elapsed().as_secs_f64();
                 if sink.offset().unwrap() % (5 * 1024 * 1024) == 0 { eprintln!("LANE4_PROGRESS bytes={} elapsed_ms={}", sink.offset().unwrap(), transfer_clock.elapsed().as_millis()); }
             }
             assert_eq!(verified.unwrap().reference(), expected);
+            eprintln!("LANE4_RECEIVE_STAGES {}", serde_json::json!({"wait_seconds":wait_seconds,"persist_verify_seconds":io_seconds,"debug_assertions":cfg!(debug_assertions)}));
             done.store(true, std::sync::atomic::Ordering::Release);
         };
         let control_sender = sender.clone();
@@ -267,6 +276,8 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
         target.verified(&reference, SIZE).unwrap();
         eprintln!("LANE4_MEASUREMENT {}", serde_json::json!({"transport":"native-native real WebRTC loopback", "relay":false,"bytes":SIZE,"seconds":elapsed,"mb_per_second":SIZE as f64/1_000_000.0/elapsed,"control_roundtrip_p99_ms":p99,"sctp_buffer_upper_bound_peak":peak,"sha256_verified":true,"target_buffer_peak":receiver.handoff_counters().buffered_upper_bound_peak}));
         assert!(p99 <= 100.0, "control p99 {p99}ms during bulk");
+        assert!(idle_p99 <= 20.0, "idle control p99 {idle_p99}ms");
+        assert!(SIZE as f64 / 1_000_000.0 / elapsed >= 5.0, "bulk throughput below 5 MB/s");
         sender.close_now(); receiver.close_now();
     }).await;
     tasks.abort_all();
@@ -379,27 +390,27 @@ impl PairFixture {
             .unwrap()
         };
         let create = async {
-            let result = NativeSendScheduler::create_resumed(&a, transport.clone(), ba, |_, _, _| {
-                Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
-            }).await;
+            let result =
+                NativeSendScheduler::create_resumed(&a, transport.clone(), ba, |_, _, _| {
+                    Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
+                })
+                .await;
             eprintln!("LANE4_RESUME constructor={:?}", result.as_ref().map(|_| ()));
             let source = result?;
-            // This pinned native SDK marks new channels as negotiation-needed
-            // even on an existing SCTP association. Honor its public SDP path;
-            // never treat constructor admission as channels already being live.
-            let offer = a.create_offer(None).await.unwrap();
-            a.set_local_description(offer.clone()).await.unwrap();
-            b.set_remote_description(offer).await.unwrap();
-            let answer = b.create_answer(None).await.unwrap();
-            b.set_local_description(answer.clone()).await.unwrap();
-            a.set_remote_description(answer).await.unwrap();
-            eprintln!("LANE4_RESUME stage=renegotiated");
+            // Existing SCTP uses in-band DCEP. No second SDP exchange and no
+            // external signalling workaround may be needed after bootstrap.
             Ok(source)
         };
         // Surface constructor failure immediately. join! used to hide it
         // behind the unrelated accept future until the fixture watchdog fired.
-        let (source, target) = tokio::try_join!(create, async { Ok::<_, crate::rx_error::RxError>(accept.await) })
-            .unwrap_or_else(|e| panic!("native resumed constructor: {e:?}"));
+        let (source, target) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(create, async {
+                Ok::<_, crate::rx_error::RxError>(accept.await)
+            })
+        })
+        .await
+        .expect("native post-bootstrap channels did not open")
+        .unwrap_or_else(|e| panic!("native resumed constructor: {e:?}"));
         for scheduler in [source.clone(), target.clone()] {
             let mut failures = scheduler.failures();
             forwarding.spawn(async move {
@@ -433,102 +444,60 @@ impl PairFixture {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lane4_real_webrtc_drop_after_persistence_replays_then_resumes_prefix() {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(90), async {
         let dir = tempfile::tempdir().unwrap();
         let source = Cas::open(dir.path().join("source")).unwrap();
         let target = Cas::open(dir.path().join("target")).unwrap();
-        let bytes = vec![93; CHUNK_BYTES * 2];
+        let mut seed = 0x6a09e667f3bcc909u64;
+        let mut bytes = vec![0; 50 * 1024 * 1024];
+        for byte in &mut bytes { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *byte = seed as u8; }
         std::fs::write(dir.path().join("primitive"), &bytes).unwrap();
-        let blob = source
-            .import(dir.path().join("primitive"), "d".repeat(64))
-            .await
-            .unwrap();
-        let sa = ReliableSession::new("artifact-drop".into(), ADMISSION[..6].try_into().unwrap())
-            .unwrap();
-        let sb = ReliableSession::new("artifact-drop".into(), ADMISSION[..6].try_into().unwrap())
-            .unwrap();
+        let blob = source.import(dir.path().join("primitive"), "d".repeat(64)).await.unwrap();
+        let sa = ReliableSession::new("artifact-drop".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("artifact-drop".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let pair = PairFixture::connect(sa.clone(), sb.clone()).await;
         let mut bulk = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
         let scope = "e".repeat(64);
-        let mut sink =
-            ArtifactReceiver::open(&target, &scope, blob.reference(), blob.size()).unwrap();
-        let payload = packet(blob.reference(), blob.size(), 0, &bytes[..CHUNK_BYTES]).unwrap();
-        pair.source
-            .send(
-                Lane::Transfer,
-                WireSeq(0),
-                &payload,
-                Some(Arc::new(Authorized)),
-            )
-            .await
-            .unwrap();
-        let Some(Incoming::Reliable {
-            bytes: received,
-            delivery: Some(unacknowledged),
-            ..
-        }) = bulk.recv().await
-        else {
-            panic!("missing pre-drop chunk");
-        };
-        sink.apply(&received).unwrap();
-        eprintln!("LANE4_RESUME stage=persisted-before-lost-ack"); // effect happened, ACK lost with channel
-        assert_eq!(sink.offset().unwrap(), CHUNK_BYTES as u64);
-        drop(unacknowledged);
-        drop(sink);
-        pair.close().await;
-        assert_eq!(sb.hello().resume_from[Lane::Transfer.index()], WireSeq(0));
+        let mut sink = ArtifactReceiver::open(&target, &scope, blob.reference(), blob.size()).unwrap();
+        let middle = bytes.len() / 2;
+        let mut last_payload = Vec::new();
+        for offset in (0..middle).step_by(CHUNK_BYTES) {
+            let payload = packet(blob.reference(), blob.size(), offset as u64, &bytes[offset..offset+CHUNK_BYTES]).unwrap();
+            pair.source.send(Lane::Transfer, WireSeq(0), &payload, Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable { bytes: received, delivery: Some(token), .. }) = bulk.recv().await else { panic!("missing pre-drop chunk"); };
+            if offset + CHUNK_BYTES == middle {
+                let (next, completed) = tokio::task::spawn_blocking(move || { let completed = sink.apply(&received).unwrap(); (sink, completed) }).await.unwrap();
+                sink = next; assert!(completed.is_none());
+                drop(token); // persisted effect, but ACK lost with the connection
+                last_payload = payload;
+            } else {
+                let (next, completed) = sink.deliver(received, token).await.unwrap(); sink = next; assert!(completed.is_none());
+            }
+        }
+        assert_eq!(sink.offset().unwrap(), middle as u64);
+        drop(sink); pair.close().await;
+        assert_eq!(sb.hello().resume_from[Lane::Transfer.index()], WireSeq((middle / CHUNK_BYTES - 1) as u64));
         let pair = PairFixture::connect(sa.clone(), sb).await;
         let mut bulk = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
         let sink = ArtifactReceiver::open(&target, &scope, blob.reference(), blob.size()).unwrap();
-        eprintln!("LANE4_RESUME stage=waiting-replay");
-        let Some(Incoming::Reliable {
-            bytes: replay,
-            delivery: Some(delivery),
-            ..
-        }) = bulk.recv().await
-        else {
-            panic!("lost message not replayed");
+        assert_eq!(sink.offset().unwrap(), middle as u64, "resume offset was not retained");
+        let Some(Incoming::Reliable { bytes: replay, delivery: Some(token), .. }) = bulk.recv().await else { panic!("lost message not replayed"); };
+        assert_eq!(replay, last_payload, "resume did not replay the unacknowledged chunk");
+        let (mut sink, completed) = sink.deliver(replay, token).await.unwrap();
+        assert!(completed.is_none()); assert_eq!(sink.offset().unwrap(), middle as u64);
+        let receive = async {
+            loop {
+                let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = bulk.recv().await else { panic!("missing resumed suffix"); };
+                let (next, completed) = sink.deliver(bytes, token).await.unwrap(); sink = next;
+                if let Some(result) = completed { assert_eq!(result.reference(), blob.reference()); break sink; }
+            }
         };
-        assert_eq!(replay, payload);
-        eprintln!("LANE4_RESUME stage=replayed");
-        let (mut sink, completed) = sink.deliver(replay, delivery).await.unwrap();
-        assert!(completed.is_none());
-        assert_eq!(sink.offset().unwrap(), CHUNK_BYTES as u64);
-        send_blob(
-            &pair.source,
-            source.clone(),
-            blob.clone(),
-            sink.offset().unwrap(),
-            Arc::new(Authorized),
-        )
-        .await
-        .unwrap();
-        let Some(Incoming::Reliable {
-            bytes: suffix,
-            delivery: Some(delivery),
-            ..
-        }) = bulk.recv().await
-        else {
-            panic!("missing resumed suffix");
-        };
-        let (next, completed) = sink.deliver(suffix, delivery).await.unwrap();
-        sink = next;
-        assert_eq!(completed.unwrap().reference(), blob.reference());
+        let (sent, sink) = tokio::join!(send_blob(&pair.source, source.clone(), blob.clone(), middle as u64, Arc::new(Authorized)), receive);
+        sent.unwrap();
         assert_eq!(sink.offset().unwrap(), blob.size());
         target.verified(blob.reference(), blob.size()).unwrap();
-        let closed = pair.source.clone();
-        pair.close().await;
-        assert!(
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                send_blob(&closed, source, blob, 0, Arc::new(Authorized))
-            )
-            .await
-            .unwrap()
-            .is_err(),
-            "closed association left producer waiting"
-        );
-    })
-    .await
-    .unwrap();
+        eprintln!("LANE4_RESUME_MEASUREMENT {}", serde_json::json!({"bytes":blob.size(),"connection_drop":true,"resume_offset":middle,"replayed_unacknowledged_prefix":true,"sha256_verified":true}));
+        let closed = pair.source.clone(); pair.close().await;
+        assert!(tokio::time::timeout(Duration::from_secs(1), send_blob(&closed, source, blob, 0, Arc::new(Authorized))).await.unwrap().is_err(), "closed association left producer waiting");
+    }).await.unwrap();
 }
