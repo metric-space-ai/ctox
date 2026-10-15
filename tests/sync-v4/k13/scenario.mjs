@@ -52,12 +52,12 @@ export default {
     await h.offline(user.page,true);
     const pending=await queueOffline(user.page,f.app.id,f.collection,f.pendingDoc);
     assert.ok((await rawStore(user.page,'outbox')).some(e=>e.op_id===pending),'No real pending write was queued');
-    let pressure;
+    let pressure,revoked;
     try {
       pressure=await control(owner,'startWrites',{collection:f.collection,intervalMs:25,stopAfterMs:30000});
       assert.ok(pressure.owner && pressure.stopAt,'Native load must have a bounded owner');
       const before=await trace(user.page);
-      const revoked=await control(owner,'setRights',f.revoke);
+      revoked=await control(owner,'setRights',f.revoke);
       await h.offline(user.page,false);
       const removalMs=await until(h,async()=>collectionRecords(await rawStore(user.page,'docs'),f.collection).length===0,5000,'Revoked IDB cleanup');
       const rejection=await pendingResult(user.page,pending);
@@ -72,6 +72,13 @@ export default {
       assertRevocation(before,after,revoked,f.collection,sendTrace);
       return {status:'measured',pass:true,acceptanceComplete:true,
         measured:{openings,expansionMs,removalMs,rights:revoked,rejection,wire:after,nonAdmin:true}};
-    } finally { if(pressure)await control(owner,'stopWrites',{owner:pressure.owner}); }
+    } finally {
+      if(pressure) {
+        const terminal=await control(owner,'stopWrites',{owner:pressure.owner});
+        assert.ok(terminal.committed>0,'No actual native writer load was observed');
+        if(revoked)assert.ok(BigInt(terminal.first_seq)<BigInt(revoked.seq) && BigInt(terminal.last_seq)>BigInt(revoked.seq),
+          'Actual writer commits must bracket the rights change');
+      }
+    }
   }
 };

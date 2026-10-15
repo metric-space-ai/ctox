@@ -99,6 +99,12 @@ export default {
         'Every configured Workjet/mobile/native route must actually complete');
       assert.ok(terminal.participants.every(p=>p.accepted>0 && p.nativeConfirmed===true),'External participant did not perform real native-confirmed writes');
       assert.deepEqual(terminal.unexpectedRightsFailures,[]);
+      for(const participant of terminal.participants) {
+        const requiredUntil=start+(participant.userId===f.revokedUser?300000:600000);
+        assert.ok(Number.isFinite(participant.firstWriteAtMs) && Number.isFinite(participant.lastWriteAtMs));
+        assert.ok(participant.firstWriteAtMs<=start+5000 && participant.lastWriteAtMs>=requiredUntil-1000,
+          'External participant did not sustain writes for the required observation interval');
+      }
     }
     const durationMs=Date.now()-start;assert.ok(durationMs>=600000);
     for(let i=0;i<peers.length;i++) {

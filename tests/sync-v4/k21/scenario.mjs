@@ -99,12 +99,15 @@ export default {
         }
         assert.deepEqual(await control(owner,'processIdentity'),baseline,'Daemon or peer respawned');
         assert.ok(p95(times)<=2000,'Activation p95 exceeded 2s: '+app.id);
-        events.push({appId:app.id,activationMs:times,p95Ms:p95(times),retained:true,archive:exported});
+        events.push({appId:app.id,updateCommittedAtMs:updated.committedAtMs,activationMs:times,p95Ms:p95(times),retained:true,archive:exported});
         completed.push(app.id);h.observe('hot-plug-app',{appId:app.id});
       }
       const migrated=await control(owner,'finishMigration',{owner:migration.owner});
       assert.equal(migrated.sourceRows,100000);assert.equal(migrated.targetRows,100000);
       assert.equal(migrated.lostRows,0);
+      assert.ok(Number.isFinite(migrated.startedAtMs) && Number.isFinite(migrated.finishedAtMs));
+      assert.ok(events.some(e=>e.updateCommittedAtMs>=migrated.startedAtMs && e.updateCommittedAtMs<=migrated.finishedAtMs),
+        'Migration must actually overlap an app update, not finish before the lifecycle begins');
       assertInventory(inventory,completed);
       return {status:'measured',pass:true,acceptanceComplete:true,measured:{inventory,events,migration:migrated}};
     } finally {await control(owner,'stopMigration',{owner:migration.owner});}
