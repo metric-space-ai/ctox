@@ -218,6 +218,19 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
         let mut sink = ArtifactReceiver::open(&target, &scope, &reference, SIZE).unwrap();
         let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done = finished.clone(); let expected = reference.clone();
+        // Counterfactual: the same control path with no blob and no CAS IO.
+        // Keep the loaded assertion below; idle data only locates the delay.
+        let mut idle_ms = Vec::new();
+        for _ in 0..4 {
+            let start = Instant::now();
+            sender.send(Lane::Control, WireSeq(1), b"idle-request", Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable { bytes, delivery: Some(delivery), .. }) = controls.recv().await else { panic!("idle request missing"); };
+            assert_eq!(bytes, b"idle-request"); delivery.acknowledge().unwrap();
+            receiver.send(Lane::Control, WireSeq(1), b"idle-reply", Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable { bytes, delivery: Some(delivery), .. }) = replies.recv().await else { panic!("idle reply missing"); };
+            assert_eq!(bytes, b"idle-reply"); idle_ms.push(start.elapsed().as_secs_f64() * 1000.0); delivery.acknowledge().unwrap();
+        }
+        eprintln!("LANE4_IDLE_CONTROL {}", serde_json::json!({"roundtrip_ms":idle_ms,"blob_active":false,"cas_io_active":false}));
         let transfer_clock = Instant::now();
         let receive = async move {
             let mut verified = None;
@@ -365,11 +378,28 @@ impl PairFixture {
             .await
             .unwrap()
         };
-        let create = NativeSendScheduler::create_resumed(&a, transport.clone(), ba, |_, _, _| {
-            Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
-        });
-        let (source, target) = tokio::join!(create, accept);
-        let source = source.unwrap_or_else(|e| panic!("native resumed constructor: {e:?}"));
+        let create = async {
+            let result = NativeSendScheduler::create_resumed(&a, transport.clone(), ba, |_, _, _| {
+                Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
+            }).await;
+            eprintln!("LANE4_RESUME constructor={:?}", result.as_ref().map(|_| ()));
+            let source = result?;
+            // This pinned native SDK marks new channels as negotiation-needed
+            // even on an existing SCTP association. Honor its public SDP path;
+            // never treat constructor admission as channels already being live.
+            let offer = a.create_offer(None).await.unwrap();
+            a.set_local_description(offer.clone()).await.unwrap();
+            b.set_remote_description(offer).await.unwrap();
+            let answer = b.create_answer(None).await.unwrap();
+            b.set_local_description(answer.clone()).await.unwrap();
+            a.set_remote_description(answer).await.unwrap();
+            eprintln!("LANE4_RESUME stage=renegotiated");
+            Ok(source)
+        };
+        // Surface constructor failure immediately. join! used to hide it
+        // behind the unrelated accept future until the fixture watchdog fired.
+        let (source, target) = tokio::try_join!(create, async { Ok::<_, crate::rx_error::RxError>(accept.await) })
+            .unwrap_or_else(|e| panic!("native resumed constructor: {e:?}"));
         for scheduler in [source.clone(), target.clone()] {
             let mut failures = scheduler.failures();
             forwarding.spawn(async move {
