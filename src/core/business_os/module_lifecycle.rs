@@ -9,7 +9,7 @@ use super::store::{
     augment_module_manifest_file_plane, backfill_local_module_icon, compute_module_bundle,
     copy_dir_recursive, decode_verified_desktop_file_or_equivalent,
     ensure_local_icon_manifest_value, find_module_json_dir_for_install, github_archive_url,
-    hex_sha256, is_allowed_source_path, is_core_module, load_module_layout,
+    hex_sha256, is_allowed_source_path, load_module_layout,
     materialize_runtime_app_starter_artifacts_at, module_asset_revision, module_catalog_source_id,
     module_governance_map, module_manifest_collection_ids, module_manifest_path,
     module_policy_decision, normalize_source_relative_path, now_ms, open_store,
@@ -893,9 +893,6 @@ pub(super) fn load_installed_module_manifests(
         if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
             continue;
         }
-        if is_core_module(&manifest.id) {
-            continue;
-        }
         if manifest.entry.is_empty() {
             manifest.entry = format!("installed-modules/{}/index.html", manifest.id);
         }
@@ -1188,9 +1185,6 @@ pub(super) fn delete_installed_module(
 ) -> anyhow::Result<()> {
     let module_id = source_sanitize_slug(&request.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module id is required");
-    if is_core_module(&module_id) {
-        anyhow::bail!("core modules cannot be deleted");
-    }
     let target = app_root.join("installed-modules").join(&module_id);
     if !target.is_dir() {
         anyhow::bail!("installed module not found: {module_id}");
@@ -1285,8 +1279,6 @@ pub(super) fn delete_installed_module(
 fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
     let base = if requested_id.is_empty() {
         "module".to_owned()
-    } else if is_core_module(requested_id) {
-        format!("{requested_id}-copy")
     } else {
         requested_id.to_owned()
     };
@@ -1305,13 +1297,9 @@ fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
 
 pub(super) fn module_install_scope(manifest: &ModuleManifest) -> String {
     let explicit = manifest.install_scope.trim().to_ascii_lowercase();
-    // System membership is defined only by the embedded canonical manifest.
-    // A module cannot promote itself to system status through module.json.
-    if is_core_module(&manifest.id) {
-        return "core".to_owned();
-    }
-    // `starter` is a retired compatibility value. Treat old manifests as
-    // marketplace apps instead of silently installing them on every instance.
+    // Retired hints cannot promote an app into the platform or install it
+    // globally. V4 activation comes from the authoritative catalog. Runtime
+    // local/installed loaders also override app-supplied origin/authority flags.
     if matches!(explicit.as_str(), "core" | "starter") {
         return "store".to_owned();
     }
@@ -1325,7 +1313,7 @@ pub(super) fn module_install_scope(manifest: &ModuleManifest) -> String {
 }
 
 pub(super) fn module_ships_on_first_install(scope: &str) -> bool {
-    matches!(scope, "core" | "internal")
+    scope == "internal"
 }
 
 pub fn rollback_module_source_snapshot(

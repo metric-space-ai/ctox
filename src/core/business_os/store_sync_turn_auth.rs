@@ -352,8 +352,8 @@ fn process_is_running(_pid: u32) -> bool {
 ///
 /// Read from the persisted SQLite runtime store via `runtime_env::get_runtime_env_value`
 /// (key `CTOX_BUSINESS_OS_MODULE_ALLOWLIST`). The value is a comma/whitespace
-/// separated list of module ids. System modules are always added, so an old
-/// tenant allowlist can never remove the Business OS base system. An empty/unset
+/// separated list of module ids. App installation/visibility in V4 comes from
+/// the authoritative platform catalog and policy, not native app names. An empty/unset
 /// value means "no additional restriction". This is intentionally not a
 /// process-env toggle: operators set it in the runtime store.
 pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
@@ -373,11 +373,6 @@ pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
         }
         if seen.insert(id.to_owned()) {
             ids.push(id.to_owned());
-        }
-    }
-    for id in system_module_ids() {
-        if seen.insert(id.clone()) {
-            ids.push(id.clone());
         }
     }
     ids

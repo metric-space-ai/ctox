@@ -8,7 +8,6 @@ Cargo.toml
 contracts/binary_bundle_manifest.txt
 contracts/source_origins_manifest.json
 src/apps/business-os/index.html
-src/apps/business-os/app.js
 src/apps/business-os/app.css
 src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
 src/apps/business-os/scripts/validate-app-module.mjs

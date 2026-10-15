@@ -2620,9 +2620,6 @@ fn delete_installed_module(
     if module_id.is_empty() {
         anyhow::bail!("module id is required");
     }
-    if store::is_core_module(&module_id) {
-        anyhow::bail!("core modules cannot be deleted");
-    }
     let target = app_root.join("installed-modules").join(&module_id);
     if !target.is_dir() {
         anyhow::bail!("installed module not found: {module_id}");
@@ -4481,11 +4478,9 @@ mod tests {
             .into_iter()
             .map(|module| (module.id.clone(), module))
             .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(
-            by_id
-                .get("ctox")
-                .map(|module| module.install_scope.as_str()),
-            Some("core")
+        assert!(
+            !by_id.contains_key("ctox"),
+            "an app name cannot override catalog installation metadata"
         );
         assert!(
             !by_id.contains_key("rem-unbound"),
@@ -4510,7 +4505,10 @@ mod tests {
             Some("local")
         );
         assert!(!by_id.contains_key("marketplace-research"));
-        assert!(!by_id.contains_key("rogue-system"));
+        assert!(
+            !by_id.contains_key("rogue-system"),
+            "app metadata must not self-install globally"
+        );
         Ok(())
     }
 
