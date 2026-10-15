@@ -5398,8 +5398,9 @@ mod tests {
     fn p4_handler_send_failure_has_one_event_counter_and_log() {
         // The production counters are process-global. A child test process
         // isolates this measurement from unrelated parallel handler tests.
-        const CHILD: &str = "CTOX_P4_SEND_WIRING_CHILD";
-        if std::env::var_os(CHILD).is_none() {
+        // The child uses --exact, which also guarantees this is the only
+        // test in its process. No process-environment switch is needed.
+        if !std::env::args().any(|arg| arg == "--exact") {
             let module = module_path!().split_once("::").unwrap().1;
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
@@ -5408,7 +5409,6 @@ mod tests {
                     "--nocapture",
                     "--test-threads=1",
                 ])
-                .env(CHILD, "1")
                 .output()
                 .unwrap();
             assert!(
@@ -6189,14 +6189,19 @@ mod tests {
             .expect("fixture connection is current")
     }
 
-
     #[tokio::test]
     async fn v4_channel_callback_preserves_bootstrap_and_its_event_consumer() {
+        use super::super::index_mod::lanes::{Lane, REALTIME_LABEL};
         let handler = WebRTCRsConnectionHandler::new();
         let peer = install_test_connection(&handler, "v4-callback", 1).await;
         let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
         let bootstrap = pc.create_data_channel("ctox-rxdb", None).await.unwrap();
-        handler.peers.lock().get_mut(peer.peer_id()).unwrap().data_channel = Some(bootstrap.clone());
+        handler
+            .peers
+            .lock()
+            .get_mut(peer.peer_id())
+            .unwrap()
+            .data_channel = Some(bootstrap.clone());
         let listener = super::super::signaling_client::bind_test_signaling_listener().await;
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -6211,13 +6216,22 @@ mod tests {
             remote_peer_id: peer.peer_id().to_owned(),
             generation: peer.generation(),
         };
-        for label in super::super::index_mod::lanes::Lane::ALL.iter().map(|l| l.label()).chain([super::super::index_mod::lanes::REALTIME_LABEL]) {
+        for label in Lane::ALL.iter().map(|l| l.label()).chain([REALTIME_LABEL]) {
             let lane = pc.create_data_channel(label, None).await.unwrap();
             events.on_data_channel(lane).await;
             let peers = handler.peers.lock();
-            let entry = peers.get(peer.peer_id()).expect("V4 callback must not retire its peer");
-            assert_eq!(entry.data_channel.as_ref().unwrap().id(), bootstrap.id(), "V4 callback must not replace bootstrap");
-            assert!(entry.tasks.is_empty(), "scheduler must remain the only V4 event consumer");
+            let entry = peers
+                .get(peer.peer_id())
+                .expect("V4 callback must not retire its peer");
+            assert_eq!(
+                entry.data_channel.as_ref().unwrap().id(),
+                bootstrap.id(),
+                "V4 callback must not replace bootstrap"
+            );
+            assert!(
+                entry.tasks.is_empty(),
+                "scheduler must remain the only V4 event consumer"
+            );
         }
         handler.close().await.unwrap();
         signaling.close().await;
