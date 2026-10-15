@@ -30,9 +30,14 @@ if (!existsSync(source)) run('git', ['worktree', 'add', '--detach', source, revi
 const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' });
 const sourceDiff = spawnSync('git', ['diff', '--exit-code', 'HEAD'], { cwd: source });
 if (sourceHead.status !== 0 || sourceHead.stdout.trim() !== revision || sourceDiff.status !== 0) throw Error('Producer source is not the immutable requested revision');
-const env = { ...process.env, CARGO_BUILD_JOBS: '2', CMAKE_BUILD_PARALLEL_LEVEL: '2', RUST_TEST_THREADS: '2',
+// Native model build scripts retain absolute CMake source paths. Sharing their
+// OUT_DIR across detached revisions makes an otherwise valid second build fail.
+// Keep prior artifacts/caches intact and give every immutable revision its own
+// cache BELOW the canonical admitted target (still on the lane's bulk SSD).
+const revisionTarget = join(process.env.CARGO_TARGET_DIR, 'e2e-revisions', revision.slice(0,12));
+const env = { ...process.env, CARGO_TARGET_DIR: revisionTarget, CARGO_BUILD_JOBS: '2', CMAKE_BUILD_PARALLEL_LEVEL: '2', RUST_TEST_THREADS: '2',
   CARGO_PROFILE_DEV_DEBUG: '0', CARGO_INCREMENTAL: '0' };
-const receipt = { revision, source, startedAt: new Date().toISOString(), terminal: false, pass: false };
+const receipt = { revision, source, target: revisionTarget, startedAt: new Date().toISOString(), terminal: false, pass: false };
 const save = () => writeFileSync(join(output, 'build.json'), JSON.stringify(receipt, null, 2));
 save();
 try {

@@ -94,3 +94,75 @@ ordered controller slices, not a claim of complete K02/K08/K04 catalog coverage.
 are host-private. Copy only results to the controller's private docs directory;
 append the table line to private `docs/e2e-ergebnisse.md`. Reports never belong
 in public repo docs. No production deployment or merge is performed here.
+
+## Katalog-Gate (#810, E2E-K)
+
+`tests/sync-v4/k01`, `k07`, `k11`, `k15`, `k02`, `k24` contain the scenario
+contracts in that execution order. Run the controller entrypoint:
+
+```sh
+scripts/sync-v4/gate-regression.sh --build /absolute/verified/build.json \
+  --profile thesen-like --rtt 150 --warm-rtt 20 --loss 1 --seconds 2100 \
+  --modules-root /absolute/node_modules --turn-bin /absolute/turnserver \
+  --turn-lib /absolute/library/directory
+```
+
+The entrypoint invokes the canonical GPU lane itself, with two workers and the
+assigned target key. gpu4 is the default because the accepted namespace setup
+requires its sudo permission; `E2E_GPU_HOST` explicitly selects another capable
+host. `E2E_SOURCE_STAGE` may point to the output of `e2e-stage.mjs`: only owned
+harness files are transferred, each with its source SHA256 and commit custody.
+Daemon binary and static assets have a separate verified producer manifest.
+Each K scenario gets a fresh private tenant and frozen harness snapshot; prior
+writes, failures and fixtures do not contaminate the next scenario.
+
+The gate prints `K-no. | red/green | evidence`, writes `gate.json` and fails if
+no scenario actually ran. A measured slice, missing adapter, missing mutation
+witness, or setup failure is never catalog acceptance. In this draft the
+coverage gaps are explicit: no scenario yet claims full catalog acceptance.
+`measuredPass` and `acceptanceComplete` are separate fields intentionally.
+
+- K01 executes real stale browser writes and a fresh-write positive control;
+  without successful control the result is inconclusive. Desktop pins, rejected
+  operation archival and the third-client startup audit are still outstanding.
+- K07 records browser command response percentiles under 20 MiB collection
+  writes and repeated full DB queries. Optional native timing probes are kept
+  separately from round-trip time. Raw DataChannel observations count text
+  query RPCs and unclassified binary sends; absence cannot be inferred from a
+  missing decoder. Real file-CAS upload and app/CPU matrix remain outstanding.
+- K11 accepts `--upgrade-build /absolute/build.json` and `--schema-cli file.json`
+  (`compatible` and `incompatible`: actual revision CLI argv arrays). It switches
+  only the owned supervised daemon and state links. It will not invoke host
+  service management or manufacture installer-maintenance flags. The isolated
+  managed-installer lifecycle still needs an adapter.
+- K15 runs eight continuously committing SQLite connections plus real browser
+  producers, native read commands and queue CLI. `--catalog-duration full`
+  selects thirty minutes, three clients via `--clients 3`, midpoint daemon
+  restart. Producer startup and terminal receipts must prove the load existed;
+  native harness-event/ack producers and commit/queue-age instrumentation remain.
+- K02's `--catalog-duration full` selects two ten-minute variants: native writes,
+  300 detail reads, five reloads and a 50 MiB quota. Wire budget is currently a
+  conservative changed-byte upper bound, not exact per-checkpoint accounting.
+  Actual Outbound UI, quota status/outbox assertions and the named pre-fix red
+  witness remain outstanding. `--prime yes` records one explicit cold bootstrap
+  before the fresh measured context; it is not a hidden retry loop.
+- K24 includes an unknown app's real source/schema/handler/one-minute-trigger
+  fixture. `--os-bootstrap /exact/same-origin/module.mjs` must export
+  `connectScenario()` returning a native-WebRTC-backed `{kernel, openApp,
+  nativePeerId, transportKind:'native-webrtc'}`. It uses `shell.source().draft`,
+  handler execution, trigger and incompatible migration/remount. No fake-core
+  fallback. Non-admin/Workjet clients, archive and native handler truth remain.
+
+`--lead-profile demand-only --scenario K08` runs the lease/window slice with an
+actual demand-only collection. It is not the historical Outbound startup code
+from before `1773924d1`; a green result does not reproduce or close that incident.
+
+`e2e-cancellation.mjs` cancels a real daemon/browser run, verifies bounded
+namespace/group retirement and retains the receipt. Signal escalation is
+bounded to five seconds. Oracle mutation copies prove missing rows, zero
+scenarios and incomplete coverage each turn a guard red, then restored green.
+No mutation changes product code or a running daemon.
+
+Native revision builds use a per-revision subdirectory below the admitted target:
+absolute CMake source paths from one detached worktree cannot poison another.
+Existing source, producer artifacts and earlier caches remain intact.

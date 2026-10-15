@@ -30,5 +30,6 @@ saveNetem('netem-start.txt');
 const child = spawn('setpriv',[`--reuid=${c.uid}`,`--regid=${c.gid}`,'--init-groups','--reset-env',process.execPath,c.runner,path],{stdio:'inherit',detached:true});
 const kill = signal => { try { process.kill(-child.pid,signal); } catch (e) { if(e.code!=='ESRCH') throw e; } };
 const timer = setTimeout(() => { kill('SIGTERM'); setTimeout(()=>kill('SIGKILL'),5000).unref(); },(c.durationSeconds+20)*1000);
-process.once('SIGTERM',()=>kill('SIGTERM'));
-child.once('exit',(code,signal)=>{clearTimeout(timer);kill('SIGKILL');sweep();saveNetem('netem-final.txt');process.exitCode=code??(signal?143:1);});
+let cancellationDeadline;
+process.once('SIGTERM',()=>{kill('SIGTERM');cancellationDeadline=setTimeout(()=>kill('SIGKILL'),5000);cancellationDeadline.unref();});
+child.once('exit',(code,signal)=>{clearTimeout(timer);clearTimeout(cancellationDeadline);kill('SIGKILL');sweep();saveNetem('netem-final.txt');process.exitCode=code??(signal?143:1);});

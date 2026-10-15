@@ -16,12 +16,14 @@ export function installRelay({ turnPort }) {
     }
   };
   const Native = globalThis.RTCPeerConnection;
-  globalThis.__e2ePeers = []; globalThis.__e2eWire = { sent: 0, received: 0 };
+  globalThis.__e2ePeers = []; globalThis.__e2eWire = { sent: 0, received: 0, queryFetch: 0, binarySent: 0 };
   const observe = channel => {
     if (channel.__e2eObserved) return; channel.__e2eObserved = true;
     const bytes = value => typeof value === 'string' ? new TextEncoder().encode(value).byteLength : value?.byteLength ?? value?.size ?? 0;
     const send = channel.send;
-    channel.send = function(value) { const result = send.call(this, value); globalThis.__e2eWire.sent += bytes(value); return result; };
+    channel.send = function(value) { const result = send.call(this, value); globalThis.__e2eWire.sent += bytes(value);
+      if(typeof value==='string'){if(value.includes('rxdb.query.fetch')||value.includes('rxdb.rows.fetch'))globalThis.__e2eWire.queryFetch++;}
+      else globalThis.__e2eWire.binarySent++;return result; };
     channel.addEventListener('message', e => { globalThis.__e2eWire.received += bytes(e.data); });
   };
   class ForcedRelay extends Native {

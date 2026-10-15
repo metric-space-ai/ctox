@@ -79,6 +79,14 @@ try {
       && globalThis.CTOX_BUSINESS_OS_APP?.initialModuleOpened === true, null, { timeout: 90000 });
     return page;
   };
+  if(config.prime) {
+    report.phase='explicit-cold-precondition';save();
+    const primer=await browser.newContext();contexts.push(primer);await primer.addInitScript(installRelay,{turnPort:config.turnPort});
+    const at=Date.now();
+    try {const p=await setupPage(primer);report.primer={warm:await bounded(p.evaluate(warm,{schema,expected:native.seed('read',here).rows.filter(r=>!r.deleted).map(r=>r.id),leadProfile:config.leadProfile}),180000,'Primer deadline'),elapsedMs:Date.now()-at};}
+    catch(e){report.primer={error:e.message,elapsedMs:Date.now()-at,notAnAcceptanceResult:true};}
+    finally{await primer.close();save();}
+  }
   for (const scenario of scenarios.filter(s => !config.scenario || s.id === config.scenario)) {
     if (interrupted) throw Error('Run interrupted');
     const rowStarted = performance.now();
@@ -173,7 +181,40 @@ try {
           revision: found?._rev ?? found?.revision ?? null, lwt: found?._meta?.lwt ?? null, phase: found?.probe_phase ?? null };
       },
       config, origin, pause,
+      observe: (phase,measured) => {
+        row.phase=phase;row.observations||=[];row.observations.push({at:new Date().toISOString(),phase,...measured});
+        if(row.observations.length>400)row.observations.splice(1,row.observations.length-400);
+        row.measured||={};row.measured.lastProgress=measured;save();
+      },
+      os: page => page.evaluate(async path=>{
+        if(!path)return {available:false,reason:'--os-bootstrap actual native transport adapter required'};
+        if(!path.startsWith('/')||path.startsWith('//')||path.includes('?'))throw Error('OS bootstrap must be an exact same-origin static module');
+        const module=await import(path),os=await module.connectScenario();
+        if(os.transportKind!=='native-webrtc'||!os.nativePeerId||!os.kernel?.shellApi||!os.openApp)throw Error('Native WebRTC OS adapter proof/contract missing');
+        globalThis.__e2eOS={...os,shell:os.kernel.shellApi()};
+        return {available:true,nativePeerId:os.nativePeerId,transportKind:os.transportKind};
+      },config.osBootstrap),
       nativeCli: args => native.cli(args),
+      queueList: () => {const at=Date.now();try {const value=JSON.parse(native.cli(['queue','list']));return {elapsedMs:Date.now()-at,ok:true,rows:Array.isArray(value)?value.length:null};}catch(e){return {elapsedMs:Date.now()-at,ok:false,error:e.message};}},
+      quota: async (page,bytes) => {const c=await page.context().newCDPSession(page);try{await c.send('Storage.overrideQuotaForOrigin',{origin,quotaSize:bytes});}finally{await c.detach();}},
+      details: page => page.evaluate(async ()=>{
+        const s=globalThis.CTOX_BUSINESS_OS_APP,c=s.db.collections.e2e_leads;
+        const rows=await c.find({selector:{},limit:300}).exec();
+        const times=[];
+        for(const d of rows){const at=performance.now();const r=await c.findOne(d.id).exec();if(!r)throw Error('Lead detail missing');times.push(performance.now()-at);}
+        return {opened:times.length,durationsMs:times};
+      }),
+      commandTruth: () => native.seed('commands',here),
+      pressure: async (seconds,writers=8,intervalMs=25) => {
+        const child=native.start('external-pressure-'+Date.now(),'python3',[join(here,'seed.py'),'--root',config.root,'--profile',config.profile,'--operation','pressure','--seconds',String(seconds),'--writers',String(writers),'--interval-ms',String(intervalMs)]);
+        await pause(250);if(child.exitCode!==null||child.signalCode!==null)throw Error('External committer failed before measurement');return child;
+      },
+      pressureResult: child => {
+        const record=native.receipts.find(r=>r.pid===child.pid),file=join(config.output,record.kind+'.log');
+        const lines=fs.readFileSync(file,'utf8').trim().split('\n');
+        let stats;try{stats=JSON.parse(lines.at(-1));}catch{stats=null;}
+        return {completed:child.exitCode===0,stats,evidence:file};
+      },
       nativeLog: () => fs.readFileSync(join(config.output,'daemon.log'),'utf8'),
       bodies: () => native.seed('bodies', here).rows,
       serverNewer: () => native.seed('server-newer', here),
@@ -182,30 +223,32 @@ try {
         await ctx.addInitScript(installRelay,{turnPort:config.turnPort});
         return setupPage(ctx,p => pages.push(p));
       },
+      wire: page => page.evaluate(()=>({...globalThis.__e2eWire})),
       browserRows: page => page.evaluate(async () => {
         const rows = await globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads.find({selector:{},limit:100000}).exec();
         return rows.map(d=>d.toJSON?.() || d);
       }),
       browserPut: (page,docs) => bounded(page.evaluate(async docs => {
         const c=globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads;
-        for(const d of docs) await c.upsert(d);
+        for(const d of docs){const {_rev,_meta,_attachments,_deleted,revision,lastWriteTime,...body}=d;await c.upsert({...body,updated_at_ms:Date.now()});}
         return {local:docs.length,at:Date.now()};
       },docs),30000,'Browser local write deadline'),
       readCommand: async page => bounded(page.evaluate(async () => {
-        const at=performance.now(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
+        const at=performance.now(),wall=Date.now(), bus=globalThis.CTOX_BUSINESS_OS_APP.commandBus;
         if (!bus?.dispatch) throw Error('Real Shell command bus unavailable');
-        try { const r=await bus.dispatch({command_type:'ctox.workjet.project.list',payload:{}},{until:'accepted',timeoutMs:5000});
-          return {elapsedMs:performance.now()-at,status:r?.status,commandId:r?.command_id || r?.id,error:null};
+        try { const r=await bus.dispatch({command_type:'ctox.workjet.project.list',payload:{},client_context:{command_timing_probe:true}},{until:'accepted',timeoutMs:5000});
+          const timing=r?.result?.command_timing || r?.command_timing || r?.result?.result?.command_timing || null;
+          return {elapsedMs:performance.now()-at,startedAtMs:wall,nativeTiming:timing,coreDispatchMs:timing?timing.native_dispatch_entered-wall:null,status:r?.status,commandId:r?.command_id || r?.id,error:['failed','rejected'].includes(r?.status)?r.status:null};
         } catch(e) {return {elapsedMs:performance.now()-at,error:e.code || e.message};}
       }),12000,'Read command observation deadline'),
       maintenance: page => page.evaluate(() => {
         const s=globalThis.CTOX_BUSINESS_OS_APP;
         return {active:s.maintenance?.active ?? null,phase:s.maintenance?.phase ?? null};
       }),
-      freeze: (page,value) => context.newCDPSession(page).then(async c=>{try{await c.send('Page.setWebLifecycleState',{state:value?'frozen':'active'});}finally{await c.detach();}}),
+      freeze: (page,value) => page.context().newCDPSession(page).then(async c=>{try{await c.send('Page.setWebLifecycleState',{state:value?'frozen':'active'});}finally{await c.detach();}}),
       offline: async (page, value) => {
-        const cdp = await context.newCDPSession(page);
-        await context.setOffline(value);
+        const cdp = await page.context().newCDPSession(page);
+        await page.context().setOffline(value);
         await cdp.send('Network.emulateNetworkConditions', { offline: value, latency: 0, downloadThroughput: -1, uploadThroughput: -1, packetLoss: value ? 100 : 0 });
         await cdp.detach();
       },

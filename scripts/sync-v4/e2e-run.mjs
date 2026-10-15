@@ -31,14 +31,14 @@ if (sourceManifest) for (const row of sourceManifest.files) {
 }
 const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
   seedAfterStart: args['seed-after-start'] === 'yes', leadProfile: args['lead-profile'] || 'eager',
-  catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,
+  osBootstrap: args['os-bootstrap'] || null, catalogDuration: args['catalog-duration'] === 'full' ? 'full' : 'slice', prime: args.prime === 'yes', upgradeBuild: args['upgrade-build'] || null, schemaCli: args['schema-cli'] ? JSON.parse(fs.readFileSync(args['schema-cli'])) : null, catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,
   root: join(output,`tenant-${build.revision.slice(0,12)}`), port: 19865, signalingPort: 19866, turnPort: 34789,
   runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest,
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
   chrome: args.chrome || '/opt/google/chrome/chrome', modulesRoot: args['modules-root'] || join(lane,'deps/shell-browser-collection-auth/node_modules'),
   turnBin: args['turn-bin'] || '/usr/bin/turnserver', turnLib: args['turn-lib'] || '', scenario: args.scenario || null };
 if (!['eager','demand-only'].includes(config.leadProfile)) throw Error('Unsupported fixture profile');
-if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>1800) throw Error('Run duration bound 30..1800 seconds');
+if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>2100) throw Error('Run duration bound 30..2100 seconds');
 for (const file of [config.turnBin, config.chrome]) fs.accessSync(file, fs.constants.X_OK);
 fs.accessSync(join(config.modulesRoot, 'playwright/package.json'), fs.constants.R_OK);
 fs.accessSync(join(config.source, 'src/apps/business-os/app.js'), fs.constants.R_OK);
