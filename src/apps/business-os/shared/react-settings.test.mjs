@@ -1351,3 +1351,17 @@ test('settings activity tab renders business-facing audit labels', () => {
   assert.doesNotMatch(html, /version_baseline_secret_id/);
   assert.doesNotMatch(html, /rollback_check/);
 });
+
+test('settings acts at once with an undo bar instead of confirmation dialogs', () => {
+  assert.doesNotMatch(reactSettingsSource, /showBusinessConfirm/);
+  for (const copy of ['providerDisconnect', 'moduleDelete', 'brandingReset']) {
+    assert.match(reactSettingsSource, new RegExp(`deferWithUndo\\(settingsUndoCopy\\(\\)\\.${copy}`));
+  }
+  const html = baseTemplate({
+    tab: 'runtime',
+    pendingUndo: { message: 'Modul demo wird gelöscht.' },
+  });
+  assert.match(html, /Modul demo wird gelöscht\./);
+  assert.match(html, /data-settings-undo/);
+  assert.match(html, /Rückgängig/);
+});

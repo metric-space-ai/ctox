@@ -1,5 +1,4 @@
 import { subscriptionModelUnavailable } from './model-access-health.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   BusinessOsPermissions,
@@ -81,6 +80,7 @@ export async function openReactSettings({
   const settingsState = {
     tab: initialTab || 'runtime',
     commandStatus: '',
+    pendingUndo: null,
     subscriptionAuth: null,
     runtimeSettings: null,
     runtimeLoading: false,
@@ -409,6 +409,27 @@ export async function openReactSettings({
     workjetPairingExpiryTimer = setInterval(refreshWorkjetPairingCountdown, 1_000);
   };
 
+  // Sofort handeln, kurz rückgängig machbar (statt Bestätigungsdialog). Ein
+  // neuer Vorgang oder das Schließen führt den offenen sofort aus.
+  const flushPendingUndo = () => {
+    const pending = settingsState.pendingUndo;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    settingsState.pendingUndo = null;
+    void pending.run();
+  };
+  const deferWithUndo = (message, run, hide = null) => {
+    flushPendingUndo();
+    const timer = setTimeout(() => {
+      if (settingsState.pendingUndo?.timer !== timer) return;
+      settingsState.pendingUndo = null;
+      void run();
+    }, SETTINGS_UNDO_MS);
+    settingsState.pendingUndo = { message, run, timer, hide };
+    settingsState.commandStatus = '';
+    render();
+  };
+
   const render = () => {
     const canOpenAdmin = canOpenModuleAdmin({
       modules: settingsState.modules.length ? settingsState.modules : modules,
@@ -427,6 +448,7 @@ export async function openReactSettings({
       canOpenAdmin,
       tab: settingsState.tab,
       commandStatus: settingsState.commandStatus,
+      pendingUndo: settingsState.pendingUndo,
       subscriptionAuth: settingsState.subscriptionAuth,
       runtimeSettings: settingsState.runtimeSettings,
       runtimeLoading: settingsState.runtimeLoading,
@@ -445,7 +467,20 @@ export async function openReactSettings({
       workjetPairing: settingsState.workjetPairing,
     });
     wireProviderLogoFallbacks(body);
+    const hidden = settingsState.pendingUndo?.hide;
+    if (hidden) body.querySelectorAll(hidden.selector).forEach((el) => {
+      const row = el.closest(hidden.row);
+      if (row) row.hidden = true;
+    });
+    body.querySelector('[data-settings-undo]')?.addEventListener('click', () => {
+      const pending = settingsState.pendingUndo;
+      if (pending) clearTimeout(pending.timer);
+      settingsState.pendingUndo = null;
+      settingsState.commandStatus = settingsUndoCopy().undone;
+      render();
+    });
     body.querySelector('[data-close-settings]')?.addEventListener('click', () => {
+      flushPendingUndo();
       try { channelsAccountsSub?.unsubscribe?.(); } catch {}
       channelsAccountsSub = null;
       try { usersSub?.unsubscribe?.(); } catch {}
@@ -583,11 +618,7 @@ export async function openReactSettings({
       render();
     });
     body.querySelector('[data-branding-reset]')?.addEventListener('click', async () => {
-      const confirmed = await showBusinessConfirm('Corporate Design auf CTOX Default zuruecksetzen?', {
-        title: 'Design zuruecksetzen',
-        confirmLabel: 'Zuruecksetzen',
-      });
-      if (!confirmed) return;
+      deferWithUndo(settingsUndoCopy().brandingReset, async () => {
       settingsState.commandStatus = 'Corporate Design wird zurueckgesetzt...';
       render();
       try {
@@ -603,6 +634,7 @@ export async function openReactSettings({
         settingsState.commandStatus = String(error?.message || error);
       }
       render();
+      });
     });
     body.querySelector('[data-activity-refresh]')?.addEventListener('click', refreshActivity);
     body.querySelector('[data-mcp-refresh]')?.addEventListener('click', refreshMcpConnectInfo);
@@ -775,13 +807,7 @@ export async function openReactSettings({
       const providerId = String(button.dataset.providerId || '');
       const accountId = String(button.dataset.accountId || '');
       const profile = providerSubscriptionProfile(providerId);
-      if (action === 'disconnect') {
-        const confirmed = await showBusinessConfirm(
-          `${profile.label} Account ${accountId} wirklich trennen?`,
-          { title: 'Provider-Account trennen', confirmLabel: 'Trennen' },
-        );
-        if (!confirmed) return;
-      }
+      const execute = async () => {
       const authWindow = action === 'rotate'
         ? window.open('', `ctox-${providerId}-subscription-rotate`)
         : null;
@@ -855,6 +881,16 @@ export async function openReactSettings({
         settingsState.commandStatus = String(error?.message || error);
         render();
       }
+      };
+      // Trennen ohne Rückfrage: sofort ausgeblendet, Rückgängig-Leiste, danach erst ausführen.
+      if (action === 'disconnect') {
+        deferWithUndo(settingsUndoCopy().providerDisconnect(profile.label, accountId), execute, {
+          selector: `[data-provider-account="${CSS.escape(accountId)}"]`,
+          row: '[data-provider-account]',
+        });
+        return;
+      }
+      await execute();
     }));
     body.querySelectorAll('[data-runtime-provider], [data-runtime-auth-mode]').forEach((control) => {
       control.addEventListener('change', () => {
@@ -1032,11 +1068,7 @@ export async function openReactSettings({
       button.addEventListener('click', async () => {
         const moduleId = button.dataset.moduleDelete || '';
         if (!moduleId) return;
-        const confirmed = await showBusinessConfirm(`Modul ${moduleId} wirklich löschen?`, {
-          title: 'Modul löschen',
-          confirmLabel: 'Löschen',
-        });
-        if (!confirmed) return;
+        deferWithUndo(settingsUndoCopy().moduleDelete(moduleId), async () => {
         settingsState.commandStatus = 'Modul wird gelöscht...';
         render();
         try {
@@ -1048,6 +1080,7 @@ export async function openReactSettings({
           settingsState.commandStatus = String(error?.message || error);
           render();
         }
+        }, { selector: `[data-module-delete="${CSS.escape(moduleId)}"]`, row: 'tr' });
       });
     });
     body.querySelector('[data-module-create]')?.addEventListener('click', async () => {
@@ -1148,6 +1181,7 @@ function settingsTemplate({
   canOpenAdmin,
   tab,
   commandStatus,
+  pendingUndo,
   subscriptionAuth,
   runtimeSettings,
   runtimeLoading,
@@ -1214,7 +1248,8 @@ function settingsTemplate({
     <footer class="settings-footer">
       <button class="text-button" type="button" data-open-account-settings>Konto</button>
       <button class="text-button" type="button" data-logout-settings>Abmelden</button>
-      ${commandStatus ? `<span class="settings-status">${escapeHtml(commandStatus)}</span>` : ''}
+      ${pendingUndo ? `<span class="settings-status" role="status">${escapeHtml(pendingUndo.message)} <button class="text-button" type="button" data-settings-undo>${escapeHtml(settingsUndoCopy().undo)}</button></span>` : ''}
+      ${!pendingUndo && commandStatus ? `<span class="settings-status">${escapeHtml(commandStatus)}</span>` : ''}
     </footer>
   `;
 }
@@ -4500,6 +4535,26 @@ function channelsHubPanel(state) {
     ${state.error ? `<div class="settings-alert is-danger"><strong>Letzter Fehler</strong><span>${escapeHtml(state.error)}</span></div>` : ''}
     ${state.status ? `<div class="settings-alert"><span>${escapeHtml(state.status)}</span></div>` : ''}
   `;
+}
+
+const SETTINGS_UNDO_MS = 8000;
+
+function settingsUndoCopy() {
+  return document.documentElement.lang === 'en'
+    ? {
+        undo: 'Undo',
+        undone: 'Undone.',
+        providerDisconnect: (label, account) => `${label} account ${account} will be disconnected.`,
+        moduleDelete: (id) => `Module ${id} will be deleted.`,
+        brandingReset: 'Corporate design will be reset to the CTOX default.',
+      }
+    : {
+        undo: 'Rückgängig',
+        undone: 'Rückgängig gemacht.',
+        providerDisconnect: (label, account) => `${label}-Account ${account} wird getrennt.`,
+        moduleDelete: (id) => `Modul ${id} wird gelöscht.`,
+        brandingReset: 'Corporate Design wird auf CTOX-Standard zurückgesetzt.',
+      };
 }
 
 function channelHubCopy() {
