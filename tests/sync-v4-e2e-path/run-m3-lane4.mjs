@@ -2,6 +2,7 @@
 // Invoke via gpu-build-run.sh. A later invocation picks up a pushed Instances fix.
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 const root=process.cwd(),out=path.resolve(process.env.CARGO_TARGET_DIR,'evidence/m3-lane4');
 fs.mkdirSync(out,{recursive:true});
@@ -32,13 +33,21 @@ try{
   worktree=path.join(scratch,'source');
   run('git',['worktree','add','--detach',worktree,snapshot]);
   run('git',['merge','--no-commit','--no-ff',report.lane4_sha],{cwd:worktree});
+  // Instances changes the native dependency graph; resolve this TEST fixture's
+  // lock in the composed worktree, then keep --locked for build and mutations.
+  const fixtureLock='tests/sync-v4-e2e-path/native/Cargo.lock';
+  run('cargo',['generate-lockfile','--offline','--manifest-path','tests/sync-v4-e2e-path/native/Cargo.toml'],{cwd:worktree});
+  run('git',['add','--',fixtureLock],{cwd:worktree});
+  report.fixture_lock_sha256=createHash('sha256').update(fs.readFileSync(path.join(worktree,fixtureLock))).digest('hex');
   report.composed_tree=run('git',['write-tree'],{cwd:worktree});
   if(run('git',['status','--porcelain'],{cwd:worktree}))run('git',['-c','user.name=CTOX M3 bench','-c','user.email=m3-bench@localhost','commit','-m','Disposable composed M3 source'],{cwd:worktree});
   report.composed_head=run('git',['rev-parse','HEAD'],{cwd:worktree});
   report.status='running';fs.writeFileSync(path.join(out,'readiness.json'),JSON.stringify(report,null,2));
   const result=spawnSync('timeout',['--kill-after=10s','1200s','bash','tests/sync-v4-e2e-path/run-step1.sh'],{cwd:worktree,env:{...process.env,E2E_OUT:path.join(out,'native-path'),E2E_MUTATIONS_DIR:path.join(out,'mutations')},stdio:'inherit',timeout:1220000});
   report.exit=result.status;report.signal=result.signal;
-  const measurement=JSON.parse(fs.readFileSync(path.join(out,'native-path/result.json'),'utf8'));
+  const measurementFile=path.join(out,'native-path/result.json');
+  if(!fs.existsSync(measurementFile))throw Error(`Native build/bench exited ${result.status??result.signal} before producing a measurement; inspect the lane log.`);
+  const measurement=JSON.parse(fs.readFileSync(measurementFile,'utf8'));
   report.status=result.status===0&&measurement.pass?'passed':'failed';
   report.measurement=path.join(out,'native-path/result.json');
   report.m3=measurement.m3;report.first=measurement.first;report.push=measurement.push;report.command=measurement.command;report.steadyCommand=measurement.steadyCommand;
