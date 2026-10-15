@@ -1,6 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
-//! Exact owned Codex OAuth model-check reservation. Credentials stay in the
+//! Exact Codex OAuth model-check reservation, including native auth snapshots. Credentials stay in the
 //! normal gateway; only account configuration and encrypted generations remain.
 use crate::business_os::{
     consumer_authority::{AdmittedConsumerAuthority, ConsumerFacts},
@@ -28,29 +28,35 @@ pub(crate) struct NativeCodexPublicationCheck {
     runtime: Mutex<Connection>,
     secrets: Mutex<Connection>,
 }
-fn current_account(conn: &Connection, id: &str) -> Result<CodexSubscriptionAccountConfig> {
-    let raw: String = conn
-        .query_row(
+fn current_account(
+    conn: &Connection,
+    expected: &CodexSubscriptionAccountConfig,
+) -> Result<CodexSubscriptionAccountConfig> {
+    let table: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='cliproxyapi_runtime_config')", [], |r| r.get(0))?;
+    let raw: Option<String> = if table {
+        conn.query_row(
             "SELECT config_json FROM cliproxyapi_runtime_config WHERE config_id=1",
             [],
             |r| r.get(0),
         )
         .optional()?
-        .context("native Codex configuration unavailable")?;
-    let cfg: CliproxyRuntimeConfig = serde_json::from_str(&raw)
+    } else {
+        None
+    };
+    let cfg: CliproxyRuntimeConfig = serde_json::from_str(raw.as_deref().unwrap_or("{}"))
         .map_err(|_| anyhow::anyhow!("native Codex configuration unavailable"))?;
-    cfg.codex_accounts
-        .into_iter()
-        .find(|a| a.id == id)
-        .context("native Codex account removed")
+    let configured = cfg.codex_accounts.into_iter().find(|a| a.id == expected.id);
+    if super::cliproxyapi_host::account_controls::codex_model_is_inherited(expected) {
+        ensure!(
+            configured.is_none(),
+            "native Codex inherited account overridden"
+        );
+        return Ok(expected.clone());
+    }
+    configured.context("native Codex account removed")
 }
 fn encrypted(conn: &Connection, account: &CodexSubscriptionAccountConfig) -> Result<String> {
-    let mut keys = vec![
-        &account.id_token_secret,
-        &account.access_token_secret,
-        &account.refresh_token_secret,
-    ];
-    keys.extend(account.proxy_url_secret.as_ref());
+    let keys = super::cliproxyapi_host::account_controls::codex_model_credential_refs(account);
     let mut hash = Sha256::new();
     hash.update(b"ctox/native-codex-model-records/v1");
     for key in keys {
@@ -74,13 +80,21 @@ fn encrypted(conn: &Connection, account: &CodexSubscriptionAccountConfig) -> Res
 impl NativeCodexPublicationCheck {
     fn open(root: &Path, expected: &CodexSubscriptionAccountConfig) -> Result<Self> {
         ensure!(!expected.disabled, "native Codex account disabled");
+        // A native snapshot can predate all explicit provider configuration.
+        // Initialize the existing store outside the held publication scope;
+        // no provider account or runtime setting is inserted.
+        if !crate::inference::runtime_env::runtime_config_path(root).exists() {
+            drop(super::cliproxyapi_integration::open_integration_config_db(
+                root,
+            )?);
+        }
         let runtime = Connection::open_with_flags(
             crate::inference::runtime_env::runtime_config_path(root),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         runtime.busy_timeout(std::time::Duration::ZERO)?;
         ensure!(
-            current_account(&runtime, &expected.id)? == *expected,
+            current_account(&runtime, expected)? == *expected,
             "native Codex configuration changed"
         );
         let secrets = Connection::open_with_flags(
@@ -111,7 +125,7 @@ impl NativeCodexPublicationCheck {
             .map_err(|_| anyhow::anyhow!("native Codex configuration busy"))?;
         let runtime = Transaction::new_unchecked(&runtime, TransactionBehavior::Immediate)?;
         ensure!(
-            current_account(&runtime, &self.account.id)? == self.account,
+            current_account(&runtime, &self.account)? == self.account,
             "native Codex configuration changed"
         );
         let secrets = self
@@ -171,30 +185,19 @@ impl NativeCodexModelReservation {
             .private_configuration_binding()
             .context("native Codex account requires current holder discovery")?;
         let root = authority.native_host_root().to_owned();
-        // This existing holder reader excludes inherited auth snapshots and
-        // shared credential references. No caller can supply a store or token.
+        // Model reads admit the native auth snapshot; mutations retain the
+        // narrower, explicitly owned credential binding.
         let current = || {
-            super::cliproxyapi_host::account_controls::account_binding(
+            super::cliproxyapi_host::account_controls::codex_model_metadata(
                 &root,
-                "codex",
                 &selected.account().private_local_account_id,
             )
         };
-        ensure!(
-            current()?.as_deref() == Some(binding),
-            "native Codex binding changed"
-        );
-        let cfg = super::cliproxyapi_host::load_instance_proxy_config(&root)?
-            .context("native Codex configuration unavailable")?;
-        let account = cfg
-            .runtime
-            .codex_accounts
-            .into_iter()
-            .find(|a| a.id == selected.account().private_local_account_id)
-            .context("native Codex account unavailable")?;
+        let (account, current_binding) = current()?.context("native Codex account unavailable")?;
+        ensure!(current_binding == binding, "native Codex binding changed");
         let check = NativeCodexPublicationCheck::open(&root, &account)?;
         ensure!(
-            current()?.as_deref() == Some(binding),
+            current()?.as_ref().map(|(_, value)| value.as_str()) == Some(binding),
             "native Codex binding changed during preparation"
         );
         let reservation = Self {
