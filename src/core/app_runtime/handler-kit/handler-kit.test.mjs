@@ -57,7 +57,8 @@ test('ctx read/write runs on the in-memory store and enforces compare-and-set', 
   await assert.rejects(ctx.write('records', { type: 'remove', id: 'one', base_rev: 'old' }), denied('conflict'));
   await assert.rejects(ctx.write('records', { type: 'patch', id: 'one', patch: { id: 'other' } }), denied('invalid'));
   await ctx.write('records', { type: 'remove', id: 'one', base_rev: result.rev });
-  assert.deepEqual(fixtures.collections.records, []);
+  assert.deepEqual(Object.keys(fixtures.collections.records[0]).sort(), ['deleted','id','rev']);
+  assert.equal(fixtures.collections.records[0].deleted, true);
 });
 test('foreign collection needs declaration, actual owner, exports and the requested operation', async () => {
   const owner = { app_id: 'owner', collections: { shared: {} }, exports: { shared: ['read'] } };
@@ -96,12 +97,12 @@ test('model, HTTP and commands use explicit fixture callbacks and log app attrib
   const fixtures = {
     grants: ['model', 'http'], model: req => { calls.push(req); return { answer: 'fixture' }; },
     http: req => ({ status: req.method === 'GET' ? 200 : 400 }),
-    command: (type, payload) => ({ type, payload }),
+    command: (type, payload) => ({ id:'next', status:'accepted', task_id:'task', type, payload }),
   };
   const ctx = createContext(manifest({ capabilities_required: ['model', 'http'] }), fixtures);
   assert.deepEqual(await ctx.model({ prompt: 'hello' }), { answer: 'fixture' });
   assert.equal((await ctx.http({ method: 'GET' })).status, 200);
-  assert.deepEqual(await ctx.command('test.run', { n: 1 }), { type: 'test.run', payload: { n: 1 } });
+  assert.deepEqual(await ctx.command('test.run', { n: 1 }), { id:'next', status:'accepted',task_id:'task',type:'test.run',payload:{n:1} });
   await assert.rejects(ctx.command('foreign.run', {}), denied('forbidden'));
   await assert.rejects(createContext(manifest(), fixtures).http({}), denied('forbidden'));
   ctx.log('info', 'done', { count: calls.length });
@@ -115,8 +116,8 @@ async function fixture(t, source = 'export default async (input, ctx) => input;'
 }
 test('runHandler loads the declared module and reads/writes through ctx', async t => {
   const fixtures = await fixture(t, `export default async (input, ctx) => {
-    await ctx.write('records', {type:'put', doc:{id:input.id, value:7}});
-    return await ctx.read('records', {selector:{id:input.id}});
+    await ctx.write('records', {type:'put', doc:{id:input.payload.id, value:7}});
+    return await ctx.read('records', {selector:{id:input.payload.id}});
   };`);
   const result = await runHandler(manifest(), 'handler.mjs', { id: 'new' }, { fixtures });
   assert.equal(result[0].value, 7);

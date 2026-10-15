@@ -18,6 +18,10 @@ if [ ! -x "$runtime_node" ]; then
   rm "$archive"
 fi
 export CTOX_APP_RUNTIME_TEST_NODE="$runtime_node"
+if [ "${1:-}" = kit ]; then
+  "$runtime_node" --test --test-concurrency=2 src/core/app_runtime/handler-kit/*.test.mjs
+  exit
+fi
 export CTOX_APP_RUNTIME_TEST_ROOT="$CARGO_TARGET_DIR/ipc-tests"
 "$runtime_node" --version
 sha256sum src/core/app_runtime/{lib.rs,worker.mjs,Cargo.toml,Cargo.lock} \

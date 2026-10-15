@@ -2,7 +2,9 @@ import { isDeepStrictEqual } from 'node:util';
 
 export class CtoxError extends Error {
   constructor(code, message, path) {
-    super(message);
+    const spec = typeof code === 'object' && code !== null ? code : { code, message, path };
+    super(spec.message);
+    code = spec.code; path = spec.path;
     this.name = 'CtoxError';
     this.code = code;
     if (path !== undefined) this.path = typeof path === 'string' ? path : path.path;
