@@ -1,8 +1,7 @@
 use super::*;
+use ctox_store::change_log;
 use rusqlite::Connection;
 use serde_json::json;
-#[path = "change_log.rs"]
-mod change_log;
 
 fn rule() -> Right {
     Right {
