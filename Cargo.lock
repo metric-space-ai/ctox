@@ -3302,6 +3302,7 @@ dependencies = [
  "url",
  "uuid",
  "webrtc",
+ "zstd",
 ]
 
 [[package]]
