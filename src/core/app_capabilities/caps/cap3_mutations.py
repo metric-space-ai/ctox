@@ -76,6 +76,7 @@ PROOFS=[
  ("process-base-env","process.rs",E(".envs(&base_env)"),"","process_base_env_contract"),
  ("process-stdin-owner","process.rs",E("meta.owner_app == ctx.app_id && sha256_hex(bytes) == meta.reference"),"sha256_hex(bytes) == meta.reference","process_base_env_contract"),
  ("automation-prevalidate","browser.rs",E('validate_step(step).map_err(|_| invalid("$.steps"))?;'),"","browser_automation_contract"),
+ ("coding-envelope","coding.rs",E('json!({ "rejected_shape": args })'),"args","coding_flat_contract"),
  ("mail-redact","mail.rs",E('|| !(k.contains("password")'),"|| !(false","mail_server_intake_contract"),
 ]
 SELECTED=set(sys.argv[2].split(",")) if len(sys.argv)>2 and sys.argv[2] else None

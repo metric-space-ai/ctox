@@ -875,7 +875,7 @@ impl CapabilityBackend for Recording {
 fn app_capabilities_cap3_coding_flat_contract() {
     let host = Host::new("coding-agents", "admin");
     let backend = Recording(RefCell::new(Vec::new()));
-    let turn = json!({"module_id":"news","prompt":"fix","faux":true,"preset_id":"ctox"});
+    let turn = json!({"app_id":"news","draft_id":"draft-1","base_draft_rev":"3-abc","prompt":"fix","model":"ctox","turn_id":"t1"});
     invoke(
         &host,
         &backend,
@@ -883,6 +883,15 @@ fn app_capabilities_cap3_coding_flat_contract() {
         "agent.coding",
         "turn",
         turn.clone(),
+    )
+    .unwrap();
+    invoke(
+        &host,
+        &backend,
+        &host.ctx,
+        "agent.coding",
+        "cancel",
+        json!({"turn_id":"t1"}),
     )
     .unwrap();
     invoke(
@@ -898,13 +907,16 @@ fn app_capabilities_cap3_coding_flat_contract() {
         backend.0.borrow().clone(),
         vec![
             ("ctox.coding.turn".to_owned(), turn),
+            ("ctox.coding.cancel".to_owned(), json!({"turn_id":"t1"})),
             ("ctox.coding.models".to_owned(), json!({"module_id":"news"}))
         ]
     );
     for args in [
-        json!({"module_id":"news","prompt":"x","model":{"id":"raw"}}),
-        json!({"module_id":"../etc","prompt":"x"}),
-        json!({"prompt":"x"}),
+        // V3 shape, alone and smuggled next to the §16.44 fields.
+        json!({"module_id":"news","prompt":"x","faux":true,"preset_id":"ctox"}),
+        json!({"app_id":"news","draft_id":"d","base_draft_rev":"1","prompt":"x","module_id":"news"}),
+        json!({"app_id":"news","prompt":"x"}),
+        json!({"payload":{"module_id":"news","prompt":"x"}}),
     ] {
         assert_eq!(
             code(invoke(
@@ -920,8 +932,15 @@ fn app_capabilities_cap3_coding_flat_contract() {
     }
     assert_eq!(
         backend.0.borrow().len(),
-        2,
-        "a refused coding turn reached the sidecar path"
+        3,
+        "a refused coding turn reached the engine"
+    );
+    // Production dispatch: unbound draft engine is unavailable, never the V3 path.
+    let f = Fixture::new();
+    let turn = json!({"app_id":"news","draft_id":"d","base_draft_rev":"1","prompt":"x"});
+    assert_eq!(
+        code(f.call(&host, "agent.coding", "turn", turn)),
+        ErrorCode::Unavailable
     );
 }
 
