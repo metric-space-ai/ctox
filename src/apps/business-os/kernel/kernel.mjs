@@ -2069,6 +2069,8 @@ export function createKernel(opts = {}) {
     agentOutcome: (fn) => fakeCore?.runtime.setAgentOutcome(fn),
     /** Fake-Core: Write eines anderen Clients direkt an den Core (z. B. doppelte Befehls-id). */
     coreWrite: (entry) => fakeCore?.write(entry),
+    /** Fake-Core: Plattform-Allowlist für process.run (CAP-3d; Name → Pfad oder {program|interpreter+script, env}). */
+    setProcessAllowlist: (map) => { if (fakeCore) fakeCore.core.processAllowlist = map ? cloneValue(map) : null; },
     coreLog: () => [...(fakeCore?.runtime.log ?? [])],
     /** Fake-Core: wie oft sich der Transport verbunden hat (kernel.reconnect = voller Neuaufbau). */
     get transportConnects() { return fakeCore?.connects ?? 0; },
