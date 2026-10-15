@@ -36,7 +36,7 @@ try{
  result.snapshot={shellRevision:manifest.shellRevision,kernelRevision:manifest.kernelRevision,manifestSha256:hash(fs.readFileSync(join(source,'snapshot.json'))),custodyCommit:git(['rev-parse','HEAD']).toString().trim(),nativePeer:target!=='bind'};
  const requireShim=join(out,'playwright.cjs');
  fs.writeFileSync(requireShim,`module.exports=require(${JSON.stringify(join(here,'playwright-adapter.cjs'))}).create(${JSON.stringify({packagePath:o.playwright,chrome:o.chrome??'/opt/google/chrome/chrome',runtime,out})});\n`);
- result.browserAdaptation={method:'native DOM.setFileInputFiles directory selection',reason:'Shell resets input.value after reading; avoid Playwright FileList postcondition timeout. No sync path, payload or criterion is simulated.'};
+ result.browserAdaptation={method:'Playwright native directory chooser; actual Shell upload completion observed',reason:'A real enabled publish button may end the stale FileList postcondition. No sync path, payload or criterion is simulated.'};
 
  const log=fs.openSync(join(out,'tool.log'),'w',0o600);
  const child=spawn(process.execPath,[join(k24,'run.mjs'),'--target',target],{cwd:runtime,env:{...process.env,PLAYWRIGHT_MODULE:requireShim,K24_GUARD_BOS:join(runtime,'src/apps/business-os')},detached:true,stdio:['ignore',log,log]});fs.closeSync(log);

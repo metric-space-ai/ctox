@@ -6,7 +6,7 @@ const require=createRequire(import.meta.url),{chromium}=require(process.argv[2])
 const browser=await chromium.launch({headless:true,executablePath:'/opt/google/chrome/chrome'});
 try{
  const page=await browser.newPage();await page.setContent('<input type="file" hidden multiple webkitdirectory>');
- const directory=resolve('tests/sync-v4/k24/app/v1/k24-probe');const started=Date.now();let error=null;
+ const directory=resolve(process.argv[3]??'tests/sync-v4/k24/app/v1/k24-probe');const started=Date.now();let error=null;
  try{await page.setInputFiles('input',directory,{timeout:5000});}catch(e){error=e.message;}
  const files=await page.locator('input').evaluate(e=>Array.from(e.files??[]).map(f=>({name:f.name,relative:f.webkitRelativePath,bytes:f.size})));
  console.log(JSON.stringify({diagnosticOnly:true,directoryUpload:{elapsedMs:Date.now()-started,error,files}}));
