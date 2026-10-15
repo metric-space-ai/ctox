@@ -10,7 +10,7 @@ fs.copyFileSync('tests/sync-v4-e2e/criteria.test.mjs',join(root,'criteria.test.m
 const run=()=>spawnSync(process.execPath,['--test',join(root,'criteria.test.mjs')],{encoding:'utf8'});
 const receipts=[];
 try{
- for(const needle of ['m.missing.length === 0','expected.length > 0','s.acceptanceComplete===true']){
+ for(const needle of ['m.missing.length === 0','expected.length > 0','s.acceptanceComplete===true','m.receivesEvents === true']){
   const first=original.indexOf(needle);if(first<0)throw Error('Mutation anchor missing: '+needle);
   fs.writeFileSync(join(root,'criteria.mjs'),original);const before=run();
   fs.writeFileSync(join(root,'criteria.mjs'),original.slice(0,first)+'true'+original.slice(first+needle.length));const mutated=run();

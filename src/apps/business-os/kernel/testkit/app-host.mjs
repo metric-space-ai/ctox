@@ -23,15 +23,15 @@ export function createAppHost(kernel, { mountTimeoutMs = 9000 } = {}) {
     try { kernel.status.report(appId, item); } catch (e) { console.error('[testkit] status', e); }
   }
 
-  async function loadModule(appId, ver) {
-    const key = `${appId}@${ver}`;
+  async function loadModule(appId, ver, binding = null) {
+    const key = binding ? binding.root : `${appId}@${ver}`;
     if (modules.has(key)) return modules.get(key);
     if (cache.has(key)) return cache.get(key);
     const manifest = await kernel.artifacts.manifest(appId, ver);
     if (!manifest) throw new Error(`Manifest ${key} fehlt`);
     const hash = manifest.files?.[manifest.entry];
     if (!hash) throw new Error(`Einstiegsdatei ${manifest.entry} fehlt in ${key}`);
-    if(kernel.loadModule){const mod=await kernel.loadModule(appId,ver);cache.set(key,mod);return mod;}
+    if(kernel.loadModule){const mod=await kernel.loadModule(appId,ver,binding);cache.set(key,mod);return mod;}
     const text = await (await kernel.artifacts.read(hash)).text();
     let url, revoke = false;
     if (typeof window !== 'undefined' && typeof URL.createObjectURL === 'function') {
@@ -51,8 +51,13 @@ export function createAppHost(kernel, { mountTimeoutMs = 9000 } = {}) {
     if (typeof fn !== 'function') throw new Error('App-Modul exportiert kein mount()');
     return fn;
   }
+  // §16.39 (K-1d): genau EINE Artefakt-Bindung je Mount (Shell-Version + Lib-Minors eingefroren)
+  function bindFor(appId, ver) {
+    try { return kernel.artifacts?.bind ? kernel.artifacts.bind(appId, ver) : null; } catch { return null; } // ohne aktive Shell: Blob/data-Weg
+  }
   async function mountVersion(root, appId, ver, ctx) {
-    const mod = await loadModule(appId, ver);
+    const binding = bindFor(appId, ver);
+    const mod = await loadModule(appId, ver, binding);
     const api = kernel.appApi(appId, ver);
     const handle = await mountFn(mod)(root, api, ctx);
     if (!handle || typeof handle.unmount !== 'function') throw new Error('mount() muss {unmount} liefern');

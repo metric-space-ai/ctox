@@ -10,7 +10,7 @@ fs.mkdirSync(stage,{recursive:true});
 const files=[];
 const visit = dir => { for (const name of fs.readdirSync(dir)) {
  const path=join(dir,name);
- if(fs.statSync(path).isDirectory()){if(dir==='tests/sync-v4'&&!/^k[0-9]+$/.test(name))continue;visit(path);continue;}
+ if(fs.statSync(path).isDirectory()){if(dir==='tests/sync-v4'&&!/^k(?:[0-9]+|-support)$/.test(name))continue;visit(path);continue;}
  if(dir==='scripts/sync-v4'&&!name.startsWith('e2e-')&&name!=='gate-regression.sh')continue;
  const to=join(stage,path);fs.mkdirSync(resolve(to,'..'),{recursive:true});
  const bytes=fs.readFileSync(path);fs.writeFileSync(to,bytes);

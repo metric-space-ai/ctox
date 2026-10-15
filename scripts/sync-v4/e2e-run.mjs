@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Entrypoint used only inside the canonical Linux build lane.
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { owner, verifiedBuild } from '../../tests/sync-v4-e2e/native.mjs';
+import {installedProfile} from '../../tests/sync-v4/k11/installed-profile.mjs';
 const args = {};
 for (let i=2;i<process.argv.length;i+=2) { if(!process.argv[i]?.startsWith('--') || !process.argv[i+1]) throw Error('Expected --key value'); args[process.argv[i].slice(2)] = process.argv[i+1]; }
 if(process.platform!=='linux'||!process.env.CARGO_TARGET_DIR||!process.env.TMPDIR||!process.env.BUILD_LANE_BIN) throw Error('Canonical Linux lane required');
@@ -20,23 +21,49 @@ const here = dirname(fileURLToPath(import.meta.url));
 const snapshot = join(output, '.runner');
 fs.mkdirSync(join(snapshot, 'tests'), { recursive: true });
 fs.mkdirSync(join(snapshot, 'scripts'), { recursive: true });
-fs.cpSync(resolve(here,'../../tests/sync-v4-e2e'),join(snapshot,'tests/sync-v4-e2e'),{recursive:true});
-if (args.catalog === 'yes') fs.cpSync(resolve(here,'../../tests/sync-v4'),join(snapshot,'tests/sync-v4'),{recursive:true});
+const repository = resolve(here,'../..');
+const manifestPath = join(repository,'source-manifest.json');
+const sourceManifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath)) : {
+  head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),scope:'owned harness files; per-file hashes',
+  files:[...new Set(execFileSync('git',['ls-files','-c','-o','--exclude-standard','-z','--','tests/sync-v4-e2e','tests/sync-v4','scripts/sync-v4'],{encoding:'utf8'}).split('\0').filter(Boolean))]
+    .filter(path=>/^(tests\/sync-v4-e2e\/|tests\/sync-v4\/k[^/]+\/|scripts\/sync-v4\/(e2e-[^/]+\.mjs|gate-regression\.sh)$)/.test(path))
+    .map(path=>({path,sha256:createHash('sha256').update(fs.readFileSync(join(repository,path))).digest('hex')}))
+};
+for (const row of sourceManifest.files) {
+  const file=resolve(repository,row.path);
+  if(!file.startsWith(repository+'/')||!fs.lstatSync(file).isFile())throw Error('Harness manifest path escape or non-file');
+  const bytes=fs.readFileSync(file);
+  if(createHash('sha256').update(bytes).digest('hex')!==row.sha256)throw Error('Harness source changed during staging');
+  if(row.path.startsWith('tests/sync-v4-e2e/') || (args.catalog==='yes'&&row.path.startsWith('tests/sync-v4/k'))){
+    const dest=join(snapshot,row.path);fs.mkdirSync(dirname(dest),{recursive:true});fs.writeFileSync(dest,bytes);
+  }
+}
+if(!sourceManifest.files.some(r=>r.path==='scripts/sync-v4/e2e-netns.mjs'))throw Error('Namespace helper absent from source custody');
 fs.copyFileSync(join(here,'e2e-netns.mjs'),join(snapshot,'scripts/e2e-netns.mjs'));
-const manifestPath = resolve(here,'../../source-manifest.json');
-const sourceManifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath)) : null;
-if (sourceManifest) for (const row of sourceManifest.files) {
-  const file = resolve(here,'../..',row.path);
-  if (!file.startsWith(resolve(here,'../..')+'/') || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== row.sha256) throw Error('Harness source changed during staging');
+let kernelAssets=null;
+if(args.v4==='yes'){
+ const revision=args['kernel-revision'];
+ if(!/^[a-f0-9]{40}$/.test(revision??''))throw Error('V4 requires an immutable browser kernel revision');
+ kernelAssets=join(snapshot,'browser-kernel');fs.mkdirSync(kernelAssets);
+ const bytes=args['kernel-archive']?fs.readFileSync(resolve(repository,args['kernel-archive'])):execFileSync('git',['archive',revision,'src/apps/business-os/kernel','src/apps/business-os/rxdb/src'],{maxBuffer:32*1024*1024});
+ if(args['kernel-archive']&&createHash('sha256').update(bytes).digest('hex')!==args['kernel-archive-sha256'])throw Error('Pinned browser kernel archive checksum mismatch');
+ const entries=execFileSync('tar',['-tf','-'],{input:bytes,encoding:'utf8'}).trim().split('\n');
+ if(entries.some(p=>p.startsWith('/')||p.split('/').includes('..')||!['src/apps/business-os/kernel/','src/apps/business-os/rxdb/src/'].some(prefix=>p.startsWith(prefix)||prefix.startsWith(p))))throw Error('Browser kernel archive path escape');
+ execFileSync('tar',['-xf','-','-C',kernelAssets],{input:bytes});
+ fs.writeFileSync(join(kernelAssets,'origin.json'),JSON.stringify({revision,archiveSha256:createHash('sha256').update(bytes).digest('hex')}));
 }
 const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
   seedAfterStart: args['seed-after-start'] === 'yes', leadProfile: args['lead-profile'] || 'eager',
-  osBootstrap: args['os-bootstrap'] || null, catalogDuration: args['catalog-duration'] === 'full' ? 'full' : 'slice', prime: args.prime === 'yes', upgradeBuild: args['upgrade-build'] || null, schemaCli: args['schema-cli'] ? JSON.parse(fs.readFileSync(args['schema-cli'])) : null, catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,
+  v4: args.v4 === 'yes', kernelAssets, kernelRevision:args['kernel-revision']??null, osBootstrap: args['os-bootstrap'] || null, catalogDuration: args['catalog-duration'] === 'full' ? 'full' : 'slice', prime: args.prime === 'yes', upgradeBuild: args['upgrade-build'] || null, schemaCli: args['schema-cli'] ? JSON.parse(fs.readFileSync(args['schema-cli'])) : null, catalog: args.catalog === 'yes', scenarioRoot: args.catalog === 'yes' ? join(snapshot,'tests/sync-v4') : null,
   root: join(output,`tenant-${build.revision.slice(0,12)}`), port: 19865, signalingPort: 19866, turnPort: 34789,
-  runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest,
+  runner: args.v4 === 'yes' ? join(snapshot,'tests/sync-v4/k-support/v4-runner.mjs') : join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest, buildReceipt: resolve(args.build), lane, canonicalTmpdir: process.env.TMPDIR,
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
   chrome: args.chrome || '/opt/google/chrome/chrome', modulesRoot: args['modules-root'] || join(lane,'deps/shell-browser-collection-auth/node_modules'),
   turnBin: args['turn-bin'] || '/usr/bin/turnserver', turnLib: args['turn-lib'] || '', scenario: args.scenario || null };
+if(args['installed-profile']){
+ if(args.v4!=='yes')throw Error('Installed profile binding is V4-only');
+ Object.assign(config,installedProfile(args['installed-profile'],build,lane,owner));
+}
 if (!['eager','demand-only'].includes(config.leadProfile)) throw Error('Unsupported fixture profile');
 if(!Number.isInteger(config.durationSeconds)||config.durationSeconds<30||config.durationSeconds>2100) throw Error('Run duration bound 30..2100 seconds');
 for (const file of [config.turnBin, config.chrome]) fs.accessSync(file, fs.constants.X_OK);
