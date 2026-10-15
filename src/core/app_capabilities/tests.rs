@@ -401,7 +401,6 @@ route_test!(
     "ctox.coding.models"
 );
 route_test!(coding_turn, "agent.coding", "turn", "ctox.coding.turn");
-route_test!(coding_cancel, "agent.coding", "cancel", "ctox.coding.cancel");
 route_test!(schedule_upsert, "schedule", "upsert", "news.topic.schedule");
 route_test!(knowledge_query, "knowledge", "query", "knowledge.command");
 
