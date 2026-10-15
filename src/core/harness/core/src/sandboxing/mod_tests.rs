@@ -28,8 +28,6 @@ use ctox_protocol::permissions::NetworkSandboxPolicy;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
-#[cfg(unix)]
-use std::path::Path;
 use tempfile::TempDir;
 
 

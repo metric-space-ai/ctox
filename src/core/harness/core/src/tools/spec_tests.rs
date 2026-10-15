@@ -5,7 +5,6 @@ use crate::models_manager::model_info::with_config_overrides;
 use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
-use ctox_app_server_protocol::AppInfo;
 use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ModelsResponse;
 use ctox_protocol::protocol::ReadOnlyAccess;

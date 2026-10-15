@@ -1,15 +1,6 @@
 use super::*;
-use crate::CodexAuth;
-use crate::CodexThread;
-use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
-use crate::config::Config;
-use crate::config::ConfigBuilder;
-use crate::config_loader::LoaderOverrides;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use ctox_protocol::config_types::ModeKind;
-use ctox_protocol::models::ContentItem;
-use ctox_protocol::models::ResponseItem;
 use ctox_protocol::protocol::ErrorEvent;
 use ctox_protocol::protocol::EventMsg;
 use ctox_protocol::protocol::TurnAbortReason;
@@ -17,11 +8,6 @@ use ctox_protocol::protocol::TurnAbortedEvent;
 use ctox_protocol::protocol::TurnCompleteEvent;
 use ctox_protocol::protocol::TurnStartedEvent;
 use pretty_assertions::assert_eq;
-use tempfile::TempDir;
-use tokio::time::Duration;
-use tokio::time::sleep;
-use tokio::time::timeout;
-use toml::Value as TomlValue;
 
 
 

@@ -852,18 +852,6 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 }
 
 mod requirements_exec_policy_tests {
-    use crate::config_loader::ConfigLayerEntry;
-    use crate::config_loader::ConfigLayerStack;
-    use crate::config_loader::ConfigRequirements;
-    use crate::config_loader::ConfigRequirementsToml;
-    use crate::config_loader::ConfigRequirementsWithSources;
-    use crate::config_loader::RequirementSource;
-    use ctox_app_server_protocol::ConfigLayerSource;
-    use ctox_execpolicy::Decision;
-    use ctox_utils_absolute_path::AbsolutePathBuf;
-    use std::path::Path;
-    use toml::Value as TomlValue;
-    use toml::from_str;
 
 
 

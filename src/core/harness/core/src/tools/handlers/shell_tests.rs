@@ -6,7 +6,6 @@ use pretty_assertions::assert_eq;
 
 use crate::codex::make_session_and_context;
 use crate::exec_env::create_env;
-use crate::is_safe_command::is_known_safe_command;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;

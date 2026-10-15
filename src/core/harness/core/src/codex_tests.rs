@@ -43,7 +43,6 @@ use crate::tools::handlers::UnifiedExecHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use ctox_app_server_protocol::AppInfo;
 use ctox_otel::TelemetryAuthMode;
 use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ContentItem;
@@ -51,12 +50,9 @@ use ctox_protocol::models::DeveloperInstructions;
 use ctox_protocol::models::ResponseInputItem;
 use ctox_protocol::models::ResponseItem;
 use ctox_protocol::protocol::Submission;
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_sdk::trace::SdkTracerProvider;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing_subscriber::prelude::*;
 
 use ctox_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -66,7 +62,6 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Once;
 use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]

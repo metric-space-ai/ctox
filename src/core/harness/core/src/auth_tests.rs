@@ -1,15 +1,9 @@
 use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
-use crate::config::Config;
-use crate::config::ConfigBuilder;
 
-use base64::Engine;
-use ctox_protocol::config_types::ForcedLoginMethod;
 use pretty_assertions::assert_eq;
-use serde::Serialize;
 use serde_json::json;
-use std::env;
 use tempfile::tempdir;
 
 static CTOX_API_KEY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

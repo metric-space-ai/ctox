@@ -701,7 +701,6 @@ pub(crate) async fn route_outgoing_envelope(
 mod tests {
     use super::*;
     use crate::error_code::OVERLOADED_ERROR_CODE;
-    use ctox_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::time::Duration;
