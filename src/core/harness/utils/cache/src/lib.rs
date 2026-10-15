@@ -51,7 +51,10 @@ where
 
         let value = f()?;
 
-        let mut cache = self.inner.lock().unwrap_or_else(|error| panic!("BlockingLruCache mutex poisoned: {error}"));
+        let mut cache = self
+            .inner
+            .lock()
+            .unwrap_or_else(|error| panic!("BlockingLruCache mutex poisoned: {error}"));
         if let Some(existing) = cache.get(&key).cloned() {
             return Ok(existing);
         }
@@ -69,11 +72,17 @@ mod tests {
     fn clear_invalidates_every_cached_entry() -> Result<(), &'static str> {
         let cache = BlockingLruCache::new(NonZeroUsize::new(2).ok_or("nonzero capacity")?);
         for key in [1, 2] {
-            assert_eq!(cache.get_or_try_insert_with(key, || Ok::<_, ()>(key)), Ok(key));
+            assert_eq!(
+                cache.get_or_try_insert_with(key, || Ok::<_, ()>(key)),
+                Ok(key)
+            );
         }
         cache.clear();
         for key in [1, 2] {
-            assert_eq!(cache.get_or_try_insert_with(key, || Ok::<_, ()>(key + 10)), Ok(key + 10));
+            assert_eq!(
+                cache.get_or_try_insert_with(key, || Ok::<_, ()>(key + 10)),
+                Ok(key + 10)
+            );
         }
         Ok(())
     }
