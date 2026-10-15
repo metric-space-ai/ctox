@@ -138,7 +138,7 @@ try {
       const client = membership.get(event.peer) || event.peer;
       peerIds.set(client.split('-g')[0], event.peer);
     }
-    if (event.kind === 'disconnected') for (const [slot, id] of peerIds) if (id === event.peer) peerIds.delete(slot);
+    if (event.kind === 'disconnected' && config.dropMode === 'factory') for (const [slot, id] of peerIds) if (id === event.peer) peerIds.delete(slot);
     if (event.kind === 'send_result') { nativeTx.push(event); inflight.get(event.id)?.resolve(event.ok); inflight.delete(event.id); }
     if (event.kind === 'ack') {
       const at = performance.now(), offeredAt = attemptTimes.get(event.id);
@@ -181,7 +181,7 @@ try {
 
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.evaluate(async values => { const adapter = await import('/bench/browser.mjs'); await adapter.start(values); },
-      { signalingUrl, room, turnUrl, slot: `browser${i}` });
+      { signalingUrl, room, turnUrl, slot: `browser${i}`, dropMode: config.dropMode });
   }
   // Bounded establishment deadline; no resource/admission retry job.
   await Promise.all(pages.map(page => page.waitForFunction(() => window.bench?.ready(), null, { timeout: 45000 })));
@@ -228,7 +228,8 @@ try {
     browserToNative: reconcile(browserEvents, evidence.nativeEvents, config.durationSeconds),
     nativeToBrowser: reconcile(nativeTx, browserEvents, config.durationSeconds),
     semantics: { browserSend: 'queue admission, not SCTP completion (legacy API limit)', nativeSend: 'awaited existing transport send completion',
-      noReplay: true, disconnect: 'close/recreate browser transport each 30s; no production peer/process touched',
+      noReplay: true, disconnect: config.dropMode === 'factory' ? 'close/recreate browser factory each 30s'
+        : 'close main DataChannel each 30s; retain factory and use production automatic reconnect',
       unsupportedClasses: ['unreliable_audio_video: legacy adapter has no exposed unreliable-channel contract'] },
     rttMs: quantiles(evidence.browsers.flatMap(b => b.samples.filter(s => s.connectionState === 'connected').map(s => s.rttMs))),
     relayAlwaysObserved: evidence.browsers.every(b => b.samples.length && b.samples.every(s => s.relay)),

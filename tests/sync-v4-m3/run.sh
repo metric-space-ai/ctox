@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 const root=process.env.M3_ROOT, out=process.env.M3_OUT;
 fs.writeFileSync(path.join(out,'config.json'), JSON.stringify({
- out, durationSeconds:Number(process.env.M3_DURATION), peers:3,
+ out, durationSeconds:Number(process.env.M3_DURATION), peers:3, dropMode:'channel',
  nativeBin:path.join(process.env.CARGO_TARGET_DIR,'debug/ctox-sync-v4-m3-peer'),
  nativeRevision:process.env.M3_REVISION || 'uncommitted', nativeBuildProfileDeclared:'debug',
  browserRoot:path.join(root,'src/apps/business-os/rxdb/src'),
