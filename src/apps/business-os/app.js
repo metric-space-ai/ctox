@@ -13904,6 +13904,92 @@ async function dispatchWorkjetProjectList(command, options, deadline, diagnostic
   }
 }
 
+// Agent secret requests (ctox secret request). Workjet shows a masked card;
+// the value travels only inside the fulfil command, whose `value` field the
+// daemon detaches at intake. The local pending command document is patched to
+// drop the value as soon as the command settles, and nothing returned here
+// ever contains it.
+async function workjetSecretRequestControl(action, request, authority) {
+  const allowed = {
+    'secret.request.list': ['action', 'commandId', 'status', 'threadKey'],
+    'secret.request.fulfill': ['action', 'commandId', 'requestId', 'value'],
+    'secret.request.decline': ['action', 'commandId', 'requestId'],
+  }[action];
+  if (!allowed) throw new Error('Unsupported Workjet project control action.');
+  assertWorkjetProjectPayloadKeys(request, new Set(allowed));
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('Workjet project control is not ready.');
+  }
+  await state.sync?.startCollection?.('business_commands');
+  const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+  const commandType = 'ctox.' + action;
+  let payload;
+  if (action === 'secret.request.list') {
+    payload = {};
+    if (request.status != null) payload.status = boundedWorkjetProjectText(request.status, 'status', 16);
+    if (request.threadKey != null) payload.thread_key = boundedWorkjetProjectText(request.threadKey, 'threadKey', 256);
+  } else {
+    payload = { request_id: boundedWorkjetProjectText(request.requestId, 'requestId', 64) };
+    if (action === 'secret.request.fulfill') {
+      if (typeof request.value !== 'string' || !request.value || request.value.length > 8192) {
+        throw new Error('Secret value must be 1-8192 characters.');
+      }
+      payload.value = request.value;
+    }
+  }
+  if (state.session !== authority.requestSession || state.db !== authority.requestDb
+    || actorContext(state.session).id !== authority.ownerUserId) {
+    throw new Error('Workjet project session changed before the secret request was delivered.');
+  }
+  let receipt;
+  try {
+    receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: commandType,
+      record_id: payload.request_id || 'secret-requests',
+      payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(authority.requestSession) },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+  } finally {
+    if (action === 'secret.request.fulfill') {
+      try {
+        const doc = await state.db.collection('business_commands')?.findOne?.(commandId)?.exec?.();
+        if (doc?.payload && Object.prototype.hasOwnProperty.call(doc.payload, 'value')) {
+          await doc.patch({ payload: { request_id: payload.request_id } });
+        }
+      } catch { /* the daemon already redacted the durable record */ }
+      payload.value = undefined;
+    }
+  }
+  const outcome = receipt?.result?.outcome || receipt?.result || {};
+  if (outcome.ok === false) throw new Error(String(outcome.error || 'Secret request failed.').slice(0, 200));
+  if (action === 'secret.request.list') {
+    const requests = Array.isArray(outcome.requests) ? outcome.requests : [];
+    return {
+      action,
+      requests: requests.slice(0, 200).map((entry) => ({
+        requestId: String(entry.request_id || ''),
+        scope: String(entry.scope || ''),
+        name: String(entry.name || ''),
+        label: String(entry.label || ''),
+        reason: entry.reason == null ? null : String(entry.reason),
+        threadKey: entry.thread_key == null ? null : String(entry.thread_key),
+        status: String(entry.status || ''),
+        ref: String(entry.secret_ref || ''),
+        createdAt: String(entry.created_at || ''),
+      })),
+    };
+  }
+  return {
+    action,
+    requestId: String(outcome.request_id || payload.request_id),
+    status: String(outcome.status || ''),
+    ...(outcome.ref ? { ref: String(outcome.ref) } : {}),
+  };
+}
+
 async function workjetProjectControl(request = {}, diagnostics = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new TypeError('Workjet project control request must be an object.');
@@ -14047,6 +14133,9 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
         },
       });
     } finally { clearTimeout(timer); controller.abort(); }
+  }
+  if (action.startsWith('secret.request.')) {
+    return workjetSecretRequestControl(action, request, { requestSession, requestDb, ownerUserId });
   }
   if (action.startsWith('project.presentation.')) {
     return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });
