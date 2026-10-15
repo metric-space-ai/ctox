@@ -30,11 +30,21 @@ save();
 if(target.kind==='v4'){
  target.requestedLabel=options['target-requested']??target.requested;
  target.revision=resolveRevision(target.requested);
+ const providedReceipt=args.indexOf('--build');
+ if(!target.revision&&/^[a-f0-9]{40}$/.test(target.requested)&&providedReceipt>=0){
+  const {verifiedBuild}=await import('../../sync-v4-e2e/native.mjs');
+  if(verifiedBuild(args[providedReceipt+1]).revision===target.requested)target.revision=target.requested;
+ }
  if(!target.revision&&/^[a-f0-9]{40}$/.test(target.requested)){
   const fetch=spawnSync('git',['fetch','origin',target.requested],{encoding:'utf8',timeout:60000});target.fetchExit=fetch.status;
   if(fetch.status===0)target.revision=resolveRevision(target.requested);
  }
  target.kernelRevision=resolveRevision(options['kernel-revision']??'fa1b88498cdb9beed020a9bc8f32a4f4037dca20');
+ if(!target.kernelRevision&&args.includes('--kernel-archive')&&/^[a-f0-9]{40}$/.test(options['kernel-revision']??''))target.kernelRevision=options['kernel-revision'];
+ if(!target.kernelRevision&&/^[a-f0-9]{40}$/.test(options['kernel-revision']??'')){
+  const fetch=spawnSync('git',['fetch','origin',options['kernel-revision']],{encoding:'utf8',timeout:60000});
+  if(fetch.status===0)target.kernelRevision=resolveRevision(options['kernel-revision']);
+ }
  let reason;
  if(!target.revision)reason='Requested V4 revision is absent: '+target.requested;
  else if(!target.kernelRevision)reason='Browser kernel #823 revision is absent';
@@ -51,13 +61,20 @@ if(target.kind==='v4'){
    const {verifiedBuild}=await import('../../sync-v4-e2e/native.mjs');const b=verifiedBuild(receipt);
    if(b.revision!==target.revision)throw Error('Provided binary does not match requested target');
    summary.build={receipt,revision:b.revision,binarySha256:b.binarySha256};
-   // Do not drive a V4 target through legacy db.collections/startCollection.
-   // #823 intentionally delegates pairing, hello, signatures and scopes to the
-   // host; a native bootstrap has to supply those authorities before K cases.
+   // Execute a real daemon/Chromium preflight, never the V3 collection adapter.
+   // An actual missing native authority remains not_run with measured phase.
    const kernelSource=spawnSync('git',['show',target.kernelRevision+':src/apps/business-os/kernel/transport-webrtc.mjs'],{encoding:'utf8'});
    summary.browserKernel={revision:target.kernelRevision,sourcePresent:kernelSource.status===0,
     hostSupplies:['createPeer','hello','resolveScope','verifyPackage'],nativeBindingExecuted:false};
-   reason='V4 app/store scenario adapter is not yet bound to native pairing/hello/signature/scope authorities required by #823; V3 db.collections/lease fallback deliberately not used. This is an open harness integration, not a measured product failure.';
+   const preflight=join(output,'native-v4-preflight'),log=fs.openSync(join(output,'native-v4-preflight.log'),'w',0o600);
+   let execution;try{execution=spawnSync(process.execPath,['scripts/sync-v4/e2e-run.mjs',...args.filter((_,i)=>args[i-1]!=='--build'&&args[i]!=='--build'), '--build',receipt,'--catalog','yes','--v4','yes','--kernel-revision',target.kernelRevision,'--seconds','180','--output',preflight],{stdio:['ignore',log,log],timeout:230000});}finally{fs.closeSync(log);}
+   summary.nativePreflight={processExit:execution.status,error:execution.error?.message,evidence:join(preflight,'result.json')};
+   if(fs.existsSync(summary.nativePreflight.evidence)){
+    const measured=JSON.parse(fs.readFileSync(summary.nativePreflight.evidence));summary.nativePreflight.result=measured;
+    summary.browserKernel.sourcePresent=measured.browserKernel?.revision===target.kernelRevision;
+    summary.browserKernel.nativeBindingExecuted=measured.binding?.nativeConnected===true;
+    reason=measured.reason??measured.error??'Native V4 preflight did not produce a binding';
+   }else reason='Native V4 preflight failed before producing a terminal result; inspect '+join(output,'native-v4-preflight.log');
 
   }catch(e){reason='V4 build unverified: '+e.message;summary.buildReceipt=receipt;}
  }
@@ -66,11 +83,11 @@ if(target.kind==='v4'){
    const file=resolve(options['k24-evidence']),row=JSON.parse(fs.readFileSync(file));
    if(row.id!=='K24'||row.terminal!==true||row.cleanup!=='owned groups absent'||row.originCommit!=='1ab7ceb03ceaeac763ea7ec99be56896608f83cb')throw Error('K24 evidence is not terminal, owned, or from the pinned tool');
    summary.scenarios.push({...row,id,evidence:file,measured:{target:row.target,criteria:row.criteria,measures:row.measured},bindingOnly:row.target==='bind'});
-  }else summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,evidence:summary.build?.receipt??summary.buildReceipt??null});
+  }else summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason,measured:summary.nativePreflight?.result?{phase:summary.nativePreflight.result.phase,binding:summary.nativePreflight.result.binding??null}:null,evidence:summary.nativePreflight?.evidence??summary.build?.receipt??summary.buildReceipt??null});
  }
 
  summary.terminal=true;summary.finishedAt=new Date().toISOString();summary.actuallyRan=summary.scenarios.filter(r=>r.status==='measured').map(r=>r.id);summary.pass=false;save();
- console.log(markdown(summary.comparison));console.log('V4 native scenarios not_run: '+reason+'; evidence '+output);process.exit(2);
+ console.log(markdown(summary.comparison));console.log('V4 native scenarios not_run: '+reason+'; evidence '+output);process.exit(summary.comparison.some(row=>row.verdict==='red')?1:2);
 }
 for(const id of expected){
  const dir=join(output,id);

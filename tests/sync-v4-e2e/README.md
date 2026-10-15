@@ -179,11 +179,46 @@ if the product had been measured, and never a green empty gate. V4 default
 build host is auto; V3/Chromium uses gpu4 because its namespace permission is
 required. A supplied producer is rehashed and must match the requested SHA.
 
-**Open:** the V4 browser/store scenario adapter is not yet bound to the native
-pairing/hello/signature/scope authorities required by #823. This gate currently
-builds/verifies V4 and emits explicit not_run prerequisites; it does not execute
-the V3 app adapter against V4 and label that native V4 acceptance. T8/Z9 and
-real K11 migration remain open. K24 bind output is separate diagnostic evidence.
+The V4 gate builds/verifies the requested daemon and executes an isolated native
+bootstrap/Chromium/forced-TURN preflight. It freezes a separate immutable #823
+kernel archive and records its SHA; `--kernel-archive` plus
+`--kernel-archive-sha256` can supply the same tracked assets to a sparse lane
+stage without a Git object database. Credentials stay in the browser; evidence
+contains only endpoint locality, identities, phases and connection statistics.
+No V3 app collection/query/pull is substituted for a V4 scenario.
+The probe document is served by the actual daemon, not `route.fulfill`:
+Chromium classifies a synthetic document differently for local-network access.
+`k-support/v4-document-mutation.mjs` restores that former document path and
+requires `ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`/no RTC connection, followed
+by a real served document with a selected TURN relay. This is a transport
+bring-up invariant, not a V4 application acceptance claim.
+
+
+**Open:** native host-owned hello/device enrollment, canonical scopes and package
+verification still need to be connected to the browser adapter. Preflight alone
+does not satisfy any K scenario: missing authority is `not_run` with the actual
+phase and logs, never a fabricated signature or MemoryCoreTransport success.
+T8/Z9 and full K11 migration remain open.
+
+K24 keeps the delivered upstream tool byte-identical. The platform adapter brings
+the actual upload page to the foreground before selecting its directory, and
+observes the Shell's real completed upload if its FileList has already reset.
+`k24/chooser-mutation.mjs` removes that foreground step in a private runner copy:
+the real upload must stall; restoration must complete. Bind criteria remain
+PASS/OFFEN/FAIL exactly as upstream reports and cannot count as native success.
+
+`k11/installer-smoke.mjs <old receipt> <new receipt> <new artifact prefix>` runs
+the actual supported installer in private PID/mount/network namespaces, verifies
+its active binary/backup and compares synthetic row hashes read-only before and
+after. It explicitly records `migrationExecuted:false` and never claims K11
+acceptance. The real compatible/incompatible publication path is still required.
+`prepare-install-source.mjs` can supplement a minimal portable source snapshot
+with an explicitly SHA-pinned tracked archive from the same revision; the
+original producer and portable package remain untouched.
+
+The controller owns one admission attempt, bounded to 40 minutes; no successor
+polling chain is created. Expiry only retires its own verified queued group;
+admitted jobs are not treated as queued and are not cancelled by this timer.
 
 `--lead-profile demand-only --scenario K08` runs the lease/window slice with an
 actual demand-only collection. It is not the historical Outbound startup code

@@ -3,7 +3,10 @@
 import {spawn,execFileSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
-const argv=process.argv.slice(2);if(argv.shift()!=='--')throw Error('Expected -- canonical lane arguments');
+const argv=process.argv.slice(2);let admissionSeconds=2400;
+if(argv[0]==='--admission-seconds'){admissionSeconds=Number(argv[1]);argv.splice(0,2);}
+if(!Number.isInteger(admissionSeconds)||admissionSeconds<1||admissionSeconds>2400)throw Error('Admission bound must be 1..2400 seconds');
+if(argv.shift()!=='--')throw Error('Expected -- canonical lane arguments');
 const helper=argv.shift();if(helper!==join(homedir(),'.codex/bin/gpu-build-run.sh'))throw Error('Only the canonical lane helper is permitted');
 const child=spawn(helper,argv,{stdio:['inherit','pipe','pipe'],detached:true});
 let admitted=false,remote=null,partial='',expired=false;
@@ -29,7 +32,7 @@ const stopQueued=()=>{
  }
  try{process.kill(-child.pid,'SIGTERM');}catch(e){if(e.code!=='ESRCH')throw e;}
 };
-const timer=setTimeout(stopQueued,40*60*1000);
+const timer=setTimeout(stopQueued,admissionSeconds*1000);
 process.once('SIGTERM',stopQueued);
 child.once('error',e=>{clearTimeout(timer);throw e;});
 child.once('exit',(code,signal)=>{clearTimeout(timer);process.exitCode=expired?75:code??(signal?143:1);});

@@ -10,6 +10,12 @@ for ((i=0;i<${#args[@]};i++)); do
 done
 if [[ "$TARGET" == v4=* ]]; then
   GPU_HOST="${E2E_GPU_HOST:-auto}"
+  kernel_set=false
+  for arg in "${args[@]}"; do [[ "$arg" != --kernel-revision ]] || kernel_set=true; done
+  if [[ "$kernel_set" == false ]]; then
+    kernel=$(git -C "$REPO" rev-parse --verify --end-of-options 'refs/remotes/origin/v4/k-1b-shell-api^{commit}' 2>/dev/null || true)
+    [[ "$kernel" =~ ^[a-f0-9]{40}$ ]] && args+=(--kernel-revision "$kernel")
+  fi
   ref="${TARGET#v4=}"
   # Pin a branch on the controller. A remote lane mirror may have an older ref.
   if [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]]; then

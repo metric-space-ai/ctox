@@ -17,7 +17,10 @@ const save=()=>fs.writeFileSync(join(output,'result.json'),JSON.stringify(record
 try{
  const fixture=await native.prepare(schema,resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
  const truth=native.seed('read',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
- record.fixture={rows:truth.rows.length,sha256:createHash('sha256').update(JSON.stringify(truth.rows)).digest('hex')};save();
+ const bodies=native.seed('bodies',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
+ const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])):value;
+ const digest=rows=>createHash('sha256').update(JSON.stringify(canonical(rows))).digest('hex');
+ record.fixture={rows:truth.rows.length,documentsCovered:bodies.rows.length,fullDocumentSha256:digest(bodies.rows),metadataSha256:digest(truth.rows)};save();
  const controller=join(dirname(new URL(import.meta.url).pathname),'upgrade-controller.mjs'),log=fs.openSync(join(output,'controller.log'),'w',0o600);
  const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade')],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
  record.controllerExit=run.status;record.controllerError=run.error?.message;
@@ -27,8 +30,9 @@ try{
  record.installerExecuted=record.installer?.installerExecuted===true&&record.controller?.groupAbsent===true&&run.status===0;
  if(record.installerExecuted){
   const current=native.seed('read',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
-  record.afterFixture={rows:current.rows.length,sha256:createHash('sha256').update(JSON.stringify(current.rows)).digest('hex')};
-  record.dataPreserved=record.afterFixture.sha256===record.fixture.sha256;
+  const content=native.seed('bodies',resolve(dirname(new URL(import.meta.url).pathname),'../../sync-v4-e2e'));
+  record.afterFixture={rows:current.rows.length,documentsCovered:content.rows.length,fullDocumentSha256:digest(content.rows),metadataSha256:digest(current.rows)};
+  record.dataPreserved=record.afterFixture.fullDocumentSha256===record.fixture.fullDocumentSha256&&record.afterFixture.documentsCovered===record.afterFixture.rows&&record.fixture.documentsCovered===record.fixture.rows;
  }
  record.next='A real publication/migration operation and generation/row invariants must follow; installing/restarting alone never satisfies K11.';
 }catch(error){record.error=error.message;}
