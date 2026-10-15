@@ -58,6 +58,23 @@ impl FileOwner {
         Ok(Self { file, path })
     }
 
+    /// Temporary compatibility access: multiple legacy connections may coexist,
+    /// but none can overlap the exclusive file owner. Hold until SQLite closes.
+    pub fn acquire_legacy_shared(path: &Path) -> io::Result<Self> {
+        let path = Self::identity(path)?;
+        let mut lock = path.as_os_str().to_os_string();
+        lock.push(".ctox-store.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock)?;
+        file.try_lock_shared()
+            .map_err(|error| io::Error::other(format!("database already owned: {error}")))?;
+        Ok(Self { file, path })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }

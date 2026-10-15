@@ -160,7 +160,7 @@ impl Store {
         Ok(store)
     }
 
-    fn connection(&self) -> Result<Connection> {
+    fn connection(&self) -> Result<TransferConnection> {
         open_transfer_connection(&self.db, false)
     }
 
@@ -348,9 +348,32 @@ impl Store {
     }
 }
 
-// One raw opener retained for compatibility and the owned path. The owned
-// path calls it only on its dedicated actor, under the canonical file lease.
-fn open_transfer_connection(path: &Path, owned: bool) -> Result<Connection> {
+// Connection drops before its compatibility lease (field declaration order).
+// The shared lease permits existing legacy peers but excludes a live file owner.
+struct TransferConnection {
+    connection: Connection,
+    _legacy_lease: Option<owner_adapter::FileOwner>,
+}
+impl std::ops::Deref for TransferConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.connection
+    }
+}
+impl std::ops::DerefMut for TransferConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+
+// The owned path calls this only inside its exclusive actor. Compatibility
+// connections participate in the same lock protocol, before opening SQLite.
+fn open_transfer_connection(path: &Path, owned: bool) -> Result<TransferConnection> {
+    let legacy_lease = if owned {
+        None
+    } else {
+        Some(owner_adapter::FileOwner::acquire_legacy_shared(path)?)
+    };
     let connection = Connection::open(path)?;
     connection.busy_timeout(if owned {
         Duration::ZERO
@@ -362,7 +385,10 @@ fn open_transfer_connection(path: &Path, owned: bool) -> Result<Connection> {
     }
     // Never inherit the Core writer's NORMAL setting for durable receipts.
     connection.pragma_update(None, "synchronous", "FULL")?;
-    Ok(connection)
+    Ok(TransferConnection {
+        connection,
+        _legacy_lease: legacy_lease,
+    })
 }
 
 /// Typed transfer operation for the existing Core file owner. `apply` runs
@@ -424,7 +450,7 @@ pub trait TransferOwner: Send + Sync {
 
 #[derive(Clone)]
 enum TransferBackend {
-    Dedicated(owner_adapter::BoundedOwner<Connection>),
+    Dedicated(owner_adapter::BoundedOwner<TransferConnection>),
     Shared(Arc<dyn TransferOwner>),
 }
 
@@ -528,7 +554,7 @@ pub struct Worker {
     // Idle polling reads through one kept connection: the worker polls every
     // 250 ms, and opening Core each time parsed its whole schema and took the
     // write lock even with an empty queue (thesen 08.10.2026: ~20 % of a core).
-    poll: std::sync::Mutex<Option<Connection>>,
+    poll: std::sync::Mutex<Option<TransferConnection>>,
     peer: Option<Arc<dyn PeerRangeSource>>,
     storage: Option<Arc<dyn StorageResolver>>,
 }
@@ -1053,6 +1079,14 @@ mod owner_contract_tests {
         };
         let saved = store.enqueue(request.clone()).await.unwrap();
         assert_eq!(saved.request, request);
+        assert!(
+            Store::open(
+                directory.path().join("core.sqlite"),
+                directory.path().join("artifacts")
+            )
+            .is_err(),
+            "legacy connection must not open an exclusively owned file"
+        );
         owner
             .call(|connection| {
                 assert_eq!(
@@ -1105,5 +1139,19 @@ mod owner_contract_tests {
         })
         .await
         .unwrap();
+        let legacy = Store::open(
+            directory.path().join("core.sqlite"),
+            directory.path().join("artifacts"),
+        )
+        .unwrap();
+        let connection = legacy.connection().unwrap();
+        let duplicate = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        assert!(
+            duplicate.get("fixture".into()).await.is_err(),
+            "exclusive owner must wait for all legacy connections to close"
+        );
+        drop(duplicate);
+        drop(connection);
+        assert!(owner_adapter::FileOwner::acquire(&directory.path().join("core.sqlite")).is_ok());
     }
 }
