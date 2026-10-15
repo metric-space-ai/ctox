@@ -16,8 +16,8 @@ const cases=[
  {id:'session-duplicate',file:'src/apps/business-os/kernel/transport-webrtc.mjs',before:'if(BigInt(id)<=this.state.delivered[lane])',after:'if(false)',test:'tests/sync-v4-e2e-path/native-wire.test.mjs'},
 ];
 for(const item of (process.env.E2E_MUTATIONS_NATIVE_ONLY==='1'?[]:cases)){const original=await readFile(item.file,'utf8');if(original.split(item.before).length!==2)throw Error('mutation anchor '+item.id);
- const baseline=run(process.execPath,['--test','--test-timeout=10000',item.test],item.id+'-baseline');await writeFile(resolve(out,item.id+'-baseline.log'),baseline.output);if(baseline.result.status!==0)throw Error('red baseline '+item.id);
- try{await writeFile(item.file,original.replace(item.before,item.after));const mutant=run(process.execPath,['--test','--test-timeout=10000',item.test],item.id);await writeFile(resolve(out,item.id+'.log'),mutant.output);
+ const baseline=run(process.execPath,['--test','--test-reporter=tap','--test-timeout=10000',item.test],item.id+'-baseline');await writeFile(resolve(out,item.id+'-baseline.log'),baseline.output);if(baseline.result.status!==0)throw Error('red baseline '+item.id);
+ try{await writeFile(item.file,original.replace(item.before,item.after));const mutant=run(process.execPath,['--test','--test-reporter=tap','--test-timeout=10000',item.test],item.id);await writeFile(resolve(out,item.id+'.log'),mutant.output);
  const receipt={...item,line:original.slice(0,original.indexOf(item.before)).split('\n').length,baseline_exit:0,exit:mutant.result.status,killed:mutant.result.status!==0&&/not ok/.test(mutant.output)&&!/SyntaxError|ERR_MODULE_NOT_FOUND/.test(mutant.output)};receipts.push(receipt);console.log('E2E_MUTATION '+JSON.stringify(receipt));if(!receipt.killed)process.exitCode=1;
  }finally{await writeFile(item.file,original);await writeFile(resolve(out,'mutation-proof.json'),JSON.stringify(receipts,null,2));}
 }
