@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctox.dev/schemas/adapter-spec.v1.json",
+  "title": "CTOX adapter spec v1",
+  "description": "Declarative service adapter executed by ctox_toolhub::spec::SpecAdapter. The Rust validator (src/spec/validate.rs) is authoritative and stricter (host allowlist, secret scan, risk vs. method, every input property must be used).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "slug", "version", "name", "description", "api_base", "allowed_hosts", "auth_schemes", "actions"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "schema": {"const": "ctox.adapter-spec/v1"},
+    "slug": {"type": "string", "pattern": "^[a-z0-9_-]{1,40}$"},
+    "version": {"type": "string", "pattern": "^[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}$"},
+    "name": {"type": "string", "minLength": 1},
+    "description": {"$ref": "#/$defs/localized"},
+    "docs": {"type": "array", "items": {"type": "string", "format": "uri"}},
+    "notes": {"type": "string"},
+    "api_base": {"type": "string", "pattern": "^https://"},
+    "api_base_template": {"type": "string", "pattern": "^https://", "description": "Per-connection base URL; placeholders {key} refer to connection_fields and must be single DNS labels."},
+    "allowed_hosts": {"type": "array", "minItems": 1, "items": {"type": "string", "description": "DNS name or *.domain; no IP literals, no local/internal names."}},
+    "connection_fields": {"type": "array", "items": {"$ref": "#/$defs/connection_field"}},
+    "auth_schemes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/auth_scheme"}},
+    "error_check": {"type": "array", "items": {"$ref": "#/$defs/error_check"}},
+    "replaces_builtin": {"type": "boolean", "default": false},
+    "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}}
+  },
+  "$defs": {
+    "localized": {"type": "object", "additionalProperties": false, "required": ["de", "en"], "properties": {"de": {"type": "string", "minLength": 1}, "en": {"type": "string", "minLength": 1}}},
+    "connection_field": {
+      "type": "object", "required": ["key", "label", "help", "placeholder", "required"],
+      "properties": {"key": {"type": "string"}, "label": {"$ref": "#/$defs/localized"}, "help": {"type": "object"}, "placeholder": {"type": "string"}, "required": {"type": "boolean"}}
+    },
+    "auth_scheme": {
+      "type": "object", "required": ["type"],
+      "properties": {"type": {"enum": ["oauth2", "api_key", "basic", "bearer"]}},
+      "description": "Same shape as ctox_toolhub::model::AuthScheme. Never contains secrets; OAuth client credentials live in the instance secret store."
+    },
+    "error_check": {
+      "type": "object", "required": ["kind", "pointer"],
+      "properties": {
+        "kind": {"enum": ["present", "flag"]}, "pointer": {"type": "string"},
+        "message_key": {"type": "string"}, "prefix": {"type": "string"},
+        "expect": {}, "error_pointer": {"type": "string"}
+      }
+    },
+    "value": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["const"], "properties": {"const": {}}},
+        {
+          "type": "object", "additionalProperties": false, "required": ["arg"],
+          "properties": {
+            "arg": {"type": "string"},
+            "type": {"enum": ["string", "integer", "number", "boolean", "string_list", "array", "object", "raw"]},
+            "trim": {"type": "boolean"}, "required": {"type": "boolean"}, "default": {},
+            "clamp": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+            "format": {"enum": ["date", "date-time"]},
+            "one_of": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"},
+            "join": {"type": "string"}, "wrap_array": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "template": {
+      "description": "A value, or an object whose entries are templates. The special key $switch_format routes one string arg by its shape.",
+      "oneOf": [{"$ref": "#/$defs/value"}, {"type": "object", "additionalProperties": {"$ref": "#/$defs/template"}}]
+    },
+    "response": {
+      "type": "object", "required": ["mode"],
+      "properties": {
+        "mode": {"enum": ["body", "pick", "list", "object", "merge_success", "const"]},
+        "pointer": {"type": "string"}, "required": {"type": "boolean"}, "empty_error": {"type": "string"},
+        "as": {"type": "string"}, "fields": {"type": "object"}, "value": {}
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slug", "title", "description", "risk", "input_schema", "request"],
+      "properties": {
+        "slug": {"type": "string", "pattern": "^[A-Z0-9_]+$"},
+        "title": {"$ref": "#/$defs/localized"},
+        "description": {"$ref": "#/$defs/localized"},
+        "risk": {"enum": ["read", "write", "destructive"], "description": "write/destructive = side effect, goes through the CTOX approval policy. DELETE must be destructive; GET must be read."},
+        "scopes": {"type": "array", "items": {"type": "string"}},
+        "docs": {"type": "string"},
+        "input_schema": {"type": "object", "required": ["type"], "properties": {"type": {"const": "object"}}},
+        "request": {
+          "type": "object", "additionalProperties": false, "required": ["method", "path"],
+          "properties": {
+            "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+            "path": {"type": "string", "pattern": "^/"},
+            "path_encoding": {"type": "object", "additionalProperties": {"enum": ["segment", "component"]}},
+            "query": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
+            "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            "body": {
+              "type": "object", "maxProperties": 1,
+              "properties": {
+                "json": {"$ref": "#/$defs/template"},
+                "form": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
+                "graphql": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}, "variables": {"$ref": "#/$defs/template"}}}
+              }
+            },
+            "constraints": {"type": "array", "items": {"type": "object", "required": ["kind", "args", "message"], "properties": {"kind": {"enum": ["at_most_one", "at_least_one"]}, "args": {"type": "array", "items": {"type": "string"}}, "message": {"type": "string"}}}},
+            "nonempty_body": {"type": "string"},
+            "read_only_post": {"type": "boolean"}
+          }
+        },
+        "response": {"$ref": "#/$defs/response"}
+      }
+    }
+  }
+}
