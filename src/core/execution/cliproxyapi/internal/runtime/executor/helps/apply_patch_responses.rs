@@ -95,6 +95,7 @@ impl ApplyPatchResponsesState {
     }
 
     /// Marks only folded namespaces that contain a winning custom patch.
+    #[cfg(test)]
     pub(crate) fn add_dispatcher(&mut self, name: &str, namespace: &str) {
         if self.bridge.namespace_has_custom(namespace) {
             self.dispatchers
@@ -104,6 +105,7 @@ impl ApplyPatchResponsesState {
 
     /// Retains upstream evidence before namespace restoration.
     /// A wrapper alone never proves dispatcher provenance.
+    #[cfg(test)]
     pub(crate) fn remember_dispatcher_event(&mut self, event: &[u8]) {
         if self.failed || self.closed || self.transport_done || self.dispatchers.is_empty() {
             return;
@@ -113,6 +115,7 @@ impl ApplyPatchResponsesState {
     }
 
     /// Keeps full snapshots on every matched candidate, including unnamed calls.
+    #[cfg(test)]
     pub(crate) fn remember_dispatcher_arguments(&mut self, event: &[u8]) {
         if self.failed || self.closed || self.transport_done || self.dispatchers.is_empty() {
             return;
@@ -624,8 +627,8 @@ impl ApplyPatchResponsesState {
         let replay_events = self.records[call_index].events.clone();
         let replay_originals = self.records[call_index].originals.clone();
         let mut out = Vec::new();
-        for index in start..replay_events.len() {
-            let mut pending = replay_events[index].clone();
+        for (index, event) in replay_events.iter().enumerate().skip(start) {
+            let mut pending = event.clone();
             let pending_text = utf8_text(&pending);
             let pending_root = gjson::parse(&pending_text);
             let pending_type = pending_root.get("type").str().to_owned();

@@ -12,8 +12,10 @@ use std::{
 };
 use tokio::sync::{mpsc, Notify};
 
+type Reply = (u16, Vec<u8>, Option<PluginExecutionError>);
+
 struct Client {
-    replies: Mutex<VecDeque<(u16, Vec<u8>, Option<PluginExecutionError>)>>,
+    replies: Mutex<VecDeque<Reply>>,
     requests: Mutex<Vec<HttpRequest>>,
 }
 impl HostHttpClient for Client {

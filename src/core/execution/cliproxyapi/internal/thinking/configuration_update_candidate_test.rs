@@ -226,7 +226,7 @@ fn candidate_thinking_updates_unsupported_routing_uses_last_nonempty_and_retains
             .unwrap();
             assert_eq!(string(&output, "reasoning.effort"), effort, "{body}");
             assert_eq!(raw(&output, "input"), kept);
-            if raw(body.as_bytes(), "reasoning.summary") != "" {
+            if !raw(body.as_bytes(), "reasoning.summary").is_empty() {
                 assert_eq!(string(&output, "reasoning.summary"), "auto");
             }
         }

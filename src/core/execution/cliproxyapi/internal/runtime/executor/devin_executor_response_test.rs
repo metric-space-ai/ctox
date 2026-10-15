@@ -378,7 +378,7 @@ fn candidate_devin_aggregate_legacy_guard_signature_only_and_sticky_byte_budget(
         original_request: br#"{"tools":[{"type":"function","name":"patch__apply_patch"}]}"#,
     };
     assert!(consume_devin_frames_to_interactions(
-        &mut Cursor::new(complete(&[legacy.clone()])),
+        &mut Cursor::new(complete(std::slice::from_ref(&legacy))),
         &ordinary,
     )
     .is_ok());

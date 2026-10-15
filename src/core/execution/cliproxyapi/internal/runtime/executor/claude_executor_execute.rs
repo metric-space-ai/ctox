@@ -326,7 +326,7 @@ fn normalize_claude_codex_integer_schemas(
     let Some(context) = context else {
         return body.to_vec();
     };
-    normalize_codex_tool_integer_types_for_executor(&body, &context.headers, "claude")
+    normalize_codex_tool_integer_types_for_executor(body, &context.headers, "claude")
 }
 
 /// Bounded Claude subscription execution path with exactly one unauthorized
@@ -3034,14 +3034,15 @@ data: {\"type\":\"message_stop\"}\n\n";
                 "transport failure after message_stop cannot cool a completed account"
             );
             drop(stream);
-            let measurements = usage.0.lock().unwrap();
-            assert_eq!(measurements.len(), 1);
-            assert_eq!(measurements[0].input_tokens, 7);
-            assert_eq!(measurements[0].output_tokens, 5);
-            assert_eq!(measurements[0].cache_read_tokens, 11);
-            assert_eq!(measurements[0].cache_creation_tokens, 13);
-            assert_eq!(measurements[0].total_tokens, 36);
-            drop(measurements);
+            {
+                let measurements = usage.0.lock().unwrap();
+                assert_eq!(measurements.len(), 1);
+                assert_eq!(measurements[0].input_tokens, 7);
+                assert_eq!(measurements[0].output_tokens, 5);
+                assert_eq!(measurements[0].cache_read_tokens, 11);
+                assert_eq!(measurements[0].cache_creation_tokens, 13);
+                assert_eq!(measurements[0].total_tokens, 36);
+            }
             let next = account
                 .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
                 .await
@@ -3085,18 +3086,19 @@ data: {\"type\":\"message_stop\"}\n\n";
                 }
             }
             drop(stream);
-            let measurements = usage.0.lock().unwrap();
-            assert_eq!(
-                measurements.len(),
-                1,
-                "EOF, cancellation and drop publish once"
-            );
-            assert_eq!(measurements[0].input_tokens, 7);
-            assert_eq!(measurements[0].output_tokens, 5);
-            assert_eq!(measurements[0].cache_read_tokens, 11);
-            assert_eq!(measurements[0].cache_creation_tokens, 13);
-            assert_eq!(measurements[0].total_tokens, 36);
-            drop(measurements);
+            {
+                let measurements = usage.0.lock().unwrap();
+                assert_eq!(
+                    measurements.len(),
+                    1,
+                    "EOF, cancellation and drop publish once"
+                );
+                assert_eq!(measurements[0].input_tokens, 7);
+                assert_eq!(measurements[0].output_tokens, 5);
+                assert_eq!(measurements[0].cache_read_tokens, 11);
+                assert_eq!(measurements[0].cache_creation_tokens, 13);
+                assert_eq!(measurements[0].total_tokens, 36);
+            }
             let next = account
                 .execute_for_model(target(), Some("sonnet"), alias_continuation_body(), false)
                 .await

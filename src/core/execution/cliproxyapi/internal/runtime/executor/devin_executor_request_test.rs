@@ -18,16 +18,18 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let mut catalog = StaticModelsCatalog::default();
-        catalog.devin = vec![RegistryModelInfo {
-            id: "swe-2".into(),
-            max_completion_tokens: 4096,
-            thinking: Some(RegistryThinkingSupport {
-                levels: vec!["low".into(), "high".into()],
+        let catalog = StaticModelsCatalog {
+            devin: vec![RegistryModelInfo {
+                id: "swe-2".into(),
+                max_completion_tokens: 4096,
+                thinking: Some(RegistryThinkingSupport {
+                    levels: vec!["low".into(), "high".into()],
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        }];
+            }],
+            ..StaticModelsCatalog::default()
+        };
         Self {
             registry: Registry::new(),
             models: DevinModelsStore::default(),

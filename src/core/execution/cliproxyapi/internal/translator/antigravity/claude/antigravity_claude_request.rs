@@ -285,8 +285,10 @@ fn convert_messages(
         }
         if let Some(parts) = message_content.as_array() {
             let converted = convert_message_parts(
-                model_name,
-                original_role,
+                ClaudeMessageSource {
+                    model_name,
+                    original_role,
+                },
                 parts,
                 function_name_map,
                 &mut tool_name_by_id,
@@ -316,9 +318,13 @@ fn convert_messages(
     Ok(output)
 }
 
+struct ClaudeMessageSource<'a> {
+    model_name: &'a str,
+    original_role: &'a str,
+}
+
 fn convert_message_parts(
-    model_name: &str,
-    original_role: &str,
+    source_identity: ClaudeMessageSource<'_>,
     source: &[Value],
     function_name_map: &HashMap<String, String>,
     tool_name_by_id: &mut HashMap<String, String>,
@@ -326,6 +332,10 @@ fn convert_message_parts(
     signature_store: Option<&dyn SignatureKvStore>,
     thinking_policy: ClaudeThinkingPolicy,
 ) -> Result<Vec<Value>, AntigravityClaudeRequestTranslationError> {
+    let ClaudeMessageSource {
+        model_name,
+        original_role,
+    } = source_identity;
     let gemini = signature_provider_from_model_name(model_name) == SignatureProvider::Gemini;
     let mut parts = Vec::new();
     let mut pending_signature = String::new();

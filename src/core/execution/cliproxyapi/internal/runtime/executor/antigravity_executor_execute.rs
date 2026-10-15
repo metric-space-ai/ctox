@@ -57,6 +57,11 @@ use crate::sdk::cliproxy::auth::{
 
 use super::claude_executor_execute::AccountStateClock;
 
+struct ClaudeStreamIdentity {
+    web_search_tool_use_id: String,
+    signature_store: Option<Arc<dyn SignatureKvStore>>,
+}
+
 pub struct AntigravitySubscriptionExecutor {
     auth: Arc<AntigravitySubscriptionAuth>,
     transport: Arc<dyn AntigravityGenerateTransport>,
@@ -492,8 +497,7 @@ impl AntigravitySubscriptionExecutor {
         model: &str,
         original_request: &[u8],
         translated_body: &[u8],
-        web_search_tool_use_id: String,
-        signature_store: Option<Arc<dyn SignatureKvStore>>,
+        identity: ClaudeStreamIdentity,
         client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
         let opened = self
@@ -510,8 +514,8 @@ impl AntigravitySubscriptionExecutor {
             opened.response,
             original_request.to_vec(),
             opened.translated_body,
-            web_search_tool_use_id,
-            signature_store,
+            identity.web_search_tool_use_id,
+            identity.signature_store,
         );
         if let Some(replay) = opened.replay {
             stream = stream.with_replay_accumulator(replay);
@@ -1096,8 +1100,10 @@ impl AntigravitySubscriptionAccountPool {
                     model,
                     &original_request,
                     &translated,
-                    web_search_tool_use_id,
-                    signature_store.clone(),
+                    ClaudeStreamIdentity {
+                        web_search_tool_use_id,
+                        signature_store: signature_store.clone(),
+                    },
                     client_headers,
                 )
                 .await

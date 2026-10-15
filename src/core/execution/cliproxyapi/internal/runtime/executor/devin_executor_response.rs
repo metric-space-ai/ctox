@@ -330,17 +330,17 @@ impl DevinInteractionAccumulator {
         }
     }
 
-    fn failure(&self, error: DevinAggregateError) -> DevinAggregateFailure {
-        DevinAggregateFailure {
+    fn failure(&self, error: DevinAggregateError) -> Box<DevinAggregateFailure> {
+        Box::new(DevinAggregateFailure {
             error,
             observation: self.observation(),
-        }
+        })
     }
 
     pub fn finish(
         self,
         context: &DevinAggregateContext<'_>,
-    ) -> Result<DevinAggregateOutput, DevinAggregateFailure> {
+    ) -> Result<DevinAggregateOutput, Box<DevinAggregateFailure>> {
         if let Some(error) = &self.terminal_error {
             return Err(self.failure(error.clone()));
         }
@@ -538,7 +538,7 @@ pub(crate) fn go_utf8_text(bytes: &[u8]) -> String {
 pub fn consume_devin_frames_to_interactions(
     body: &mut impl Read,
     context: &DevinAggregateContext<'_>,
-) -> Result<DevinAggregateOutput, DevinAggregateFailure> {
+) -> Result<DevinAggregateOutput, Box<DevinAggregateFailure>> {
     let mut state = DevinInteractionAccumulator::default();
     loop {
         let frame = match read_connect_frame(body) {

@@ -320,16 +320,17 @@ async fn candidate_devin_status_refresh_uses_selected_auth_and_preserves_it_on_f
         updated.metadata["email"],
         Value::String("testuser@example.com".into())
     );
-    let requests = http.requests.lock().unwrap();
-    assert_eq!(
-        requests[0].url,
-        format!("https://selected.invalid{DEVIN_GET_USER_STATUS_PATH}")
-    );
-    assert_eq!(
-        requests[0].headers["Authorization"],
-        vec!["Basic selected-token-selected-token"]
-    );
-    drop(requests);
+    {
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(
+            requests[0].url,
+            format!("https://selected.invalid{DEVIN_GET_USER_STATUS_PATH}")
+        );
+        assert_eq!(
+            requests[0].headers["Authorization"],
+            vec!["Basic selected-token-selected-token"]
+        );
+    }
     let (_, sender, service) = transport(403);
     send(&sender, b"quota endpoint denied".to_vec()).await;
     drop(sender);

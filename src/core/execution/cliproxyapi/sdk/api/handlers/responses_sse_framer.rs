@@ -296,7 +296,7 @@ impl ResponsesSseFramer {
             return;
         }
         let raw = item.json();
-        if raw.as_bytes().is_empty() {
+        if raw.is_empty() {
             return;
         }
         let item_raw = raw.as_bytes().to_vec();
@@ -450,13 +450,11 @@ fn gjson_array_nonempty(value: &gjson::Value) -> bool {
 fn joined_output_items(indexed: &BTreeMap<i64, Vec<u8>>, unindexed: &[Vec<u8>]) -> Vec<u8> {
     let mut output = Vec::new();
     output.push(b'[');
-    let mut written = 0;
-    for item in indexed.values().chain(unindexed.iter()) {
+    for (written, item) in indexed.values().chain(unindexed.iter()).enumerate() {
         if written > 0 {
             output.push(b',');
         }
         output.extend_from_slice(item);
-        written += 1;
     }
     output.push(b']');
     output

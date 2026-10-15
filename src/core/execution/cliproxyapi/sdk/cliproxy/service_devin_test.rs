@@ -173,19 +173,20 @@ async fn candidate_devin_factory_registry_dispatch_uses_selected_http_transport_
         response.headers.get("X-Owned-Transport").unwrap(),
         &["selected"]
     );
-    let requests = transport.0.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "POST");
-    assert_eq!(
-        requests[0].url,
-        "https://fixture.invalid/test/GetUserStatus"
-    );
-    assert_eq!(requests[0].body, b"owned-unary-body");
-    assert_eq!(
-        requests[0].headers.get("Authorization").unwrap(),
-        &["Basic test-only-selected-token-test-only-selected-token"]
-    );
-    drop(requests);
+    {
+        let requests = transport.0.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(
+            requests[0].url,
+            "https://fixture.invalid/test/GetUserStatus"
+        );
+        assert_eq!(requests[0].body, b"owned-unary-body");
+        assert_eq!(
+            requests[0].headers.get("Authorization").unwrap(),
+            &["Basic test-only-selected-token-test-only-selected-token"]
+        );
+    }
     assert!(registry
         .http_request("devin", ExecutorHttpRequest::default())
         .await

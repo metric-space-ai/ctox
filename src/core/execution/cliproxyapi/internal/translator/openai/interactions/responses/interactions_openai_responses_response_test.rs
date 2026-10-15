@@ -352,7 +352,10 @@ fn candidate_interactions_v13_reasoning_summary_has_a_complete_single_part_lifec
             "response.output_item.added",
             "response.reasoning_summary_part.added",
         ];
-        names.extend(std::iter::repeat("response.reasoning_summary_text.delta").take(parts.len()));
+        names.extend(std::iter::repeat_n(
+            "response.reasoning_summary_text.delta",
+            parts.len(),
+        ));
         names.extend([
             "response.reasoning_summary_text.done",
             "response.reasoning_summary_part.done",

@@ -251,8 +251,9 @@ pub use usage_helpers::{
     parse_claude_stream_usage, parse_claude_usage, parse_codex_image_tool_usage, parse_codex_usage,
     parse_gemini_stream_usage, parse_gemini_usage, parse_interactions_stream_usage,
     parse_interactions_usage, parse_openai_stream_usage, parse_openai_usage,
-    strip_usage_metadata_from_json, SseUsageMetadataFilter, StreamUsageBuffer,
-    DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL, MAX_USAGE_STREAM_CHUNK_BYTES,
+    parse_plugin_executor_response_usage, strip_usage_metadata_from_json, SseUsageMetadataFilter,
+    StreamUsageBuffer, DEFAULT_STOP_TRACE_CAPACITY, DEFAULT_STOP_TRACE_TTL,
+    MAX_USAGE_STREAM_CHUNK_BYTES,
 };
 pub use user_id_cache::{ClaudeIdentityKvStore, ClaudeIdentityStoreError, UserIdCache};
 pub use utls_client::{

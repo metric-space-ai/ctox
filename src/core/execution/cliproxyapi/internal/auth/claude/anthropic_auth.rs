@@ -1500,10 +1500,8 @@ mod tests {
             RefreshTransportFailure::Protocol,
             RefreshTransportFailure::Cancelled,
         ] {
-            let transport = SequenceTransport::new(vec![
-                Err(failure.clone()),
-                Ok(success("unused-rotated-refresh")),
-            ]);
+            let transport =
+                SequenceTransport::new(vec![Err(failure), Ok(success("unused-rotated-refresh"))]);
             let clock = TestClock::at(SystemTime::UNIX_EPOCH + Duration::from_secs(500));
             let coordinator = ClaudeRefreshCoordinator::default();
             let result = coordinator

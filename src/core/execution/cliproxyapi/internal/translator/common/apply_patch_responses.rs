@@ -1038,6 +1038,7 @@ impl ApplyPatchResponsesBridge {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_input_error(&self) -> Option<&str> {
         self.errors.tool_input_error()
     }
@@ -1079,6 +1080,7 @@ impl ApplyPatchResponsesBridge {
     }
 
     /// Reports whether a namespace still owns a winning custom patch child.
+    #[cfg(test)]
     pub(crate) fn namespace_has_custom(&self, namespace: &str) -> bool {
         self.tools
             .values()
