@@ -26,6 +26,45 @@ pub trait ChangeLogSink {
     fn install_rxdb(&self, tx: &Transaction<'_>, binding: &RxdbTable) -> Result<(), StoreError>;
 }
 
+/// The actual P3-05 sink, retaining the registered application's version and
+/// generation. Neither a per-table counter nor a fabricated schema version is
+/// introduced when a legacy physical table joins the global change log.
+pub struct CanonicalChangeLog;
+impl ChangeLogSink for CanonicalChangeLog {
+    fn install_rxdb(&self, tx: &Transaction<'_>, binding: &RxdbTable) -> Result<(), StoreError> {
+        crate::change_log::install_triggers(
+            tx,
+            &crate::change_log::TableBinding {
+                collection: binding.collection.clone(),
+                gen: binding.generation,
+                table: binding.table.clone(),
+                id_column: "id".into(),
+                rev_column: "revision".into(),
+                data_column: "data".into(),
+                deleted_column: "deleted".into(),
+                schema_column: None,
+                schema_ver: binding.schema_version,
+                app_ver: binding.app_version.clone(),
+            },
+        )
+        .map_err(Into::into)
+    }
+}
+
+pub fn backfill(
+    tx: &Transaction<'_>,
+    table: &str,
+    after: Option<&str>,
+) -> Result<Option<String>, StoreError> {
+    let (collection, generation): (String, u64) = tx.query_row(
+        "SELECT collection,gen FROM _change_sources WHERE table_name=?1",
+        [table],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let page = crate::change_log::backfill_page(tx, &collection, generation, after, 500)?;
+    Ok(if page.complete { None } else { page.cursor })
+}
+
 /// Borrow the already registered owner and its reader pool; never create a
 /// second owner just because a new collection is registered.
 #[derive(Clone)]
@@ -37,14 +76,25 @@ impl RxdbOwner {
     /// Construct once per registered DbId and share clones across collections.
     /// Derive the reader path/generation from the writer, never from a caller's
     /// independently supplied connection or path.
-    pub async fn for_writer(
-        writer: WriterHandle,
-        config: crate::config::ConnectionConfig,
-        budget: crate::config::AdmissionBudget,
-    ) -> Result<Self, StoreError> {
+    pub async fn attach(writer: WriterHandle, readers: ReadPool) -> Result<Self, StoreError> {
         writer.ready().await?;
-        let readers =
-            ReadPool::for_database(writer.db_id(), writer.generation(), config, budget).await?;
+        if readers.generation() != writer.generation().0 {
+            return Err(StoreError::Invalid(
+                "RxDB reader generation mismatch".into(),
+            ));
+        }
+        let path: String = readers
+            .read_job(ReadJob::new(JobOptions::default(), |conn| {
+                Ok(conn.query_row(
+                    "SELECT file FROM pragma_database_list WHERE name='main'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            }))
+            .await?;
+        if crate::DbId::new(path)? != *writer.db_id() {
+            return Err(StoreError::Invalid("RxDB reader file mismatch".into()));
+        }
         Ok(Self { writer, readers })
     }
 
@@ -172,9 +222,15 @@ mod tests {
             .unwrap();
         let mut budget = AdmissionBudget::default();
         budget.execution = std::time::Duration::from_secs(3);
-        let owner = RxdbOwner::for_writer(writer.clone(), ConnectionConfig::default(), budget)
-            .await
-            .unwrap();
+        let readers = ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            ConnectionConfig::default(),
+            budget,
+        )
+        .await
+        .unwrap();
+        let owner = RxdbOwner::attach(writer.clone(), readers).await.unwrap();
 
         let (started, ready) = tokio::sync::oneshot::channel();
         let (release, wait) = std::sync::mpsc::channel();
