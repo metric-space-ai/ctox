@@ -162,3 +162,165 @@ impl RevokedWrite {
         }
     }
 }
+
+use rxdb::plugins::replication_webrtc::{
+    WebRTCConnectionHandler, WebRTCPublicationGuard, WebRTCResponse, WebRTCWireFrame,
+};
+use rxdb::rx_error::{new_rx_error, RxResult};
+use std::sync::Arc;
+
+pub type CoreClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+fn denied() -> rxdb::rx_error::RxError {
+    new_rx_error("ctox_v4_scope_revoked", None)
+}
+
+/// Retained by the native queue. The real native send path reacquires this
+/// fence on EVERY physical send poll, and releases it on Pending/backpressure.
+pub struct NativePublication {
+    pub authority: Arc<super::super::StoreRightsAuthority>,
+    pub subscription_id: String,
+    pub token: super::SignedScope,
+    pub epoch: String,
+    pub public_key: Vec<u8>,
+    pub collection: String,
+    pub generation: u64,
+    pub clock: CoreClock,
+}
+impl WebRTCPublicationGuard for NativePublication {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        // Router epoch is immutable; rights are rechecked under the actual IO
+        // fence below as well, so releasing this preflight cannot widen access.
+        self.authority
+            .router
+            .with_snapshot(self.token.claims.rights_ver, &self.epoch, |_, _| Ok(()))
+            .map_err(|_| denied())?;
+        let mut io_error = None;
+        let result = self.authority.router.with_change_frame(
+            &self.subscription_id,
+            &self.token,
+            &self.public_key,
+            (self.clock)(),
+            &self.collection,
+            self.generation,
+            "",
+            0,
+            None,
+            |_| match publish() {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    io_error = Some(error);
+                    Err("send failed".into())
+                }
+            },
+        );
+        match io_error {
+            Some(error) => Err(error),
+            None => result.map_err(|_| denied()),
+        }
+    }
+}
+pub struct NativeChange<'a> {
+    pub collection: &'a str,
+    pub generation: u64,
+    pub epoch: &'a str,
+    pub id: &'a str,
+    pub seq: u64,
+    pub document: Option<&'a Value>,
+    pub core_sent_at_ms: u64,
+}
+/// The caller is the Core change-log drain for one active subscription. Only
+/// the masked projection enters the queue; its native guard survives queueing.
+/// There is deliberately no unguarded-send fallback.
+pub async fn send_native_change<H: WebRTCConnectionHandler>(
+    transport: &H,
+    peer: &H::Peer,
+    authority: Arc<NativePublication>,
+    change: NativeChange<'_>,
+) -> RxResult<()> {
+    if change.collection != authority.collection
+        || change.generation != authority.generation
+        || change.epoch != authority.epoch
+    {
+        return Err(denied());
+    }
+    let frame=authority.authority.router.with_change_frame(&authority.subscription_id,&authority.token,
+        &authority.public_key,(authority.clock)(),change.collection,change.generation,change.id,
+        change.seq,change.document,|projected|{
+            Ok(WebRTCWireFrame::Response(WebRTCResponse{
+                id:"v4:change".into(),collection:Some(change.collection.into()),error:None,
+                result:serde_json::json!({"type":"live","epoch":change.epoch,"gen":change.generation,
+                    "scope_hash":authority.token.claims.scope_hash,"rights_ver":authority.token.claims.rights_ver.to_string(),
+                    "core_sent_at_ms":change.core_sent_at_ms,"cursor_to":change.seq.to_string(),
+                    "changes":[projected]}),
+            }))
+        }).map_err(|_|denied())?;
+    transport.send_guarded(peer, frame, authority).await
+}
+/// A peer forwarding queue revalidates BOTH leases and the original signed
+/// packet on every physical poll, just like Core-originated publication.
+pub struct NativePeerPublication {
+    pub authority: Arc<super::super::StoreRightsAuthority>,
+    pub subscription_id: String,
+    pub public_key: Vec<u8>,
+    pub sender_device: String,
+    pub sender_lease: super::PeerLease,
+    pub receiver_lease: super::PeerLease,
+    pub packet: super::PeerPacket,
+    pub signature: String,
+    pub payload: Vec<u8>,
+    pub clock: CoreClock,
+}
+impl WebRTCPublicationGuard for NativePeerPublication {
+    fn with_current(&self, publish: &mut dyn FnMut() -> RxResult<()>) -> RxResult<()> {
+        let mut io_error = None;
+        let result = self.authority.router.with_peer_frame(
+            &self.subscription_id,
+            &self.public_key,
+            (self.clock)(),
+            (&self.sender_device, &self.sender_lease),
+            &self.receiver_lease,
+            &self.packet,
+            &self.signature,
+            &self.payload,
+            || match publish() {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    io_error = Some(error);
+                    Err("send failed".into())
+                }
+            },
+        );
+        match io_error {
+            Some(error) => Err(error),
+            None => result.map_err(|_| denied()),
+        }
+    }
+}
+
+/// Revoke uses the newly issued current token, including an empty projection;
+/// no obsolete token is promoted just to send the cleanup notification.
+pub async fn send_native_revoke<H: WebRTCConnectionHandler>(
+    transport: &H,
+    peer: &H::Peer,
+    authority: Arc<NativePublication>,
+    revoke: &ScopeRevoke,
+) -> RxResult<()> {
+    let expected = ResolvedScope {
+        rights_ver: revoke.rights_ver,
+        projections: revoke.remaining.clone(),
+    };
+    if revoke.rights_ver != authority.token.claims.rights_ver
+        || expected.hash().map_err(|_| denied())? != authority.token.claims.scope_hash
+    {
+        return Err(denied());
+    }
+    let frame = WebRTCWireFrame::Response(WebRTCResponse {
+        id: "v4:scope_revoke".into(),
+        collection: None,
+        error: None,
+        result: serde_json::json!({"type":"scope_revoke","scope_hash":authority.token.claims.scope_hash,
+            "rights_ver":revoke.rights_ver.to_string(),"remaining":revoke.remaining,"artifacts":revoke.artifacts,
+            "outbox_reason":revoke.outbox_reason}),
+    });
+    transport.send_guarded(peer, frame, authority).await
+}

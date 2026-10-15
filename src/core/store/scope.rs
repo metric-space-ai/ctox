@@ -577,3 +577,18 @@ impl ScopedCheckpoint {
         Ok(old.carry_checkpoint(next, collection, self.seq))
     }
 }
+
+impl SignedScope {
+    pub fn to_wire(&self) -> Result<String> {
+        Ok(URL_SAFE_NO_PAD.encode(canonical(self)?))
+    }
+    pub fn from_wire(encoded: &str) -> Result<Self> {
+        if encoded.len() > 4096 {
+            return Err("scope token too large".into());
+        }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| "invalid scope encoding")?;
+        serde_json::from_slice(&bytes).map_err(|_| "invalid scope token".into())
+    }
+}

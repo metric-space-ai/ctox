@@ -919,3 +919,131 @@ impl sync_rights::scope::InstanceSigningKeyStore for SyncInstanceSigningKeyStore
         .map_err(|_| "instance signing authority unavailable".into())
     }
 }
+
+/// P4 AuthenticatePeer extension: this callback is supplied by the trusted
+/// pairing/identity owner after checking nonce + signature + current device.
+pub struct VerifiedSyncPeer {
+    pub actor: BusinessOsActor,
+    pub instance_id: String,
+    pub device_id: String,
+}
+pub type VerifySyncPeer = std::sync::Arc<
+    dyn Fn(
+            String,
+            rxdb::plugins::replication_webrtc::index_mod::hello::Hello,
+        )
+            -> futures_util::future::BoxFuture<'static, sync_rights::scope::Result<VerifiedSyncPeer>>
+        + Send
+        + Sync,
+>;
+
+pub fn sync_peer_authenticator<
+    S: sync_rights::scope::InstanceSigningKeyStore + Send + Sync + 'static,
+>(
+    authority: std::sync::Arc<sync_rights::StoreRightsAuthority>,
+    keys: std::sync::Arc<S>,
+    verify: VerifySyncPeer,
+    clock: sync_rights::scope::scope_filter::CoreClock,
+) -> rxdb::plugins::replication_webrtc::index_mod::connection_lifecycle::AuthenticatePeer {
+    use rxdb::plugins::replication_webrtc::index_mod::{
+        connection_lifecycle::AuthorizedSession,
+        hello::{HelloReject, RejectReason, WireSeq},
+    };
+    std::sync::Arc::new(move |peer, hello| {
+        let (authority, keys, verify, clock) = (
+            authority.clone(),
+            keys.clone(),
+            verify.clone(),
+            clock.clone(),
+        );
+        Box::pin(async move {
+            let failure = || {
+                HelloReject::new(
+                    RejectReason::AuthenticationFailed,
+                    "current device and scope authority",
+                )
+            };
+            let (device, instance, wanted) = (
+                hello.device_proof.device_id.clone(),
+                hello.instance_id.clone(),
+                hello.scopes_wanted.clone(),
+            );
+            if wanted.len() > 32 {
+                return Err(failure());
+            }
+            let verified = verify(peer, hello).await.map_err(|_| failure())?;
+            if verified.device_id != device || verified.instance_id != instance {
+                return Err(failure());
+            }
+            let actor = verified
+                .actor
+                .id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(failure)?;
+            let role = verified.actor.role.as_str();
+            let (head, rights) = authority.hello_snapshot().await.map_err(|_| failure())?;
+            let now = clock();
+            let mut scopes = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for collection in wanted {
+                if !seen.insert(collection.clone()) {
+                    return Err(failure());
+                }
+                let scope = rights
+                    .resolve_collection(role, actor, &collection)
+                    .map_err(|_| failure())?;
+                if scope.projections.is_empty() {
+                    return Err(failure());
+                }
+                scopes.push(
+                    sync_rights::scope::SignedScope::issue(&*keys, &instance, &device, &scope, now)
+                        .and_then(|s| s.to_wire())
+                        .map_err(|_| failure())?,
+                );
+            }
+            // Signing occurs outside the router/issuer lock order. A concurrent
+            // revocation invalidates this result before it can complete hello.
+            authority
+                .router
+                .with_snapshot(rights.rights_ver, &head.epoch, |current, _| {
+                    if current != instance {
+                        return Err("instance mismatch".into());
+                    }
+                    Ok(AuthorizedSession {
+                        instance_id: instance,
+                        device_id: device,
+                        epoch: head.epoch.clone(),
+                        head_seq: WireSeq(head.head_seq),
+                        scope_tokens: scopes,
+                        rights_ver: WireSeq(rights.rights_ver),
+                    })
+                })
+                .map_err(|_| failure())
+        })
+    })
+}
+/// Before-handler mapping; callers pass an assignment result from Core policy,
+/// never a flag copied from the command payload.
+pub fn dispatch_sync_command<T>(
+    router: &sync_rights::RightsRouter,
+    actor: &BusinessOsActor,
+    app_id: &str,
+    command: &str,
+    assigned_by_core: bool,
+    start: impl FnOnce(sync_rights::manifest_rules::CommandPermit) -> sync_rights::scope::Result<T>,
+) -> sync_rights::scope::Result<T> {
+    let id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("forbidden")?;
+    router.with_command_dispatch(
+        app_id,
+        id,
+        actor.role.as_str(),
+        command,
+        assigned_by_core,
+        start,
+    )
+}
