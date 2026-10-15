@@ -2,6 +2,8 @@
 // License: Apache-2.0
 
 use super::app_runtime;
+#[path = "app_platform/mod.rs"]
+pub(crate) mod app_platform;
 use super::control_command_types::ActiveExternalSqlControlCommand;
 use super::domain_effect::{self, DomainEffectAdmission};
 use super::policy::{
@@ -817,6 +819,34 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     origin: CommandOrigin,
     guest_runtime: super::guest_commands::GuestRuntimeInjection,
 ) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_runtimes(root, document, origin, guest_runtime, None)
+}
+
+/// Called by the canonical store owner on its blocking command worker. The
+/// existing WriterHandle must be injected; this entry never opens a store or
+/// writes legacy command/projection tables for ctox.app.*.
+pub(crate) fn accept_rxdb_business_command_with_app_platform(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    platform: &app_platform::Platform,
+) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_runtimes(
+        root,
+        document,
+        origin,
+        super::guest_commands::GuestRuntimeInjection::Unregistered,
+        Some(platform),
+    )
+}
+
+fn accept_rxdb_business_command_with_runtimes(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    guest_runtime: super::guest_commands::GuestRuntimeInjection,
+    platform: Option<&app_platform::Platform>,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -853,6 +883,25 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     // the claim intent, business_commands, business_records, process events
     // and the RxDB projection all store this command.
     super::store::detach_secret_intake_value(&command_id, &mut command);
+    if app_platform::handles(&command.command_type) {
+        let platform = platform.context("canonical app-platform owner is not attached")?;
+        let session = rxdb_authenticated_session(root, &command)?;
+        let result = platform
+            .execute(
+                policy_actor_from_session(&session),
+                app_platform::CommandDocument {
+                    id: command_id.clone(),
+                    module: command.module.clone(),
+                    command_type: command.command_type.clone(),
+                    payload: command.payload.clone(),
+                },
+                u64::try_from(now_ms()).context("platform timestamp overflow")?,
+            )?
+            .blocking_wait()?;
+        return Ok(serde_json::json!({"id":command_id,"command_id":command_id,
+            "status":if result["status"] == "preparing" {"running"} else if result["status"] == "rejected" {"failed"} else {"completed"},
+            "result":result}));
+    }
     let legacy_replay = (matches!(command.origin, CommandOrigin::ReplicatedPeer)
         && super::external_sql_sync::is_external_sql_command(&command.command_type))
     .then(|| command.clone());
