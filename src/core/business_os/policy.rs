@@ -858,3 +858,64 @@ pub(super) fn owner_transfer_policy_decision(session: &BusinessOsSession) -> Pol
         &BusinessOsScope::workspace(),
     )
 }
+
+// V4 mapping only: current Store rows are authoritative; static V3 permission
+// defaults never widen a resolved collection projection.
+#[path = "../store/rights.rs"]
+pub mod sync_rights;
+
+pub fn resolve_sync_scope(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+) -> sync_rights::scope::Result<sync_rights::scope::ResolvedScope> {
+    let actor_id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("actor identity required")?;
+    rights.resolve(actor.role.as_str(), actor_id)
+}
+
+pub fn authorize_sync_write(
+    actor: &BusinessOsActor,
+    rights: &sync_rights::RightsSnapshot,
+    collection: &str,
+    before: Option<&serde_json::Value>,
+    after: Option<&serde_json::Value>,
+) -> sync_rights::scope::Result<()> {
+    let actor_id = actor
+        .id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or("revoked")?;
+    rights.authorize_write(actor.role.as_str(), actor_id, collection, before, after)
+}
+
+/// Official Core credential-provider bridge. The existing secret is canonical
+/// base64url PKCS#8 under scope "instance"; provisioning/rotation is a separate
+/// owner action. This path never initializes, replaces or writes any secret.
+pub struct SyncInstanceSigningKeyStore<'a> {
+    pub root: &'a std::path::Path,
+}
+impl sync_rights::scope::InstanceSigningKeyStore for SyncInstanceSigningKeyStore<'_> {
+    fn with_instance_signing_key<T>(
+        &self,
+        use_key: impl FnOnce(&[u8]) -> sync_rights::scope::Result<T>,
+    ) -> sync_rights::scope::Result<T> {
+        use base64::Engine as _;
+        crate::secrets::with_current_secret_value(
+            self.root,
+            "instance",
+            sync_rights::scope::INSTANCE_SIGNING_KEY,
+            |encoded| {
+                let key = zeroize::Zeroizing::new(
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(encoded)
+                        .map_err(|_| anyhow::anyhow!("invalid instance signing key encoding"))?,
+                );
+                use_key(&key).map_err(anyhow::Error::msg)
+            },
+        )
+        .map_err(|_| "instance signing authority unavailable".into())
+    }
+}
