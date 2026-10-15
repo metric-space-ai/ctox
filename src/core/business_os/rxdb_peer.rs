@@ -16,6 +16,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "../store/peer_schema_adapter.rs"]
+pub(crate) mod peer_schema_adapter;
 use super::app_runtime;
 use super::browser_runtime::browser_runtime_manager;
 use super::desktop_files::*;
@@ -689,8 +691,6 @@ enum NativePeerExit {
     HeartbeatStale,
     /// The persisted sync room/signaling config changed: respawn with fresh config.
     SyncConfigurationChanged,
-    /// Runtime-installed module schemas changed: respawn so new collections are registered.
-    RuntimeSchemasChanged,
     /// A load-bearing command/projection task exited unexpectedly: respawn.
     CriticalTaskExited,
     /// Work is alive but its durable queues made no progress: respawn.
@@ -2196,12 +2196,6 @@ pub fn spawn_native_peer(
                              reconfiguring immediately"
                         );
                     }
-                    Ok(NativePeerExit::RuntimeSchemasChanged) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer runtime app schemas changed; \
-                             reconfiguring immediately"
-                        );
-                    }
                     Ok(NativePeerExit::CriticalTaskExited) => {
                         eprintln!(
                             "[business-os] native rxdb peer critical task exited; \
@@ -2238,7 +2232,7 @@ pub fn spawn_native_peer(
                 }
                 let immediate_reconfigure = matches!(
                     result,
-                    Ok(NativePeerExit::SyncConfigurationChanged | NativePeerExit::RuntimeSchemasChanged)
+                    Ok(NativePeerExit::SyncConfigurationChanged)
                 );
                 if !immediate_reconfigure
                     && native_peer_circuit_snapshot()
@@ -2748,6 +2742,7 @@ async fn run_native_peer(
         return Ok(NativePeerExit::ProcessLockUnavailable);
     };
     let configured_signaling_urls = signaling_urls.clone();
+    let mut schema_commits = peer_schema_adapter::subscribe();
     let mut runtime_schema_state = runtime_installed_module_schema_state(&root)?;
     let signaling_base_urls: Vec<String> = signaling_urls
         .into_iter()
@@ -3569,25 +3564,39 @@ async fn run_native_peer(
                     }
                 }
             }
+            update = schema_commits.changed() => {
+                if update.is_ok() {
+                    let creators = schema_commits.borrow_and_update().clone();
+                    if let Some(creators) = creators {
+                        let registries = peer._pools.iter()
+                            .map(|session| session.pool().query_fetch_registry.clone())
+                            .collect::<Vec<_>>();
+                        if let Err(error) = peer_schema_adapter::apply(&database, &registries, (*creators).clone()).await {
+                            eprintln!("[business-os] committed schema activation incomplete: {error:#}");
+                        }
+                    }
+                }
+            }
             _ = runtime_schema_watch.tick() => {
-                match native_peer_runtime_installed_schemas_changed(
-                    &root,
-                    &mut runtime_schema_state,
-                ) {
+                // Compatibility discovery only. The v4 registry publishes its
+                // committed snapshot through schema_commits, without polling.
+                let previous = runtime_schema_state.clone();
+                match native_peer_runtime_installed_schemas_changed(&root, &mut runtime_schema_state) {
                     Ok(true) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer: runtime app schemas changed; \
-                             shutting down for immediate supervised reconfiguration"
-                        );
-                        exit = NativePeerExit::RuntimeSchemasChanged;
-                        break;
+                        let registries = peer._pools.iter()
+                            .map(|session| session.pool().query_fetch_registry.clone())
+                            .collect::<Vec<_>>();
+                        match peer_schema_adapter::apply(&database, &registries,
+                            runtime_installed_module_collection_creators(&root)).await {
+                            Ok(added) => eprintln!("[business-os] registered {} runtime collections without retiring the peer", added.len()),
+                            Err(error) => {
+                                runtime_schema_state = previous;
+                                eprintln!("[business-os] online runtime schema activation incomplete: {error:#}");
+                            }
+                        }
                     }
                     Ok(false) => {}
-                    Err(err) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer runtime app schema check failed: {err:#}"
-                        );
-                    }
+                    Err(error) => eprintln!("[business-os] runtime schema discovery failed: {error:#}"),
                 }
             }
         }
@@ -13266,7 +13275,7 @@ pub(in crate::business_os) mod tests {
         )?;
         assert!(
             native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
-            "runtime app schema edits must force a native peer respawn"
+            "runtime app schema edits must request online registration"
         );
         Ok(())
     }

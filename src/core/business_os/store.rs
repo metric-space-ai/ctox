@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "../store/business_store_adapter.rs"]
+pub(crate) mod business_store_adapter;
 #[path = "store_peer_revocations.rs"]
 mod peer_revocations;
 #[path = "store_security_projections.rs"]
@@ -1362,50 +1364,16 @@ fn upsert_attached_rxdb_record(
     }
     redact_document_client_context_secrets(&mut payload);
     let table_columns = attached_rxdb_table_columns(conn, &table)?;
-    let mut columns = vec!["id".to_string(), "data".to_string()];
-    let mut values = vec![
-        SqlValue::Text(record_id.to_string()),
-        SqlValue::Text(serde_json::to_string(&payload)?),
-    ];
-    let mut updates = vec!["data = excluded.data".to_string()];
-    if let Some(deleted_column) = ["deleted", "_deleted"]
-        .into_iter()
-        .find_map(|column| table_columns.contains(column).then_some(column))
-    {
-        columns.push(deleted_column.to_string());
-        values.push(SqlValue::Integer(0));
-        updates.push(format!("{deleted_column} = excluded.{deleted_column}"));
-    }
-    if let Some(revision_column) = ["revision", "_rev"]
-        .into_iter()
-        .find_map(|column| table_columns.contains(column).then_some(column))
-    {
-        columns.push(revision_column.to_string());
-        values.push(SqlValue::Text(rev));
-        updates.push(format!("{revision_column} = excluded.{revision_column}"));
-    }
-    if table_columns.contains("lastWriteTime") {
-        columns.push("lastWriteTime".to_string());
-        values.push(SqlValue::Real(updated_at_ms as f64));
-        updates.push("lastWriteTime = excluded.lastWriteTime".to_string());
-    }
-    let placeholders = (1..=columns.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
-            columns = columns.join(", "),
-            updates = updates.join(", "),
-            guard = canonical_rxdb_table_upsert_guard_sql(&table, "data")
-                .map(|guard| format!(" WHERE {guard}"))
-                .unwrap_or_default(),
-        ),
-        params_from_iter(values),
-    )?;
-    Ok(())
+    business_store_adapter::write_legacy_projection(
+        conn,
+        &qualified_table,
+        &table_columns,
+        record_id,
+        &payload,
+        rev,
+        now_ms() as f64,
+        canonical_rxdb_table_upsert_guard_sql(&table, "data"),
+    )
 }
 
 fn queue_projection_status_fields_match(payload: &Value, task: &channels::QueueTaskView) -> bool {
