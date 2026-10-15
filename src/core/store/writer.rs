@@ -52,7 +52,41 @@ pub struct CommitNotification {
 
 /// A watch retains the newest committed head. Intermediate heads may coalesce:
 /// readers drain `_changes` by cursor, not by counting wakeups (§16.1).
-pub type CommitReceiver = watch::Receiver<Option<CommitNotification>>;
+#[derive(Clone, Default)]
+struct CommitState {
+    head: Option<CommitNotification>,
+    closed: bool,
+}
+
+/// No watch borrow escapes this wrapper: a consumer cannot hold the watch
+/// read-lock across an await and stall the writer's commit publication.
+#[derive(Clone)]
+pub struct CommitReceiver(watch::Receiver<CommitState>);
+impl CommitReceiver {
+    /// Inspect the latest head and mark that wakeup consumed.
+    pub fn latest(&mut self) -> Option<CommitNotification> {
+        self.0.borrow_and_update().head.clone()
+    }
+    pub fn has_changed(&self) -> Result<bool, StoreError> {
+        self.0.has_changed().map_err(|_| StoreError::Closed)
+    }
+    /// Resolves to the newest head, or Closed when this owner shuts down.
+    pub async fn changed(&mut self) -> Result<CommitNotification, StoreError> {
+        loop {
+            if self.0.borrow().closed {
+                return Err(StoreError::Closed);
+            }
+            self.0.changed().await.map_err(|_| StoreError::Closed)?;
+            let state = self.0.borrow_and_update().clone();
+            if state.closed {
+                return Err(StoreError::Closed);
+            }
+            if let Some(head) = state.head {
+                return Ok(head);
+            }
+        }
+    }
+}
 type Completion = Box<dyn FnOnce(Option<StoreError>) + Send>;
 struct Outcome {
     finish: Completion,
@@ -102,7 +136,7 @@ pub(crate) struct Inner {
     pub(crate) generation: DbGeneration,
     queue: Mutex<Option<SyncSender<Box<dyn Pending>>>>,
     state: watch::Sender<Lifecycle>,
-    commits: watch::Sender<Option<CommitNotification>>,
+    commits: watch::Sender<CommitState>,
 }
 impl Inner {
     fn close(&self) {
@@ -141,7 +175,7 @@ impl WriterHandle {
         self.inner.state.borrow().clone()
     }
     pub fn subscribe_commits(&self) -> CommitReceiver {
-        self.inner.commits.subscribe()
+        CommitReceiver(self.inner.commits.subscribe())
     }
     pub async fn ready(&self) -> Result<(), StoreError> {
         let mut state = self.inner.state.subscribe();
@@ -187,7 +221,7 @@ impl WriterHandle {
 pub(crate) fn start(db_id: DbId, options: WriterOptions) -> Result<WriterHandle, StoreError> {
     let (send, receive) = mpsc::sync_channel(QUEUE_CAPACITY);
     let (state, _) = watch::channel(Lifecycle::Starting);
-    let (commits, _) = watch::channel(None);
+    let (commits, _) = watch::channel(CommitState::default());
     let generation = DbGeneration(NEXT_GENERATION.fetch_add(1, Ordering::Relaxed));
     let inner = Arc::new(Inner {
         db_id,
@@ -207,6 +241,7 @@ pub(crate) fn start(db_id: DbId, options: WriterOptions) -> Result<WriterHandle,
                 .unwrap_or(Err(StoreError::Panicked));
             // serve's connection and file guard have dropped before publishing stop.
             inner.close();
+            inner.commits.send_modify(|state| state.closed = true);
             inner.state.send_replace(Lifecycle::Stopped(result));
         })?;
     Ok(handle)
@@ -362,11 +397,14 @@ fn execute_batch(
             tx.commit()?;
             // Commit succeeds before *either* notification or job result.
             if let Some(head_seq) = head_seq {
-                inner.commits.send_replace(Some(CommitNotification {
-                    db_id: inner.db_id.clone(),
-                    generation: inner.generation,
-                    head_seq,
-                }));
+                inner.commits.send_replace(CommitState {
+                    head: Some(CommitNotification {
+                        db_id: inner.db_id.clone(),
+                        generation: inner.generation,
+                        head_seq,
+                    }),
+                    closed: false,
+                });
             }
             Ok(())
         })();

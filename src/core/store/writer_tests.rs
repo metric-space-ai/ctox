@@ -236,7 +236,7 @@ async fn same_kind_batches_use_savepoints_and_publish_only_after_commit() {
         .await
         .unwrap();
     let mut commits = writer.subscribe_commits();
-    commits.borrow_and_update();
+    commits.latest();
     let before = hooks.load(Ordering::SeqCst);
     let mut jobs = Vec::new();
     for i in [1, 1, 2] {
@@ -270,7 +270,7 @@ async fn same_kind_batches_use_savepoints_and_publish_only_after_commit() {
         2,
         "blocker plus one batched transaction"
     );
-    let notification = commits.borrow_and_update().clone().unwrap();
+    let notification = commits.latest().unwrap();
     assert_eq!(notification.head_seq, 2);
     assert_eq!(notification.generation, writer.generation());
     // Independent WAL reader proves the notification is not pre-commit.
@@ -488,7 +488,7 @@ async fn commit_failure_never_acknowledges_or_publishes_a_head() {
     writer.ready().await.unwrap();
     execute(&writer, "CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE records(id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED)").await;
     let mut commits = writer.subscribe_commits();
-    commits.borrow_and_update();
+    commits.latest();
     let failed = writer
         .submit(WriteJob::new(JobOptions::default(), |tx| {
             tx.execute("INSERT INTO records VALUES(99)", [])?;
@@ -528,7 +528,7 @@ async fn acknowledgement_and_notification_wait_for_the_commit_boundary() {
     writer.ready().await.unwrap();
     execute(&writer, "CREATE TABLE records(id INTEGER)").await;
     let mut commits = writer.subscribe_commits();
-    commits.borrow_and_update();
+    commits.latest();
     hold.store(true, Ordering::Release);
     let mut job = writer
         .submit(WriteJob::new(JobOptions::default(), |tx| {
@@ -547,6 +547,17 @@ async fn acknowledgement_and_notification_wait_for_the_commit_boundary() {
     hold.store(false, Ordering::Release);
     release.send(()).unwrap();
     job.await.unwrap();
-    assert_eq!(commits.borrow().as_ref().unwrap().head_seq, 1);
+    assert_eq!(commits.latest().unwrap().head_seq, 1);
     writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn commit_subscription_closes_with_owner_even_while_old_handles_remain() {
+    let (_directory, id) = database();
+    let writer = opened(id).await;
+    let mut commits = writer.subscribe_commits();
+    writer.shutdown().await.unwrap();
+    assert_eq!(commits.changed().await, Err(StoreError::Closed));
+    let mut late_subscriber = writer.subscribe_commits();
+    assert_eq!(late_subscriber.changed().await, Err(StoreError::Closed));
 }
