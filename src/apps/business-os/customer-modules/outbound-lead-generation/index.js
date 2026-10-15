@@ -1290,6 +1290,8 @@ async function seedSources() {
     };
     if (existing) {
       const current = existing.toJSON?.() || existing;
+      // Vom Nutzer entfernte mitgelieferte Quelle bleibt entfernt (Owner 15.10.2026).
+      if (current.payload?.removed === true) continue;
       if (current.payload?.builtin !== false) {
         // Built-in bedeutet „mitgeliefert“, nicht „unveränderlich“. Beim
         // Upgrade ergänzen wir neue Pflichtabdeckung additiv, lassen aber die
@@ -1902,7 +1904,7 @@ function applyFreshCollections(fresh, bindingGeneration, leadChanges) {
   // sie bestaetigt: ein Nachladen mit dem aelteren Serverstand liess ihn sonst
   // zuruckspringen, und der naechste Klick schaltete falsch herum (Rundgang
   // 25.09.2026). Nach zwei Minuten gilt wieder, was die Datenbank sagt.
-  if (fresh.has('sources')) state.sources = sources.map((source) => {
+  if (fresh.has('sources')) state.sources = sources.filter((source) => source.payload?.removed !== true).map((source) => {
     const absicht = state.sourceToggleIntent.get(source.id);
     if (!absicht) return source;
     if ((source.enabled !== false) === absicht.enabled || Date.now() > absicht.bis) {
@@ -3259,7 +3261,6 @@ function renderSourceRow(item) {
   const needsBrowserAuthorization = intern || istSchluesselZugang(item.credential_secret_name)
     ? false
     : item.payload?.input_driven !== true;
-  const userManaged = item.payload?.builtin === false;
   const hintergrund = intern
     ? ' · interne Quelle'
     : item.payload?.input_driven === true
@@ -3288,8 +3289,7 @@ function renderSourceRow(item) {
       <button class="ctox-pane-icon" data-action="test-adapter" title="${tr('testAdapter', 'Datenzugriff prüfen')}" aria-label="${tr('testAdapter', 'Datenzugriff prüfen')}">${icon('test')}</button>
       ${item.requires_credential ? `<button class="ctox-pane-icon" data-action="check-credential" title="Zugang prüfen" aria-label="Zugang von ${escapeHtml(item.label)} prüfen">${icon('key')}</button>` : ''}
       ${needsBrowserAuthorization ? `<button class="ctox-pane-icon" data-action="auth-source" title="${tr('browserSignIn', 'Im CTOX-Browser anmelden / entsperren')}" aria-label="${tr('signIn', 'Anmelden')}">${icon('login')}</button>` : ''}
-      <button class="ctox-pane-icon is-danger" data-action="delete-adapter" title="Adapter entfernen" aria-label="Adapter für ${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
-      ${userManaged ? `<button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle vollständig löschen" aria-label="${escapeHtml(item.label)} vollständig löschen">${icon('close')}</button>` : ''}
+      <button class="ctox-pane-icon is-danger" data-action="delete-source" title="Quelle entfernen" aria-label="${escapeHtml(item.label)} entfernen">${icon('trash')}</button>
     </div>`}
   </div>`;
 }
@@ -4097,7 +4097,6 @@ async function handleClick(event) {
   if (action === 'check-credential') await pruefeZugang(id);
   if (action === 'test-adapter') await runAdapterCommand(id, 'outbound.research_source.test');
   if (action === 'auth-source') await runAdapterCommand(id, 'outbound.research_source.auth_assist');
-  if (action === 'delete-adapter') await deleteSourceAdapter(id);
   if (action === 'edit-source') await editSource(id);
   if (action === 'delete-source') await deleteSource(id);
   if (action === 'research-campaign') await startCampaignResearch(trigger.dataset.campaign || state.selectedCampaign);
@@ -7688,21 +7687,44 @@ async function editSource(sourceId) {
   await queueAdapterReconciliationAfterSourceChange('source_settings_changed');
 }
 
+// Alle Adapter einer Quelle: auf THESEN lagen je Quelle zwei (adapter_thesen_* vom
+// 22.09. und adapter_leadgen_*); geloescht wurde nur der erste, die Zeile blieb
+// (Owner 15.10.2026: „ich habe zwei adapter gelöscht, aber es ist gar nichts passiert“).
+async function removeAllSourceAdapters(sourceId) {
+  const docs = await state.collections.adapters.find({ selector: { source_id: sourceId } }).exec();
+  for (const doc of docs) await doc.remove();
+  state.adapters = state.adapters.filter((entry) => entry.source_id !== sourceId);
+}
+
 async function deleteSource(sourceId) {
   const item = state.sources.find((entry) => entry.id === sourceId);
-  if (!item || item.payload?.builtin !== false) return;
+  if (!item) return;
+  const mitgeliefert = item.payload?.builtin !== false;
   const confirmed = await showBusinessConfirm(
-    `Die Quelle „${item.label}“ und ihr eingerichteter Datenzugriff werden vollständig gelöscht.`,
+    `Die Quelle „${item.label}“ wird entfernt und bei Recherchen nicht mehr verwendet.`,
     {
-      title: 'Quelle löschen',
-      confirmLabel: 'Quelle löschen',
+      title: 'Quelle entfernen',
+      confirmLabel: 'Quelle entfernen',
       kind: 'danger',
     },
   );
   if (!confirmed) return;
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
+  await removeAllSourceAdapters(sourceId);
+  if (mitgeliefert) {
+    // Mitgelieferte Quellen legt seedSources bei jedem Start an; sie bleiben
+    // deshalb als entfernt markiert statt geloescht.
+    const now = Date.now();
+    const doc = await state.collections.sources.findOne(sourceId).exec();
+    const current = doc?.toJSON?.() || {};
+    await doc?.incrementalPatch({
+      enabled: false,
+      payload: { ...(current.payload || {}), removed: true, removed_at_ms: now },
+      updated_at_ms: now,
+    });
+    state.sources = state.sources.filter((entry) => entry.id !== sourceId);
+    renderSourcePanel();
+    return;
+  }
   const sourceDoc = await state.collections.sources.findOne(sourceId).exec();
   const geloeschterStand = sourceDoc ? (sourceDoc.toJSON?.() || sourceDoc) : null;
   if (sourceDoc) await sourceDoc.remove();
@@ -8006,55 +8028,6 @@ async function runAdapterCommandInner(item, commandType, preopened) {
     console.error('[outbound-lead-generation] adapter command failed', error);
     showBusinessAlert(message);
   }
-}
-
-async function deleteSourceAdapter(sourceId) {
-  const item = state.sources.find((entry) => entry.id === sourceId);
-  const adapter = state.adapters.find((entry) => entry.source_id === sourceId);
-  if (!item) return;
-  // Ohne Adapterdatensatz warf der Abschluss einen TypeError (adapter.id) —
-  // die Quelle war schon zurueckgesetzt, eine Meldung kam nie
-  // (Klicktest-Befund P4 V4).
-  if (!adapter) {
-    await showBusinessAlert(`Für „${item.label}“ ist kein Datenzugriff eingerichtet.`);
-    return;
-  }
-  const confirmed = await showBusinessConfirm(
-    `Der eingerichtete Datenzugriff für „${item.label}“ wird gelöscht. Die Quelle selbst bleibt erhalten.`,
-    {
-      title: 'Datenzugriff löschen',
-      confirmLabel: 'Datenzugriff löschen',
-      kind: 'danger',
-    },
-  );
-  if (!confirmed) return;
-  const adapterDoc = adapter ? await state.collections.adapters.findOne(adapter.id).exec() : null;
-  if (adapterDoc) await adapterDoc.remove();
-  const now = Date.now();
-  // Ein hinterlegter Zugang bleibt hinterlegt; nur der Datenzugriff geht
-  // (vorher immer "required", Klicktest-Befund P4 V19).
-  // Der Secret-Katalog entscheidet, sonst Quelle ODER Adapter: die Quelle
-  // selbst stand oft noch auf "required", obwohl ein Zugang liegt (Nachtest F, T54).
-  const katalog = secretStand(item.credential_secret_name);
-  const zugangLiegt = katalog
-    ? katalog.vorhanden
-    : ['credential_available', 'authenticated'].includes(item.auth_status)
-      || ['credential_available', 'authenticated'].includes(adapter.auth_status);
-  const authStatus = !item.requires_credential
-    ? 'not_required'
-    : (zugangLiegt ? 'credential_available' : 'required');
-  const sourceDoc = await state.collections.sources.findOne(item.id).exec();
-  await sourceDoc?.incrementalPatch({
-    adapter_status: 'draft',
-    scrape_status: 'target_available',
-    auth_status: authStatus,
-    updated_at_ms: now,
-  });
-  state.adapters = state.adapters.filter((entry) => entry.id !== adapter.id);
-  state.sources = state.sources.map((entry) => entry.id === item.id
-    ? { ...entry, adapter_status: 'draft', scrape_status: 'target_available', auth_status: authStatus, updated_at_ms: now }
-    : entry);
-  renderSourcePanel();
 }
 
 function authAssistFromCommandResult(result) {
