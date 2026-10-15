@@ -201,6 +201,18 @@ export interface ShellModule {
 // ============================================================================================================
 
 export type ActivationState = 'received' | 'fetched' | 'data-ready' | 'activated' | 'failed';
+/** §16.19 Nr. 6 – fehlende Felder sind null. */
+export type AppLayout = {
+  icon_asset: string | null;
+  icon_svg: string | null;
+  category: string | null;
+  frame_palette: string | null;
+  default_width: number | null;
+  default_height: number | null;
+  min_width: number | null;
+  min_height: number | null;
+  presentation: string | null;
+};
 export type AppEntry = {
   id: string;
   title: string;
@@ -212,12 +224,16 @@ export type AppEntry = {
   state: ActivationState;
   target_ver: string | null;
   error: string | null;
+  layout: AppLayout;
+  styles: string[];
 };
 export type Activation = {
   app_id: string;
   activated_ver: string | null;
   target_ver: string | null;
   previous_ver?: string | null;
+  /** zuletzt erfolgreich aktivierte Versionen (für reportFailed). */
+  good_vers?: string[];
   state: ActivationState | null;
   error: string | null;
   at_seq?: string;
@@ -233,6 +249,9 @@ export type AppManifest = {
   collections: Record<string, { schema?: object; class?: string; client_limit?: number; byte_budget?: number; rights?: unknown }>;
   /** §16.4: Generation je Collection (fehlt = 1); Namensraum `name@g<k>`. */
   generations: Record<string, number>;
+  /** §16.19 Nr. 6 */
+  layout: AppLayout;
+  styles: string[];
   handlers: Record<string, string>;
   min_app_api: string;
   capabilities_required: string[];
@@ -241,24 +260,78 @@ export type AppManifest = {
   created_at: string;
 };
 
+/** K-1b: Artefaktinhalt; Text bleibt UTF-8, Binärinhalt wird als Bytes gehasht und gespeichert. */
+export type ArtifactContent = string | Blob | ArrayBuffer | ArrayBufferView;
+/** §16.22 A9: Inhalt von collections.schema.json. */
+export type CollectionsFile = {
+  collections?: Record<string, object | { schema: object; indexes?: unknown[]; class?: string; rights?: unknown; client_limit?: number; byte_budget?: number }>;
+  migrations?: Record<string, { from_ver: string; migrate_fn: string } | { from_ver: string; steps: MigrationStep[] }>;
+};
+/** Stub-Teilmenge deklarativer Migrationsschritte. */
+export type MigrationStep =
+  | { op: 'rename'; from: string; to: string }
+  | { op: 'add'; field: string; value?: unknown }
+  | { op: 'remove'; field: string }
+  | { op: 'cast'; field: string; to: 'string' | 'number' | 'boolean' };
+export type CollectionDiff = {
+  name: string;
+  kind: 'unchanged' | 'compatible' | 'new' | 'generation' | 'removed';
+  reasons: string[];
+  needsMigration: boolean;
+  migration: { from_ver: string; migrate_fn?: string; steps?: MigrationStep[] } | null;
+};
+/** §16.22 A4. files: Pfad → Text, null = im Entwurf gelöscht. */
+export type DraftInfo = { base_app_ver: string | null; files: Record<string, string | Uint8Array | null>; manifest: Record<string, unknown>; updated_at: number };
+
+/** §10.2a Nr. 7 + §16.22. Entwürfe je (App, Nutzer); im Kernel lokal in IDB meta `draft:<app>` (IDB je Instanz+Nutzer, §16.7). */
 export interface SourceApi {
-  /** Recht apps.source.view. Ohne `ver`: aktive Version plus Entwurfsdateien. */
+  /** Recht apps.source.view. Ohne `ver`: Basis des eigenen Entwurfs (sonst aktive Version) überlagert mit dem Entwurf. */
   list(ver?: string): Promise<string[]>;
-  /** Recht apps.source.view. Ohne `ver`: Entwurf, falls vorhanden, sonst aktive Version. */
-  read(path: string, ver?: string): Promise<string>;
+  /** Recht apps.source.view. Ohne `ver`: Entwurfsfassung, sonst Basis. Gelöschte Datei → not_found. */
+  read(path: string, ver?: string): Promise<string | Uint8Array>;
   draft: {
-    /** Recht apps.source.edit. */
-    write(path: string, text: string): Promise<void>;
-    setCollections(schemaDiff: unknown): Promise<void>;
-    /** Vergleich-und-Setzen gegen die aktive Version; result.rev = neue Version. Gründe: forbidden | stale_base | busy. */
-    publish(opts: { base_app_ver: string }): WriteHandle;
+    /** A4 – null, wenn kein eigener Entwurf. */
+    info(): Promise<DraftInfo | null>;
+    /** Recht apps.source.edit (gilt für alle schreibenden Entwurfsaufrufe). `manifest.json` → invalid (§16.26). */
+    write(path: string, content: ArtifactContent): Promise<void>;
+    /** A7 – not_found, wenn die Datei nicht existiert. */
+    remove(path: string): Promise<void>;
+    /** A7 – not_found (Quelle fehlt), conflict (Ziel existiert). Verweise im Manifest (entry, handlers, styles) wandern mit (§16.26). */
+    rename(from: string, to: string): Promise<void>;
+    /** A5/§16.26 – einzige Quelle der Manifest-Felder im Entwurf (title, entry, handlers, …); null entfernt ein Feld bzw. einen Handler. */
+    setManifest(fields: Record<string, unknown>): Promise<void>;
+    /** A6 – vollständiger Inhalt von collections.schema.json; liefert den Diff gegen die Entwurfsbasis. */
+    setCollections(content: string | CollectionsFile): Promise<{ base_app_ver: string | null; diff: CollectionDiff[] }>;
+    discard(): Promise<void>;
+    /** Basis des Entwurfs umsetzen (Änderungen bleiben). */
+    rebase(ver: string | null): Promise<void>;
+    /**
+     * A2/A3 – Vergleich-und-Setzen gegen die aktive Version; base_app_ver = null legt eine neue App an; ohne Angabe gilt
+     * die Basis des Entwurfs. result.rev = neue Version. Gründe: forbidden | stale_base | busy | invalid (detail z. B.
+     * „Migration fehlt: <coll>“ oder „Verweis auf fehlende Datei: …“, §16.26). Bei Ablehnung bleibt der Entwurf erhalten.
+     */
+    publish(opts?: { base_app_ver?: string | null }): WriteHandle<{ diff?: Array<{ name: string; kind: CollectionDiff['kind'] }> }>;
   };
 }
 
-export type StatusZoneEntry = Readonly<StatusItem & { app_id: string; ref: string | null; source: 'app' | 'kernel'; at: number }>;
-export interface StatusZone extends LiveQuery<StatusZoneEntry> {
-  forApp(appId: string): LiveQuery<StatusZoneEntry>;
+/** @deprecated Alter Name (66edb98) für StatusEntry / StatusStream. */
+export type StatusZoneEntry = StatusEntry;
+/** @deprecated */
+export type StatusZone = StatusStream;
+export type StatusEntry = Readonly<StatusItem & { app_id: string; ref: string | null; source: 'app' | 'kernel' | 'shell'; at: number }>;
+/** §16.19 Nr. 1: Strom der Zustandseinträge; rendern macht die Shell. Gleicher (app_id, code) ersetzt. */
+export interface StatusStream extends LiveQuery<StatusEntry> {
+  forApp(appId: string): LiveQuery<StatusEntry>;
+  /** Eigene Einträge der Shell (source 'shell'). */
+  report(appId: string, item: StatusItem): void;
   clear(appId: string, code: string): void;
+}
+
+/** §16.19 Nr. 3 – je Tab und Nutzer, IDB window_state. Werte structured-clone-fähig. */
+export interface WindowStateApi {
+  get<T = unknown>(key: string): Promise<T | null>;
+  put(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 export interface WindowState { title: string; header: unknown; size: { width: number; height: number }; mode: string; closed: boolean }
@@ -268,6 +341,8 @@ export interface ShellKernelApi {
   activation: {
     get(appId: string): LiveDoc<Activation | null>;
     onChange(cb: (ev: ActivationEvent) => void): () => void;
+    /** §16.19 Nr. 2: Version für diesen Client failed, Zeiger zurück auf die letzte funktionierende, app_activation failed. */
+    reportFailed(appId: string, ver: string, reason: string): Promise<Activation>;
   };
   artifacts: {
     read(hash: string): Promise<Blob>;
@@ -284,7 +359,11 @@ export interface ShellKernelApi {
     /** Schließt diesen Kernel und liefert einen Kernel für (Instanz, Nutzer). */
     switchInstance(next: { instanceId?: string; userId?: string }): Promise<StubKernel>;
   };
-  statusZone: StatusZone;
+  status: StatusStream;
+  /** @deprecated Alias für `status` (seit §16.19). */
+  statusZone: StatusStream;
+  /** §16.19 Nr. 3 */
+  windowState: WindowStateApi;
   /** Stub-Komfort: Fensterzustand je App (Titel/Header kommen aus api.shell). */
   window(appId: string): {
     state: LiveDoc<WindowState>;
@@ -318,14 +397,21 @@ export interface StubKernelOptions {
   theme?: Record<string, string>;
   /** Rückfall-Frist beim Remount (Standard 10000, §16.10). */
   remountTimeoutMs?: number;
+  /** Tab-Identität für windowState (Standard: sessionStorage, sonst je Kernel neu). */
+  tabKey?: string;
   /** false = Ein-Tab-Betrieb erzwingen. */
   multiTab?: boolean;
 }
 
 export interface PublishOptions {
   /** Pfad → Inhalt (UTF-8). Einstieg `entry` (Standard index.js) wird bei fehlendem `module` importiert. */
-  files?: Record<string, string>;
+  files?: Record<string, ArtifactContent>;
   entry?: string;
+  /** §16.19 Nr. 6 */
+  layout?: Partial<AppLayout>;
+  styles?: string[];
+  /** Weitere Manifest-Felder (triggers, command_rights, …). */
+  manifestExtra?: Record<string, unknown>;
   /** In-Memory-Modul (nur dieser Tab), statt Code aus Artefakten zu laden. */
   module?: AppModule;
   title?: string;
@@ -376,6 +462,8 @@ export interface StubSim {
   inspect(collection: string, id: string): Promise<any>;
   outbox(): Promise<any[]>;
   archiveLocal(): Promise<any[]>;
+  windowStateRows(): Promise<any[]>;
+  /** @deprecated Alias für `windowStateRows` (seit §16.19). */
   windowState(): Promise<any[]>;
   coreHead(): Promise<number>;
   /** Wartet, bis Outbox, Zustellung und Hintergrundaufgaben ruhen. */
@@ -398,8 +486,19 @@ export interface StubKernel {
   readonly isLeader: boolean;
   readonly storageKind: 'indexeddb' | 'memory' | null;
   appApi(appId: string, appVer: string): CtoxAppApi;
-  /** Zustandszone (live, je App filterbar). */
-  statusZone: StatusZone;
+  readonly tabKey: string;
+  // Shell-Kernel-Schnittstelle direkt am Kernel (§16.15, §16.19) – identisch mit kernel.shell
+  apps: ShellKernelApi['apps'];
+  activation: ShellKernelApi['activation'];
+  metrics: ShellKernelApi['metrics'];
+  leader: ShellKernelApi['leader'];
+  status: StatusStream;
+  /** @deprecated Alias für `status` (seit §16.19). */
+  statusZone: StatusStream;
+  windowState: WindowStateApi;
+  artifacts: ShellKernelApi['artifacts'];
+  source: ShellKernelApi['source'];
+  identity: ShellKernelApi['identity'];
   shell: ShellKernelApi;
   shellApi(): ShellKernelApi;
   sim: StubSim;
@@ -414,6 +513,10 @@ export declare function runCompiledQuery<T>(docs: T[], compiled: unknown): T[];
 export declare function uuidv7(): string;
 export declare function sha256Hex(content: string | Blob | ArrayBuffer | ArrayBufferView): Promise<string>;
 export declare function mergePatch<T>(target: T, patch: object): T;
+export declare const SCHEMA_FILE: 'collections.schema.json';
+export declare function parseCollectionsFile(input: string | CollectionsFile): { collections: Record<string, { schema: any; indexes: unknown[]; class: string | null; rights: unknown; client_limit: number | null; byte_budget: number | null }>; migrations: CollectionsFile['migrations'] };
+export declare function classifyCollections(base: ReturnType<typeof parseCollectionsFile>, next: ReturnType<typeof parseCollectionsFile>, opts?: { baseVer?: string | null }): CollectionDiff[];
+export declare function applyMigrationSteps<T extends object>(doc: T, steps: MigrationStep[]): T;
 
 // Real local kernel. The stub-only entry selects an explicit MemoryCoreTransport.
 export interface KernelOptions extends Omit<StubKernelOptions, 'instanceId'|'userId'> {
