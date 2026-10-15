@@ -91,10 +91,9 @@ impl NativeOwners {
             secrets.readers.clone(),
         )
         .await?;
-        // Each importer first releases its Core read snapshot, then submits a
-        // destination job. No cross-file transaction or mutual queue wait.
-        secrets.migrate_legacy_from_core().await.map_err(failure)?;
-        runtime.migrate_legacy_from_core().await.map_err(failure)?;
+        // Legacy imports are explicit maintenance operations, not normal boot:
+        // replaying legacy Runtime credentials can overwrite the current issuer.
+        // Retain the canonical files here without copying old Core settings.
         Ok(Self {
             _core: core,
             _lcm: lcm,

@@ -202,5 +202,32 @@ async fn foreground_owns_real_files_and_drains_engine_before_store() -> anyhow::
         .await??;
     }
 
+    // Normal boot must not replay obsolete Core configuration into the canonical
+    // Runtime/Secrets owners. Migration is an explicit, separately owned step.
+    let legacy_profile = tempfile::tempdir()?;
+    std::fs::create_dir_all(crate::paths::runtime_dir(legacy_profile.path()))?;
+    let legacy_writer = ctox_store::registry::Registry.open(
+        DbId::new(crate::paths::core_db(legacy_profile.path()))?,
+        Default::default(),
+    )?;
+    legacy_writer.ready().await?;
+    legacy_writer.submit(WriteJob::new(Default::default(),|tx| {
+        tx.execute_batch("CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL);INSERT INTO runtime_env_kv VALUES('CTOX_FIXTURE_THEME','obsolete-core-value');")?;
+        Ok(())
+    }))?.await?;
+    legacy_writer.shutdown().await?;
+    let mut restarted =
+        Foreground::start(legacy_profile.path().to_owned(), Handle::current()).await?;
+    let read_root = legacy_profile.path().to_owned();
+    let value = crate::persistence::run_core_sync(move || {
+        Ok(crate::runtime_env::get_runtime_env_value(
+            &read_root,
+            "CTOX_FIXTURE_THEME",
+        ))
+    })
+    .await?;
+    assert_eq!(value, None, "normal boot replayed legacy configuration");
+    restarted.shutdown().await?;
+
     Ok(())
 }
