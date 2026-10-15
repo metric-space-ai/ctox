@@ -32,6 +32,7 @@ import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs'
 import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
+import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -910,6 +911,7 @@ async function synchronizeInitialData() {
   // wenn alle Sammlungen live sind; sonst beim naechsten Start.
   if (!nichtLive.length) {
     bootSchritt('repair-adapters');
+    await pflegeSchritt('dedupe-adapters', () => entferneDoppelteAdapter());
     // Nachladen nur, wenn ein Schritt etwas geaendert hat: jedes reload sind
     // mehrere Abfragen gegen das Abfragekontingent des Browsers.
     if (await pflegeSchritt('repair-adapters', () => repairAdapterActivationDrift())) {
@@ -7698,6 +7700,18 @@ async function patchStoredDoc(collection, doc, fields) {
   await collection.storageCollection.upsert({
     ...doc, ...fields, updated_at_ms: now, _meta: { ...(doc._meta || {}), lwt: now },
   });
+}
+
+async function entferneDoppelteAdapter() {
+  const adapters = state.collections.adapters;
+  if (typeof adapters?.storageCollection?.allDocuments !== 'function') return false;
+  const docs = await adapters.storageCollection.allDocuments();
+  const ids = new Set(doppelteAdapterIds(docs));
+  for (const doc of docs) {
+    if (ids.has(doc.id)) await patchStoredDoc(adapters, doc, { _deleted: true, is_deleted: true });
+  }
+  if (ids.size) state.adapters = state.adapters.filter((entry) => !ids.has(entry.id));
+  return ids.size > 0;
 }
 
 async function removeAllSourceAdapters(sourceId) {
