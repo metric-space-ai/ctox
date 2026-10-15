@@ -466,7 +466,7 @@ mod tests {
         (dir, source, receipt)
     }
 
-#[test]
+    #[test]
     fn upsert_then_lookup_round_trips() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(entry.year, Some(2024));
     }
 
-#[test]
+    #[test]
     fn upsert_preserves_created_at() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();
@@ -502,7 +502,7 @@ mod tests {
         assert!(second.updated_at >= first.updated_at);
     }
 
-#[test]
+    #[test]
     fn refresh_appends_a_new_unverified_version() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(cache.list_for_run().unwrap().len(), 1);
     }
 
-#[test]
+    #[test]
     fn evidence_is_ineligible_until_verified_with_document_snapshot() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();

@@ -1473,7 +1473,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn render_prompt_injects_qwen_xml_tool_protocol() {
         let prompt = render_chat_prompt(&test_request());
 
@@ -1486,7 +1486,7 @@ mod tests {
         assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n"));
     }
 
-#[test]
+    #[test]
     fn render_prompt_can_disable_qwen_thinking_with_reasoning_none_effort() {
         let mut req = test_request();
         req.reasoning = Some(json!({"effort":"none"}));
@@ -1495,7 +1495,7 @@ mod tests {
         assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
     }
 
-#[test]
+    #[test]
     fn clean_output_strips_prompt_opened_thinking_prefix() {
         let raw = "Need a shell inspection.\n</think>\n\n<tool_call>\n<function=exec_command>\n<parameter=cmd>\npwd\n</parameter>\n</function>\n</tool_call>";
         let cleaned = clean_model_output(raw);
@@ -1504,7 +1504,7 @@ mod tests {
         assert!(!cleaned.contains("Need a shell inspection"));
     }
 
-#[test]
+    #[test]
     fn parses_qwen_xml_tool_call_to_responses_function_call() {
         let parsed = parse_qwen_tool_code(
             r#"<tool_call>
@@ -1524,7 +1524,7 @@ printf CTOX_QWEN_TOOL_OK
         );
     }
 
-#[test]
+    #[test]
     fn parses_qwen_json_tool_call_to_responses_function_call() {
         let parsed = parse_qwen_tool_code(
             r#"<tool_call>
@@ -1540,7 +1540,7 @@ printf CTOX_QWEN_TOOL_OK
         );
     }
 
-#[test]
+    #[test]
     fn function_history_renders_as_qwen_xml_and_tool_response() {
         let call = input_item_to_turn(&json!({
             "type": "function_call",
@@ -1560,7 +1560,7 @@ printf CTOX_QWEN_TOOL_OK
         assert_eq!(output.1, "ok");
     }
 
-#[test]
+    #[test]
     fn tool_output_turn_disables_thinking_and_uses_qwen_tool_role_template() {
         let mut req = test_request();
         req.input.push(json!({
@@ -1581,7 +1581,7 @@ printf CTOX_QWEN_TOOL_OK
         assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
     }
 
-#[test]
+    #[test]
     fn context_size_errors_are_reported_as_context_length_exceeded() {
         let err = anyhow!(
             "{}",
@@ -1593,7 +1593,7 @@ printf CTOX_QWEN_TOOL_OK
         assert_eq!(ipc_error.code, "context_length_exceeded");
     }
 
-#[test]
+    #[test]
     fn local_preflight_overflow_is_reported_as_context_length_exceeded() {
         let err = anyhow!(
             "context_length_exceeded: rendered prompt has 130000 tokens; required context 132112 exceeds configured context size 131072"

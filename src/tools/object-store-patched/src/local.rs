@@ -1266,7 +1266,7 @@ mod tests {
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
-#[cfg(target_family = "unix")]
+    #[cfg(target_family = "unix")]
     async fn check_list(integration: &LocalFileSystem, prefix: Option<&Path>, expected: &[&str]) {
         let result: Vec<_> = integration.list(prefix).try_collect().await.unwrap();
 

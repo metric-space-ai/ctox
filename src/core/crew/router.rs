@@ -249,7 +249,7 @@ mod tests {
         members(&conn).unwrap()
     }
 
-#[test]
+    #[test]
     fn route_prefers_judgment_and_falls_back_honestly() {
         let pool = pool();
         assert!(pool.len() >= 2, "fixture needs a pool");

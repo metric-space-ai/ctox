@@ -194,7 +194,7 @@ impl Tensor {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn contiguous_strides_f32_row_major() {
         // A 2-D f32 tensor [4, 8] (ne[0]=4, ne[1]=8): nb[0]=4,
         // nb[1]=16, nb[2]=128, nb[3]=128. ref: ggml_new_tensor_impl.
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(nb, [4, 16, 128, 128]);
     }
 
-#[test]
+    #[test]
     fn contiguous_strides_q4_k() {
         // Q4_K [256, 2]: nb[0] = 144, nb[1] = 144*256/256 = 144.
         let nb = Tensor::make_contiguous_strides(GgmlType::Q4_K, [256, 2, 1, 1]);

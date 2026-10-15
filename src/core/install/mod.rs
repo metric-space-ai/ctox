@@ -4921,7 +4921,7 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::tempdir;
 
-#[test]
+    #[test]
     fn post_upgrade_check_waits_out_a_locked_store_but_not_other_errors() {
         let mut calls = 0;
         let result =
@@ -4946,7 +4946,7 @@ mod tests {
         assert_eq!(calls, 1, "a real invariant failure is reported at once");
     }
 
-#[test]
+    #[test]
     fn watchdog_unit_skips_ticks_during_release_switch() {
         let root = tempdir().expect("temporary watchdog directory");
         let service_dir = root.path().join("units");
@@ -4960,7 +4960,7 @@ mod tests {
         assert!(unit.contains("systemctl --user start ctox.service"));
     }
 
-#[cfg(target_os = "linux")]
+    #[cfg(target_os = "linux")]
     #[test]
     fn watchdog_tick_cannot_start_while_release_switch_holds_lock() {
         use std::os::fd::AsRawFd;
@@ -4995,7 +4995,7 @@ mod tests {
         assert_eq!(released.code(), Some(99));
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn legacy_global_real_binary_tracks_activation_and_rollback() {
         let root = tempdir().expect("temporary managed install");
@@ -5038,7 +5038,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn every_installed_unit_running_the_ctox_binary_is_restarted_on_upgrade() {
         // install.sh writes the user units; every one whose ExecStart runs the
         // CTOX binary must follow a release switch (ctox.service is restarted
@@ -5073,7 +5073,7 @@ mod tests {
         assert!(RELEASE_BOUND_UNITS.contains(&"ctox-business-os-mcp.service"));
     }
 
-#[test]
+    #[test]
     fn latest_core_release_ignores_newer_shell_release() {
         let release = |tag_name: &str, draft: bool, prerelease: bool| GitHubReleaseResponse {
             tag_name: tag_name.to_string(),
@@ -5094,7 +5094,7 @@ mod tests {
         assert_eq!(selected.tag_name, "v0.3.27");
     }
 
-#[test]
+    #[test]
     fn core_release_tag_requires_plain_three_part_semver() {
         assert!(is_ctox_core_release_tag("v0.3.27"));
         assert!(!is_ctox_core_release_tag("business-os-shell-v0.1.44"));
@@ -5102,7 +5102,7 @@ mod tests {
         assert!(!is_ctox_core_release_tag("0.3.27"));
     }
 
-#[test]
+    #[test]
     fn active_symlink_release_name_overrides_stale_manifest_identity() {
         let releases = Path::new("/opt/ctox/releases");
         assert_eq!(
@@ -5123,7 +5123,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn maintenance_state_migrates_once_from_the_legacy_core_database() {
         let temp = tempdir().unwrap();
         let layout = maintenance_test_layout(temp.path());
@@ -5167,7 +5167,7 @@ mod tests {
         assert_eq!(version, 1);
     }
 
-#[test]
+    #[test]
     fn terminal_maintenance_status_does_not_wait_for_store_migration() {
         let temp = tempdir().unwrap();
         let layout = InstallLayout::resolve(temp.path()).unwrap();
@@ -5206,7 +5206,7 @@ mod tests {
     // hielt die Instanz zwoelf Tage schreibgeschuetzt, weil der Status-
     // Endpunkt nur completed/rolled_back als inaktiv zaehlte. failed ist
     // terminal — der Banner bleibt (retryable), der Schreibschutz nicht.
-#[test]
+    #[test]
     fn update_holds_browser_writes_only_from_the_switch_on() {
         let temp = tempdir().unwrap();
         let layout = InstallLayout::resolve(temp.path()).unwrap();
@@ -5241,7 +5241,7 @@ mod tests {
         assert_eq!(payload["state"]["phase"], "switching");
     }
 
-#[test]
+    #[test]
     fn failed_maintenance_does_not_keep_the_instance_write_protected() {
         let temp = tempdir().unwrap();
         // Wie im Nachbartest: der Status-Endpunkt loest das Layout selbst aus
@@ -5264,7 +5264,7 @@ mod tests {
         assert_eq!(payload["message"], "");
     }
 
-#[test]
+    #[test]
     fn maintenance_failure_and_rollback_remain_retryable() {
         let temp = tempdir().unwrap();
         let layout = maintenance_test_layout(temp.path());
@@ -5286,7 +5286,7 @@ mod tests {
         assert!(rolled_back.retryable);
     }
 
-#[test]
+    #[test]
     fn expired_maintenance_lease_becomes_stale() {
         let temp = tempdir().unwrap();
         let layout = maintenance_test_layout(temp.path());
@@ -5310,7 +5310,7 @@ mod tests {
         assert!(reconciled.retryable);
     }
 
-#[test]
+    #[test]
     fn active_target_recovers_interrupted_service_activation() {
         let temp = tempdir().unwrap();
         let mut layout = maintenance_test_layout(temp.path());
@@ -5370,7 +5370,7 @@ mod tests {
         assert!(!recovered.retryable);
     }
 
-#[test]
+    #[test]
     fn legacy_release_bundle_is_normalized_to_installable_layout() {
         let temp = tempdir().unwrap();
         let legacy = temp
@@ -5392,7 +5392,7 @@ mod tests {
         assert!(error.contains("missing required runtime paths"));
     }
 
-#[test]
+    #[test]
     fn source_workspace_copy_excludes_local_runtime_build_and_archive_state() {
         let temp = tempdir().unwrap();
         let source = temp.path().join("source");
@@ -5452,7 +5452,7 @@ mod tests {
         assert!(!release.join(".git").exists());
     }
 
-#[test]
+    #[test]
     fn binary_bundle_validation_rejects_target_only_archive_layout() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("bundle");
@@ -5465,7 +5465,7 @@ mod tests {
         assert!(error.contains("bin/ctox-real"));
     }
 
-#[test]
+    #[test]
     fn binary_bundle_validation_requires_runtime_workspace_assets() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("bundle");
@@ -5484,7 +5484,7 @@ mod tests {
         assert!(error.contains("src/apps/business-os/index.html"));
     }
 
-#[test]
+    #[test]
     fn a_bundle_built_before_the_contract_installs_if_it_can_serve() {
         // v0.3.27 wurde am 10.06.2026 getaggt, der Bundle-Kontrakt entstand am
         // 29.07. Wer das aeltere Bundle gegen den neueren Kontrakt prueft,
@@ -5505,7 +5505,7 @@ mod tests {
         validate_binary_bundle(&bundle).expect("a pre-contract bundle that can serve installs");
     }
 
-#[test]
+    #[test]
     fn a_manifestless_bundle_that_cannot_serve_the_shell_is_refused() {
         // Die Gegenprobe zum Test darueber: "kein Manifest" darf nicht zu
         // "alles installiert" werden. Eine Instanz, die auf jede Anfrage 404
@@ -5520,7 +5520,7 @@ mod tests {
         assert!(error.contains("src/apps/business-os/index.html"));
     }
 
-#[test]
+    #[test]
     fn binary_bundle_validation_accepts_release_runtime_workspace() {
         let temp = tempdir().unwrap();
         let bundle = temp.path().join("bundle");
@@ -5549,7 +5549,7 @@ mod tests {
         validate_binary_bundle(&bundle).unwrap();
     }
 
-#[test]
+    #[test]
     fn release_switch_stop_is_guarded_for_business_os_app_tasks() {
         let temp = tempdir().unwrap();
         let root = temp.path();
@@ -5591,7 +5591,7 @@ mod tests {
         assert!(err.contains("Business OS app creation/modification task is leased"));
     }
 
-#[test]
+    #[test]
     fn update_lock_blocks_second_active_holder() {
         let temp = tempdir().unwrap();
         let layout = InstallLayout {
@@ -5613,7 +5613,7 @@ mod tests {
         assert!(text.contains("target_release=branch-main"));
     }
 
-#[test]
+    #[test]
     fn stale_update_lock_is_replaced() {
         let temp = tempdir().unwrap();
         let layout = InstallLayout {
@@ -5638,7 +5638,7 @@ mod tests {
         assert!(contents.contains("target_release=branch-main-new"));
     }
 
-#[test]
+    #[test]
     fn resolve_active_root_prefers_managed_current_when_install_root_is_known() {
         let temp = tempdir().unwrap();
         let source_root = temp.path().join("source");
@@ -5654,7 +5654,7 @@ mod tests {
         assert_eq!(resolve_active_root(&source_root, None), source_root);
     }
 
-#[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
     #[test]
     fn refresh_launchd_agent_writes_current_root_and_marker() {
         let temp = tempdir().unwrap();
@@ -5694,7 +5694,7 @@ mod tests {
             .exists());
     }
 
-#[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
     #[test]
     fn refresh_launchd_signaling_agent_uses_local_signaling_script() {
         let temp = tempdir().unwrap();
@@ -5733,7 +5733,7 @@ mod tests {
             .exists());
     }
 
-#[test]
+    #[test]
     fn non_terminal_update_phase_clears_finished_at() {
         let temp = tempdir().unwrap();
         let state_path = temp.path().join("update_state.json");
@@ -5762,7 +5762,7 @@ mod tests {
         assert!(state.last_error.is_none());
     }
 
-#[test]
+    #[test]
     fn runtime_credential_snapshot_detects_lost_azure_secret() {
         let temp = tempdir().unwrap();
         let mut env = std::collections::BTreeMap::new();
@@ -5787,7 +5787,7 @@ mod tests {
             .contains("AZURE_FOUNDRY_API_KEY secret missing"));
     }
 
-#[test]
+    #[test]
     fn runtime_credential_snapshot_preserves_chatgpt_subscription_auth() {
         let temp = tempdir().unwrap();
         let mut env = std::collections::BTreeMap::new();
@@ -5836,7 +5836,7 @@ mod tests {
             .contains("ChatGPT subscription auth backup missing"));
     }
 
-#[test]
+    #[test]
     fn state_backup_restores_encrypted_credentials_without_original_store() {
         let temp = tempdir().unwrap();
         let original = temp.path().join("original");
@@ -5897,7 +5897,7 @@ mod tests {
         );
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn state_backup_rejects_master_key_symlink() {
         let temp = tempdir().unwrap();
@@ -5916,7 +5916,7 @@ mod tests {
         assert_eq!(fs::read_to_string(outside).unwrap(), "synthetic key");
     }
 
-#[test]
+    #[test]
     fn state_backup_snapshots_live_wal_database_without_sidecars() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
@@ -5948,7 +5948,7 @@ mod tests {
         drop(connection);
     }
 
-#[test]
+    #[test]
     fn state_backup_falls_back_to_plain_copy_for_non_database_files() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
@@ -5967,7 +5967,7 @@ mod tests {
         assert!(!backup.join("ctox.sqlite3-shm").exists());
     }
 
-#[test]
+    #[test]
     fn update_backup_retention_keeps_latest_and_manual_backups() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
@@ -5997,7 +5997,7 @@ mod tests {
     /// Mandanten-Proxy mit. Dieser Test bildet zwanzig abgebrochene Laeufe nach:
     /// Sicherung anlegen, danach aufraeumen, dann abbrechen. Die Zahl der
     /// Sicherungen muss beschraenkt bleiben.
-#[test]
+    #[test]
     fn aborted_updates_never_accumulate_backups() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
@@ -6030,7 +6030,7 @@ mod tests {
         }
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn automatic_release_recovery_preserves_live_sqlite_writes() -> Result<()> {
         let temp = tempdir()?;
@@ -6074,7 +6074,7 @@ mod tests {
         Ok(())
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn automatic_release_recovery_propagates_stop_and_activation_failures() -> Result<()> {
         let temp = tempdir()?;
@@ -6121,7 +6121,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn restore_state_backup_drops_stale_wal_sidecars() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
@@ -6154,7 +6154,7 @@ mod tests {
         assert_eq!(value, "before");
     }
 
-#[test]
+    #[test]
     fn restore_state_backup_keeps_sidecars_shipped_in_old_format_backups() {
         // Backups written by a pre-v2 binary plain-copied the database plus
         // its live -wal/-shm; the WAL carries committed transactions and must
@@ -6190,7 +6190,7 @@ mod tests {
         assert!(!state_root.join("ctox.sqlite3-shm").exists());
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn state_backup_aborts_when_wal_snapshot_is_inconsistent() {
         use std::os::unix::fs::PermissionsExt;
@@ -6234,7 +6234,7 @@ mod tests {
         drop(connection);
     }
 
-#[test]
+    #[test]
     fn prune_release_cache_keeps_current_and_previous_artifacts() {
         let temp = tempdir().unwrap();
         let cache_root = temp.path().join("cache");
@@ -6272,7 +6272,7 @@ mod tests {
         assert!(!bundles.join("v0.3.9").exists());
     }
 
-#[test]
+    #[test]
     fn managed_layout_prefers_manifest_state_root_over_current_runtime_symlink() {
         let temp = tempdir().unwrap();
         let install_root = temp.path().join("install");
@@ -6308,7 +6308,7 @@ mod tests {
         assert_eq!(layout.state_root, stable_state_root);
     }
 
-#[test]
+    #[test]
     fn prune_old_releases_keeps_current_and_previous_only() {
         let temp = tempdir().unwrap();
         let releases = temp.path().join("releases");

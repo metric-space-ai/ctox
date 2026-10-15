@@ -201,7 +201,7 @@ impl Path {
         })
     }
 
-#[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_arch = "wasm32"))]
     /// Convert a filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences
@@ -217,7 +217,7 @@ impl Path {
         Self::from_absolute_path(absolute)
     }
 
-#[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_arch = "wasm32"))]
     /// Convert an absolute filesystem path to a [`Path`] relative to the filesystem root
     ///
     /// This will return an error if the path contains illegal character sequences,
@@ -276,7 +276,7 @@ impl Path {
     /// # Performance
     ///
     /// This operation is `O(n)`.
-#[doc(alias = "len")]
+    #[doc(alias = "len")]
     pub fn parts_count(&self) -> usize {
         self.raw.split_terminator(DELIMITER).count()
     }
@@ -360,7 +360,7 @@ impl Path {
     }
 
     /// Creates a new child of this [`Path`]
-#[deprecated = "use .join() or .clone().join() instead"]
+    #[deprecated = "use .join() or .clone().join() instead"]
     pub fn child<'a>(&self, child: impl Into<PathPart<'a>>) -> Self {
         self.clone().join(child)
     }
@@ -480,11 +480,9 @@ mod tests {
     use super::*;
 
     /// Main test for `impl Extend for Path`, covers most cases.
-
     /// Test for `impl Extend for Path`, specifically covers addition of a single segment.
-
     /// Construct a [`Path`] from a raw `&str`, or panic trying.
-#[track_caller]
+    #[track_caller]
     fn path(raw: &str) -> Path {
         Path::parse(raw).unwrap()
     }

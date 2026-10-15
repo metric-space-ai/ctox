@@ -246,7 +246,7 @@ impl HttpAgent {
 
     /// Test seam: build an agent with an explicit transport + deterministic clock.
     /// NOT used in production (the default `new` wires the real client + now_ms).
-#[cfg(test)]
+    #[cfg(test)]
     fn with_transport_and_clock(
         agent_id: impl Into<String>,
         config: HttpAgentConfig,
@@ -680,7 +680,7 @@ mod tests {
 
     // Secret redaction: HttpAgentConfig Debug must never print the secret-store
     // key name or header values; only the base URI + header NAMES are shown.
-#[test]
+    #[test]
     fn http_agent_config_debug_redacts_secrets() {
         let mut headers = BTreeMap::new();
         headers.insert(
@@ -808,7 +808,7 @@ mod tests {
 
     // ---- §2A.29 min poll interval enforced (injected clock) ---------------
 
-#[test]
+    #[test]
     fn min_poll_interval_enforced_default_5s() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "23.5", &[])]);
@@ -850,7 +850,7 @@ mod tests {
 
     // ---- §2A.29 FIXED-DELAY: gap measured from completion, not start ------
 
-#[test]
+    #[test]
     fn fixed_delay_measures_from_completion_not_fixed_rate() {
         // A clock that JUMPS forward inside the request (simulating a slow
         // response) lets us prove the next due time is anchored to completion.
@@ -926,7 +926,7 @@ mod tests {
 
     // ---- §2A.29 only 2xx processed ----------------------------------------
 
-#[test]
+    #[test]
     fn non_2xx_is_skipped_polling_continues() {
         let clock = TestClock::new(0);
         // first response 500 (skip), second 200 (process).
@@ -960,7 +960,7 @@ mod tests {
 
     // ---- §2A.29 Link: rel=next pagination accumulates ----------------------
 
-#[test]
+    #[test]
     fn pagination_accumulates_link_next_pages() {
         let clock = TestClock::new(0);
         // page 1 has a Link: rel=next to page 2; page 2 has no next.
@@ -1000,7 +1000,7 @@ mod tests {
         assert_eq!(reqs[1].1, "http://device.local/api/temp?page=2");
     }
 
-#[test]
+    #[test]
     fn pagination_disabled_does_not_follow_next() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(
@@ -1034,7 +1034,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn parse_link_next_extracts_next_uri() {
         let mut h = BTreeMap::new();
         h.insert(
@@ -1060,7 +1060,7 @@ mod tests {
 
     // ---- §2A.30 fire-and-forget writes; updateOnWrite is the runtime's job -
 
-#[test]
+    #[test]
     fn write_is_fire_and_forget_and_sends_processed_value() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "", &[])]);
@@ -1088,7 +1088,7 @@ mod tests {
         assert_eq!(reqs[0].1, "http://device.local/api/setpoint");
     }
 
-#[test]
+    #[test]
     fn write_to_unlinked_attribute_is_ignored() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "", &[])]);
@@ -1114,7 +1114,7 @@ mod tests {
 
     // ---- unlink + connect/status sanity -----------------------------------
 
-#[test]
+    #[test]
     fn unlink_stops_polling() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "1", &[])]);
@@ -1140,7 +1140,7 @@ mod tests {
         assert_eq!(transport.request_count(), 1, "no poll after unlink");
     }
 
-#[test]
+    #[test]
     fn connect_without_base_uri_schedules_backoff() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "", &[])]);
@@ -1224,7 +1224,7 @@ mod tests {
         let _ = stream.flush();
     }
 
-#[test]
+    #[test]
     fn real_loopback_listener_2xx_body_via_ureq() {
         let (base, _handle) = spawn_http_fixture();
         let clock = TestClock::new(0);
@@ -1257,7 +1257,7 @@ mod tests {
         assert_eq!(r[0].raw.0, serde_json::json!("23.5"));
     }
 
-#[test]
+    #[test]
     fn real_loopback_listener_pagination_via_ureq() {
         let (base, _handle) = spawn_http_fixture();
         let clock = TestClock::new(0);

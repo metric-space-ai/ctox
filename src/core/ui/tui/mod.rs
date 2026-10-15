@@ -2465,7 +2465,7 @@ impl App {
         }
     }
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn selected_setting_help(&self) -> String {
         self.current_setting()
             .map(|item| match item.kind {
@@ -4083,7 +4083,7 @@ impl App {
         Ok(())
     }
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn header_lines(&self, width: usize) -> Vec<String> {
         let model = compact_model_name(&self.header.model, width);
         let loop_state = if self.service_status.running {
@@ -4194,7 +4194,7 @@ impl App {
         ]
     }
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn header_preview_line(&self) -> String {
         let family_item = self
             .settings_items
@@ -6156,7 +6156,7 @@ mod tests {
         root
     }
 
-#[test]
+    #[test]
     fn chat_composer_title_carries_image_badge_when_pending() {
         use ratatui::backend::TestBackend;
 
@@ -6213,7 +6213,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-#[test]
+    #[test]
     fn image_slash_command_resolves_existing_file_and_rejects_non_image() {
         let root = temp_root("image-slash");
         let db_path = crate::persistence::sqlite_path(&root);
@@ -6254,7 +6254,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-#[test]
+    #[test]
     fn app_defaults_to_model_settings_view_and_openai_key_visibility_follows_provider() {
         let root = temp_root("visibility");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6324,7 +6324,7 @@ mod tests {
         assert!(app.setting_visible(&openai_web_search_row));
     }
 
-#[test]
+    #[test]
     fn no_gpu_hosts_offer_no_local_chat_families() {
         let root = temp_root("no-gpu-families");
         let choices = supported_local_chat_family_choices_with_gpu(&root, &BTreeMap::new(), false);
@@ -6335,7 +6335,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn settings_view_shortcuts_switch_between_model_and_communication() {
         let root = temp_root("settings-view-shortcuts");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6358,7 +6358,7 @@ mod tests {
         assert_eq!(app.settings_view, SettingsView::Secrets);
     }
 
-#[test]
+    #[test]
     fn tab_cycles_through_work_views_and_settings_before_leaving_page() {
         let root = temp_root("settings-tab-cycle");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6428,7 +6428,7 @@ mod tests {
         assert_eq!(app.settings_view, SettingsView::Paths);
     }
 
-#[test]
+    #[test]
     fn visible_model_settings_follow_requested_minimal_flow() {
         let root = temp_root("minimal-flow");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6562,7 +6562,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn cto_contract_setting_opens_editor_and_persists_to_runtime_store() {
         let root = temp_root("cto-contract-editor");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6597,7 +6597,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn communication_settings_show_remote_webrtc_fields_only_when_enabled() {
         let root = temp_root("communication-remote-webrtc");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6621,7 +6621,7 @@ mod tests {
         assert!(keys.contains(&"CTOX_WEBRTC_PASSWORD"));
     }
 
-#[test]
+    #[test]
     fn configured_runtime_models_skip_remote_chat_model_for_api_source() {
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
@@ -6635,7 +6635,7 @@ mod tests {
             .any(|model| model == "Qwen/Qwen3-Embedding-0.6B"));
     }
 
-#[test]
+    #[test]
     fn api_estimate_keeps_aux_models_without_projecting_local_chat_gpu_load() {
         let root = temp_root("api-estimate-aux");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6750,7 +6750,7 @@ mod tests {
         assert!(allocations.contains(&"tts"));
     }
 
-#[test]
+    #[test]
     fn healthy_aux_backend_falls_back_to_planned_gpu_allocation_when_live_probe_misses_it() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -6800,7 +6800,7 @@ mod tests {
         }));
     }
 
-#[test]
+    #[test]
     fn communication_visibility_switches_email_and_jami_blocks() {
         let root = temp_root("comm-visibility");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6870,7 +6870,7 @@ mod tests {
         assert!(app.setting_visible(&jami_row));
     }
 
-#[test]
+    #[test]
     fn refresh_header_ignores_stale_local_active_model_when_chat_source_is_api() {
         let root = temp_root("api-header");
         let db_path = root.join("runtime/test.sqlite3");
@@ -6896,7 +6896,7 @@ mod tests {
         assert_eq!(app.header.base_model, "gpt-5.4-mini");
     }
 
-#[test]
+    #[test]
     fn load_skill_catalog_discovers_skill_scripts_and_resources() {
         let root = temp_root("skills-catalog");
         let skill_dir = root.join("skills/packs/demo-skill");
@@ -6928,7 +6928,7 @@ mod tests {
             .any(|resource| resource.contains("references:")));
     }
 
-#[test]
+    #[test]
     fn load_skill_catalog_classifies_curated_codex_and_personal_skills() {
         let root = temp_root("skills-classes");
         let curated_dir = root.join("skills/packs/demo-pack");
@@ -6991,7 +6991,7 @@ mod tests {
         assert_eq!(personal.state, SkillState::Generated);
     }
 
-#[test]
+    #[test]
     fn setup_wizard_arms_only_while_no_chat_backend_is_usable() {
         let root = temp_root("wizard-need");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7011,7 +7011,7 @@ mod tests {
         assert!(!app.setup_wizard_needed());
     }
 
-#[test]
+    #[test]
     fn setup_wizard_skip_is_persisted() {
         let root = temp_root("wizard-skip");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7029,7 +7029,7 @@ mod tests {
         assert!(!app.setup_wizard_needed());
     }
 
-#[test]
+    #[test]
     fn setup_wizard_enter_deep_links_into_the_credential_row() {
         let root = temp_root("wizard-jump");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7052,7 +7052,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn tab_cycles_chat_work_skills_settings() {
         let root = temp_root("page-cycle");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7099,7 +7099,7 @@ mod tests {
         assert_eq!(app.page, Page::Chat);
     }
 
-#[test]
+    #[test]
     fn secrets_view_saves_back_into_encrypted_store() {
         let root = temp_root("secret-save");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7122,7 +7122,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn save_settings_mirrors_chat_model_to_base_model() {
         let root = temp_root("boost-save");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7155,7 +7155,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn save_settings_persists_openai_token_only_in_secret_store() {
         let root = temp_root("settings-openai-secret");
         let db_path = root.join("runtime/test.sqlite3");
@@ -7182,7 +7182,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn save_settings_persists_azure_foundry_selection_and_secret() {
         let root = temp_root("settings-azure-foundry");
         let db_path = root.join("runtime/test.sqlite3");

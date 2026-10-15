@@ -195,5 +195,4 @@ mod tests {
 
     // No-op sanity: the module compiles + the public types are named
     // as the graph builder (next session's port) expects.
-
 }

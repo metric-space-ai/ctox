@@ -732,5 +732,4 @@ mod tests {
 
     // this is inconsistent: decode will decode any None datetime to smalldatetime, ignoring size
     // but it's non-critical, so let it be here
-
 }

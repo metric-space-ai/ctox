@@ -793,7 +793,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_skips_non_dach_countries() {
         // The enum only contains DACH today; this test guards against a
         // future Country variant accidentally engaging the D&B path.
@@ -820,7 +820,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_empty_company_is_no_match() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test-dnb"),
@@ -833,7 +833,7 @@ mod tests {
         assert!(matches!(result, Err(SourceError::NoMatch)));
     }
 
-#[test]
+    #[test]
     fn parses_search_fixture_into_hits() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("fixture has hits");
@@ -846,28 +846,28 @@ mod tests {
         assert!(sap.snippet.contains("Prepackaged Software"));
     }
 
-#[test]
+    #[test]
     fn parses_search_fixture_caps_hits_at_max() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("hits");
         assert!(hits.len() <= MAX_HITS);
     }
 
-#[test]
+    #[test]
     fn empty_search_candidates_maps_to_no_match() {
         let value: Value = serde_json::from_str(r#"{"searchCandidates": []}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::NoMatch));
     }
 
-#[test]
+    #[test]
     fn missing_candidates_field_maps_to_parse_failed() {
         let value: Value = serde_json::from_str(r#"{"error": "boom"}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::ParseFailed { .. }));
     }
 
-#[test]
+    #[test]
     fn extract_fields_pulls_wz_code_high() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
         let fields = module().extract_fields(&page);
@@ -887,7 +887,7 @@ mod tests {
             .contains("NACE Revision 2"));
     }
 
-#[test]
+    #[test]
     fn extract_fields_pulls_umsatz_high_with_currency_and_year() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
         let fields = module().extract_fields(&page);
@@ -903,7 +903,7 @@ mod tests {
         assert!(note.contains("FY2024"), "year note missing: {note}");
     }
 
-#[test]
+    #[test]
     fn extract_fields_pulls_mitarbeiter_high() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
         let fields = module().extract_fields(&page);
@@ -921,7 +921,7 @@ mod tests {
             .contains("Consolidated"));
     }
 
-#[test]
+    #[test]
     fn extract_fields_pulls_firma_email_medium() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
         let fields = module().extract_fields(&page);
@@ -933,7 +933,7 @@ mod tests {
         assert!(matches!(email.1.confidence, Confidence::Medium));
     }
 
-#[test]
+    #[test]
     fn extract_fields_falls_back_to_employees_array_when_figures_block_absent() {
         let body = serde_json::json!({
             "organization": {
@@ -962,7 +962,7 @@ mod tests {
             .contains("Estimated"));
     }
 
-#[test]
+    #[test]
     fn extract_fields_industry_falls_back_to_primary_sic() {
         let body = serde_json::json!({
             "organization": {
@@ -983,19 +983,19 @@ mod tests {
         assert!(wz.1.note.as_deref().unwrap_or("").contains("SIC v4"));
     }
 
-#[test]
+    #[test]
     fn extract_fields_returns_empty_on_non_json_text() {
         let page = dummy_page("not a json body", "https://plus.dnb.com/data/duns/x");
         assert!(module().extract_fields(&page).is_empty());
     }
 
-#[test]
+    #[test]
     fn extract_fields_returns_empty_when_organization_missing() {
         let page = dummy_page(r#"{"unrelated":true}"#, "https://plus.dnb.com/data/duns/x");
         assert!(module().extract_fields(&page).is_empty());
     }
 
-#[test]
+    #[test]
     fn base64_encode_matches_rfc4648_vectors() {
         assert_eq!(base64_encode(b""), "");
         assert_eq!(base64_encode(b"f"), "Zg==");
@@ -1006,7 +1006,7 @@ mod tests {
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::dnbhoovers"]
     fn live_credential_missing_or_smoke() {
         // Ohne aktive Subscription auf dem Operator-Host (Default) MUSS der

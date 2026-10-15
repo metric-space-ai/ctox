@@ -1071,7 +1071,7 @@ mod tests {
         Ok((temp, store, inbox))
     }
 
-#[test]
+    #[test]
     fn message_summaries_and_counts_do_not_load_message_content() -> StalwartResult<()> {
         let (_temp, store, inbox) = test_store()?;
         let message_id = store.put_message(
@@ -1098,7 +1098,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn message_uids_are_persistent_across_deletions() -> StalwartResult<()> {
         let (_temp, store, inbox) = test_store()?;
         let first =
@@ -1139,7 +1139,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn legacy_databases_get_uids_backfilled_chronologically() -> StalwartResult<()> {
         let temp = tempdir()?;
         let db_path = temp.path().join("legacy.sqlite3");
@@ -1175,7 +1175,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn passwords_are_stored_hashed_and_verify_roundtrip() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.add_user("carol@example.test", "s3cret pa55word")?;
@@ -1196,7 +1196,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn legacy_plaintext_rows_authenticate_once_and_upgrade_to_hash() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.with_connection(|conn| {
@@ -1224,7 +1224,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn runtime_settings_roundtrip_without_environment_state() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         let settings = MailserverRuntimeSettings {
@@ -1242,7 +1242,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn tracking_tokens_resolve_to_append_only_events() -> StalwartResult<()> {
         let (_temp, store, _inbox) = test_store()?;
         store.save_tracking_token(

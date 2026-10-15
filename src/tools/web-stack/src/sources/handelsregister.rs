@@ -763,7 +763,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn shape_query_de_pins_both_domains() {
         let shaped = module()
             .shape_query("WITTENSTEIN SE", &ctx_de())
@@ -780,7 +780,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn shape_query_non_de_returns_none() {
         assert!(module().shape_query("Red Bull GmbH", &ctx_at()).is_none());
         assert!(module()
@@ -788,12 +788,12 @@ mod tests {
             .is_none());
     }
 
-#[test]
+    #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
     }
 
-#[test]
+    #[test]
     fn split_address_typical() {
         let (street, zip, city) =
             super::split_address("Walter-Wittenstein-Straße 1, 97999 Igersheim");
@@ -802,7 +802,7 @@ mod tests {
         assert_eq!(city, "Igersheim");
     }
 
-#[test]
+    #[test]
     fn split_address_no_zip() {
         let (street, zip, city) = super::split_address("Hauptstr. 5, Berlin");
         assert_eq!(street, "Hauptstr. 5");
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(city, "Berlin");
     }
 
-#[test]
+    #[test]
     fn split_address_only_street() {
         let (street, zip, city) = super::split_address("Königsallee 1");
         assert_eq!(street, "Königsallee 1");
@@ -818,7 +818,7 @@ mod tests {
         assert!(city.is_empty());
     }
 
-#[test]
+    #[test]
     fn parse_person_block_single() {
         let row = super::parse_person_block(
             "Schult, Bertram, Igersheim, *17.05.1962, einzelvertretungsberechtigt",
@@ -829,7 +829,7 @@ mod tests {
         assert_eq!(row.first_name.as_deref(), Some("Bertram"));
     }
 
-#[test]
+    #[test]
     fn parse_person_block_picks_first_of_many() {
         let row = super::parse_person_block(
             "Schult, Bertram, Igersheim, *17.05.1962; Brandstetter, Thomas, Igersheim, *03.09.1969",
@@ -840,7 +840,7 @@ mod tests {
         assert_eq!(row.first_name.as_deref(), Some("Bertram"));
     }
 
-#[test]
+    #[test]
     fn parse_person_block_rejects_date_in_first_name_slot() {
         // Defensive: wenn die Quelle das Format kippt und nach dem Nachnamen
         // direkt das Datum kommt, weisen wir den Vornamen ab.
@@ -856,7 +856,7 @@ mod tests {
     /// `erweiterte-suche.xhtml`-Trefferliste; auf das stabile RegPortErg-
     /// Schema reduziert. Captcha-Wall ist hier nicht abgebildet, weil die
     /// Trefferliste erst nach erfolgreichem Captcha gerendert wird.
-#[test]
+    #[test]
     fn extract_search_wittenstein_fixture() {
         let html = include_str!("../../fixtures/sources/handelsregister/search_wittenstein.html");
         let page = SourceReadResult {
@@ -903,7 +903,7 @@ mod tests {
     /// End-to-end extraction against a frozen „Aktueller Abdruck" der
     /// WITTENSTEIN SE. Hier sollen Firma + Anschrift + Vorstand-Person
     /// extrahiert werden.
-#[test]
+    #[test]
     fn extract_detail_wittenstein_fixture() {
         let html = include_str!("../../fixtures/sources/handelsregister/detail_wittenstein.html");
         let page = SourceReadResult {
@@ -955,7 +955,7 @@ mod tests {
         assert_eq!(last.confidence, Confidence::Medium);
     }
 
-#[test]
+    #[test]
     fn extract_empty_on_unrelated_html() {
         let page = SourceReadResult {
             url: "https://example.com/".to_string(),
@@ -971,7 +971,7 @@ mod tests {
         assert!(fields.is_empty(), "unexpected fields: {fields:?}");
     }
 
-#[test]
+    #[test]
     fn extract_returns_empty_on_pdf_payload() {
         let page = SourceReadResult {
             url: "https://www.handelsregister.de/rp_web/foo.pdf".to_string(),
@@ -990,7 +990,7 @@ mod tests {
     /// Regel `SourceError::Blocked` — das ist das dokumentierte Erwartungs-
     /// Resultat, kein Test-Fehler. Echte Field-Extraction läuft hier nur,
     /// wenn ein Operator vor dem Test manuell den Browser-Pfad bedient hat.
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::handelsregister"]
     fn live_smoke_blocked_is_ok() {
         match fetch_raw_search("WITTENSTEIN SE") {

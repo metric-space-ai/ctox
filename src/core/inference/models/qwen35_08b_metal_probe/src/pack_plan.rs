@@ -609,7 +609,7 @@ fn has_class(entries: &[PackEntry], class: TensorClass) -> bool {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn classifies_core_qwen_tensor_names() {
         assert_eq!(
             classify_tensor("model.embed_tokens.weight"),

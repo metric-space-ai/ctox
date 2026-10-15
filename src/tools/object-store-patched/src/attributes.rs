@@ -143,13 +143,13 @@ impl Attributes {
     }
 
     /// Returns the number of [`Attribute`] in this collection
-#[inline]
+    #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Returns true if this contains no [`Attribute`]
-#[inline]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

@@ -271,7 +271,7 @@ mod tests {
         .unwrap();
     }
 
-#[test]
+    #[test]
     fn value_at_path_navigates_json() {
         let p = json!({ "data": { "temp": 23.5 }, "flat": 7 });
         assert_eq!(value_at_path(&p, Some("data.temp")).unwrap(), &json!(23.5));
@@ -281,7 +281,7 @@ mod tests {
     }
 
     // Inbound webhook records a datapoint on the bound signal (full inbound path).
-#[test]
+    #[test]
     fn ingest_records_datapoint_from_payload() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -305,7 +305,7 @@ mod tests {
     }
 
     // End-to-end: an inbound webhook drives a bound widget's watcher → fire.
-#[test]
+    #[test]
     fn ingest_fires_bound_widget_watcher() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -375,7 +375,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn build_outbound_sets_json_and_rejects_bad_url() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -397,7 +397,7 @@ mod tests {
 
     // Register an inbound webhook, then the HTTP handler authenticates the bearer
     // token and ingests to the BOUND signal. Wrong token / unknown id are rejected.
-#[test]
+    #[test]
     fn register_then_handle_http_authenticates_and_ingests() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();

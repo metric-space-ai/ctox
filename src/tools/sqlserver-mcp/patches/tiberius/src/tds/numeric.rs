@@ -48,19 +48,19 @@ impl Numeric {
         self.value / self.pow_scale()
     }
 
-#[inline]
+    #[inline]
     fn pow_scale(self) -> i128 {
         10i128.pow(self.scale as u32)
     }
 
     /// The scale (where is the decimal point) of the value.
-#[inline]
+    #[inline]
     pub fn scale(self) -> u8 {
         self.scale
     }
 
     /// The internal integer value
-#[inline]
+    #[inline]
     pub fn value(self) -> i128 {
         self.value
     }

@@ -57,5 +57,4 @@ pub fn default_prompt_ids(delay_tokens: usize) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

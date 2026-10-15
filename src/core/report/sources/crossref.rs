@@ -214,13 +214,13 @@ fn strip_jats_xml(raw: &str) -> String {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn jats_strip_removes_tags_and_collapses_whitespace() {
         let s = strip_jats_xml("<jats:p>Hello\n\n<jats:italic>world</jats:italic>.</jats:p>");
         assert_eq!(s, "Hello world.");
     }
 
-#[test]
+    #[test]
     fn normalise_doi_handles_prefixes_and_punct() {
         assert_eq!(normalise_doi("doi:10.1000/AbC."), "10.1000/abc");
         assert_eq!(

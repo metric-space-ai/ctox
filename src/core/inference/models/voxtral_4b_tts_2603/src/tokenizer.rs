@@ -138,7 +138,7 @@ pub fn base64_decode(s: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn parse_fake_tekken() {
         let json = br#"{"vocab":[{"token_bytes":"SGk="},{"token_bytes":"IQ=="}]}"#;
         let t = Tekken::from_json_bytes(json).unwrap();

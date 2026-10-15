@@ -413,9 +413,8 @@ mod tests {
     }
 
     // §2A.1 — has_explicit_timestamp: 0 vs >0 (strict > 0, NOT >= 0).
-
     // §2A.2 — normalize_event_timestamp: <=0 → system time; future → clamp.
-#[test]
+    #[test]
     fn normalize_timestamp_zero_and_future_clamp() {
         let sys = 1_000_000;
         assert_eq!(normalize_event_timestamp(0, sys), sys, "0 → system time");
@@ -434,7 +433,7 @@ mod tests {
     }
 
     // §2A.3 — is_outdated is STRICT > (equal timestamps are not outdated).
-#[test]
+    #[test]
     fn is_outdated_strict_greater() {
         let mut ev = AttributeEvent {
             asset_id: "a".into(),
@@ -455,7 +454,7 @@ mod tests {
     }
 
     // §2A.4 — shallow vs deep equality.
-#[test]
+    #[test]
     fn shallow_vs_deep_equality() {
         let mut a = Attribute::new("temp");
         a.value_type = Some(ValueBaseType::Number);
@@ -479,7 +478,7 @@ mod tests {
     }
 
     // §2A.5 — coercion failure rejects the event.
-#[test]
+    #[test]
     fn coerce_value_failure_rejects() {
         assert!(coerce_value(&AttributeValue(json!("notnum")), ValueBaseType::Number).is_err());
         assert!(coerce_value(&AttributeValue(json!("maybe")), ValueBaseType::Boolean).is_err());
@@ -505,7 +504,7 @@ mod tests {
     }
 
     // §2A.6 — descriptor meta merged ONCE; explicit meta not overwritten.
-#[test]
+    #[test]
     fn merge_descriptor_meta_once() {
         let mut meta = MetaMap::new();
         meta.insert("unit".into(), json!("celsius"));
@@ -535,7 +534,7 @@ mod tests {
     }
 
     // §2A.6 — Asset::new_with_type merges descriptor meta into each attribute once.
-#[test]
+    #[test]
     fn asset_new_with_type_merges_meta() {
         let mut m = MetaMap::new();
         m.insert("unit".into(), json!("celsius"));
@@ -556,7 +555,7 @@ mod tests {
     }
 
     // §2A.8 — lazy hydration from value_str.
-#[test]
+    #[test]
     fn hydrate_from_value_str() {
         let mut a = Attribute::new("temp");
         a.value_str = Some("42.5".to_string());

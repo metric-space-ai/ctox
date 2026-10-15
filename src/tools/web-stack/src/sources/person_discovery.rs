@@ -542,7 +542,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn shape_query_pins_both_networks() {
         let shaped = module()
             .shape_query("DO & Co. AG", &ctx_de())
@@ -558,7 +558,7 @@ mod tests {
         assert!(shaped.domains.iter().any(|d| d == "xing.com"));
     }
 
-#[test]
+    #[test]
     fn shape_query_preserves_all_requested_responsibility_queries() {
         for roles in [
             "(CEO OR \"Country Manager\")",
@@ -580,12 +580,12 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
     }
 
-#[test]
+    #[test]
     fn extracts_linkedin_profile_from_classic_title() {
         let h = hit(
             "Attila Dogudan - Founder & CEO - DO & CO AG | LinkedIn",
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(nachname.value, "Dogudan");
     }
 
-#[test]
+    #[test]
     fn extracts_xing_profile_with_bei_separator() {
         let h = hit(
             "Anna Maier - Geschäftsführerin bei Beispiel GmbH - XING",
@@ -644,7 +644,7 @@ mod tests {
             .contains("seniority=c_level"));
     }
 
-#[test]
+    #[test]
     fn dedupes_repeated_profile_urls() {
         let h1 = hit(
             "Anna Maier - CFO - Beispiel GmbH",
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(linkedin_count, 1);
     }
 
-#[test]
+    #[test]
     fn skips_non_profile_urls() {
         let h = hit(
             "DO & Co. AG | LinkedIn",
@@ -676,7 +676,7 @@ mod tests {
         assert!(fields.is_empty());
     }
 
-#[test]
+    #[test]
     fn seniority_classification_covers_main_buckets() {
         assert_eq!(classify_seniority("Vorstand Schaden"), "c_level");
         assert_eq!(classify_seniority("Geschäftsführer"), "c_level");
@@ -688,7 +688,7 @@ mod tests {
         assert_eq!(classify_seniority("Werkstudent"), "unknown");
     }
 
-#[test]
+    #[test]
     fn parse_title_handles_em_dash_and_pipe() {
         let (first, last, role) = parse_title(
             "Edith Hahn-Olsson – Head of Schaden – DONAU AG | LinkedIn",
@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(role.as_deref(), Some("Head of Schaden"));
     }
 
-#[test]
+    #[test]
     fn extract_path_token_handles_trailing_slash_and_query() {
         assert_eq!(
             extract_path_token("https://www.linkedin.com/in/anna/", "/in/").as_deref(),

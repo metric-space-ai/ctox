@@ -457,7 +457,7 @@ pub enum FixtureRunError {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn ordered_phrases_must_match_in_sequence() {
         let checks = evaluate_ordered_phrases(
             &[
@@ -471,7 +471,7 @@ mod tests {
         assert!(checks.iter().all(|check| check.matched));
     }
 
-#[test]
+    #[test]
     fn ordered_phrases_fail_when_order_breaks() {
         let checks = evaluate_ordered_phrases(
             &["gamma".to_string(), "alpha".to_string()],
@@ -493,7 +493,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn fixture_evaluation_checks_lines_groups_and_forbidden_patterns() {
         let fixture = PageFixture {
             id: "sample".to_string(),

@@ -542,7 +542,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_skips_non_dach_countries() {
         // No non-DACH country exists in Country enum today, so this is a
         // structural guard: if Country ever grows (e.g. FR), the explicit
@@ -568,7 +568,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn fetch_direct_empty_company_is_no_match() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test-linkedin"),
@@ -581,7 +581,7 @@ mod tests {
         assert!(matches!(r, Err(SourceError::NoMatch)));
     }
 
-#[test]
+    #[test]
     fn fetch_direct_missing_token_returns_credential_missing() {
         // Pointing at a directory with no SQLite runtime store at all is
         // the equivalent of "key not set" — runtime_config::get returns
@@ -602,7 +602,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn parses_search_fixture_into_hits() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("fixture has hits");
@@ -618,7 +618,7 @@ mod tests {
         assert!(anna.snippet.contains("Geschäftsführerin"));
     }
 
-#[test]
+    #[test]
     fn empty_search_elements_maps_to_no_match() {
         let value: Value =
             serde_json::from_str(r#"{"elements": [], "paging": {"total": 0}}"#).unwrap();
@@ -626,14 +626,14 @@ mod tests {
         assert!(matches!(err, SourceError::NoMatch));
     }
 
-#[test]
+    #[test]
     fn missing_elements_field_maps_to_parse_failed() {
         let value: Value = serde_json::from_str(r#"{"oops": "boom"}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::ParseFailed { .. }));
     }
 
-#[test]
+    #[test]
     fn extracts_funktion_and_linkedin_from_search_hit() {
         let page = dummy_page(
             SEARCH_FIXTURE,
@@ -659,7 +659,7 @@ mod tests {
         assert!(matches!(linkedin.1.confidence, Confidence::High));
     }
 
-#[test]
+    #[test]
     fn extracts_fields_from_detail_body() {
         let page = dummy_page(
             DETAIL_FIXTURE,
@@ -691,13 +691,13 @@ mod tests {
             .any(|(k, _)| matches!(k, FieldKey::PersonGeschlecht)));
     }
 
-#[test]
+    #[test]
     fn extract_fields_returns_nothing_on_non_json_input() {
         let page = dummy_page("<html><body>not json</body></html>", "https://x/y");
         assert!(module().extract_fields(&page).is_empty());
     }
 
-#[test]
+    #[test]
     fn headline_role_extraction_strips_company_suffix() {
         assert_eq!(
             extract_role_from_headline("Geschäftsführerin Vertrieb bei WITTENSTEIN SE"),
@@ -714,7 +714,7 @@ mod tests {
         assert!(extract_role_from_headline("   bei Firma").is_none());
     }
 
-#[test]
+    #[test]
     fn read_localized_handles_plain_string_and_locale_object() {
         let raw = serde_json::json!("Hallo");
         assert_eq!(read_localized(Some(&raw)), Some("Hallo".to_string()));
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(read_localized(Some(&raw)), Some("Hi".to_string()));
     }
 
-#[test]
+    #[test]
     fn person_to_hit_skips_entries_without_public_identifier() {
         let raw = serde_json::json!({
             "firstName": {"localized": {"de_DE": "A"}, "preferredLocale": {"country":"DE","language":"de"}},
@@ -742,7 +742,7 @@ mod tests {
         assert!(person_to_hit(&raw).is_none());
     }
 
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::linkedin"]
     fn live_search_smoke_handles_credential_missing_cleanly() {
         // Live smoke test. With no LINKEDIN_SALES_NAV_TOKEN in the test

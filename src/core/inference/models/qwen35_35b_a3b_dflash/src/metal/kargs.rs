@@ -1098,26 +1098,26 @@ mod tests {
     // Spot-check a handful of the ported structs against hand-computed
     // sizes. If these drift, the vendored header got updated and the
     // Rust ports must be re-synced.
-#[test]
+    #[test]
     fn size_cpy_matches() {
         // 1 i64 (nk0) + 4 i64 (ne00..03) + 4 u64 (nb00..03) +
         // 4 i64 (ne0..3) + 4 u64 (nb0..3) = 17*8 = 136 bytes.
         assert_eq!(size_of::<KargsCpy>(), 136);
     }
 
-#[test]
+    #[test]
     fn size_argmax_matches() {
         // i64 (ne00) + u64 (nb01) = 16 bytes.
         assert_eq!(size_of::<KargsArgmax>(), 16);
     }
 
-#[test]
+    #[test]
     fn size_sum_matches() {
         // u64 (np) = 8 bytes.
         assert_eq!(size_of::<KargsSum>(), 8);
     }
 
-#[test]
+    #[test]
     fn size_rope_matches() {
         // 4 i32 (ne00..03) + 4 u64 (nb00..03) + 4 i32 (ne0..3) +
         // 4 u64 (nb0..3) + 3 i32 (n_past, n_dims, n_ctx_orig) +

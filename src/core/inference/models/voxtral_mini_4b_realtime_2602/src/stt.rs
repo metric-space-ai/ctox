@@ -286,13 +286,13 @@ impl VoxtralQ4Runtime {
             Err(Error::Unsupported("native STT ggml runtime is not linked"))
         }
     }
-#[cfg(not(ctox_ggml_unavailable))]
+    #[cfg(not(ctox_ggml_unavailable))]
     fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
         let runtime = GgmlVoxtralRuntime::load(gguf_path, backend)?;
         Ok(Self { runtime })
     }
 
-#[cfg(ctox_ggml_unavailable)]
+    #[cfg(ctox_ggml_unavailable)]
     fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
         let _ = (gguf_path, backend);
         Err(Error::Unsupported(
@@ -300,12 +300,12 @@ impl VoxtralQ4Runtime {
         ))
     }
 
-#[cfg(not(ctox_ggml_unavailable))]
+    #[cfg(not(ctox_ggml_unavailable))]
     fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
         self.runtime.transcribe_samples(samples, sample_rate)
     }
 
-#[cfg(ctox_ggml_unavailable)]
+    #[cfg(ctox_ggml_unavailable)]
     fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
         let _ = (samples, sample_rate);
         Err(Error::Unsupported(
@@ -406,7 +406,7 @@ pub fn shape_contract() -> Vec<(&'static str, usize)> {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn transcribe_does_not_return_fake_text() {
         let model = VoxtralSttModel::new(VoxtralSttConfig::default(), VoxtralSttBackend::Cpu);
         let wav = tiny_wav();
@@ -422,14 +422,14 @@ mod tests {
             .contains("requires a ggml-compatible Q4 GGUF"));
     }
 
-#[test]
+    #[test]
     fn unavailable_backend_is_rejected_before_artifact_loading() {
         let error = VoxtralSttModel::from_gguf("not-a-model.gguf", VoxtralSttBackend::Wgsl)
             .expect_err("an unimplemented GPU backend must not run on CPU");
         assert!(error.to_string().contains("backend is not compiled"));
     }
 
-#[test]
+    #[test]
     fn streaming_without_loaded_model_is_rejected() {
         let model = VoxtralSttModel::new(VoxtralSttConfig::default(), VoxtralSttBackend::Cpu);
         assert!(model

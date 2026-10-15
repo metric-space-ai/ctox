@@ -575,8 +575,6 @@ mod tests {
     }
 
     /// See CONTRIBUTING.md for the MinIO setup for this test.
-
     /// Integration test that ensures I/O is done on an alternate threadpool
     /// when using the `SpawnedReqwestConnector`.
-
 }

@@ -240,7 +240,7 @@ impl Drop for FenceTiming {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn histograms_use_inclusive_bounds_and_saturate_without_panicking() {
         let mut histogram = Histogram::default();
         for us in [100, 101, 500, 501, 1_000_000, 1_000_001] {

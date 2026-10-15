@@ -537,7 +537,7 @@ mod tests {
         ensure_schema(&conn).unwrap();
         conn
     }
-#[test]
+    #[test]
     fn fixture_and_central_policy_keep_private_crew_fields_and_grants_closed() {
         use crate::business_os::policy::*;
         let fixture: serde_json::Value =
@@ -600,7 +600,7 @@ mod tests {
             }
         }
     }
-#[test]
+    #[test]
     fn seed_grey_lumi_gets_a_colour_but_owner_colours_stay() {
         let conn = fixture();
         conn.execute(
@@ -649,7 +649,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn migration_preserves_existing_rows_and_seed_edits() {
         let conn = fixture();
         conn.execute(
@@ -678,7 +678,7 @@ mod tests {
             1
         );
     }
-#[test]
+    #[test]
     fn selection_manual_continuity_archive_and_stable_ties() {
         let mut all = members(&fixture()).unwrap();
         let mut task = TaskTraits {
@@ -707,7 +707,7 @@ mod tests {
         task.module = Some("tickets".into());
         assert_eq!(select(&all, &task, &[], 0).unwrap().member_id, "crew-pico");
     }
-#[test]
+    #[test]
     fn selection_scores_history_and_recent_failures_without_ambient_time() {
         let all = members(&fixture()).unwrap();
         let task = TaskTraits {
@@ -755,7 +755,7 @@ mod tests {
         );
         assert!(select(&[], &task, &[], 0).is_none());
     }
-#[test]
+    #[test]
     fn learnings_require_evidence_and_prose() {
         let mut r = Retrospective {
             retrospective: "Die Prüfung hat den Fehler eingegrenzt.".into(),
@@ -775,5 +775,4 @@ mod tests {
         assert!(r.validate(true, None).is_err());
         assert_eq!(normalized("  Bitte  PRÜFEN\n"), "bitte prüfen");
     }
-
 }

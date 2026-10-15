@@ -2053,7 +2053,7 @@ mod tests {
         path
     }
 
-#[test]
+    #[test]
     fn optional_secret_read_distinguishes_absence_from_unavailable_or_corrupt_storage() -> Result<()>
     {
         let root = tempfile::tempdir()?;
@@ -2097,7 +2097,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn optional_read_never_replaces_a_lost_key_and_can_migrate_an_existing_key() -> Result<()> {
         let root = tempfile::tempdir()?;
         let scope = "credentials";
@@ -2150,7 +2150,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn secret_store_encrypts_values_at_rest_and_round_trips() -> Result<()> {
         let root = temp_root("roundtrip");
         fs::create_dir_all(&root)?;
@@ -2219,7 +2219,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn secret_snapshot_reads_committed_issuer_while_writer_and_master_fence_are_held() -> Result<()>
     {
         let root = tempfile::tempdir()?;
@@ -2255,7 +2255,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn secret_snapshot_does_not_block_rotation_and_next_read_reloads_it() -> Result<()> {
         let root = tempfile::tempdir()?;
         put_secret(
@@ -2287,7 +2287,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn secret_snapshot_missing_authority_never_initializes_runtime() -> Result<()> {
         let root = tempfile::tempdir()?;
         let mut entered = false;
@@ -2303,7 +2303,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn current_secret_tuple_fences_all_records_and_reloads_rotated_values() -> Result<()> {
         let root = tempfile::tempdir()?;
         for (name, value) in [("issuer", "issuer-before"), ("grant", "grant-before")] {
@@ -2356,7 +2356,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn current_secret_publication_fences_rotation_and_reads_the_next_issuer() -> Result<()> {
         let root = tempfile::tempdir()?;
         persistence::store_text_value(root.path(), "publication_fixture", Some("present"))?;
@@ -2417,7 +2417,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn current_secret_publication_denies_busy_missing_and_conflicting_authority() -> Result<()> {
         let root = tempfile::tempdir()?;
         let mut called = false;
@@ -2496,7 +2496,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn repeated_secret_reads_observe_late_legacy_key_conflicts_and_rotation() -> Result<()> {
         let root = tempfile::tempdir()?;
         persistence::store_text_value(root.path(), "secret_reader_fixture", Some("present"))?;
@@ -2556,7 +2556,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn credential_tuple_delete_is_atomic_and_idempotent() -> Result<()> {
         let root = temp_root("tuple-delete");
         fs::create_dir_all(&root)?;
@@ -2615,17 +2615,17 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn llm_proxy_api_key_is_treated_as_encrypted_credential() {
         assert!(is_secret_key("CTOX_LLM_PROXY_API_KEY"));
     }
 
-#[test]
+    #[test]
     fn turn_edge_key_is_treated_as_encrypted_credential() {
         assert!(is_secret_key("CTOX_TURN_EDGE_KEY"));
     }
 
-#[test]
+    #[test]
     fn secret_intake_stores_secret_and_rewrites_memory_reference() -> Result<()> {
         let root = temp_root("intake");
         fs::create_dir_all(&root)?;
@@ -2676,7 +2676,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn secret_stdin_value_strips_one_terminal_line_ending() {
         assert_eq!(
             strip_single_trailing_line_ending("secret-value\n".to_string()),
@@ -2696,14 +2696,14 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn secret_stdin_value_reader_reads_without_requiring_arg_value() -> Result<()> {
         let value = read_secret_value_from_reader(std::io::Cursor::new("stdin-secret\r\n"))?;
         assert_eq!(value.as_str(), "stdin-secret");
         Ok(())
     }
 
-#[test]
+    #[test]
     fn auto_intake_prompt_secrets_stores_and_rewrites_high_confidence_literals() -> Result<()> {
         let root = temp_root("prompt-auto-intake");
         fs::create_dir_all(&root)?;
@@ -2760,7 +2760,7 @@ vercel-password-123
         Ok(())
     }
 
-#[test]
+    #[test]
     fn auto_intake_does_not_rewrite_workspace_paths_as_secrets() -> Result<()> {
         let root = temp_root("prompt-auto-intake-workspace-path");
         fs::create_dir_all(&root)?;

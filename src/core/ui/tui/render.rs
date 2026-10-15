@@ -4899,7 +4899,7 @@ mod tests {
         out
     }
 
-#[test]
+    #[test]
     fn chat_sidebar_footer_visible_in_24_rows() {
         let backend = TestBackend::new(150, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -4911,7 +4911,7 @@ mod tests {
         assert!(text.contains("quit"), "{text}");
     }
 
-#[test]
+    #[test]
     fn chat_view_shows_turn_state_and_structured_roles() {
         let backend = TestBackend::new(140, 36);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5009,7 +5009,7 @@ mod tests {
         assert!(text.contains("YOU"), "{text}");
     }
 
-#[test]
+    #[test]
     fn internal_follow_up_turns_render_as_user_messages() {
         let backend = TestBackend::new(140, 34);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5035,7 +5035,7 @@ mod tests {
         assert!(text.contains("execution timed out after 180s"), "{text}");
     }
 
-#[test]
+    #[test]
     fn chat_header_shows_boost_state() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5054,7 +5054,7 @@ mod tests {
         assert!(text.contains("7m left"), "{text}");
     }
 
-#[test]
+    #[test]
     fn chat_header_collapses_identical_base_and_active_models() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5073,7 +5073,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn chat_header_shows_api_source_and_gpu_allocations() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5101,7 +5101,7 @@ mod tests {
         assert!(text.contains("GPU0 embed 512M"), "{text}");
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_distinguishes_remote_chat_from_local_load() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5131,7 +5131,7 @@ mod tests {
         assert!(!text.contains("gpu0"), "{text}");
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_keeps_preview_wording_in_estimate_mode() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5160,7 +5160,7 @@ mod tests {
         assert!(text.contains("gpu0     qwen35 11264M"), "{text}");
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_lists_aux_gpu_roles_explicitly() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5203,7 +5203,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_shows_loop_and_aux_targets_with_zero_progress() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5257,7 +5257,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn chat_header_shows_targeted_aux_progress_ranges() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5305,7 +5305,7 @@ mod tests {
         assert!(!text.contains("warmup expected"), "{text}");
     }
 
-#[test]
+    #[test]
     fn chat_header_overlays_target_ranges_on_live_idle_gpus() {
         let backend = TestBackend::new(180, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5372,7 +5372,7 @@ mod tests {
         assert!(text.contains("GPU2 idle"), "{text}");
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_shows_effective_cache_type_in_plan() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5387,7 +5387,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn settings_snapshot_uses_off_when_plan_disables_paged_attention() {
         let mut app = test_app();
         app.ensure_settings_items_loaded();
@@ -5402,7 +5402,7 @@ mod tests {
         assert!(text.contains("cache     off"), "{text}");
     }
 
-#[test]
+    #[test]
     fn work_flow_view_renders_structured_blocks_natively() {
         use crate::service::harness_flow as hf;
         let backend = TestBackend::new(140, 36);
@@ -5472,7 +5472,7 @@ mod tests {
         assert!(text.contains("Review approved"), "{text}");
     }
 
-#[test]
+    #[test]
     fn skills_view_shows_skill_details_and_resources() {
         let backend = TestBackend::new(140, 36);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5500,7 +5500,7 @@ mod tests {
         assert!(text.contains("install-patterns.md"), "{text}");
     }
 
-#[test]
+    #[test]
     fn skills_view_keeps_selected_skill_inside_visible_window() {
         let backend = TestBackend::new(140, 18);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5528,7 +5528,7 @@ mod tests {
         assert!(!text.contains("skill-29"), "{text}");
     }
 
-#[test]
+    #[test]
     fn secret_details_text_masks_stored_and_draft_values() {
         let mut app = test_app();
         app.page = Page::Settings;

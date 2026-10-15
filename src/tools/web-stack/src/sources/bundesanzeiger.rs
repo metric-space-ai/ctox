@@ -424,7 +424,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn shape_query_de_pins_domain_and_keyword() {
         let shaped = module()
             .shape_query("WITTENSTEIN SE", &ctx_de())
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(shaped.domains, vec!["bundesanzeiger.de".to_string()]);
     }
 
-#[test]
+    #[test]
     fn shape_query_unknown_country_still_allowed() {
         // No country pin → still in. The orchestrator may not have a
         // country at hand for the initial query phase.
@@ -445,12 +445,12 @@ mod tests {
         assert!(shaped.query.contains("Jahresabschluss"));
     }
 
-#[test]
+    #[test]
     fn shape_query_non_de_returns_none() {
         assert!(module().shape_query("Red Bull GmbH", &ctx_at()).is_none());
     }
 
-#[test]
+    #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
     }
@@ -463,7 +463,7 @@ mod tests {
     /// (`https://www.bundesanzeiger.de/pub/de/suche?13` mit `name=Wittenstein`),
     /// auf eine Treffer-Zeile reduziert; Treffer-Zeile mit `data-id` und
     /// dem `.title`-Block ist die offizielle DOM-Struktur.
-#[test]
+    #[test]
     fn extract_search_results_html_fixture() {
         let html = include_str!("../../fixtures/sources/bundesanzeiger/search_wittenstein.html");
         let page = SourceReadResult {
@@ -501,7 +501,7 @@ mod tests {
     /// repräsentativ — der Orchestrator-Pfad liefert genau diesen
     /// Plaintext nach Lauf durch `ctox_pdf_parse::parse_pdf_bytes` mit
     /// `OutputFormat::Text`.
-#[test]
+    #[test]
     fn extract_jahresabschluss_pdf_fixture() {
         let text = include_str!("../../fixtures/sources/bundesanzeiger/detail_wittenstein.txt");
         let page = SourceReadResult {
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(mitarbeiter.confidence, Confidence::High);
     }
 
-#[test]
+    #[test]
     fn umsatz_keeps_current_year_when_prior_year_column_is_adjacent() {
         // Multi-column GuV: current and prior-year figures side by side.
         // Only the first (current-year) value must be captured, never the two
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(normalise_amount("(1.234)"), "-1.234");
     }
 
-#[test]
+    #[test]
     fn extract_pdf_handles_mitarbeiter_alias() {
         // Some publishers print "Mitarbeiter im Jahresdurchschnitt" instead
         // of "Arbeitnehmer im Jahresdurchschnitt"; the regex must accept both.
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(mitarbeiter.value, "42");
     }
 
-#[test]
+    #[test]
     fn extract_pdf_with_thousands_separator_in_count() {
         let text = "FOO AG\n\nArbeitnehmer im Jahresdurchschnitt   1.842\n";
         let page = SourceReadResult {
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(mitarbeiter.value, "1842");
     }
 
-#[test]
+    #[test]
     fn extract_empty_on_unrelated_html() {
         let page = SourceReadResult {
             url: "https://example.com/".to_string(),
@@ -613,12 +613,12 @@ mod tests {
         assert!(fields.is_empty(), "unexpected fields: {fields:?}");
     }
 
-#[test]
+    #[test]
     fn normalise_amount_parens_to_minus() {
         assert_eq!(normalise_amount(" (123.456,00) "), "-123.456,00");
     }
 
-#[test]
+    #[test]
     fn normalise_amount_strips_inner_whitespace() {
         assert_eq!(normalise_amount("485 .732 .145,00"), "485.732.145,00");
     }
@@ -630,7 +630,7 @@ mod tests {
     ///
     /// Bundesanzeiger drosselt aggressiv (HTTP 429), deshalb soft-skipped
     /// dieser Test bei Netzwerk- oder Status-Fehlern statt zu failen.
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -- --ignored sources::bundesanzeiger::live_wittenstein"]
     fn live_wittenstein() {
         let url = "https://www.bundesanzeiger.de/pub/de/suche?13&name=Wittenstein";

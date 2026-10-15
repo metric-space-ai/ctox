@@ -472,7 +472,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
-#[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self

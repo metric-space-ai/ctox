@@ -1175,7 +1175,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn assess_marks_repeated_blocked_context_as_critical() {
         let snapshot = sample_snapshot(
             vec![
@@ -1209,7 +1209,7 @@ mod tests {
             .any(|warning| warning.severity == WarningSeverity::Critical));
     }
 
-#[test]
+    #[test]
     fn warns_when_mission_contract_and_failure_memory_are_missing() {
         let snapshot = sample_snapshot(
             vec![
@@ -1261,7 +1261,7 @@ mod tests {
             .any(|warning| warning.code == "failure_memory_missing"));
     }
 
-#[test]
+    #[test]
     fn verification_gap_counts_as_mission_contract_coverage() {
         let snapshot = sample_snapshot(vec![("user", "continue progress report")], 10_000);
         let continuity = lcm::ContinuityShowAll {
@@ -1284,7 +1284,7 @@ mod tests {
             .any(|warning| warning.code == "mission_contract_thin"));
     }
 
-#[test]
+    #[test]
     fn forgotten_lines_count_as_negative_memory() {
         let snapshot = sample_snapshot(
             vec![
@@ -1315,7 +1315,7 @@ mod tests {
             .any(|warning| warning.code == "failure_memory_missing"));
     }
 
-#[test]
+    #[test]
     fn critical_warning_overrides_healthy_score_band() {
         let snapshot = sample_snapshot(vec![("user", "continue task")], 0);
         let mut continuity = healthy_continuity();
@@ -1326,7 +1326,7 @@ mod tests {
         assert!(health.summary.contains("strongest severity critical"));
     }
 
-#[test]
+    #[test]
     fn repair_governor_blocks_recursive_repair() {
         let snapshot = sample_snapshot(vec![("user", "continue task")], 120_000);
         let mut continuity = healthy_continuity();
@@ -1344,7 +1344,7 @@ mod tests {
         assert!(decision.reason.contains("already is"));
     }
 
-#[test]
+    #[test]
     fn preempt_matches_emitted_critical_codes() {
         let snapshot = super::ContextHealthSnapshot {
             conversation_id: 1,

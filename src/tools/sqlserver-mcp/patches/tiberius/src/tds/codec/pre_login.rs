@@ -57,7 +57,7 @@ impl PreloginMessage {
         }
     }
 
-#[cfg(any(
+    #[cfg(any(
         feature = "rustls",
         feature = "native-tls",
         feature = "vendored-openssl"
@@ -76,7 +76,7 @@ impl PreloginMessage {
         }
     }
 
-#[cfg(not(any(
+    #[cfg(not(any(
         feature = "rustls",
         feature = "native-tls",
         feature = "vendored-openssl"

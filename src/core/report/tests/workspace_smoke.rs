@@ -83,3 +83,4 @@ fn workspace_skill_input_revision_mode_has_goals() {
         "revision mode goals[] should contain the supplied goal"
     );
 }
+

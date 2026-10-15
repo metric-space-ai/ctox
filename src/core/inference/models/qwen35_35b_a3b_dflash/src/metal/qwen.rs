@@ -375,7 +375,7 @@ impl Mlp {
     /// Temporary buffers `tmp_gate`, `tmp_up`, `tmp_silu`, `tmp_prod`
     /// must each be sized for `M * intermediate * sizeof(bfloat16)`.
     /// Caller-owned to avoid per-call allocation on the hot path.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         enc: &ComputeEncoder,
@@ -429,7 +429,7 @@ pub struct Bf16Mlp {
 }
 
 impl Bf16Mlp {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         enc: &ComputeEncoder,
@@ -470,7 +470,7 @@ pub struct Bf16Attention {
 }
 
 impl Bf16Attention {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_cross(
         &self,
         enc: &ComputeEncoder,
@@ -860,7 +860,7 @@ impl Attention {
     ///   * `work`        : pre-allocated per-runtime work buffers
     ///                     (q/k/v_proj, attn_out).
     ///   * `n_tokens`    : number of tokens in this chunk.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         enc: &ComputeEncoder,
@@ -1300,7 +1300,7 @@ impl GatedDeltaNet {
     ///   * `conv_state` : `[kernel-1, conv_channels]` — updated in place.
     ///   * `ssm_state`  : `[Hv, Dv, Dk]` raw bf16 state buffer.
     ///   * `work`       : pre-allocated scratch buffers.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         enc: &ComputeEncoder,

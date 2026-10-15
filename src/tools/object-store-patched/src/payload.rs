@@ -250,13 +250,13 @@ impl PutPayloadMut {
     }
 
     /// Returns `true` if this [`PutPayloadMut`] contains no bytes
-#[inline]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Returns the total length of the [`Bytes`] in this payload
-#[inline]
+    #[inline]
     pub fn content_length(&self) -> usize {
         self.len
     }

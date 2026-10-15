@@ -2274,7 +2274,6 @@ mod tests {
     /// STALE (an old/deleted release dir), then write the real parquet at the
     /// resolved live path. The projection must publish one catalog document:
     /// no embedded rows, the resolved path, and the live row count.
-
     fn assert_catalog_document_has_no_rows(doc: &Value) {
         for key in [
             "rows",
@@ -2353,7 +2352,7 @@ mod tests {
             .collect()
     }
 
-#[test]
+    #[test]
     fn evidence_normalization_derives_eligibility_and_preserves_candidates() -> anyhow::Result<()> {
         let valid = json!({
             "source_id": "src-1",
@@ -2441,7 +2440,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn imported_evidence_requires_matching_server_web_receipt() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
@@ -2525,7 +2524,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn imported_evidence_accepts_untampered_managed_research_snapshot() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
@@ -2572,7 +2571,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn imported_data_evidence_requires_untampered_server_artifact() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
@@ -2652,7 +2651,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn formatted_flags_and_hashes_do_not_qualify_without_full_gate() -> anyhow::Result<()> {
         let row = json!({
             "source_id": "src-1",
@@ -2677,7 +2676,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn claim_normalization_requires_claim_source_and_snapshot_trace_ids() -> anyhow::Result<()> {
         let mut row = json!({
             "claim_id": "claim-1",
@@ -2724,8 +2723,7 @@ mod tests {
     }
 
     /// An archived catalog row must not be projected.
-
-#[test]
+    #[test]
     fn knowledge_table_active_tables_filter_domain_and_skip_archived() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();

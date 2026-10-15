@@ -225,7 +225,7 @@ pub fn required_tensors() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn synthesize_fails_without_loaded_artifacts() {
         let model = VoxtralTtsModel::new(VoxtralTtsConfig::default(), VoxtralTtsBackend::Cpu);
         let err = model

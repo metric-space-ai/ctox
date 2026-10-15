@@ -228,7 +228,7 @@ impl WsAgent {
     }
 
     /// Test seam: override the reconnect clock with a deterministic source.
-#[cfg(test)]
+    #[cfg(test)]
     fn set_clock(&mut self, clock: Clock) {
         self.clock = clock;
     }
@@ -681,7 +681,7 @@ mod tests {
 
     // Secret redaction: WsConfig Debug must never print the secret-store key name
     // or the verbatim connect frames, and redact_auth must strip auth material.
-#[test]
+    #[test]
     fn ws_config_debug_redacts_secret_key_and_frames() {
         let cfg = WsConfig {
             url: "wss://device.example/ws".into(),
@@ -704,7 +704,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn redact_auth_strips_authorization_material() {
         let msg = "ws connect failed: 401 with authorization: Bearer auth-secret";
         let red = redact_auth(msg);
@@ -892,7 +892,7 @@ mod tests {
 
     // --- tests -------------------------------------------------------------
 
-#[test]
+    #[test]
     fn new_rejects_non_ws_url() {
         let root = std::env::temp_dir();
         let ctx = AgentContext {
@@ -904,7 +904,7 @@ mod tests {
         assert!(WsAgent::new(ctx).is_err());
     }
 
-#[test]
+    #[test]
     fn new_rejects_cleartext_remote_websocket_url() {
         let root = std::env::temp_dir();
         let ctx = AgentContext {
@@ -919,7 +919,7 @@ mod tests {
         assert!(err.to_string().contains("use wss:// for remote devices"));
     }
 
-#[test]
+    #[test]
     fn new_accepts_secure_remote_websocket_url() {
         let root = std::env::temp_dir();
         let ctx = AgentContext {
@@ -933,7 +933,7 @@ mod tests {
 
     /// Whole-frame value routing: a pushed device frame becomes an inbound
     /// reading carrying the raw value, ready for the runtime's base layer.
-#[test]
+    #[test]
     fn inbound_frame_maps_to_attribute_reading_value() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -964,7 +964,7 @@ mod tests {
     }
 
     /// The whole-frame mode (no value_pointer) carries the entire frame body.
-#[test]
+    #[test]
     fn inbound_whole_frame_no_pointer() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -980,7 +980,7 @@ mod tests {
     }
 
     /// Routing gate: only frames whose match_pointer == match_value reach a link.
-#[test]
+    #[test]
     fn inbound_match_gate_routes_only_addressed_frames() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -1010,7 +1010,7 @@ mod tests {
     }
 
     /// Outbound write reaches the device socket (the loopback server records it).
-#[test]
+    #[test]
     fn outbound_write_sends_frame_to_device() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     /// unlink stops routing without disturbing the connection (§2A.27).
-#[test]
+    #[test]
     fn unlink_stops_routing() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -1057,7 +1057,7 @@ mod tests {
     /// post-reconnect push lands again. The reconnect TIMING is driven entirely
     /// by the injected clock — `poll_ready_to_retry` only advances once the
     /// injected `now` passes `next_attempt_at_ms`.
-#[test]
+    #[test]
     fn reconnect_after_socket_drop_uses_injected_clock() {
         let server = LoopbackServer::start();
         let root = std::env::temp_dir();
@@ -1123,7 +1123,7 @@ mod tests {
     /// connect() before `next_attempt_at_ms` stays WAITING; once the injected
     /// clock advances past it, connect() advances. Uses a dead endpoint so the
     /// dial always fails and the SM parks in WAITING deterministically.
-#[test]
+    #[test]
     fn waiting_backoff_is_gated_by_injected_clock() {
         let root = std::env::temp_dir();
         // A reserved-unroutable port that refuses fast: 127.0.0.1:0 then closed.

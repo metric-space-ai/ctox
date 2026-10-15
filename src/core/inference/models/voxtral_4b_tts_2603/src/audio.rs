@@ -255,7 +255,7 @@ pub fn mel_filter_bank(
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn resample_length() {
         let x = vec![0.0; 48_000];
         let y = linear_resample(&x, 48_000, 16_000);

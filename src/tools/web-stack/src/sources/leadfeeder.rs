@@ -546,7 +546,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_engages_for_each_dach_country() {
         // The Country enum currently only covers DACH, so there is no
         // negative variant we could feed in. We instead assert the
@@ -569,7 +569,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_missing_credential_returns_credential_missing() {
         // Point root at a directory that definitely has no runtime config
         // SQLite — runtime_config::get returns None, fetch_direct must
@@ -590,7 +590,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_empty_company_is_no_match() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-nonexistent-leadfeeder"),
@@ -601,7 +601,7 @@ mod tests {
         assert!(matches!(result, Err(SourceError::NoMatch)));
     }
 
-#[test]
+    #[test]
     fn lead_fixture_yields_firma_email_and_domain_with_high_confidence() {
         let page = dummy_page(
             LEADS_FIXTURE,
@@ -624,7 +624,7 @@ mod tests {
         assert!(matches!(firma_domain.1.confidence, Confidence::High));
     }
 
-#[test]
+    #[test]
     fn contact_fixture_yields_person_email_with_medium_confidence() {
         let page = dummy_page(
             CONTACTS_FIXTURE,
@@ -648,13 +648,13 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn extract_fields_returns_empty_when_text_is_not_json() {
         let page = dummy_page("<html>not json</html>", "https://example.invalid");
         assert!(module().extract_fields(&page).is_empty());
     }
 
-#[test]
+    #[test]
     fn extract_fields_filters_garbage_emails() {
         let body = r#"{
             "data": [{
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(domain.1.value, "example.com");
     }
 
-#[test]
+    #[test]
     fn domain_from_url_strips_scheme_and_www() {
         assert_eq!(
             domain_from_url("https://www.Wittenstein.de/de"),
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(domain_from_url(""), "");
     }
 
-#[test]
+    #[test]
     fn looks_like_email_accepts_real_addresses_and_rejects_others() {
         assert!(looks_like_email("a@b.de"));
         assert!(looks_like_email("foo.bar@example.co.uk"));
@@ -704,7 +704,7 @@ mod tests {
         assert!(!looks_like_email("a b@c.de"));
     }
 
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::leadfeeder"]
     fn live_credential_missing_or_smoke() {
         // The repo has no Leadfeeder token by default; the live test

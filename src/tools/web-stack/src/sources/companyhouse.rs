@@ -446,7 +446,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn shape_query_de_pins_domain() {
         let shaped = module()
             .shape_query("Manfred Schneider", &ctx_de())
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(shaped.domains, vec!["companyhouse.de".to_string()]);
     }
 
-#[test]
+    #[test]
     fn shape_query_unknown_country_still_shapes() {
         // Companyhouse-Matrix referenziert keine Nicht-DE-Zeile, also ist
         // None ⇒ erlaubt; Source-Filtering nach Land übernimmt Phase 4.
@@ -465,14 +465,14 @@ mod tests {
             .is_some());
     }
 
-#[test]
+    #[test]
     fn shape_query_non_de_returns_none() {
         assert!(module()
             .shape_query("Manfred Schneider", &ctx_at())
             .is_none());
     }
 
-#[test]
+    #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
     }
@@ -486,7 +486,7 @@ mod tests {
     /// Zeitpunkt offline waren. Struktur entspricht dem öffentlich
     /// indexierten Heading-Pattern (Titel + Vorname + Nachname im `<h1>`,
     /// gefolgt von Mandaten-Liste).
-#[test]
+    #[test]
     fn extract_person_fixture() {
         let html =
             include_str!("../../fixtures/sources/companyhouse/person_manfred_schneider.html");
@@ -527,7 +527,7 @@ mod tests {
     }
 
     /// End-to-end extraction against a frozen Companyhouse company profile.
-#[test]
+    #[test]
     fn extract_company_fixture() {
         let html = include_str!("../../fixtures/sources/companyhouse/firma_bayer_ag.html");
         let page = SourceReadResult {
@@ -556,7 +556,7 @@ mod tests {
         assert!(by_key.get(&FieldKey::PersonNachname).is_none());
     }
 
-#[test]
+    #[test]
     fn extract_unrelated_html_returns_nothing() {
         let page = SourceReadResult {
             url: "https://www.companyhouse.de/login".to_string(),
@@ -575,7 +575,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn extract_no_h1_returns_nothing() {
         let page = SourceReadResult {
             url: "https://www.companyhouse.de/person/Empty".to_string(),
@@ -591,7 +591,7 @@ mod tests {
         assert!(fields.is_empty());
     }
 
-#[test]
+    #[test]
     fn extract_skips_pdf() {
         let page = SourceReadResult {
             url: "https://www.companyhouse.de/person/Manfred-Schneider".to_string(),
@@ -607,7 +607,7 @@ mod tests {
         assert!(fields.is_empty(), "PDFs are skipped by contract");
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_simple() {
         let parsed = parse_person_heading("Dr. Manfred Schneider").expect("parsed");
         assert_eq!(parsed.title.as_deref(), Some("Dr."));
@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(parsed.last_name.as_deref(), Some("Schneider"));
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_multi_title() {
         let parsed = parse_person_heading("Prof. Dr.-Ing. Anna Müller").expect("parsed");
         assert_eq!(parsed.title.as_deref(), Some("Prof. Dr.-Ing."));
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(parsed.last_name.as_deref(), Some("Müller"));
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_no_title() {
         let parsed = parse_person_heading("Hans Meier").expect("parsed");
         assert!(parsed.title.is_none());
@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(parsed.last_name.as_deref(), Some("Meier"));
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_with_nobility_particle() {
         let parsed = parse_person_heading("Dr. Anna-Maria von der Heide").expect("parsed");
         assert_eq!(parsed.title.as_deref(), Some("Dr."));
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(parsed.last_name.as_deref(), Some("von der Heide"));
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_single_token() {
         let parsed = parse_person_heading("Schneider").expect("parsed");
         assert!(parsed.title.is_none());
@@ -647,13 +647,13 @@ mod tests {
         assert_eq!(parsed.last_name.as_deref(), Some("Schneider"));
     }
 
-#[test]
+    #[test]
     fn parse_person_heading_empty() {
         assert!(parse_person_heading("").is_none());
         assert!(parse_person_heading("   ").is_none());
     }
 
-#[test]
+    #[test]
     fn is_person_url_matches_canonical_path() {
         assert!(is_person_url(
             "https://www.companyhouse.de/person/Manfred-Schneider"
@@ -665,7 +665,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn is_company_url_excludes_known_non_profiles() {
         assert!(is_company_url(
             "https://www.companyhouse.de/Bayer-AG-Leverkusen"
@@ -685,7 +685,7 @@ mod tests {
     /// schlägt nur dann fehl, wenn ein 200-Body zurückkommt und der Parser
     /// nichts daraus zieht.
     ///   `cargo test -p ctox-web-stack -- --ignored sources::companyhouse::live`
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -- --ignored sources::companyhouse::live_person"]
     fn live_person() {
         let url = "https://www.companyhouse.de/person/Manfred-Schneider";

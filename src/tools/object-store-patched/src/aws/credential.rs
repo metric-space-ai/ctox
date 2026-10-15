@@ -302,7 +302,7 @@ impl<'a> AwsAuthorizer<'a> {
             .append_pair("X-Amz-Signature", &signature);
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn string_to_sign(
         &self,
         date: DateTime<Utc>,
@@ -870,5 +870,4 @@ mod tests {
     use std::env;
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
-
 }

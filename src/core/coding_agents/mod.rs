@@ -219,7 +219,7 @@ fn help_outcome() -> Value {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn operator_turn_rejects_ambiguous_preset_and_raw_model() {
         let root = tempfile::tempdir().unwrap();
         let args = [
@@ -240,7 +240,7 @@ mod tests {
         assert!(error.contains("mutually exclusive"));
     }
 
-#[test]
+    #[test]
     fn operator_turn_re_resolves_unknown_preset_before_starting_sidecar() {
         let root = tempfile::tempdir().unwrap();
         let args = [
@@ -260,7 +260,7 @@ mod tests {
         assert!(!root.path().join("coding-agents").exists());
     }
 
-#[test]
+    #[test]
     fn coding_models_global_root_pair_rejects_malformed_options() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().display().to_string();
@@ -285,7 +285,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn operator_turn_accepts_one_global_root_before_preset_validation() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().display().to_string();

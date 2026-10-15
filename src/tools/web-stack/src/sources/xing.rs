@@ -838,7 +838,7 @@ mod tests {
             .collect()
     }
 
-#[test]
+    #[test]
     fn browser_capture_keeps_profile_bound_evidence_and_response_completion() {
         let test = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xing-browser-evidence.mjs");
         let output = Command::new("node")
@@ -853,7 +853,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn shape_query_falls_back_to_provider_scoped_profile_search() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test"),
@@ -867,7 +867,7 @@ mod tests {
         assert_eq!(shaped.domains, vec!["xing.com"]);
     }
 
-#[test]
+    #[test]
     fn browser_capture_json_quotes_query_and_contains_no_secret_logging() -> anyhow::Result<()> {
         let source = build_authenticated_browser_capture(
             "Example \"Quoted\" AG; return globalThis.secret",
@@ -884,7 +884,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn browser_capture_rejects_numeric_names_and_profile_contacts_links() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -904,7 +904,7 @@ mod tests {
         assert!(values_for_field(&records, "person_xing").is_empty());
     }
 
-#[test]
+    #[test]
     fn browser_capture_uses_canonical_profile_slug_and_rejects_location_as_function() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -946,7 +946,7 @@ mod tests {
         assert!(!values_for_field(&records, "person_funktion").contains(&"Harthausen, Deutschland"));
     }
 
-#[test]
+    #[test]
     fn browser_capture_rejects_former_company_as_current_person_evidence() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -974,7 +974,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn browser_capture_rejects_ui_metadata_and_person_name_as_function() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -1026,7 +1026,7 @@ mod tests {
         assert_eq!(values_for_field(&records, "person_xing").len(), 4);
     }
 
-#[test]
+    #[test]
     fn browser_capture_skips_metadata_and_keeps_next_plausible_function() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -1048,7 +1048,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn browser_capture_rejects_person_names_locations_and_articles_as_functions() {
         let records = parse_browser_records(serde_json::json!([
             {
@@ -1080,7 +1080,7 @@ mod tests {
         assert_eq!(values_for_field(&records, "person_xing").len(), 2);
     }
 
-#[test]
+    #[test]
     fn fetch_direct_without_api_token_falls_back_to_browser_for_de() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test-xing-no-secret"),
@@ -1092,7 +1092,7 @@ mod tests {
             .is_none());
     }
 
-#[test]
+    #[test]
     fn fetch_direct_empty_company_short_circuits_no_match() {
         // Even without a token: empty company string must map to
         // `NoMatch` before we ever look at credentials, so the test stays
@@ -1108,7 +1108,7 @@ mod tests {
         assert!(matches!(r, Err(SourceError::NoMatch)));
     }
 
-#[test]
+    #[test]
     fn fetch_direct_without_api_token_falls_back_to_browser_for_at_and_ch() {
         for country in [Country::At, Country::Ch] {
             let ctx = SourceCtx {
@@ -1122,7 +1122,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn fetch_direct_with_unknown_country_falls_back_to_browser() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test-xing-no-secret"),
@@ -1134,7 +1134,7 @@ mod tests {
             .is_none());
     }
 
-#[test]
+    #[test]
     fn parses_search_fixture_into_hits() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("fixture has hits");
@@ -1156,28 +1156,28 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn parses_search_fixture_caps_hits_at_max() {
         let value: Value = serde_json::from_str(SEARCH_FIXTURE).expect("fixture json");
         let hits = parse_search_hits(&value).expect("hits");
         assert!(hits.len() <= MAX_HITS);
     }
 
-#[test]
+    #[test]
     fn empty_items_list_maps_to_no_match() {
         let value: Value = serde_json::from_str(r#"{"users": {"items": [], "total": 0}}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::NoMatch));
     }
 
-#[test]
+    #[test]
     fn missing_items_field_maps_to_parse_failed() {
         let value: Value = serde_json::from_str(r#"{"error": "boom"}"#).unwrap();
         let err = parse_search_hits(&value).unwrap_err();
         assert!(matches!(err, SourceError::ParseFailed { .. }));
     }
 
-#[test]
+    #[test]
     fn extracts_funktion_and_xing_from_detail_json_with_high_confidence() {
         let page = dummy_page(DETAIL_FIXTURE, "https://api.xing.com/v1/users/10368_abcdef");
         let fields = module().extract_fields(&page);
@@ -1207,7 +1207,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn extracts_from_search_fixture_top_item_as_user() {
         // `pick_user` also accepts the search-result shape and returns the
         // first item. Useful when the orchestrator passes a `users/find`
@@ -1226,7 +1226,7 @@ mod tests {
         assert_eq!(xing.1.value, "https://www.xing.com/profile/Anna_Schmidt10");
     }
 
-#[test]
+    #[test]
     fn extract_fields_returns_empty_for_non_json_body() {
         let html = "<html><head><title>XING – Anna Schmidt</title></head><body></body></html>";
         let page = dummy_page(html, "https://www.xing.com/profile/Anna_Schmidt10");
@@ -1237,7 +1237,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn extract_fields_ignores_user_object_without_permalink_or_funktion() {
         // A user body that has neither a permalink nor a primary_company.title
         // must not emit any evidence at all.
@@ -1247,7 +1247,7 @@ mod tests {
         assert!(fields.is_empty(), "got unexpected fields: {fields:?}");
     }
 
-#[test]
+    #[test]
     fn pick_user_accepts_bare_user_body() {
         let raw = r#"{"id": "bare", "display_name": "Bare User",
                        "permalink": "https://www.xing.com/profile/Bare_User",
@@ -1264,7 +1264,7 @@ mod tests {
         assert_eq!(funktion.1.value, "CEO");
     }
 
-#[test]
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::xing"]
     fn live_search_credential_missing_smoke() {
         // Phase 2 live-test: without a configured `XING_API_TOKEN` in the

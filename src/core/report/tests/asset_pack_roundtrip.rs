@@ -111,3 +111,4 @@ fn asset_pack_block_library_min_chars_positive() {
         );
     }
 }
+

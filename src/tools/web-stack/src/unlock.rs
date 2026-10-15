@@ -1772,7 +1772,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn public_browser_fallback_accepts_only_bounded_access_classifications() {
         let mut request = public_request();
         assert!(validate_public_unlock_request(&request).is_ok());
@@ -1785,7 +1785,7 @@ mod tests {
         assert!(validate_public_unlock_request(&request).is_err());
     }
 
-#[test]
+    #[test]
     fn public_browser_fallback_rejects_cross_domain_and_credential_urls() {
         let mut request = public_request();
         for target in [
@@ -1808,7 +1808,7 @@ mod tests {
         assert!(validate_public_unlock_request(&request).is_err());
     }
 
-#[test]
+    #[test]
     fn public_browser_fallback_invokes_the_persistent_session_contract() {
         let request = public_request();
         let root = Path::new("/ctox-root");
@@ -1834,7 +1834,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn evaluate_sannysoft_passed_when_no_failed() {
         let raw = json!({
             "result": {
@@ -1848,7 +1848,7 @@ mod tests {
         assert!(list.is_empty());
     }
 
-#[test]
+    #[test]
     fn evaluate_sannysoft_failed_lists_names() {
         let raw = json!({
             "result": {
@@ -1864,7 +1864,7 @@ mod tests {
         assert_eq!(list, vec!["User Agent (Old)".to_string()]);
     }
 
-#[test]
+    #[test]
     fn run_probe_fixture_uses_json_without_browser_runtime() {
         let root = std::env::temp_dir().join(format!(
             "ctox-web-unlock-fixture-test-{}",
@@ -1908,7 +1908,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-#[test]
+    #[test]
     fn evaluate_areyouheadless_passes_when_not_headless() {
         let raw = json!({"result": {"isHeadless": false}});
         let (passed, count, _, _) = evaluate_outcome("areyouheadless", &raw);
@@ -1916,7 +1916,7 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-#[test]
+    #[test]
     fn evaluate_incolumitas_aggregates_fails_and_warnings() {
         let raw = json!({
             "result": {
@@ -1931,14 +1931,14 @@ mod tests {
         assert!(list[1].starts_with("worker:"));
     }
 
-#[test]
+    #[test]
     fn evaluate_creepjs_passes_when_clean() {
         let raw = json!({"result": {"headlessSignal": "clean"}});
         let (passed, _, _, _) = evaluate_outcome("creepjs", &raw);
         assert!(passed);
     }
 
-#[test]
+    #[test]
     fn evaluate_creepjs_fails_on_ua_leak() {
         let raw = json!({
             "result": {
@@ -1959,7 +1959,7 @@ mod tests {
         conn
     }
 
-#[test]
+    #[test]
     fn open_repair_marks_vector_broken_and_records_row() {
         let conn = seeded_in_memory_db();
         let id = open_repair(
@@ -1989,7 +1989,7 @@ mod tests {
         assert!(succeeded.is_none(), "newly opened repair should be pending");
     }
 
-#[test]
+    #[test]
     fn close_repair_succeeded_flips_vector_back_to_working() {
         let conn = seeded_in_memory_db();
         let id = open_repair(&conn, "plugins-uint32-overflow", None, "x", None).unwrap();
@@ -2014,7 +2014,7 @@ mod tests {
         assert_eq!(commit.as_deref(), Some("abc123"));
     }
 
-#[test]
+    #[test]
     fn close_repair_failed_leaves_vector_broken() {
         let conn = seeded_in_memory_db();
         let id = open_repair(&conn, "connection-rtt-zero", None, "x", None).unwrap();
@@ -2029,7 +2029,7 @@ mod tests {
         assert_eq!(status, "broken");
     }
 
-#[test]
+    #[test]
     fn record_signal_persists_row() {
         let conn = seeded_in_memory_db();
         let id = record_signal(
@@ -2050,7 +2050,7 @@ mod tests {
         assert_eq!(count, 1);
     }
 
-#[test]
+    #[test]
     fn resolve_signal_marks_resolved_and_links_repair() {
         let conn = seeded_in_memory_db();
         let signal_id = record_signal(
@@ -2082,7 +2082,7 @@ mod tests {
         assert_eq!(row.2.as_deref(), Some("captcha addressed"));
     }
 
-#[test]
+    #[test]
     fn first_positional_skips_known_value_flags() {
         let raw = vec![
             "history".to_string(),
@@ -2105,7 +2105,7 @@ mod tests {
         assert_eq!(first_positional(&raw).as_deref(), Some("creepjs"));
     }
 
-#[test]
+    #[test]
     fn seed_populates_probes_and_vectors() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();

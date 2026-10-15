@@ -730,13 +730,13 @@ pub fn sources_for_country(country: Country) -> Vec<&'static dyn SourceModule> {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn find_resolves_by_id_and_alias() {
         let by_id = find("bundesanzeiger.de").expect("by id");
         assert_eq!(by_id.id(), "bundesanzeiger.de");
     }
 
-#[test]
+    #[test]
     fn credentialed_sources_expose_browser_recipes_without_secrets() {
         let linkedin = find("linkedin.com").expect("linkedin source");
         let recipe = linkedin.browser_recipe().expect("linkedin browser recipe");
@@ -753,13 +753,13 @@ mod tests {
         assert!(recipe.capture_script.is_some());
     }
 
-#[test]
+    #[test]
     fn public_sources_do_not_default_to_browser_recipes() {
         let bundesanzeiger = find("bundesanzeiger.de").expect("bundesanzeiger source");
         assert!(bundesanzeiger.browser_recipe().is_none());
     }
 
-#[test]
+    #[test]
     fn every_outbound_research_field_has_an_authoritative_source() {
         assert_eq!(OUTBOUND_RESEARCH_FIELDS.len(), 32);
         for field in OUTBOUND_RESEARCH_FIELDS {

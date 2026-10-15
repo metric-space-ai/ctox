@@ -2622,7 +2622,7 @@ fn slugify(raw: &str) -> String {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn plan_excludes_tier_c_unless_opted_in() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2649,7 +2649,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn plan_excludes_person_discovery_without_opt_in() {
         // person-discovery (Tier S, people-scraping) must NOT run implicitly on
         // a plain company lookup — it harvests GDPR personal data.
@@ -2682,7 +2682,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn plan_includes_tier_c_when_opted_in_by_id() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2699,7 +2699,7 @@ mod tests {
         assert!(plans.iter().any(|p| p.source_id == "linkedin.com"));
     }
 
-#[test]
+    #[test]
     fn plan_includes_tier_c_when_opted_in_by_alias() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2716,7 +2716,7 @@ mod tests {
         assert!(plans.iter().any(|p| p.source_id == "linkedin.com"));
     }
 
-#[test]
+    #[test]
     fn plan_sorted_tier_p_first() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2744,7 +2744,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn aggregate_picks_highest_confidence() {
         let mut raw: BTreeMap<FieldKey, Vec<Value>> = BTreeMap::new();
         raw.insert(
@@ -2761,7 +2761,7 @@ mod tests {
         assert_eq!(umsatz["candidates"].as_array().unwrap().len(), 2);
     }
 
-#[test]
+    #[test]
     fn aggregate_rejects_grammatical_placeholders_as_person_names() {
         let mut raw = BTreeMap::new();
         raw.insert(
@@ -2790,7 +2790,7 @@ mod tests {
         assert_eq!(aggregated["person_nachname"]["value"], "Eberspächer");
     }
 
-#[test]
+    #[test]
     fn url_belongs_to_source_handles_subdomains_and_prefixes() {
         assert!(url_belongs_to_source(
             "https://www.northdata.de/Foo+SE,Berlin",
@@ -2812,7 +2812,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn url_belongs_to_source_resolves_via_host_suffixes() {
         // Zefix: id=zefix.ch, but hit URLs come back from zefix.admin.ch.
         assert!(url_belongs_to_source(
@@ -2837,7 +2837,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn browser_assist_recommendations_expose_recipe_without_secret_value() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2880,7 +2880,7 @@ mod tests {
             .contains("secret_value\""));
     }
 
-#[test]
+    #[test]
     fn browser_assist_tasks_materialize_from_source_failures() {
         let request = PersonResearchRequest {
             company: "ACME".into(),
@@ -2929,7 +2929,7 @@ mod tests {
         assert!(serialized.contains("LINKEDIN_BROWSER_LOGIN"));
     }
 
-#[test]
+    #[test]
     fn public_scrape_challenge_materializes_existing_browser_session() {
         let module = sources::find("companyhouse.de").unwrap();
         let plan = PersonResearchPlan {
@@ -2982,7 +2982,7 @@ mod tests {
         assert!(!serialized.contains("password"));
     }
 
-#[test]
+    #[test]
     fn dynamic_adapter_authorization_becomes_visible_browser_handoff() {
         let mut payload = json!({
             "fields": {
@@ -3030,7 +3030,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn browser_extract_evidence_imports_only_typed_redacted_fields() {
         let root = std::env::temp_dir().join(format!(
             "ctox-web-stack-browser-extract-{}",
@@ -3161,7 +3161,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-#[test]
+    #[test]
     fn browser_extract_evidence_skips_wrong_company_scope() {
         let fields = serde_json::Map::from_iter([
             (
@@ -3199,7 +3199,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn search_evidence_rejects_stale_wrong_source_and_wrong_company() {
         let request = PersonResearchRequest {
             company: "ACME GmbH".into(),
@@ -3254,7 +3254,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn authenticated_source_records_merge_only_planned_fields_and_provider_urls() {
         let mut payload = json!({
             "plan": [{
@@ -3326,7 +3326,7 @@ mod tests {
         assert!(!serialized.contains("must-not-pass"));
     }
 
-#[test]
+    #[test]
     fn person_records_without_urls_group_by_normalized_name() {
         let mut raw = BTreeMap::from([
             (
@@ -3365,7 +3365,7 @@ mod tests {
             .any(|evidence| evidence["field"] == "person_email_validation"));
     }
 
-#[test]
+    #[test]
     fn beiersdorf_xing_fixture_groups_eight_people_and_keeps_flat_fields_person_bound() {
         let people = [
             ("Jana", "Laufer", Some("Geschäftsführerin"), "Jana_Laufer"),
@@ -3427,7 +3427,7 @@ mod tests {
             .is_some_and(|count| count >= 3)));
     }
 
-#[test]
+    #[test]
     fn authenticated_person_records_stay_grouped_by_profile() {
         let mut payload = json!({
             "plan": [{
@@ -3480,7 +3480,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn slugify_handles_typical_company_names() {
         assert_eq!(
             slugify("Example Industrial GmbH"),

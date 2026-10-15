@@ -196,7 +196,7 @@ impl VerifyQuantizedLinear {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn eligibility_bits_and_group() {
         assert!(!is_verify_eligible(8, 64, 1024, 1024, "mlp.gate_proj"));
         assert!(!is_verify_eligible(4, 48, 1024, 1024, "mlp.gate_proj"));

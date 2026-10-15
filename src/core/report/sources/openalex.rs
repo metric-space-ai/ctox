@@ -252,7 +252,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-#[test]
+    #[test]
     fn reconstruct_inverted_abstract_orders_by_position() {
         let v = json!({
             "world": [1],
@@ -263,13 +263,13 @@ mod tests {
         assert_eq!(s, "Hello world again");
     }
 
-#[test]
+    #[test]
     fn reconstruct_inverted_abstract_returns_none_on_empty() {
         let v = json!({});
         assert!(reconstruct_inverted_abstract(&v).is_none());
     }
 
-#[test]
+    #[test]
     fn strip_doi_prefix_handles_full_url() {
         assert_eq!(
             strip_doi_prefix("https://doi.org/10.1234/AbC"),

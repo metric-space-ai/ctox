@@ -495,5 +495,4 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     // Note: `BufWriter::with_tags` functionality is tested in `crate::tests::tagging`
-
 }

@@ -1544,7 +1544,7 @@ impl GetOptions {
     /// Sets the `if_match` condition.
     ///
     /// See [`GetOptions::if_match`]
-#[must_use]
+    #[must_use]
     pub fn with_if_match(mut self, etag: Option<impl Into<String>>) -> Self {
         self.if_match = etag.map(Into::into);
         self
@@ -1553,7 +1553,7 @@ impl GetOptions {
     /// Sets the `if_none_match` condition.
     ///
     /// See [`GetOptions::if_none_match`]
-#[must_use]
+    #[must_use]
     pub fn with_if_none_match(mut self, etag: Option<impl Into<String>>) -> Self {
         self.if_none_match = etag.map(Into::into);
         self
@@ -1562,7 +1562,7 @@ impl GetOptions {
     /// Sets the `if_modified_since` condition.
     ///
     /// See [`GetOptions::if_modified_since`]
-#[must_use]
+    #[must_use]
     pub fn with_if_modified_since(mut self, dt: Option<impl Into<DateTime<Utc>>>) -> Self {
         self.if_modified_since = dt.map(Into::into);
         self
@@ -1571,7 +1571,7 @@ impl GetOptions {
     /// Sets the `if_unmodified_since` condition.
     ///
     /// See [`GetOptions::if_unmodified_since`]
-#[must_use]
+    #[must_use]
     pub fn with_if_unmodified_since(mut self, dt: Option<impl Into<DateTime<Utc>>>) -> Self {
         self.if_unmodified_since = dt.map(Into::into);
         self
@@ -1580,7 +1580,7 @@ impl GetOptions {
     /// Sets the `range` condition.
     ///
     /// See [`GetOptions::range`]
-#[must_use]
+    #[must_use]
     pub fn with_range(mut self, range: Option<impl Into<GetRange>>) -> Self {
         self.range = range.map(Into::into);
         self
@@ -1589,7 +1589,7 @@ impl GetOptions {
     /// Sets the `version` condition.
     ///
     /// See [`GetOptions::version`]
-#[must_use]
+    #[must_use]
     pub fn with_version(mut self, version: Option<impl Into<String>>) -> Self {
         self.version = version.map(Into::into);
         self
@@ -1598,7 +1598,7 @@ impl GetOptions {
     /// Sets the `head` condition.
     ///
     /// See [`GetOptions::head`]
-#[must_use]
+    #[must_use]
     pub fn with_head(mut self, head: impl Into<bool>) -> Self {
         self.head = head.into();
         self
@@ -1607,7 +1607,7 @@ impl GetOptions {
     /// Sets the `extensions` condition.
     ///
     /// See [`GetOptions::extensions`]
-#[must_use]
+    #[must_use]
     pub fn with_extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
         self
@@ -1909,7 +1909,7 @@ impl CopyOptions {
     /// Sets the `mode.
     ///
     /// See [`CopyOptions::mode`].
-#[must_use]
+    #[must_use]
     pub fn with_mode(mut self, mode: CopyMode) -> Self {
         self.mode = mode;
         self
@@ -1918,7 +1918,7 @@ impl CopyOptions {
     /// Sets the `extensions`.
     ///
     /// See [`CopyOptions::extensions`].
-#[must_use]
+    #[must_use]
     pub fn with_extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
         self
@@ -1979,7 +1979,7 @@ impl RenameOptions {
     /// Sets the `target_mode=.
     ///
     /// See [`RenameOptions::target_mode`].
-#[must_use]
+    #[must_use]
     pub fn with_target_mode(mut self, target_mode: RenameTargetMode) -> Self {
         self.target_mode = target_mode;
         self
@@ -1988,7 +1988,7 @@ impl RenameOptions {
     /// Sets the `extensions`.
     ///
     /// See [`RenameOptions::extensions`].
-#[must_use]
+    #[must_use]
     pub fn with_extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
         self
@@ -2281,5 +2281,4 @@ mod tests {
         // This function is just to ensure that the trait bounds are satisfied
         let _ = store;
     }
-
 }
