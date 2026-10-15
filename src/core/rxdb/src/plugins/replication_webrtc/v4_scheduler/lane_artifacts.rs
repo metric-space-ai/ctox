@@ -4,9 +4,9 @@
 use super::super::super::webrtc_types::WebRTCPublicationGuard;
 use super::super::hello::WireSeq;
 use super::super::lanes::Lane;
-use super::{failure, DeliveryToken, NativeSendScheduler};
+use super::{DeliveryToken, NativeSendScheduler, failure};
 use crate::rx_error::RxResult;
-use ctox_store::cas::{Cas, Receiver, VerifiedBlob, CHUNK_BYTES};
+use ctox_store::cas::{CHUNK_BYTES, Cas, Receiver, VerifiedBlob};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -52,38 +52,7 @@ impl<'a> ArtifactAddress<'a> {
         if !identifier(app) || !identifier(app_version) || !identifier(shell_version) {
             return Err(failure("invalid immutable artifact address"));
         }
-        let path = if path.contains('%') {
-            let mut decoded = Vec::with_capacity(path.len());
-            let mut raw = path.as_bytes().iter().copied();
-            while let Some(byte) = raw.next() {
-                if byte == b'%' {
-                    let hi = raw
-                        .next()
-                        .and_then(|b| (b as char).to_digit(16))
-                        .ok_or_else(|| failure("artifact percent escape"))?;
-                    let lo = raw
-                        .next()
-                        .and_then(|b| (b as char).to_digit(16))
-                        .ok_or_else(|| failure("artifact percent escape"))?;
-                    decoded.push((hi * 16 + lo) as u8);
-                } else {
-                    decoded.push(byte);
-                }
-            }
-            std::borrow::Cow::Owned(
-                String::from_utf8(decoded).map_err(|_| failure("artifact UTF-8 path"))?,
-            )
-        } else {
-            std::borrow::Cow::Borrowed(path)
-        };
-        if path.len() > 4096
-            || path.chars().any(|c| c.is_control() || c == '\\')
-            || path
-                .split('/')
-                .any(|part| part.is_empty() || part == "." || part == "..")
-        {
-            return Err(failure("invalid artifact path"));
-        }
+        let path = artifact_path(path)?;
         Ok(Self {
             app,
             app_version,
@@ -92,6 +61,45 @@ impl<'a> ArtifactAddress<'a> {
         })
     }
 }
+
+fn artifact_path(path: &str) -> RxResult<std::borrow::Cow<'_, str>> {
+    let path = if path.contains('%') {
+        let mut decoded = Vec::with_capacity(path.len());
+        let mut raw = path.as_bytes().iter().copied();
+        while let Some(byte) = raw.next() {
+            if byte == b'%' {
+                let hi = raw
+                    .next()
+                    .and_then(|b| (b as char).to_digit(16))
+                    .ok_or_else(|| failure("artifact percent escape"))?;
+                let lo = raw
+                    .next()
+                    .and_then(|b| (b as char).to_digit(16))
+                    .ok_or_else(|| failure("artifact percent escape"))?;
+                decoded.push((hi * 16 + lo) as u8);
+            } else {
+                decoded.push(byte);
+            }
+        }
+        std::borrow::Cow::Owned(
+            String::from_utf8(decoded).map_err(|_| failure("artifact UTF-8 path"))?,
+        )
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    };
+    if path.len() > 4096
+        || path.chars().any(|c| c.is_control() || c == '\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(failure("invalid artifact path"));
+    }
+    Ok(path)
+}
+
+#[path = "artifact_manifest.rs"]
+pub mod manifest;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
