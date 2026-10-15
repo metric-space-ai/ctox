@@ -55,21 +55,43 @@ jobs:
           text = pathlib.Path(filename).read_text()
           pattern = {
               "rust": r"^test result: ok\. ([1-9][0-9]*) passed; 0 failed;",
-              "node": r"^# pass ([1-9][0-9]*)$",
+              "node": r"^# v4_contract_cases ([1-9][0-9]*)$",
           }[kind]
           if not re.search(pattern, text, re.M):
               raise SystemExit(f"{kind}: no executed passing tests in {filename}")
           PY
+          cat > "$RUNNER_TEMP/v4-contracts-reporter.mjs" <<'JS'
+          import { tap } from 'node:test/reporters';
+          import { resolve } from 'node:path';
+          export default async function* contractsReporter(source) {
+            let executed = 0;
+            async function* observe() {
+              for await (const event of source) {
+                const data = event.data;
+                // Node can report a successful file wrapper with no selected
+                // test cases. Count only located, executed leaf tests.
+                if (event.type === 'test:pass' && Number.isInteger(data.line)
+                    && data.details?.type !== 'suite' && !data.skip && !data.todo
+                    && (!data.file || resolve(data.name) !== resolve(data.file))) {
+                  executed++;
+                }
+                yield event;
+              }
+            }
+            yield* tap(observe());
+            yield `# v4_contract_cases ${executed}\n`;
+          }
+          JS
           # Guard the guard: a stale/misspelled filter must fail this job.
           printf 'test result: ok. 0 passed; 0 failed; 0 ignored;\n' > "$RUNNER_TEMP/v4-empty-rust.log"
-          printf '# tests 0\n' > "$RUNNER_TEMP/v4-empty-node.log"
+          printf '# v4_contract_cases 0\n' > "$RUNNER_TEMP/v4-empty-node.log"
           if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" rust "$RUNNER_TEMP/v4-empty-rust.log"; then
             exit 1
           fi
           if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-empty-node.log"; then
             exit 1
           fi
-          printf '# tests 1\n# pass 0\n# skipped 1\n' > "$RUNNER_TEMP/v4-skipped-node.log"
+          printf '# tests 1\n# pass 0\n# skipped 1\n# v4_contract_cases 0\n' > "$RUNNER_TEMP/v4-skipped-node.log"
           if python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-skipped-node.log"; then
             exit 1
           fi
@@ -92,7 +114,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test --test-concurrency=2 --test-reporter=tap src/apps/business-os/kernel/tests/*.test.mjs \
+          node --test --test-concurrency=2 --test-reporter="$RUNNER_TEMP/v4-contracts-reporter.mjs" src/apps/business-os/kernel/tests/*.test.mjs \
             | tee "$RUNNER_TEMP/v4-contracts-proof/kernel.log"
           python3 "$RUNNER_TEMP/v4-contracts-nonempty.py" node "$RUNNER_TEMP/v4-contracts-proof/kernel.log"
       - name: Retain contract evidence
