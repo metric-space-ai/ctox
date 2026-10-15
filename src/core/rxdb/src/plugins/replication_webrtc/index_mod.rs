@@ -18,6 +18,12 @@
 //! - Per-peer fork `RxReplicationState`s are owned by `PeerState` so cancel
 //!   propagates on `remove_peer`.
 
+// V4 entry seams: consumers explicitly opt in; V3 is not silently negotiated.
+#[path = "connection_lifecycle.rs"]
+pub mod connection_lifecycle;
+#[path = "hello.rs"]
+pub mod hello;
+
 use super::collection_authority::authorize_collection_for_peer;
 use super::{protocol_contract_generated, NativePeerRole};
 
