@@ -32,6 +32,8 @@ export class Native {
     fs.symlinkSync(join(this.config.source, 'Cargo.toml'), join(this.config.root, 'Cargo.toml'));
     fs.symlinkSync(join(this.config.source, 'src'), join(this.config.root, 'src'));
     fs.symlinkSync(join(this.config.source, 'contracts'), join(this.config.root, 'contracts'));
+    fs.mkdirSync(join(this.config.root, 'bin'));
+    fs.symlinkSync(this.config.binary, join(this.config.root, 'bin/ctox'));
     this.cli(['business-os','rxdb','init','--root',this.config.root]);
     const module = join(this.config.root, 'runtime/business-os/local-modules/e2e-probe'); fs.mkdirSync(module, { recursive: true });
     fs.writeFileSync(join(module, 'module.json'), JSON.stringify({ id: 'e2e-probe', title: 'Synthetic E2E regression app', version: '1.0.0', entry: 'local-modules/e2e-probe/index.js', collections: ['e2e_leads'] }));

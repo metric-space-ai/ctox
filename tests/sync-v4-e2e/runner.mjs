@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { Native, until, pause, owner, verifiedBuild } from './native.mjs';
 import { schema, installRelay, warm, readAndRender, relayProof } from './browser.mjs';
@@ -48,7 +49,8 @@ try {
     if (start < 0) return false;
     const end = html.indexOf(';window.CTOX_BUSINESS_OS_DESIGN_TEMPLATES=', start);
     if (end < 0) return false;
-    return JSON.parse(html.slice(start + marker.length, end)).native_rxdb_peer_available === true;
+    const config = JSON.parse(html.slice(start + marker.length, end));
+    return config.native_rxdb_peer_available === true && !!config.native_rxdb_peer_status?.peer_session_id;
   }, 60000, 'isolated daemon boot');
   const require = createRequire(join(config.modulesRoot, 'playwright/package.json'));
   const { chromium } = require('playwright');
@@ -68,7 +70,8 @@ try {
       if (report.browserDiagnostics.length > 200) report.browserDiagnostics.shift();
     } });
     await page.goto(`${origin}/index.html?rxdbSmoke=1`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => !!globalThis.CTOX_BUSINESS_OS_APP?.db && !!globalThis.CTOX_BUSINESS_OS_APP?.sync, null, { timeout: 90000 });
+    await page.waitForFunction(() => !!globalThis.CTOX_BUSINESS_OS_APP?.db && !!globalThis.CTOX_BUSINESS_OS_APP?.sync
+      && globalThis.CTOX_BUSINESS_OS_APP?.initialModuleOpened === true, null, { timeout: 90000 });
     return page;
   };
   for (const scenario of scenarios.filter(s => !config.scenario || s.id === config.scenario)) {
@@ -85,7 +88,16 @@ try {
       page: async () => setupPage(context, page => pages.push(page)),
       warm: async page => {
         row.phase = 'initial-replication'; save();
+        const shape = (rttMs, phase) => {
+          if (fs.readlinkSync('/proc/self/ns/net') !== config.netem.namespace || config.netem.namespace === config.hostNetworkNamespace) throw Error('Network change outside owned namespace');
+          execFileSync('sudo',['-n','tc','qdisc','change','dev','lo','parent','1:3','handle','30:','netem','delay',String(rttMs/2)+'ms','loss',String(config.lossPercent)+'%','limit','10000']);
+          report.netemStages ||= []; report.netemStages.push({at:new Date().toISOString(),scenario:scenario.id,phase,rttMs,
+            qdisc:execFileSync('/usr/sbin/tc',['-s','qdisc','show','dev','lo'],{encoding:'utf8'})}); save();
+        };
+        if (config.warmRttMs !== config.rttMs) shape(config.warmRttMs, 'precondition-only');
         row.warm = await bounded(page.evaluate(warm, { schema, expected }), 180000, "Initial fixture replication exceeded 180 seconds");
+        row.warmRttMs = config.warmRttMs;
+        if (config.warmRttMs !== config.rttMs) shape(config.rttMs, 'measurement');
         row.relay = await page.evaluate(relayProof);
         if (!row.relay.forced) throw Error('Selected candidate pair did not prove forced TURN');
         // Extra genuine clients share the same instance but independent IDB identities.
@@ -124,20 +136,36 @@ try {
         if (!storage.replicationCheckpointStatus) throw Error('Replication checkpoint observation missing');
         return storage.replicationCheckpointStatus();
       }),
+      checkpointPull: page => bounded(page.evaluate(async () => {
+        const state = globalThis.__e2eBridge?.state;
+        const peer = state?.openPeerIds?.()[0];
+        if (!peer || typeof state.pullFromPeer !== 'function') throw Error('Actual checkpointed native pull unavailable');
+        const original = state.requestMasterChangesSince, replies = [];
+        state.requestMasterChangesSince = async function(...args) {
+          const response = await original.apply(this,args);
+          const documents = response.result?.documents;
+          if (!Array.isArray(documents)) throw Error('Native checkpoint pull returned an error or malformed result');
+          replies.push({ rows:documents.length, probe:documents.filter(d => d.id === 'e2e-leads-behind').map(d => ({id:d.id,phase:d.probe_phase,updatedAtMs:d.updated_at_ms})) });
+          return response;
+        };
+        try { await state.pullFromPeer(peer); } finally { state.requestMasterChangesSince = original; }
+        if (!replies.length) throw Error('No native checkpoint reply observed');
+        return { replies, ordinaryProductionPull: true };
+      }),30000,'Checkpoint pull deadline'),
       inject: async operation => { row.phase = 'ATTACH-' + operation; save(); return native.seed(operation, here); },
       truth: async () => native.seed('read', here),
-      awaitLocal: async (page, id, timeout, revision) => {
+      awaitLocal: async (page, id, timeout, phase) => {
         const start = performance.now(); let found = null;
         while (performance.now() - start < timeout) {
           found = await page.evaluate(async id => {
             const rows = await globalThis.CTOX_BUSINESS_OS_APP.db.collections.e2e_leads.storageCollection.findDocumentsById([id]);
             return Array.isArray(rows) ? rows[0] || null : rows[id] || null;
           }, id);
-          if (found && (!revision || found._rev === revision)) break;
+          if (found && (!phase || found.probe_phase === phase)) break;
           await pause(100);
         }
-        return { found: !!found && (!revision || found._rev === revision), elapsedMs: performance.now() - start,
-          revision: found?._rev ?? null, lwt: found?._meta?.lwt ?? null };
+        return { found: !!found && (!phase || found.probe_phase === phase), elapsedMs: performance.now() - start,
+          revision: found?._rev ?? found?.revision ?? null, lwt: found?._meta?.lwt ?? null, phase: found?.probe_phase ?? null };
       },
       offline: async (page, value) => {
         const cdp = await context.newCDPSession(page);
@@ -166,6 +194,7 @@ try {
           fs.unlinkSync(target); fs.symlinkSync(join(build.source, part), target);
         }
         native.config.binary = build.binary; native.config.source = build.source;
+        fs.unlinkSync(join(config.root, 'bin/ctox')); fs.symlinkSync(build.binary,join(config.root,'bin/ctox'));
         native.serve();
         report.releaseTransitions ||= [];
         report.releaseTransitions.push({ at: new Date().toISOString(), revision: build.revision, binarySha256: build.binarySha256,
@@ -176,7 +205,7 @@ try {
     try {
       const result = await scenario.run(h); Object.assign(row, result);
       row.status = 'measured';
-      if (scenario.id === 'K04-ATTACH' && !row.measured.positiveControl.found) { row.pass = false; row.status = 'inconclusive'; row.reason = 'Forward-write positive control failed; cannot attribute missing row to checkpoint'; }
+      if (scenario.id === 'K04-ATTACH' && (!row.measured.positiveControl.found || !row.measured.positiveControl.nativeConfirmed)) { row.pass = false; row.status = 'inconclusive'; row.reason = 'Forward-write positive control failed; cannot attribute missing row to checkpoint'; }
     } catch (e) {
       row.error = e.message; row.status = row.status === 'running' ? 'failed' : 'not_run';
       row.failureSnapshot = { at: new Date().toISOString(), phase: row.phase || 'browser-connect', expected: expected.length };
@@ -189,7 +218,9 @@ try {
           const rows = Array.isArray(data) ? data : Object.values(data);
           const ids = new Set(rows.map(r => r.id));
           return { available: true, found: rows.length, missing: expected.filter(id => !ids.has(id)),
-            rows: rows.map(r => ({ id:r.id, revision:r._rev, lwt:r._meta?.lwt })), wire: globalThis.__e2eWire };
+            rows: rows.map(r => ({ id:r.id, revision:r._rev, lwt:r._meta?.lwt })), wire: globalThis.__e2eWire,
+            peers: (globalThis.__e2ePeers || []).map(p => ({ connectionState:p.connectionState,iceConnectionState:p.iceConnectionState,signalingState:p.signalingState })),
+            sockets: (globalThis.__e2eSockets || []).map(s => ({...s.observation,readyState:s.socket.readyState})) };
         }, expected), 3000, 'failure snapshot deadline');
       } catch(error) { row.failureSnapshot.browserUnavailable = error.message; }
     }

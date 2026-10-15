@@ -10,8 +10,8 @@ const args = {};
 for (let i=2;i<process.argv.length;i+=2) { if(!process.argv[i]?.startsWith('--') || !process.argv[i+1]) throw Error('Expected --key value'); args[process.argv[i].slice(2)] = process.argv[i+1]; }
 if(process.platform!=='linux'||!process.env.CARGO_TARGET_DIR||!process.env.TMPDIR||!process.env.BUILD_LANE_BIN) throw Error('Canonical Linux lane required');
 const build = verifiedBuild(args.build);
-const profile = args.profile || 'small', clients = Number(args.clients || 1), rttMs = Number(args.rtt || 150), lossPercent = Number(args.loss || 1);
-if(!['small','thesen-like'].includes(profile)||!Number.isInteger(clients)||clients<1||clients>3||![20,150,600].includes(rttMs)||lossPercent<0||lossPercent>10) throw Error('Unsupported bounded profile');
+const profile = args.profile || 'small', clients = Number(args.clients || 1), rttMs = Number(args.rtt || 150), warmRttMs = Number(args['warm-rtt'] || rttMs), lossPercent = Number(args.loss || 1);
+if(!['small','thesen-like'].includes(profile)||!Number.isInteger(clients)||clients<1||clients>3||![20,150,600].includes(rttMs)||![20,150,600].includes(warmRttMs)||lossPercent<0||lossPercent>10) throw Error('Unsupported bounded profile');
 const lane = resolve(process.env.BUILD_LANE_BIN,'..');
 const output = resolve(args.output || join(lane,'artifacts',`v4-e2e-${Date.now()}-${process.pid}`));
 if(!output.startsWith(join(lane,'artifacts')+'/')) throw Error('Output must be a new private lane artifact directory');
@@ -28,7 +28,7 @@ if (sourceManifest) for (const row of sourceManifest.files) {
   const file = resolve(here,'../..',row.path);
   if (!file.startsWith(resolve(here,'../..')+'/') || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== row.sha256) throw Error('Harness source changed during staging');
 }
-const config = { owner, ...build, output, profile, clients, rttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
+const config = { owner, ...build, output, profile, clients, rttMs, warmRttMs, lossPercent, uid: process.getuid(), gid: process.getgid(),
   root: join(output,`tenant-${build.revision.slice(0,12)}`), port: 19865, signalingPort: 19866, turnPort: 34789,
   runner: join(snapshot,'tests/sync-v4-e2e/runner.mjs'), sourceManifest,
   durationSeconds: Number(args.seconds || 900), hostNetworkNamespace: fs.readlinkSync('/proc/self/ns/net'),
@@ -40,7 +40,7 @@ fs.accessSync(join(config.modulesRoot, 'playwright/package.json'), fs.constants.
 fs.accessSync(join(config.source, 'src/apps/business-os/app.js'), fs.constants.R_OK);
 const file = join(output,'config.private.json'); fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
 const child = spawn('sudo',['-n','unshare','--net','--',process.execPath,join(snapshot,'scripts/e2e-netns.mjs'),file],{stdio:'inherit',detached:true});
-const record = { owner, controllerPid: process.pid, namespaceOwnerPid: child.pid, group: child.pid, output,
+const record = { owner, controllerPid: process.pid, privilegeControllerPid: child.pid, group: child.pid, output,
   stop: `terminal or ${config.durationSeconds+40}s`, startedAt:new Date().toISOString() };
 fs.writeFileSync(join(output,'controller.json'),JSON.stringify(record,null,2));
 const kill = signal => {try{process.kill(-child.pid,signal);}catch(e){if(e.code!=='ESRCH')throw e;}};
@@ -50,6 +50,7 @@ process.once('SIGTERM',()=>kill('SIGTERM'));
 const exit = await new Promise((r,j)=>{child.once('error',j);child.once('exit',(code,signal)=>r({code,signal}));});
 clearTimeout(timer);clearTimeout(escalator);kill('SIGKILL');
 record.exit=exit;record.finishedAt=new Date().toISOString();
+record.namespaceProof = JSON.parse(fs.readFileSync(file)).netem;
 record.groupAbsent = false;
 for (let attempt = 0; attempt < 40; attempt++) {
   try { process.kill(-child.pid,0); } catch(e) { if(e.code==='ESRCH') { record.groupAbsent=true; break; } throw e; }

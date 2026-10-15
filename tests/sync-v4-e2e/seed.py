@@ -14,15 +14,15 @@ q=lambda s:'"'+s.replace('"','""')+'"'
 name='e2e_leads'; table='ctox_business_os__'+name+'__v0'
 if a.operation=='read':
  c=sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True); c.execute('PRAGMA query_only=ON')
- rows=c.execute('SELECT id,revision,lastWriteTime,deleted FROM '+q(table)+' ORDER BY id').fetchall()
- print(json.dumps({'rows':[dict(zip(['id','revision','lwt','deleted'],x)) for x in rows]})); raise SystemExit
+ rows=c.execute("SELECT id,revision,lastWriteTime,deleted,json_extract(data,'$.probe_phase') FROM "+q(table)+' ORDER BY id').fetchall()
+ print(json.dumps({'rows':[dict(zip(['id','revision','lwt','deleted','phase'],x)) for x in rows]})); raise SystemExit
 if a.operation in ['behind','forward']:
  # Faithful fault injection of store.rs upsert_attached_rxdb_record's ATTACH write.
  # It is not a claim to have called that private Rust function through a CLI.
  c=sqlite3.connect(r/'runtime/e2e-writer.sqlite3'); c.execute('ATTACH DATABASE ? AS projection',(str(db),))
  lwt=base-1000 if a.operation=='behind' else int(time.time()*1000)
  rev=('1' if a.operation=='behind' else '2')+'-e2e-behind'
- doc={'id':'e2e-leads-behind','fixtureOnly':True,'ordinal':999999,'padding':'checkpoint probe','updated_at_ms':lwt,'_rev':rev,'_deleted':False,'_meta':{'lwt':lwt},'_attachments':{}}
+ doc={'id':'e2e-leads-behind','fixtureOnly':True,'ordinal':999999,'padding':'checkpoint probe','probe_phase':a.operation,'updated_at_ms':lwt,'_rev':rev,'_deleted':False,'_meta':{'lwt':lwt},'_attachments':{}}
  c.execute('INSERT INTO projection.'+q(table)+' (id,revision,deleted,lastWriteTime,data) VALUES(?,?,0,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,lastWriteTime=excluded.lastWriteTime,data=excluded.data',(doc['id'],rev,lwt,json.dumps(doc)))
  c.commit(); print(json.dumps({'id':doc['id'],'revision':rev,'lwt':lwt,'operation':a.operation})); raise SystemExit
 c=sqlite3.connect(db); populations=[]; digest=hashlib.sha256()

@@ -10,5 +10,6 @@ test('fast but incomplete data and an absent positive control cannot become acce
   assert.equal(completeFirstWindow({ ...good, missing: ['native-row'] }), false);
   const row = { id: 'e2e-row', lwt: 42 };
   assert.equal(checkpointDelivered({found:true}, {found:false}, row, row), false);
-  assert.equal(checkpointDelivered({found:true}, {found:true}, row, row), true);
+  assert.equal(checkpointDelivered({found:true}, {found:true}, row, row), false);
+  assert.equal(checkpointDelivered({found:true}, {found:true,nativeConfirmed:true}, row, row), true);
 });

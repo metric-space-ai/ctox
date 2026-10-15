@@ -1,8 +1,20 @@
 // Real browser runtime adapter. No transport, store, query or readiness mock.
 export const schema = { version: 0, primaryKey: 'id', type: 'object', additionalProperties: true,
   properties: { id: { type: 'string', maxLength: 180 }, fixtureOnly: { type: 'boolean' }, ordinal: { type: 'integer' },
-    padding: { type: 'string' }, updated_at_ms: { type: 'number' } }, required: ['id','ordinal','padding','updated_at_ms'], indexes: [['ordinal']] };
+    padding: { type: 'string' }, probe_phase: { type: 'string' }, updated_at_ms: { type: 'number' } }, required: ['id','ordinal','padding','updated_at_ms'], indexes: [['ordinal']] };
 export function installRelay({ turnPort }) {
+  const Socket = globalThis.WebSocket;
+  globalThis.__e2eSockets = [];
+  globalThis.WebSocket = class extends Socket {
+    constructor(...args) {
+      super(...args);
+      const url = new URL(args[0]);
+      const observation = { local: ['127.0.0.1','localhost','192.0.2.1'].includes(url.hostname), port: url.port, opened: false, closeCode: null };
+      globalThis.__e2eSockets.push({ socket: this, observation });
+      this.addEventListener('open', () => { observation.opened = true; });
+      this.addEventListener('close', e => { observation.closeCode = e.code; });
+    }
+  };
   const Native = globalThis.RTCPeerConnection;
   globalThis.__e2ePeers = []; globalThis.__e2eWire = { sent: 0, received: 0 };
   const observe = channel => {
@@ -25,21 +37,22 @@ export async function warm({ schema, expected }) {
   const s = globalThis.CTOX_BUSINESS_OS_APP;
   if (!s?.db || !s.sync) throw Error('Real Shell DB/sync unavailable');
   await s.db.addCollections({ e2e_leads: { schema, syncProfile: 'eager' } });
-  const lease = await s.sync.leaseCollection('e2e_leads', 'e2e-warm');
+  const lease = await s.sync.leaseCollection('e2e_leads', 'e2e-warm', { forceDirect: true });
   globalThis.__e2eLease = lease;
-  let bridge = await s.sync.startCollection('e2e_leads', { pin: false });
+  let bridge = await s.sync.startCollection('e2e_leads', { pin: false, forceDirect: true, requireOwner: true });
   if (bridge?.ready) bridge = await bridge.ready;
   globalThis.__e2eBridge = bridge;
-  if (typeof bridge?.state?.awaitInitialReplication !== 'function') throw Error('Real initial-replication contract absent');
+  if (typeof bridge?.state?.awaitInitialReplication !== 'function') throw Error('Real initial-replication contract absent: ' + JSON.stringify({mode:bridge?.mode,reason:bridge?.reason,hasState:!!bridge?.state}));
   await bridge.state.awaitInitialReplication();
-  // The first query is a real app query; warm-up may legitimately go to native.
-  const rows = await s.db.collections.e2e_leads.find({ selector: {}, limit: expected.length + 1 }).exec();
+  // Precondition is actual local storage, not a successful app query. Otherwise
+  // a query row-cap would become a setup failure instead of a measured red list.
+  const local = await s.db.collections.e2e_leads.storageCollection.findDocumentsById(expected);
+  const rows = Array.isArray(local) ? local : Object.values(local);
+  const cached = rows.length;
   const ids = rows.map(x => x.id);
   const missing = expected.filter(id => !ids.includes(id));
-  if (missing.length) throw Error(`Warm-up incomplete: ${ids.length}/${expected.length}, missing ${missing.slice(0,4)}`);
-  const local = await s.db.collections.e2e_leads.storageCollection.findDocumentsById(expected);
-  const cached = Array.isArray(local) ? local.length : Object.keys(local).length;
   if (cached !== expected.length) throw Error(`Fixture is not held locally: ${cached}/${expected.length}`);
+  if (missing.length) throw Error('Local fixture IDs differ from native truth');
   return { rows: ids.length, cached, wire: { ...globalThis.__e2eWire } };
 }
 export async function readAndRender({ expected }) {

@@ -35,6 +35,10 @@ Never borrow another daemon or bypass namespace isolation to get a green run.
 `--seconds 900` bounds the full scenario run, at most 1800. `--scenario K02`,
 `K08` or `K04-ATTACH` selects one incident. `--clients 1..3` opens real independent
 browser storage contexts. The selected local ICE candidate MUST be `relay`.
+Optional `--warm-rtt 20` establishes the real locally-held-data precondition at
+20ms before restoring the requested `--rtt` for the measured scenario. This is
+not a cold-sync performance result at the measurement RTT. Both changes retain
+kernel qdisc evidence; an ICE consent RTT sampled during warm-up may be older.
 Each run freezes its own runner files and records their hashes before starting;
 later source transfers cannot change a running scenario. Namespace cleanup also
 retires detached descendants if the coordinator crashes.

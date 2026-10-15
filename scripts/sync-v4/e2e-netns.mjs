@@ -19,7 +19,7 @@ run('ip',['route','add','default','dev','bench0']);
 run('tc',['qdisc','add','dev','lo','root','handle','1:','prio','bands','3']);
 run('tc',['qdisc','add','dev','lo','parent','1:3','handle','30:','netem','delay',`${c.rttMs/2}ms`,'loss',`${c.lossPercent}%`,'limit','10000']);
 for (const direction of ['dport','sport']) run('tc',['filter','add','dev','lo','parent','1:','protocol','ip','prio','1','u32','match','ip','protocol','17','0xff','match','ip',direction,String(c.turnPort),'0xffff','flowid','1:3']);
-c.netem = { isolated: true, hostQdiscChanged: false, namespace: fs.readlinkSync('/proc/self/ns/net'), rttMs: c.rttMs, lossPercent: c.lossPercent, shaped: 'browser/TURN UDP leg' };
+c.netem = { isolated: true, hostQdiscChanged: false, ownerPid: process.pid, namespace: fs.readlinkSync('/proc/self/ns/net'), rttMs: c.rttMs, lossPercent: c.lossPercent, shaped: 'browser/TURN UDP leg' };
 fs.writeFileSync(path, JSON.stringify(c,null,2)); fs.chownSync(path,c.uid,c.gid);
 const saveNetem = name => {
   const file = c.output + '/' + name;
