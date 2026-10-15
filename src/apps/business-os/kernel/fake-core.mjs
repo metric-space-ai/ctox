@@ -5,6 +5,7 @@ import { KernelTransport, decimalSeq } from './transport.mjs';
 import { cloneValue, CtoxError, fnv1a, mergePatch } from './values.mjs';
 import { applyOp } from './outbox.mjs';
 import { createCoreRuntime, FAKE_CORE_CAPABILITIES } from './fake-core-runtime.mjs';
+import { checkCommandTransition, COMMAND_IMMUTABLE_FIELDS } from './command-state.mjs';
 export { FAKE_CORE_CAPABILITIES };
 const cores = new Map();
 function coreFor(namespace) {
@@ -18,6 +19,8 @@ function coreFor(namespace) {
     for (const data of Array.isArray(docs) ? docs : [docs]) {
       if (!data?.id) throw new CtoxError('invalid', 'Document ID required');
       const old = core.docs.get(key(collection, data.id));
+      // K-1c Punkt 10: der Core schreibt Befehlszustände nur vorwärts; ein Terminalzustand entsteht genau einmal
+      if (collection === 'business_commands' && !data._deleted && old?.data && checkCommandTransition(old.data, data)) { core.refused = (core.refused ?? 0) + 1; continue; }
       const seq = decimalSeq(++core.head), deleted = !!data._deleted;
       const doc = deleted ? null : cloneValue(data); if (doc) delete doc._deleted;
       const row = { collection, id: data.id, data: doc, deleted, seq, rev: `${seq}-${fnv1a(JSON.stringify(doc))}` };
@@ -105,10 +108,18 @@ export class MemoryCoreTransport extends KernelTransport {
     let result = this.reject.length ? { status:'rejected', reason:this.reject.shift() } : null;
     if (!result) { const code = this.core.runtime.checkWrite(this.currentUser, entry, old); if (code) result = { status: 'rejected', reason: code }; }
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};
+    // Doppelter Befehl (gleiche id, neue op): geänderte Absicht → idempotency_conflict; gleiche Absicht → angenommen ohne Rückschritt
+    let duplicateCommand = false;
+    if (!result && entry.collection === 'business_commands' && entry.op === 'put' && old?.data && !old.deleted) {
+      const intent = Object.fromEntries(COMMAND_IMMUTABLE_FIELDS.filter((f) => f in (entry.body ?? {})).map((f) => [f, entry.body[f]]));
+      const bad = checkCommandTransition(old.data, { ...old.data, ...intent });
+      if (bad) result = { status: 'rejected', reason: bad.code };
+      else { duplicateCommand = true; result = { status: 'accepted', seq: old.seq, rev: old.rev, doc: cloneValue(old.data), deleted: false }; }
+    }
     let baseRev = entry.base_rev;
     if(baseRev?.startsWith('op:')) baseRev=this.core.ops.get(baseRev.slice(3))?.rev ?? baseRev;
     if(!result && entry.op==='delete' && (baseRev??null)!==(old?.rev??null)) result={status:'rejected',reason:'conflict'};
-    if (!result) {
+    if (!result && !duplicateCommand) {
       let state = applyOp(old ?? {data:null,deleted:false},entry);
       const migration=this.migrate.shift(); let archived_ref;
       if(migration && state.data){ for(const f of migration.dropFields??[]) if(f!=='id') delete state.data[f]; archived_ref=`core_archive:${entry.op_id}`; }
@@ -121,7 +132,7 @@ export class MemoryCoreTransport extends KernelTransport {
     this.core.ops.set(entry.op_id,cloneValue(result));
     // Pages follow the write result through the SAME stream. No separate live path.
     setTimeout(()=>{for(const peer of this.core.listeners) void peer.deliver(entry.collection);},0);
-    if(result.status!=='rejected' && entry.collection==='business_commands' && entry.body?.status==='queued') this.core.spawnCommand({ ...entry.body, actor_id: entry.body.actor_id ?? this.identity?.userId }, 0, this);
+    if(result.status!=='rejected' && !duplicateCommand && entry.collection==='business_commands' && entry.body?.status==='queued') this.core.spawnCommand({ ...entry.body, actor_id: entry.body.actor_id ?? this.identity?.userId }, 0, this);
     return cloneValue(result);
   }
   runCommand(doc) { return this.core.spawnCommand(doc, 0, this); }

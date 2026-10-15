@@ -11,6 +11,7 @@ import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, live
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, docKey, nsName, applyOp, recompute } from './outbox.mjs';
+import { checkCommandTransition } from './command-state.mjs';
 import { SCHEMA_FILE, parseCollectionsFile, classifyCollections, applyMigrationSteps, manifestCollectionsToParsed, parsedToManifestCollections } from './schema-diff.mjs';
 export { CtoxError, uuidv7, sha256Hex, sha256Js } from './values.mjs';
 export { compileQuery, runCompiledQuery } from './app-api.mjs';
@@ -669,7 +670,7 @@ export function createKernel(opts = {}) {
     const out = await db.tx(async (t) => {
       await assertGen(t);
       const key = checkpointKey(scope), previous = await t.get('meta', key);
-      const recs = [];
+      const recs = [], refused = [];
       for (const change of page.docs ?? []) {
         const ns = change.collection ?? page.collection;
         if(ns !== page.collection) throw new CtoxError('invalid', 'Page mixes collections');
@@ -678,6 +679,11 @@ export function createKernel(opts = {}) {
         const old = await t.get('docs', [ns, change.id]);
         if(!old || seqGreater(seq,old.base?.seq ?? '0')) {
           const deleted = change.deleted || change.op === 'delete' || change.op === 'unproject';
+          // K-1c Punkt 10: Befehlsdokumente nur in erlaubter Richtung; ein beendeter Befehl bleibt beendet (genau einmal)
+          if (ns === 'business_commands' && !deleted && old?.base?.data) {
+            const bad = checkCommandTransition(old.base.data, change.data ?? change.doc);
+            if (bad) { refused.push({ id: change.id, ...bad }); continue; }
+          }
           const base = {data: deleted ? null : cloneValue(change.data ?? change.doc),deleted:!!deleted,seq,rev:change.rev};
           const rec = recompute(ns,change.id,base,await t.outboxFor(ns,change.id));
           await putDoc(t,rec); recs.push(rec);
@@ -686,9 +692,10 @@ export function createKernel(opts = {}) {
       await t.put('meta',{key,...scope,cursor_to:maxSeq(previous?.cursor_to ?? '0',cursor),complete:seqGreater(previous?.cursor_to??'0',cursor)?previous.complete:!!page.complete});
       const cp=maxSeq((await t.get('meta','checkpoint'))?.value ?? '0',cursor);
       await t.put('meta',{key:'checkpoint',value:cp});
-      return {recs,cp};
+      return {recs,cp,refused};
     }).catch(err => { if(err instanceof StaleLeader){stepDown();return null;} throw err; });
     if(!out)return;
+    for (const r of out.refused) zoneReport('kernel', { level: 'warn', code: `command.${r.code}`, text: `Befehl ${r.id}: ${r.message} – Zustellung verworfen`, ref: r.id }, 'kernel');
     for(const rec of out.recs)mirrorPut(rec);
     scopeCursors.set(page.collection,maxSeq(scopeCursors.get(page.collection)??'0',cursor));notify('checkpoint');
     scopeBacklog.set(checkpointKey(scope),Math.max(0,Number(page.backlog??0)));
@@ -1887,6 +1894,8 @@ export function createKernel(opts = {}) {
     coreRows: async (collection) => (fakeCore ? [...fakeCore.core.docs.values()].filter((r) => r.collection === collection && !r.deleted && r.data).map((r) => cloneValue(r.data)) : []),
     /** Fake-Harness: Ergebnis der nächsten Agentenläufe ({status:'done'|'failed', result}). */
     agentOutcome: (fn) => fakeCore?.runtime.setAgentOutcome(fn),
+    /** Fake-Core: Write eines anderen Clients direkt an den Core (z. B. doppelte Befehls-id). */
+    coreWrite: (entry) => fakeCore?.write(entry),
     coreLog: () => [...(fakeCore?.runtime.log ?? [])],
     inspectMeta: async (key) => db.get('meta', key),
     /** @deprecated seit §16.19 – Alias für `windowStateRows`. */
