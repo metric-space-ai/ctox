@@ -12,7 +12,7 @@ test('stale leader sends nothing after a generation change before dispatch',asyn
   async subscribe(){}
   async write(){sent++;}
  }
- const transport=new Transport(),kernel=createKernel({instanceId:`fenced-${process.pid}`,userId:'alice',storage:'memory',locks:testLocks,latencyMs:20,transport});
+ const transport=new Transport(),kernel=createKernel({instanceId:`fenced-${process.pid}`,userId:'alice',storage:'memory',locks:testLocks,latencyMs:100,transport});
  await kernel.ready;
  let releaseSuccessor;const held=new Promise(resolve=>{releaseSuccessor=resolve;});
  // A successor already waits for the real lock; the retired tab cannot regain
@@ -26,6 +26,8 @@ test('stale leader sends nothing after a generation change before dispatch',asyn
   // Finish the independent link transaction before changing the generation:
   // its guard must not accidentally kill the dispatch mutation for us.
   assert.equal((await db.get('meta','network')).value.link.state,'online');
+  const reservationDeadline=Date.now()+3000;
+  while(!(await kernel.sim.outbox())[0]?.client_seq){assert.ok(Date.now()<reservationDeadline,'dispatch reservation deadline');await new Promise(r=>setTimeout(r,1));}
   await kernel.sim.bumpLeaderGen();
 
   // Observe the fencing outcome, not an arbitrary delay before the assertion.

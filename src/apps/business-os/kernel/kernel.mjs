@@ -10,7 +10,7 @@ import { assertLeader, acquireGeneration } from './leader.mjs';
 import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
-import { emptyBase, byOpId, docKey, nsName, applyOp, recompute } from './outbox.mjs';
+import { emptyBase, byOpId, enqueueWrite, reserveWrites, docKey, nsName, applyOp, recompute } from './outbox.mjs';
 export { CtoxError, uuidv7, sha256Hex, sha256Js } from './values.mjs';
 export { compileQuery, runCompiledQuery } from './app-api.mjs';
 export { createShellKernel } from './shell-api.mjs';
@@ -70,6 +70,7 @@ export function createKernel(opts = {}) {
   const timers = new Set(), tasks = new Set(), deadlineCancels = new Set();
   const inflight = new Map(); // docKey -> op_id
   const inflightOps = new Set();
+  const reservedOps = new Set();
   const skipBeforeCommit = new Set();
   const uploadProgress = new Map(), uploadsDone = new Set();
   const activationListeners = new Set();
@@ -275,6 +276,7 @@ export function createKernel(opts = {}) {
 
   // ---- Laden, Leiterwahl ----
   async function loadFromStorage() {
+    for (const e of await db.all('outbox')) if (e.client_seq != null) reservedOps.add(e.op_id);
     const docs = await db.all('docs');
     for (const r of docs) mirrorPut(r);
     const metas = await db.all('meta');
@@ -312,6 +314,7 @@ export function createKernel(opts = {}) {
     if (closed) return;
     myGen = await acquireGeneration(db);
     isLeader = true;
+    for (const e of await db.all('outbox')) if (e.client_seq != null) reservedOps.add(e.op_id);
     // Ein neuer Leiter hat alles gelesen, was der alte geschrieben hat (gemeinsame IDB).
     for (const r of await db.all('docs')) mirrorPut(r);
     for (const m of await db.all('meta')) if (m.key.startsWith('activation:')) applyActivationLocal(m, false);
@@ -471,7 +474,7 @@ export function createKernel(opts = {}) {
       const rec = await db.tx(async (t) => {
         if(isLeader)await assertGen(t);
         const stored = await t.get('docs', [ns, id]);
-        await t.put('outbox', entry); // docs + outbox in EINER Transaktion
+        await enqueueWrite(t, entry); // enqueue order + docs + outbox in ONE transaction
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
         await putDoc(t, r);
         return r;
@@ -509,13 +512,13 @@ export function createKernel(opts = {}) {
     if (closed || loggedOut) return false;
     const e = getEntry();
     if (!e) { skipBeforeCommit.add(op_id); return true; } // noch nicht vorbereitet
-    // nur vor dem Senden: Leiter weiß es exakt; ein Leser nur, wenn der Leiter offline ist.
-    const canCancel = isLeader ? !inflightOps.has(op_id) : (followerNet?.link?.state ?? 'online') !== 'online';
+    // Only the leader can synchronously prove that no durable dispatch was reserved.
+    const canCancel = isLeader && !pumping && !inflightOps.has(op_id) && !reservedOps.has(op_id);
     if (!canCancel) return false;
     track((async () => {
       const rec = await db.tx(async (t) => {
         const queued = await t.get('outbox', op_id);
-        if (!queued || queued.sent_gen) return null;
+        if (!queued || queued.sent_gen || queued.client_seq != null) return null;
         await t.del('outbox', op_id);
         const stored = await t.get('docs', [e.collection, e.id]);
         const r = recompute(e.collection, e.id, stored?.base ?? emptyBase(), await t.outboxFor(e.collection, e.id));
@@ -556,18 +559,24 @@ export function createKernel(opts = {}) {
     try {
       do {
         pumpAgain = false;
-        const entries = (await db.all('outbox')).sort(byOpId);
+        const entries = await db.tx(async t => { await assertGen(t); return reserveWrites(t); });
+        for (const e of entries) if (e.client_seq != null) reservedOps.add(e.op_id);
+        // P8's bounded gap buffer holds 64 positions. A blocked document head
+        // must not let thousands of later commands exhaust it after reconnect.
+        const floor = entries.find(e => e.client_seq != null)?.client_seq;
         const first = new Map();
         for (const e of entries) { const k = docKey(e.collection, e.id); if (!first.has(k)) first.set(k, e); }
         for (const [k, e] of first) {
           if (inflight.has(k) || !isLeader || link.state !== 'online') continue;
+          if (e.client_seq != null && BigInt(e.client_seq) >= BigInt(floor) + 64n) continue;
           inflight.set(k, e.op_id);
           inflightOps.add(e.op_id);
           if (e.op === 'upload') setUploadProgress(e.id, Math.floor((uploadProgress.get(e.id)?.total ?? 0) / 2), uploadProgress.get(e.id)?.total ?? 0, true);
           later(() => track(confirm(k, e)), latencyMs);
         }
       } while (pumpAgain);
-    } finally { pumping = false; }
+    } catch (err) { if (err instanceof StaleLeader) stepDown(); else throw err; }
+    finally { pumping = false; }
   }
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
@@ -623,8 +632,9 @@ export function createKernel(opts = {}) {
     let awaitingResult=false;
     try {
       // Mark dispatch and validate the generation in one durable transaction.
-      const sent = await db.tx(async t=>{await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return false;await t.put('outbox',{...entry,sent_gen:myGen});return true;});
+      const sent = await db.tx(async t=>{await assertGen(t);const entry=await t.get('outbox',e.op_id);if(!entry)return false;await t.put('outbox',{...entry,sent_gen:myGen});return entry;});
       if(!sent || closed || !isLeader)return;
+      e = sent;
       if(e.op==='upload') {
         const blob=await db.get('blobs',e.id); await transport.upload(e.id,blob.blob);
         await db.tx(async t=>{await assertGen(t);await t.del('outbox',e.op_id);await t.put('blobs',{...blob,pinned:false});await t.put('meta',{key:`upload_done:${e.id}`,ref:e.id});await bumpLocalSeq(t);});
@@ -665,6 +675,7 @@ export function createKernel(opts = {}) {
     });
     if(!out)return;
     mirrorPut(out.rec);setCheckpoint(out.rec.base.seq);
+    reservedOps.delete(e.op_id);
     const info={op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id};handleWriteResult(info,out.res);
     post({type:'docs',keys:[[e.collection,e.id]]});post({type:'write_result',info,result:out.res});
     const dw=doubleWrite.get(e.collection);
