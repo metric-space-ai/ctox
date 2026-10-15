@@ -454,6 +454,7 @@ pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
                 | BusinessOsPermission::IntegrationsManage
                 | BusinessOsPermission::SecretsManage
                 | BusinessOsPermission::McpManage
+                | BusinessOsPermission::MachinesManage
                 | BusinessOsPermission::AppsInstall
                 | BusinessOsPermission::AppsUninstall
                 | BusinessOsPermission::AppsAssignOwner
@@ -464,7 +465,8 @@ pub fn base_release_rights(collections: &[String]) -> Vec<sync_rights::Right> {
                 | BusinessOsPermission::AppsModify
                 | BusinessOsPermission::AppsRelease
                 | BusinessOsPermission::AppsRollback
-                | BusinessOsPermission::AppsSourceView => {
+                | BusinessOsPermission::AppsSourceView
+                | BusinessOsPermission::AppsSourceEdit => {
                     if admin {
                         RowFilter::All
                     } else if role == BusinessOsRole::Founder {

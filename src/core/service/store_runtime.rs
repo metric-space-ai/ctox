@@ -36,7 +36,7 @@ pub(super) async fn read_snapshot<T: Send + 'static>(
     database: &Database,
     stage: &'static str,
     options: JobOptions,
-    operation: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
+    operation: impl FnOnce(&rusqlite::Connection) -> Result<T, StoreError> + Send + 'static,
 ) -> Result<T, StoreError> {
     let submitted = std::time::Instant::now();
     let timing = Arc::new(Mutex::new(None));
