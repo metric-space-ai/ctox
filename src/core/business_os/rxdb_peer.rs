@@ -2742,7 +2742,7 @@ async fn run_native_peer(
         return Ok(NativePeerExit::ProcessLockUnavailable);
     };
     let configured_signaling_urls = signaling_urls.clone();
-    let mut schema_commits = peer_schema_adapter::subscribe();
+    let mut schema_commits = peer_schema_adapter::subscribe(&store::rxdb_store_path(&root));
     let mut runtime_schema_state = runtime_installed_module_schema_state(&root)?;
     let signaling_base_urls: Vec<String> = signaling_urls
         .into_iter()
@@ -3571,7 +3571,7 @@ async fn run_native_peer(
                         let registries = peer._pools.iter()
                             .map(|session| session.pool().query_fetch_registry.clone())
                             .collect::<Vec<_>>();
-                        if let Err(error) = peer_schema_adapter::apply(&database, &registries, (*creators).clone()).await {
+                        if let Err(error) = peer_schema_adapter::apply(&peer.database, &registries, (*creators).clone()).await {
                             eprintln!("[business-os] committed schema activation incomplete: {error:#}");
                         }
                     }
@@ -3586,7 +3586,7 @@ async fn run_native_peer(
                         let registries = peer._pools.iter()
                             .map(|session| session.pool().query_fetch_registry.clone())
                             .collect::<Vec<_>>();
-                        match peer_schema_adapter::apply(&database, &registries,
+                        match peer_schema_adapter::apply(&peer.database, &registries,
                             runtime_installed_module_collection_creators(&root)).await {
                             Ok(added) => eprintln!("[business-os] registered {} runtime collections without retiring the peer", added.len()),
                             Err(error) => {

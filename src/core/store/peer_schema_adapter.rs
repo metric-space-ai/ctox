@@ -8,26 +8,34 @@ use rxdb::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tokio::sync::watch;
 
 type Snapshot = Option<Arc<HashMap<String, RxCollectionCreator>>>;
-static SCHEMA_COMMITS: OnceLock<watch::Sender<Snapshot>> = OnceLock::new();
+static SCHEMA_COMMITS: OnceLock<Mutex<HashMap<PathBuf, watch::Sender<Snapshot>>>> = OnceLock::new();
 
-fn commits() -> &'static watch::Sender<Snapshot> {
-    SCHEMA_COMMITS.get_or_init(|| watch::channel(None).0)
+fn commits(database: &Path) -> watch::Sender<Snapshot> {
+    SCHEMA_COMMITS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .entry(database.to_path_buf())
+        .or_insert_with(|| watch::channel(None).0)
+        .clone()
 }
 
 /// Called by the daemon registry owner AFTER its schema transaction commits.
-/// A full current snapshot coalesces safely; no credential or grant is carried.
-pub fn committed(creators: HashMap<String, RxCollectionCreator>) {
-    commits().send_replace(Some(Arc::new(creators)));
+/// Use the canonical DbId path, shared with this peer's startup. A full snapshot
+/// coalesces safely; it carries no credential or grant. Different stores never
+/// receive each other's schema updates.
+pub fn committed(database: &Path, creators: HashMap<String, RxCollectionCreator>) {
+    commits(database).send_replace(Some(Arc::new(creators)));
 }
 
-pub fn subscribe() -> watch::Receiver<Snapshot> {
-    let mut receiver = commits().subscribe();
-    // Also consume a registry commit that preceded this peer generation.
+pub fn subscribe(database: &Path) -> watch::Receiver<Snapshot> {
+    let mut receiver = commits(database).subscribe();
     receiver.mark_changed();
     receiver
 }
@@ -50,6 +58,25 @@ pub async fn apply(
             .collect()
     };
     for collection in &existing {
+        let requested = &creators
+            .get(&collection.name)
+            .expect("selected creator")
+            .schema;
+        let normalized = rxdb::rx_schema::create_rx_schema(
+            requested.clone(),
+            database.hash_function.clone(),
+            true,
+        )?;
+        let current = collection
+            .schema
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing active collection schema"))?;
+        anyhow::ensure!(
+            serde_json::to_value(&normalized.json_schema)?
+                == serde_json::to_value(&current.json_schema)?,
+            "schema generation migration required for {}",
+            collection.name
+        );
         creators.remove(&collection.name);
         for registry in registries {
             registry.register(Arc::clone(collection));
@@ -114,7 +141,7 @@ mod tests {
         })
         .await?;
         let token = db.token.clone();
-        let mut updates = subscribe();
+        let mut updates = subscribe(&dir.path().join("sync.sqlite3"));
         updates.borrow_and_update();
         let schema: RxJsonSchema = serde_json::from_value(json!({
             "version":0,"type":"object","primaryKey":"id",
@@ -123,14 +150,17 @@ mod tests {
         }))?;
         let registry = Arc::new(QueryFetchRegistry::new(8));
         let started = std::time::Instant::now();
-        committed(HashMap::from([(
-            "hotplug_notes".into(),
-            RxCollectionCreator {
-                schema,
-                conflict_handler: None,
-                options: HashMap::new(),
-            },
-        )]));
+        committed(
+            &dir.path().join("sync.sqlite3"),
+            HashMap::from([(
+                "hotplug_notes".into(),
+                RxCollectionCreator {
+                    schema: schema.clone(),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]),
+        );
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             updates.changed().await?;
             let snapshot = updates.borrow_and_update().clone().unwrap();
@@ -157,6 +187,26 @@ mod tests {
             "hot-plug must retain the same database incarnation"
         );
         eprintln!("hotplug-read-ms={}", started.elapsed().as_millis());
+        let mut changed = schema;
+        changed.version = 1;
+        let error = apply(
+            &db,
+            &[registry],
+            HashMap::from([(
+                "hotplug_notes".into(),
+                RxCollectionCreator {
+                    schema: changed,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]),
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("active schema edit was silently skipped"))?;
+        assert!(error
+            .to_string()
+            .contains("schema generation migration required"));
         db.close().await?;
         Ok(())
     }
