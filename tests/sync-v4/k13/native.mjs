@@ -25,6 +25,8 @@ export async function connect(h, id) {
   const fixture = await control(page,'prepare',{scenario:id});
   assert.equal(fixture.scenario,id);
   assert.equal(fixture.isolated,true,'Only the runner-owned synthetic tenant may be modified');
+  assert.equal(fixture.revision,h.config.revision,'Fixture must use the checksum-bound daemon revision');
+  assert.equal(fixture.root,h.config.root,'Fixture control must target this runner-owned tenant');
   assert.equal(fixture.instanceId,await page.evaluate(()=>globalThis.__e2eOS.kernel.instanceId));
   return {page,fixture};
 }
