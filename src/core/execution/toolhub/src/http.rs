@@ -70,12 +70,15 @@ pub struct UreqTransport {
 
 /// Resolver for spec adapters: drops every non-public address, fails if none remain.
 #[cfg(feature = "ureq-transport")]
-fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+fn public_only_resolve(netloc: &str, fake_ip_egress: bool) -> std::io::Result<Vec<std::net::SocketAddr>> {
     use std::net::ToSocketAddrs;
     let all: Vec<std::net::SocketAddr> = netloc.to_socket_addrs()?.collect();
     let public: Vec<std::net::SocketAddr> = all
         .into_iter()
-        .filter(|a| !crate::spec::egress::is_forbidden_ip(a.ip()))
+        .filter(|a| {
+            !crate::spec::egress::is_forbidden_ip(a.ip())
+                || (fake_ip_egress && crate::spec::egress::is_benchmark_range(a.ip()))
+        })
         .collect();
     if public.is_empty() {
         return Err(std::io::Error::new(
@@ -89,6 +92,24 @@ fn public_only_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr
 #[cfg(feature = "ureq-transport")]
 impl Default for UreqTransport {
     fn default() -> Self {
+        Self::with_options(TransportOptions::default())
+    }
+}
+
+/// Typed transport options (set by the caller from instance config; no env switches).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportOptions {
+    /// The host network answers DNS with 198.18.0.0/15 "fake IPs" and routes
+    /// them through an egress proxy (sandboxes, some corporate networks). Only
+    /// then may spec adapters connect to that range; all other private ranges
+    /// stay blocked.
+    pub fake_ip_egress: bool,
+}
+
+#[cfg(feature = "ureq-transport")]
+impl UreqTransport {
+    pub fn with_options(options: TransportOptions) -> Self {
+        let fake = options.fake_ip_egress;
         Self {
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(30))
@@ -97,7 +118,7 @@ impl Default for UreqTransport {
             restricted: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(30))
                 .redirects(0)
-                .resolver(public_only_resolve)
+                .resolver(move |netloc: &str| public_only_resolve(netloc, fake))
                 .user_agent(concat!("ctox-toolhub/", env!("CARGO_PKG_VERSION")))
                 .build(),
         }

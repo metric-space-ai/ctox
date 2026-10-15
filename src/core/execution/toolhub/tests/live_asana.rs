@@ -6,9 +6,7 @@ mod support;
 use ctox_toolhub::AuthSchemeKind;
 use serde_json::{json, Value};
 
-#[test]
-#[ignore]
-fn live_read_and_scoped_write_actions() {
+fn scenario() {
     let (Ok(_), Ok(ws), Ok(project)) = (
         std::env::var("CTOX_TOOLHUB_LIVE_ASANA_TOKEN"),
         std::env::var("CTOX_TOOLHUB_LIVE_ASANA_WORKSPACE"),
@@ -69,4 +67,18 @@ fn live_read_and_scoped_write_actions() {
     run("ASANA_DELETE_TASK", json!({"task": new}));
     println!("LIVE SKIP ASANA_CREATE_SECTION (Abschnitte lassen sich über die Tools nicht wieder löschen)");
     assert!(fails.is_empty(), "live failures: {fails:?}");
+}
+
+#[test]
+#[ignore]
+fn live_read_and_scoped_write_actions() {
+    scenario();
+}
+
+/// Same scenario through the hot-plug spec `specs/asana.json` (SpecAdapter).
+#[test]
+#[ignore]
+fn live_read_and_scoped_write_actions_via_spec() {
+    support::use_spec(include_str!("../specs/asana.json"));
+    scenario();
 }

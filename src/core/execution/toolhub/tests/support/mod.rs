@@ -106,10 +106,25 @@ pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str
     use ctox_toolhub::*;
     let var = format!("CTOX_TOOLHUB_LIVE_{}_TOKEN", toolkit.to_ascii_uppercase().replace('-', "_"));
     let token = std::env::var(&var).ok()?;
-    let hub = ToolHub::new(
+    #[allow(unused_mut)]
+    let mut hub = ToolHub::new(
         MemorySecretBackend::default(),
-        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::default())
+        std::sync::Arc::new(ctox_toolhub::http::UreqTransport::with_options(
+            // The CTOX box resolves public hosts to 198.18.x.x behind its egress proxy.
+            ctox_toolhub::http::TransportOptions { fake_ip_egress: true },
+        ))
     );
+    if let Some(spec) = SPEC_MODE.with(|m| m.borrow().clone()) {
+        // Hot-plug path: the bundled spec is installed into a throwaway instance
+        // store, activated and loaded; it replaces the compiled adapter.
+        let root = std::env::temp_dir().join(format!("ctox-live-spec-{}-{toolkit}", std::process::id()));
+        let store = ctox_toolhub::spec::SpecStore::for_instance_root(&root);
+        let v = store.install(&spec).expect("install spec");
+        store.activate(&v.slug, &v.version, "live-test").expect("activate spec");
+        let rep = hub.reload_specs(&store).expect("reload specs");
+        assert!(rep.replaced_builtins.contains(&toolkit.to_string()), "spec not loaded: {rep:?}");
+        assert!(hub.is_spec_toolkit(toolkit));
+    }
     let cfg = AuthConfig { id: "live".into(), toolkit: toolkit.into(), scheme, source: ClientCredentialSource::None, client_id: None, scopes: vec![], enabled: true };
     hub.upsert_auth_config(&cfg, None).expect("auth config");
     hub.connect_with_credential("live", "_instance", "live-test", token.trim()).expect("connect");
@@ -119,6 +134,16 @@ pub fn live_exec(toolkit: &str, scheme: ctox_toolhub::AuthSchemeKind, tool: &str
         Ok(other) => Err(format!("{other:?}")),
         Err(e) => Err(format!("error: {e:#}")),
     })
+}
+
+thread_local! {
+    static SPEC_MODE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run following `live_exec` calls on this thread through the hot-plug spec
+/// (`specs/<slug>.json`) instead of the compiled adapter.
+pub fn use_spec(spec_json: &str) {
+    SPEC_MODE.with(|m| *m.borrow_mut() = Some(spec_json.to_string()));
 }
 
 /// First string value under key `key` anywhere in `v` (depth-first).

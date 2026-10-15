@@ -90,6 +90,11 @@ pub fn is_forbidden_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// 198.18.0.0/15 (RFC 2544 benchmarking), used by fake-IP DNS egress proxies.
+pub fn is_benchmark_range(ip: IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v) if v.octets()[0] == 198 && (18..20).contains(&v.octets()[1]))
+}
+
 /// Egress policy of one spec adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressPolicy {
