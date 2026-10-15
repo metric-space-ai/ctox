@@ -66,20 +66,20 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
         elapsed.extend(worker.await??);
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let present = sync
-            .readers
-            .read(|tx| {
-                tx.query_row("SELECT COUNT(*) FROM c_ctox_queue_tasks", [], |r| {
-                    r.get::<_, u64>(0)
-                })
-            })
-            .await?;
-        if present == 128 {
-            break;
-        }
+    // Only this fixture writes Sync. Wait on its actual ordered head, then
+    // inspect exact row coverage once; do not generate a query per bulk row.
+    while changes.latest().is_none_or(|head| head.head_seq < 128) {
         tokio::time::timeout_at(deadline, changes.changed()).await??;
     }
+    assert_eq!(
+        sync.readers
+            .read(
+                |tx| tx.query_row("SELECT COUNT(*) FROM c_ctox_queue_tasks", [], |r| r
+                    .get::<_, u64>(0))
+            )
+            .await?,
+        128
+    );
     let receipt = core
         .readers
         .read(|tx| {
@@ -123,7 +123,16 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
             Ok(())
         }))?
         .await?;
-    let mut source_commits = core.writer.subscribe_commits();
+    let mut source_commits = OWNERS
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .get(core.writer.db_id().path())
+        .and_then(Weak::upgrade)
+        .unwrap()
+        .publication_progress
+        .subscribe();
     let denied = AckRequest {
         operation_id: "queue-current-owner".into(),
         keys: vec!["queue-owner-fixture-128".into()],
@@ -135,10 +144,23 @@ async fn real_queue_ack_under_load_commits_intent_and_uses_current_target_author
     ack_async(root.clone(), denied, None).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let rejected=core.readers.read(|tx|tx.query_row("SELECT EXISTS(SELECT 1 FROM _publication_outbox WHERE op_id='queue-current-owner:queue-owner-fixture-128' AND state='dead_letter' AND error_code='forbidden')",[],|r|r.get::<_,bool>(0))).await?;
-        if rejected {
+        // Core intentionally has no published head_seq. Its driver notifies
+        // after finish() committed; inspect the canonical indexed receipt API.
+        let status = publication::status(
+            &core.writer,
+            options(),
+            "queue-current-owner:queue-owner-fixture-128".into(),
+        )
+        .await?
+        .unwrap();
+        if status.state == "dead_letter" {
+            assert_eq!(status.error_code.as_deref(), Some("forbidden"));
             break;
         }
+        assert_ne!(
+            status.state, "delivered",
+            "stale target authority accepted the effect"
+        );
         tokio::time::timeout_at(deadline, source_commits.changed()).await??;
     }
     assert!(!sync.readers.read(|tx|tx.query_row("SELECT EXISTS(SELECT 1 FROM c_ctox_queue_tasks WHERE id='queue-owner-fixture-128')",[],|r|r.get::<_,bool>(0))).await?);

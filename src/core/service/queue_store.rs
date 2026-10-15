@@ -27,7 +27,7 @@ use std::{
 };
 use tokio::{
     runtime::Handle,
-    sync::{Notify, RwLock, Semaphore},
+    sync::{watch, Notify, RwLock, Semaphore},
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -297,6 +297,9 @@ pub(crate) struct QueueStore {
     wake: Arc<Notify>,
     admission: Arc<Semaphore>,
     driver: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    // Local notification AFTER the source outbox receipt commits. Core has no
+    // published sequence; consumers read the persisted op_id status on wake.
+    publication_progress: watch::Sender<Option<Delivery>>,
 }
 impl QueueStore {
     pub async fn install(
@@ -337,6 +340,7 @@ impl QueueStore {
         .await?;
         let gate = Arc::new(RwLock::new(()));
         let wake = Arc::new(Notify::new());
+        let (publication_progress, _) = watch::channel(None);
         let owner = Arc::new(Self {
             root,
             core: core.clone(),
@@ -346,6 +350,7 @@ impl QueueStore {
             wake: wake.clone(),
             admission: Arc::new(Semaphore::new(1024)),
             driver: Mutex::new(None),
+            publication_progress: publication_progress.clone(),
         });
         {
             let mut owners = OWNERS
@@ -379,7 +384,7 @@ impl QueueStore {
                 loop {
                     let outcome=publication::deliver_one(&core.writer,&sync.writer,"sync.queue".into(),options(),Receiver{authority:authority.clone(),apply:Arc::new(apply)},now(),RetryPolicy::default()).await;
                     match outcome {
-                        Ok(Delivery::Idle)=>break,Ok(_)=>{},
+                        Ok(Delivery::Idle)=>break,Ok(delivery)=>{publication_progress.send_replace(Some(delivery));},
                         Err(StoreError::Busy)=>{tokio::select!{_=wake.notified()=>{},_=tokio::time::sleep(Duration::from_millis(10))=>{}}},
                         Err(StoreError::Closed) if closing.load(Ordering::Acquire)=>return,
                         Err(_)=>{eprintln!("ctox queue publication stopped: owner job failed");return;}
