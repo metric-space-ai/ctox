@@ -586,6 +586,39 @@ try {
     assert.match(olgSource, /finally \{\s*if \(!preopened\.launched\) await closePreopenedBrowserWindow\(state\.ctx, preopened\.windowId\);/);
     assert.match(olgSource, /preopened\.launched = await openSourceAuthorization\(item, authAssist\);/);
   });
+  await test('a rate-limited Lead read keeps the editor draft and allows a retry', async () => {
+    const { existingLead } = setup();
+    const pending = deferred();
+    const mount = { innerHTML: '', querySelector: () => null, replaceChildren() { this.innerHTML = ''; }, ownerDocument: { activeElement: null } };
+    state.ctx.host.querySelector = selector => selector === '[data-app-dialog]' ? mount : null;
+    state.leadEditorId = existingLead.id;
+    state.leadEditorOpen = true;
+    state.leadEditorContactId = '';
+    state.adapterInspectorSourceId = '';
+    state.leadDraft = { name: 'Aktueller Firmenname', campaign: 'K', country: 'DE' };
+    state.leadDraftOriginal = { name: existingLead.name, campaign: 'K', country: 'DE' };
+    state.collections.leads.findOne = () => ({ exec: () => pending.promise });
+    const save = hooks.saveLeadEditor();
+    assert.equal(state.leadEditorSaving, true);
+    assert.equal(state.leadEditorOpen, true);
+    assert.match(mount.innerHTML, /Wird gespeichert/);
+    assert.match(mount.innerHTML, /disabled/);
+    pending.reject(Object.assign(new Error('RATE_LIMITED: per-peer query-fetch rate limit reached'), { code: 'RATE_LIMITED' }));
+    await save;
+    assert.equal(state.leadEditorSaving, false);
+    assert.equal(state.leadEditorOpen, true, 'a rejected native read cannot close the only copy of the draft');
+    assert.equal(state.leadDraft.name, 'Aktueller Firmenname');
+    assert.match(mount.innerHTML, /Aktueller Firmenname/);
+    assert.match(state.notice, /fehlgeschlagen/);
+    let persisted;
+    state.collections.leads.findOne = () => ({ exec: async () => ({
+      toJSON: () => existingLead,
+      incrementalPatch: async patch => { persisted = patch; },
+    }) });
+    await hooks.saveLeadEditor();
+    assert.equal(persisted.name, 'Aktueller Firmenname');
+    assert.equal(state.leadEditorOpen, false);
+  });
 } finally {
   const state = (await import(pathToFileURL(join(fixture, 'modules', 'olg', 'index.js')).href)).__leadgenOutboundTestHooks.testState();
   state.uiMounted = false;
