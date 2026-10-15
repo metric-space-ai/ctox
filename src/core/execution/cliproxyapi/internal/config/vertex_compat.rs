@@ -39,19 +39,19 @@ pub struct VertexCompatKey {
 }
 
 impl VertexCompatKey {
-#[must_use]
+    #[must_use]
     pub fn api_key(&self) -> &str {
         &self.api_key
     }
-#[must_use]
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
-#[must_use]
+    #[must_use]
     pub fn prefix(&self) -> &str {
         &self.prefix
     }
-#[must_use]
+    #[must_use]
     pub fn proxy_url(&self) -> &str {
         &self.proxy_url
     }
@@ -71,23 +71,23 @@ pub struct VertexCompatModel {
 }
 
 impl VertexCompatModel {
-#[must_use]
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
-#[must_use]
+    #[must_use]
     pub fn alias(&self) -> &str {
         &self.alias
     }
-#[must_use]
+    #[must_use]
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
-#[must_use]
+    #[must_use]
     pub fn force_mapping(&self) -> bool {
         self.force_mapping
     }
-#[must_use]
+    #[must_use]
     pub fn thinking(&self) -> Option<&RegistryThinkingSupport> {
         self.thinking.as_ref()
     }

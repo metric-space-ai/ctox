@@ -503,7 +503,7 @@ mod tests {
         path
     }
 
-#[test]
+    #[test]
     fn auxiliary_backend_enabled_honors_global_disable() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -518,7 +518,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn auxiliary_backend_enabled_honors_disabled_model_selector() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -528,7 +528,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn effective_runtime_env_map_reads_persisted_values_only() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -544,7 +544,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn effective_operator_env_map_excludes_runtime_projection_keys() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -565,7 +565,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn configured_chat_model_prefers_explicit_model_over_stale_base() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -580,7 +580,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn env_or_config_reads_persisted_non_secret_values() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -594,7 +594,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn get_runtime_env_value_caches_non_secret_values_and_invalidates_on_write() {
         let root = make_temp_root();
         set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "balanced").unwrap();
@@ -614,7 +614,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn env_or_config_reads_secrets_only_from_store() {
         // Set conflicting ambient values only in a child test process; changing
         // this process's environment races every other runtime test.
@@ -698,7 +698,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn legacy_runtime_env_secret_migrates_even_when_new_store_has_rows() {
         let root = make_temp_root();
         let legacy_path = crate::persistence::sqlite_path(&root);
@@ -746,7 +746,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn save_runtime_state_projection_preserves_non_runtime_keys() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();

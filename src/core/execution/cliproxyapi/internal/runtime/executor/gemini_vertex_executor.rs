@@ -90,7 +90,7 @@ pub struct GeminiVertexExecutor {
 }
 
 impl GeminiVertexExecutor {
-#[must_use]
+    #[must_use]
     pub fn new(
         registry: Arc<Registry>,
         token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
@@ -109,7 +109,7 @@ impl GeminiVertexExecutor {
         }
     }
 
-#[must_use]
+    #[must_use]
     pub fn with_context(
         registry: Arc<Registry>,
         token_provider: Option<Arc<dyn VertexAccessTokenProvider>>,
@@ -130,7 +130,7 @@ impl GeminiVertexExecutor {
     }
 
     /// Bind the host's existing client configuration and model catalog owner.
-#[must_use]
+    #[must_use]
     pub fn with_request_processor(
         mut self,
         processor: Arc<dyn super::helps::CodexMultiAgentV2Processor + Send + Sync>,
@@ -139,14 +139,14 @@ impl GeminiVertexExecutor {
         self
     }
 
-#[must_use]
+    #[must_use]
     pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
         self.payload_config = config;
         self
     }
 
     /// Bind the owning gateway engine to the same instance translator registry.
-#[must_use]
+    #[must_use]
     pub fn with_canonical_thinking(
         mut self,
         engine: Arc<crate::internal::thinking::ThinkingEngine>,

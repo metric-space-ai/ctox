@@ -34,5 +34,4 @@ pub fn register_gemini_antigravity(registry: &Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

@@ -47,5 +47,4 @@ fn clean_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

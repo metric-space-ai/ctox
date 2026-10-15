@@ -254,7 +254,7 @@ mod tests {
         description, escape_input_fragment, is_custom_tool, parameters, unwrap_input, wrap_input,
     };
 
-#[test]
+    #[test]
     fn recognizes_only_the_custom_apply_patch_name() {
         let custom = gjson::parse(r#"{"type":"custom","name":" apply_patch "}"#);
         let function = gjson::parse(r#"{"type":"function","name":"apply_patch"}"#);
@@ -264,7 +264,7 @@ mod tests {
         assert!(!is_custom_tool(&other));
     }
 
-#[test]
+    #[test]
     fn description_keeps_grammar_and_drops_the_freeform_wrapper() {
         let tool = gjson::parse(
             r#"{"description":"Edit files only. This is a FREEFORM tool, so do not wrap the patch in JSON. Preserve line endings.","format":{"definition":"*** Environment ID: env\nstart"}}"#,
@@ -278,7 +278,7 @@ mod tests {
         assert!(text.contains("*** Begin Patch"));
     }
 
-#[test]
+    #[test]
     fn wrap_and_escape_match_go_json_encoding() {
         let cases = [
             ("", r#"{"input":""}"#, ""),
@@ -307,7 +307,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn unwrap_rejects_duplicate_extra_and_trailing_json() {
         for arguments in [
             "",

@@ -1424,7 +1424,7 @@ impl PersistentSession {
         )
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn start_with_instructions_and_tool_mode(
         root: &Path,
         settings: &BTreeMap<String, String>,
@@ -1454,7 +1454,7 @@ impl PersistentSession {
         )
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn start_with_native_mode(
         root: &Path,
         settings: &BTreeMap<String, String>,
@@ -3346,7 +3346,7 @@ mod shutdown_tests;
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn queue_cancel_terminal_witness_requires_exact_thread_and_turn() {
         let event = |thread: &str, turn: Option<&str>| {
             InProcessServerEvent::LegacyNotification(JSONRPCNotification {
@@ -3398,7 +3398,7 @@ mod tests {
         })
     }
 
-#[test]
+    #[test]
     fn direct_plan_v2_persists_real_steps_before_review_without_legacy_start() -> Result<()> {
         use crate::context::lcm;
         let notification = plan_v2_notification(
@@ -3463,7 +3463,7 @@ mod tests {
         Ok(())
     }
 
-#[test]
+    #[test]
     fn direct_plan_v2_rejects_foreign_thread_and_stale_turn() {
         for (thread, turn) in [("foreign", "current"), ("current", "stale")] {
             let notification = plan_v2_notification(
@@ -3475,7 +3475,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn direct_plan_v2_and_legacy_deduplicate_in_either_order_but_keep_changes() {
         for typed_first in [true, false] {
             let notification = plan_v2_notification(
@@ -3552,7 +3552,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn direct_sessions_receive_the_managed_linux_sandbox_executable() {
         let paths = direct_session_arg0_paths();
 
@@ -3563,7 +3563,7 @@ mod tests {
         assert!(paths.ctox_linux_sandbox_exe.is_none());
     }
 
-#[test]
+    #[test]
     fn business_os_mcp_thread_config_is_local_scoped_and_tool_bounded() {
         let config =
             business_os_mcp_thread_config("0.0.0.0:9877", "test-secret", "command-session")
@@ -3618,7 +3618,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn business_os_mcp_thread_config_exposes_scheduled_supervisor_tools() {
         let config =
             business_os_mcp_thread_config("127.0.0.1:8788", "test-secret", "command-session")
@@ -3642,7 +3642,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn business_os_mcp_thread_config_rejects_remote_urls_and_empty_tokens() {
         assert!(business_os_mcp_thread_config(
             "https://example.com/mcp",
@@ -3654,7 +3654,7 @@ mod tests {
         assert!(business_os_mcp_thread_config("127.0.0.1:8788", "secret", " ").is_err());
     }
 
-#[test]
+    #[test]
     fn managed_linux_sandbox_override_survives_turn_rebuilds() {
         let mut overrides = vec![(
             "features.use_legacy_landlock".to_string(),
@@ -3682,7 +3682,7 @@ mod tests {
         );
     }
 
-#[cfg(target_os = "linux")]
+    #[cfg(target_os = "linux")]
     #[test]
     fn managed_worker_default_readable_roots_cover_install_wrapper_and_resolver() {
         use std::os::unix::fs::symlink;
@@ -3726,7 +3726,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn managed_linux_workers_cannot_read_sibling_workspaces() {
         use ctox_protocol::protocol::ReadOnlyAccess;
 
@@ -3757,7 +3757,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn managed_worker_scope_adds_exact_app_roots() {
         use ctox_protocol::protocol::ReadOnlyAccess;
 
@@ -3782,7 +3782,7 @@ mod tests {
         ));
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn native_guest_startup_disables_inherited_background_execution() -> Result<()> {
         use ctox_core::features::Feature;
         let home = tempfile::tempdir()?;
@@ -3842,7 +3842,7 @@ enable_fanout = true
         Ok(())
     }
 
-#[test]
+    #[test]
     fn worker_sessions_enable_web_stack_and_forbid_free_subagents() {
         let mut overrides = vec![
             ("tools.ctox_web".to_string(), toml::Value::Boolean(false)),
@@ -3874,7 +3874,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn tool_disabled_review_sessions_do_not_enable_worker_tools() {
         let mut overrides = Vec::new();
 
@@ -3883,7 +3883,7 @@ enable_fanout = true
         assert!(overrides.is_empty());
     }
 
-#[test]
+    #[test]
     fn persistent_worker_thread_name_is_stable_and_root_scoped() {
         let first = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
         let same = persistent_worker_thread_name(Path::new("/tmp/ctox-a"));
@@ -3894,7 +3894,7 @@ enable_fanout = true
         assert!(first.starts_with(CTOX_PERSISTENT_WORKER_THREAD_NAME));
     }
 
-#[test]
+    #[test]
     fn openai_subscription_auth_only_applies_to_openai_provider() {
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -3913,7 +3913,7 @@ enable_fanout = true
         ));
     }
 
-#[test]
+    #[test]
     fn openai_subscription_auth_accepts_compatibility_aliases() {
         for value in [
             "subscription",
@@ -3931,7 +3931,7 @@ enable_fanout = true
         }
     }
 
-#[test]
+    #[test]
     fn selected_model_prefers_resolved_runtime_over_stale_settings() {
         let mut settings = BTreeMap::new();
         settings.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.5".to_string());
@@ -3943,7 +3943,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn selected_model_uses_settings_without_resolved_runtime() {
         let mut settings = BTreeMap::new();
         settings.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
@@ -3963,7 +3963,7 @@ enable_fanout = true
         root
     }
 
-#[test]
+    #[test]
     fn override_base_instructions_stand_alone_without_worker_prompt() {
         let root = compose_test_root("override-base");
         let instructions = compose_base_instructions(
@@ -3980,14 +3980,14 @@ enable_fanout = true
         assert!(!instructions.contains("You are CTOX, the personal CTO agent"));
     }
 
-#[test]
+    #[test]
     fn exact_prompt_budget_keeps_generation_headroom() {
         assert_eq!(exact_prompt_safe_input_budget(131_072), 98_304);
         assert_eq!(exact_prompt_safe_input_budget(1), 1);
         assert_eq!(exact_prompt_safe_input_budget(0), 1);
     }
 
-#[test]
+    #[test]
     fn exact_prompt_preflight_reuses_precomputed_count() {
         let precomputed = ExactPromptTokenCount {
             tokens: 123,
@@ -4005,7 +4005,7 @@ enable_fanout = true
         assert_eq!(count, precomputed);
     }
 
-#[test]
+    #[test]
     fn tokenizer_response_parser_accepts_llama_tokens_array() {
         assert_eq!(
             parse_tokenize_count(r#"{"tokens":[1,2,3],"pieces":[]}"#).unwrap(),
@@ -4013,14 +4013,14 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn tokenizer_response_parser_accepts_count_fields() {
         assert_eq!(parse_tokenize_count(r#"{"n_tokens":42}"#).unwrap(), 42);
         assert_eq!(parse_tokenize_count(r#"{"token_count":17}"#).unwrap(), 17);
         assert_eq!(parse_tokenize_count(r#"{"count":9}"#).unwrap(), 9);
     }
 
-#[test]
+    #[test]
     fn tokenizer_base_url_does_not_fallback_to_stale_port_for_ipc_runtime() {
         let binding = runtime_kernel::ResolvedRuntimeBinding {
             workload: runtime_kernel::InferenceWorkloadRole::PrimaryGeneration,
@@ -4043,7 +4043,7 @@ enable_fanout = true
         assert!(!err.contains("127.0.0.1:1234"));
     }
 
-#[test]
+    #[test]
     fn performance_preset_sets_low_reasoning_for_gpt_54_mini() {
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -4057,7 +4057,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn explicit_reasoning_effort_overrides_performance_default() {
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -4075,7 +4075,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn runtime_performance_preset_sets_low_reasoning_for_provider_prefixed_model() {
         let settings = BTreeMap::new();
 
@@ -4085,7 +4085,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn quality_preset_does_not_force_low_reasoning() {
         let mut settings = BTreeMap::new();
         settings.insert("CTOX_CHAT_LOCAL_PRESET".to_string(), "Quality".to_string());
@@ -4096,7 +4096,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn control_request_timeout_defaults_without_deadline() {
         assert_eq!(
             direct_session_control_request_timeout(None),
@@ -4104,7 +4104,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn control_request_timeout_is_capped_by_default() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
 
@@ -4114,7 +4114,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn control_request_timeout_honors_near_deadline() {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
         let timeout = direct_session_control_request_timeout(Some(deadline));
@@ -4123,7 +4123,7 @@ enable_fanout = true
         assert!(timeout <= Duration::from_millis(50));
     }
 
-#[test]
+    #[test]
     fn legacy_notification_thread_scoping_extracts_ids() {
         let scoped = JSONRPCNotification {
             method: "codex/event/agent_message".to_string(),
@@ -4152,7 +4152,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn direct_session_ignores_stream_delta_events_before_deserialize() {
         let before = DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed);
         let notif = JSONRPCNotification {
@@ -4172,7 +4172,7 @@ enable_fanout = true
         );
     }
 
-#[test]
+    #[test]
     fn direct_session_extracts_agent_message_events() {
         let before = DIRECT_SESSION_EVENT_DESERIALIZE_CALLS.load(AtomicOrdering::Relaxed);
         let notif = JSONRPCNotification {

@@ -232,14 +232,14 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn facade_loads_and_resolves_only_against_injected_root() {
         let source = MemoryDocument(Mutex::new(b"plugins:\n  dir: ~/extensions\n".to_vec()));
         let config = load_config(&source, Path::new("/srv/ctox")).unwrap();
         assert_eq!(config.plugins.dir, "/srv/ctox/extensions");
     }
 
-#[test]
+    #[test]
     fn optional_and_parse_semantics_delegate_to_internal_core() {
         let empty = MemoryDocument(Mutex::new(Vec::new()));
         assert!(load_config(&empty, Path::new("/data")).is_err());
@@ -253,7 +253,7 @@ mod tests {
         assert!(parse_config_bytes(b"unknown: true\n", Path::new("/data")).is_err());
     }
 
-#[test]
+    #[test]
     fn injected_sink_preserves_leading_comments_and_updates_nested_scalars() {
         let document = MemoryDocument(Mutex::new(
             b"# retained\nplugins:\n  enabled: false\n".to_vec(),

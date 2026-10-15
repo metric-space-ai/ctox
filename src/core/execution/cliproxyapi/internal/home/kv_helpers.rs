@@ -156,5 +156,4 @@ pub fn kv_log_prefix(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

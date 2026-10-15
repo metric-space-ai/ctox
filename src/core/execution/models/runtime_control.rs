@@ -1771,7 +1771,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn grok_selection_requires_an_installed_account_and_live_model_membership() {
         assert!(select_grok_subscription_route("grok-4.7", false, || panic!(
             "no account, no discovery"
@@ -1791,7 +1791,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn live_grok_selection_replaces_the_cloud_proxy_route() {
         let root = make_temp_root();
         let route =
@@ -1834,7 +1834,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn switching_away_does_not_retain_the_grok_only_provider() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::from([
@@ -1864,7 +1864,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn rollback_restores_the_previous_cloud_proxy_not_the_new_subscription_route() {
         let root = make_temp_root();
         let mut state = test_runtime_state(runtime_state::InferenceSource::Api);
@@ -1916,7 +1916,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn api_runtime_selection_persists_requested_switch_transaction() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -1936,7 +1936,7 @@ mod tests {
         assert_eq!(txn.requested_source, runtime_state::InferenceSource::Api);
     }
 
-#[test]
+    #[test]
     fn switch_phase_updates_error_state() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -1954,7 +1954,7 @@ mod tests {
         assert_eq!(txn.error.as_deref(), Some("backend launch failed"));
     }
 
-#[test]
+    #[test]
     fn reconciliation_marks_local_switch_as_warming_when_backend_is_starting() {
         let root = make_temp_root();
         let mut state = test_runtime_state(runtime_state::InferenceSource::Local);
@@ -2023,7 +2023,7 @@ mod tests {
         assert_eq!(txn.phase, RuntimeSwitchPhase::Warming);
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn reconciliation_promotes_starting_workload_to_committed_when_socket_is_ready() {
         let root = make_temp_root();
@@ -2120,7 +2120,7 @@ mod tests {
         accept_loop.join().unwrap();
     }
 
-#[test]
+    #[test]
     fn local_runtime_is_not_ready_from_ownership_alone() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2157,7 +2157,7 @@ mod tests {
         assert!(!local_runtime_is_ready(&root, &state));
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn reconciliation_marks_local_switch_committed_when_runtime_socket_is_ready() {
         let root = make_temp_root();
@@ -2244,7 +2244,7 @@ mod tests {
         let _ = std::fs::remove_file(ipc_path);
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn reconciliation_does_not_commit_local_switch_from_socket_alone() {
         let root = make_temp_root();
@@ -2298,7 +2298,7 @@ mod tests {
         let _ = std::fs::remove_file(ipc_path);
     }
 
-#[test]
+    #[test]
     fn reconciliation_marks_api_switch_committed_after_local_backend_is_gone() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2329,7 +2329,7 @@ mod tests {
         assert_eq!(txn.phase, RuntimeSwitchPhase::Committed);
     }
 
-#[test]
+    #[test]
     fn committed_local_switch_downgrades_to_failed_when_runtime_disappears() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2375,7 +2375,7 @@ mod tests {
             .is_some_and(|value| value.contains("lost ownership or readiness")));
     }
 
-#[test]
+    #[test]
     fn committed_local_switch_stays_committed_when_owned_runtime_is_busy() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2442,7 +2442,7 @@ mod tests {
         assert!(txn.error.is_none());
     }
 
-#[test]
+    #[test]
     fn warming_local_switch_fails_when_starting_workload_loses_process() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2505,7 +2505,7 @@ mod tests {
             .is_some_and(|value| { value.contains("lost process ownership before readiness") }));
     }
 
-#[test]
+    #[test]
     fn local_model_switch_redeploys_full_runtime_fleet() {
         let previous_state = runtime_state::InferenceRuntimeState {
             source: runtime_state::InferenceSource::Local,
@@ -2528,7 +2528,7 @@ mod tests {
         assert!(!should_release_previous_local_backend(&change, &next_state));
     }
 
-#[test]
+    #[test]
     fn unchanged_local_model_does_not_redeploy_full_runtime_fleet() {
         let previous_state = runtime_state::InferenceRuntimeState {
             source: runtime_state::InferenceSource::Local,
@@ -2553,7 +2553,7 @@ mod tests {
         assert!(!should_release_previous_local_backend(&change, &next_state));
     }
 
-#[test]
+    #[test]
     fn stale_runtime_switch_lock_is_reclaimed() {
         let root = make_temp_root();
         let stale = RuntimeSwitchLeaseRecord {
@@ -2570,7 +2570,7 @@ mod tests {
         assert!(load_runtime_switch_lease_record(&root).unwrap().is_none());
     }
 
-#[test]
+    #[test]
     fn current_runtime_switch_lock_is_not_stale() {
         let root = make_temp_root();
         let current = RuntimeSwitchLeaseRecord {
@@ -2584,7 +2584,7 @@ mod tests {
         assert!(!runtime_switch_lock_is_stale(&root).unwrap());
     }
 
-#[test]
+    #[test]
     fn stale_warming_switch_fails_when_lock_owner_is_gone_and_other_model_is_active() {
         let root = make_temp_root();
         runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
@@ -2654,7 +2654,7 @@ mod tests {
         assert!(load_runtime_switch_lease_record(&root).unwrap().is_none());
     }
 
-#[test]
+    #[test]
     fn local_runtime_selection_does_not_reuse_stale_persisted_plan_for_new_model() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
@@ -2756,7 +2756,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn rollback_runtime_switch_restores_previous_runtime_selection() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
@@ -2863,7 +2863,7 @@ mod tests {
         assert_eq!(restored_plan.model, "Qwen/Qwen3.6-27B");
     }
 
-#[test]
+    #[test]
     fn apply_runtime_selection_does_not_inherit_stale_process_model_env() {
         let root = make_temp_root();
         std::env::set_var("CTOX_CHAT_MODEL", "openai/gpt-oss-120b");
@@ -2886,7 +2886,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn apply_runtime_selection_keeps_explicit_local_model_when_previous_root_points_to_default() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
@@ -2994,7 +2994,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn api_runtime_selection_clears_local_runtime_projection() {
         let root = make_temp_root();
         let previous_plan = runtime_plan::ChatRuntimePlan {
@@ -3112,7 +3112,7 @@ mod tests {
             .is_none());
     }
 
-#[test]
+    #[test]
     fn api_runtime_selection_preserves_explicit_azure_foundry_provider() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();
@@ -3164,7 +3164,7 @@ mod tests {
         );
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn local_runtime_health_accepts_managed_socket_without_http_health() {
         let root = make_temp_root();
@@ -3201,7 +3201,7 @@ mod tests {
         drop(listener);
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn cutover_ready_local_switch_commits_immediately_when_backend_is_ready() {
         let root = make_temp_root();

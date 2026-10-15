@@ -61,7 +61,7 @@ pub struct ClaudeCallbackResult {
 }
 
 impl ClaudeCallbackResult {
-#[must_use]
+    #[must_use]
     pub fn from_parts(code: &str, state: &str, provider_error: &str) -> Self {
         Self {
             code: secret(code),
@@ -574,7 +574,7 @@ mod tests {
         }
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn full_login_uses_injected_callback_and_secret_store_only() {
         let store = Arc::new(Store::default());
         let auth = ClaudeAuthenticator::new(

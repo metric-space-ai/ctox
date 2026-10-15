@@ -1495,7 +1495,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-#[test]
+    #[test]
     fn extract_message_content_blocks_handles_plain_string() {
         let content = json!("hello world");
         let blocks = extract_message_content_blocks(Some(&content));
@@ -1504,7 +1504,7 @@ mod tests {
         assert_eq!(blocks[0]["text"], "hello world");
     }
 
-#[test]
+    #[test]
     fn extract_message_content_blocks_keeps_input_image_as_image_url() {
         let content = json!([
             {"type": "input_text", "text": "look"},
@@ -1517,7 +1517,7 @@ mod tests {
         assert_eq!(blocks[1]["image_url"]["url"], "https://example.com/x.png");
     }
 
-#[test]
+    #[test]
     fn extract_message_content_blocks_converts_image_data_to_data_uri() {
         let content = json!([
             {"type": "input_image", "image_data": "AAAA", "mime_type": "image/jpeg"},
@@ -1528,7 +1528,7 @@ mod tests {
         assert_eq!(blocks[0]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
     }
 
-#[test]
+    #[test]
     fn extract_message_content_blocks_passthrough_openai_image_url() {
         let content = json!([
             {"type": "image_url", "image_url": {"url": "https://example.com/a.webp", "detail": "high"}},
@@ -1540,7 +1540,7 @@ mod tests {
         assert_eq!(blocks[0]["image_url"]["detail"], "high");
     }
 
-#[test]
+    #[test]
     fn message_blocks_contain_image_detects_both_variants() {
         let with_input_image = vec![json!({"type": "input_image", "image_url": "x"})];
         assert!(message_blocks_contain_image(&with_input_image));
@@ -1550,7 +1550,7 @@ mod tests {
         assert!(!message_blocks_contain_image(&only_text));
     }
 
-#[test]
+    #[test]
     fn qwen_runtime_uses_engine_vision_startup() {
         let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
         let runtime = default_runtime_config(LocalModelFamily::Qwen35Vision);
@@ -1561,7 +1561,7 @@ mod tests {
         assert!(command.iter().any(|part| part == "Qwen/Qwen3.6-27B"));
     }
 
-#[test]
+    #[test]
     fn gemma_runtime_uses_engine_vision_startup() {
         let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
         let runtime = default_runtime_config(LocalModelFamily::Gemma4Vision);
@@ -1572,7 +1572,7 @@ mod tests {
         assert!(command.iter().any(|part| part == "google/gemma-4-31B-it"));
     }
 
-#[test]
+    #[test]
     fn auxiliary_profiles_use_dedicated_engine_subcommands() {
         let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
 
@@ -1608,7 +1608,7 @@ mod tests {
             .any(|part| part == "engineai/Voxtral-4B-TTS-2603"));
     }
 
-#[test]
+    #[test]
     fn cpu_aux_models_have_native_runtime_profiles() {
         assert!(runtime_profile_for_model("legacy-stt-model").is_err());
 
@@ -1618,7 +1618,7 @@ mod tests {
         assert!(tts.isq.is_none());
     }
 
-#[test]
+    #[test]
     fn source_layout_paths_use_harness_runtime_root() {
         let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
         assert_eq!(deps.tools_root, PathBuf::from("/tmp/ctox/src/tools"));
@@ -1632,7 +1632,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn pa_cache_type_is_manifest_owned() {
         let env_map = BTreeMap::new();
         assert_eq!(
@@ -1642,7 +1642,7 @@ mod tests {
         assert_eq!(resolve_pa_cache_type(None, &env_map), None);
     }
 
-#[test]
+    #[test]
     fn supported_model_retains_manifest_cache_type_even_when_env_requests_override() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -1655,7 +1655,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn supported_model_keeps_manifest_turboquant_default() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -1668,7 +1668,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn gemma4_keeps_manifest_cache_type_even_when_env_requests_change() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -1684,7 +1684,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn cache_override_is_ignored_for_non_paged_attention_family() {
         let mut env_map = BTreeMap::new();
         env_map.insert(
@@ -1697,7 +1697,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn supported_cache_override_promotes_paged_attention_from_off() {
         assert_eq!(
             resolve_model_paged_attn("Qwen/Qwen3.6-35B-A3B", "off", Some("turboquant3")),
@@ -1705,7 +1705,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn harmony_prompt_inlines_function_tool_namespace() {
         let prompt = build_gpt_oss_harmony_prompt(
             "Be precise.",
@@ -1729,7 +1729,7 @@ mod tests {
         assert!(prompt.contains("type exec_command = (_: {"));
     }
 
-#[test]
+    #[test]
     fn recognizes_minimax_m3_api_chat_model() {
         assert!(is_minimax_api_chat_model("MiniMax-M3"));
         assert!(is_minimax_api_chat_model("MiniMax-M3.1-Flash-Preview"));
@@ -1750,7 +1750,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn recognizes_kimi_k3_as_ctox_proxy_model() {
         assert!(is_ctox_proxy_api_chat_model("kimi-k3"));
         assert!(is_api_chat_model("kimi-k3"));
@@ -1775,7 +1775,7 @@ mod tests {
         assert!(!api_provider_supports_model("minimax", "kimi-k3"));
     }
 
-#[test]
+    #[test]
     fn responses_rewrite_wraps_and_filters_tools() {
         let payload = serde_json::json!({
             "tools": [
@@ -1800,7 +1800,7 @@ mod tests {
         assert!(value.get("max_tool_calls").is_none());
     }
 
-#[test]
+    #[test]
     fn responses_rewrite_preserves_structured_input_and_instructions() {
         let payload = serde_json::json!({
             "instructions": "System rule",
@@ -1820,7 +1820,7 @@ mod tests {
         assert_eq!(value["input"], payload["input"]);
     }
 
-#[test]
+    #[test]
     fn openai_responses_rewrite_flattens_namespace_tools() {
         let payload = serde_json::json!({
             "tools": [
@@ -1847,7 +1847,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_gpt_oss_chat_completions() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -1872,7 +1872,7 @@ mod tests {
         assert_eq!(value["messages"][1]["content"], "Do the thing");
     }
 
-#[test]
+    #[test]
     fn exact_text_requests_keep_gpt_oss_thinking_enabled() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -1889,7 +1889,7 @@ mod tests {
         assert_eq!(value["reasoning_effort"], "low");
     }
 
-#[test]
+    #[test]
     fn reasoning_none_disables_gpt_oss_thinking() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -1908,7 +1908,7 @@ mod tests {
         assert_eq!(value["max_tokens"], 16);
     }
 
-#[test]
+    #[test]
     fn minimal_reasoning_keeps_gpt_oss_thinking_enabled() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -1925,7 +1925,7 @@ mod tests {
         assert_eq!(value["reasoning_effort"], "low");
     }
 
-#[test]
+    #[test]
     fn short_output_budget_keeps_gpt_oss_thinking_enabled() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -1944,7 +1944,7 @@ mod tests {
         assert_eq!(value["max_tokens"], 128);
     }
 
-#[test]
+    #[test]
     fn caps_gpt_oss_reasoning_effort_when_requested_value_is_higher() {
         assert_eq!(
             cap_gpt_oss_reasoning_effort("medium", Some("low")),
@@ -1964,14 +1964,14 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn caps_gpt_oss_max_output_tokens_when_cap_is_present() {
         assert_eq!(cap_gpt_oss_max_output_tokens(1024, Some(384)), 384);
         assert_eq!(cap_gpt_oss_max_output_tokens(128, Some(384)), 128);
         assert_eq!(cap_gpt_oss_max_output_tokens(256, None), 256);
     }
 
-#[test]
+    #[test]
     fn gpt_oss_thinking_output_floor_avoids_tiny_budgets() {
         assert_eq!(
             ensure_gpt_oss_thinking_output_floor("openai/gpt-oss-120b", 16),
@@ -1991,7 +1991,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_glm_chat_without_thinking_by_default() {
         let payload = serde_json::json!({
             "model": "zai-org/GLM-4.7-Flash",
@@ -2011,7 +2011,7 @@ mod tests {
         assert!(value.get("reasoning_effort").is_none());
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_qwen_chat_without_thinking_by_default() {
         let payload = serde_json::json!({
             "model": "Qwen/Qwen3.5-4B",
@@ -2030,7 +2030,7 @@ mod tests {
         assert_eq!(value["enable_thinking"], false);
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_nemotron_chat_without_thinking_by_default() {
         let payload = serde_json::json!({
             "model": "nvidia/Nemotron-Cascade-2-30B-A3B",
@@ -2049,7 +2049,7 @@ mod tests {
         assert_eq!(value["enable_thinking"], false);
     }
 
-#[test]
+    #[test]
     fn rewrites_nemotron_think_tags_back_to_responses_reasoning() {
         let payload = serde_json::json!({
             "id":"abc",
@@ -2070,7 +2070,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "CTOX_OK");
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_qwen_chat_with_explicit_reasoning() {
         let payload = serde_json::json!({
             "model": "Qwen/Qwen3.5-4B",
@@ -2086,7 +2086,7 @@ mod tests {
         assert_eq!(value["enable_thinking"], true);
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_glm_chat_with_explicit_reasoning() {
         let payload = serde_json::json!({
             "model": "zai-org/GLM-4.7-Flash",
@@ -2103,7 +2103,7 @@ mod tests {
         assert_eq!(value["reasoning_effort"], "high");
     }
 
-#[test]
+    #[test]
     fn translates_harmony_completion_back_to_responses() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2126,7 +2126,7 @@ mod tests {
         assert_eq!(value["usage"]["output_tokens"], 7);
     }
 
-#[test]
+    #[test]
     fn translates_gpt_oss_chat_completions_back_to_responses() {
         let payload = serde_json::json!({
             "id":"chatcmpl-123",
@@ -2153,7 +2153,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "CTOX_OK");
     }
 
-#[test]
+    #[test]
     fn exact_text_override_normalizes_gpt_oss_chat_completion_output() {
         let payload = serde_json::json!({
             "id":"chatcmpl-123",
@@ -2179,7 +2179,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "OK");
     }
 
-#[test]
+    #[test]
     fn harmony_prompt_without_tools_has_explicit_final_contract() {
         let prompt = build_gpt_oss_harmony_prompt(
             "",
@@ -2199,7 +2199,7 @@ mod tests {
         assert!(!prompt.contains("<|start|>assistant<|channel|>final<|message|>"));
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_gpt_oss_completion() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -2223,7 +2223,7 @@ mod tests {
         assert!(prompt.ends_with("<|start|>assistant"));
     }
 
-#[test]
+    #[test]
     fn translates_responses_request_to_gpt_oss_completion_without_thinking() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -2245,7 +2245,7 @@ mod tests {
         assert!(prompt.contains("return exactly that text and nothing else"));
     }
 
-#[test]
+    #[test]
     fn gpt_oss_completion_rewrite_appends_harmony_stop_markers() {
         let payload = serde_json::json!({
             "model": "openai/gpt-oss-120b",
@@ -2262,7 +2262,7 @@ mod tests {
         assert_eq!(value["stop"], json!(["DONE", "<|return|>", "<|call|>"]));
     }
 
-#[test]
+    #[test]
     fn does_not_extract_exact_text_override_from_latest_user_message() {
         let payload = json!({
             "input": [
@@ -2289,7 +2289,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn does_not_extract_exact_text_override_from_embedded_user_clause() {
         let payload = json!({
             "input": [
@@ -2306,7 +2306,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn does_not_extract_exact_text_override_from_german_embedded_user_clause() {
         let payload = json!({
             "input": [
@@ -2323,7 +2323,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn does_not_extract_exact_text_override_for_workspace_build_request() {
         let payload = json!({
             "tools": [
@@ -2359,7 +2359,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn workspace_build_request_with_exact_marker_keeps_gpt_oss_tools() {
         let payload = json!({
             "model": "openai/gpt-oss-120b",
@@ -2402,7 +2402,7 @@ mod tests {
         assert_eq!(value["tools"].as_array().map(|tools| tools.len()), Some(1));
     }
 
-#[test]
+    #[test]
     fn exact_text_override_normalizes_gpt_oss_completion_output() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2422,7 +2422,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "OK");
     }
 
-#[test]
+    #[test]
     fn prefers_last_explicit_harmony_final_message() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2441,7 +2441,7 @@ mod tests {
         assert_eq!(value["output_text"], "CTOX_LAST_FINAL");
     }
 
-#[test]
+    #[test]
     fn strips_plaintext_harmony_channel_leakage_from_gpt_oss() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2462,7 +2462,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "GPTOSS_OK");
     }
 
-#[test]
+    #[test]
     fn extracts_plaintext_final_payload_after_analysis_leakage() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2481,7 +2481,7 @@ mod tests {
         assert_eq!(value["output_text"], "CTOX_RECOVERED");
     }
 
-#[test]
+    #[test]
     fn strips_real_world_plaintext_harmony_channel_leakage_from_gpt_oss() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2502,7 +2502,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "GPTOSS_OK");
     }
 
-#[test]
+    #[test]
     fn strips_real_world_plaintext_harmony_channel_leakage_with_trailing_assistant() {
         let payload = serde_json::json!({
             "id":"123",
@@ -2523,7 +2523,7 @@ mod tests {
         assert_eq!(value["output"][0]["content"][0]["text"], "GPTOSS_OK");
     }
 
-#[test]
+    #[test]
     fn translates_harmony_tool_call_back_to_responses() {
         let payload = serde_json::json!({
             "id":"456",
@@ -2545,7 +2545,7 @@ mod tests {
         assert_eq!(value["output"][0]["name"], "shell_command");
     }
 
-#[test]
+    #[test]
     fn normalizes_relaxed_exec_command_multiline_string_arguments() {
         let raw = "{\n\"cmd\": \"apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: foo.txt\n+hello\n*** End Patch\nPATCH\"\n}";
         let normalized = normalize_function_call_arguments("exec_command", raw);
@@ -2556,7 +2556,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn normalizes_relaxed_exec_command_array_arguments() {
         let raw = r#"{"cmd":["bash","-lc","printf CTOX_OK"],"yield_time_ms":1000}"#;
         let normalized = normalize_function_call_arguments("exec_command", raw);
@@ -2567,7 +2567,7 @@ mod tests {
         assert_eq!(value["yield_time_ms"], 1000);
     }
 
-#[test]
+    #[test]
     fn normalizes_apply_patch_array_to_heredoc_command() {
         let raw = r#"{"cmd":["apply_patch","*** Begin Patch\n*** Add File: hello.txt\n+hi\n*** End Patch"]}"#;
         let normalized = normalize_function_call_arguments("exec_command", raw);
@@ -2578,7 +2578,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn translates_harmony_completion_to_sse() {
         let payload = serde_json::json!({
             "id":"789",
@@ -2597,7 +2597,7 @@ mod tests {
         assert!(text.contains("\"type\":\"response.completed\""));
     }
 
-#[test]
+    #[test]
     fn emits_added_and_done_frames_for_web_search_calls() {
         let payload = serde_json::json!({
             "id": "resp_ws",
@@ -2623,7 +2623,7 @@ mod tests {
         assert!(text.contains("\"query\":\"weather berlin\""));
     }
 
-#[test]
+    #[test]
     fn gemma4_request_translation_preserves_named_tool_outputs() {
         let payload = serde_json::json!({
             "model": "google/gemma-4-26B-A4B-it",
@@ -2659,7 +2659,7 @@ mod tests {
         assert_eq!(messages[3]["content"], "{\"temp_c\":18}");
     }
 
-#[test]
+    #[test]
     fn gemma4_request_translation_splits_assistant_thought_channel_for_hf_template() {
         let payload = serde_json::json!({
             "model": "google/gemma-4-31B-it",
@@ -2682,7 +2682,7 @@ mod tests {
         assert_eq!(messages[0]["reasoning_content"], "Need a quick check.");
     }
 
-#[test]
+    #[test]
     fn gemma4_response_translation_parses_channel_reasoning_and_tool_calls() {
         let payload = serde_json::json!({
             "id":"gemma123",
@@ -2713,7 +2713,7 @@ mod tests {
         assert_eq!(value["usage"]["input_tokens"], 9);
     }
 
-#[test]
+    #[test]
     fn gemma4_response_translation_keeps_visible_text_alongside_raw_tool_calls() {
         let payload = serde_json::json!({
             "id":"gemma789",
@@ -2743,7 +2743,7 @@ mod tests {
         assert_eq!(output[1]["arguments"], "{\"city\":\"Berlin\"}");
     }
 
-#[test]
+    #[test]
     fn gemma4_response_translation_keeps_structured_message_fields() {
         let payload = serde_json::json!({
             "id":"gemma456",

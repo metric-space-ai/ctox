@@ -249,7 +249,7 @@ pub struct CodexAuthenticator {
 }
 
 impl CodexAuthenticator {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         service: Arc<dyn CodexOAuthService>,
         callback: Arc<dyn CodexCallbackSession>,
@@ -551,8 +551,7 @@ fn secret_eq(left: &SecretString, right: &SecretString) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-#[test]
+    #[test]
     fn callback_debug_redacts_secrets() {
         let result = CodexCallbackResult::from_parts("do-not-leak-code", "do-not-leak-state", "");
         assert!(!format!("{result:?}").contains("do-not-leak"));

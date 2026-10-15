@@ -60,7 +60,7 @@ fn generate_code_challenge(code_verifier: &str) -> String {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn verifier_has_upstream_entropy_length_and_url_safe_alphabet() {
         let codes = generate_pkce_codes().unwrap();
 
@@ -74,7 +74,7 @@ mod tests {
         assert!(!codes.code_challenge.contains('='));
     }
 
-#[test]
+    #[test]
     fn challenge_matches_rfc_7636_s256_vector() {
         assert_eq!(
             generate_code_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
@@ -82,7 +82,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn generated_challenge_is_derived_from_generated_verifier() {
         let codes = generate_pkce_codes().unwrap();
         assert_eq!(

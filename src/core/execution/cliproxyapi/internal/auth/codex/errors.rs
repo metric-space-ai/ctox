@@ -297,7 +297,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn authentication_error_copies_base_formats_cause_and_omits_it_from_json() {
         let error = new_authentication_error(&ERR_INVALID_STATE, Cause("state mismatch"));
         assert_eq!(error.error_type, "invalid_state");
@@ -317,7 +317,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn errors_as_style_classification_traverses_external_wrappers_only() {
         let wrapped_auth = Wrapper {
             source: Box::new(new_authentication_error(

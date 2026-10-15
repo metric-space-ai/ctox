@@ -1260,7 +1260,7 @@ mod speech_availability_tests {
         SpeechBackend, SpeechGateway, SpeechRuntimeConfig,
     };
 
-#[test]
+    #[test]
     fn status_never_promotes_credential_presence_to_verified_provider_readiness() {
         let root = tempfile::tempdir().unwrap();
         let gateway = SpeechGateway {
@@ -1283,7 +1283,7 @@ mod speech_availability_tests {
         );
     }
 
-#[test]
+    #[test]
     fn a_completed_check_maps_to_available_or_unavailable() {
         assert_eq!(
             availability_from_check(Ok(true)),
@@ -1295,7 +1295,7 @@ mod speech_availability_tests {
         );
     }
 
-#[test]
+    #[test]
     fn a_check_that_could_not_run_is_unknown_not_unavailable() {
         assert_eq!(
             availability_from_check(Err(())),

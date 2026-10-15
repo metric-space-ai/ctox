@@ -106,7 +106,7 @@ mod tests {
 
     const WEB_SEARCH_REQUEST: &[u8] = br#"{"messages":[{"role":"user","content":"weather"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}"#;
 
-#[test]
+    #[test]
     fn default_registration_is_capability_fail_closed() {
         let registry = Registry::new();
         register_claude_antigravity(&registry);
@@ -123,7 +123,7 @@ mod tests {
         assert!(output.pointer("/request/tools/0/googleSearch").is_none());
     }
 
-#[test]
+    #[test]
     fn injected_runtime_capability_enables_only_the_selected_model() {
         let registry = Registry::new();
         register_claude_antigravity_with_capability_resolver(

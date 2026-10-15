@@ -523,7 +523,7 @@ mod tests {
         .unwrap()
     }
 
-#[test]
+    #[test]
     fn secrets_are_redacted_in_debug_and_display() {
         let secret = SecretString::new("top-secret-value").unwrap();
         assert_eq!(secret.to_string(), "[REDACTED]");
@@ -535,7 +535,7 @@ mod tests {
         assert!(!debug.contains("refresh-do-not-leak"));
     }
 
-#[test]
+    #[test]
     fn empty_secrets_and_handles_are_rejected() {
         assert_eq!(SecretString::new(""), Err(TokenError::EmptySecret));
         assert_eq!(
@@ -548,7 +548,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn refresh_is_due_inside_the_four_hour_lead() {
         let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let data = token(issued_at, Duration::from_secs(8 * 60 * 60));
@@ -559,7 +559,7 @@ mod tests {
         assert!(data.is_expired_at(issued_at + Duration::from_secs(9 * 60 * 60)));
     }
 
-#[test]
+    #[test]
     fn credential_handle_pair_rejects_swapped_kinds() {
         let access = ClaudeSecretHandle::new(
             "provider-subscriptions",
@@ -631,7 +631,7 @@ mod tests {
         .unwrap()
     }
 
-#[test]
+    #[test]
     fn storage_persists_rotating_secrets_only_through_typed_store() {
         let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
         let storage = ClaudeTokenStorage::from_token_data(
@@ -654,7 +654,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn adversarial_metadata_cannot_override_or_render_credentials() {
         let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
         let mut storage = ClaudeTokenStorage::from_token_data(
@@ -683,7 +683,7 @@ mod tests {
         assert!(!debug.contains("metadata-do-not-log"));
     }
 
-#[test]
+    #[test]
     fn token_storage_update_rotates_pair_and_keeps_identity_metadata() {
         let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_067_200);
         let mut storage = ClaudeTokenStorage::from_token_data(

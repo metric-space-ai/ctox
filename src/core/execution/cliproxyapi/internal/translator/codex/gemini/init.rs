@@ -44,5 +44,4 @@ fn stream_state(state: &mut TranslationState) -> &mut CodexToGeminiStreamState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

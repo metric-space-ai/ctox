@@ -268,7 +268,7 @@ mod tests {
 
     impl Error for Cause {}
 
-#[test]
+    #[test]
     fn authentication_error_copies_base_and_formats_cause() {
         let error = new_authentication_error(&ERR_INVALID_STATE, Cause("state mismatch"));
         assert_eq!(error.error_type, "invalid_state");

@@ -61,7 +61,6 @@ fn antigravity_web_search_requires_requested_provider_capability() {
 }
 
 // ref: internal/registry/models/models.json @ 16d98881d4bb37adaa827599e4be8f5154e81646
-
 #[test]
 fn catalog_validation_rejects_empty_and_duplicate_ids() {
     let mut catalog = embedded_models_catalog().unwrap();

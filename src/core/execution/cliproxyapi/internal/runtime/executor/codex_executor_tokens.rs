@@ -203,7 +203,7 @@ fn push_raw_field(
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn empty_and_semantic_segments_match_upstream_shape() {
         assert_eq!(count_codex_input_tokens("gpt-5", b"{}").unwrap(), 0);
         let count = count_codex_input_tokens(
@@ -214,7 +214,7 @@ mod tests {
         assert!(count > 20);
     }
 
-#[test]
+    #[test]
     fn model_families_select_distinct_upstream_encodings() {
         let body = r#"{"instructions":"こんにちは世界","input":[]}"#.as_bytes();
         let modern = count_codex_input_tokens("gpt-5-codex", body).unwrap();
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(count_codex_input_tokens("unknown", body).unwrap(), legacy);
     }
 
-#[test]
+    #[test]
     fn response_uses_internal_responses_usage_contract() {
         let payload =
             codex_token_count_response("gpt-5", br#"{"instructions":"hello","input":[]}"#).unwrap();

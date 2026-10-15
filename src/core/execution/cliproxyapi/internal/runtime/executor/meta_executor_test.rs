@@ -1,6 +1,5 @@
 // Canonical host construction must exercise the real preparation/HTTP path;
 // passthrough test engines cannot stand in for production capability rules.
-
 struct ThinkingWithOwnedModel(Arc<crate::internal::modelconfig::ModelInfo>, AtomicUsize);
 impl RequestThinkingEngine for ThinkingWithOwnedModel {
     fn apply_request_thinking(
@@ -24,7 +23,6 @@ impl RequestThinkingEngine for ThinkingWithOwnedModel {
         Ok(input.body.to_vec())
     }
 }
-
 use crate::sdk::cliproxy::auth::{
     AsyncAuthRefresher, AuthPreparationError, AuthPreparer, AuthRefresher,
     ProviderExecutorRegistration, ProviderExecutorRegistry, RefreshExecutorError,

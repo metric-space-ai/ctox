@@ -2,7 +2,6 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 use super::credential_in_flight::*;
-
 #[test]
 fn invalid_timing_capacity_and_closed_schema_fail() {
     let cfg = CredentialInFlightConfig {

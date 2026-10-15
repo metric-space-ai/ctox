@@ -172,7 +172,7 @@ mod tests {
         )
     }
 
-#[test]
+    #[test]
     fn bundle_uses_canonical_token_and_secret_types_without_debug_leaks() {
         let bundle = ClaudeAuthBundle::new(
             Some(SecretString::new("api-key-do-not-leak").unwrap()),

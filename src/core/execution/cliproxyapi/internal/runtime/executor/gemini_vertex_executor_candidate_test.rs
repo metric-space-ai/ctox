@@ -1,6 +1,5 @@
 // ref: internal/runtime/executor/gemini_vertex_executor.go @ d7914afdedca7af95ee974a42453dc49fc1388ce
 // License: MIT (upstream); modifications AGPL-3.0-only
-
 use super::super::helps::{PayloadApplyConfig, PayloadModelRule, PayloadRule};
 
 use super::*;

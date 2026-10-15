@@ -286,7 +286,7 @@ pub fn host_requires_nvidia_cuda(root: &Path) -> bool {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn parses_engine_binary_build_features_from_doctor_json() {
         let raw = br#"{
             "system": {
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(features.label(), "cuda cudnn nccl flash-attn");
     }
 
-#[test]
+    #[test]
     fn command_output_with_timeout_times_out_hung_child() {
         let err = command_output_with_timeout(
             Command::new("sh").args(["-c", "sleep 2"]),

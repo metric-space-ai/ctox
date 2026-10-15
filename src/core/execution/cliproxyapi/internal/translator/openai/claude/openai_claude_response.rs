@@ -1222,7 +1222,7 @@ mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
 
-#[test]
+    #[test]
     fn extract_openai_usage_subtracts_cached_tokens() {
         let raw = r#"{"prompt_tokens":10,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":3}}"#;
         let (input, output, cached) = usage_for_test(raw);
@@ -1231,7 +1231,7 @@ mod tests {
         assert_eq!(cached, 3);
     }
 
-#[test]
+    #[test]
     fn extract_openai_usage_handles_missing_and_null() {
         let raw = r#"{"prompt_tokens":2,"completion_tokens":1}"#;
         let (input, output, cached) = usage_for_test(raw);
@@ -1240,7 +1240,7 @@ mod tests {
         assert_eq!(cached, 0);
     }
 
-#[test]
+    #[test]
     fn non_stream_response_emits_text_and_tool_use() {
         let context = TranslationContext::default();
         let mut state = OpenAIToClaudeStreamState::default();
@@ -1280,7 +1280,7 @@ mod tests {
         assert_eq!(value["usage"]["output_tokens"], 2);
     }
 
-#[test]
+    #[test]
     fn non_stream_response_emits_thinking_and_text() {
         let context = TranslationContext::default();
         let mut state = OpenAIToClaudeStreamState::default();
@@ -1310,7 +1310,7 @@ mod tests {
         assert_eq!(value["stop_reason"], "end_turn");
     }
 
-#[test]
+    #[test]
     fn map_openai_finish_reason_preserves_table() {
         assert_eq!(map_openai_finish_reason_to_anthropic("stop"), "end_turn");
         assert_eq!(

@@ -192,7 +192,7 @@ fn index_view(
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn projection_uses_live_index_and_never_contains_api_keys() {
         let config = ProviderCompatConfig {
             codex_api_key: vec![crate::internal::config::CodexKey {

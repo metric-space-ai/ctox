@@ -445,7 +445,7 @@ fn default_qwen36_llama_cli(root: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn voxtral_stt_backend_assembles_hidden_service_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(backend.model_id, "voxtral-mini-4b-realtime-2602");
     }
 
-#[test]
+    #[test]
     fn voxtral_tts_backend_assembles_hidden_service_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(backend.model_id, "voxtral-4b-tts-2603");
     }
 
-#[test]
+    #[test]
     fn qwen36_27b_backend_assembles_expected_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
@@ -523,7 +523,7 @@ mod tests {
             .ends_with("src/core/inference/models/qwen35_27b_q4km_dflash/target/release/qwen35-27b-q4km-dflash-server"));
     }
 
-#[test]
+    #[test]
     fn qwen35_legacy_backend_assembles_expected_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(backend.model_id, "qwen36-27b-q4km-dflash");
     }
 
-#[test]
+    #[test]
     fn qwen36_backend_assembles_expected_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
@@ -564,7 +564,7 @@ mod tests {
         ));
     }
 
-#[test]
+    #[test]
     fn unsupported_model_returns_none() {
         let root = Path::new("/tmp/ctoxroot");
         assert!(resolve_local_model_backend(LocalModelRequest {

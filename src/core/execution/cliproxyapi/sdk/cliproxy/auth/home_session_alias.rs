@@ -36,7 +36,7 @@ pub struct HomeSessionAliasCache {
 }
 
 impl HomeSessionAliasCache {
-#[must_use]
+    #[must_use]
     pub fn canonical(
         &self,
         primary: &str,
@@ -131,7 +131,7 @@ impl HomeSessionAliasCache {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = HomeSessionAliasState::default();
     }
 
-#[must_use]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.state
             .lock()
@@ -140,7 +140,7 @@ impl HomeSessionAliasCache {
             .len()
     }
 
-#[must_use]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

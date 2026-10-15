@@ -665,7 +665,7 @@ impl LocalListener {
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn http_base_url_only_tcp() {
         let tcp = LocalTransport::TcpLoopback {
             host: "127.0.0.1".to_string(),
@@ -688,7 +688,7 @@ mod tests {
         .is_none());
     }
 
-#[test]
+    #[test]
     fn parses_named_pipe_ipc_endpoints() {
         let transport = LocalTransport::from_ipc_endpoint_string(r"\\.\pipe\ctox-primary");
         assert_eq!(
@@ -699,7 +699,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn default_for_host_prefers_unix_socket_when_available_on_unix() {
         let path = PathBuf::from("/tmp/ctox.sock");
         let transport = LocalTransport::default_for_host(Some(path.clone()), "127.0.0.1", 2234);
@@ -715,7 +715,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn default_for_host_falls_back_to_tcp_when_no_socket_path() {
         let transport = LocalTransport::default_for_host(None, "127.0.0.1", 2234);
         assert_eq!(
@@ -727,7 +727,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn named_pipe_connect_returns_unsupported() {
         let transport = LocalTransport::NamedPipe {
             name: "ctox-x".to_string(),
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
-#[cfg(not(unix))]
+    #[cfg(not(unix))]
     #[test]
     fn unix_socket_connect_on_non_unix_returns_unsupported() {
         let transport = LocalTransport::UnixSocket {
@@ -754,7 +754,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
-#[test]
+    #[test]
     fn probe_rejects_invalid_tcp_host() {
         let transport = LocalTransport::TcpLoopback {
             host: "definitely-not-a-valid-host.invalid".to_string(),
@@ -797,7 +797,7 @@ mod tests {
         server.join().expect("server thread");
     }
 
-#[test]
+    #[test]
     fn tcp_loopback_listener_accepts_and_streams_newline_json() {
         // End-to-end roundtrip over TcpLoopback — the transport Windows uses
         // when Unix sockets are unavailable.
@@ -819,7 +819,7 @@ mod tests {
         );
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     #[test]
     fn unix_socket_listener_accepts_and_streams_newline_json() {
         // SUN_LEN limits the supplied pathname, even when TMPDIR is valid for
@@ -837,14 +837,14 @@ mod tests {
         unix_socket_roundtrip_in(socket_root);
     }
 
-#[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
     #[test]
     fn unix_socket_roundtrip_uses_short_macos_ci_fallback() {
         // Exercise the unmounted-volume branch on the operator's Mac too.
         unix_socket_roundtrip_in(std::path::Path::new("/tmp"));
     }
 
-#[cfg(unix)]
+    #[cfg(unix)]
     fn unix_socket_roundtrip_in(socket_root: &std::path::Path) {
         std::fs::create_dir_all(socket_root).expect("create socket fixture root");
         let dir = tempfile::Builder::new()

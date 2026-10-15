@@ -46,7 +46,7 @@ impl IpDiscoveryPolicy {
         Ok(Self { endpoints, timeout })
     }
 
-#[must_use]
+    #[must_use]
     pub fn endpoints(&self) -> &[Url] {
         &self.endpoints
     }
@@ -99,19 +99,19 @@ pub struct SshCommandPlan {
 }
 
 impl SshCommandPlan {
-#[must_use]
+    #[must_use]
     pub fn program(&self) -> &Path {
         &self.program
     }
 
-#[must_use]
+    #[must_use]
     pub fn args(&self) -> &[OsString] {
         &self.args
     }
 
     /// Human-readable rendering only. Execution must pass `program` and
     /// `args` separately to an injected process runner.
-#[must_use]
+    #[must_use]
     pub fn display(&self) -> String {
         std::iter::once(self.program.as_os_str())
             .chain(self.args.iter().map(OsString::as_os_str))
@@ -178,7 +178,7 @@ impl SshTunnelSpec {
         })
     }
 
-#[must_use]
+    #[must_use]
     pub fn command_plan(&self) -> SshCommandPlan {
         let mut args = Vec::new();
         if let Some(identity) = &self.identity_file {

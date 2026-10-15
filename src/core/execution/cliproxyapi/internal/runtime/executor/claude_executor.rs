@@ -901,7 +901,7 @@ mod tests {
         SecretString::new("credential-do-not-leak").unwrap()
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn stream_bootstrap_waits_for_fragmented_message_start() {
         let (sender, receiver) = mpsc::channel(4);
         sender
@@ -928,7 +928,7 @@ mod tests {
         );
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn stream_bootstrap_rejects_provider_error_before_message_start() {
         let (sender, receiver) = mpsc::channel(1);
         sender
@@ -946,7 +946,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn api_key_uses_x_api_key_only_on_exact_anthropic_https_origin() {
         let prepared = ClaudePreparedAuthorization::prepare(
             &target("HTTPS", "API.ANTHROPIC.COM"),
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(prepared.expose_header_value(), "credential-do-not-leak");
     }
 
-#[test]
+    #[test]
     fn api_key_uses_bearer_for_custom_or_non_https_origin() {
         for target in [
             target("https", "gateway.example.com"),
@@ -987,7 +987,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn oauth_always_uses_bearer_and_debug_is_redacted() {
         let prepared = ClaudePreparedAuthorization::prepare(
             &target("https", "api.anthropic.com"),
@@ -1004,7 +1004,7 @@ mod tests {
         assert!(rendered.contains("[REDACTED]"));
     }
 
-#[test]
+    #[test]
     fn invalid_targets_are_rejected_before_header_creation() {
         assert_eq!(
             ClaudeUpstreamTarget::new("", "api.anthropic.com"),
@@ -1016,7 +1016,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn messages_envelope_owns_zeroizing_body_and_exact_endpoint() {
         let request = ClaudeMessagesRequest::new(
             target("https", "api.anthropic.com"),
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(!rendered.contains("credential-do-not-leak"));
     }
 
-#[test]
+    #[test]
     fn fingerprint_keeps_session_stable_and_request_id_unique() {
         let session_id = Uuid::new_v4().to_string();
         let first = ClaudeMessagesRequest::new_with_session(
@@ -1085,7 +1085,7 @@ mod tests {
         assert!(!rendered.contains(first.fingerprint().client_request_id()));
     }
 
-#[test]
+    #[test]
     fn device_profile_rejects_header_injection() {
         assert_eq!(
             ClaudeDeviceProfile::new(
@@ -1099,7 +1099,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn claude_usage_matches_independent_cache_accounting() {
         let usage = parse_claude_usage(
             br#"{"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}"#,
@@ -1116,7 +1116,7 @@ mod tests {
         assert_eq!(stream.total_tokens, 7);
     }
 
-#[test]
+    #[test]
     fn response_decode_supports_headers_magic_and_typed_failures() {
         let plain = b"data: {\"type\":\"message_start\"}\n\n";
         let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());

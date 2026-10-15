@@ -45,7 +45,7 @@ pub fn static_model_definitions_payload(
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn unported_channels_are_explicit_not_empty_successes() {
         assert_eq!(
             static_model_definitions_payload("unknown"),

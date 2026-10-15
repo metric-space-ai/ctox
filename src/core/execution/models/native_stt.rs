@@ -945,7 +945,7 @@ fn default_backend_for_host(compute_target: engine::ComputeTarget) -> VoxtralStt
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn doctor_reports_native_voxtral_stt_without_fake_text() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-stt-doctor-{}",
@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(status["ok"].as_bool(), Some(false));
     }
 
-#[test]
+    #[test]
     fn live_transcription_requires_actual_streaming_latency_proof() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-live-status-{}",
@@ -1022,7 +1022,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn realtime_proof_alone_does_not_unlock_local_live_streaming() {
         let root = std::env::temp_dir().join(format!(
             "ctox-voxtral-live-proof-{}",
@@ -1059,7 +1059,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-#[test]
+    #[test]
     fn mistral_multipart_body_sends_model_and_wav_file() {
         let body = mistral_stt_multipart_body("boundary", "voxtral-mini-latest", b"RIFFdata");
         let rendered = String::from_utf8_lossy(&body);

@@ -10,7 +10,6 @@ const USAGE: &[u8] = br#"data: {"usage":{"input_tokens":10,"output_tokens":20,"t
 
 /// Semantic counterpart to the upstream single-content-chunk benchmark: the
 /// fast rejection path must leave the already observed tier unchanged.
-
 /// Semantic counterpart to the upstream 100-chunk benchmark: constant-space
 /// observation must retain the first tier and final usage, independent of the
 /// number of irrelevant content chunks.

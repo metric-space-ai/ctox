@@ -24,7 +24,7 @@ impl SecretString {
         Ok(Self(Zeroizing::new(value)))
     }
 
-#[must_use]
+    #[must_use]
     pub fn expose_secret(&self) -> &str {
         self.0.as_str()
     }
@@ -62,27 +62,27 @@ impl KimiTokenData {
         }
     }
 
-#[must_use]
+    #[must_use]
     pub fn access_token(&self) -> &SecretString {
         &self.access_token
     }
 
-#[must_use]
+    #[must_use]
     pub fn refresh_token(&self) -> Option<&SecretString> {
         self.refresh_token.as_ref()
     }
 
-#[must_use]
+    #[must_use]
     pub fn token_type(&self) -> &str {
         &self.token_type
     }
 
-#[must_use]
+    #[must_use]
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
     }
 
-#[must_use]
+    #[must_use]
     pub fn scope(&self) -> &str {
         &self.scope
     }
@@ -95,7 +95,7 @@ pub struct KimiAuthBundle {
 }
 
 impl KimiAuthBundle {
-#[must_use]
+    #[must_use]
     pub fn new(token_data: KimiTokenData, device_id: impl Into<String>) -> Self {
         Self {
             token_data,
@@ -103,12 +103,12 @@ impl KimiAuthBundle {
         }
     }
 
-#[must_use]
+    #[must_use]
     pub fn token_data(&self) -> &KimiTokenData {
         &self.token_data
     }
 
-#[must_use]
+    #[must_use]
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
@@ -147,7 +147,7 @@ impl KimiSecretHandle {
         Ok(Self { id, kind })
     }
 
-#[must_use]
+    #[must_use]
     pub fn kind(&self) -> KimiSecretKind {
         self.kind
     }
@@ -176,7 +176,7 @@ pub struct KimiStoredCredentials {
 }
 
 impl KimiStoredCredentials {
-#[must_use]
+    #[must_use]
     pub fn from_token_data(token_data: &KimiTokenData) -> Self {
         Self {
             access_token: token_data.access_token.clone(),
@@ -184,12 +184,12 @@ impl KimiStoredCredentials {
         }
     }
 
-#[must_use]
+    #[must_use]
     pub fn access_token(&self) -> &SecretString {
         &self.access_token
     }
 
-#[must_use]
+    #[must_use]
     pub fn refresh_token(&self) -> Option<&SecretString> {
         self.refresh_token.as_ref()
     }
@@ -222,7 +222,7 @@ pub struct KimiTokenStorage {
 }
 
 impl KimiTokenStorage {
-#[must_use]
+    #[must_use]
     pub fn from_bundle(bundle: &KimiAuthBundle) -> Self {
         let token = bundle.token_data();
         Self {
@@ -239,37 +239,37 @@ impl KimiTokenStorage {
         self.metadata = metadata;
     }
 
-#[must_use]
+    #[must_use]
     pub fn credentials(&self) -> &KimiStoredCredentials {
         &self.credentials
     }
 
-#[must_use]
+    #[must_use]
     pub fn token_type(&self) -> &str {
         &self.token_type
     }
 
-#[must_use]
+    #[must_use]
     pub fn scope(&self) -> &str {
         &self.scope
     }
 
-#[must_use]
+    #[must_use]
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
 
-#[must_use]
+    #[must_use]
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
     }
 
-#[must_use]
+    #[must_use]
     pub fn metadata(&self) -> &BTreeMap<String, Value> {
         &self.metadata
     }
 
-#[must_use]
+    #[must_use]
     pub fn is_expired_at(&self, now: SystemTime) -> bool {
         self.expires_at.is_some_and(|expires_at| {
             now.checked_add(KIMI_REFRESH_THRESHOLD)
@@ -277,7 +277,7 @@ impl KimiTokenStorage {
         })
     }
 
-#[must_use]
+    #[must_use]
     pub fn needs_refresh_at(&self, now: SystemTime) -> bool {
         self.credentials.refresh_token.is_some() && self.is_expired_at(now)
     }
@@ -354,7 +354,7 @@ impl std::error::Error for KimiSecretStoreError {}
 mod tests {
     use super::*;
 
-#[test]
+    #[test]
     fn storage_refresh_threshold_and_secret_redaction_are_explicit() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         let token = KimiTokenData::new(
@@ -372,7 +372,7 @@ mod tests {
         assert!(!debug.contains("refresh-secret"));
     }
 
-#[test]
+    #[test]
     fn missing_expiry_or_refresh_token_matches_upstream_valid_state() {
         let token = KimiTokenData::new(
             SecretString::new("access").unwrap(),

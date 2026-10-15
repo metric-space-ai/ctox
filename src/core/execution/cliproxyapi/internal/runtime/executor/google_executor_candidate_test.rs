@@ -196,7 +196,6 @@ impl ModelInfoResolver for OwnedResolver {
         (model == self.0.id).then(|| self.0.clone())
     }
 }
-
 async fn operation_contract(kind: Kind) {
     for (stream, count, metadata_count, alt, expected_action, expected_suffix, expected_turns) in [
         (

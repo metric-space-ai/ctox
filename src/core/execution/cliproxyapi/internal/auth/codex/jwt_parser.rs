@@ -90,7 +90,7 @@ impl JwtClaims {
 
     /// ChatGPT plan from the access-token claims. Missing or blank claims use
     /// `free`, which is the upstream default when the claim is absent.
-#[must_use]
+    #[must_use]
     pub fn plan_type(&self) -> &str {
         let plan = self.codex_auth_info.chatgpt_plan_type.trim();
         if plan.is_empty() {
@@ -157,7 +157,7 @@ mod tests {
 
     use super::*;
 
-#[test]
+    #[test]
     fn extracts_account_and_email_without_echoing_token_on_error() {
         let claims = serde_json::json!({
             "email": "operator@example.com",
@@ -177,7 +177,7 @@ mod tests {
         assert!(!format!("{error:?} {error}").contains(secret));
     }
 
-#[test]
+    #[test]
     fn plan_type_defaults_blank_claims_to_free() {
         assert_eq!(JwtClaims::default().plan_type(), DEFAULT_PLAN_TYPE);
         let whitespace = JwtClaims {

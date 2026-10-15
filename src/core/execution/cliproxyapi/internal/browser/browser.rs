@@ -221,7 +221,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn linux_uses_first_available_launcher_and_keeps_url_one_argument() {
         let system = FakeSystem::new("linux", &["firefox", "google-chrome"]);
         let url = "https://example.test/oauth?code=a&state=b;touch /tmp/nope";
@@ -237,7 +237,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn windows_includes_file_protocol_handler_before_url() {
         let system = FakeSystem::new("windows", &["rundll32"]);
 
@@ -252,7 +252,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn platform_info_is_side_effect_free_and_preserves_linux_order() {
         let system = FakeSystem::new("linux", &["google-chrome", "xdg-open"]);
 
@@ -266,7 +266,7 @@ mod tests {
         assert!(system.starts.lock().unwrap().is_empty());
     }
 
-#[test]
+    #[test]
     fn unsupported_and_missing_platforms_fail_explicitly() {
         let unsupported = FakeSystem::new("plan9", &[]);
         let linux = FakeSystem::new("linux", &[]);
@@ -282,7 +282,7 @@ mod tests {
         assert!(!platform_info_with(&linux).available);
     }
 
-#[test]
+    #[test]
     fn availability_uses_injected_authority_without_starting_a_process() {
         let unavailable = FakeSystem::new("linux", &[]);
         let available = FakeSystem::new("linux", &["firefox"]);

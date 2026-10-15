@@ -157,7 +157,7 @@ mod tests {
             "usage":{"input_tokens":13,"cache_read_input_tokens":7,"cache_creation_input_tokens":3,"output_tokens":5}})).unwrap()
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_emits_ordered_blocks_and_raw_tool_input() {
         let raw = br#"{"id":"msg_native","type":"message","role":"assistant","model":"claude-native",
             "content":[{"type":"text","text":"Hello"},
@@ -215,7 +215,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_keeps_citations_in_adapter_and_response() {
         let citation = json!({"type":"web_search_result_location","url":"https://example.invalid",
             "title":"Source","cited_text":"Answer.","encrypted_index":"IDX"});
@@ -235,7 +235,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_chat_preserves_usage_and_terminal_reason() {
         for (reason, expected) in [
             ("end_turn", "stop"),
@@ -290,7 +290,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_responses_preserves_merged_text_tools_and_limits() {
         for (reason, expected) in [
             ("end_turn", "completed"),
@@ -345,7 +345,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_authoritative_model_and_reasoning_survive_aliases() {
         let text = "line1\n\"quoted\" \\ 雪 <tag>";
         let input = json!({"nested":{"text":text,"items":[true,null,2]},"empty":{}});
@@ -379,7 +379,7 @@ mod tests {
         }
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_missing_usage_and_unknown_blocks_remain_valid() {
         let raw = br#"{"type":"message","content":[{"type":"custom","number":2e+09,"number":9}]}"#;
         let (adapted, model) = claude_messages_json_to_sse(raw);
@@ -395,7 +395,7 @@ mod tests {
         assert!(events[3]["delta"]["stop_sequence"].is_null());
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_preserves_sse_request_echo_model() {
         let raw = native(json!([{"type":"text","text":"SSE"}]), "end_turn");
         let (sse, _) = claude_messages_json_to_sse(&raw);
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(response["output"][0]["content"][0]["text"], "SSE");
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_responses_stop_at_protocol_terminator() {
         let raw = native(json!([{"type":"text","text":"accepted"}]), "end_turn");
         let (sse, _) = claude_messages_json_to_sse(&raw);
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(response["usage"]["output_tokens"], 5);
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_text_merges_only_between_non_text_boundaries() {
         let raw = native(
             json!([
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(output[3]["content"][0]["text"], "after");
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_stream_reasoning_and_terminal_usage_match_chat() {
         use crate::internal::translator::claude::openai::chat_completions::{
             convert_claude_response_to_openai_chat_stream, ClaudeToChatStreamState,
@@ -518,7 +518,7 @@ mod tests {
         .is_empty());
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_stream_without_usage_omits_terminal_chunk() {
         use crate::internal::translator::claude::openai::chat_completions::{
             convert_claude_response_to_openai_chat_stream, ClaudeToChatStreamState,
@@ -542,7 +542,7 @@ mod tests {
         .is_empty());
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_stream_tool_indices_ignore_other_blocks() {
         use crate::internal::translator::claude::openai::chat_completions::{
             convert_claude_response_to_openai_chat_stream, ClaudeToChatStreamState,
@@ -588,7 +588,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn candidate_claude_native_json_pretty_payloads_keep_single_line_events() {
         let text = "a b\tline\n\"quoted\" \\ 雪";
         let input = json!({"nested":{"text":text,"items":[true,null,2]}});

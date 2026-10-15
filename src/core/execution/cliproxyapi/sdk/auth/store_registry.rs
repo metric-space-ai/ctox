@@ -14,7 +14,7 @@ pub struct TokenStoreRegistry {
 }
 
 impl TokenStoreRegistry {
-#[must_use]
+    #[must_use]
     pub fn new(store: Option<Arc<dyn AuthStore>>) -> Self {
         Self { store }
     }
@@ -27,7 +27,7 @@ impl TokenStoreRegistry {
         self.store = None;
     }
 
-#[must_use]
+    #[must_use]
     pub fn get(&self) -> Option<Arc<dyn AuthStore>> {
         self.store.clone()
     }

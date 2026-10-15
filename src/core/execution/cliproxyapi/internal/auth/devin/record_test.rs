@@ -27,7 +27,6 @@ fn status() -> DevinUserStatus {
         ..DevinUserStatus::default()
     }
 }
-
 struct UnavailableClient {
     requests: Mutex<Vec<HttpRequest>>,
 }
