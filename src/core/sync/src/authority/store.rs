@@ -151,7 +151,7 @@ impl SqliteStore {
                 .busy_timeout(std::time::Duration::ZERO)
                 .map_err(other)?;
             connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-                PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=0;
+                PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=1000;
                 PRAGMA journal_size_limit=67108864;
                 CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS sync_logs(idx TEXT PRIMARY KEY,value BLOB NOT NULL);
@@ -493,6 +493,7 @@ mod owner_contract_tests {
         let store = SqliteStore::open(&path).unwrap();
         store.run("owner_contract_init", |connection| {
             assert_eq!(connection.pragma_query_value(None, "synchronous", |r| r.get::<_, i64>(0)).map_err(other)?, 2);
+            assert_eq!(connection.pragma_query_value(None, "wal_autocheckpoint", |r| r.get::<_, i64>(0)).map_err(other)?, 1000);
             connection.execute_batch("CREATE TEMP TABLE owner_marker(value INTEGER); INSERT INTO owner_marker VALUES(73);").map_err(other)
         }).await.unwrap();
         let duplicate = SqliteStore::open(&path).unwrap();

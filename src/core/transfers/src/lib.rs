@@ -33,7 +33,7 @@ pub use storage::{
     validate_relative_path, StorageConnection, StorageDirection, StorageResolver, StorageTransfer,
 };
 
-const TRANSFER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
+pub const TRANSFER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ctox_transfer_jobs (
                 id TEXT PRIMARY KEY, request TEXT NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('queued','running','paused','cancelled','failed','completed')),
                 desired TEXT NOT NULL CHECK(desired IN ('run','pause','cancel')),
@@ -358,32 +358,100 @@ fn open_transfer_connection(path: &Path, owned: bool) -> Result<Connection> {
         Duration::from_secs(5)
     })?;
     if owned {
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=0; PRAGMA journal_size_limit=67108864;")?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=67108864;")?;
     }
     // Never inherit the Core writer's NORMAL setting for durable receipts.
     connection.pragma_update(None, "synchronous", "FULL")?;
     Ok(connection)
 }
 
-/// First owned transfer API. Core composition must inject/share this file
-/// owner before retiring Store/Worker compatibility callers. Never run both
-/// ownership paths on the same live Core file.
+/// Typed transfer operation for the existing Core file owner. `apply` runs
+/// inside its transaction; submitters must reply only after that FULL commit.
+pub enum TransferOwnerJob {
+    Enqueue(DownloadRequest),
+    Get(String),
+    Control { id: String, action: String },
+}
+
+impl TransferOwnerJob {
+    /// No connection is opened here. The Core owner must configure FULL before
+    /// BEGIN, initialize TRANSFER_SCHEMA, and commit/rollback after this returns.
+    pub fn apply(self, tx: &rusqlite::Transaction<'_>) -> Result<Transfer> {
+        let synchronous: i64 = tx.pragma_query_value(None, "synchronous", |row| row.get(0))?;
+        ensure!(synchronous == 2, "transfer owner requires FULL durability");
+        match self {
+            Self::Enqueue(request) => {
+                request.validate()?;
+                tx.execute("INSERT INTO ctox_transfer_jobs(id,request,state,desired) VALUES (?1,?2,'queued','run') ON CONFLICT(id) DO NOTHING", params![request.id, serde_json::to_string(&request)?])?;
+                let saved = read_owned_transfer(tx, &request.id)?;
+                ensure!(
+                    saved.request == request,
+                    "transfer id conflicts with immutable request"
+                );
+                Ok(saved)
+            }
+            Self::Get(id) => read_owned_transfer(tx, &id),
+            Self::Control { id, action } => {
+                match action.as_str() {
+                    "cancel" | "pause" => {
+                        let state = if action == "cancel" {
+                            "cancelled"
+                        } else {
+                            "paused"
+                        };
+                        tx.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
+                    }
+                    "resume" => {
+                        tx.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state IN ('paused','failed','running')", [&id])?;
+                    }
+                    _ => bail!("expected pause, resume or cancel"),
+                }
+                read_owned_transfer(tx, &id)
+            }
+        }
+    }
+}
+
+pub type TransferOwnerReply =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Transfer>> + Send>>;
+
+/// Core composition implements this with its existing bounded writer. It must
+/// execute `job.apply(tx)` and acknowledge only the FULL commit, never open a
+/// second Core connection or wait synchronously on a Tokio worker.
+pub trait TransferOwner: Send + Sync {
+    fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply;
+}
+
+#[derive(Clone)]
+enum TransferBackend {
+    Dedicated(owner_adapter::BoundedOwner<Connection>),
+    Shared(Arc<dyn TransferOwner>),
+}
+
+/// Async metadata adapter. Use `from_owner` for a Core file already owned by
+/// the daemon; `open` is only for a file with no other live owner.
 #[derive(Clone)]
 pub struct OwnedTransferStore {
-    owner: owner_adapter::BoundedOwner<Connection>,
+    backend: TransferBackend,
 }
 
 impl Store {
-    /// Consume the compatibility facade after its schema setup. The actor
-    /// acquires the same canonical lease as the Core owner; a second owner fails.
+    /// Consume the compatibility facade after its schema setup. Never retain
+    /// a legacy worker alongside this owner on the same Core file.
     pub fn into_owner(self) -> Result<OwnedTransferStore> {
         OwnedTransferStore::open(self.db)
     }
 }
 
 impl OwnedTransferStore {
-    /// Metadata-only owner entry point; does not open the file on the caller.
-    /// Core composition must choose/share this owner before migrating workers.
+    /// Share the actual Core writer. This entry point never touches a file.
+    pub fn from_owner(owner: Arc<dyn TransferOwner>) -> Self {
+        Self {
+            backend: TransferBackend::Shared(owner),
+        }
+    }
+
+    /// Metadata-only standalone owner; no SQLite is opened on the caller.
     pub fn open(db: impl Into<PathBuf>) -> Result<Self> {
         let db = db.into();
         if let Some(parent) = db.parent() {
@@ -396,66 +464,44 @@ impl OwnedTransferStore {
                 .map_err(std::io::Error::other)?;
             Ok(connection)
         })?;
-        Ok(Self { owner })
+        Ok(Self {
+            backend: TransferBackend::Dedicated(owner),
+        })
     }
 
-    async fn run<T: Send + 'static>(
-        &self,
-        operation: impl FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    ) -> Result<T> {
-        Ok(self
-            .owner
-            .call(move |connection| {
-                let sync: i64 = connection
-                    .pragma_query_value(None, "synchronous", |row| row.get(0))
-                    .map_err(std::io::Error::other)?;
-                if sync != 2 {
-                    return Err(std::io::Error::other(
-                        "transfer owner requires FULL durability",
-                    ));
-                }
-                operation(connection).map_err(std::io::Error::other)
-            })
-            .await?)
+    async fn execute(&self, job: TransferOwnerJob) -> Result<Transfer> {
+        match &self.backend {
+            TransferBackend::Shared(owner) => owner.submit(job).await,
+            TransferBackend::Dedicated(owner) => Ok(owner
+                .call(move |connection| {
+                    let tx = connection
+                        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                        .map_err(std::io::Error::other)?;
+                    let saved = job.apply(&tx).map_err(std::io::Error::other)?;
+                    tx.commit().map_err(std::io::Error::other)?;
+                    Ok(saved)
+                })
+                .await?),
+        }
     }
 
     pub async fn enqueue(&self, request: DownloadRequest) -> Result<Transfer> {
-        request.validate()?;
-        self.run(move |connection| {
-            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute("INSERT INTO ctox_transfer_jobs(id,request,state,desired) VALUES (?1,?2,'queued','run') ON CONFLICT(id) DO NOTHING", params![request.id, serde_json::to_string(&request)?])?;
-            let saved = read_owned_transfer(&tx, &request.id)?;
-            ensure!(saved.request == request, "transfer id conflicts with immutable request");
-            tx.commit()?;
-            Ok(saved)
-        }).await
+        self.execute(TransferOwnerJob::Enqueue(request)).await
     }
 
     pub async fn get(&self, id: String) -> Result<Transfer> {
-        self.run(move |connection| read_owned_transfer(connection, &id))
-            .await
+        self.execute(TransferOwnerJob::Get(id)).await
     }
 
     pub async fn control(&self, id: String, action: String) -> Result<Transfer> {
-        ensure!(
-            matches!(action.as_str(), "cancel" | "pause" | "resume"),
-            "expected pause, resume or cancel"
-        );
-        self.run(move |connection| {
-            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            match action.as_str() {
-                "cancel" | "pause" => {
-                    let state = if action == "cancel" { "cancelled" } else { "paused" };
-                    tx.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
-                }
-                _ => {
-                    tx.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state IN ('paused','failed','running')", [&id])?;
-                }
-            }
-            let saved = read_owned_transfer(&tx, &id)?;
-            tx.commit()?;
-            Ok(saved)
-        }).await
+        self.execute(TransferOwnerJob::Control { id, action }).await
+    }
+}
+
+impl TransferOwner for OwnedTransferStore {
+    fn submit(&self, job: TransferOwnerJob) -> TransferOwnerReply {
+        let store = self.clone();
+        Box::pin(async move { store.execute(job).await })
     }
 }
 
@@ -990,7 +1036,13 @@ mod owner_contract_tests {
     #[tokio::test]
     async fn transfer_owner_full_committed_and_immutable() {
         let directory = tempfile::tempdir().unwrap();
-        let store = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        let native = OwnedTransferStore::open(directory.path().join("core.sqlite")).unwrap();
+        let owner = match &native.backend {
+            TransferBackend::Dedicated(owner) => owner.clone(),
+            _ => unreachable!(),
+        };
+        // The injected facade must use this already-owned file, not reopen it.
+        let store = OwnedTransferStore::from_owner(Arc::new(native));
         let request = DownloadRequest {
             id: "fixture".into(),
             sources: vec!["http://127.0.0.1/fixture".into()],
@@ -1001,12 +1053,19 @@ mod owner_contract_tests {
         };
         let saved = store.enqueue(request.clone()).await.unwrap();
         assert_eq!(saved.request, request);
-        store
-            .run(|connection| {
+        owner
+            .call(|connection| {
                 assert_eq!(
                     connection
-                        .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))?,
+                        .pragma_query_value(None, "synchronous", |row| row.get::<_, i64>(0))
+                        .map_err(std::io::Error::other)?,
                     2
+                );
+                assert_eq!(
+                    connection
+                        .pragma_query_value(None, "wal_autocheckpoint", |row| row.get::<_, i64>(0))
+                        .map_err(std::io::Error::other)?,
+                    1000
                 );
                 assert!(connection.is_autocommit());
                 Ok(())
@@ -1036,8 +1095,9 @@ mod owner_contract_tests {
                 .state,
             "cancelled"
         );
-        let mut closed = store.owner.closed_signal();
+        let mut closed = owner.closed_signal();
         drop(store);
+        drop(owner);
         tokio::time::timeout(Duration::from_secs(5), async {
             while !*closed.borrow_and_update() {
                 closed.changed().await.unwrap();
