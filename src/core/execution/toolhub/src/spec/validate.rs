@@ -52,6 +52,9 @@ pub struct ArgRef {
     pub one_of: Option<(Vec<String>, bool)>,
     pub join: Option<String>,
     pub wrap_array: bool,
+    /// Resource-URI APIs (Calendly): a bare id becomes `<prefix><id>`; a full
+    /// URI must already start with the prefix (an https URL on an allowed host).
+    pub uri_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +76,9 @@ pub enum PathEnc {
     Segment,
     /// Trimmed and percent-encoded like `encodeURIComponent`.
     Component,
+    /// Accepts a bare id or a full resource URI; uses its last path segment
+    /// (then checked like `Segment`).
+    UriTail,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,7 +228,7 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         known_keys(v, &["const"], ctx)?;
         return Ok(Val::Const(c.clone()));
     }
-    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array"], ctx)?;
+    known_keys(v, &["arg", "type", "trim", "required", "default", "clamp", "format", "one_of", "strict", "join", "wrap_array", "uri_prefix"], ctx)?;
     let name = s(v, "arg", ctx)?.to_string();
     let prop = props.get(&name).ok_or_else(|| anyhow!("{ctx}: arg `{name}` is not declared in input_schema.properties"))?;
     used.insert(name.clone());
@@ -266,6 +272,13 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
         one_of,
         join: v.get("join").and_then(Value::as_str).map(String::from),
         wrap_array: v.get("wrap_array").and_then(Value::as_bool).unwrap_or(false),
+        uri_prefix: match v.get("uri_prefix") {
+            None => None,
+            Some(p) => {
+                let p = p.as_str().filter(|p| p.starts_with("https://") && p.ends_with('/')).ok_or_else(|| anyhow!("{ctx}: uri_prefix must be an https URL ending in `/`"))?;
+                Some(p.to_string())
+            }
+        },
     }))
 }
 
@@ -318,6 +331,7 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
         let e = match enc.get(name).and_then(Value::as_str) {
             None | Some("segment") => PathEnc::Segment,
             Some("component") => PathEnc::Component,
+            Some("uri_tail") => PathEnc::UriTail,
             Some(o) => bail!("{ctx}: unknown path encoding `{o}`"),
         };
         out.push(PathPart::Param(name.to_string(), e));

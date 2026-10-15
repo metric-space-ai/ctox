@@ -79,6 +79,11 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
   `SpecAdapter`, per-instance `SpecStore` (versions, active pointer, history,
   rollback), hub hot reload, restricted transport (no redirects, public IPs only).
   Todoist and Asana run as specs with the same live results as the compiled adapters.
+- **Calendly (2026-10-15): first spec-only build** (`specs/calendly.json`, 17 actions,
+  `tests/live_calendly.rs`), no Rust adapter code. 14 actions live-passed against
+  api.calendly.com; get/list invitees, get event and cancel event are list-only
+  covered (free account has no bookings). Needed one minimal format extension:
+  `uri_prefix` (args) and `uri_tail` (path encoding).
 - **Not wired yet:** the toolhub is not part of the `ctox` binary on main, so there
   is no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,
@@ -89,3 +94,30 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 
 - Fake-IP DNS egress (box resolves to 198.18.0.0/15): live tests need
   `TransportOptions { fake_ip_egress: true }`; production instances keep the default.
+- **Build time (Calendly, spec-only):** about 45 minutes from token to green live
+  test, including the format extension. Most of it was reading the API shape;
+  writing the spec via a small Python generator (helpers for paging, URI args,
+  response modes) was faster and less error-prone than hand-written JSON.
+- **Resource-URI APIs (Calendly, also Stripe-like "self" links):** references are
+  full URIs (`https://api.calendly.com/users/<uuid>`) in query and body, but UUIDs in
+  paths. Use `"uri_prefix": "https://api.calendly.com/users/"` on args (bare id gets
+  expanded; a URI for another resource or host is refused) and
+  `"path_encoding": {"x": "uri_tail"}` for path params (takes the last segment).
+  Agents can then pass whatever the previous call returned.
+- **Pagination style Calendly:** `count` (1–100) + `page_token`; next token at
+  `/pagination/next_page_token`, items at `/collection`. Map with
+  `response.mode = object` fields `collection` + `next_page_token`. Single reads
+  return `{"resource": …}` → `mode: pick, pointer: /resource`.
+- **Owner filters:** list endpoints want `user` or `organization`; express this as an
+  `at_least_one` constraint, not as required fields. Webhook list/create need
+  `organization` + `scope` (and `user` when scope=user) even on a single-user account.
+- **Webhooks on a free account work** (create/get/delete) with a harmless
+  `https://example.com/…` target; always delete in the same test and verify the
+  list is empty afterwards.
+- **DELETE returning 204:** use `response.mode = const` (`{"deleted": true}`).
+- **Empty test accounts:** seed what you can safely create (scheduling link,
+  webhook); actions that need real bookings or other people (cancel event,
+  invitees) stay list-only covered. Never book a slot with an invented invitee.
+- **Live harness:** `support::use_spec(include_str!("../specs/<slug>.json"))` works
+  for spec-only toolkits too as long as `replaces_builtin` matches an existing
+  compiled slug; a brand-new slug needs a harness path without that assert.

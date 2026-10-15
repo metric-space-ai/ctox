@@ -377,3 +377,40 @@ fn differential_check_detects_a_wrong_mapping() {
     assert!(d.iter().any(|x| x.starts_with("TODOIST_COMPLETE_TASK")), "path change not detected");
     assert!(d.iter().any(|x| x.starts_with("TODOIST_LIST_LABELS parse")), "response change not detected");
 }
+
+// ------------------------------------------------------------------ resource-URI references (Calendly)
+
+const CALENDLY: &str = include_str!("../specs/calendly.json");
+
+#[test]
+fn uri_prefix_and_uri_tail_handle_resource_uri_references() {
+    let a = SpecAdapter::from_json(CALENDLY).expect("calendly spec compiles");
+    let uuid = "356d8cef-6813-4815-8544-7ac5d11d74e1";
+    let full = format!("https://api.calendly.com/users/{uuid}");
+    // Query: a bare UUID is expanded, a full URI passes through unchanged.
+    for v in [uuid.to_string(), full.clone()] {
+        let r = a.build_request("CALENDLY_LIST_EVENT_TYPES", &json!({"user": v})).unwrap();
+        assert!(r.url.contains(&format!("user=https%3A%2F%2Fapi.calendly.com%2Fusers%2F{uuid}")), "{}", r.url);
+    }
+    // A URI for another resource type or host is refused.
+    for bad in ["https://api.calendly.com/event_types/x", "https://evil.example/users/x", "a/b"] {
+        assert!(a.build_request("CALENDLY_LIST_EVENT_TYPES", &json!({"user": bad})).is_err(), "{bad}");
+    }
+    // Path: URI or UUID both end up as the last segment.
+    for v in [uuid.to_string(), full.clone(), format!("{full}/")] {
+        let r = a.build_request("CALENDLY_GET_USER", &json!({"user": v})).unwrap();
+        assert_eq!(r.url, format!("https://api.calendly.com/users/{uuid}"));
+    }
+    assert!(a.build_request("CALENDLY_GET_USER", &json!({"user": "https://api.calendly.com/users/a%2F.."})).is_err());
+    // Body: owner URI built from the event type id; owner_type constant.
+    let r = a.build_request("CALENDLY_CREATE_SCHEDULING_LINK", &json!({"event_type": "et1"})).unwrap();
+    let b: Value = serde_json::from_slice(r.body.as_ref().unwrap()).unwrap();
+    assert_eq!(b, json!({"max_event_count": 1, "owner": "https://api.calendly.com/event_types/et1", "owner_type": "EventType"}));
+    // Owner constraint and risk levels.
+    assert!(a.build_request("CALENDLY_LIST_SCHEDULED_EVENTS", &json!({})).is_err());
+    assert_eq!(a.risk("CALENDLY_CANCEL_EVENT"), Some(spec::validate::Risk::Destructive));
+    rejects(|v| v["actions"][0]["request"]["path_encoding"] = json!({"id": "weird"}), "unknown path encoding");
+    rejects(|v| {
+        v["actions"][0]["request"]["query"] = json!({"x": {"arg": "id", "uri_prefix": "http://api.acme.io/x/"}});
+    }, "uri_prefix must be an https URL");
+}

@@ -55,7 +55,8 @@
             "clamp": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
             "format": {"enum": ["date", "date-time"]},
             "one_of": {"type": "array", "items": {"type": "string"}}, "strict": {"type": "boolean"},
-            "join": {"type": "string"}, "wrap_array": {"type": "boolean"}
+            "join": {"type": "string"}, "wrap_array": {"type": "boolean"},
+            "uri_prefix": {"type": "string", "pattern": "^https://.*/$"}
           }
         }
       ]
@@ -88,7 +89,7 @@
           "properties": {
             "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
             "path": {"type": "string", "pattern": "^/"},
-            "path_encoding": {"type": "object", "additionalProperties": {"enum": ["segment", "component"]}},
+            "path_encoding": {"type": "object", "additionalProperties": {"enum": ["segment", "component", "uri_tail"]}},
             "query": {"type": "object", "additionalProperties": {"$ref": "#/$defs/value"}},
             "headers": {"type": "object", "additionalProperties": {"type": "string"}},
             "body": {

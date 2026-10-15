@@ -146,6 +146,19 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
             out = None;
         }
     }
+    if let (Some(prefix), Some(Value::String(v))) = (&a.uri_prefix, &out) {
+        let full = if v.starts_with("https://") {
+            let tail = v.strip_prefix(prefix.as_str()).ok_or_else(|| anyhow!("`{}` must be an id or a URI starting with {prefix}", a.name))?;
+            if tail.is_empty() || tail.contains(['/', '?', '#']) {
+                bail!("`{}` must be an id or a URI starting with {prefix}", a.name);
+            }
+            v.clone()
+        } else {
+            crate::toolkits::path_segment(&json!({"v": v}), "v").map_err(|_| anyhow!("invalid argument `{}`", a.name))?;
+            format!("{prefix}{v}")
+        };
+        out = Some(Value::String(full));
+    }
     if let (Some(sep), Some(Value::Array(x))) = (&a.join, &out) {
         out = Some(Value::String(x.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(sep)));
     }
@@ -196,6 +209,11 @@ fn path_value(args: &Value, name: &str, enc: &PathEnc) -> Result<String> {
                 bail!("invalid argument `{name}`");
             }
             Ok(encode_component(v))
+        }
+        PathEnc::UriTail => {
+            let v = args.get(name).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| anyhow!("missing argument `{name}`"))?;
+            let tail = v.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+            Ok(crate::toolkits::path_segment(&json!({ name: tail }), name)?.to_string())
         }
     }
 }
