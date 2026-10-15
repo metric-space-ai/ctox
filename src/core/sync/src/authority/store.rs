@@ -22,10 +22,12 @@ use std::{
 
 #[path = "../../../store/harness_adapter.rs"]
 mod owner_adapter;
+#[path = "../../../store/authority_adapter.rs"]
+mod owner_factory;
 
 #[derive(Clone)]
 pub struct SqliteStore {
-    owner: owner_adapter::BoundedOwner<Connection>,
+    owner: owner_factory::BoundedOwner<Connection>,
     timings: Timings,
 }
 
@@ -145,19 +147,11 @@ impl SqliteStore {
     pub fn open(path: &Path) -> io::Result<Self> {
         // Startup is queued on the owner thread. Initialization errors surface
         // on the first async job, before any Raft acknowledgement.
-        let owner = owner_adapter::BoundedOwner::start(path.to_path_buf(), |path| {
-            let connection = Connection::open(path).map_err(other)?;
-            connection
-                .busy_timeout(std::time::Duration::ZERO)
-                .map_err(other)?;
-            connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-                PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=1000;
-                PRAGMA journal_size_limit=67108864;
-                CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
+        let owner = owner_factory::open_full(path.to_path_buf(), |connection| {
+            connection.execute_batch("CREATE TABLE IF NOT EXISTS sync_meta(key TEXT PRIMARY KEY,value BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS sync_logs(idx TEXT PRIMARY KEY,value BLOB NOT NULL);
                 CREATE TABLE IF NOT EXISTS sync_jobs(key TEXT PRIMARY KEY,value BLOB NOT NULL);
-                CREATE TABLE IF NOT EXISTS sync_receipts(key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,value BLOB NOT NULL);").map_err(other)?;
-            Ok(connection)
+                CREATE TABLE IF NOT EXISTS sync_receipts(key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,value BLOB NOT NULL);").map_err(other)
         })?;
         Ok(Self {
             owner,
