@@ -168,6 +168,10 @@ mod tests {
             let collection = registry
                 .get("hotplug_notes")
                 .ok_or_else(|| anyhow::anyhow!("new collection is not served"))?;
+            assert!(
+                Arc::ptr_eq(&collection.database, &db),
+                "registration must retain the live database owner"
+            );
             collection
                 .insert(json!({"id":"one","title":"online"}))
                 .await?;
@@ -182,6 +186,10 @@ mod tests {
             anyhow::Ok(())
         })
         .await??;
+        assert!(
+            started.elapsed() <= std::time::Duration::from_secs(1),
+            "online collection readability exceeded one second"
+        );
         assert_eq!(
             db.token, token,
             "hot-plug must retain the same database incarnation"
