@@ -8,6 +8,8 @@ license = "AGPL-3.0-only"
 path = "lib.rs"
 
 [dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 tokio = { version = "1", features = ["sync", "rt", "time"] }
 
