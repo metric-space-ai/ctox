@@ -11,6 +11,45 @@ use rusqlite::{ffi, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+/// Offline takeover uses the writer's stable lock inode, never the database
+/// inode which restore replaces. Hold this across SQLite close and rename.
+pub(super) struct MaintenanceOwner(std::fs::File);
+
+impl MaintenanceOwner {
+    pub(super) fn acquire(path: &Path) -> Result<Self> {
+        let db = ctox_store::DbId::new(path)?;
+        let mut name = db
+            .path()
+            .file_name()
+            .context("database filename")?
+            .to_os_string();
+        name.push(".ctox-store.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(db.path().with_file_name(name))?;
+        file.try_lock().with_context(|| {
+            format!(
+                "offline maintenance requires stopped daemon and exclusive store ownership: {}",
+                db.path().display()
+            )
+        })?;
+        ensure!(
+            ctox_store::DbId::new(path)? == db,
+            "database identity changed during maintenance takeover"
+        );
+        Ok(Self(file))
+    }
+}
+
+impl Drop for MaintenanceOwner {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 struct MainFile<'a> {
     file: *mut ffi::sqlite3_file,
     mutex: *mut ffi::sqlite3_mutex,
@@ -101,10 +140,54 @@ pub(super) fn sqlite_file_sha256(connection: &Connection) -> Result<(u64, String
 /// Backups are caller-selected paths and can alias an already-open live inode.
 /// Even the rejected-backup hash must use SQLite's inode/descriptor bookkeeping.
 pub(super) fn sqlite_path_sha256(path: &Path) -> Result<(u64, String)> {
+    let _owner = MaintenanceOwner::acquire(path)?;
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("open SQLite physical digest {}", path.display()))?;
     sqlite_file_sha256(&connection)
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn live_owner_excludes_digest_and_maintenance_until_shutdown() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("owned.sqlite3");
+        let db = ctox_store::DbId::new(&path)?;
+        let writer = ctox_store::registry::Registry.open(db.clone(), Default::default())?;
+        writer.ready().await?;
+        assert!(MaintenanceOwner::acquire(&path).is_err());
+        assert!(sqlite_path_sha256(&path).is_err());
+        writer.shutdown().await?;
+        let maintenance = MaintenanceOwner::acquire(&path)?;
+        let competitor = ctox_store::registry::Registry.open(db.clone(), Default::default())?;
+        assert!(competitor.ready().await.is_err());
+        assert!(MaintenanceOwner::acquire(&path).is_err());
+        drop(maintenance);
+        assert!(sqlite_path_sha256(&path)?.0 > 0);
+        let reopened = ctox_store::registry::Registry.open(db, Default::default())?;
+        reopened.ready().await?;
+        reopened.shutdown().await?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn maintenance_canonicalizes_symlinks_and_refuses_hardlinks() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("store.sqlite3");
+        drop(Connection::open(&path)?);
+        let alias = root.path().join("alias.sqlite3");
+        std::os::unix::fs::symlink(&path, &alias)?;
+        let guard = MaintenanceOwner::acquire(&path)?;
+        assert!(MaintenanceOwner::acquire(&alias).is_err());
+        drop(guard);
+        std::fs::hard_link(&path, root.path().join("hardlink.sqlite3"))?;
+        assert!(MaintenanceOwner::acquire(&path).is_err());
+        Ok(())
+    }
 }
