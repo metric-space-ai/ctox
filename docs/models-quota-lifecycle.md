@@ -1,0 +1,9 @@
+# Reported limits and account lifecycle
+
+Native Claude quota observations are tied to the holder-private credential generation captured before buffered or streaming transport execution. A response arriving after account removal or re-login cannot recreate or overwrite the removed/replaced account's quota data. The generation uses native topology identity and protected Secret Store record versions; tokens are neither read nor decrypted for this comparison, and the digest is never part of the public quota snapshot DTO.
+
+Only provider-reported windows are stored. Missing values remain unknown. Loading an observation from an older credential generation, or a valid legacy observation without a generation, produces no usable quota until another real upstream response reports it. Account enablement, weights, priority and model selection do not change the quota credential identity. Deactivation preserves observations.
+
+Permanent removal uses the existing proof-bearing holder recovery. After exact credential cleanup, it removes the exact provider/account quota row idempotently. It retains the credential lifecycle guard and Runtime topology write transaction while performing Core payload cleanup. Observation writes use the same Runtime → Core order, preventing a concurrent native process from passing a topology check and writing after removal. A removal proof is rejected if its account was re-created; it cannot clear the new generation or a sibling account.
+
+Validation uses isolated synthetic Linux Secret Stores, the existing native account-control path, and real loopback HTTP Responses handlers with buffered and streaming upstream fixtures. It does not prove installed provider access or production UI acceptance. Public limits readback in the account table and other providers' reported windows remain separate delivery work. This PR stacks on #626; the existing Monday 13:00 Berlin hold applies, and only the Supervisor merges it.

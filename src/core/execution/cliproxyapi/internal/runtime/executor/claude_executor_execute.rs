@@ -1885,6 +1885,10 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
+                .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_stream_for_model_with_context(
                     target,
@@ -1898,6 +1902,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
+                    self.router
+                        .observe_claude_quota(
+                            quota_observation,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)
@@ -1980,6 +1991,10 @@ impl ClaudeSubscriptionAccountPool {
                     Default::default(),
                 )
             });
+            let quota_observation = self
+                .router
+                .begin_claude_quota_observation(&selected.auth_id)
+                .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_for_model_with_context(
                     target,
@@ -1994,6 +2009,13 @@ impl ClaudeSubscriptionAccountPool {
                     if outcome.state_persisted() != Some(true) {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
+                    self.router
+                        .observe_claude_quota(
+                            quota_observation,
+                            outcome.response().headers(),
+                            self.clock.now_ms(),
+                        )
+                        .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
                         || (200..300).contains(&status)

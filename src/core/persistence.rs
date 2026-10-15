@@ -276,7 +276,7 @@ fn initialized_paths() -> &'static Mutex<HashSet<PathBuf>> {
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn open_sqlite(root: &Path) -> Result<Connection> {
+pub(crate) fn open_sqlite(root: &Path) -> Result<Connection> {
     let path = sqlite_path(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
